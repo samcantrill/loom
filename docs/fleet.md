@@ -733,3 +733,29 @@ has `schema_version: 1`, `disposable: true`, `kind: "workload-upgrade"`, and fie
 relative to the selection file; the report must be new. The owner records native
 old-run observation, unchanged historical evidence, checks and settlement,
 service identities throughout promotion, old-client refusal, and exact replay.
+
+### Deferring an agent's qualification
+
+When a host cannot be qualified, an operator can explicitly defer it while
+completing maintenance for the remaining agents:
+
+```sh
+loom fleet upgrade --fleet fleet.json --runtime-release release.json \
+  --deployment client.json --connection operator.json --apply \
+  --operation-id upgrade-window --defer-agent busy-host \
+  --deferral-reason 'GPU capacity unavailable; exclude this worker'
+```
+
+For an existing upgrade, use `fleet operation defer-agent upgrade-window
+--fleet fleet.json --agent busy-host --reason 'GPU capacity unavailable'`.
+Accepted work must settle first. If a qualification check is waiting, explicitly
+cancel that exact run through its native owner and wait for settlement; deferral
+never cancels work implicitly. Existing check results and intents are preserved.
+
+A deferral leaves the **whole agent natively drained**, including CPU capacity;
+it does not change the coordinator service or pretend the skipped checks passed.
+The completed maintenance result reports `qualification: partial` and
+`deferred_agents` with the operator's reasons. Other agents retain all required
+checks. A later image/source upgrade must explicitly repeat any deferral; default
+maintenance still qualifies every participating agent. Qualify the deferred host
+in a later maintenance window before deliberately resuming its scheduling.

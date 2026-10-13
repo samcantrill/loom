@@ -565,10 +565,57 @@ def _prepare_attempt(operation, name, check, identity, previous=None):
     }
 
 
+def _deferrals(operation):
+    path = operation.directory / "deferred-agents.json"
+    return read(path) if path.exists() else {}
+
+
+def _defer_capacity(operation, name):
+    """Keep an explicitly unqualified agent behind a native acknowledged drain."""
+    key = name + "-deferred-drain"
+    path = operation.receipts / key / "intent.json"
+    if path.exists():
+        predecessor = read(path)["condition"]["expected_control_id"]
+    elif (operation.receipts / (name + "-checks-capacity") / "intent.json").exists():
+        original = read(operation.receipts / (name + "-checks-capacity") / "intent.json")
+        successors = _control_successors(operation, name + "-checks-capacity")
+        predecessor = (successors[-1] if successors else original)["operation_id"]
+    else:
+        suffix = "-promotion" if operation.intent["kind"] == "workload-upgrade" else "-drain"
+        predecessor = operation.intent["operation_id"] + "-" + name + suffix
+    accepted = operation.policy(name, key, "drain", predecessor)
+    value = operation.verify_policy(name, accepted)
+    if not value["drained"]:
+        raise QueueConflictError("deferred agent must remain drained: " + name)
+
+
+def _record_deferrals(operation, names, reason):
+    if not names or not reason or not reason.strip():
+        raise QueueConfigError("agent deferral requires agent names and a reason")
+    if any(name not in operation.intent["agents"] for name in names):
+        raise QueueConfigError("deferred agent must belong to this upgrade")
+    current = _deferrals(operation)
+    if any(name in current and current[name] != reason for name in names):
+        raise QueueConflictError("retained agent deferral reason changed")
+    if (operation.directory / "complete.json").exists():
+        if any(name not in current for name in names):
+            raise QueueConflictError("completed qualification cannot be deferred")
+        return
+    operation.recheck()
+    # Never abandon accepted work. An already admitted check must finish or be
+    # explicitly cancelled through its native owner before changing qualification.
+    if (operation.receipts / "close" / "intent.json").exists():
+        operation.settled()
+    atomic(operation.directory / "deferred-agents.json", {**current, **dict.fromkeys(names, reason)})
+
+
 def _run_checks(operation):
     attempts = _attempts(operation)
     for name, declaration in operation.intent.get("target_declarations", operation.intent["declarations"]).items():
         if name == "coordinator" or name not in operation.intent["agents"]:
+            continue
+        if name in _deferrals(operation):
+            _defer_capacity(operation, name)
             continue
         profile = declaration["resident_profiles"][0]
         # Provider-backed GPUs belong to the native inventory, so their legacy
@@ -617,6 +664,9 @@ def _run_checks(operation):
 
 def _restore(operation, *, abort=False):
     for name, original in operation.intent["agents"].items():
+        if name in _deferrals(operation) and not abort:
+            _defer_capacity(operation, name)
+            continue
         keys = [name + "-drain", name + "-checks-capacity"]
         predecessor = (original.get("control") or {}).get("operation_id")
         changed = False
@@ -724,6 +774,9 @@ def _continue(operation):
     restoring = operation.directory / "restoring.json"
     if not restoring.exists():
         for name in operation.intent["agents"]:
+            if name in _deferrals(operation):
+                _defer_capacity(operation, name)
+                continue
             predecessor = operation.intent["operation_id"] + "-" + name + "-drain"
             accepted = operation.policy(
                 name, name + "-checks-capacity", "resume", predecessor
@@ -736,6 +789,8 @@ def _continue(operation):
         "state": "complete",
         "release": operation.intent["release"],
         "checks": _attempts(operation),
+        "deferred_agents": _deferrals(operation),
+        "qualification": "partial" if _deferrals(operation) else "passed",
         "deployment": operation.intent["check_selection"]["deployment"],
         "operator_connection": operation.intent["check_selection"][
             "operator_connection"
@@ -765,6 +820,8 @@ def upgrade(
     check_config=None,
     failed_control=None,
     new_control=None,
+    defer_agents=None,
+    deferral_reason=None,
 ):
     """Preview/apply or continue one immutable service upgrade; never cancel work."""
     _environment_files(inventory, env_file)
@@ -861,6 +918,10 @@ def upgrade(
         else:
             operation = _Upgrade(inventory, directory, intent)
         try:
+            if defer_agents is not None:
+                if not apply and action != "defer-agent":
+                    raise QueueConfigError("deferral requires apply or defer-agent")
+                _record_deferrals(operation, defer_agents, deferral_reason)
             if (directory / "aborted.json").exists():
                 result = {"state": "aborted"}
             elif action == "abort":

@@ -314,3 +314,51 @@ def test_missing_source_promotion_refuses_before_candidate_or_mutation(
             image=tmp_path / "candidate.sif",
             workload_inventory=tmp_path / "candidate.json" if missing == "source" else None,
         )
+
+
+def test_workload_upgrade_deferral_preserves_native_drain(site, tmp_path, monkeypatch):  # noqa: F811
+    from loom.fleet import _workload_host
+    from loom.queue.deployment import _load_protected_config
+    from tests.integration.fleet.test_runtime_upgrade import finish
+
+    inventory, base, selection = site
+    inventory = bind_environments(inventory)
+    authored = read(inventory.hosts[0].config)
+    for principal in authored["agent_policy"]["principals"]:
+        if principal["role"] == "operator":
+            principal["actions"].append("resume")
+    write(inventory.hosts[0].config, authored)
+    setup = apply(inventory, operation_id="setup-deferred-image", issuer=base / "issuer", check_selection=selection)
+    assert setup["outcome"] == "complete", setup
+    image = tmp_path / "candidate.sif"
+    image.write_bytes(b"CPU fixture; physical SIF qualification remains separate")
+    ssh = upgrades.sshops.ssh
+
+    def qualified_cpu(host, request):
+        if request["action"] != "workload-probe":
+            return ssh(host, request)
+        before = dict(_load_protected_config(Path(request["config"]), env_file=request["env_file"])[2])
+        after = json.loads(json.dumps(before))
+        after["resident_profiles"][0]["descriptor"] = {
+            "profile_id": "probe", "revision": "image-" + request["image_sha256"][:24],
+        }
+        return {
+            "source": _workload_host.qualify(request, before),
+            "target": _workload_host.qualify(request, after, check_promotion=True),
+            "image_sha256": request["image_sha256"], "declaration": after,
+        }
+
+    monkeypatch.setattr(upgrades.sshops, "ssh", qualified_cpu)
+    result = finish(
+        inventory, "deferred-image", apply=True, workload_profile="probe", image=image,
+        deployment=Path(setup["deployment"]), connection=Path(setup["operator_connection"]),
+        config=selection["config"], defer_agents=["worker"], deferral_reason="capacity unavailable",
+    )
+    assert result["qualification"] == "partial"
+    assert result["deferred_agents"] == {"worker": "capacity unavailable"}
+    assert result["checks"] == {}
+    with CoordinatorOperatorClient.from_connection_file(setup["operator_connection"]) as operator:
+        assert operator.observe_maintenance()["state"] == "open"
+        worker = operator.observe_agent("worker").value
+        assert worker["drained"] is True
+        assert worker["control"]["operation_id"] == "deferred-image-worker-deferred-drain"

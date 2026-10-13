@@ -718,3 +718,55 @@ def test_infrastructure_check_profile_excludes_scientific_processor():
     del policies["another"]
     with pytest.raises(QueueConfigError, match="processor-free"):
         upgrades._check_profile(declarations, "worker", "science")
+
+
+@pytest.mark.parametrize("existing", [False, True], ids=["upfront", "existing"] )
+def test_upgrade_deferred_agent_remains_natively_drained(site, tmp_path, monkeypatch, existing):  # noqa: F811
+    inventory, base, selection = site
+    inventory = bind_environments(inventory)
+    authored = read(inventory.hosts[0].config)
+    for principal in authored["agent_policy"]["principals"]:
+        if principal["role"] == "operator":
+            principal["actions"].append("resume")
+    write(inventory.hosts[0].config, authored)
+    setup = apply(inventory, operation_id="setup-deferred", issuer=base / "issuer", check_selection=selection)
+    assert setup["outcome"] == "complete", setup
+    run_checks = upgrades._run_checks
+    if existing:
+        def interrupted(operation):
+            raise upgrades._Waiting("before checks")
+        monkeypatch.setattr(upgrades, "_run_checks", interrupted)
+    options = dict(
+        apply=True,
+        runtime_release=target_bundle(inventory, tmp_path),
+        deployment=Path(setup["deployment"]), connection=Path(setup["operator_connection"]),
+        config=selection["config"],
+    )
+    if existing:
+        result = upgrades.upgrade(inventory, operation_id="upgrade-deferred", **options)
+        deadline = time.monotonic() + 240
+        while result.get("reason") != "before checks" and result["outcome"] == "waiting" and time.monotonic() < deadline:
+            result = upgrades.upgrade(inventory, operation_id="upgrade-deferred")
+        assert result.get("reason") == "before checks", result
+        monkeypatch.setattr(upgrades, "_run_checks", run_checks)
+        options = {"action": "defer-agent"}
+    result = finish(
+        inventory, "upgrade-deferred", **options,
+        defer_agents=["worker"], deferral_reason="GPU unavailable; keep worker excluded",
+    )
+    assert result["qualification"] == "partial"
+    assert result["deferred_agents"] == {"worker": "GPU unavailable; keep worker excluded"}
+    assert result["checks"] == {}
+    with CoordinatorOperatorClient.from_connection_file(setup["operator_connection"]) as operator:
+        assert operator.observe_maintenance()["state"] == "open"
+        worker = operator.observe_agent("worker").value
+        assert worker["drained"] is True
+        assert worker["control"]["operation_id"] == "upgrade-deferred-worker-deferred-drain"
+    replay = upgrades.upgrade(inventory, operation_id="upgrade-deferred")
+    assert replay["qualification"] == "partial"
+    refused = upgrades.upgrade(
+        inventory, operation_id="upgrade-deferred", action="defer-agent",
+        defer_agents=["worker"], deferral_reason="different intent",
+    )
+    assert refused["outcome"] == "blocked"
+    assert "reason changed" in refused["reason"]

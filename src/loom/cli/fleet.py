@@ -97,16 +97,21 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     upgrade.add_argument("--config", default="fleet-check.yaml")
     upgrade.add_argument("--env-file", type=Path)
     upgrade.add_argument("--timeout", type=float, default=120)
+    upgrade.add_argument("--defer-agent", dest="defer_agents", action="append", help="leave this agent drained and its qualification explicitly deferred")
+    upgrade.add_argument("--deferral-reason")
     upgrade.add_argument("--format", dest="output_format", choices=("text", "json"), default="text")
     upgrade.set_defaults(handler=handle)
     operation = commands.add_parser(
         "operation", help="inspect or continue retained setup"
     )
     operations = operation.add_subparsers(dest="operation_command", required=True)
-    for action in ("status", "resume", "abort", "retry-check", "retry-control"):
+    for action in ("status", "resume", "abort", "retry-check", "retry-control", "defer-agent"):
         item = operations.add_parser(action)
         item.add_argument("operation_id")
         item.add_argument("--fleet", required=True)
+        if action == "defer-agent":
+            item.add_argument("--agent", dest="defer_agents", action="append", required=True)
+            item.add_argument("--reason", dest="deferral_reason", required=True)
         if action == "retry-check":
             item.add_argument("--failed-check", required=True)
             item.add_argument("--operation-id", dest="new_check", required=True)
@@ -236,7 +241,7 @@ def handle(namespace: argparse.Namespace) -> int:
                 from loom.fleet.upgrades import preview
                 result = preview(inventory, runtime_release=namespace.runtime_release, workload_profile=namespace.workload_profile, image=namespace.image, workload_inventory=namespace.workload_inventory, deployment=namespace.deployment, connection=namespace.connection, config=namespace.config, env_file=namespace.env_file)
             else:
-                result = upgrade(inventory, operation_id=namespace.operation_id, runtime_release=namespace.runtime_release, workload_profile=namespace.workload_profile, image=namespace.image, workload_inventory=namespace.workload_inventory, deployment=namespace.deployment, connection=namespace.connection, config=namespace.config, env_file=namespace.env_file, timeout_seconds=namespace.timeout, apply=True)
+                result = upgrade(inventory, operation_id=namespace.operation_id, runtime_release=namespace.runtime_release, workload_profile=namespace.workload_profile, image=namespace.image, workload_inventory=namespace.workload_inventory, deployment=namespace.deployment, connection=namespace.connection, config=namespace.config, env_file=namespace.env_file, timeout_seconds=namespace.timeout, apply=True, defer_agents=namespace.defer_agents, deferral_reason=namespace.deferral_reason)
         elif command == "migrate-services":
             from loom.fleet.ssh_operations import migrate_services
             result = migrate_services(inventory, operation_id=namespace.operation_id,
@@ -257,7 +262,7 @@ def handle(namespace: argparse.Namespace) -> int:
                     result = adopt(inventory, operation_id=namespace.operation_id, action=namespace.operation_command)
                 elif intent.get("kind") in {"runtime-upgrade", "workload-upgrade"}:
                     from loom.fleet.upgrades import upgrade
-                    result = upgrade(inventory, operation_id=namespace.operation_id, action=namespace.operation_command, failed_check=getattr(namespace, "failed_check", None), new_check=getattr(namespace, "new_check", None), check_config=getattr(namespace, "check_config", None), failed_control=getattr(namespace, "failed_control", None), new_control=getattr(namespace, "new_control", None))
+                    result = upgrade(inventory, operation_id=namespace.operation_id, action=namespace.operation_command, failed_check=getattr(namespace, "failed_check", None), new_check=getattr(namespace, "new_check", None), check_config=getattr(namespace, "check_config", None), failed_control=getattr(namespace, "failed_control", None), new_control=getattr(namespace, "new_control", None), defer_agents=getattr(namespace, "defer_agents", None), deferral_reason=getattr(namespace, "deferral_reason", None))
                 elif namespace.operation_command == "resume":
                     result = apply(inventory, operation_id=namespace.operation_id, resume=True)
                 else:
