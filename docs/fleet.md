@@ -760,7 +760,7 @@ checks. A later image/source upgrade must explicitly repeat any deferral; defaul
 maintenance still qualifies every participating agent. Qualify the deferred host
 in a later maintenance window before deliberately resuming its scheduling.
 
-Fleet observes native control acknowledgements for up to 30 seconds (bounded by
-the operation timeout) before returning waiting. Pending or unacknowledged
+Fleet observes native control acknowledgements within the selected operation
+timeout before returning waiting. Pending or unacknowledged
 controls remain pending; timeout never becomes success. This avoids repeating
 whole-fleet preflight for routine asynchronous acknowledgements.

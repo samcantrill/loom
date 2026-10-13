@@ -41,7 +41,7 @@ class _Waiting(Exception):
 
 def _observe_control(operator, identity, timeout):
     """Allow acknowledgement to arrive without restarting whole-fleet preflight."""
-    deadline = time.monotonic() + min(30.0, timeout)
+    deadline = time.monotonic() + timeout
     while True:
         result = operator.observe_control(identity)
         if result["state"] == "failed" or (
