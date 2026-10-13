@@ -768,6 +768,50 @@ def test_finite_gpu_result_release_matrix(fault, outcome):
     )
 
 
+@pytest.mark.parametrize(
+    "condition,outcome",
+    [
+        ("external", "passed"),
+        ("unreleased", "waiting"),
+        ("reflected", "waiting"),
+        ("stale", "waiting"),
+        ("unknown", "waiting"),
+        ("loom_claimed", "waiting"),
+        ("other_device", "waiting"),
+        ("wrong_uuid", "failed"),
+    ],
+)
+def test_gpu_release_qualification_with_later_external_occupancy(condition, outcome):
+    report, assignment, agent, profile = evidence()
+    agent["offer"]["gpu_atoms"] = []
+    status = {
+        "resource_kind": "gpu",
+        "local_capacity_key": "gpu0",
+        "available": False,
+        "reason_code": "external_process_detected",
+    }
+    agent["resource_status"] = [status]
+    if condition == "unreleased":
+        assignment["released"] = False
+    elif condition == "reflected":
+        agent["offer"]["reflected_claim_ids"] = [assignment["claim_id"]]
+    elif condition == "stale":
+        agent["offer"]["freshness"] = "retained"
+    elif condition == "unknown":
+        status["reason_code"] = "observation_unavailable"
+    elif condition == "loom_claimed":
+        status["reason_code"] = "loom_claimed"
+    elif condition == "other_device":
+        status["local_capacity_key"] = "gpu1"
+    elif condition == "wrong_uuid":
+        assignment["actual_claims"]["actual_gpu_uuids"] = ["GPU-other"]
+    result = verify_check(
+        "gpu", report, assignment, agent,
+        agent_id="worker", session_id="s", profile=profile, run_uri="r",
+    )
+    assert result["outcome"] == outcome
+
+
 def test_gpu_probe_optional_import_and_actual_uuid_compute(monkeypatch):
     monkeypatch.setitem(sys.modules, "torch", None)
     assert gpu_probe()["code"] == "unsupported_check"
