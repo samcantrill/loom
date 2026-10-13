@@ -467,8 +467,37 @@ def site(tmp_path, bundle, endpoint, request):
         shutil.rmtree(base)
 
 
-def test_fresh_setup_repeat_and_selected_add_host(site, capsys):
+@pytest.mark.parametrize("relative_root", ["c", "c/agent", "."])
+def test_colocated_overlapping_roots_refuse_before_ssh(site, monkeypatch, relative_root):
+    from loom.fleet import ssh_operations
+    from loom.queue.errors import QueueConfigError
+
+    inventory, base, _ = site
+    value = json.loads(inventory.path.read_text())
+    value["agents"]["worker"]["host"] = value["coordinator"]["host"]
+    write(inventory.path, value)
+    worker = inventory.hosts[1].config
+    declaration = json.loads(worker.read_text())
+    declaration["agent_root"] = str(base / relative_root)
+    write(worker, declaration)
+
+    def forbid(*args, **kwargs):
+        pytest.fail("overlapping native roots must refuse before SSH dispatch")
+
+    monkeypatch.setattr(ssh_operations, "ssh", forbid)
+    with pytest.raises(QueueConfigError, match="non-overlapping native roots"):
+        plan(load_inventory(inventory.path), issuer=base / "issuer")
+    assert not (base / "c").exists()
+
+
+@pytest.mark.parametrize("colocated", [False, True])
+def test_fresh_setup_repeat_and_selected_add_host(site, capsys, colocated):
     inventory, base, selection = site
+    if colocated:
+        value = json.loads(inventory.path.read_text())
+        value["agents"]["worker"]["host"] = value["coordinator"]["host"]
+        write(inventory.path, value)
+        inventory = load_inventory(inventory.path)
     preview = plan(inventory, issuer=base / "issuer")
     assert all("unavailable" not in row for row in preview["hosts"].values()), preview
     assert not (base / "c").exists() and not (base / "issuer").exists()
@@ -543,7 +572,10 @@ def test_fresh_setup_repeat_and_selected_add_host(site, capsys):
             env_file=different_environment,
         )
     value = json.loads(inventory.path.read_text())
-    value["agents"]["worker2"] = {"host": "worker2", "config": "worker2.json"}
+    value["agents"]["worker2"] = {
+        "host": value["coordinator"]["host"] if colocated else "worker2",
+        "config": "worker2.json",
+    }
     write(inventory.path, value)
     updated = load_inventory(inventory.path)
     preview = plan(updated, hosts=["worker2"], issuer=base / "issuer")

@@ -152,9 +152,16 @@ def _selection(inventory, hosts, env_file):
             "env_sha256": None if selected_env is None else _file_hash(selected_env),
             "service_manager": inventory.service_manager,
         }
-    aliases = [entry["host"] for entry in rows.values()]
-    if len(aliases) != len(set(aliases)):
-        raise QueueConfigError("colocated coordinator/worker automation is unsupported")
+    entries = list(rows.values())
+    for index, entry in enumerate(entries):
+        for other in entries[:index]:
+            if entry["host"] != other["host"]:
+                continue
+            root, other_root = Path(entry["root"]), Path(other["root"])
+            if root.is_relative_to(other_root) or other_root.is_relative_to(root):
+                raise QueueConfigError(
+                    "colocated roles require separate non-overlapping native roots"
+                )
     return rows, declarations
 
 
