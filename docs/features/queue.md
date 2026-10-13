@@ -1200,3 +1200,25 @@ The preparation attempt's private `logs/stderr.log` retains the full traceback,
 including chained causes, for the operator. Inspect that file on the assigned
 agent when `config.project_preparation` fails; an accepted submission alone does
 not establish that scientific preparation or training succeeded.
+
+### Scientific metadata in shared preparation
+
+A shared installed project processor receives an `artifact_directory` in its
+private preparation request. It may write regular metadata companions beneath
+that directory. The native report and those companions are published together
+under the existing bounded shared artifact closure. The coordinator run-store
+URI remains an identity; it is not a worker filesystem grant.
+
+For checked shared stages, Loom transports the immutable preparation report as
+a native internal input. `StageContext.metadata["loom.project_report"]` contains
+its materialized `ArtifactRef`; the stage can load the report through
+`context.load_artifact` and read contained companions relative to that report.
+This input is separate from user-authored stage ports and does not inline the
+whole report into worker metadata. Original references are bound to admitted
+bytes and worker paths use the selected host's shared-root mapping.
+
+Whole-run and action-result verification receive the same report access through
+their private artifact-access mappings. Local non-shared preparations retain
+their existing storage contract. A companion write or read failure retains its
+private traceback rather than requiring an operator to reproduce it with wider
+filesystem access.
