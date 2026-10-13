@@ -47,14 +47,22 @@ def finish(inventory, identity, **kwargs):
     return result
 
 
+@pytest.mark.parametrize("correct_recipe", [False, True])
 def test_runtime_upgrade_abort_interruption_resume_and_native_checks(
     site,  # noqa: F811
     tmp_path,
     monkeypatch,
     capsys,
+    correct_recipe,
 ):
     inventory, base, selection = site
     inventory = bind_environments(inventory)
+    if correct_recipe:
+        recipe = tmp_path / "projects/pipeline.yaml"
+        recipe.with_name("corrected.yaml").write_bytes(recipe.read_bytes())
+        source_selection = read(Path(selection["deployment"]))
+        source_selection["preparation"]["source"]["include"].append("corrected.yaml")
+        write(Path(selection["deployment"]), source_selection)
     authored = read(inventory.hosts[0].config)
     for principal in authored["agent_policy"]["principals"]:
         if principal["role"] == "operator":
@@ -193,7 +201,11 @@ def test_runtime_upgrade_abort_interruption_resume_and_native_checks(
     assert changed_target["outcome"] == "blocked"
     assert not (inventory.path.parent / "checks/changed-target-successor").exists()
     target.write_bytes(target_bytes)
-    original_source.write_bytes(source_bytes)
+    corrected_source = original_source.with_name("corrected.yaml")
+    if correct_recipe:
+        corrected_source.write_bytes(source_bytes)
+    else:
+        original_source.write_bytes(source_bytes)
     repeated_failure = upgrades.upgrade(inventory, operation_id="upgrade-window")
     assert repeated_failure["outcome"] == "blocked"
     submit = CoordinatorClient.start_run
@@ -219,6 +231,7 @@ def test_runtime_upgrade_abort_interruption_resume_and_native_checks(
         action="retry-check",
         failed_check=failed,
         new_check="replacement-check",
+        check_config="corrected.yaml" if correct_recipe else None,
     )
     deadline = time.monotonic() + 120
     while (
@@ -235,6 +248,7 @@ def test_runtime_upgrade_abort_interruption_resume_and_native_checks(
             action="retry-check",
             failed_check=failed,
             new_check="replacement-check",
+            check_config="corrected.yaml" if correct_recipe else None,
         )
     assert replacement["outcome"] == "waiting", replacement
     assert (
@@ -251,7 +265,20 @@ def test_runtime_upgrade_abort_interruption_resume_and_native_checks(
         new_check="different-successor",
     )
     assert duplicate["outcome"] == "blocked" and "successor" in duplicate["reason"]
+    if correct_recipe:
+        changed_recipe = upgrades.upgrade(
+            inventory, operation_id="upgrade-window", action="retry-check",
+            failed_check=failed, new_check="replacement-check", check_config="different.yaml",
+        )
+        assert changed_recipe["outcome"] == "blocked"
+        assert "configuration correction changed" in changed_recipe["reason"]
     result = finish(inventory, "upgrade-window")
+    if correct_recipe:
+        assert original_source.read_text() == "pipeline: [invalid"
+        assert read(inventory.path.parent / "operations/upgrade-window/intent.json")["check_selection"]["config"] == selection["config"]
+        for slot, attempts in result["checks"].items():
+            check_intent = read(inventory.path.parent / "checks" / attempts[-1]["operation_id"] / "intent.json")
+            assert check_intent["requests"][slot.split(":")[1]]["preparation"]["config_path"] == "corrected.yaml"
     assert checked_irreversible
     assert len(migrations) == 1 and submitted == ["replacement-check"]
     assert (
@@ -661,3 +688,85 @@ def test_abort_reopens_while_admitted_pipeline_remains_active(
                 "admitted-work", timeout_seconds=30
             ).admission
             assert completed is not None and completed.state.value == "SUCCEEDED"
+
+
+def test_infrastructure_check_profile_excludes_scientific_processor():
+    from loom.queue.errors import QueueConfigError
+
+    policies = {
+        "science": {
+            "resident_profile_id": "reference",
+            "project_processor": {
+                "schema_version": 3,
+                "callable": "rphys_reference_experiment._scientific_admission:inspect_scientific_submission",
+                "evidence_namespace": "rphys-reference",
+                "target_prefix": "science-",
+            },
+        },
+        "infrastructure": {"resident_profile_id": "reference"},
+    }
+    declarations = {
+        "coordinator": {"preparation": {"profiles": policies}},
+        "worker": {"resident_profiles": [{"descriptor": {"profile_id": "reference"}}]},
+    }
+    assert upgrades._check_profile(declarations, "worker", "science") == "infrastructure"
+    policies["another"] = {"resident_profile_id": "reference"}
+    assert upgrades._check_profile(declarations, "worker", "infrastructure") == "infrastructure"
+    with pytest.raises(QueueConfigError, match="unambiguous processor-free"):
+        upgrades._check_profile(declarations, "worker", "science")
+    del policies["infrastructure"]
+    del policies["another"]
+    with pytest.raises(QueueConfigError, match="processor-free"):
+        upgrades._check_profile(declarations, "worker", "science")
+
+
+@pytest.mark.parametrize("existing", [False, True], ids=["upfront", "existing"] )
+def test_upgrade_deferred_agent_remains_natively_drained(site, tmp_path, monkeypatch, existing):  # noqa: F811
+    inventory, base, selection = site
+    inventory = bind_environments(inventory)
+    authored = read(inventory.hosts[0].config)
+    for principal in authored["agent_policy"]["principals"]:
+        if principal["role"] == "operator":
+            principal["actions"].append("resume")
+    write(inventory.hosts[0].config, authored)
+    setup = apply(inventory, operation_id="setup-deferred", issuer=base / "issuer", check_selection=selection)
+    assert setup["outcome"] == "complete", setup
+    run_checks = upgrades._run_checks
+    if existing:
+        def interrupted(operation):
+            raise upgrades._Waiting("before checks")
+        monkeypatch.setattr(upgrades, "_run_checks", interrupted)
+    options = dict(
+        apply=True,
+        runtime_release=target_bundle(inventory, tmp_path),
+        deployment=Path(setup["deployment"]), connection=Path(setup["operator_connection"]),
+        config=selection["config"],
+    )
+    if existing:
+        result = upgrades.upgrade(inventory, operation_id="upgrade-deferred", **options)
+        deadline = time.monotonic() + 240
+        while result.get("reason") != "before checks" and result["outcome"] == "waiting" and time.monotonic() < deadline:
+            result = upgrades.upgrade(inventory, operation_id="upgrade-deferred")
+        assert result.get("reason") == "before checks", result
+        monkeypatch.setattr(upgrades, "_run_checks", run_checks)
+        options = {"action": "defer-agent"}
+    result = finish(
+        inventory, "upgrade-deferred", **options,
+        defer_agents=["worker"], deferral_reason="GPU unavailable; keep worker excluded",
+    )
+    assert result["qualification"] == "partial"
+    assert result["deferred_agents"] == {"worker": "GPU unavailable; keep worker excluded"}
+    assert result["checks"] == {}
+    with CoordinatorOperatorClient.from_connection_file(setup["operator_connection"]) as operator:
+        assert operator.observe_maintenance()["state"] == "open"
+        worker = operator.observe_agent("worker").value
+        assert worker["drained"] is True
+        assert worker["control"]["operation_id"] == "upgrade-deferred-worker-deferred-drain"
+    replay = upgrades.upgrade(inventory, operation_id="upgrade-deferred")
+    assert replay["qualification"] == "partial"
+    refused = upgrades.upgrade(
+        inventory, operation_id="upgrade-deferred", action="defer-agent",
+        defer_agents=["worker"], deferral_reason="different intent",
+    )
+    assert refused["outcome"] == "blocked"
+    assert "reason changed" in refused["reason"]

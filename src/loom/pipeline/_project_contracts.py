@@ -13,8 +13,9 @@ from loom.serialization import PlainData, ensure_plain_data
 CONTRACT = "loom.project_contract"
 CONTRACTS = "loom.project_contracts"
 CAPTURE = "loom.project_contract_capture"
+REPORT = "loom.project_report"
 EXECUTION = "loom.execution_binding"
-RESERVED = frozenset({CONTRACT, CONTRACTS, CAPTURE, EXECUTION, "loom.remote_recovery", "loom.recovery_binding"})
+RESERVED = frozenset({CONTRACT, CONTRACTS, CAPTURE, REPORT, EXECUTION, "loom.remote_recovery", "loom.recovery_binding"})
 
 
 def reject_overrides(metadata: Mapping[str, object] | None) -> None:
@@ -223,7 +224,15 @@ def worker_contract_metadata(
     report = load_contract_report(store, run_uri)
     if report is None:
         return {}
-    return _worker_contract_metadata(report, stage)
+    metadata = _worker_contract_metadata(report, stage)
+    prepared = store.read_prepared_run(run_uri)
+    entry = report_entry(prepared["metadata"][CONTRACTS])
+    from loom.pipeline.stores.shared_artifacts import binding
+
+    reference = ArtifactRef.from_dict(entry["report_ref"])
+    if binding(reference.metadata) is not None:
+        metadata[REPORT] = entry["report_ref"]
+    return metadata
 
 
 def _worker_contract_metadata(
@@ -248,6 +257,10 @@ def _worker_contract_metadata(
 def validate_worker_metadata(
     metadata: Mapping[str, PlainData], *, node: str, attempt: int, fingerprint: Any
 ) -> None:
+    if REPORT in metadata:
+        if CONTRACT not in metadata:
+            raise ValueError("worker project report requires a checked attachment")
+        ArtifactRef.from_dict(plain_mapping(metadata[REPORT]))
     if CONTRACTS in metadata:
         raise ValueError("a worker cannot receive whole-graph contracts")
     if (CONTRACT in metadata) != (CAPTURE in metadata):
@@ -312,7 +325,7 @@ def validate_admitted_worker(store: Any, request: Any, stage: Any) -> None:
     expected = worker_contract_metadata(store, request.run_uri, stage)
     actual = {
         key: request.metadata[key]
-        for key in (CONTRACT, CAPTURE)
+        for key in (CONTRACT, CAPTURE, REPORT)
         if key in request.metadata
     }
     if plain_mapping(actual) != expected:

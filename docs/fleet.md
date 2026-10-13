@@ -524,6 +524,24 @@ loom fleet operation retry-check upgrade-018 --fleet lab \
 loom fleet operation resume upgrade-018 --fleet lab
 ```
 
+If failure came from selecting the wrong source-relative check recipe, add
+`--config configs/infrastructure.yaml` to `retry-check`. This explicit correction
+applies to the new successor and checks not yet created. Fleet records it in the
+operation's protected `check-config-corrections.json`; it does not change the
+service/image target, original maintenance intent, existing requests, or passed
+evidence. Repeating that successor may omit `--config` or repeat the same value;
+a different value is refused. The recipe must already be permitted by the
+selected source capture. Choose a recipe that composes without scientific
+run inputs: these probes qualify infrastructure, not training. Without this
+option, retry retains the current check recipe.
+
+Upgrade probes select a processor-free preparation policy for the same resident
+profile. A matching client policy is preferred; otherwise exactly one such
+policy must exist. Preview refuses a missing or ambiguous infrastructure policy
+before maintenance begins. Scientific project inspection remains reserved for
+scientific submissions.
+
+
 The predecessor must be a confirmed native terminal failure with no outstanding
 native effects. The successor is appended to the same maintenance history and
 receives exact operator authorization before dispatch. Prior failure evidence
@@ -715,3 +733,34 @@ has `schema_version: 1`, `disposable: true`, `kind: "workload-upgrade"`, and fie
 relative to the selection file; the report must be new. The owner records native
 old-run observation, unchanged historical evidence, checks and settlement,
 service identities throughout promotion, old-client refusal, and exact replay.
+
+### Deferring an agent's qualification
+
+When a host cannot be qualified, an operator can explicitly defer it while
+completing maintenance for the remaining agents:
+
+```sh
+loom fleet upgrade --fleet fleet.json --runtime-release release.json \
+  --deployment client.json --connection operator.json --apply \
+  --operation-id upgrade-window --defer-agent busy-host \
+  --deferral-reason 'GPU capacity unavailable; exclude this worker'
+```
+
+For an existing upgrade, use `fleet operation defer-agent upgrade-window
+--fleet fleet.json --agent busy-host --reason 'GPU capacity unavailable'`.
+Accepted work must settle first. If a qualification check is waiting, explicitly
+cancel that exact run through its native owner and wait for settlement; deferral
+never cancels work implicitly. Existing check results and intents are preserved.
+
+A deferral leaves the **whole agent natively drained**, including CPU capacity;
+it does not change the coordinator service or pretend the skipped checks passed.
+The completed maintenance result reports `qualification: partial` and
+`deferred_agents` with the operator's reasons. Other agents retain all required
+checks. A later image/source upgrade must explicitly repeat any deferral; default
+maintenance still qualifies every participating agent. Qualify the deferred host
+in a later maintenance window before deliberately resuming its scheduling.
+
+Fleet observes native control acknowledgements within the selected operation
+timeout before returning waiting. Pending or unacknowledged
+controls remain pending; timeout never becomes success. This avoids repeating
+whole-fleet preflight for routine asynchronous acknowledgements.

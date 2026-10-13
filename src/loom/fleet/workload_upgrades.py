@@ -426,7 +426,9 @@ class WorkloadUpgrade(maintenance._Upgrade):
                     + "-drain"
                 },
             )
-            return self.operator.observe_control(value["operation_id"])
+            return maintenance._observe_control(
+                self.operator, value["operation_id"], self.intent["timeout_seconds"]
+            )
 
         result = self.native(key, request, invoke)
         if result["state"] != "applied" or not result["acknowledged"]:
@@ -509,6 +511,9 @@ def continue_upgrade(operation):
     restoring = directory / "restoring.json"
     if not restoring.exists():
         for name in intent["agents"]:
+            if name in maintenance._deferrals(operation):
+                maintenance._defer_capacity(operation, name)
+                continue
             accepted = operation.policy(
                 name,
                 name + "-checks-capacity",
@@ -525,6 +530,8 @@ def continue_upgrade(operation):
         "image_sha256": intent["image_sha256"],
         "profile": next(iter(intent["candidates"].values()))["target"]["profile"],
         "checks": maintenance._attempts(operation),
+        "deferred_agents": maintenance._deferrals(operation),
+        "qualification": "partial" if maintenance._deferrals(operation) else "passed",
         "deployment": intent["check_selection"]["deployment"],
         "previous_deployment": intent["original_check_selection"]["deployment"],
         "operator_connection": intent["check_selection"]["operator_connection"],

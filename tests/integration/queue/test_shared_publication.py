@@ -1,6 +1,7 @@
 """Native remote producer/consumer closure without payload relay or copies."""
 
 from copy import deepcopy
+from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
@@ -47,9 +48,9 @@ from tests.integration.queue.test_preparation_operations import (
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
 
-@pytest.mark.parametrize("pure_coordinator", [False, True])
+@pytest.mark.parametrize("pure_coordinator,project_context", [(False, False), (True, False), (True, True)])
 def test_two_agents_publish_and_consume_complete_large_shared_closure(
-    tmp_path, monkeypatch, pure_coordinator
+    tmp_path, monkeypatch, pure_coordinator, project_context
 ):
     _service(tmp_path)
     root = tmp_path / "nas" / "outputs"
@@ -90,7 +91,7 @@ def test_two_agents_publish_and_consume_complete_large_shared_closure(
         factory={
             "_target_": "tests.support.shared_execution_stages.SharedClosureProducer"
         },
-        config={},
+        config={"project_context": project_context},
         outputs={"manifest": {"artifact_type": "json", "codec_key": "json.v1"}},
         placement={"target": "worker-b"},
     )
@@ -137,6 +138,13 @@ def test_two_agents_publish_and_consume_complete_large_shared_closure(
     authored["preparation"]["profiles"]["existing-project"].update(
         configuration_policy="shared", shared_locations=[]
     )
+    if project_context:
+        authored["preparation"]["profiles"]["existing-project"]["project_processor"] = {
+            "schema_version": 3,
+            "callable": "tests.support.shared_execution_stages:inspect_shared_context",
+            "evidence_namespace": "shared-context",
+            "target_prefix": "context-",
+        }
     if pure_coordinator:
         authored["local_agent"] = None
         authored["shared_roots"] = roots(root)
@@ -279,7 +287,9 @@ def test_two_agents_publish_and_consume_complete_large_shared_closure(
                     sequence=remote.next_poll_sequence(current.session_id),
                     wait_timeout_ms=5000,
                 )
-                assert executed["state"] == "RELEASED", executed
+                if daemon._service_error:
+                    daemon.reconcile_once()
+                assert executed.get("state") == "RELEASED", (executed, daemon._service_error)
             assert client.wait("target", timeout_seconds=25).state.value == "SUCCEEDED"
             assert len(attempts) == 2 and attempts[0] == attempts[1]
             store = LocalRunStore(service.daemon.run_store_root)
@@ -309,6 +319,9 @@ def test_two_agents_publish_and_consume_complete_large_shared_closure(
                 agent_root = tmp_path / "remote" / credential
                 for directory in (agent_root / "assignments").iterdir():
                     request = _ResidentAssignmentWorkspace(agent_root, directory.name).request()
+                    if project_context and "loom.project_report" in request.worker_metadata:
+                        with pytest.raises(QueueConflictError, match="project report input"):
+                            replace(request, inputs=tuple(item for item in request.inputs if item.logical_name != "loom_project_report"))
                     encoded_request = json.dumps(request.to_dict())
                     assert str(service.daemon.coordinator_root) not in encoded_request
                     assert str(root) not in encoded_request
