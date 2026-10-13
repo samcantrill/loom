@@ -253,6 +253,14 @@ resources or reads worker-authored metadata as native allocation proof.
 
 ## SSH setup and continuation
 
+The coordinator and separate resident agents may share an SSH host. Give each
+role a distinct configuration, credentials and non-overlapping native root;
+Fleet retains separate installations, locks, service ownership and operation
+receipts for those roots. Declare non-overlapping resource budgets and GPU
+devices when multiple agents share a machine: Fleet does not partition physical
+capacity between independent agents. Use the same SSH alias for colocated roles
+so setup can reject overlapping roots before dispatch.
+
 For setup select `service_manager: tmux` or `systemd-user` explicitly. Fleet uses only configured
 SSH aliases and their existing authentication/host-key policy; aliases cannot
 contain SSH options or shell syntax. Each host must already provide Python 3.12,
