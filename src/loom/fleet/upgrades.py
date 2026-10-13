@@ -12,6 +12,7 @@ import hashlib
 from pathlib import Path
 from typing import Any, cast
 import math
+import time
 
 from loom.coordinator import CoordinatorClientError, CoordinatorOperatorClient
 from loom.deployment import load_deployment
@@ -36,6 +37,21 @@ REQUIRED_CAPABILITIES = (
 
 class _Waiting(Exception):
     pass
+
+
+def _observe_control(operator, identity, timeout):
+    """Allow acknowledgement to arrive without restarting whole-fleet preflight."""
+    deadline = time.monotonic() + min(30.0, timeout)
+    while True:
+        result = operator.observe_control(identity)
+        if result["state"] == "failed" or (
+            result["state"] == "applied" and result["acknowledged"]
+        ):
+            return result
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return result
+        time.sleep(min(0.25, remaining))
 
 
 def _checks(inventory, deployment, connection, config):
@@ -356,7 +372,9 @@ class _Upgrade(sshops._Operation):
                 ),
                 condition=condition,
             )
-            return self.operator.observe_control(value["operation_id"])
+            return _observe_control(
+                self.operator, value["operation_id"], self.intent["timeout_seconds"]
+            )
 
         result = self.native(key, request, invoke)
         if result["state"] != "applied" or not result["acknowledged"]:

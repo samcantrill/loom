@@ -426,7 +426,9 @@ class WorkloadUpgrade(maintenance._Upgrade):
                     + "-drain"
                 },
             )
-            return self.operator.observe_control(value["operation_id"])
+            return maintenance._observe_control(
+                self.operator, value["operation_id"], self.intent["timeout_seconds"]
+            )
 
         result = self.native(key, request, invoke)
         if result["state"] != "applied" or not result["acknowledged"]:
