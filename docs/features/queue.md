@@ -1191,3 +1191,12 @@ canonical predecessor stays startable. After accepting its local recovery intent
 native promotion publishes the canonical source and completes the protected
 bindings under native locks. Startup resolves partial publication before joining
 the supervisor. An exact completed replay never republishes an earlier source.
+
+### Project preparation failures
+
+When an installed project processor raises during preparation, its portable
+preflight report includes the exception class without copying exception text.
+The preparation attempt's private `logs/stderr.log` retains the full traceback,
+including chained causes, for the operator. Inspect that file on the assigned
+agent when `config.project_preparation` fails; an accepted submission alone does
+not establish that scientific preparation or training succeeded.

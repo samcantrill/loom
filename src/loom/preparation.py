@@ -13,6 +13,7 @@ from copy import deepcopy
 import importlib
 import json
 import os
+import traceback
 from pathlib import Path
 from typing import Any, cast
 
@@ -339,8 +340,9 @@ def _inspect_project(
         checked = _plain_mapping(result.pop("composition"))
         _validate_project_result(composition, checked, result, binding)
     except Exception as exc:
-        # Project exceptions may contain paths or secrets. Retain the failure class,
-        # never unchecked exception text, in the existing native diagnostic owner.
+        # Worker stderr is private attempt evidence; the portable preflight report
+        # keeps only the exception class, never paths or secrets from its message.
+        traceback.print_exc()
         check = PreflightCheckResult(
             "config.project_preparation", PreflightGroup.CONFIG,
             PreflightCheckStatus.FAIL, PreflightSeverity.ERROR,

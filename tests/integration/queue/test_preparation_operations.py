@@ -2481,6 +2481,13 @@ class Consumer:
             assert report["project_result"] is None
             assert report["preflight"]["status"] == "FAIL"
             assert "private-path-do-not-expose" not in json.dumps(report)
+            if value == "false":
+                assert service.daemon.agent_root is not None
+                logs = list((service.daemon.agent_root / "assignments").glob("*/logs/stderr.log"))
+                diagnostic = "\n".join(path.read_text() for path in logs)
+                assert "Traceback (most recent call last)" in diagnostic
+                assert "installed_inspector.py" in diagnostic
+                assert "ValueError: private-path-do-not-expose" in diagnostic
             assert request.run_name is not None
             assert not (service.daemon.run_store_root / request.run_name).exists()
             return
