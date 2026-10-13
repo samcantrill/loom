@@ -215,10 +215,15 @@ the workload function. Missing Torch or UUID observation yields
 
 Success also requires matching run, stage, agent, session and immutable profile,
 native terminal acknowledgement, exact provider-release proof, and a current
-post-release offer. Native terminal success alone is insufficient. External
+post-release offer without the probe's reflected claim. Native terminal success
+alone is insufficient. If fresh native resource status shows that an external
+process subsequently occupied the exact released GPU, the completed check can
+pass while that GPU remains unavailable for scheduling. Unknown observations,
+retained claims and unproven release still wait.
 Upgrade qualification selects a GPU probe when either the resident profile or
 the retained native resource inventory declares GPUs, including NVIDIA provider
-discovery. GPU occupancy or retained claims report waiting. GPU observations are limited
+discovery. Occupancy before execution prevents dispatch until capacity is available.
+GPU observations are limited
 to infrastructure and cannot establish scientific accuracy or throughput.
 
 Protected receipts live beside the inventory in `checks/<operation-id>` outside

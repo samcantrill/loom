@@ -77,7 +77,8 @@ def verify_check(
 
     A successful terminal row alone is insufficient. The native parent observes
     the launch UUID; the workload observes CUDA properties; provider release and
-    a current offer independently establish relinquished capacity.
+    a current offer independently establish relinquished capacity. A later
+    external occupant does not invalidate an already proven provider release.
     """
     if (
         assignment.get("agent_id") != agent_id
@@ -141,7 +142,17 @@ def verify_check(
             f"{agent_id}:{atom['local_capacity_key']}"
             for atom in offer.get("gpu_atoms", ())
         }
-        if not keys or not keys.issubset(available):
+        externally_busy = {
+            f"{agent_id}:{status['local_capacity_key']}"
+            for status in agent.get("resource_status", ())
+            if status.get("resource_kind") == "gpu"
+            and status.get("available") is False
+            and status.get("reason_code") == "external_process_detected"
+        }
+        # The native proof and absent reflected claim above establish release.
+        # An independent process may occupy that device before this observation;
+        # it remains unavailable for scheduling even though this check passed.
+        if not keys or not keys.issubset(available | externally_busy):
             return _waiting("waiting_for_capacity")
     return {"outcome": "passed", "code": "check_complete"}
 
