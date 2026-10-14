@@ -499,6 +499,12 @@ before restoring the previous drain policy and reopening. Accepted later DAG
 stages continue before drain. Timeout detaches; it never cancels or force-kills.
 Partial/rolling upgrades and post-migration rollback are unsupported.
 
+The stopped-role guard accepts a clean supervisor journal from the v5
+predecessor as well as the current v6 journal. It verifies the same identity,
+host, containment and clean-shutdown evidence without rewriting the journal.
+Normal supervisor opening performs the supported schema migration; replacing
+the service must not require that migration to have happened already.
+
 Supply `--deployment` (connection-only shared-source selection), `--connection`
 (protected operator connection), and source-relative `--config` for checks.
 Retained completed setup bindings can supply the first two. Every agent uses its

@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import select
 import signal
+import sqlite3
 import subprocess
 import sys
 import time
@@ -251,7 +252,10 @@ def test_runtime_binding_never_enables_linger(monkeypatch):
 
 
 @pytest.mark.optional_dependency
-def test_quiesced_migration_preserves_native_identity_and_refuses_live_owner(tmp_path):
+@pytest.mark.parametrize("previous_schema", [5, 6])
+def test_quiesced_migration_preserves_native_identity_and_refuses_live_owner(
+    tmp_path, previous_schema,
+):
     from tests.unit.loom.queue.test_deployment import _agent_config
     from loom.queue.deployment import (
         load_outbound_agent_service_config,
@@ -269,11 +273,36 @@ def test_quiesced_migration_preserves_native_identity_and_refuses_live_owner(tmp
     finally:
         client.shutdown_clean()
         client.close()
+    assert service.client.agent_root is not None
+    supervisor_root = service.client.agent_root / "supervisor"
+    supervisor_database = supervisor_root / "supervisor.sqlite"
+    with sqlite3.connect(supervisor_database) as conn:
+        if previous_schema == 5:
+            # Reproduce the actual predecessor table, not just its version tag.
+            conn.execute("DROP INDEX pending_temporary_storage")
+            for column in ("temporary_storage_pending", "temporary_storage_error", "start_error"):
+                conn.execute(f"ALTER TABLE launches DROP COLUMN {column}")
+            conn.execute("UPDATE metadata SET value = '5' WHERE key = 'schema_version'")
+        before = dict(conn.execute("SELECT key, value FROM metadata"))
     with service_backend_migration_guard(service, root_id):
         from loom.queue.operations import inspect_native_service
 
-        assert service.client.agent_root is not None
         assert inspect_native_service(service.client.agent_root).owner == root_id
+    with sqlite3.connect(supervisor_database) as conn:
+        assert dict(conn.execute("SELECT key, value FROM metadata")) == before
+    # The guard admits the old clean cut without rewriting it. Normal owner
+    # opening performs the supported migration and preserves retained identity.
+    from loom.queue._agent_process_supervisor import AgentProcessSupervisor
+
+    configuration = _service_configuration(supervisor_root)
+    owner = AgentProcessSupervisor(
+        supervisor_root, agent_id=root_id, profiles=configuration.profiles,
+    )
+    assert owner.supervisor_id == before["supervisor_id"]
+    assert owner.continuity_epoch == before["continuity_epoch"]
+    with sqlite3.connect(supervisor_database) as conn:
+        after = dict(conn.execute("SELECT key, value FROM metadata"))
+        assert after == {**before, "schema_version": "6"}
     with pytest.raises(QueueConflictError, match="identity changed"):
         with service_backend_migration_guard(service, "wrong-root"):
             pytest.fail("migration rebound native identity")
