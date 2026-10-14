@@ -537,6 +537,38 @@ remains. Another active successor, different target/owner or unsettled prior
 attempt refuses. Only the latest explicitly selected settled pass satisfies a
 slot, and all slots must pass before the gate reopens.
 
+If the installed runtime has changed its preparation-report contract, an older
+workload image may be unable to pass those checks. Keep admission closed and
+build a compatible immutable image separately. After a confirmed native check
+failure, the existing runtime operation can promote that image inside its own
+maintenance window:
+
+```sh
+loom fleet operation repair-workload upgrade-018 --fleet lab \
+  --workload-profile analysis --image /shared/images/analysis-v2.sif
+# Add --workload-inventory /PRIVATE/candidate/fleet.json to promote source too.
+loom fleet operation resume upgrade-018 --fleet lab
+```
+
+This bounded recovery requires all declared services to be live on the exact
+runtime target, unchanged native roots, settled work and the original gate owner.
+The selected profile must cover every upgraded agent. It retains a separate
+immutable workload intent under the parent operation's `workload-repair/`
+directory; the runtime intent and failed check evidence are preserved. The old
+settled-check authorization is revoked before promotion, without erasing results.
+The maintenance gate stays closed under its original owner. Ordinary
+native workload promotion owns source publication and interruption recovery.
+Fresh CPU/storage and declared GPU checks qualify the resulting service/image
+combination. Only their settlement permits restoration of the policy from before
+the runtime upgrade and reopening of the original gate. No report-format fallback,
+new service migration, rollback or temporary admission opening occurs.
+
+Repeat `repair-workload` only with the same target, or use ordinary parent
+`resume`. Once bound, parent `retry-check` and `retry-control` address the repair's
+checks and controls. Existing abort restrictions still apply after service
+replacement. A narrower selected-profile repair and changing a retained repair
+target are unsupported.
+
 A resume control can also fail with `retained_work`. Resolve the underlying
 native recovery first and keep the maintenance gate closed. Ordinary operation
 resume replays the failed control; it does not erase that result. Select a new

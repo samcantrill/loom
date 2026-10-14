@@ -38,6 +38,14 @@ class _Waiting(Exception):
     pass
 
 
+def _maintenance_binding(intent):
+    """A workload repair borrows its unchanged runtime operation's native gate."""
+    return intent.get("maintenance_binding", {
+        "operation_id": intent["operation_id"],
+        "target_intent_digest": digest(intent),
+    })
+
+
 def _checks(inventory, deployment, connection, config):
     if deployment is None or connection is None:
         for path in sorted(
@@ -260,10 +268,11 @@ class _Upgrade(sshops._Operation):
         gate = cast(
             dict[str, Any], thaw_plain_data(self.operator.observe_maintenance())
         )
+        binding = _maintenance_binding(self.intent)
         if (
             gate["state"] != "closed"
-            or gate["maintenance_id"] != self.intent["operation_id"]
-            or gate["intent_digest"] != digest(self.intent)
+            or gate["maintenance_id"] != binding["operation_id"]
+            or gate["intent_digest"] != binding["target_intent_digest"]
         ):
             raise QueueConflictError("maintenance gate owner/intent changed")
         return gate
@@ -289,13 +298,14 @@ class _Upgrade(sshops._Operation):
 
     def maintenance(self, key, action, check=None):
         path = self.receipts / key / "intent.json"
+        binding = _maintenance_binding(self.intent)
         request = (
             read(path)
             if path.exists()
             else {
                 "operation_id": self.intent["operation_id"] + "-" + key,
-                "maintenance_id": self.intent["operation_id"],
-                "maintenance_intent_digest": digest(self.intent),
+                "maintenance_id": binding["operation_id"],
+                "maintenance_intent_digest": binding["target_intent_digest"],
                 "action": action,
                 "expected_revision": self.operator.observe_maintenance()["revision"],
                 "check": check,
@@ -442,10 +452,7 @@ def _attempts(operation):
 
 def _prepare_attempt(operation, name, check, identity, previous=None):
     path = operation.inventory.path.parent / "checks" / identity / "intent.json"
-    binding = {
-        "operation_id": operation.intent["operation_id"],
-        "target_intent_digest": digest(operation.intent),
-    }
+    binding = _maintenance_binding(operation.intent)
     if path.exists():
         intent = read(path)
         if intent.get("maintenance_binding") != binding:
@@ -531,8 +538,8 @@ def _prepare_attempt(operation, name, check, identity, previous=None):
         ).to_dict()
 
     return {
-        "maintenance_id": operation.intent["operation_id"],
-        "target_intent_digest": digest(operation.intent),
+        "maintenance_id": binding["operation_id"],
+        "target_intent_digest": binding["target_intent_digest"],
         "previous_check_id": previous,
         "operation_id": identity,
         "slot": [name, check],
@@ -603,7 +610,7 @@ def _run_checks(operation):
 
 
 def _restore(operation, *, abort=False):
-    for name, original in operation.intent["agents"].items():
+    for name, original in operation.intent.get("restore_agents", operation.intent["agents"]).items():
         keys = [name + "-drain", name + "-checks-capacity"]
         predecessor = (original.get("control") or {}).get("operation_id")
         changed = False
@@ -647,6 +654,9 @@ def _restore(operation, *, abort=False):
 
 
 def _continue(operation):
+    if (operation.directory / "workload-repair" / "intent.json").exists():
+        from .runtime_workload_repair import continue_repair
+        return continue_repair(operation)
     if operation.intent.get("kind") == "workload-upgrade":
         from .workload_upgrades import continue_upgrade
         return continue_upgrade(operation)
@@ -825,9 +835,9 @@ def upgrade(
             intent["target_path"]
         ):
             raise QueueConflictError("upgrade target intent changed")
-        if workload_profile is not None and (intent.get("workload_profile") != workload_profile or image is None or intent.get("image") != str(Path(image).resolve())):
+        if action != "repair-workload" and workload_profile is not None and (intent.get("workload_profile") != workload_profile or image is None or intent.get("image") != str(Path(image).resolve())):
             raise QueueConflictError("workload target intent changed")
-        if workload_profile is not None and intent.get("workload_inventory") != (
+        if action != "repair-workload" and workload_profile is not None and intent.get("workload_inventory") != (
             None if workload_inventory is None else str(Path(workload_inventory).resolve())
         ):
             raise QueueConflictError("workload inventory intent changed")
@@ -861,6 +871,15 @@ def upgrade(
                         _restore(operation, abort=True)
                     atomic(directory / "aborted.json", {"state": "aborted"})
                     result = {"state": "aborted"}
+            elif action == "repair-workload":
+                from .runtime_workload_repair import repair_workload
+                result = repair_workload(operation, workload_profile=workload_profile,
+                                         image=image, workload_inventory=workload_inventory)
+            elif action in {"retry-check", "retry-control"} and (directory / "workload-repair" / "intent.json").exists():
+                from .runtime_workload_repair import continue_repair
+                result = continue_repair(operation, action=action, failed_check=failed_check,
+                                         new_check=new_check, failed_control=failed_control,
+                                         new_control=new_control)
             elif action == "retry-check":
                 result = _retry_check(operation, failed_check, new_check)
             elif action == "retry-control":
