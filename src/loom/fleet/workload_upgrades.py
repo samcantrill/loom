@@ -385,6 +385,7 @@ class WorkloadUpgrade(maintenance._Upgrade):
             request = read(path)
         else:
             gate = self.gate()
+            binding = maintenance._maintenance_binding(self.intent)
             current = cast(
                 dict[str, Any], thaw_plain_data(self.operator.observe_agent(name).value)
             )
@@ -401,8 +402,8 @@ class WorkloadUpgrade(maintenance._Upgrade):
                     False,
                     "Fleet selected workload promotion",
                     {
-                        "maintenance_id": self.intent["operation_id"],
-                        "maintenance_intent_digest": digest(self.intent),
+                        "maintenance_id": binding["operation_id"],
+                        "maintenance_intent_digest": binding["target_intent_digest"],
                         "expected_gate_revision": gate["revision"],
                         "agent_root_id": current["agent_root_id"],
                         "predecessor_immutable": candidate["source"]["immutable"],
@@ -469,8 +470,16 @@ def continue_upgrade(operation):
     operation.probes()
     irreversible = directory / "irreversible.json"
     if not irreversible.exists():
-        operation.maintenance("close", "close")
+        if "maintenance_binding" in intent:
+            operation.gate()
+        else:
+            operation.maintenance("close", "close")
         operation.settled()
+        if "maintenance_binding" in intent:
+            # The predecessor checks are settled evidence, not permission to run
+            # the old workload during promotion. Keep their results untouched.
+            for identity in list(operation.gate()["checks"]):
+                operation.maintenance("revoke-before-promotion-" + identity, "revoke", identity)
         for name, agent in intent["agents"].items():
             accepted = operation.policy(
                 name,

@@ -103,7 +103,7 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
         "operation", help="inspect or continue retained setup"
     )
     operations = operation.add_subparsers(dest="operation_command", required=True)
-    for action in ("status", "resume", "abort", "retry-check", "retry-control"):
+    for action in ("status", "resume", "abort", "retry-check", "retry-control", "repair-workload"):
         item = operations.add_parser(action)
         item.add_argument("operation_id")
         item.add_argument("--fleet", required=True)
@@ -113,6 +113,10 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
         if action == "retry-control":
             item.add_argument("--failed-control", required=True)
             item.add_argument("--operation-id", dest="new_control", required=True)
+        if action == "repair-workload":
+            item.add_argument("--workload-profile", required=True)
+            item.add_argument("--image", type=Path, required=True)
+            item.add_argument("--workload-inventory", type=Path)
         item.add_argument(
             "--format", dest="output_format", choices=("text", "json"), default="text"
         )
@@ -256,7 +260,7 @@ def handle(namespace: argparse.Namespace) -> int:
                     result = adopt(inventory, operation_id=namespace.operation_id, action=namespace.operation_command)
                 elif intent.get("kind") in {"runtime-upgrade", "workload-upgrade"}:
                     from loom.fleet.upgrades import upgrade
-                    result = upgrade(inventory, operation_id=namespace.operation_id, action=namespace.operation_command, failed_check=getattr(namespace, "failed_check", None), new_check=getattr(namespace, "new_check", None), failed_control=getattr(namespace, "failed_control", None), new_control=getattr(namespace, "new_control", None))
+                    result = upgrade(inventory, operation_id=namespace.operation_id, action=namespace.operation_command, failed_check=getattr(namespace, "failed_check", None), new_check=getattr(namespace, "new_check", None), failed_control=getattr(namespace, "failed_control", None), new_control=getattr(namespace, "new_control", None), workload_profile=getattr(namespace, "workload_profile", None), image=getattr(namespace, "image", None), workload_inventory=getattr(namespace, "workload_inventory", None))
                 elif namespace.operation_command == "resume":
                     result = apply(inventory, operation_id=namespace.operation_id, resume=True)
                 else:
