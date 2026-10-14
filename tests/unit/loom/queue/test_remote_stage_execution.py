@@ -1452,8 +1452,11 @@ def test_owner_rejected_saved_launch_retains_identity_and_truthful_no_start_repo
     assert report.status is StageStatus.FAILED
     assert report.process_created is False
     assert workspace.supervisor_launch_json() == retained_launch
-    assert not any(record["disposition"] == "applied"
-                   for record in report.executor_metadata["resource_controls"])
+    assert report.executor_metadata is not None
+    controls = report.executor_metadata["resource_controls"]
+    assert isinstance(controls, (tuple, list))
+    assert all(isinstance(record, Mapping) and record["disposition"] != "applied"
+               for record in controls)
     (tmp_path / "unavailable").rename(data)
     with pytest.raises(_SupervisorNoStartError, match="durably rejected"):
         supervisor.launch(launch)
@@ -1538,11 +1541,14 @@ def test_completed_shared_container_reports_and_publishes_without_original_input
     original_command = launch.container_command
     (tmp_path / "data").rename(tmp_path / "unavailable-input")
 
-    restored = _launch_from_value(json.loads(workspace.supervisor_launch_json()))
+    retained_launch = workspace.supervisor_launch_json()
+    assert retained_launch is not None
+    restored = _launch_from_value(json.loads(retained_launch))
     assert restored.spec_digest == original_digest
     assert restored.container_command == original_command
     report = workspace.retain_outputs()
     assert report.status is StageStatus.SUCCEEDED
+    assert report.executor_metadata is not None
     assert (report.executor_metadata.get("resource_controls") is None) is legacy
     refs = publish(workspace.request(), report, profile.shared_roots, agent_id="agent-1", fence="fence-1")
     assert workspace.retain_outputs() == report

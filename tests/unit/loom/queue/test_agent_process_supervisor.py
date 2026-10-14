@@ -1398,12 +1398,22 @@ def test_client_disconnect_preserves_supervisor_and_its_running_worker(
 def test_client_deadline_interrupts_actual_transport_and_closes_connection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stall: str,
 ) -> None:
+    from loom.queue._agent_process_supervisor import _DeadlineConnection
+
     agent = tmp_path / "agent"
     agent.mkdir()
     client = AgentProcessSupervisorService.initialize(
         agent, configuration=SupervisorLaunchConfiguration("agent-A", (_profile(),))
     )
     original_endpoint = client._endpoint
+    transports: list[tuple[_DeadlineConnection, socket.socket]] = []
+    initialize_connection = _DeadlineConnection.__init__
+
+    def retain_connection(self: _DeadlineConnection, transport: socket.socket, deadline: float) -> None:
+        initialize_connection(self, transport, deadline)
+        transports.append((self, transport))
+
+    monkeypatch.setattr(_DeadlineConnection, "__init__", retain_connection)
     release = Event()
     reached = Event()
     closed = Event()
@@ -1465,12 +1475,12 @@ def test_client_deadline_interrupts_actual_transport_and_closes_connection(
                         def call() -> tuple[float, _SupervisorCommunicationError]:
                             started = monotonic()
                             threads = set(threading.enumerate())
-                            descriptors = len(tuple(Path("/proc/self/fd").iterdir()))
                             with pytest.raises(_SupervisorCommunicationError) as failure:
                                 client._call("launch", request)
                             assert set(threading.enumerate()) == threads
-                            if stall == "connect":
-                                assert len(tuple(Path("/proc/self/fd").iterdir())) == descriptors
+                            assert len(transports) == 1
+                            connection, transport = transports[0]
+                            assert connection.closed and transport.fileno() == -1
                             return monotonic() - started, failure.value
 
                         attempt = workers.submit(call)
