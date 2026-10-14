@@ -917,10 +917,13 @@ def _complete_remote_result_and_release(
             ):
                 result = _managed_root_failed_worker_result(
                     workspace.worker_request(),
-                    ManagedLocalError("worker backend success is unqualified"),
+                    ManagedLocalError(evidence.temporary_storage_error or "worker backend success is unqualified"),
                     process_exit_code=evidence.exit_code,
                 )
             metadata = dict(result.executor_metadata)
+            metadata.pop("temporary_storage_cleanup_error", None)
+            if evidence.temporary_storage_error is not None:
+                metadata["temporary_storage_cleanup_error"] = evidence.temporary_storage_error
             metadata.pop("managed_successful_exit", None)
             metadata.pop("managed_backend_success", None)
             if result.status is StageStatus.SUCCEEDED:

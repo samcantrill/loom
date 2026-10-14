@@ -2237,6 +2237,22 @@ def _resident_profile(tmp_path: Path, profile_id: str) -> dict[str, object]:
     }
 
 
+@pytest.mark.parametrize("role", ("coordinator", "agent"))
+@pytest.mark.optional_dependency
+def test_empty_temporary_mounts_preserve_role_identity(tmp_path: Path, role: str) -> None:
+    pytest.importorskip("weave")
+    source = _coordinator_config(tmp_path) if role == "coordinator" else _agent_config(tmp_path)
+    load = load_coordinator_service_config if role == "coordinator" else load_outbound_agent_service_config
+    original = load(source)
+    agent_source = source.parent / "agent.yaml"
+    agent = json.loads(agent_source.read_text())
+    agent["resident_profiles"][0]["temporary_mounts"] = []
+    _write_protected(agent_source, agent)
+    current = load(source)
+    assert current.immutable_fingerprint == original.immutable_fingerprint
+    assert current.active_fingerprint == original.active_fingerprint
+
+
 def _local_agent_payload(source: Path) -> dict[str, object]:
     payload = json.loads((source.parent / "agent.yaml").read_text(encoding="utf-8"))
     assert isinstance(payload, dict)

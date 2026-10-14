@@ -478,6 +478,7 @@ class ResidentExecutionProfile:
     preparation_shared_roots: Mapping[str, Path] = field(default_factory=dict)
     container: Mapping[str, PlainData] | None = None
     shared_roots: Mapping[str, PlainData] = field(default_factory=dict)
+    temporary_mounts: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.descriptor, ResidentProfileDescriptor):
@@ -488,6 +489,8 @@ class ResidentExecutionProfile:
         object.__setattr__(self, "descriptor", replace(self.descriptor, shared_roots=qualifications(roots)))
         from ._container_worker import container_binding
         object.__setattr__(self, "container", container_binding(self.container))
+        from ._temporary_storage import temporary_mount_targets
+        object.__setattr__(self, "temporary_mounts", temporary_mount_targets(self.temporary_mounts, self.container))
         if self.container is not None:
             options = cast(Mapping[str, PlainData], self.container["options"])
             if not Path(str(options["command"])).is_file():
@@ -569,6 +572,7 @@ class ResidentExecutionProfile:
             readiness_identity=self.readiness_identity,
             preparation_shared_roots=self.preparation_shared_roots,
             shared_roots=self.shared_roots,
+            temporary_mounts=self.temporary_mounts,
         )
 
 
