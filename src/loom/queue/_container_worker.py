@@ -116,6 +116,8 @@ def prepare_container_worker_paths(
     from ._shared_recovery import validate_wire, current_tree
     from .shared_execution import assignment_scope
 
+    from ._temporary_storage import prepare_assignment_storage
+    prepare_assignment_storage(profile, workspace=workspace, agent_id=agent_id)
     if not profile.shared_roots:
         return
     assignment = _ResidentAssignmentWorkspace(workspace.parent.parent, workspace.name).request()
@@ -224,6 +226,12 @@ def project_container_worker(
     assert binding is not None
     container = parse_container_options(binding["container"])
     mounts = _base_worker_mounts(profile, workspace, runtime=runtime, shared_scope=shared_scope)
+    if assignment is not None and profile.temporary_mounts:
+        from ._temporary_storage import assignment_mounts
+        if agent_id is None:
+            raise ValueError("temporary storage requires the assignment agent identity")
+        for target, source in assignment_mounts(profile, workspace=workspace, agent_id=agent_id).items():
+            mounts[target] = replace(mounts[target], source=str(source))
     if shared_scope is not None:
         from .shared_execution import project_path
         for item in cast(Sequence[Mapping[str, PlainData]], shared_scope["locations"]):

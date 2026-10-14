@@ -247,6 +247,30 @@ free resources or proof of every platform constraint. JSON output from
 `agent-check` and `daemon-check` includes `effective_capacity` for the selected
 agent resources. A `null` CPU or memory value means no supported bound was
 available; a `null` whole object means no agent-level resources were selected.
+
+A container resident profile may declare `temporary_mounts: ["/loom/cache"]`.
+Each target must already select a writable installed container mount. Its source
+is the host-specific storage base; Loom substitutes an owned directory beneath
+`<base>/attempts/` for each assignment. All processes in that assignment see the
+same container target. Separate assignments have separate directories, and replay
+of the same launch retains the same directory. Omitting the declaration keeps the
+installed mount's existing lifetime. Empty declarations preserve the previous
+profile identity; a nonempty declaration changes the active launch identity and
+must be adopted through the normal profile update route.
+
+The supervisor records ownership before allocating storage. It removes only the
+owned directory after proving containment of the entire assignment, including
+failed launches and cancelled work. Unknown containment preserves the directory.
+Deletion failure is reported as `temporary_storage_cleanup_error` in execution
+metadata; an existing execution failure remains primary. It prevents an otherwise
+successful assignment from being qualified as successful, but does not retain
+compute claims after containment. Pending cleanup is retried on supervisor restart
+or agent reconnection using the journaled profile and host ownership. Checkpoints,
+results and other retained evidence must live outside temporary mounts. The base,
+other attempts and execution workspaces are never deletion targets. Mounts may not
+overlap other declared mounts or execution/project roots. There are no free-space
+estimates, reservations, eviction or storage-failure fallback.
+
 Before `daemon-check`, `agent-check`, initialization, serving, or explicit
 reload offers a resident profile, Loom runs the selected worker Python with the
 same cwd and allowlisted environment used for workers. A profile may add a

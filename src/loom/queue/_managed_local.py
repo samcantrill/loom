@@ -4202,11 +4202,17 @@ def run_managed_local_assignment(
             worker_result = _managed_root_failed_worker_result(
                 worker_request,
                 ManagedLocalError(
-                    "worker success lacks successful complete owned-group exit"
+                    contained.temporary_storage_error
+                    or "worker success lacks successful complete owned-group exit"
                 ),
                 process_exit_code=contained.exit_code,
                 worker_result_state="unqualified_success",
             )
+            if contained.temporary_storage_error is not None:
+                worker_result = replace(worker_result, executor_metadata={
+                    **worker_result.executor_metadata,
+                    "temporary_storage_cleanup_error": contained.temporary_storage_error,
+                })
             return finalize_result(worker_result, coordinator_expected="running")
         try:
             report = workspace.retain_outputs()
@@ -4238,6 +4244,9 @@ def run_managed_local_assignment(
         metadata = dict(worker_result.executor_metadata)
         metadata.pop("managed_successful_exit", None)
         metadata.pop("managed_backend_success", None)
+        metadata.pop("temporary_storage_cleanup_error", None)
+        if contained.temporary_storage_error is not None:
+            metadata["temporary_storage_cleanup_error"] = contained.temporary_storage_error
         if worker_result.status is StageStatus.SUCCEEDED:
             metadata[
                 "managed_backend_success"

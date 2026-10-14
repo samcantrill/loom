@@ -1855,6 +1855,7 @@ def test_embedded_restart_reuses_retained_input_descriptors_and_staged_bytes(tmp
         first.stop()
         retained = SQLiteAgentJournal(config.agent_journal, _allow_initialize=False).retained_claim_commands()
         assert len(retained) == 1
+        assert config.agent_root is not None
         workspace = _ResidentAssignmentWorkspace(config.agent_root, retained[0].assignment.assignment_id)
         assert len(workspace.request().inputs) == 1
         saved_launch = workspace.supervisor_launch_json()
@@ -1891,6 +1892,7 @@ def test_embedded_qualification_rejection_settles_without_accepting_a_launch(tmp
     daemon.start()
     execution = daemon._execution
     assert execution is not None and execution.supervisor is not None
+    assert execution.journal is not None and config.agent_root is not None
     original = execution.supervisor.launch
 
     def unavailable(launch):

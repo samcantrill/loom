@@ -511,7 +511,9 @@ def test_conditional_controls_preserve_independent_policy_and_exact_replay(owner
             absent = {"expected_control_id": None}
             client.control_agent(first, condition=absent)
             acknowledge(first.operation_id)
-            assert client.observe_agent(session.agent_id).value["control"]["operation_id"] == first.operation_id
+            observed_control = client.observe_agent(session.agent_id).value["control"]
+            assert isinstance(observed_control, Mapping)
+            assert observed_control["operation_id"] == first.operation_id
             independent = drain(session, operation_id="independent-drain")
             direct.control_agent(independent)
             acknowledge(independent.operation_id)
@@ -522,7 +524,9 @@ def test_conditional_controls_preserve_independent_policy_and_exact_replay(owner
             assert refused.value.code == "conflict"
             assert refused.value.mutation_outcome == "not_applied"
             assert client.observe_agent(session.agent_id).value["drained"] is True
-            assert client.observe_agent(session.agent_id).value["control"]["operation_id"] == independent.operation_id
+            observed_control = client.observe_agent(session.agent_id).value["control"]
+            assert isinstance(observed_control, Mapping)
+            assert observed_control["operation_id"] == independent.operation_id
             matching = {"expected_control_id": independent.operation_id}
             client.control_agent(restore, condition=matching)
             acknowledge(restore.operation_id)
@@ -532,7 +536,9 @@ def test_conditional_controls_preserve_independent_policy_and_exact_replay(owner
             # Lost-reply recovery resolves original acceptance, never reapplies it.
             assert client.control_agent(restore, condition=matching)["state"] == "applied"
             assert client.observe_agent(session.agent_id).value["drained"] is True
-            assert client.observe_agent(session.agent_id).value["control"]["operation_id"] == later.operation_id
+            observed_control = client.observe_agent(session.agent_id).value["control"]
+            assert isinstance(observed_control, Mapping)
+            assert observed_control["operation_id"] == later.operation_id
             with pytest.raises(CoordinatorClientError) as changed:
                 client.control_agent(restore, condition={"expected_control_id": later.operation_id})
             assert changed.value.code == "conflict"
