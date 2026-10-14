@@ -2046,7 +2046,9 @@ def retained_supervisor_guard(agent_root: Path, *, agent_id: str):
                 states = tuple(row[0] for row in conn.execute("SELECT state FROM launches"))
                 boot = json.loads(metadata.get("boot_evidence", "null"))
                 if (
-                    metadata.get("schema_version") != str(AgentProcessSupervisor._SCHEMA_VERSION)
+                    # V5 has the same ownership and clean-cut evidence. Its
+                    # optional cleanup columns migrate when the new owner opens.
+                    metadata.get("schema_version") not in {"5", str(AgentProcessSupervisor._SCHEMA_VERSION)}
                     or metadata.get("agent_id") != agent_id
                     or metadata.get("configuration_fingerprint") != fingerprint
                     or metadata.get("execution_root") != str(root)
