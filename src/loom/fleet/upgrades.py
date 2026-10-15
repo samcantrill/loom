@@ -238,7 +238,7 @@ def preview(
             "close admission",
             "wait admitted work and native settlement",
             "conditional drain",
-            "stop and migrate/replace",
+            "stop and replace",
             "reconcile",
             "authorize exact checks",
             "wait checks and release",
@@ -740,7 +740,7 @@ def _continue(operation):
             irreversible,
             {"step": "stop-replace", "intent_digest": digest(operation.intent)},
         )
-    # Host receipts retain exact stop/migrate/start requests across coordinator downtime.
+    # Host receipts retain exact stop/replace/start requests across coordinator downtime.
     for name in [*operation.intent["agents"], "coordinator"]:
         row = operation.intent["hosts"][name]
         operation.call(

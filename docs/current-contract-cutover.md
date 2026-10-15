@@ -12,8 +12,10 @@ Initial base: `25cb93c853da0e58646ff405be081b237f5b5147`. Isolated worktree
 `../loom-worktrees/current-contract-cutover`. The first branch
 `refactor/current-contract-cutover` merged through PR #408 as
 `0d860c47d30e8bfbe01023f3fc6260b91ba60e85`; its merged tree matches the reviewed
-head. The authority slice uses `refactor/current-authority-formats` from that
-exact merge. No active installation is modified by local
+head. The authority slice `refactor/current-authority-formats` merged through #409 as
+`7cd73071cadcf6d11f6d3c9ff7cec963f15c16f3`. Its tree matches reviewed source plus
+evidence notes at `097a793f`. The next branch `refactor/current-coordinator-formats`
+starts from that exact merge. No active installation is modified by local
 tests. Current-format bytes remain unchanged unless a later row changes shape.
 
 ## Persistence slice
@@ -23,8 +25,8 @@ tests. Current-format bytes remain unchanged unless a later row changes shape.
 | Current record writers → `serialization.load_versioned_document` | Exact owner-declared version, strict integer and fields; removed `DocumentMigration`, export, argument and conversion loop | merged #408 |
 | Supervisor initialization/launch → reopen and retained role guard | Journal 6 and launch 2 only; removed schema 2–5 upgrades/schema-less launches; current DDL retained; read-only refusal before owner contact or repair | merged #408 |
 | Coordinator/agent roots → service startup | Current 19/12 only, remove offline schema upgrade and older reconstruction | pending |
-| Authority/coordination → current stores and inspection | Current 11, complete fresh DDL, no automatic upgrades; preserve WAL-aware inspection | implemented; validation and independent review passed (#409) |
-| Authority-service repository → admission/read/write | Repository 12; remove v3–11 upgrade functions and audit-table conversion; fresh DDL and strict existing-root checks | implemented; validation and independent review passed (#409) |
+| Authority/coordination → current stores and inspection | Current 11, complete fresh DDL, no automatic upgrades; preserve WAL-aware inspection | merged #409 |
+| Authority-service repository → admission/read/write | Repository 12; remove v3–11 upgrade functions and audit-table conversion; fresh DDL and strict existing-root checks | merged #409 |
 
 Discovery before edits: `DocumentMigration` and `migrations=` have no production
 callers; only schema helper tests pass conversions. Current callers include
@@ -201,8 +203,8 @@ with no accepted-contract blocker. It verified that changes after tested source
 head `837209c7` were documentation only. Review retained the documented WAL-copy
 temporary-space/I/O and sustained-churn timeout risks for downstream scaling
 qualification; fresh service and coordination stores use rollback journals.
-Subsequent edits to this receipt only record that review. Delivery is through
-PR #409; the following work must verify its remote merge before continuing.
+Subsequent edits to this receipt only record that review. PR #409 is remotely merged; base develop, final head and matching merged tree
+were verified before the next branch started.
 
 Next coordinator census: `_coordinator_upgrade.py` and `daemon-upgrade` have
 live consumers in fleet `_upgrade_host.py` and `_adoption_host.py`, as well as
@@ -220,3 +222,107 @@ context and processor v3; historical offline/import/annotation/lineage/Slurm
 projections; fleet predecessor adoption and schema-upgrade CLI removal. Each
 requires producer/consumer and dynamic-reference inventory before modification.
 No row can be closed solely by assigning it to another stage.
+
+
+### Coordinator, agent and fleet consumer reconciliation
+
+Base `7cd73071cadcf6d11f6d3c9ff7cec963f15c16f3`. Discovery
+finds the following coupled owners, beyond the earlier coordinator upgrade CLI:
+
+| Boundary | Existing producer/consumer and required disposition |
+| --- | --- |
+| Coordinator 19 / agent 12 roots | `local_daemon._open_root` has a historical selector and earlier-shape reconstruction; remove the selector, old preparation flags and offline upgrader. Preserve full current initialization and pre-owner-lock refusal. |
+| Assignment delivery schema | `LocalDaemon.start` and `_RemoteAgentJournal` add `reference_json` on reopen; current `initialize_agent_session_schema` already creates it, while `validate_agent_session_schema` omits it. Require the complete current columns and remove repairs/backfill. Inspect nullable current inline/reference semantics before tightening row admission. |
+| Agent retained poll/delivery | `_agent_session_journal` backfills missing inline request evidence; protocol/journal also recover legacy unconfirmed fences and absent sequence predecessors. These reach `agent_session_transport` restart barriers. Remove only historical construction/recovery after checking current lost-reply, rejection and restart producers; preserve exact request/digest/containment proofs. |
+| Candidate runtime probe | `operations.probe_upgrade_compatibility` admits coordinator 12/15–18 and emits migration-direction fields. It must report only current-storage compatibility and preserve capability qualification and truthful refusal. Update all consumers and inspection fixtures together. |
+| Current runtime replacement | `fleet._upgrade_host.replace` invokes `daemon-upgrade`; `inspect` permits schema 18. Replace that dependency with current-schema verification before replacement, retaining native settlement/owner locks, exact candidate binding and workload checks. |
+| Predecessor installation adoption | `fleet/adoption.py`, `_adoption_host.py`, `queue.service_upgrade.inspect_adoption_service`, CLI `fleet adopt`, host dispatch and operation resume expose historical adoption. Remove this reachable command/API set, not just its coordinator-upgrade call. |
+| Service-manager migration | `fleet._services.migrate`, `ssh_operations.migrate_services`, CLI `migrate-services` and retained operation dispatch convert existing tmux bindings. Remove migration entrypoints; keep current explicit service-manager modes and current create/start/stop/replacement. The shared native guard still has a current replacement consumer and should use current replacement terminology without an alias. |
+| Rphys wrapper | `tools/loom-fleet/adoption.py`, `rphys-fleet` migration dispatch and `operate.py` instructions emit/import predecessor inventory. Remove when adopting the paired Loom pin, so maintained runtime selections never invoke a removed command. |
+
+Relevant existing checks include coordinator schema/refusal and preparation
+operations, reconciliation and action results; agent-session current delivery and
+restart/recovery tests; operator observation compatibility/refusal; fleet runtime
+upgrade interruption/resume/native settlement, service lifecycle and command
+parsing. Migration/adoption-success-only tests are obsolete; any current ownership,
+cancellation, replay and containment assertions must survive at their current
+owners. Do not claim the coordinator/agent inventory complete while protocol
+fallbacks remain open. Physical current-runtime replacement remains part of the
+later paired image/deployment qualification, not these local test receipts.
+
+Implemented in this delivery: current-only coordinator/agent schema reopening,
+complete delivery-column validation, no startup DDL/backfill, no coordinator
+schema upgrader/API/CLI, no Fleet installation adoption or backend-migration
+commands/host steps, current-only candidate compatibility, and current native
+replacement guard naming without an alias. Current explicit tmux/systemd modes
+remain supported. Retired host actions and retained operation kinds are refused
+before lock/receipt creation. Paired rphys wrapper removal remains pending with
+its dependency adoption; its existing pinned runtime still owns its old API.
+
+Discovery/validation correction: a real interrupted coordinator write passed
+schema admission but failed at `retirement_receipt`, whose read-only connection
+required rollback on the original. That read now uses the same established
+private inspector; normal current startup performs recovery afterward. The first
+core execution was 91 passes and one such failure. No failed case counts as pass.
+The affected retirement consumer joins this delivery's selected checks.
+
+Validation selection (locked Python 3.12, collect before execution):
+
+- Baseline: `tests/unit/loom/queue/test_current_storage.py` and
+  `tests/unit/loom/queue/test_agent_sessions.py`. Fresh reopen, before-lock refusal,
+  missing-column refusal, hot-write recovery, removed command parsing, current
+  delivery publication/replay/reconciliation and resource handling.
+- Config/Fleet environment (`--extra config --extra fleet`), exact selectors:
+
+```text
+tests/integration/queue/test_operator_observations.py
+tests/integration/queue/test_role_retirement.py
+tests/integration/queue/test_reconciled_runs.py
+tests/integration/queue/test_preparation_operations.py::test_restart_reopens_real_nonterminal_admission_and_retained_worker_journal
+tests/integration/queue/test_preparation_operations.py::test_native_unix_prepare_publish_submit_and_reconnect
+tests/integration/queue/test_preparation_operations.py::test_running_preparation_cancellation_waits_for_native_resource_release
+tests/integration/queue/test_preparation_operations.py::test_restart_reuses_capture_and_replays_a_claimed_complete_target
+tests/integration/queue/test_agent_session_transport.py::test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result
+tests/integration/fleet/test_runtime_upgrade.py
+tests/integration/fleet/test_service_lifecycle.py
+tests/integration/fleet/test_configuration.py
+tests/integration/fleet/test_ssh_operations.py
+tests/unit/loom/fleet/test_upgrades.py
+```
+
+The integration population covers real current preparation/admission restart,
+exact intent/cancellation replay, current supervisor and durable result recovery,
+operator observations, retirement/release, current runtime replacement and setup
+interruption/replay. Migration-only tests are removed; mixed tests retain their
+current identity, work, cleanup and replay assertions. Retired delivery-backfill
+fixtures no longer claim a supported restart path. No retired-case assertion is
+changed into a pass for current behavior. Agent protocol legacy fencing/resource
+fallbacks remain an explicit later transport/API inventory item and are not
+claimed removed by this storage/command delivery.
+
+Changed-file Ruff, affected source Pyright in the config/Fleet environment, and
+diff checks also apply. No new dependency, scientific producer, report writer or
+fixture input format changes; earlier unaffected serialization/authority evidence
+is reused, except reached service-lifecycle guard checks are fresh here. Expand
+for newly reached consumers or failures; physical fleet/image qualification and
+the final scientific/size/scaling/archive gates remain outstanding.
+
+Core final receipt: 92 passed in 33.21 s, no failures or skips
+(`build/current-contract-cutover/coordinator-core-final.xml`). Changed-file Ruff
+and affected Pyright passed. Source/test diff plus the new current-storage test
+SHA-256 is `60f0914ed64072a31634b334fc68a14cc2a8427cf7890683074aa801157d394b`.
+The config/Fleet selection completed on the same source/test tree: 169 passed in
+2170.47 s, with zero failures, errors, skips or deselections
+(`build/current-contract-cutover/coordinator-config.xml`). These include disposable
+SSH installation/runtime-replacement fixtures; they do not claim qualification
+of an external physical fleet. Together the two selections cover 261 distinct
+cases. No selected coverage gap remains.
+
+Independent actual-diff review passed. Its one finding, a stale downstream guide
+claim that a schema-12 upgrade remained available, was corrected to the
+current-root procedure and confirmed resolved. Source/test hash remains the one
+above; subsequent differences are documentation only and leave runtime source,
+dependencies, configurations and fixtures unchanged. Earlier authority and
+serialization receipts therefore remain applicable within their stated scopes.
+The paired rphys pin/wrapper and physical qualification remain open. The delivery
+PR owns the exact commit, remote merge and tree-synchronization receipt.

@@ -1270,7 +1270,7 @@ def test_running_preparation_cancellation_waits_for_native_resource_release(
         daemon.stop()
 
 
-def test_upgrade_reopens_real_nonterminal_admission_and_retained_worker_journal(
+def test_restart_reopens_real_nonterminal_admission_and_retained_worker_journal(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1351,46 +1351,11 @@ def test_upgrade_reopens_real_nonterminal_admission_and_retained_worker_journal(
             service.daemon.agent_root / "control.sqlite",
         )
     }
-    # Prior formats are unchanged: create the exact predecessor control shape
-    # only after real native admissions, claims and a worker process exist.
-    with sqlite3.connect(service.daemon.control_database) as conn:
-        assert (
-            conn.execute("SELECT COUNT(*) FROM preparation_operations").fetchone()[0]
-            == 0
-        )
-        conn.execute("DROP TABLE action_demands")
-        conn.execute("DROP TABLE action_claims")
-        conn.execute("DROP TABLE action_graph_cancellations")
-        conn.execute("DROP TABLE preparation_cancellations")
-        conn.execute("DROP TABLE preparation_operations")
-        conn.execute("PRAGMA user_version = 12")
-        before = {
-            row[0]: tuple(conn.execute(f'SELECT * FROM "{row[0]}"'))
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            )
-        }
-    upgraded = _cli_result("daemon-upgrade", str(config_path))["result"]
-    assert upgraded == {"coordinator_id": coordinator_id, "schema_version": 19}
-    with sqlite3.connect(service.daemon.control_database) as conn:
-        assert {
-            name: tuple(conn.execute(f'SELECT * FROM "{name}"')) for name in before
-        } == before
     assert {path: path.read_bytes() for path in worker_files} == worker_files
     assert (
-        SQLiteAgentJournal(
-            service.daemon.agent_journal, _allow_initialize=False
-        ).retained_claim_commands()
+        SQLiteAgentJournal(service.daemon.agent_journal, _allow_initialize=False).retained_claim_commands()
         == retained
     )
-    assert LocalDaemon.upgrade_coordinator_root(service.daemon) == (coordinator_id, 19)
-    (backup,) = service.daemon.coordinator_root.glob("*.backup")
-    with sqlite3.connect(backup) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
-        assert (
-            tuple(conn.execute("SELECT * FROM managed_admissions"))
-            == before["managed_admissions"]
-        )
 
     entered = Event()
     resume = LocalDaemonExecution.resume_retained_local_work

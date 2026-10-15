@@ -6234,6 +6234,7 @@ def validate_agent_session_schema(
                 "request_json",
                 "state",
                 "poll_sequence",
+                "reference_json",
             },
             "remote_assignments": {
                 "assignment_id",
@@ -6345,6 +6346,7 @@ def validate_agent_session_schema(
                 "reference_kind",
                 "reference_id",
                 "resolved",
+                "reference_json",
             },
             "agent_reference_revision": {"singleton", "revision"},
             "agent_retirement_proofs_local": {"session_id", "proof_json"},

@@ -347,7 +347,7 @@ def start(request):
     manager = request.get("service_manager", "tmux")
     binding = Path(request["admin"]) / "service.json"
     if binding.exists() and read(binding).get("service_manager", "tmux") != manager:
-        raise QueueConflictError("service backend change requires explicit quiesced migration")
+        raise QueueConflictError("service backend change requires a fresh installation")
     if manager == "systemd-user":
         from loom.fleet._services import start as start_systemd
         return start_systemd(request)
@@ -670,9 +670,6 @@ def bind_principal(request, directory):
 
 def execute(request, repeated, directory):
     action = request["action"]
-    if action.startswith("adopt-"):
-        from loom.fleet._adoption_host import execute as adoption_step
-        return adoption_step(request, directory)
     if action.startswith("workload-"):
         from loom.fleet._workload_host import execute as workload_step
         return workload_step(request, directory)
@@ -689,9 +686,6 @@ def execute(request, repeated, directory):
         return initialize(request, repeated)
     if action == "start":
         return start(request)
-    if action == "migrate-services":
-        from loom.fleet._services import migrate
-        return migrate(request)
     if action == "enroll":
         return enroll(request, directory)
     if action == "bind":
@@ -713,6 +707,13 @@ def execute(request, repeated, directory):
 def main():
     os.umask(0o077)
     request = json.loads(sys.stdin.buffer.read(128 * 1024 * 1024 + 1))
+    if request["action"] not in {
+        "receipt", "prepare", "issue", "receive", "initialize", "start", "enroll", "bind",
+        "observe", "resources", "upgrade-probe", "upgrade-settlement", "upgrade-stop",
+        "upgrade-replace", "workload-probe", "workload-coordinator-probe", "workload-recover",
+        "workload-stage", "workload-publish",
+    }:
+        raise QueueConflictError("unsupported fixed native host action")
     admin = Path(request["admin"])
     with (admin / "native.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -726,7 +727,7 @@ def main():
                 if publication.exists()
                 else None
             )
-        if request["action"] in {"observe", "resources", "upgrade-probe", "upgrade-settlement", "workload-probe", "workload-coordinator-probe", "workload-recover", "adopt-probe"}:
+        if request["action"] in {"observe", "resources", "upgrade-probe", "upgrade-settlement", "workload-probe", "workload-coordinator-probe", "workload-recover"}:
             if (
                 request.get("expected_declaration") is not None
                 and digest(payload(request)) != request["expected_declaration"]

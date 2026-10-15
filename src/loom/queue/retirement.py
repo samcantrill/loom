@@ -16,6 +16,7 @@ import sqlite3
 import stat
 from typing import TYPE_CHECKING, cast
 
+from loom._sqlite_inspection import inspect_sqlite_database
 from loom.serialization import PlainData
 
 from .errors import QueueConflictError, QueueServiceError
@@ -263,7 +264,7 @@ def verify_agent_candidate(spec: AgentSpec) -> AgentDeclarationBinding:
 def retirement_receipt(root: Path) -> dict[str, PlainData] | None:
     """Read an existing role's retirement fence without creating any state."""
     database = root / "control.sqlite"
-    with sqlite3.connect(f"{database.resolve().as_uri()}?mode=ro", uri=True) as conn:
+    with inspect_sqlite_database(database) as conn:
         row = conn.execute(
             "SELECT value FROM root_metadata WHERE key='role_retirement'"
         ).fetchone()

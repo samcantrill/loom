@@ -24,6 +24,7 @@ import stat
 
 from typing import cast
 
+from loom._sqlite_inspection import inspect_sqlite_database
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 
 from loom.queue._managed_local import (
@@ -127,47 +128,8 @@ class _RemoteAgentJournal:
             raise QueueServiceError(
                 "remote agent control state is unavailable"
             ) from exc
-        with self._connection() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            columns = {row[1] for row in conn.execute("PRAGMA table_info(agent_session_references)")}
-            if "reference_json" not in columns:
-                conn.execute("ALTER TABLE agent_session_references ADD COLUMN reference_json TEXT")
-            self._backfill_delivery_requests(conn)
-            conn.commit()
         self.root_id = metadata["stable_id"]
 
-    @staticmethod
-    def _backfill_delivery_requests(conn: sqlite3.Connection) -> None:
-        from ._shared_assignment import reference
-
-        # Only the surviving original inline receipt can fill a legacy row.
-        # A resolved workspace is a different representation and remains owned
-        # by the retained-work recovery path.
-        rows = conn.execute(
-            "SELECT r.session_id, r.reference_id, p.result_json "
-            "FROM agent_session_references r JOIN agent_poll_state_local p "
-            "ON p.session_id = r.session_id WHERE r.reference_kind = 'delivery' "
-            "AND r.resolved = 0 AND r.reference_json IS NULL "
-            "AND p.result_json IS NOT NULL"
-        ).fetchall()
-        for row in rows:
-            result = json.loads(row["result_json"])
-            request = result.get("request")
-            if (
-                result.get("result") != "assignment"
-                or not isinstance(request, dict)
-                or request.get("assignment_id") != row["reference_id"]
-            ):
-                continue
-            if reference(request) is not None:
-                continue
-            _ResidentAssignmentBundle.from_remote_dict(request)
-            conn.execute(
-                "UPDATE agent_session_references SET reference_json = ? "
-                "WHERE session_id = ? AND reference_kind = 'delivery' "
-                "AND reference_id = ? AND resolved = 0 AND reference_json IS NULL",
-                (_canonical_json(request), row["session_id"], row["reference_id"]),
-            )
 
     def _validated_metadata(
         self,
@@ -176,7 +138,7 @@ class _RemoteAgentJournal:
     ) -> dict[str, str]:
         """Read and validate the immutable binding and recoverable active state."""
 
-        with self._connection() as conn:
+        with inspect_sqlite_database(self._path, timeout=30) as conn:
             if int(conn.execute("PRAGMA user_version").fetchone()[0]) != (
                 _LOCAL_DAEMON_SCHEMA_VERSION
             ):
