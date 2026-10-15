@@ -743,7 +743,7 @@ def _apptainer_descriptor(name: str) -> ExecutorDescriptor:
             "singularity_compatible": name == "singularity",
             "timeout_prerequisites": (
                 "built-in subprocess runner on Linux with pidfds and waitid/WNOWAIT; "
-                "SingularityCE 3.10.4 foreground exec with PID-namespace init; "
+                "SingularityCE 3.10.4 or 4.1.1 foreground exec with PID-namespace init; "
                 "execution-host admission is checked at launch, not by this descriptor"
             ),
             "security_sandbox": False,
@@ -904,7 +904,7 @@ def _timeout_capability_message(
         if executor in {"apptainer", "singularity"}:
             return (
                 f"executor {executor!r} can enforce reliability timeout policy with "
-                "the built-in runner on supported Linux/SingularityCE 3.10.4 "
+                "the built-in runner on supported Linux/SingularityCE 3.10.4 or 4.1.1 "
                 "PID-namespace hosts; execution-host prerequisites are checked at "
                 "launch, not by this static diagnostic"
             )

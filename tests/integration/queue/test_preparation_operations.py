@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.support.preparation_reports import load_report
+
 from dataclasses import replace
 from collections.abc import Mapping
 import json
@@ -22,7 +24,7 @@ from loom.artifacts import ArtifactRef
 from loom.serialization import ensure_plain_data, stable_json_bytes
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore
 from loom.io.uris import uri_to_path
-from loom.pipeline.execution.models import StageWorkerResult
+from loom.pipeline.execution.models import ExecutionFailure, StageWorkerResult
 from loom.pipeline.cleanup import (
     CleanupManagedRoot,
     CleanupSafetyReason,
@@ -611,14 +613,56 @@ def test_unqualified_or_different_profile_cannot_take_preparation_but_runs_ordin
         daemon.stop()
 
 
-@pytest.mark.parametrize("mode", ("shared", "staged"))
+def _damaged_native_report_environment(root: Path, fault: str) -> dict[str, str]:
+    installed = root / "damaged-report-producer"
+    installed.mkdir()
+    (installed / "sitecustomize.py").write_text(
+        "import os\n"
+        "from loom.pipeline.context import StageContext\n"
+        "from loom.io.codecs.json_codec import JSONCodec\n"
+        "encode = JSONCodec.encode\n"
+        "def encoded(self, obj, **kwargs):\n"
+        "    if os.environ['LOOM_TEST_REPORT_FAULT'] == 'malformed_json' and isinstance(obj, dict) and 'input_manifest_digest' in obj:\n"
+        "        return b'{invalid json'\n"
+        "    return encode(self, obj, **kwargs)\n"
+        "JSONCodec.encode = encoded\n"
+        "save = StageContext.save_artifact\n"
+        "def changed(self, name, value, **kwargs):\n"
+        "    if name == 'report' and self.stage_name == 'prepare' and os.environ['LOOM_TEST_REPORT_FAULT'] == 'malformed_companion':\n"
+        "        self.local_output_path('report', suffix='.composition.json').write_bytes(b'{invalid companion')\n"
+        "    return save(self, name, value, **kwargs)\n"
+        "StageContext.save_artifact = changed\n"
+    )
+    return {"PYTHONPATH": str(installed), "LOOM_TEST_REPORT_FAULT": fault}
+
+
+@pytest.mark.parametrize("mode,fault", (("shared", None), ("staged", None), ("shared", "malformed_companion"), ("staged", "malformed_json")))
 def test_https_prepares_on_one_worker_then_executes_on_another(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     mode: str,
+    fault: str | None,
 ) -> None:
     import loom.queue.agent_session_transport as transport
 
+    from loom.queue.agent_sessions import AgentSessionService
+    original_declare = AgentSessionService.declare_outputs
+    def declare_native_pair(owner, session_id, assignment_id, *, fence, authorization_id, authorization_revision, report):
+        if report.schema_version == 5:
+            downgraded = replace(report, schema_version=3, outputs=tuple(replace(item, preparation_report_transfer=None) for item in report.outputs))
+            with pytest.raises(QueueConflictError, match="native preparation transfer capability"):
+                original_declare(owner, session_id, assignment_id, fence=fence, authorization_id=authorization_id, authorization_revision=authorization_revision, report=downgraded)
+        return original_declare(owner, session_id, assignment_id, fence=fence, authorization_id=authorization_id, authorization_revision=authorization_revision, report=report)
+    monkeypatch.setattr(AgentSessionService, "declare_outputs", declare_native_pair)
+    original_commit = AgentSessionService.commit_result
+    def commit_complete_pair(owner, session_id, assignment_id, *, fence):
+        root = owner._daemon.config.coordinator_root / "remote-relay" / assignment_id / "outputs"
+        if (root / "report").is_file():
+            pair = root / "report-publication"
+            assert (pair / "report.json").is_file()
+            assert (pair / "report.composition.json").is_file()
+        return original_commit(owner, session_id, assignment_id, fence=fence)
+    monkeypatch.setattr(AgentSessionService, "commit_result", commit_complete_pair)
     _service(tmp_path, mode=mode)
     prepare_request = _request(mode)
     if mode == "staged":
@@ -641,6 +685,7 @@ def test_https_prepares_on_one_worker_then_executes_on_another(
     preparer = qualified_resident_profile(
         replace(
             base,
+            environment={} if fault is None else _damaged_native_report_environment(tmp_path, fault),
             preparation_shared_roots={"projects": tmp_path / "snapshots"} if mode == "shared" else {},
             readiness_requirements=replace(base.readiness_requirements, preparation_staged=mode == "staged"),
         )
@@ -959,6 +1004,28 @@ def test_https_prepares_on_one_worker_then_executes_on_another(
                 )
             assert result["state"] == "RELEASED", result
             prepared = client.wait_operation("prepare-1", timeout_seconds=25).operation
+            if fault is not None:
+                assert (prepared.state, prepared.code) == ("failed", "preparation_child_failed"), prepared
+                assert _result(prepared)["prepared_run"] is None
+                assert not (service.daemon.run_store_root / "target-1").exists()
+                child = client.admission(_result(prepared)["preparation_admission_id"]).admission
+                assert child.state.value == "FAILED"
+                assert agents[0].resume_retained_work() == ()
+                with sqlite3.connect(service.daemon.execution_database) as conn:
+                    assert conn.execute("SELECT COUNT(*) FROM coordinator_assignments WHERE state != 'released'").fetchone()[0] == 0
+                stored = LocalRunStore(service.daemon.run_store_root).read_stage_worker_result(child.run_uri, "prepare", attempt=1)
+                assert stored is not None
+                failure = StageWorkerResult.from_dict(stored).failure
+                assert isinstance(failure, ExecutionFailure)
+                assert failure.details["worker_result"] == "invalid_preparation_report_closure"
+                assert "preparation" in failure.message.lower()
+                actual = list((agent_configs[0].agent_root / "assignments").rglob("worker-result.json"))
+                assert len(actual) == 1
+                original = StageWorkerResult.from_dict(json.loads(actual[0].read_text()))
+                assert original.status.value == "SUCCEEDED"
+                primary = uri_to_path(original.outputs["report"].uri)
+                assert (primary.read_bytes() == b"{invalid json") if fault == "malformed_json" else ((primary.parent / "report.composition.json").read_bytes() == b"{invalid companion")
+                return
             assert prepared.state == "applied", prepared
             assert _result(prepared)["input_receipt"]["mode"] == mode
             if mode == "staged":
@@ -968,6 +1035,16 @@ def test_https_prepares_on_one_worker_then_executes_on_another(
                 _result(prepared)["preparation_admission_id"]
             ).admission
             assert child.state.value == "SUCCEEDED"
+            from loom.preparation import load_preparation_report
+            published = ArtifactRef.from_dict(dict(_result(prepared)["report_ref"]))
+            published_path = uri_to_path(published.uri)
+            assert (published_path.parent / "report.composition.json").is_file()
+            worker_results = list((agent_configs[0].agent_root / "assignments").rglob("worker-result.json"))
+            assert len(worker_results) == 1
+            original = StageWorkerResult.from_dict(json.loads(worker_results[0].read_text())).outputs["report"]
+            assert replace(original, uri=published.uri) == published
+            assert load_preparation_report(published, published_path) == load_preparation_report(original, uri_to_path(original.uri))
+            assert "preparation_report_transfer" not in published.metadata
             assert len(client.admissions().admissions) == 1
             target_uri = _result(prepared)["prepared_run"]["run_uri"]
             client.submit(LocalDaemonAdmissionRequest("remote-target", target_uri))
@@ -1294,7 +1371,7 @@ def test_upgrade_reopens_real_nonterminal_admission_and_retained_worker_journal(
             )
         }
     upgraded = _cli_result("daemon-upgrade", str(config_path))["result"]
-    assert upgraded == {"coordinator_id": coordinator_id, "schema_version": 18}
+    assert upgraded == {"coordinator_id": coordinator_id, "schema_version": 19}
     with sqlite3.connect(service.daemon.control_database) as conn:
         assert {
             name: tuple(conn.execute(f'SELECT * FROM "{name}"')) for name in before
@@ -1306,7 +1383,7 @@ def test_upgrade_reopens_real_nonterminal_admission_and_retained_worker_journal(
         ).retained_claim_commands()
         == retained
     )
-    assert LocalDaemon.upgrade_coordinator_root(service.daemon) == (coordinator_id, 18)
+    assert LocalDaemon.upgrade_coordinator_root(service.daemon) == (coordinator_id, 19)
     (backup,) = service.daemon.coordinator_root.glob("*.backup")
     with sqlite3.connect(backup) as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
@@ -1522,7 +1599,7 @@ def test_restart_reuses_capture_and_replays_a_claimed_complete_target(
         "invalid edited authoring bytes"
     )
     with sqlite3.connect(service.daemon.control_database) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 18
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 19
     assert service.daemon.agent_root is not None
     with sqlite3.connect(service.daemon.agent_root / "control.sqlite") as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
@@ -1624,7 +1701,8 @@ def test_restart_reuses_capture_and_replays_a_claimed_complete_target(
         ("malformed_pipeline", "invalid_preparation_report"),
         ("malformed_runtime", "invalid_preparation_report"),
         ("malformed_worker_result", "invalid_preparation_report"),
-        ("malformed_json", "invalid_preparation_report"),
+        ("malformed_json", "preparation_child_failed"),
+        ("malformed_companion", "preparation_child_failed"),
         ("worker_result", "invalid_preparation_report"),
         ("checksum", "invalid_preparation_report"),
         ("required_unavailable", "preflight_failed"),
@@ -1646,6 +1724,12 @@ def test_child_failure_or_inconsistent_evidence_never_publishes(
     elif fault == "runtime_path":
         stage["config"] = {"input_path": str(tmp_path / "worker-private")}
     source.write_text(json.dumps(authored))
+
+    if fault == "malformed_companion":
+        config = json.loads((tmp_path / "agent.json").read_text())
+        config["resident_profiles"][0]["environment"] = _damaged_native_report_environment(tmp_path, fault)
+        (tmp_path / "agent.json").write_text(json.dumps(config))
+        service = load_coordinator_service_config(tmp_path / "coordinator.json")
 
     if fault in {
         "profile",
@@ -1742,7 +1826,18 @@ def test_child_failure_or_inconsistent_evidence_never_publishes(
         assert _result(failed)["prepared_run"] is None
         assert not (service.daemon.run_store_root / "target-1").exists()
         child = daemon._admission(_result(failed)["preparation_admission_id"])
-        assert child.state.value == ("FAILED" if fault == "compose" else "SUCCEEDED")
+        assert child.state.value == ("FAILED" if fault in {"compose", "malformed_json", "malformed_companion"} else "SUCCEEDED")
+        if fault in {"malformed_json", "malformed_companion"}:
+            from loom.queue._managed_local import SQLiteAgentJournal
+            assert SQLiteAgentJournal(service.daemon.agent_journal, _allow_initialize=False).retained_claim_commands() == ()
+            with sqlite3.connect(service.daemon.execution_database) as conn:
+                assert conn.execute("SELECT COUNT(*) FROM coordinator_assignments WHERE state != 'released'").fetchone()[0] == 0
+            stored = LocalRunStore(service.daemon.run_store_root).read_stage_worker_result(child.run_uri, "prepare", attempt=1)
+            assert stored is not None
+            failure = StageWorkerResult.from_dict(stored).failure
+            assert isinstance(failure, ExecutionFailure)
+            assert failure.details["worker_result"] == "invalid_preparation_report_closure"
+            assert "preparation" in failure.message.lower()
         if fault == "checks":
             assert _result(failed)["preflight_status"] == "FAIL"
             assert _result(failed)["report_ref"] is not None
@@ -1921,7 +2016,7 @@ def test_native_report_projection_omits_large_checks_and_rejects_large_receipts_
         reference = ArtifactRef.from_dict(
             ensure_plain_data(_result(completed)["report_ref"])
         )
-        report = LocalArtifactStore(service.daemon.run_store_root).load(reference)
+        report = load_report(service.daemon.run_store_root, reference)
         assert isinstance(report, dict)
         assert report["preflight"]["status"] == "PASS"
         if large == "preflight":
@@ -2280,7 +2375,7 @@ def test_native_local_file_graph_is_bound_from_preparation_to_execution(
             child_intent = load_managed_local_intent(service.daemon, child.run_uri)
             binding = PreparationChildInput.from_dict(child_intent.pipeline.get_stage("prepare").stage_config)
             report_ref = ArtifactRef.from_dict(dict(_result(operation)["report_ref"]))
-            report = LocalArtifactStore(LocalRunStore(service.daemon.run_store_root).local_artifact_root(child.run_uri)).load(report_ref)
+            report = load_report(LocalRunStore(service.daemon.run_store_root).local_artifact_root(child.run_uri), report_ref)
             assert isinstance(report, dict)
             assert report["schema_version"] == 3
             decode_preparation_report(report, expected=binding)
@@ -2348,9 +2443,7 @@ def test_preparation_preserves_redacted_output_declarations(
             result = _result(operation)
             child = client.admission(result["preparation_admission_id"]).admission
             store = LocalRunStore(service.daemon.run_store_root)
-            report = LocalArtifactStore(store.local_artifact_root(child.run_uri)).load(
-                ArtifactRef.from_dict(dict(result["report_ref"]))
-            )
+            report = load_report(store.local_artifact_root(child.run_uri), ArtifactRef.from_dict(dict(result["report_ref"])))
             assert isinstance(report, dict)
             resolved = report["composition"]["resolved"]["pipeline"]["stages"][0]
             redacted = report["composition"]["redacted"]["pipeline"]["stages"][0]
@@ -2472,8 +2565,7 @@ class Consumer:
         assert result["report_ref"] is not None, operation.to_dict()
         child = daemon.admission(result["preparation_admission_id"]).admission
         store = LocalRunStore(service.daemon.run_store_root)
-        report = LocalArtifactStore(store.local_artifact_root(child.run_uri)).load(
-            ArtifactRef.from_dict(dict(result["report_ref"])))
+        report = load_report(store.local_artifact_root(child.run_uri), ArtifactRef.from_dict(dict(result["report_ref"])))
         assert isinstance(report, dict), operation.to_dict()
         assert report["schema_version"] == 4
         if value == "false" or fault not in (None, "no_key"):
@@ -2481,6 +2573,13 @@ class Consumer:
             assert report["project_result"] is None
             assert report["preflight"]["status"] == "FAIL"
             assert "private-path-do-not-expose" not in json.dumps(report)
+            if value == "false":
+                assert service.daemon.agent_root is not None
+                logs = list((service.daemon.agent_root / "assignments").glob("*/logs/stderr.log"))
+                diagnostic = "\n".join(path.read_text() for path in logs)
+                assert "Traceback (most recent call last)" in diagnostic
+                assert "installed_inspector.py" in diagnostic
+                assert "ValueError: private-path-do-not-expose" in diagnostic
             assert request.run_name is not None
             assert not (service.daemon.run_store_root / request.run_name).exists()
             return

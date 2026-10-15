@@ -99,6 +99,7 @@ def build_parser() -> argparse.ArgumentParser:
     from loom.cli import authority as authority_command
     from loom.cli import backend as backend_command
     from loom.cli import clean as clean_command
+    from loom.cli import fleet as fleet_command
     from loom.cli import gc as gc_command
     from loom.cli import inspect_run as inspect_run_command
     from loom.cli import logs as logs_command
@@ -124,6 +125,7 @@ def build_parser() -> argparse.ArgumentParser:
     artifacts_command.register_subparser(subparsers)
     clean_command.register_subparser(subparsers)
     gc_command.register_subparser(subparsers)
+    fleet_command.register_subparser(subparsers)
     authority_command.register_subparser(subparsers)
     backend_command.register_subparser(subparsers)
     runs_command.register_subparser(subparsers)

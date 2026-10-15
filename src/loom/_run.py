@@ -13,7 +13,7 @@ from typing import cast
 from uuid import uuid4
 
 from loom.coordinator import CoordinatorClientError, RunObservation, RunRequest
-from loom.deployment import AvailableDeployment, ensure_available, load_deployment
+from loom.deployment import AvailableDeployment, DeploymentSelection, ensure_available, load_deployment
 from loom.queue.errors import QueueConfigError, QueueError
 from loom.queue._coordinator_control import control_error
 from loom.queue.local_daemon import LocalDaemonAdmissionState
@@ -101,6 +101,41 @@ def _cleanup(
         time.sleep(min(0.05, max(0, deadline - time.monotonic())))
 
 
+def _validate_run_arguments(
+    request: RunRequest,
+    *,
+    wait: bool,
+    timeout_seconds: float | None,
+) -> None:
+    """Validate call arguments before deployment IO or an identity receipt."""
+    if not isinstance(request, RunRequest) or not isinstance(wait, bool):
+        raise QueueConfigError("run request/wait is invalid")
+    if timeout_seconds is not None and (
+        type(timeout_seconds) not in (int, float)
+        or not math.isfinite(timeout_seconds)
+        or timeout_seconds < 0
+    ):
+        raise QueueConfigError("run timeout is invalid")
+
+
+def _validate_run_selection(request: RunRequest, selection: DeploymentSelection) -> None:
+    """Validate the selected source closure before availability or a receipt."""
+    preparation = request.preparation
+    if (
+        preparation.source != selection.source
+        or preparation.preparation_profile != selection.preparation_profile
+    ):
+        raise QueueConfigError("run preparation conflicts with deployment selection")
+    for path in (preparation.config_path, *preparation.overlays):
+        if not any(
+            include == "." or path == include or path.startswith(include + "/")
+            for include in selection.source.include
+        ):
+            raise QueueConfigError(
+                "experiment path is outside the preparation source closure"
+            )
+
+
 def run(
     request: RunRequest,
     *,
@@ -118,32 +153,13 @@ def run(
     Adapters may pass their existing absolute deadline and an additional owner
     guard; capacity acquisition never resets that deadline.
     """
-    if not isinstance(request, RunRequest) or not isinstance(wait, bool):
-        raise QueueConfigError("run request/wait is invalid")
-    if timeout_seconds is not None and (
-        type(timeout_seconds) not in (int, float)
-        or not math.isfinite(timeout_seconds)
-        or timeout_seconds < 0
-    ):
-        raise QueueConfigError("run timeout is invalid")
+    _validate_run_arguments(request, wait=wait, timeout_seconds=timeout_seconds)
     deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
     if _deadline is not None:
         deadline = min(deadline if deadline is not None else math.inf, _deadline)
     selection = load_deployment(deployment)
+    _validate_run_selection(request, selection)
     preparation = request.preparation
-    if (
-        preparation.source != selection.source
-        or preparation.preparation_profile != selection.preparation_profile
-    ):
-        raise QueueConfigError("run preparation conflicts with deployment selection")
-    for path in (preparation.config_path, *preparation.overlays):
-        if not any(
-            include == "." or path == include or path.startswith(include + "/")
-            for include in selection.source.include
-        ):
-            raise QueueConfigError(
-                "experiment path is outside the preparation source closure"
-            )
     startup_deadline = min(
         time.monotonic() + selection.startup_seconds,
         deadline if deadline is not None else math.inf,

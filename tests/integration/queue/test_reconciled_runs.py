@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.support.preparation_reports import load_report
+
 from dataclasses import replace
 import json
 from pathlib import Path
@@ -214,7 +216,7 @@ def test_concurrent_reconciled_publication_and_verified_reuse(tmp_path):
         from loom.preparation import decode_preparation_report
         from loom.queue.preparation import PreparationChildInput
         from loom.queue.local_daemon_execution import load_managed_local_intent
-        from loom.pipeline.stores import LocalRunStore, LocalArtifactStore
+        from loom.pipeline.stores import LocalRunStore
         from loom.artifacts import ArtifactRef
 
         verified = next(
@@ -230,13 +232,9 @@ def test_concurrent_reconciled_publication_and_verified_reuse(tmp_path):
             .pipeline.get_stage("prepare")
             .stage_config
         )
-        report = LocalArtifactStore(
-            LocalRunStore(service.daemon.run_store_root).local_artifact_root(
+        report = load_report(LocalRunStore(service.daemon.run_store_root).local_artifact_root(
                 child.run_uri
-            )
-        ).load(
-            ArtifactRef.from_dict(dict(_result(verified)["verification_report_ref"]))
-        )
+            ), ArtifactRef.from_dict(dict(_result(verified)["verification_report_ref"])))
         assert isinstance(report, dict)
         assert report["schema_version"] == 5 and report["candidate"] is not None
         for field in ("candidate", "verification", "profile_descriptor", "invocation"):
@@ -465,7 +463,7 @@ def test_schema_upgrade_preserves_accepted_exact_intent_and_cancel_receipt(tmp_p
             cancellations,
         )
         conn.execute("PRAGMA user_version = 15")
-    assert LocalDaemon.upgrade_coordinator_root(service.daemon)[1] == 18
+    assert LocalDaemon.upgrade_coordinator_root(service.daemon)[1] == 19
     with sqlite3.connect(service.daemon.control_database) as conn:
         assert (
             conn.execute("SELECT * FROM preparation_operations").fetchall()

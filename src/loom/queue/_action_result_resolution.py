@@ -17,7 +17,7 @@ from loom.pipeline._project_contracts import (
     CONTRACT,
     load_contract_report,
     plain_mapping,
-    worker_contract_metadata,
+    _worker_contract_metadata,
 )
 from loom.pipeline.cleanup.preparation_pins import (
     preparation_path_is_retained,
@@ -127,7 +127,7 @@ class ActionResultResolution:
             "processor": plain_mapping(report["project_preparation"])["processor"],
         }
         spec = intent.pipeline.get_stage(node)
-        contract = worker_contract_metadata(self.execution.run_store, run_uri, spec)[
+        contract = _worker_contract_metadata(report, spec)[
             CONTRACT
         ]
         snapshot = authority.open_run(run_uri)
@@ -276,6 +276,16 @@ class ActionResultResolution:
                 ),
             },
         }
+        from loom.pipeline._project_contracts import CONTRACTS, report_entry
+        from loom.pipeline.stores.shared_artifacts import binding as shared_binding
+        reports = {}
+        for label, source_uri in (("producer", claim["owner_run_uri"]), ("desired", run_uri)):
+            prepared = self.execution.run_store.read_prepared_run(source_uri)
+            reference = report_entry(prepared["metadata"][CONTRACTS])["report_ref"]
+            if shared_binding(ArtifactRef.from_dict(reference).metadata) is not None:
+                reports[label] = reference
+        if reports:
+            candidate["access"] = {**plain_mapping(candidate["access"]), "project_reports": reports}
         candidate["candidate_digest"] = hash_mapping(candidate)
         candidate = action_candidate(candidate)
         verification = self.daemon._preparations.verify_action_result(

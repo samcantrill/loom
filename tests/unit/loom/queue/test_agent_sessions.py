@@ -2150,7 +2150,7 @@ def test_rejected_poll_rewind_requires_original_predecessor_delivery(tmp_path):
     _, assignment, *_ = _assignment_reference_fixture(tmp_path)
     journal, session = _delivery_journal(tmp_path / "agent")
     predecessor = {"result": "assignment", "sequence": 1, "request": assignment.to_dict()}
-    delivery = {"assignment_id": assignment.assignment_id, "request_digest": _canonical_digest(assignment.to_dict())}
+    delivery: PlainData = {"assignment_id": assignment.assignment_id, "request_digest": _canonical_digest(assignment.to_dict())}
     try:
         _prepare_delivery_poll(journal, session, 1)
         journal.fence_poll(session.session_id, 1)
@@ -2160,7 +2160,8 @@ def test_rejected_poll_rewind_requires_original_predecessor_delivery(tmp_path):
             journal.discard_absent_poll(
                 session.session_id, 2, predecessor_sequence=1, predecessor_delivery=delivery,
             )
-        assert journal.pending_poll()[2] == 2
+        pending = journal.pending_poll()
+        assert pending is not None and pending[2] == 2
     finally:
         journal.close()
     journal, session = _delivery_journal(tmp_path / "owned-agent")
@@ -2684,7 +2685,7 @@ def test_shared_reference_target_publication_poll_restart_and_inline_migration(t
         ) == {
             "state": "absent", "predecessor_sequence": 1,
             "predecessor_delivery": {
-                "assignment_id": delivered["request"]["assignment_id"],
+                "assignment_id": ref["assignment_id"],
                 "request_digest": hashlib.sha256(json.dumps(
                     thaw_plain_data(delivered["request"]), sort_keys=True, separators=(",", ":"),
                 ).encode()).hexdigest(),

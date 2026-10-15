@@ -76,6 +76,14 @@ MAX_TRANSFER_BYTES = 64 * 1024 * 1024
 TRANSFER_CHUNK_BYTES = 32 * 1024
 
 
+class _PreparationReportRetentionError(QueueConflictError):
+    """A contained native worker produced an unusable preparation closure."""
+
+
+class _RemoteTransferLimitError(QueueConflictError):
+    """A regular producer output is definitively larger than its byte bound."""
+
+
 def _identifier(value: object, field: str) -> str:
     if (
         not isinstance(value, str)
@@ -470,6 +478,7 @@ class ResidentExecutionProfile:
     preparation_shared_roots: Mapping[str, Path] = field(default_factory=dict)
     container: Mapping[str, PlainData] | None = None
     shared_roots: Mapping[str, PlainData] = field(default_factory=dict)
+    temporary_mounts: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.descriptor, ResidentProfileDescriptor):
@@ -480,6 +489,8 @@ class ResidentExecutionProfile:
         object.__setattr__(self, "descriptor", replace(self.descriptor, shared_roots=qualifications(roots)))
         from ._container_worker import container_binding
         object.__setattr__(self, "container", container_binding(self.container))
+        from ._temporary_storage import temporary_mount_targets
+        object.__setattr__(self, "temporary_mounts", temporary_mount_targets(self.temporary_mounts, self.container))
         if self.container is not None:
             options = cast(Mapping[str, PlainData], self.container["options"])
             if not Path(str(options["command"])).is_file():
@@ -561,6 +572,7 @@ class ResidentExecutionProfile:
             readiness_identity=self.readiness_identity,
             preparation_shared_roots=self.preparation_shared_roots,
             shared_roots=self.shared_roots,
+            temporary_mounts=self.temporary_mounts,
         )
 
 
@@ -879,7 +891,7 @@ class _ResidentAssignmentBundle:
         claims = tuple(self.claims)
         if (
             any(not isinstance(item, _RemoteArtifact) for item in inputs)
-            or len(inputs) > 32 + len(_preparation_verification_refs(fingerprint))
+            or len(inputs) > 32 + len(_preparation_verification_refs(fingerprint)) + ("loom.project_report" in metadata)
             or len({item.logical_name for item in inputs}) != len(inputs)
         ):
             raise QueueServiceError("resident input logical names must be unique")
@@ -890,6 +902,16 @@ class _ResidentAssignmentBundle:
         if len(outputs) > 32 or len(set(outputs)) != len(outputs):
             raise QueueServiceError("resident output names must be unique")
         expected_inputs = set(fingerprint_record.payload.declared_inputs)
+        from loom.pipeline._project_contracts import REPORT
+        if REPORT in metadata:
+            name = "loom_project_report"
+            if name in expected_inputs:
+                raise QueueConflictError("project report input name is reserved")
+            expected_inputs.add(name)
+            reference = ArtifactRef.from_dict(thaw_plain_data(metadata[REPORT]))
+            transferred = next((item for item in inputs if item.logical_name == name), None)
+            if transferred is None or replace(transferred.local_ref(Path("/")), uri=reference.uri) != reference:
+                raise QueueConflictError("project report input differs from its admitted reference")
         archive = _preparation_archive(fingerprint)
         if archive is not None:
             if _PREPARATION_ARCHIVE_INPUT in expected_inputs:
@@ -983,8 +1005,17 @@ class _ResidentAssignmentBundle:
             from loom.pipeline.stores.input_lineage import decode_bindings, validate_worker_inputs
             validate_worker_inputs(worker_request, decode_bindings(worker_request.metadata["attempt_input_bindings"]))
         safe_metadata: dict[str, PlainData] = {key: worker_request.metadata[key]
-            for key in ("loom.project_contract", "loom.project_contract_capture", "loom.execution_binding", "attempt_input_evidence")
+            for key in ("loom.project_contract", "loom.project_contract_capture", "loom.project_report", "loom.execution_binding", "attempt_input_evidence")
             if key in worker_request.metadata}
+        from loom.pipeline._project_contracts import REPORT
+        if REPORT in safe_metadata:
+            reference = ArtifactRef.from_dict(thaw_plain_data(safe_metadata[REPORT]))
+            publication = shared_binding(reference.metadata)
+            if publication is None:
+                raise QueueConflictError("remote project report requires shared publication")
+            safe_metadata[REPORT] = replace(reference, uri=(
+                f"loom-shared://{publication['root_id']}/{publication['tree']}/{publication['primary']}"
+            )).to_dict()
         from ._execution_binding import execution_binding
         from loom.pipeline._project_contracts import EXECUTION
         if EXECUTION not in safe_metadata:
@@ -1135,6 +1166,7 @@ class _RemoteOutputArtifact:
     producer_stage: str | None
     created_at: str | None
     metadata: Mapping[str, PlainData] = field(default_factory=dict)
+    preparation_report_transfer: Mapping[str, PlainData] | None = None
 
     def __post_init__(self) -> None:
         for value, name in (
@@ -1170,6 +1202,12 @@ class _RemoteOutputArtifact:
             raise QueueServiceError("remote output artifact metadata is invalid")
         _reject_path_bearing_data({key: value for key, value in metadata.items() if key != SHARED_PUBLICATION}, "output artifact metadata")
         object.__setattr__(self, "metadata", metadata)
+        if self.preparation_report_transfer is not None:
+            from ._preparation_report_transfer import header
+            if self.logical_name != "report" or self.artifact_type != "json" or self.codec_key != "json.v1" or self.artifact_schema_version != 1 or shared_binding(self.metadata) is not None:
+                raise QueueServiceError("preparation transfer descriptor role is invalid")
+            object.__setattr__(self, "preparation_report_transfer", freeze_plain_data(header(self.preparation_report_transfer, self.size_bytes)))
+
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
@@ -1184,6 +1222,7 @@ class _RemoteOutputArtifact:
             "fingerprint": self.fingerprint,
             "producer_stage": self.producer_stage,
             "created_at": self.created_at,
+            **({"preparation_report_transfer": thaw_plain_data(self.preparation_report_transfer)} if self.preparation_report_transfer is not None else {}),
             "metadata": thaw_plain_data(
                 self.metadata, path="remote output artifact metadata"
             ),
@@ -1191,7 +1230,7 @@ class _RemoteOutputArtifact:
 
     @classmethod
     def from_dict(cls, value: object) -> "_RemoteOutputArtifact":
-        if not isinstance(value, Mapping) or set(value) != {
+        if not isinstance(value, Mapping) or set(value) - {"preparation_report_transfer"} != {
             "transfer_id",
             "logical_name",
             "digest",
@@ -1206,6 +1245,8 @@ class _RemoteOutputArtifact:
             "metadata",
         }:
             raise QueueServiceError("remote output artifact is invalid")
+        if "preparation_report_transfer" in value and value["preparation_report_transfer"] is None:
+            raise QueueServiceError("preparation transfer header is missing")
         return cls(
             transfer_id=cast(str, value["transfer_id"]),
             logical_name=cast(str, value["logical_name"]),
@@ -1219,14 +1260,22 @@ class _RemoteOutputArtifact:
             producer_stage=cast(str | None, value["producer_stage"]),
             created_at=cast(str | None, value["created_at"]),
             metadata=cast(Mapping[str, PlainData], value["metadata"]),
+            preparation_report_transfer=cast(Mapping[str, PlainData] | None, value.get("preparation_report_transfer")),
         )
 
 
     def local_ref(self, path: Path) -> ArtifactRef:
-        return ArtifactRef(artifact_id=self.artifact_id, uri=path.resolve().as_uri(),
+        checksum = self.digest
+        if self.preparation_report_transfer is not None:
+            checksum = cast(str, cast(Mapping[str, PlainData], self.preparation_report_transfer["primary"])["digest"])
+        ref = ArtifactRef(artifact_id=self.artifact_id, uri=path.resolve().as_uri(),
             artifact_type=self.artifact_type, codec_key=self.codec_key, schema_version=self.artifact_schema_version,
-            checksum=f"sha256:{self.digest}", fingerprint=self.fingerprint, producer_stage=self.producer_stage,
+            checksum=f"sha256:{checksum}", fingerprint=self.fingerprint, producer_stage=self.producer_stage,
             created_at=self.created_at, metadata=self.metadata)
+        if self.preparation_report_transfer is not None:
+            from ._preparation_report_transfer import verify_pair
+            verify_pair(ref, path, self.preparation_report_transfer)
+        return ref
 
 
 @dataclass(frozen=True, slots=True)
@@ -1252,7 +1301,7 @@ class _RemoteExecutionReport:
     schema_version: int = 1
 
     def __post_init__(self) -> None:
-        if type(self.schema_version) is not int or self.schema_version not in {1, 2, 3, 4}:
+        if type(self.schema_version) is not int or self.schema_version not in {1, 2, 3, 4, 5}:
             raise QueueServiceError("remote result schema is unsupported")
         for value, name in (
             (self.assignment_id, "assignment_id"),
@@ -1288,6 +1337,9 @@ class _RemoteExecutionReport:
             raise QueueServiceError("failed remote result must not expose outputs")
         if any(shared_binding(item.metadata) is not None for item in outputs) and self.schema_version != 4:
             raise QueueServiceError("shared output requires shared publication report capability")
+        marked = [item for item in outputs if item.preparation_report_transfer is not None]
+        if (marked and self.schema_version != 5) or (self.schema_version == 5 and (self.status is not StageStatus.SUCCEEDED or len(outputs) != 1 or len(marked) != 1 or outputs[0].logical_name != "report")):
+            raise QueueServiceError("preparation transfer remote report capability or role is invalid")
         object.__setattr__(self, "outputs", outputs)
         for value, name in (
             (self.failure_type, "failure_type"),
@@ -1446,7 +1498,7 @@ class _RemoteExecutionReport:
             raise QueueServiceError("legacy remote execution report shape is invalid")
         if schema_version == 2 and set(value) != current:
             raise QueueServiceError("remote execution report shape is invalid")
-        if schema_version in {3, 4} and set(value) != with_routes:
+        if schema_version in {3, 4, 5} and set(value) != with_routes:
             raise QueueServiceError("remote route report shape is invalid")
         outputs = value["outputs"]
         if not isinstance(outputs, Sequence) or isinstance(outputs, (str, bytes)):
@@ -1875,6 +1927,12 @@ class _ResidentAssignmentWorkspace:
             if item.logical_name in fingerprint.payload.declared_inputs
         }
         metadata = dict(request.worker_metadata)
+        from loom.pipeline._project_contracts import REPORT
+        if REPORT in metadata:
+            report = next((item for item in request.inputs if item.logical_name == "loom_project_report"), None)
+            if report is None:
+                raise QueueConflictError("worker project report input is missing")
+            metadata[REPORT] = report.local_ref(input_path(report)).to_dict()
         from ._shared_recovery import WIRE, BINDING, worker_binding
         metadata.pop(WIRE, None)
         if resolve_shared:
@@ -1957,19 +2015,29 @@ class _ResidentAssignmentWorkspace:
             local_context["shared_scope"] = dict(preparation.shared_scope)
         if preparation.project_preparation is not None:
             local_context["project_preparation"] = dict(preparation.project_preparation)
+        candidate_report = next((item for item in request.inputs if item.logical_name == "candidate_project_report"), None)
+        if candidate_report is not None:
+            from ._shared_publication import resolve_input
+            from .shared_execution import execution_roots
+            path = resolve_input(candidate_report, execution_roots(launch_profile.shared_roots, container=launch_profile.container is not None))
+            local_context["candidate_project_report"] = candidate_report.local_ref(path).to_dict()
         if preparation.action_verification is not None:
             from ._shared_publication import resolve_input
             from .shared_execution import execution_roots
 
             artifacts = {}
+            reports = {}
             for item in request.inputs:
-                if not item.logical_name.startswith(_ACTION_RESULT_INPUT_PREFIX):
+                prefix = _ACTION_PROJECT_INPUT_PREFIX if item.logical_name.startswith(_ACTION_PROJECT_INPUT_PREFIX) else _ACTION_RESULT_INPUT_PREFIX
+                if not item.logical_name.startswith(prefix):
                     continue
                 path = self.input_path(item.logical_name)
                 if shared_binding(item.metadata) is not None:
                     path = resolve_input(item, execution_roots(launch_profile.shared_roots, container=launch_profile.container is not None))
-                artifacts[item.logical_name.removeprefix(_ACTION_RESULT_INPUT_PREFIX)] = item.local_ref(path).to_dict()
+                destination = reports if prefix == _ACTION_PROJECT_INPUT_PREFIX else artifacts
+                destination[item.logical_name.removeprefix(prefix)] = item.local_ref(path).to_dict()
             local_context["action_artifacts"] = artifacts
+            local_context["action_project_reports"] = reports
         if not isinstance(preparation.input_receipt, SharedInputReceipt):
             directory = self._prepare_staged_input()
             assert directory is not None
@@ -2177,8 +2245,45 @@ class _ResidentAssignmentWorkspace:
         return StageWorkerResult.from_dict(json.loads(str(row[0])))
 
     def retain_outputs(self) -> _RemoteExecutionReport:
-        request = self.request()
+        from ._preparation_report_transfer import native_role
+
         result = self.worker_result()
+        try:
+            return self._retain_outputs(result)
+        except _RemoteTransferLimitError:
+            raise
+        except (QueueConflictError, QueueServiceError, OSError, ValueError) as exc:
+            if (
+                result is not None
+                and result.status is StageStatus.SUCCEEDED
+                and native_role(self.request().fingerprint)
+            ):
+                raise _PreparationReportRetentionError(str(exc)) from exc
+            raise
+
+    def failed_preparation_retention_report(
+        self, error: _PreparationReportRetentionError
+    ) -> _RemoteExecutionReport:
+        from ._managed_local import _managed_root_failed_worker_result
+
+        original = self.worker_result()
+        if original is None or original.status is not StageStatus.SUCCEEDED:
+            raise QueueConflictError("preparation retention failure lacks worker success")
+        failed = _managed_root_failed_worker_result(
+            self.worker_request(), error,
+            process_exit_code=original.exit_code,
+            worker_result_state="invalid_preparation_report_closure",
+        )
+        # Retain the immutable worker success and its checksum-bound bad bytes.
+        # Only publication fails; replay derives the same terminal report.
+        failed = replace(
+            failed, started_at=original.started_at, finished_at=original.finished_at,
+            failure=replace(cast(ExecutionFailure, failed.failure), failed_at=cast(str, original.finished_at)),
+        )
+        return self._retain_outputs(failed)
+
+    def _retain_outputs(self, result: StageWorkerResult | None) -> _RemoteExecutionReport:
+        request = self.request()
         if result is None:
             raise QueueConflictError("remote result is not durable")
         outputs: list[_RemoteOutputArtifact] = []
@@ -2202,12 +2307,20 @@ class _ResidentAssignmentWorkspace:
                     source = unresolved_source.resolve(strict=True)
                     source.relative_to(self.root)
                     data = _read_regular_file_bytes(source)
+                except _RemoteTransferLimitError:
+                    raise
                 except (OSError, ValueError, QueueConflictError) as exc:
                     raise QueueConflictError(
                         "remote output is not a regular file in its assignment workspace"
                     ) from exc
+                transfer = None
+                from ._preparation_report_transfer import frame, native_role
+                if native_role(request.fingerprint):
+                    if logical_name != "report":
+                        raise QueueConflictError("native preparation output role conflicts")
+                    data, transfer = frame(ref, source)
                 digest = hashlib.sha256(data).hexdigest()
-                if ref.checksum is not None and ref.checksum != f"sha256:{digest}":
+                if transfer is None and ref.checksum is not None and ref.checksum != f"sha256:{digest}":
                     raise QueueConflictError(
                         "remote output checksum conflicts with its bytes"
                     )
@@ -2234,6 +2347,7 @@ class _ResidentAssignmentWorkspace:
                     producer_stage=ref.producer_stage,
                     created_at=ref.created_at,
                     metadata=ref.metadata,
+                    preparation_report_transfer=transfer,
                 )
                 outputs.append(descriptor)
                 with self._connect() as conn:
@@ -2279,10 +2393,21 @@ class _ResidentAssignmentWorkspace:
                 False if result.status in {StageStatus.FAILED, StageStatus.CANCELLED} else None
             )
         route_metadata = dict(result.executor_metadata)
+        # Only the native parent can attest the actual retained launch binding.
+        route_metadata.pop("native_claim_observation", None)
         if process_row["supervisor_launch_json"] is not None:
             launch = _launch_from_value(
                 json.loads(str(process_row["supervisor_launch_json"]))
             )
+            if process_created is True:
+                binding_value = launch.environment.get("CUDA_VISIBLE_DEVICES")
+                uuids = [] if not binding_value else binding_value.split(",")
+                route_metadata["native_claim_observation"] = cast(PlainData, {
+                    "actual_gpu_uuids": uuids if all(value.startswith("GPU-") for value in uuids) else None,
+                    "assignment_id": request.assignment_id,
+                    "source": "native_supervisor_launch",
+                    "gpu_capacity_keys": [atom.local_capacity_key for claim in request.claims if claim.resource_kind == "gpu" for atom in claim.atoms],
+                })
             command_argv = launch.command_argv if launch.profile.container is None else ()
             if launch.profile.container is not None:
                 command = launch.container_command
@@ -2323,7 +2448,7 @@ class _ResidentAssignmentWorkspace:
             ),
             process_created=process_created,
             executor_metadata=redact_executor_metadata(route_metadata, public=True),
-            schema_version=4 if shared_publication else 3,
+            schema_version=4 if shared_publication else 5 if any(item.preparation_report_transfer is not None for item in outputs) else 3,
         )
 
     def output_chunk(self, transfer_id: str, offset: int) -> tuple[bytes, bool]:
@@ -2545,31 +2670,44 @@ def _validate_remote_semantic_data(
             for child in value:
                 validate_references(child)
     validate_references(fingerprint)
+    if "loom.project_report" in worker_metadata:
+        validate_references(worker_metadata["loom.project_report"])
     _reject_path_bearing_data(fingerprint, "fingerprint")
     _reject_path_bearing_data(resolved_runtime, "resolved_runtime")
-    from loom.pipeline._project_contracts import CONTRACT, CAPTURE, EXECUTION
+    from loom.pipeline._project_contracts import CONTRACT, CAPTURE, REPORT, EXECUTION
     if EXECUTION in worker_metadata and cast(Mapping[str, PlainData], worker_metadata[EXECUTION])["run_state_root"] is not None:
         raise QueueServiceError("remote execution cannot export a local state root")
     from ._shared_recovery import WIRE, BINDING
     if BINDING in worker_metadata:
         raise QueueServiceError("remote execution cannot export resolved recovery paths")
-    _reject_path_bearing_data({key: value for key, value in worker_metadata.items() if key not in {CONTRACT, CAPTURE, EXECUTION, WIRE}}, "worker_metadata")
+    _reject_path_bearing_data({key: value for key, value in worker_metadata.items() if key not in {CONTRACT, CAPTURE, REPORT, EXECUTION, WIRE}}, "worker_metadata")
 
 
 _PREPARATION_ARCHIVE_INPUT = "preparation_archive"
 _ACTION_RESULT_INPUT_PREFIX = "action_result_"
+_ACTION_PROJECT_INPUT_PREFIX = "action_project_report_"
 
 
 def _preparation_verification_refs(fingerprint: Mapping[str, PlainData]) -> dict[str, ArtifactRef]:
     preparation = _preparation_input_from_fingerprint(fingerprint)
-    if preparation is None or preparation.action_verification is None:
+    if preparation is None:
         return {}
     from loom.pipeline._project_contracts import plain_mapping
+    if preparation.candidate is not None:
+        candidate = plain_mapping(preparation.candidate)
+        reference = plain_mapping(candidate["artifact_binding"]).get("project_report")
+        return {} if reference is None else {"candidate_project_report": ArtifactRef.from_dict(reference)}
+    if preparation.action_verification is None:
+        return {}
 
     candidate = plain_mapping(preparation.action_verification["candidate"])
     result = plain_mapping(candidate["result"])
-    return {_ACTION_RESULT_INPUT_PREFIX + str(fact["artifact_name"]): ArtifactRef.from_dict(fact["artifact"])
+    refs = {_ACTION_RESULT_INPUT_PREFIX + str(fact["artifact_name"]): ArtifactRef.from_dict(fact["artifact"])
             for fact in cast(list[Mapping[str, PlainData]], result["artifact_facts"])}
+    reports = plain_mapping(candidate["access"]).get("project_reports", {})
+    for name, reference in plain_mapping(reports).items():
+        refs[_ACTION_PROJECT_INPUT_PREFIX + name] = ArtifactRef.from_dict(reference)
+    return refs
 
 
 def _preparation_archive(fingerprint: Mapping[str, PlainData]) -> ArtifactRef | None:
@@ -2582,10 +2720,16 @@ def _preparation_archive(fingerprint: Mapping[str, PlainData]) -> ArtifactRef | 
 
 
 def _resident_input_refs(
-    inputs: Mapping[str, ArtifactRef], fingerprint: Mapping[str, PlainData]
+    inputs: Mapping[str, ArtifactRef], fingerprint: Mapping[str, PlainData],
+    worker_metadata: Mapping[str, PlainData] | None = None,
 ) -> dict[str, ArtifactRef]:
     """Join the fixed child's archive to native transfer without a pipeline input."""
     result = dict(inputs)
+    from loom.pipeline._project_contracts import REPORT
+    if worker_metadata is not None and REPORT in worker_metadata:
+        if "loom_project_report" in result:
+            raise QueueConflictError("project report input name is reserved")
+        result["loom_project_report"] = ArtifactRef.from_dict(thaw_plain_data(worker_metadata[REPORT]))
     for name, ref in _preparation_verification_refs(fingerprint).items():
         if name in result:
             raise QueueConflictError("action verification input name is reserved")
@@ -2702,7 +2846,7 @@ def _read_regular_file_bytes(
     finally:
         os.close(descriptor)
     if len(data) > max_bytes:
-        raise QueueConflictError("remote transfer source exceeds its byte bound")
+        raise _RemoteTransferLimitError("remote transfer source exceeds its byte bound")
     return data
 
 

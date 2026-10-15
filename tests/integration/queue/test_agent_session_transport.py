@@ -14,7 +14,7 @@ import socket
 import ssl
 import sqlite3
 import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from threading import Event, Thread
 from time import monotonic, sleep
 from typing import Any, cast
@@ -3221,7 +3221,7 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
                 raise QueueServiceError("shared snapshot root is not mapped")
 
             monkeypatch.setattr(
-                "loom.queue.agent_session_transport.ResidentWorkerLaunch",
+                "loom.queue._agent_assignment.ResidentWorkerLaunch",
                 unavailable_snapshot,
             )
         if restart_barrier in {
@@ -7142,9 +7142,25 @@ def test_loopback_exposes_client_and_operator_views_only_to_configured_roles(
     try:
         handshake = client.handshake(role="client")
         assert handshake["role"] == "client"
+        # The current client surface advertises maintenance, conditional control,
+        # both quiescent promotions and bounded logs alongside run inspection.
+        expected_capabilities = (
+            "authenticated-application-v1",
+            "daemon-control-v1",
+            "operator-observations-v1",
+            "conditional-agent-control-v1",
+            "quiescent-profile-promotion-v2",
+            "quiescent-source-promotion-v1",
+            "maintenance-admission-v1",
+            "run-context-v1",
+            "run-query-v1",
+            "output-query-v1",
+            "lineage-query-v1",
+            "artifact-read-v1",
+            "bounded-run-logs-v1",
+        )
         assert handshake["capabilities"] in (
-            ("authenticated-application-v1", "daemon-control-v1", "run-context-v1", "run-query-v1", "output-query-v1", "lineage-query-v1", "artifact-read-v1"),
-            ["authenticated-application-v1", "daemon-control-v1", "run-context-v1", "run-query-v1", "output-query-v1", "lineage-query-v1", "artifact-read-v1"],
+            expected_capabilities, list(expected_capabilities)
         )
         remote_status = client.call_application("client", "status", {})
         direct_status = (
@@ -7824,7 +7840,9 @@ def test_external_gpu_occupancy_drives_real_local_and_remote_admission(
         REMOTE_EXECUTION_CAPABILITY,
         REGULAR_FILE_RELAY_CAPABILITY,
     )
+    from loom.queue.agent_sessions import LocalOwnerOperatorPolicy
     policy = AgentPolicyConfig(
+        local_owner=LocalOwnerOperatorPolicy(("drain",), ("agent-a",), ("default",)),
         agents=(
             AgentPrincipalPolicy(
                 "credential-a",
@@ -8086,6 +8104,30 @@ def test_external_gpu_occupancy_drives_real_local_and_remote_admission(
         )
         assert isinstance(output, Mapping)
         assert output["value"] == bindings[1]
+        # Observe exact native device/settlement evidence, never requested GPUs.
+        from loom.queue.operations import inspect_local_assignment
+        admission = coordinator.admission_for_queue_item("occupancy-item")
+        detail = coordinator.admission(admission.admission_id)
+        assignment_records = cast(Sequence[Mapping[str, Any]], cast(Mapping[str, Any], detail.owners["assignment"])["assignments"])
+        root = cast(AgentTlsClientConfig, client_config).agent_root if remote else config.agent_root
+        assert root is not None
+        assignment_observations = [inspect_local_assignment(root, item["assignment_id"]) for item in assignment_records]
+        actual = [item for item in assignment_observations if item.availability == "available" and item.value["actual_gpu_uuids"] is not None]
+        assert len(actual) == 1
+        assert tuple(cast(Sequence[str], actual[0].value["actual_gpu_uuids"])) == (bindings[1],)
+        assert actual[0].value["providers_released"] is True
+        assert actual[0].value["containment"] == "contained"
+        operator = daemon.operator_view(LocalDaemonPrincipal(f"uid:{os.getuid()}", LocalDaemonRole.OPERATOR))
+        assignment = operator.observe_assignment(cast(str, actual[0].value["assignment_id"]))
+        assert assignment.value["claim_id"] == actual[0].value["claim_id"]
+        assert assignment.value["released"] is True
+        if remote:
+            claim = cast(Mapping[str, Any], assignment.value["actual_claims"])
+            assert claim["availability"] == "available"
+            assert tuple(claim["actual_gpu_uuids"]) == (bindings[1],)
+            assert claim["source"] == "native_supervisor_launch"
+            assert claim["gpu_capacity_keys"]
+        assert "retirement_secret" not in json.dumps(assignment.to_dict())
         wait_for_reasons(("available", "available"))
         failed = True
         if agent is not None:

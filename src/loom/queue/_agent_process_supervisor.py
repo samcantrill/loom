@@ -42,7 +42,7 @@ class AgentProcessSupervisorError(ValueError):
 
 
 class _SupervisorNoStartError(AgentProcessSupervisorError):
-    """The process owner rejected qualification before accepting a launch."""
+    """The process owner positively rejected execution before creating a root."""
 
 
 class _SupervisorCommunicationError(AgentProcessSupervisorError):
@@ -114,6 +114,7 @@ class ResidentWorkerLaunchProfile:
     preparation_shared_roots: Mapping[str, Path] = field(default_factory=dict)
     container: Mapping[str, PlainData] | None = None
     shared_roots: Mapping[str, PlainData] = field(default_factory=dict)
+    temporary_mounts: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         from .shared_execution import root_bindings
@@ -121,6 +122,10 @@ class ResidentWorkerLaunchProfile:
         from ._container_worker import container_binding
 
         object.__setattr__(self, "container", container_binding(self.container))
+        from ._temporary_storage import temporary_mount_targets
+        object.__setattr__(self, "temporary_mounts", temporary_mount_targets(
+            self.temporary_mounts, self.container
+        ))
         root = Path(os.path.abspath(self.project_root))
         executable = Path(os.path.abspath(self.python_executable))
         try:
@@ -345,6 +350,8 @@ class SupervisorReceipt:
     successful_exit: bool = False
     backend_id: str | None = None
     backend_successful: bool = False
+    temporary_storage_pending: bool = False
+    temporary_storage_error: str | None = None
 
     @property
     def started(self) -> bool:
@@ -352,7 +359,7 @@ class SupervisorReceipt:
 
     @property
     def qualified_success(self) -> bool:
-        return (
+        return not self.temporary_storage_pending and (
             self.backend_successful
             if self.launch.backend_kind == "docker"
             else self.successful_exit
@@ -367,7 +374,7 @@ class AgentProcessSupervisor:
     ``UNKNOWN`` for a nonterminal launch: a PID is not adoption evidence.
     """
 
-    _SCHEMA_VERSION = 5
+    _SCHEMA_VERSION = 6
 
     def __init__(
         self,
@@ -388,6 +395,7 @@ class AgentProcessSupervisor:
         if initialize:
             self._initialize()
         self._open()
+        self.retry_temporary_storage_cleanup()
 
     @classmethod
     def initialize(
@@ -420,8 +428,12 @@ class AgentProcessSupervisor:
               operation_id TEXT PRIMARY KEY, digest TEXT NOT NULL,
               launch_json TEXT NOT NULL, state TEXT NOT NULL, revision INTEGER NOT NULL,
               pid INTEGER, exit_code INTEGER, result_digest TEXT,
-              successful_exit INTEGER NOT NULL DEFAULT 0
+              successful_exit INTEGER NOT NULL DEFAULT 0,
+              temporary_storage_pending INTEGER NOT NULL DEFAULT 0,
+              temporary_storage_error TEXT, start_error TEXT
             );
+            CREATE INDEX pending_temporary_storage ON launches(state)
+              WHERE temporary_storage_pending = 1;
             """)
             if any(
                 profile.container is not None and profile.container["kind"] == "docker"
@@ -458,7 +470,7 @@ class AgentProcessSupervisor:
                     for row in conn.execute("SELECT key, value FROM metadata")
                 }
                 if (
-                    values.get("schema_version") not in {"2", "3", "4", "5"}
+                    values.get("schema_version") not in {"2", "3", "4", "5", "6"}
                     or values.get("agent_id") != self._agent_id
                     or values.get("configuration_fingerprint")
                     != self._configuration.fingerprint
@@ -496,13 +508,21 @@ class AgentProcessSupervisor:
                     )
                     conn.execute("UPDATE metadata SET value = '5' WHERE key = 'schema_version'")
                     values["schema_version"] = "5"
+                if values.get("schema_version") == "5":
+                    conn.execute("ALTER TABLE launches ADD COLUMN temporary_storage_pending INTEGER NOT NULL DEFAULT 0")
+                    conn.execute("ALTER TABLE launches ADD COLUMN temporary_storage_error TEXT")
+                    conn.execute("ALTER TABLE launches ADD COLUMN start_error TEXT")
+                    conn.execute("CREATE INDEX pending_temporary_storage ON launches(state) WHERE temporary_storage_pending = 1")
+                    conn.execute("UPDATE metadata SET value = '6' WHERE key = 'schema_version'")
+                    values["schema_version"] = "6"
                 conn.execute("SELECT assignment_id FROM rejected_assignments LIMIT 0")
                 conn.execute(
                     "SELECT operation_id, intent, result FROM reboot_recoveries LIMIT 0"
                 )
                 conn.execute(
                     "SELECT operation_id, digest, launch_json, state, revision, "
-                    "pid, exit_code, result_digest, successful_exit FROM launches LIMIT 0"
+                    "pid, exit_code, result_digest, successful_exit, temporary_storage_pending, "
+                    "temporary_storage_error, start_error FROM launches LIMIT 0"
                 )
         except sqlite3.Error as exc:
             raise AgentProcessSupervisorError(
@@ -652,17 +672,17 @@ class AgentProcessSupervisor:
         )
 
     def reject_unstarted_assignment(self, assignment_id: str) -> bool:
-        """Atomically forbid future launches, only if none was ever accepted.
+        """Atomically forbid future launches against positive no-start evidence.
 
         The tombstone lasts for the supervisor root's lifetime and covers every
-        operation/fence for this immutable assignment. Any accepted launch,
-        including an uncertain or terminal one, refuses this no-start proof.
+        operation/fence for this immutable assignment. Accepted launches refuse
+        this proof unless the owner recorded failure before creating any root.
         """
         if not isinstance(assignment_id, str) or not assignment_id.strip():
             raise AgentProcessSupervisorError("assignment identity is required")
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            for row in conn.execute("SELECT launch_json FROM launches"):
+            for row in conn.execute("SELECT launch_json FROM launches WHERE start_error IS NULL"):
                 if json.loads(row[0])["assignment_id"] == assignment_id:
                     return False
             conn.execute(
@@ -698,9 +718,8 @@ class AgentProcessSupervisor:
             ).fetchone()
         if existing is None:
             self._qualify_new_launch(launch)
-            if launch.profile.container is not None:
+            if launch.profile.container is not None and not launch.profile.temporary_mounts:
                 from ._container_worker import prepare_container_worker_paths
-
                 prepare_container_worker_paths(
                     launch.profile, workspace=launch.workspace_root, agent_id=launch.agent_id
                 )
@@ -717,21 +736,25 @@ class AgentProcessSupervisor:
                     raise AgentProcessSupervisorError(
                         "launch operation conflicts with durable identity"
                     )
+                if row["start_error"] is not None:
+                    raise _SupervisorNoStartError(row["start_error"])
                 if (
                     row["state"] == "starting"
                     or (launch.launch_operation_id not in self._children
                         and row["state"] == "running")
+                    or (row["state"] == "contained" and row["temporary_storage_pending"])
                 ):
                     conn.commit()
                     return self.query(launch)
                 return self._receipt(launch, row)
             conn.execute(
-                "INSERT INTO launches(operation_id, digest, launch_json, state, revision) VALUES (?, ?, ?, ?, 1)",
+                "INSERT INTO launches(operation_id, digest, launch_json, state, revision, temporary_storage_pending) VALUES (?, ?, ?, ?, 1, ?)",
                 (
                     launch.launch_operation_id,
                     launch.spec_digest,
                     encoded,
                     SupervisorLaunchState.STARTING.value,
+                    int(bool(launch.profile.temporary_mounts)),
                 ),
             )
             conn.commit()
@@ -739,9 +762,14 @@ class AgentProcessSupervisor:
         # identity.  Do not merge ambient service state at the spawn boundary.
         environment = dict(launch.environment)
         gate = launch.workspace_root / "run.grant"
-        if launch.backend_kind != "apptainer":
-            gate.write_text("granted\n", encoding="utf-8")
         try:
+            if launch.profile.temporary_mounts:
+                from ._container_worker import prepare_container_worker_paths
+                prepare_container_worker_paths(
+                    launch.profile, workspace=launch.workspace_root, agent_id=launch.agent_id
+                )
+            if launch.backend_kind != "apptainer":
+                gate.write_text("granted\n", encoding="utf-8")
             child = subprocess.Popen(
                 launch.command_argv,
                 cwd=launch.profile.project_root,
@@ -752,6 +780,9 @@ class AgentProcessSupervisor:
                 start_new_session=True,
             )
         except OSError as exc:
+            if launch.profile.temporary_mounts:
+                self._record_no_start(launch, exc)
+                raise _SupervisorNoStartError(f"resident root was not created: {exc}") from exc
             with self._connect() as conn:
                 conn.execute(
                     "UPDATE launches SET state = ?, revision = revision + 1 WHERE operation_id = ?",
@@ -895,7 +926,9 @@ class AgentProcessSupervisor:
                     "SELECT * FROM launches WHERE operation_id = ?",
                     (launch.launch_operation_id,),
                 ).fetchone()
-            return self._receipt(launch, row)
+        if row["state"] == SupervisorLaunchState.CONTAINED.value:
+            row = self._cleanup_temporary_storage(launch)
+        return self._receipt(launch, row)
 
     def contain(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
         with self._assignment_lock(launch):
@@ -974,11 +1007,7 @@ class AgentProcessSupervisor:
                 ),
             )
             conn.commit()
-            row = conn.execute(
-                "SELECT * FROM launches WHERE operation_id = ?",
-                (launch.launch_operation_id,),
-            ).fetchone()
-        return self._receipt(launch, row)
+        return self._receipt(launch, self._cleanup_temporary_storage(launch))
 
     def _docker_reconcile(
         self,
@@ -999,6 +1028,8 @@ class AgentProcessSupervisor:
             ).fetchone()
         if existing is None and start:
             self._qualify_new_launch(launch)
+            if launch.profile.temporary_mounts:
+                self.bind_execution_host()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             if start:
@@ -1013,13 +1044,14 @@ class AgentProcessSupervisor:
                         SupervisorLaunchState.NOT_ACCEPTED, launch, 0
                     )
                 conn.execute(
-                    "INSERT INTO launches(operation_id, digest, launch_json, state, revision) "
-                    "VALUES (?, ?, ?, ?, 1)",
+                    "INSERT INTO launches(operation_id, digest, launch_json, state, revision, temporary_storage_pending) "
+                    "VALUES (?, ?, ?, ?, 1, ?)",
                     (
                         launch.launch_operation_id,
                         launch.spec_digest,
                         _launch_json(launch),
                         SupervisorLaunchState.STARTING.value,
+                        int(bool(launch.profile.temporary_mounts)),
                     ),
                 )
                 conn.commit()
@@ -1027,15 +1059,28 @@ class AgentProcessSupervisor:
                 raise AgentProcessSupervisorError(
                     "Docker launch conflicts with durable identity"
                 )
+            elif row["start_error"] is not None:
+                # Storage preparation failed before any daemon intent. Replaying
+                # this accepted launch must retain its proven no-start outcome.
+                conn.commit()
+                if start:
+                    raise _SupervisorNoStartError(row["start_error"])
+                return self._receipt(launch, self._cleanup_temporary_storage(launch))
             # No database writer may span a daemon call, including replay of an
             # existing row. Other assignments need these short transitions.
             conn.commit()
             if row is None:
                 from ._container_worker import prepare_container_worker_paths
 
-                prepare_container_worker_paths(
-                    launch.profile, workspace=launch.workspace_root, agent_id=launch.agent_id
-                )
+                try:
+                    prepare_container_worker_paths(
+                        launch.profile, workspace=launch.workspace_root, agent_id=launch.agent_id
+                    )
+                except OSError as exc:
+                    if launch.profile.temporary_mounts:
+                        self._record_no_start(launch, exc)
+                        raise _SupervisorNoStartError(f"resident root was not created: {exc}") from exc
+                    raise
             binding = launch.profile.container
             assert binding is not None
             owner = DockerWorker(
@@ -1089,6 +1134,9 @@ class AgentProcessSupervisor:
             ).fetchone()[0]
             if state is SupervisorLaunchState.CONTAINED:
                 owner.remove()
+                cleanup = self._cleanup_temporary_storage(launch)
+            else:
+                cleanup = None
             return SupervisorReceipt(
                 state,
                 launch,
@@ -1097,7 +1145,59 @@ class AgentProcessSupervisor:
                 worker_result_digest=digest,
                 backend_id=observation.container_id,
                 backend_successful=observation.successful,
+                temporary_storage_pending=bool(cleanup["temporary_storage_pending"]) if cleanup is not None else bool(launch.profile.temporary_mounts),
+                temporary_storage_error=cleanup["temporary_storage_error"] if cleanup is not None else None,
             )
+
+    def _record_no_start(self, launch: ResidentWorkerLaunch, error: OSError) -> None:
+        """Retain positive pre-spawn failure so assignment claims can be released."""
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE launches SET state = 'contained', start_error = ?, revision = revision + 1 WHERE operation_id = ?",
+                (f"resident root was not created: {type(error).__name__}: {error}"[:1024], launch.launch_operation_id),
+            )
+        self._cleanup_temporary_storage(launch)
+
+    def _cleanup_temporary_storage(self, launch: ResidentWorkerLaunch) -> sqlite3.Row:
+        """Retry exact owned storage only against durable containment evidence."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM launches WHERE operation_id = ?", (launch.launch_operation_id,)).fetchone()
+        if row is None or row["digest"] != launch.spec_digest:
+            raise AgentProcessSupervisorError("temporary storage launch ownership conflicts")
+        if row["state"] != "contained" or not row["temporary_storage_pending"]:
+            return row
+        from ._temporary_storage import cleanup_assignment_storage
+        with self._connect() as conn:
+            metadata = dict(conn.execute("SELECT key, value FROM metadata"))
+        boot = json.loads(metadata.get("boot_evidence", "null"))
+        error = None
+        if (
+            not isinstance(boot, dict)
+            or boot.get("host") != _host_boot_evidence()["host"]
+            or metadata.get("execution_root") != str(self.root)
+            or launch.agent_id != self._agent_id
+        ):
+            error = "temporary storage execution-host ownership is unavailable"
+        else:
+            try:
+                cleanup_assignment_storage(launch.profile, workspace=launch.workspace_root, agent_id=launch.agent_id)
+            except OSError as exc:
+                error = f"{type(exc).__name__}: {exc}"[:1024]
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE launches SET temporary_storage_pending = ?, temporary_storage_error = ?, revision = revision + 1 WHERE operation_id = ?",
+                (int(error is not None), error, launch.launch_operation_id),
+            )
+            return conn.execute("SELECT * FROM launches WHERE operation_id = ?", (launch.launch_operation_id,)).fetchone()
+
+    def retry_temporary_storage_cleanup(self) -> None:
+        """Resume terminal cleanup after restart without adopting any live PID."""
+        with self._connect() as conn:
+            rows = tuple(conn.execute("SELECT launch_json FROM launches WHERE temporary_storage_pending = 1 AND state = 'contained'"))
+        for row in rows:
+            launch = _launch_from_value(json.loads(row["launch_json"]))
+            with self._assignment_lock(launch):
+                self._cleanup_temporary_storage(launch)
 
     def quiescent(self) -> bool:
         """Return positive local evidence that no launch needs this service."""
@@ -1258,13 +1358,15 @@ class AgentProcessSupervisor:
     @staticmethod
     def _receipt(launch: ResidentWorkerLaunch, row: sqlite3.Row) -> SupervisorReceipt:
         return SupervisorReceipt(
-            SupervisorLaunchState(str(row["state"])),
+            SupervisorLaunchState.NOT_ACCEPTED if row["start_error"] is not None else SupervisorLaunchState(str(row["state"])),
             launch,
             int(row["revision"]),
             cast_int(row["pid"]),
             cast_int(row["exit_code"]),
             str(row["result_digest"]) if row["result_digest"] is not None else None,
             bool(row["successful_exit"]),
+            temporary_storage_pending=bool(row["temporary_storage_pending"]),
+            temporary_storage_error=row["temporary_storage_error"],
         )
 
 
@@ -1288,6 +1390,7 @@ def _profile_value(profile: ResidentWorkerLaunchProfile) -> dict[str, object]:
         "environment": dict(profile.environment),
         "readiness_identity": profile.readiness_identity,
         **({"shared_roots": dict(profile.shared_roots)} if profile.shared_roots else {}),
+        **({"temporary_mounts": list(profile.temporary_mounts)} if profile.temporary_mounts else {}),
         **({"container": profile.container} if profile.container is not None else {}),
         **(
             {
@@ -1313,7 +1416,7 @@ def _profile_from_value(value: object) -> ResidentWorkerLaunchProfile:
     if (
         not isinstance(value, Mapping)
         or not required.issubset(value)
-        or not set(value).issubset(required | {"preparation_shared_roots", "container", "shared_roots"})
+        or not set(value).issubset(required | {"preparation_shared_roots", "container", "shared_roots", "temporary_mounts"})
     ):
         raise AgentProcessSupervisorError("supervisor profile state is invalid")
     return ResidentWorkerLaunchProfile(
@@ -1324,6 +1427,7 @@ def _profile_from_value(value: object) -> ResidentWorkerLaunchProfile:
         readiness_identity=cast(str | None, value["readiness_identity"]),
         container=cast(Mapping[str, PlainData] | None, value.get("container")),
         shared_roots=cast(Mapping[str, PlainData], value.get("shared_roots", {})),
+        temporary_mounts=value.get("temporary_mounts", ()),
         preparation_shared_roots=cast(
             Mapping[str, Path], value.get("preparation_shared_roots", {})
         ),
@@ -1438,13 +1542,16 @@ def _receipt_value(receipt: SupervisorReceipt) -> dict[str, object]:
         "successful_exit": receipt.successful_exit,
         "backend_id": receipt.backend_id,
         "backend_successful": receipt.backend_successful,
+        **({"temporary_storage_pending": receipt.temporary_storage_pending,
+            "temporary_storage_error": receipt.temporary_storage_error}
+           if receipt.launch.profile.temporary_mounts else {}),
     }
 
 
 def _receipt_from_value(value: object) -> SupervisorReceipt:
     if (
         not isinstance(value, Mapping)
-        or set(value)
+        or set(value) - {"temporary_storage_pending", "temporary_storage_error"}
         != {
             "state",
             "launch",
@@ -1458,6 +1565,8 @@ def _receipt_from_value(value: object) -> SupervisorReceipt:
         }
         or not isinstance(value.get("successful_exit"), bool)
         or not isinstance(value.get("backend_successful"), bool)
+        or type(value.get("temporary_storage_pending", False)) is not bool
+        or (value.get("temporary_storage_error") is not None and not isinstance(value["temporary_storage_error"], str))
     ):
         raise AgentProcessSupervisorError("supervisor receipt is invalid")
     return SupervisorReceipt(
@@ -1470,6 +1579,8 @@ def _receipt_from_value(value: object) -> SupervisorReceipt:
         cast(bool, value["successful_exit"]),
         cast(str | None, value["backend_id"]),
         cast(bool, value["backend_successful"]),
+        value.get("temporary_storage_pending", False),
+        value.get("temporary_storage_error"),
     )
 
 
@@ -1774,6 +1885,21 @@ class AgentProcessSupervisorService:
         supervisor.rotate_clean_continuity()
         return cls._start(agent_root, configuration)
 
+    @classmethod
+    def serve_initialized(
+        cls, agent_root: Path, *, configuration: SupervisorLaunchConfiguration | None = None,
+        immutable_fingerprint: str | None = None, active_fingerprint: str | None = None,
+    ) -> None:
+        """Serve an existing native root in the foreground for a service manager.
+
+        Startup holds the native agent and supervisor locks. Only positive Linux
+        boot evidence may contain a previous boot's work; same-boot owner loss
+        preserves uncertainty. This never initializes missing state or adopts PIDs.
+        """
+        _serve(Path(agent_root).resolve() / "supervisor", managed_start=True,
+               expected_configuration=configuration, immutable_fingerprint=immutable_fingerprint,
+               active_fingerprint=active_fingerprint)
+
     @staticmethod
     def _start(
         agent_root: Path, configuration: SupervisorLaunchConfiguration
@@ -1920,7 +2046,9 @@ def retained_supervisor_guard(agent_root: Path, *, agent_id: str):
                 states = tuple(row[0] for row in conn.execute("SELECT state FROM launches"))
                 boot = json.loads(metadata.get("boot_evidence", "null"))
                 if (
-                    metadata.get("schema_version") != str(AgentProcessSupervisor._SCHEMA_VERSION)
+                    # V5 has the same ownership and clean-cut evidence. Its
+                    # optional cleanup columns migrate when the new owner opens.
+                    metadata.get("schema_version") not in {"5", str(AgentProcessSupervisor._SCHEMA_VERSION)}
                     or metadata.get("agent_id") != agent_id
                     or metadata.get("configuration_fingerprint") != fingerprint
                     or metadata.get("execution_root") != str(root)
@@ -2017,7 +2145,7 @@ class _SupervisorDispatch:
             if operation in {"query", "request_stop"} and current.state is SupervisorLaunchState.CONTAINED:
                 # Docker's success/backend fields live in its existing owner,
                 # so its terminal receipt still comes through reconciliation.
-                if launch.backend_kind != "docker":
+                if launch.backend_kind != "docker" and not current.temporary_storage_pending:
                     return current
             if entry is None:
                 if self.active >= self._SLOW_LIMIT or busy:
@@ -2102,6 +2230,24 @@ class _SupervisorDispatch:
                 ):
                     self._start(candidate, "request_stop")
 
+    def retry_temporary_cleanup(self) -> None:
+        """Use spare effect slots to resume terminal cleanup on agent reconnect."""
+        with self.lock:
+            if self.closing or self.active >= self._SLOW_LIMIT:
+                return
+            with self.supervisor._connect() as conn:
+                rows = tuple(conn.execute(
+                    "SELECT launch_json FROM launches WHERE temporary_storage_pending = 1 AND state = 'contained' LIMIT ?",
+                    (self._SLOW_LIMIT - self.active,),
+                ))
+            for row in rows:
+                launch = _launch_from_value(json.loads(row["launch_json"]))
+                if any(item.active is not None and item.launch.assignment_id == launch.assignment_id for item in self.operations.values()):
+                    continue
+                entry = self.operations.setdefault(launch.launch_operation_id, _SupervisorOperation(launch))
+                entry.results.clear()
+                self._start(entry, "query")
+
     def begin_shutdown(self) -> None:
         with self.lock:
             if self.active or any(entry.stop for entry in self.operations.values()):
@@ -2111,7 +2257,11 @@ class _SupervisorDispatch:
             self.closing = True
 
 
-def _serve(root: Path) -> None:
+def _serve(
+    root: Path, *, managed_start: bool = False,
+    expected_configuration: SupervisorLaunchConfiguration | None = None,
+    immutable_fingerprint: str | None = None, active_fingerprint: str | None = None,
+) -> None:
     root = Path(root).resolve()
     lock_path = root / "service.lock"
     lock = lock_path.open("a+", encoding="utf-8")
@@ -2123,9 +2273,35 @@ def _serve(root: Path) -> None:
             "managed supervisor service is already running"
         ) from exc
     configuration = _service_configuration(root)
+    if expected_configuration is not None and configuration != expected_configuration:
+        raise AgentProcessSupervisorError("managed supervisor configuration changed")
     supervisor = AgentProcessSupervisor(
         root, agent_id=configuration.agent_id, profiles=configuration.profiles
     )
+    if managed_start:
+        from ._agent_session_journal import _RemoteAgentJournal
+
+        journal = _RemoteAgentJournal(root.parent,
+            expected_configuration_fingerprint=immutable_fingerprint,
+            expected_active_configuration_fingerprint=active_fingerprint)
+        try:
+            from .retirement import require_unretired
+            from ._managed_local import SQLiteAgentJournal
+            require_unretired(root.parent)
+            SQLiteAgentJournal(root.parent / "journal.sqlite", _allow_initialize=False)._open_existing()
+            if journal.root_id != configuration.agent_id:
+                raise AgentProcessSupervisorError("supervisor agent identity changed")
+            with supervisor._connect() as conn:
+                values = dict(conn.execute("SELECT key, value FROM metadata"))
+            prior = json.loads(values.get("boot_evidence", "null"))
+            observed = _host_boot_evidence()
+            if isinstance(prior, dict) and prior.get("boot") != observed["boot"]:
+                receipt = supervisor.recover_reboot("service-boot-" + observed["boot"])
+                if receipt["state"] != "contained":
+                    raise AgentProcessSupervisorError(str(receipt["reason"]))
+            supervisor.rotate_clean_continuity()
+        finally:
+            journal.close()
     secret = (root / "service.secret").read_bytes()
     endpoint = _endpoint_for_root(root)
     if endpoint.exists():
@@ -2135,6 +2311,13 @@ def _serve(root: Path) -> None:
     listener.listen(4)
     listener.settimeout(0.1)
     endpoint.chmod(0o600)
+    if managed_start and os.environ.get("NOTIFY_SOCKET"):
+        address = os.environ["NOTIFY_SOCKET"]
+        if address.startswith("@"):
+            address = "\0" + address[1:]
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as notification:
+            notification.connect(address)
+            notification.sendall(b"READY=1")
     dispatch = _SupervisorDispatch(supervisor)
     stopped = Event()
     slots = BoundedSemaphore(4)
@@ -2162,6 +2345,7 @@ def _serve(root: Path) -> None:
                     else None
                 )
                 if operation == "status":
+                    dispatch.retry_temporary_cleanup()
                     response: object = {
                         "supervisor_id": supervisor.supervisor_id,
                         "continuity_epoch": supervisor.continuity_epoch,

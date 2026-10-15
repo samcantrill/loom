@@ -69,6 +69,8 @@ def test_direct_and_unix_sources_share_the_exact_v1_model(tmp_path: Path) -> Non
     finally:
         server.stop()
 
+    from loom.diagnostics.run_explanation import explain_run
+    assert explain_run(unix).to_dict() == explain_run(direct).to_dict()
     assert unix == direct
     assert unix.to_dict() == direct.to_dict()
     assert set(direct.to_dict()) == {

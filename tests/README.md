@@ -143,7 +143,7 @@ only when an additional execution/report is required. The summary e2e row runs w
 
 The timeout acceptance image needs `sh`, `setsid`, and `sleep`; the supplied path
 must already exist. Tests use temporary bind-mounted readiness files, fixture-owned
-pidfds, and the selected Linux/SingularityCE 3.10.4 foreground namespace path.
+pidfds, and the selected Linux/SingularityCE 3.10.4 or 4.1.1 foreground namespace path.
 They exercise direct timeout/startup/interruption, root-first exit, TERM-resistant
 descendants, uncertain cleanup, ordinary results, and both managed group owners.
 They neither pull/build an image nor request CPU/RAM cgroups or GPUs.
@@ -163,3 +163,109 @@ leased branch retirement, metadata publication and two phases in one stage
 worktree. Run it with `uv run --locked pytest tests/integration/tools/test_phase_workflow.py`.
 The existing integration and full validation lanes collect it. It never operates
 on real GitHub branches or starts Loom services.
+
+## Installed Fleet checks
+
+`tests/fleet_acceptance/test_self_tests.py` is the explicit installed SIF/GPU
+owner. It does not discover hosts, install images, start services or cancel work.
+Run without marker exclusions in the locked config/Fleet environment:
+
+```sh
+LOOM_RUN_FLEET_ACCEPTANCE=1 \
+LOOM_FLEET_ACCEPTANCE_CONFIG=/PRIVATE/disposable-acceptance.json \
+uv run --python 3.12 --isolated --locked --group dev --extra config --extra fleet \
+  pytest tests/fleet_acceptance/test_self_tests.py
+```
+
+For an existing waiting self-test, also set
+`LOOM_FLEET_ACCEPTANCE_OPERATION_ID` to its exact printed check ID and select a
+new protected evidence `report` path. This continues the retained intent through
+the same native API and verifies the installed identity, bytes, UUID and release
+oracles again; it creates no replacement request. Both disposable-selection
+opt-ins remain required. An unknown ID refuses; a retained failed check stays
+failed. Use the explicit Fleet `--retry-of` command only after correcting the
+observed failure, then validate that chosen successor ID through this hook.
+
+The owner-protected JSON selection must contain `schema_version: 1`,
+`disposable: true`, paths `fleet`, `deployment`, `operator_connection`, `image`,
+and a new `report`; explicit `agent_id`, source-relative `config`,
+`coordinator_id`, `agent_root_id`, `gpu_uuids` (the explicit nonempty UUID list
+matching the selected profile), complete expected native `profile`
+descriptor, and `image_sha256`. Paths resolve relative to the selection file.
+The selected agent role must declare that Apptainer image. The operator supplies
+an existing disposable fleet, immutable SIF containing Loom probes and Torch,
+and a real declared GPU. The test compares image bytes and selected identities
+before requests, then records native operation/source/profile identity, complete
+results, Torch/Python versions and provider-release/owned-work cleanup evidence.
+Failure or waiting retains operation IDs; services stay borrowed.
+
+Absent opt-ins are unavailable installed evidence, not qualification. The ordinary
+integration owner tests safe refusal and native temporary CPU/storage execution;
+mock CUDA checks do not substitute for this installed gate.
+
+The bounded GPU job claims one native device from that declared set. Its exact
+observed/claimed UUID is recorded; it does not qualify every GPU in the set.
+
+
+### Installed managed-service lifetimes
+
+Use `tests/fleet_acceptance/test_managed_services.py` without marker exclusions,
+with `LOOM_RUN_FLEET_ACCEPTANCE=1` and a protected
+`LOOM_FLEET_ACCEPTANCE_CONFIG`. The selection is JSON with `schema_version: 1`,
+`disposable: true`, `kind: managed-services`, and a `cases` mapping. Case keys are
+`ssh_disconnect`, `logout`, `resident_agent_restart`, `sif_agent_restart`,
+`idle_reboot`, and `in_job_reboot`. An absent selection is unavailable evidence,
+not a pass of that case or the full matrix.
+
+Each selected case supplies `fleet`, `agent_id`, `agent_root_id`,
+`coordinator_id`, `session_id`, absolute installed `agent_python` and
+`coordinator_python`, protected `operator_connection`, a new protected `report`,
+and `timeout_seconds` (1..900). Optional `agent_env_file` and
+`coordinator_env_file` name the protected role environments. Paths `fleet`,
+`operator_connection`, and `report` resolve relative to the selection. The fleet
+must explicitly use systemd-user and separate agent/coordinator SSH hosts.
+Except for idle reboot, supply `assignment_id` for an already submitted bounded
+synthetic native job. Submit it through ordinary native APIs, with enough time
+remaining for the selected event and cleanup. Use separate assignments/case
+runs, and a disposable supervisor with no unrelated workers. SIF restart also
+requires the exact absolute `image` and its `image_sha256`; the actual launch
+must use that image. The harness borrows services and waits for bounded work to
+settle, proving worker process exit via owned pidfds and an empty worker cgroup.
+On failure it retains evidence and native owners for inspection; it terminates
+only its own SSH observer.
+
+Actual reboot additionally requires `LOOM_ALLOW_FLEET_REBOOT=1` and the exact
+agent SSH alias in top-level `reboot_authorized_hosts`. Never supply these opt-ins
+without permission to reboot that host. Tests retain pre/post Linux boot identity,
+native root/session identity, interrupted assignment containment and provider
+release. Idle and in-job reboot remain separately unavailable without this
+permission. SSH logout records whether the site's PAM integration created a
+logind session; it cannot claim last-logind-session evidence when none existed.
+
+### Installed runtime upgrades
+
+Run `tests/fleet_acceptance/test_runtime_upgrade.py` without marker exclusions,
+using the same locked dev/config/fleet environment and
+`LOOM_RUN_FLEET_ACCEPTANCE=1`, with `LOOM_FLEET_ACCEPTANCE_CONFIG` naming a
+protected JSON selection. It must contain `schema_version: 1`,
+`disposable: true`, `kind: runtime-upgrade`, and `cases` entries `upgrade` and
+`interruption`. An absent case is unavailable evidence, never a pass.
+
+Each case supplies `fleet`, `runtime_release`, `deployment`,
+`operator_connection`, source-relative `config`, a new `operation_id`,
+`roots` (inventory-entry to exact native root-ID map), `source_releases`
+(entry to installed descriptor-SHA256 map), a new `report`, and
+`timeout_seconds` (1..900). Optional `env_file` selects the protected native role
+environment. File paths resolve relative to the selection. Exactly two distinct
+SSH hosts are required. Both installed source and target must support the gate
+and conditional controls; retain the explicit bridge receipt separately.
+
+The test invokes real CLI subprocesses, replaces only the selected native
+services, checks exact before/after identities and releases, and verifies every
+required native check and resource acknowledgement/release. The interruption
+case terminates only its owned controller/SSH process group after observing the
+accepted maintenance gate, then resumes the same operation. Native service
+ownership survives. Cases borrow services and retain incomplete receipts on
+failure; they never reboot hosts, cancel work or forcibly clear claims. Prepare
+separate immutable targets and fresh operation/report identities for successive
+cases. Passing this file qualifies the selected same-boot upgrade only.

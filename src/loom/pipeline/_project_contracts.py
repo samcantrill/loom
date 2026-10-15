@@ -13,8 +13,9 @@ from loom.serialization import PlainData, ensure_plain_data
 CONTRACT = "loom.project_contract"
 CONTRACTS = "loom.project_contracts"
 CAPTURE = "loom.project_contract_capture"
+REPORT = "loom.project_report"
 EXECUTION = "loom.execution_binding"
-RESERVED = frozenset({CONTRACT, CONTRACTS, CAPTURE, EXECUTION, "loom.remote_recovery", "loom.recovery_binding"})
+RESERVED = frozenset({CONTRACT, CONTRACTS, CAPTURE, REPORT, EXECUTION, "loom.remote_recovery", "loom.recovery_binding"})
 
 
 def reject_overrides(metadata: Mapping[str, object] | None) -> None:
@@ -49,11 +50,23 @@ def _native_digest(value: object) -> None:
 
 def node_result(value: object) -> dict[str, PlainData]:
     result = plain_mapping(value)
+    _check_node_result(result)
+    return result
+
+
+def _plain_mapping_view(value: PlainData) -> dict[str, PlainData]:
+    """Read an already normalized tree without copying its opaque payload."""
+    if not isinstance(value, dict):
+        raise ValueError("project contract must be a plain mapping")
+    return value
+
+
+def _check_node_result(result: dict[str, PlainData]) -> None:
     if set(result) != {"semantic_key", "payload"}:
         raise ValueError("project node contract fields are invalid")
     key = result["semantic_key"]
     if key is not None:
-        key = plain_mapping(key)
+        key = _plain_mapping_view(key)
         if (
             set(key) != {"version", "digest"}
             or type(key["version"]) is not int
@@ -61,7 +74,6 @@ def node_result(value: object) -> dict[str, PlainData]:
         ):
             raise ValueError("project semantic key version is unsupported")
         _digest(key["digest"])
-    return result
 
 
 def declaration(stage: Any) -> dict[str, PlainData]:
@@ -125,6 +137,11 @@ def envelope(
 
 def validate_envelope(value: object) -> dict[str, PlainData]:
     data = plain_mapping(value)
+    _check_envelope(data)
+    return data
+
+
+def _check_envelope(data: dict[str, PlainData]) -> None:
     if (
         set(data)
         != {"schema_version", "namespace", "semantic_key", "payload", "binding_digest"}
@@ -134,9 +151,8 @@ def validate_envelope(value: object) -> dict[str, PlainData]:
         raise ValueError("native project contract version or fields are unsupported")
     if not isinstance(data["namespace"], str) or not data["namespace"]:
         raise ValueError("project namespace is invalid")
-    node_result({key: data[key] for key in ("semantic_key", "payload")})
+    _check_node_result({key: data[key] for key in ("semantic_key", "payload")})
     _native_digest(data["binding_digest"])
-    return data
 
 
 def report_entry(value: object) -> dict[str, PlainData]:
@@ -176,24 +192,27 @@ def load_contract_report(store: Any, run_uri: str) -> dict[str, PlainData] | Non
         return None
     data = report_entry(prepared["metadata"][CONTRACTS])
     ref = ArtifactRef.from_dict(data["report_ref"])
-    report = plain_mapping(
-        LocalArtifactStore(store.local_artifact_root(run_uri)).load(ref)
-    )
-    project = plain_mapping(report["project_preparation"])
-    processor = plain_mapping(project["processor"])
+    from loom.preparation import load_preparation_report
+
+    artifact_store = LocalArtifactStore(store.local_artifact_root(run_uri))
+    report = load_preparation_report(ref, artifact_store.local_path(ref))
+    project = _plain_mapping_view(report["project_preparation"])
+    processor = _plain_mapping_view(project["processor"])
     if (
         processor["schema_version"] != 3
         or processor["evidence_namespace"] != data["namespace"]
     ):
         raise ValueError("retained report installation namespace conflicts")
-    composition = plain_mapping(report["composition"])
+    composition = _plain_mapping_view(report["composition"])
     if composition["resolved"] != json.loads(
         store.read_config_snapshot(run_uri, "resolved")
     ):
         raise ValueError("retained report captured declaration conflicts")
-    contracts = plain_mapping(report["project_contracts"])
+    contracts = _plain_mapping_view(report["project_contracts"])
     for value in contracts.values():
-        if validate_envelope(value)["namespace"] != data["namespace"]:
+        checked = _plain_mapping_view(value)
+        _check_envelope(checked)
+        if checked["namespace"] != data["namespace"]:
             raise ValueError("retained node namespace conflicts")
     return report
 
@@ -204,8 +223,23 @@ def worker_contract_metadata(
     report = load_contract_report(store, run_uri)
     if report is None:
         return {}
-    contracts = plain_mapping(report["project_contracts"])
-    attached = validate_envelope(contracts[stage.name])
+    metadata = _worker_contract_metadata(report, stage)
+    prepared = store.read_prepared_run(run_uri)
+    entry = report_entry(prepared["metadata"][CONTRACTS])
+    from loom.pipeline.stores.shared_artifacts import binding
+
+    reference = ArtifactRef.from_dict(entry["report_ref"])
+    if binding(reference.metadata) is not None:
+        metadata[REPORT] = entry["report_ref"]
+    return metadata
+
+
+def _worker_contract_metadata(
+    report: dict[str, PlainData], stage: Any
+) -> dict[str, PlainData]:
+    """Select one attachment from the freshly checked report owned by the caller."""
+    contracts = _plain_mapping_view(report["project_contracts"])
+    attached = _plain_mapping_view(contracts[stage.name])
     capture = capture_digest(report)
     expected = envelope(
         cast(str, attached["namespace"]),
@@ -222,6 +256,10 @@ def worker_contract_metadata(
 def validate_worker_metadata(
     metadata: Mapping[str, PlainData], *, node: str, attempt: int, fingerprint: Any
 ) -> None:
+    if REPORT in metadata:
+        if CONTRACT not in metadata:
+            raise ValueError("worker project report requires a checked attachment")
+        ArtifactRef.from_dict(plain_mapping(metadata[REPORT]))
     if CONTRACTS in metadata:
         raise ValueError("a worker cannot receive whole-graph contracts")
     if (CONTRACT in metadata) != (CAPTURE in metadata):
@@ -286,7 +324,7 @@ def validate_admitted_worker(store: Any, request: Any, stage: Any) -> None:
     expected = worker_contract_metadata(store, request.run_uri, stage)
     actual = {
         key: request.metadata[key]
-        for key in (CONTRACT, CAPTURE)
+        for key in (CONTRACT, CAPTURE, REPORT)
         if key in request.metadata
     }
     if plain_mapping(actual) != expected:

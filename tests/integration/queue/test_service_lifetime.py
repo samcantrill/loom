@@ -200,8 +200,21 @@ def _stop_fixture_process(root: Path) -> None:
     [("persistent", "run"), ("run", "persistent"), ("run", "run")],
 )
 def test_independent_mixed_lifetimes(
-    tmp_path: Path, coordinator_lifetime: str, agent_lifetime: str
+    tmp_path: Path, coordinator_lifetime: str, agent_lifetime: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    import signal
+    import loom.deployment as deployment_module
+
+    launched = []
+    original_launch = deployment_module._launch
+
+    def launch(selection, role):
+        process = original_launch(selection, role)
+        launched.append(process)
+        return process
+
+    monkeypatch.setattr(deployment_module, "_launch", launch)
     path = _mixed_selection(tmp_path, coordinator_lifetime, agent_lifetime)
     try:
         outcome = loom.run(
@@ -216,6 +229,14 @@ def test_independent_mixed_lifetimes(
             "stopped" if agent_lifetime == "run" else "persistent/borrowed"
         )
     finally:
+        # A reconnect may launch a second contender before the first owner exits.
+        # A journal row names only the published owner, not that pending starter.
+        for process in launched:
+            if process.poll() is None:
+                process.send_signal(signal.SIGINT)
+        for process in launched:
+            process.wait(timeout=15)
+            assert process.returncode is not None
         _stop_fixture_process(tmp_path / "outbound")
         _stop_fixture_process(tmp_path / "deployment/coordinator")
         _stop_fixture_supervisor(tmp_path / "outbound")

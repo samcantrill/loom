@@ -142,6 +142,13 @@ def _payload(value: object) -> PlainData:
 
 def _result(value: object, text: str) -> CallToolResult:
     payload = _payload(value)
+    from loom.diagnostics.run_explanation import RunExplanation
+    if isinstance(value, RunExplanation):
+        assert value.inspection is not None
+        return CallToolResult(
+            content=[TextContent(text=value.format_text())],
+            structured_content=value.inspection.to_dict(),
+        )
     return CallToolResult(
         content=[TextContent(text=_summary(payload, text))], structured_content=payload
     )
@@ -278,24 +285,30 @@ class _Adapter:
     def _inspect_run(
         self, run_uri: str, expected_coordinator_id: str | None, deadline: float
     ) -> Any:
-        try:
-            return decode_run_inspection_response(
-                self._native(
-                    "inspect_run",
-                    {"run_uri": run_uri},
-                    expected_coordinator_id,
-                    deadline,
-                )
-            )
-        except CoordinatorClientError:
-            raise
-        except (QueueError, TypeError, ValueError, KeyError, RecursionError) as exc:
-            raise control_error(
-                "invalid_response",
-                "inspect_run",
-                {"run_uri": run_uri},
-                dispatched=True,
-            ) from exc
+        from loom.diagnostics.run_explanation import explain_run
+        from loom.diagnostics.run_inspection import RunInspectionResult
+
+        with self._connect() as client:
+            try:
+                inspection = decode_run_inspection_response(client._native_call(
+                    "inspect_run", {"run_uri": run_uri}, expected_coordinator_id, deadline=deadline,
+                ))
+            except CoordinatorClientError:
+                raise
+            except (QueueError, TypeError, ValueError, KeyError, RecursionError) as exc:
+                raise control_error("invalid_response", "inspect_run", {"run_uri": run_uri}, dispatched=True) from exc
+            detail = None
+            error_code = None
+            if isinstance(inspection, RunInspectionResult) and inspection.admission_id is not None:
+                connection = client._last_connection
+                owner = expected_coordinator_id if connection is None else connection.coordinator_id
+                try:
+                    detail = client._native_call("admission", {"admission_id": inspection.admission_id}, owner, deadline=deadline)
+                except CoordinatorClientError as exc:
+                    if exc.code not in {"unavailable", "deadline_exceeded", "not_found", "unauthorized", "unsupported"}:
+                        raise
+                    error_code = exc.code
+            return explain_run(inspection, detail=detail, error_code=error_code)
 
     def server(self) -> MCPServer:
         @asynccontextmanager

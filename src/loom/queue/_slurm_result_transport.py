@@ -151,7 +151,7 @@ class SharedSlurmResult:
             )
         # Use the existing application decoder before publication as well as
         # during delivery, including space for the authenticated session envelope.
-        from .agent_session_transport import _decode
+        from ._agent_session_codec import _decode
         from .agent_sessions import _MAX_IDENTIFIER
 
         wire = {

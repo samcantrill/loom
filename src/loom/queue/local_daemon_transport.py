@@ -18,7 +18,7 @@ from loom.serialization import PlainData
 from ._coordinator_client import NativeCoordinatorClient
 from ._coordinator_control import (
     CONTROL_CAPABILITY, CONTROL_OPERATIONS, WAIT_OPERATIONS, CoordinatorClientError,
-    control_error, dispatch_control, encode_wire,
+    control_error, dispatch_control, encode_wire, OPERATOR_OPERATIONS,
 )
 from ._coordinator_transport import UnixControlTransport, read_unix_message
 from .errors import (
@@ -182,7 +182,7 @@ class LocalDaemonSocketServer:
             result: PlainData
             if operation in CONTROL_OPERATIONS or daemon_control == CONTROL_CAPABILITY:
                 result = dict(dispatch_control(
-                    self._daemon, LocalDaemonPrincipal(f"uid:{uid}", LocalDaemonRole.CLIENT),
+                    self._daemon, LocalDaemonPrincipal(f"uid:{uid}", LocalDaemonRole.OPERATOR if operation in OPERATOR_OPERATIONS else LocalDaemonRole.CLIENT),
                     operation, payload, transport="unix", wait_slice=_SERVER_WAIT_SECONDS,
                     inspect_run=self._inspect_run, legacy=daemon_control is None,
                 ))

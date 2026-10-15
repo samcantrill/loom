@@ -13,6 +13,7 @@ from copy import deepcopy
 import importlib
 import json
 import os
+import traceback
 from pathlib import Path
 from typing import Any, cast
 
@@ -82,6 +83,7 @@ _PREPARATION_GROUPS = (
 )
 _REPORT_FIELDS = {
     "schema_version",
+    "report_format",
     "operation_id",
     "input_manifest_digest",
     "preparation_profile",
@@ -114,7 +116,7 @@ class PreparationStage:
             raise QueueConflictError("preparation installation_mismatch")
         if binding.action_verification is not None:
             return {"report": context.save_artifact(
-                "report", _run_action_verification(binding, private.get("action_artifacts")), artifact_type="json", codec_key="json.v1"
+                "report", _run_action_verification(binding, private.get("action_artifacts"), private.get("action_project_reports")), artifact_type="json", codec_key="json.v1"
             )}
         if isinstance(binding.input_receipt, SharedInputReceipt):
             roots = cast(Mapping[str, str], private["shared_roots"])
@@ -183,12 +185,13 @@ class PreparationStage:
         project_result = None
         if binding.project_preparation is not None and preparation_checks_allow_publication(preflight):
             composition, project_result, preflight = _inspect_project(
-                composition, effective_options, binding, preflight
+                composition, effective_options, binding, preflight,
+                artifact_directory=context.local_output_path("report").parent if binding.shared_scope is not None else None
             )
 
         verification = None
         if binding.candidate is not None and preparation_checks_allow_publication(preflight):
-            verification = _verify_project_candidate(binding, composition, effective_options, project_result)
+            verification = _verify_project_candidate(binding, composition, effective_options, project_result, artifact_directory=context.local_output_path("report").parent if binding.shared_scope is not None else None, project_report=private.get("candidate_project_report"))
 
         requirements: dict[str, PlainData] = {}
         if preflight.status != PreflightStatus.FAIL:
@@ -223,14 +226,16 @@ class PreparationStage:
         }
         if _is_v3(binding):
             report["project_contracts"] = _report_contracts(report) if project_result is not None else None
+        from loom._preparation_report import save_composition_evidence
+
         return {
             "report": context.save_artifact(
-                "report", report, artifact_type="json", codec_key="json.v1"
+                "report", save_composition_evidence(report, context.local_output_path("report", suffix=".composition.json")), artifact_type="json", codec_key="json.v1"
             )
         }
 
 
-def _run_action_verification(binding: PreparationChildInput, artifact_access: object = None) -> dict[str, PlainData]:
+def _run_action_verification(binding: PreparationChildInput, artifact_access: object = None, project_reports: object = None) -> dict[str, PlainData]:
     from loom.pipeline._action_verification import action_verification_request, action_verification_response
 
     assert binding.project_preparation is not None
@@ -249,6 +254,16 @@ def _run_action_verification(binding: PreparationChildInput, artifact_access: ob
         if replace(materialized, uri=original.uri) != original:
             raise QueueConflictError("action verifier materialized identity conflicts")
         LocalArtifactStore(Path(uri_to_path(materialized.uri)).parent).validate(materialized)
+    reports = _plain_mapping(project_reports or {})
+    expected_reports = _plain_mapping(_plain_mapping(candidate["access"]).get("project_reports", {}))
+    if set(reports) != set(expected_reports):
+        raise QueueConflictError("action verifier project report materialization is incomplete")
+    for label, wire in reports.items():
+        original = ArtifactRef.from_dict(expected_reports[label])
+        materialized = ArtifactRef.from_dict(wire)
+        if replace(materialized, uri=original.uri) != original:
+            raise QueueConflictError("action verifier project report identity conflicts")
+        load_preparation_report(original, uri_to_path(materialized.uri))
     selected = _plain_mapping(binding.project_preparation["processor"])
     response, failure = None, None
     try:
@@ -259,13 +274,13 @@ def _run_action_verification(binding: PreparationChildInput, artifact_access: ob
         value = cast(Any, processor)({
             "schema_version": 3, "operation": "verify_result",
             "project_preparation": dict(binding.project_preparation),
-            "artifact_access": {"mode": "read_only", "outputs": outputs},
+            "artifact_access": {"mode": "read_only", "outputs": outputs, **({"project_reports": reports} if reports else {})},
             **requested,
         })
         response = action_verification_response(value, _plain_mapping(requested["candidate"]))
     except Exception:
-        # Crashes and malformed callback replies are explicit native failures;
-        # unchecked project exception messages never cross this boundary.
+        # Private attempt logs retain the cause; portable verdicts remain bounded.
+        traceback.print_exc()
         failure = "action_verification_invalid"
     return {
         "schema_version": 9, "operation_id": binding.operation_id,
@@ -312,6 +327,7 @@ def _report_contracts(report: Mapping[str, PlainData]) -> dict[str, PlainData]:
 def _inspect_project(
     composition: dict[str, PlainData], options: RunOptions | None,
     binding: PreparationChildInput, preflight: PreflightResult,
+    *, artifact_directory: Path | None = None,
 ) -> tuple[dict[str, PlainData], dict[str, PlainData] | None, PreflightResult]:
     assert binding.project_preparation is not None and options is not None
     selected = _plain_mapping(binding.project_preparation["processor"])
@@ -324,6 +340,7 @@ def _inspect_project(
             "schema_version": selected["schema_version"],
             **({"operation": "prepare"} if selected["schema_version"] in (2, 3) else {}),
             "composition": deepcopy(composition),
+            **({"artifact_directory": str(artifact_directory)} if artifact_directory is not None else {}),
             "effective_run_options": options.to_dict(),
             "invocation": _invocation_data(binding),
             "operation_id": binding.operation_id,
@@ -339,8 +356,9 @@ def _inspect_project(
         checked = _plain_mapping(result.pop("composition"))
         _validate_project_result(composition, checked, result, binding)
     except Exception as exc:
-        # Project exceptions may contain paths or secrets. Retain the failure class,
-        # never unchecked exception text, in the existing native diagnostic owner.
+        # Worker stderr is private attempt evidence; the portable preflight report
+        # keeps only the exception class, never paths or secrets from its message.
+        traceback.print_exc()
         check = PreflightCheckResult(
             "config.project_preparation", PreflightGroup.CONFIG,
             PreflightCheckStatus.FAIL, PreflightSeverity.ERROR,
@@ -367,7 +385,7 @@ def _checked_project_uri(binding: PreparationChildInput, result: Mapping[str, Pl
 
 
 def _verify_project_candidate(binding: PreparationChildInput, composition: Mapping[str, PlainData],
-                              options: RunOptions | None, project_result: Mapping[str, PlainData] | None) -> dict[str, PlainData]:
+                              options: RunOptions | None, project_result: Mapping[str, PlainData] | None, *, artifact_directory: Path | None = None, project_report: object = None) -> dict[str, PlainData]:
     from loom.fingerprints import hash_mapping
     from loom.serialization import thaw_plain_data
 
@@ -379,9 +397,21 @@ def _verify_project_candidate(binding: PreparationChildInput, composition: Mappi
         processor = getattr(processor, part)
     candidate = _plain_mapping(thaw_plain_data(binding.candidate))
     expected = {"schema_version": 1, "candidate_digest": hash_mapping(candidate), "verdict": "verified"}
+    expected_report = _plain_mapping(candidate["artifact_binding"]).get("project_report")
+    if (expected_report is None) != (project_report is None):
+        raise QueueConflictError("candidate project report materialization is incomplete")
+    if project_report is not None:
+        from loom.io.uris import uri_to_path
+        original = ArtifactRef.from_dict(expected_report)
+        materialized = ArtifactRef.from_dict(project_report)
+        if replace(materialized, uri=original.uri) != original:
+            raise QueueConflictError("candidate project report identity conflicts")
+        load_preparation_report(original, uri_to_path(materialized.uri))
     try:
         response = _plain_mapping(cast(Any, processor)({
             "schema_version": selected["schema_version"], "operation": "verify_candidate", "candidate": candidate,
+            **({"artifact_directory": str(artifact_directory)} if artifact_directory is not None else {}),
+            **({"artifact_access": {"project_report": project_report}} if project_report is not None else {}),
             "composition": deepcopy(composition), "project_result": project_result,
             "effective_run_options": None if options is None else options.to_dict(),
             "operation_id": binding.operation_id, "invocation": _invocation_data(binding),
@@ -394,6 +424,7 @@ def _verify_project_candidate(binding: PreparationChildInput, composition: Mappi
         if response != expected:
             raise QueueConflictError("candidate verification result conflicts")
     except Exception as exc:
+        traceback.print_exc()
         return {**expected, "verdict": "rejected", "error_type": type(exc).__name__}
     return expected
 
@@ -554,7 +585,7 @@ def _worker_context() -> Mapping[str, PlainData]:
             version = 4 if "shared_scope" in value else 3
         if (
             not isinstance(value, dict)
-            or (set(value) - {"local_scope", "project_preparation", "shared_scope"} - ({"action_artifacts"} if action_context else set())) not in (
+            or (set(value) - {"local_scope", "project_preparation", "shared_scope", "candidate_project_report"} - ({"action_artifacts", "action_project_reports"} if action_context else set())) not in (
                 {"schema_version", "profile_descriptor", "shared_roots"},
                 {"schema_version", "profile_descriptor", "staged_directory"},
             )
@@ -615,6 +646,24 @@ class _ReceivedComposition:
     project_contracts_entry: Mapping[str, PlainData] | None = None
 
 
+def load_preparation_report(reference: ArtifactRef, report_path: str | Path) -> dict[str, PlainData]:
+    """Hydrate a canonical preparation report's complete retained evidence.
+
+    ``reference`` is the original committed JSON ArtifactRef; ``report_path`` is
+    its validated published local path, or an explicitly verified contained
+    archive copy for inspection. The latter never grants live run authority.
+    The primary checksum, sibling companion and exact metadata projections must
+    agree. Missing or old formats require fresh native preparation; no source
+    import, recomposition or legacy conversion occurs. Returned values are detached.
+    """
+    from loom._preparation_report import load_report
+
+    try:
+        return load_report(reference, report_path)
+    except (OSError, ValueError, ValidationError, SerializationError) as exc:
+        raise QueueConflictError("preparation retained report closure is invalid") from exc
+
+
 def decode_preparation_report(
     value: object,
     *,
@@ -645,6 +694,7 @@ def _decode_preparation_report(
                         | ({"candidate", "verification"} if "candidate" in expected.to_dict() else set())
                         | ({"project_contracts"} if _is_v3(expected) else set())
                         | ({"generations"} if expected.generations is not None else set()))
+        or report["report_format"] != "loom.preparation_report.v1"
         or type(report["schema_version"]) is not int
         or report["schema_version"] != expected.to_dict()["schema_version"]
     ):
@@ -819,6 +869,11 @@ def prepare_child_run(
         },
         "runtime": runtime_options.to_dict(),
     }
+    from loom.queue._maintenance import preparation_placement
+    placement = preparation_placement(service.daemon, binding.operation_id)
+    if placement is not None:
+        child = cast(list[dict[str, PlainData]], cast(Mapping[str, PlainData], resolved["pipeline"])["stages"])[0]
+        child["placement"] = dict(placement)
     _require_local_binding(binding.local_scope, service.daemon.resident_worker_launch_profile, agent_id=service.daemon.machine_id)
     _bind_local_snapshot(resolved, binding.local_scope)
     if binding.shared_scope is not None:
@@ -981,6 +1036,9 @@ class CoordinatorPreparation:
             preflight = PreflightResult((), ())
             return PreparationReport(reference, preflight.to_dict(), preflight.status.value,
                                      False, None, None, action_verification=checked)
+        value = load_preparation_report(
+            reference, LocalArtifactStore(store.local_artifact_root(admission.run_uri)).local_path(reference)
+        )
         composed, requirements, preflight = decode_preparation_report(
             value, expected=binding
         )
@@ -1049,13 +1107,23 @@ class CoordinatorPreparation:
         record = load_managed_local_runtime_record(store, run_uri)
         from loom.pipeline._project_contracts import load_contract_report
         contract_report = load_contract_report(store, run_uri)
+        project_reference = {}
+        if contract_report is not None:
+            from loom.pipeline._project_contracts import CONTRACTS, report_entry
+            from loom.pipeline.stores.shared_artifacts import binding as shared_binding
+            prepared = store.read_prepared_run(run_uri)
+            assert prepared is not None  # Established by load_contract_report above.
+            metadata = cast(Mapping[str, Any], prepared["metadata"])
+            reference = report_entry(metadata[CONTRACTS])["report_ref"]
+            if shared_binding(ArtifactRef.from_dict(reference).metadata) is not None:
+                project_reference = {"project_report": reference}
         return {
             **({"project_contracts": contract_report["project_contracts"]} if contract_report is not None else {}),
             "schema_version": 1, "run_uri": run_uri,
             "admission": None if admission is None else admission.to_dict(),
             "authority": snapshot.to_dict(), "configuration": json.loads(resolved),
             "native_intent": record, "intent_digest": intent.digest,
-            "artifact_binding": {"access": "read_only", "root": str(store.local_artifact_root(run_uri))},
+            "artifact_binding": {"access": "read_only", "root": str(store.local_artifact_root(run_uri)), **project_reference},
             "prepared_run": {"run_uri": run_uri, "plan_digest": record["plan_digest"],
                              "runtime_digest": record["digest"], "stage_names": list(intent.pipeline.stage_names)},
         }

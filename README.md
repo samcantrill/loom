@@ -162,3 +162,6 @@ make validate-pr
 make test-summary
 make build
 ```
+
+Generic optional Fleet configuration and read-only administration are documented
+in [Fleet administration](docs/fleet.md).

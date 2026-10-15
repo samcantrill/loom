@@ -9,7 +9,7 @@ import sys
 from typing import cast
 from uuid import uuid4
 
-from loom.cli.errors import CliError, ExitCode
+from loom.cli.errors import ExitCode
 from loom.cli.formatting import format_json_envelope
 from loom.cli.options import OutputFormat, RunCliOptions, SelectorCliOptions
 from loom.serialization import PlainData
@@ -62,14 +62,15 @@ def register_subparser(
 
 
 def handle(namespace: argparse.Namespace) -> int:
-    from loom.coordinator import CoordinatorClientError
-    from loom._run import run
+    from loom._run import run, _validate_run_arguments, _validate_run_selection
+    from loom.cli.run_operations import emit_reference, operation_error, logical_status
     from loom.deployment import load_deployment
     from loom.queue.errors import QueueError
     from loom.queue.preparation import PrepareRunRequest
     from loom.queue.run import RunRequest
     from loom.runs import SubmissionContext
 
+    identity = namespace.operation_id or "run-" + uuid4().hex
     try:
         from loom.queue.errors import QueueConfigError
 
@@ -78,7 +79,6 @@ def handle(namespace: argparse.Namespace) -> int:
         if (reconcile and (namespace.run_name or namespace.queue_item_id)) or (retry and not reconcile):
             raise QueueConfigError("--reconcile requires an unresolved target; --retry-failed requires --reconcile")
         selection = load_deployment(namespace.deployment)
-        identity = namespace.operation_id or "run-" + uuid4().hex
         context_path = getattr(namespace, "context", None)
         context = None
         if context_path is not None:
@@ -108,6 +108,12 @@ def handle(namespace: argparse.Namespace) -> int:
             retry_policy="one_observed_failure" if retry else "never",
             fresh_stages=tuple(getattr(namespace, "fresh_stage", None) or ()),
         )
+        _validate_run_arguments(
+            request, wait=not namespace.detach,
+            timeout_seconds=namespace.timeout_seconds,
+        )
+        _validate_run_selection(request, selection)
+        emit_reference(identity, selection)
         result = run(
             request,
             deployment=selection.path,
@@ -115,22 +121,9 @@ def handle(namespace: argparse.Namespace) -> int:
             timeout_seconds=namespace.timeout_seconds,
         )
     except QueueError as exc:
-        raise CliError(
-            str(exc),
-            code="cli.run.coordinator",
-            exit_code=ExitCode.RUN_STATE,
-            details={"coordinator": exc.to_dict()}
-            if isinstance(exc, CoordinatorClientError)
-            else None,
-        ) from exc
+        raise operation_error(exc, identity, namespace.deployment) from exc
     observation = result.observation
-    failed = (
-        observation.operation is not None
-        and observation.operation.state in {"failed", "conflict", "cancelled"}
-    ) or (
-        observation.admission is not None
-        and observation.admission.state.value in {"FAILED", "CANCELLED", "BLOCKED"}
-    )
+    _, _, failed = logical_status(observation)
     if namespace.output_format == "json":
         sys.stdout.write(
             format_json_envelope(

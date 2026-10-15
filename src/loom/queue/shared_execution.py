@@ -18,6 +18,37 @@ from .errors import QueueServiceError
 
 SHARED_EXECUTION_CAPABILITY = "shared-execution-v1"
 SHARED_EXECUTION_SCOPE = "loom.shared_execution"
+SOURCE_PROMOTION_CAPABILITY = "quiescent-source-promotion-v1"
+
+
+def _readonly_root_relocations(
+    current: Mapping[str, PlainData], replacement: Mapping[str, PlainData]
+) -> tuple[str, ...]:
+    """Check retained logical roots; only read-only host locations may differ.
+
+    Inputs have passed the native root loader. The same alias, challenge, access,
+    container target and publication policy retain the original logical storage
+    identity. Callers own native quiescence; this check never authorizes a move,
+    copies files or proves equivalence beyond the declared root qualification.
+    Additional roots are left to the caller's ordinary configuration policy.
+    """
+    from .errors import QueueConflictError
+
+    changed = []
+    for alias, previous in current.items():
+        after = replacement.get(alias)
+        if after == previous:
+            continue
+        before = cast(Mapping[str, PlainData], previous)
+        if (
+            not isinstance(after, Mapping)
+            or before["access"] != "ro"
+            or {key: value for key, value in before.items() if key != "host_path"}
+            != {key: value for key, value in after.items() if key != "host_path"}
+        ):
+            raise QueueConflictError("retained shared root identity or writable mapping changed")
+        changed.append(alias)
+    return tuple(changed)
 
 
 def _relative(value: object) -> str:

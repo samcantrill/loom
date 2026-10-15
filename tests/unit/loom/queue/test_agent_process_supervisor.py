@@ -900,6 +900,10 @@ def test_supervisor_v4_migrates_rejection_state(tmp_path: Path) -> None:
     )
     with sqlite3.connect(agent_root / "supervisor/supervisor.sqlite") as conn:
         conn.execute("DROP TABLE rejected_assignments")
+        conn.execute("DROP INDEX pending_temporary_storage")
+        conn.execute("ALTER TABLE launches DROP COLUMN temporary_storage_pending")
+        conn.execute("ALTER TABLE launches DROP COLUMN temporary_storage_error")
+        conn.execute("ALTER TABLE launches DROP COLUMN start_error")
         conn.execute("UPDATE metadata SET value = '4' WHERE key = 'schema_version'")
     migrated = AgentProcessSupervisor(
         agent_root / "supervisor", agent_id="agent-A", profiles=(_profile(),)
@@ -1035,9 +1039,16 @@ def test_apptainer_namespace_signal_race_preserves_supervisor_ownership(
     from types import SimpleNamespace
 
     from examples.execution.containers.apptainer_fixture import fake_apptainer
+    from loom.queue._temporary_storage import assignment_mounts
 
     with fake_apptainer() as binding:
-        profile = replace(_profile(), container=binding)
+        cache_base = tmp_path / "cache"
+        cache_base.mkdir()
+        profile = replace(_profile(), container={
+            **binding, "container": {**binding["container"], "mounts": [
+                {"source": str(cache_base), "target": "/loom/cache", "mode": "rw"}
+            ]},
+        }, temporary_mounts=("/loom/cache",))
         monkeypatch.setattr(
             ResidentWorkerLaunch,
             "container_command",
@@ -1056,6 +1067,8 @@ def test_apptainer_namespace_signal_race_preserves_supervisor_ownership(
         workspace.mkdir()
         launch = replace(_launch(supervisor, workspace), profile=profile)
         supervisor.launch(launch)
+        cache = assignment_mounts(profile, workspace=workspace, agent_id="agent-A")["/loom/cache"]
+        (cache / "prepared.npz").write_bytes(b"owned prepared sample")
         send_signal = signal.pidfd_send_signal
 
         def fail_after_observation(namespace: int, signum: int) -> None:
@@ -1075,12 +1088,14 @@ def test_apptainer_namespace_signal_race_preserves_supervisor_ownership(
             )
             assert receipt.state is expected
             assert not receipt.qualified_success
+            assert cache.exists() is (signal_error is PermissionError)
             if signal_error is PermissionError:
                 assert supervisor.query(launch).state is SupervisorLaunchState.RUNNING
                 assert not supervisor.quiescent()
         finally:
             monkeypatch.setattr(signal, "pidfd_send_signal", send_signal)
             assert supervisor.contain(launch).state is SupervisorLaunchState.CONTAINED
+            assert not cache.exists()
         assert supervisor.quiescent()
 
 
@@ -1383,12 +1398,22 @@ def test_client_disconnect_preserves_supervisor_and_its_running_worker(
 def test_client_deadline_interrupts_actual_transport_and_closes_connection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stall: str,
 ) -> None:
+    from loom.queue._agent_process_supervisor import _DeadlineConnection
+
     agent = tmp_path / "agent"
     agent.mkdir()
     client = AgentProcessSupervisorService.initialize(
         agent, configuration=SupervisorLaunchConfiguration("agent-A", (_profile(),))
     )
     original_endpoint = client._endpoint
+    transports: list[tuple[_DeadlineConnection, socket.socket]] = []
+    initialize_connection = _DeadlineConnection.__init__
+
+    def retain_connection(self: _DeadlineConnection, transport: socket.socket, deadline: float) -> None:
+        initialize_connection(self, transport, deadline)
+        transports.append((self, transport))
+
+    monkeypatch.setattr(_DeadlineConnection, "__init__", retain_connection)
     release = Event()
     reached = Event()
     closed = Event()
@@ -1450,12 +1475,12 @@ def test_client_deadline_interrupts_actual_transport_and_closes_connection(
                         def call() -> tuple[float, _SupervisorCommunicationError]:
                             started = monotonic()
                             threads = set(threading.enumerate())
-                            descriptors = len(tuple(Path("/proc/self/fd").iterdir()))
                             with pytest.raises(_SupervisorCommunicationError) as failure:
                                 client._call("launch", request)
                             assert set(threading.enumerate()) == threads
-                            if stall == "connect":
-                                assert len(tuple(Path("/proc/self/fd").iterdir())) == descriptors
+                            assert len(transports) == 1
+                            connection, transport = transports[0]
+                            assert connection.closed and transport.fileno() == -1
                             return monotonic() - started, failure.value
 
                         attempt = workers.submit(call)
@@ -1652,6 +1677,10 @@ def test_successful_exit_qualification_is_durable_and_legacy_is_unqualified(
         with sqlite3.connect(tmp_path / "agent" / "supervisor" / "supervisor.sqlite") as conn:
             conn.execute("ALTER TABLE launches DROP COLUMN successful_exit")
             conn.execute("DROP TABLE rejected_assignments")
+            conn.execute("DROP INDEX pending_temporary_storage")
+            conn.execute("ALTER TABLE launches DROP COLUMN temporary_storage_pending")
+            conn.execute("ALTER TABLE launches DROP COLUMN temporary_storage_error")
+            conn.execute("ALTER TABLE launches DROP COLUMN start_error")
             conn.execute("UPDATE metadata SET value = '2' WHERE key = 'schema_version'")
     reopened = AgentProcessSupervisor(
         tmp_path / "agent" / "supervisor", agent_id="agent-A", profiles=(profile,)
@@ -1801,6 +1830,10 @@ def test_reboot_requires_prelaunch_host_root_and_boot_evidence(
         with owner._connect() as conn:
             conn.execute("DELETE FROM metadata WHERE key = 'boot_evidence'")
             conn.execute("DROP TABLE rejected_assignments")
+            conn.execute("DROP INDEX pending_temporary_storage")
+            conn.execute("ALTER TABLE launches DROP COLUMN temporary_storage_pending")
+            conn.execute("ALTER TABLE launches DROP COLUMN temporary_storage_error")
+            conn.execute("ALTER TABLE launches DROP COLUMN start_error")
             conn.execute("UPDATE metadata SET value = '3' WHERE key = 'schema_version'")
     else:
         destination = tmp_path / "moved"

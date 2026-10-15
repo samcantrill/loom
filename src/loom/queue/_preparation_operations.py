@@ -26,6 +26,7 @@ from loom.runs.context import SubmissionContext
 
 from .errors import QueueConflictError, QueueServiceError
 from .run import RunRequest, _public_operation_id
+from ._maintenance import MaintenanceCheckConflict
 from ._service_lifetime import ServiceRetiring
 from .preparation import (
     PreparationChildInput,
@@ -483,6 +484,14 @@ class CoordinatorPreparations:
             if run_mode == "reconcile":
                 result.update(queue_item_id=None, admission=None, cancellation_operation_id=None,
                               binding=None, decision=None, verification_report_ref=None)
+            from ._maintenance import classify
+            full_request = (request.to_dict() if run_mode is None else RunRequest(
+                request, queue_item_id, run_mode, retry_policy, fresh_stages).to_dict())
+            check = classify(conn, request.operation_id, request=full_request, principal_id=principal_id)
+            if check is not None:
+                if _mapping(selected["profile"])["profile_descriptor"] != check["profile"]:
+                    raise QueueConflictError("maintenance check selected profile conflicts")
+                selected["maintenance_check"] = dict(check)
             accepted_at = self.daemon._clock()
             result["submission"] = {
                 "operation_id": request.operation_id,
@@ -564,6 +573,8 @@ class CoordinatorPreparations:
                 self._cursor = int(row["sequence"])
                 try:
                     self._advance(row)
+                except MaintenanceCheckConflict:
+                    self._fail(self._read(str(row["operation_id"])), "maintenance_check_constraints", conflict=True)
                 except _InvalidInitialContext:
                     self._fail(self._read(str(row["operation_id"])), "invalid_context")
                 except Exception:

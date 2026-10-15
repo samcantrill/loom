@@ -118,6 +118,7 @@ class AgentControlKind(StrEnum):
     DRAIN = "drain"
     RESUME = "resume"
     RELOAD = "reload"
+    PROMOTE = "promote"
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +133,7 @@ class AgentControl:
     pool: str | None
     cancel_active: bool
     reason: str
+    promotion: Mapping[str, PlainData] | None = None
 
     def __post_init__(self) -> None:
         for name in (
@@ -142,6 +144,14 @@ class AgentControl:
         ):
             _identifier(getattr(self, name), name)
         object.__setattr__(self, "kind", AgentControlKind(self.kind))
+        if self.kind is AgentControlKind.PROMOTE:
+            from ._profile_promotion import validate_promotion
+            validate_promotion(self.promotion)
+            if self.cancel_active:
+                raise QueueServiceError("profile promotion cannot cancel work")
+            object.__setattr__(self, "promotion", freeze_plain_data(self.promotion))
+        elif self.promotion is not None:
+            raise QueueServiceError("promotion binding requires promote control")
         if self.pool is not None:
             _identifier(self.pool, "pool")
         if not isinstance(self.cancel_active, bool):
@@ -163,6 +173,7 @@ class AgentControl:
             "pool": self.pool,
             "cancel_active": self.cancel_active,
             "reason": self.reason,
+            **({"promotion": thaw_plain_data(self.promotion)} if self.promotion is not None else {}),
         }
 
     @classmethod
@@ -177,7 +188,7 @@ class AgentControl:
             "cancel_active",
             "reason",
         }
-        if set(value) != fields:
+        if set(value) not in (fields, fields | {"promotion"}):
             raise QueueServiceError("agent control fields are invalid")
         pool = value["pool"]
         if pool is not None and not isinstance(pool, str):
@@ -203,6 +214,7 @@ class AgentControl:
             pool,
             cast(bool, value["cancel_active"]),
             cast(str, value["reason"]),
+            cast(Mapping[str, PlainData] | None, value.get("promotion")),
         )
 
 
@@ -453,6 +465,7 @@ class TransportPrincipalPolicy:
                 "reload",
                 "cancel_active",
                 "scheduling_reload",
+                "maintenance",
                 "recover_unknown",
                 "recover_time",
                 "replace_session",
@@ -527,6 +540,7 @@ class LocalOwnerOperatorPolicy:
             "reload",
             "cancel_active",
             "scheduling_reload",
+                "maintenance",
             "recover_unknown",
             "recover_time",
             "replace_session",
@@ -3845,8 +3859,18 @@ class AgentSessionService:
                 or output_mismatch
             ):
                 raise QueueConflictError("remote result does not match its request")
+            from ._preparation_report_transfer import native_role
+            if report.schema_version == 5 and not native_role(request.fingerprint):
+                raise QueueConflictError("preparation transfer targets another stage role")
             shared_outputs = None
             from ._shared_publication import selected, publish
+            if (
+                report.status is StageStatus.SUCCEEDED
+                and native_role(request.fingerprint)
+                and selected(request) is None
+                and report.schema_version != 5
+            ):
+                raise QueueConflictError("native preparation transfer capability is missing")
             if selected(request) is not None and report.status is StageStatus.SUCCEEDED:
                 if report.schema_version != 4:
                     raise QueueConflictError("shared publication report capability is missing")
@@ -3953,13 +3977,18 @@ class AgentSessionService:
             )
             row = conn.execute(
                 "SELECT digest, size_bytes, private_path, received_bytes, "
-                "finalized FROM remote_transfers WHERE assignment_id = ? AND "
+                "finalized, descriptor_json FROM remote_transfers WHERE assignment_id = ? AND "
                 "direction = 'output' AND transfer_id = ?",
                 (assignment_id, transfer_id),
             ).fetchone()
             if row is None:
                 raise QueueConflictError("remote output transfer is not declared")
+            descriptor = _RemoteOutputArtifact.from_dict(json.loads(str(row["descriptor_json"])))
             target = Path(str(row["private_path"]))
+            def publish_pair():
+                if descriptor.preparation_report_transfer is not None:
+                    from ._preparation_report_transfer import publish
+                    publish(descriptor, target)
             received = int(row["received_bytes"])
             size = int(row["size_bytes"])
             if bool(row["finalized"]):
@@ -3971,6 +4000,7 @@ class AgentSessionService:
                         raise QueueConflictError(
                             "output replay conflicts with durable bytes"
                         )
+                publish_pair()
                 return freeze_plain_data(
                     {"transfer_id": transfer_id, "received_bytes": size, "final": True},
                     path="remote output chunk",
@@ -3992,6 +4022,7 @@ class AgentSessionService:
                         "output replay conflicts with durable bytes"
                     )
                 conn.commit()
+                publish_pair()
                 return freeze_plain_data(
                     {"transfer_id": transfer_id, "received_bytes": size, "final": True},
                     path="remote output chunk",
@@ -4007,6 +4038,7 @@ class AgentSessionService:
                         "remote output bytes do not match their manifest"
                     )
                 _publish_staged_file(staging, target)
+                publish_pair()
                 conn.execute(
                     "UPDATE remote_transfers SET received_bytes = ?, finalized = 1 "
                     "WHERE assignment_id = ? AND direction = 'output' "
@@ -4488,6 +4520,10 @@ class AgentSessionService:
                 json.loads(str(row["descriptor_json"]))
             )
             path = Path(str(row["private_path"]))
+            if descriptor.preparation_report_transfer is not None:
+                from ._preparation_report_transfer import publish
+                outputs[str(row["logical_name"])] = publish(descriptor, path)
+                continue
             outputs[str(row["logical_name"])] = ArtifactRef(
                 artifact_id=descriptor.artifact_id,
                 uri=path.resolve().as_uri(),

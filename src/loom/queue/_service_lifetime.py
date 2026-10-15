@@ -66,14 +66,7 @@ class CoordinatorLifetime:
         with daemon._connection() as conn:
             # Terminal preparation-only history and publication pins do not retain
             # services. Run continuations stay pending until exact admission.
-            queries = (
-                "SELECT 1 FROM managed_admissions WHERE state NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED') LIMIT 1",
-                "SELECT 1 FROM preparation_operations WHERE state NOT IN ('applied', 'failed', 'cancelled', 'conflict') LIMIT 1",
-                "SELECT 1 FROM preparation_cancellations WHERE state NOT IN ('applied', 'failed', 'cancelled', 'conflict') LIMIT 1",
-                "SELECT 1 FROM daemon_metadata WHERE key LIKE 'admission-retry:%' AND json_extract(value, '$.state') = 'pending' LIMIT 1",
-                "SELECT 1 FROM remote_assignments WHERE state NOT IN ('RELEASED', 'FAILED', 'CANCELLED') LIMIT 1",
-            )
-            if any(conn.execute(query).fetchone() is not None for query in queries):
+            if _retained_coordinator_operations(conn):
                 return True
             for row in conn.execute(
                 "SELECT key, value FROM daemon_metadata WHERE key LIKE 'startup-attachment:%'"
@@ -159,7 +152,7 @@ def record_process(
     import sqlite3
 
     pid = os.getpid()
-    started = Path(f"/proc/{pid}/stat").read_text().split()[21]
+    started = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
     with sqlite3.connect(root / "control.sqlite") as conn:
         conn.execute(
             "INSERT INTO root_metadata(key,value) VALUES ('service_process',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -167,7 +160,9 @@ def record_process(
                 json.dumps(
                     {
                         "pid": pid,
+                        "capabilities": ["quiescent-profile-promotion-v2", "quiescent-source-promotion-v1"],
                         "started": started,
+                        "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
                         "stopped": stopped,
                         "coordinator_id": coordinator_id,
                         "session_id": session_id,
@@ -198,3 +193,18 @@ def retained_lifetime(root: Path, requested: str | None) -> str:
         )
         conn.commit()
         return lifetime
+
+
+def _retained_coordinator_operations(conn) -> bool:
+    """One predicate for active and offline coordinator service ownership."""
+    queries = (
+        "SELECT 1 FROM managed_admissions WHERE state NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED') LIMIT 1",
+        "SELECT 1 FROM preparation_operations WHERE state NOT IN ('applied', 'failed', 'cancelled', 'conflict') LIMIT 1",
+        "SELECT 1 FROM preparation_cancellations WHERE state NOT IN ('applied', 'failed', 'cancelled', 'conflict') LIMIT 1",
+        "SELECT 1 FROM daemon_metadata WHERE key LIKE 'admission-retry:%' AND json_extract(value, '$.state') = 'pending' LIMIT 1",
+        "SELECT 1 FROM remote_assignments WHERE state NOT IN ('RELEASED', 'FAILED', 'CANCELLED') LIMIT 1",
+    )
+    return any(conn.execute(query).fetchone() is not None for query in queries) or any(
+        float(json.loads(row[0])) > time.time()
+        for row in conn.execute("SELECT value FROM daemon_metadata WHERE key LIKE 'startup-attachment:%'")
+    )

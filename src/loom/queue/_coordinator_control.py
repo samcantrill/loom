@@ -45,10 +45,14 @@ from ._service_lifetime import ServiceRetiring
 from ._preparation_operations import PreparationChildReserved, PreparationNotAccepted
 
 
+from .operations import OPERATOR_CAPABILITY, CONDITIONAL_CONTROL_CAPABILITY, OperatorObservation
+from ._maintenance import MaintenanceInProgress, MAINTENANCE_CAPABILITY
+
+OPERATOR_OPERATIONS = frozenset({"operator_handshake", "operator_status", "operator_agent", "operator_assignment", "operator_control", "operator_operation", "operator_maintenance", "operator_maintenance_control", "operator_maintenance_operation"})
 CONTROL_CAPABILITY = "daemon-control-v1"
 MAX_RESPONSE_BYTES = 1_048_576
 MAX_OBSERVATION_SECONDS = 25.0
-CONTROL_OPERATIONS = frozenset(
+CONTROL_OPERATIONS = OPERATOR_OPERATIONS | frozenset(
     {
         "handshake",
         "status",
@@ -58,6 +62,7 @@ CONTROL_OPERATIONS = frozenset(
         "agents",
         "agent",
         "inspect_run",
+        "read_run_logs",
         "get_run_context",
         "patch_run_annotations",
         "append_run_note",
@@ -89,7 +94,7 @@ CONTROL_OPERATIONS = frozenset(
     }
 )
 WAIT_OPERATIONS = frozenset({"wait_operation", "wait_admission"})
-MUTATION_OPERATIONS = frozenset(
+MUTATION_OPERATIONS = frozenset({"operator_control", "operator_maintenance_control"}) | frozenset(
     {"startup_attach", "startup_release", "submit", "cancel", "prepare_run", "cancel_preparation", "start_run", "cancel_run_operation", "patch_run_annotations", "append_run_note"}
 )
 
@@ -142,6 +147,9 @@ def request_ids(payload: Mapping[str, object]) -> dict[str, PlainData]:
         value = payload.get(key)
         if isinstance(value, str):
             ids[key] = value
+    control = payload.get("control")
+    if isinstance(control, Mapping):
+        ids.update(request_ids(control))
     preparation = payload.get("preparation")
     if isinstance(preparation, Mapping):
         ids.update(request_ids(preparation))
@@ -351,15 +359,19 @@ def decode_envelope(
         raise control_error(
             "capacity_exhausted", operation, request, boundary="coordinator"
         )
-    if operation == "handshake" and response.get("ok") is False:
+    if operation in {"handshake", "operator_handshake"} and response.get("ok") is False:
         raise control_error("unsupported", operation, request)
     raise invalid
 
 
 def decode_result(operation: str, value: Mapping[str, object]) -> Any:
     """Decode each native result at one owner shared by both Python adapters."""
-    if operation == "handshake":
+    if operation in {"handshake", "operator_handshake"}:
         return CoordinatorConnectionDescription.from_dict(value)
+    if operation in {"operator_status", "operator_agent", "operator_assignment"}:
+        return OperatorObservation.from_dict(value)
+    if operation in {"operator_control", "operator_operation", "operator_maintenance", "operator_maintenance_control", "operator_maintenance_operation"}:
+        return dict(value)
     if operation == "status":
         return DaemonStatus.from_dict(value)
     if operation in {"submit", "cancel", "admission_for_queue_item"}:
@@ -410,6 +422,9 @@ def decode_result(operation: str, value: Mapping[str, object]) -> Any:
         from loom.runs.annotations import RunNote, RunNotePage
 
         return RunNote.from_dict(value) if operation == "append_run_note" else RunNotePage.from_dict(value)
+    if operation == "read_run_logs":
+        from ._remote_logs import decode_logs
+        return decode_logs(value)
     if operation in {"inspect_run", "get_run_context"}:
         return value  # The diagnostic union decoder belongs above queue.
     if operation in {"trace_lineage", "select_outputs", "list_output_commits", "search_runs", "search_submissions", "search_jobs", "tag_keys", "tag_values"}:
@@ -467,6 +482,15 @@ def validate_request(
         query_payload.pop("expected_coordinator_id", None)
         return validate_query_request(operation, query_payload)
     fields = {
+        "operator_handshake": set(),
+        "operator_status": set(),
+        "operator_maintenance": set(),
+        "operator_maintenance_control": {"control", "intent_digest"},
+        "operator_maintenance_operation": {"operation_id"},
+        "operator_agent": {"agent_id"},
+        "operator_assignment": {"assignment_id"},
+        "operator_control": {"control", "intent_digest"},
+        "operator_operation": {"operation_id"},
         "handshake": set(),
         "status": set(),
         "submit": {"request"},
@@ -485,6 +509,7 @@ def validate_request(
         "agent": {"agent_id"},
         "operation": {"operation_id"},
         "inspect_run": {"run_uri"},
+        "read_run_logs": {"operation_id", "stage", "stream", "tail"},
         "get_run_context": {"run_uri"},
         "patch_run_annotations": {"run_uri", "mutation_id", "patch"},
         "append_run_note": {"run_uri", "mutation_id", "text"},
@@ -496,6 +521,30 @@ def validate_request(
         raise control_error("unsupported", operation, payload)
     value = dict(payload)
     value.pop("expected_coordinator_id", None)
+    if operation == "operator_maintenance_control":
+        from ._maintenance import validate_control
+        from .operations import control_intent_digest
+        if optional_id(payload.get("expected_coordinator_id")) is None or not isinstance(value.get("control"), Mapping):
+            raise ValueError("maintenance requires coordinator and control identity")
+        maintenance = validate_control(cast(Mapping[str, object], value["control"]))
+        if value.get("intent_digest") != control_intent_digest(maintenance):
+            raise ValueError("maintenance control intent digest differs")
+    if operation == "operator_control":
+        from .agent_sessions import AgentControl
+        if optional_id(payload.get("expected_coordinator_id")) is None or not isinstance(value.get("control"), Mapping):
+            raise ValueError("operator mutation requires coordinator and control identity")
+        control = AgentControl.from_value(cast(Mapping[str, object], value["control"]))
+        from .operations import control_intent_digest
+        expected_intent = control.value()
+        if "condition" in value:
+            condition = value["condition"]
+            if not isinstance(condition, Mapping) or set(condition) != {"expected_control_id"}:
+                raise ValueError("invalid conditional control")
+            optional_id(condition["expected_control_id"])
+            fields[operation] = fields[operation] | {"condition"}
+            expected_intent = {"control": control.value(), "condition": dict(condition)}
+        if value.get("intent_digest") != control_intent_digest(expected_intent):
+            raise ValueError("operator control intent digest differs")
     if operation == "service_lifetime":
         value.setdefault("agent_root_id", None)
         optional_id(value["agent_root_id"])
@@ -506,6 +555,9 @@ def validate_request(
         value.setdefault("timeout", None)
     if set(value) != fields[operation]:
         raise ValueError("control request fields are invalid")
+    if operation == "read_run_logs":
+        from ._remote_logs import validate_log_selection
+        validate_log_selection(value["stage"], value["stream"], value["tail"])
     if operation in {"patch_run_annotations", "append_run_note", "list_run_notes"}:
         from loom.runs.annotations import mutation_request, page_notes
         from loom.runs.context import RUN_CONTEXT_LIMITS
@@ -570,7 +622,7 @@ def dispatch_control(
     try:
         try:
             if not (legacy and transport == "unix" and operation == "inspect_run"):
-                daemon._require_view_role(principal, LocalDaemonRole.CLIENT)
+                daemon._require_view_role(principal, LocalDaemonRole.OPERATOR if operation in OPERATOR_OPERATIONS else LocalDaemonRole.CLIENT)
         except QueueError as exc:
             raise control_error(
                 "unauthorized", operation, payload, boundary="authentication"
@@ -601,40 +653,17 @@ def dispatch_control(
             raise control_error(
                 "invalid_request", operation, payload, boundary="coordinator"
             ) from exc
+        if operation in OPERATOR_OPERATIONS and operation != "operator_handshake":
+            dispatched = operation in MUTATION_OPERATIONS
+            result = _dispatch_operator(daemon, principal, operation, value, payload)
+            if len(encode_wire({"ok": True, "result": result})) > MAX_RESPONSE_BYTES:
+                raise control_error("result_too_large", operation, payload, dispatched=dispatched, applied=dispatched)
+            return result
         view = daemon.client_view(principal)
         result: Any
-        if operation == "handshake":
-            from loom.runs.context import RUN_CONTEXT_LIMITS
-
-            status = view.status()
-            preparation = (
-                daemon.config.preparation_policy
-                if daemon.preparation_available
-                else None
-            )
-            result = CoordinatorConnectionDescription(
-                "1",
-                transport,
-                status.coordinator_id,
-                status.coordinator_epoch,
-                (
-                    CONTROL_CAPABILITY,
-                    "run-context-v1",
-                    "run-query-v1",
-                    "output-query-v1",
-                    "lineage-query-v1",
-                    "artifact-read-v1",
-                    *(
-                        ("agent-preparation-v1", "reconciled-run-v1")
-                        if daemon.preparation_available
-                        else ()
-                    ),
-                ),
-                (() if preparation is None else preparation.effective_modes),
-                (() if preparation is None else preparation.effective_profiles),
-                (() if preparation is None else preparation.effective_roots),
-                RUN_CONTEXT_LIMITS,
-            )
+        if operation in {"handshake", "operator_handshake"}:
+            status = daemon.operator_view(principal).status() if operation == "operator_handshake" else view.status()
+            result = _connection_description(daemon, status, transport)
         elif operation == "startup_attach":
             result = daemon._lifetime.attach(cast(str, value["attachment_id"]), cast(float, value["expires_at"]))
         elif operation == "startup_release":
@@ -696,9 +725,10 @@ def dispatch_control(
                 raise control_error("invalid_cursor", operation, payload, boundary="coordinator") from exc
             except QueryError as exc:
                 raise control_error("invalid_request", operation, payload, boundary="coordinator") from exc
-        elif operation in {"describe_artifact", "read_artifact_chunk", "read_artifact"}:
+        elif operation in {"describe_artifact", "read_artifact_chunk", "read_artifact", "read_run_logs"}:
             from ._artifact_access import artifact_operation
-            result = artifact_operation(daemon, operation, value)
+            from ._remote_logs import read_logs
+            result = read_logs(daemon, value) if operation == "read_run_logs" else artifact_operation(daemon, operation, value)
         elif operation == "get_run_context":
             from ._run_context import get_run_context
 
@@ -787,11 +817,12 @@ def dispatch_control(
         return cast(Mapping[str, PlainData], plain)
     except ServiceRetiring as exc:
         raise control_error("unavailable", operation, payload, boundary="coordinator", dispatched=False) from exc
-    except (PreparationNotAccepted, PreparationChildReserved) as exc:
+    except (PreparationNotAccepted, PreparationChildReserved, MaintenanceInProgress) as exc:
         raise control_error(
             exc.code,
             operation,
             payload,
+            ids=getattr(exc, "ids", None),
             boundary="coordinator",
             dispatched=False,
             applied=False,
@@ -832,3 +863,82 @@ def dispatch_control(
             dispatched=dispatched,
             applied=applied,
         ) from exc
+
+
+def _dispatch_operator(daemon: LocalDaemon, principal: LocalDaemonPrincipal, operation: str, value: Mapping[str, object], payload: Mapping[str, object]) -> Mapping[str, PlainData]:
+    view = daemon.operator_view(principal)
+    if operation == "operator_maintenance":
+        return view.observe_maintenance()
+    if operation in {"operator_maintenance_control", "operator_maintenance_operation"}:
+        try:
+            daemon._authorizer().require_operator(principal, "maintenance")
+            check = cast(Mapping[str, object], value.get("control", {})).get("check")
+            if isinstance(check, Mapping):
+                daemon._authorizer().require_operator(principal, "maintenance", agent_id=cast(str, check["agent_id"]), pool=cast(str, check["pool"]))
+        except QueueServiceError as exc:
+            raise control_error("unauthorized", operation, payload, boundary="authentication") from exc
+        try:
+            if operation == "operator_maintenance_operation":
+                return view.maintenance_operation(cast(str, value["operation_id"]))
+            return view.maintenance(cast(Mapping[str, object], value["control"]), expected_coordinator_id=cast(str, payload["expected_coordinator_id"]))
+        except QueueConflictError as exc:
+            raise control_error("conflict", operation, payload, boundary="coordinator") from exc
+    if operation == "operator_status":
+        return view.observe_status().to_dict()
+    if operation == "operator_agent":
+        return view.observe_agent(cast(str, value["agent_id"])).to_dict()
+    if operation == "operator_assignment":
+        return view.observe_assignment(cast(str, value["assignment_id"])).to_dict()
+    if operation == "operator_operation":
+        return view.observe_control(cast(str, value["operation_id"]))
+    from .agent_sessions import AgentControl
+    control = AgentControl.from_value(cast(Mapping[str, object], value["control"]))
+    try:
+        daemon._authorizer().require_operator(principal, "maintenance" if control.promotion is not None else control.kind.value, agent_id=control.agent_id, pool=control.pool)
+        if control.cancel_active:
+            daemon._authorizer().require_operator(principal, "cancel_active", agent_id=control.agent_id, pool=control.pool)
+    except QueueServiceError as exc:
+        raise control_error("unauthorized", operation, payload, boundary="authentication") from exc
+    try:
+        result = view.control_agent(control, condition=cast(Mapping[str, PlainData] | None, value.get("condition")))
+    except QueueConflictError as exc:
+        raise control_error("conflict", operation, payload, boundary="coordinator") from exc
+    return {**result, "mutation_outcome": "applied"}
+
+
+def _connection_description(daemon: LocalDaemon, status: DaemonStatus, transport: str) -> CoordinatorConnectionDescription:
+    from loom.runs.context import RUN_CONTEXT_LIMITS
+
+    preparation = (
+        daemon.config.preparation_policy
+        if daemon.preparation_available
+        else None
+    )
+    return CoordinatorConnectionDescription(
+        "1",
+        transport,
+        status.coordinator_id,
+        status.coordinator_epoch,
+        (
+            CONTROL_CAPABILITY,
+            OPERATOR_CAPABILITY,
+            CONDITIONAL_CONTROL_CAPABILITY,
+            "quiescent-profile-promotion-v2", "quiescent-source-promotion-v1",
+            MAINTENANCE_CAPABILITY,
+            "run-context-v1",
+            "run-query-v1",
+            "output-query-v1",
+            "lineage-query-v1",
+            "artifact-read-v1",
+            "bounded-run-logs-v1",
+            *(
+                ("agent-preparation-v1", "reconciled-run-v1")
+                if daemon.preparation_available
+                else ()
+            ),
+        ),
+        (() if preparation is None else preparation.effective_modes),
+        (() if preparation is None else preparation.effective_profiles),
+        (() if preparation is None else preparation.effective_roots),
+        RUN_CONTEXT_LIMITS,
+    )

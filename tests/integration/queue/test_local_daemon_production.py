@@ -2022,6 +2022,7 @@ def test_embedded_qualification_rejection_settles_without_accepting_a_launch(tmp
     daemon.start()
     execution = daemon._execution
     assert execution is not None and execution.supervisor is not None
+    assert execution.journal is not None and config.agent_root is not None
     original = execution.supervisor.launch
 
     def unavailable(launch):

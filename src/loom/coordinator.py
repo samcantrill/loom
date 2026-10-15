@@ -7,11 +7,14 @@ adds connection selection and the diagnostic result union above that boundary.
 from __future__ import annotations
 
 from pathlib import Path
-from collections.abc import Mapping
+from collections.abc import Mapping, Iterator
 from dataclasses import dataclass
 import math
 import time
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from loom.diagnostics.run_explanation import RunExplanation
 
 from loom.serialization import PlainData
 from loom.runs.context import RunAnnotations, RunContext
@@ -47,6 +50,8 @@ from loom.queue._coordinator_transport import (
 from loom.queue.errors import QueueError
 from loom.queue.preparation import PrepareRunRequest
 from loom.queue.run import RunRequest
+from loom.queue.operations import OperatorObservation
+from loom.queue.agent_sessions import AgentControl
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +61,8 @@ class RunObservation:
     Existing services are borrowed. No service is stopped by this observer;
     cleanup records that decision separately from execution and containment.
     ``operation.state == 'applied'`` is an admission fact, not experiment success.
+    ``detail`` retains the existing owner join for pure explanations; the
+    established observation serialization is unchanged.
     """
 
     operation_id: str
@@ -63,6 +70,7 @@ class RunObservation:
     admission: LocalDaemonAdmission | None
     inspection: RunInspectionResponse | None
     connection: CoordinatorConnectionDescription
+    detail: LocalDaemonAdmissionDetail | None = None
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
@@ -180,37 +188,17 @@ class CoordinatorClient(NativeCoordinatorClient):
         operation = None
         admission = None
         inspection = None
+        detail = None
         try:
             while deadline is None or time.monotonic() < deadline:
-                if operation is None:
-                    operation = cast(
-                        LocalDaemonOperation,
-                        self._native_call(
-                            "operation",
-                            {"operation_id": operation_id},
-                            owner,
-                            deadline=deadline,
-                        ),
-                    )
-                    if operation.kind != "run":
-                        raise control_error(
-                            "invalid_request",
-                            "observe_run",
-                            {"operation_id": operation_id},
-                        )
-                result = cast(Mapping[str, PlainData], operation.result)
-                retained = result.get("admission")
-                if isinstance(retained, Mapping):
-                    admission = cast(
-                        LocalDaemonAdmissionDetail,
-                        self._native_call(
-                            "admission",
-                            {"admission_id": retained["admission_id"]},
-                            owner,
-                            deadline=deadline,
-                        ),
-                    ).admission
-                    inspection = self._inspect_run(admission.run_uri, owner, deadline)
+                for snapshot in self._run_observation_steps(
+                    operation_id, connection, deadline=deadline, operation=operation,
+                ):
+                    operation = snapshot.operation
+                    admission = snapshot.admission or admission
+                    inspection = snapshot.inspection or inspection
+                    detail = snapshot.detail or detail
+                assert operation is not None
                 if not wait or operation.state in {"failed", "cancelled", "conflict"}:
                     break
                 duration = (
@@ -262,7 +250,63 @@ class CoordinatorClient(NativeCoordinatorClient):
             ):
                 raise
         return RunObservation(
-            operation_id, operation, admission, inspection, connection
+            operation_id, operation, admission, inspection, connection, detail
+        )
+
+    def _run_observation_steps(
+        self, operation_id: str, connection: CoordinatorConnectionDescription, *,
+        deadline: float | None, operation: LocalDaemonOperation | None = None,
+    ) -> Iterator[RunObservation]:
+        """Retain each completed read without consuming the caller's interruption."""
+        owner = connection.coordinator_id
+        if operation is None:
+            operation = cast(LocalDaemonOperation, self._native_call(
+                "operation", {"operation_id": operation_id}, owner, deadline=deadline,
+            ))
+            if operation.kind != "run":
+                raise control_error("invalid_request", "observe_run", {"operation_id": operation_id})
+        result = cast(Mapping[str, PlainData], operation.result)
+        retained = result.get("admission")
+        admission = None
+        inspection = None
+        yield RunObservation(operation_id, operation, None, None, connection)
+        if isinstance(retained, Mapping):
+            detail = cast(LocalDaemonAdmissionDetail, self._native_call(
+                "admission", {"admission_id": retained["admission_id"]}, owner, deadline=deadline,
+            ))
+            admission = detail.admission
+            yield RunObservation(operation_id, operation, admission, None, connection, detail)
+            inspection = self._inspect_run(admission.run_uri, owner, deadline)
+            yield RunObservation(operation_id, operation, admission, inspection, connection, detail)
+
+    def explain_run(
+        self, operation_id: str, *, timeout_seconds: float = 25.0,
+        expected_coordinator_id: str | None = None, deployment: str | None = None,
+    ) -> "RunExplanation":
+        """Bounded connect-only explanation; retain completed reads on owner loss.
+
+        Unknown operations stay ``not_found``. Authentication, identity and codec
+        errors propagate. A later unavailable owner cannot erase earlier facts.
+        """
+        from loom.diagnostics.run_explanation import explain_run
+
+        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+            raise control_error("invalid_request", "explain_run", {"operation_id": operation_id})
+        deadline = time.monotonic() + timeout_seconds
+        observation = None
+        error_code = None
+        try:
+            connection = self._native_call("handshake", {}, expected_coordinator_id, deadline=deadline)
+            for snapshot in self._run_observation_steps(operation_id, connection, deadline=deadline):
+                observation = snapshot
+        except CoordinatorClientError as exc:
+            if exc.code not in {"unavailable", "deadline_exceeded", "not_found", "maintenance_in_progress"}:
+                raise
+            error_code = exc.code
+        return explain_run(
+            None if observation is None else observation.inspection,
+            observation=observation, operation_id=operation_id, deployment=deployment,
+            error_code=error_code,
         )
 
     def get_run_context(self, run_uri: str, *, expected_coordinator_id: str | None = None) -> RunContext:
@@ -407,6 +451,7 @@ class CoordinatorClient(NativeCoordinatorClient):
 
 
 __all__ = [
+    "CoordinatorOperatorClient",
     "CoordinatorClient",
     "CoordinatorClientError",
     "CoordinatorConnectionDescription",
@@ -414,3 +459,95 @@ __all__ = [
     "RunRequest",
     "RunObservation",
 ]
+
+
+class CoordinatorOperatorClient(NativeCoordinatorClient):
+    """Explicit operator-role connection; ordinary client credentials cannot use it.
+
+    Controls require an expected coordinator ID and retain native operation and
+    intent identity. A transport timeout reports unknown, never non-application.
+    """
+
+    _handshake_operation = "operator_handshake"
+    _retained_status: OperatorObservation | None = None
+
+    @classmethod
+    def from_unix_socket(cls, path: str | Path, *, expected_coordinator_id: str | None = None) -> CoordinatorOperatorClient:
+        return cls(UnixControlTransport(path), expected_coordinator_id=expected_coordinator_id)
+
+    @classmethod
+    def from_connection_file(cls, path: str | Path, *, expected_coordinator_id: str | None = None) -> CoordinatorOperatorClient:
+        from loom.queue.deployment import load_coordinator_connection_file
+        config = load_coordinator_connection_file(path)
+        try:
+            selected = optional_id(expected_coordinator_id)
+        except ValueError as exc:
+            raise control_error("invalid_request", "connection", {}) from exc
+        if selected is not None and config.expected_coordinator_id not in {None, selected}:
+            raise control_error("conflict", "connection", {})
+        return cls(HttpsControlTransport(config.url, config.server_ca_path, config.certificate_path, config.private_key_path, role="operator"), expected_coordinator_id=selected if selected is not None else config.expected_coordinator_id)
+
+    def observe_status(self) -> OperatorObservation:
+        """Read accepted configuration; unreachable services retain known identity."""
+        from loom.queue.operations import OperatorObservation
+        from loom.timestamps import utc_timestamp
+        try:
+            result = cast(OperatorObservation, self._native_call("operator_status", {}))
+            self._retained_status = result
+            return result
+        except CoordinatorClientError as exc:
+            if exc.code not in {"unavailable", "deadline_exceeded"}:
+                raise
+            owner = self._expected_coordinator_id
+            if owner is None and self._last_connection is not None:
+                owner = self._last_connection.coordinator_id
+            retained = self._retained_status
+            return OperatorObservation(owner, utc_timestamp(), None if retained is None else retained.revision,
+                "unknown" if retained is None else "retained", "unavailable",
+                {} if retained is None else {**retained.value, "retained_observed_at": retained.observed_at}, exc.code)
+
+    def observe_agent(self, agent_id: str) -> OperatorObservation:
+        """Observe one agent without interpreting stale capacity as available."""
+        return self._native_call("operator_agent", {"agent_id": agent_id})
+
+    def observe_assignment(self, assignment_id: str) -> OperatorObservation:
+        """Observe one assignment; local claims remain independently sourced."""
+        return self._native_call("operator_assignment", {"assignment_id": assignment_id})
+
+    def control_agent(self, control: AgentControl, *, expected_coordinator_id: str | None = None, condition: Mapping[str, PlainData] | None = None) -> Mapping[str, PlainData]:
+        """Commit/replay a native control with optional predecessor ownership.
+
+        ``condition={"expected_control_id": id}`` requires that exact latest
+        control; an explicit null ID requires no prior control. Omission retains
+        unconditional operator behavior. The condition is immutable intent and
+        is compared atomically only for fresh acceptance, never during replay.
+        """
+        from loom.queue.operations import control_intent_digest
+        value = control.value()
+        payload: dict[str, PlainData] = {"control": value}
+        if condition is not None:
+            payload["condition"] = dict(condition)
+        payload["intent_digest"] = control_intent_digest(value if condition is None else {"control": value, "condition": dict(condition)})
+        return self._native_call("operator_control", payload, expected_coordinator_id)
+
+    def observe_control(self, operation_id: str) -> Mapping[str, PlainData]:
+        """Resolve the original operation after a lost mutation response."""
+        return self._native_call("operator_operation", {"operation_id": operation_id})
+
+    def observe_maintenance(self) -> Mapping[str, PlainData]:
+        """Read current native gate ownership, revision and check permissions."""
+        return self._native_call("operator_maintenance", {})
+
+    def maintenance(self, control: Mapping[str, PlainData], *, expected_coordinator_id: str | None = None) -> Mapping[str, PlainData]:
+        """Apply an exact gate control; retain its intent for lost-reply recovery.
+
+        Controls carry operation/maintenance IDs, maintenance intent digest,
+        action (close/open/authorize/revoke), expected revision and check binding.
+        See the queue maintenance contract for check fields and resource units.
+        """
+        from loom.queue.operations import control_intent_digest
+        return self._native_call("operator_maintenance_control", {"control": dict(control), "intent_digest": control_intent_digest(control)}, expected_coordinator_id)
+
+    def maintenance_operation(self, operation_id: str) -> Mapping[str, PlainData]:
+        """Observe the original mutation; an unknown ID never submits work."""
+        return self._native_call("operator_maintenance_operation", {"operation_id": operation_id})

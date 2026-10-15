@@ -152,6 +152,17 @@ simultaneously; its all-or-none multi-agent reservation is gang scheduling and
 requires a different candidate, batch-commit, rendezvous, launch, and group-
 failure contract.
 
+The outbound client's transport, session decisions and persistence have separate
+private owners. `agent_session_transport` keeps the public client/server imports,
+TLS/authentication, HTTP deadlines and bounded progress lanes;
+`_agent_session_codec` owns wire limits and decoding. `_agent_session_protocol`
+owns registration, offer revisions, delivery sequence and reconnect decisions on
+the same cooperative application owner. `_agent_session_journal` alone owns the
+outbound session transactions, including references shared with assignment
+recovery. Transport uncertainty preserves the exact pending intent; it does not
+select a fresh session or a new delivery. The public entry points retain their
+existing serialization gates and bulk/control/poll budgets.
+
 A reconnect normally resumes the durable session. A clean new session is
 allowed only after the authenticated old session withdraws/fences delivery and
 coordinator plus agent reconciliation proves the complete assignment/claim/
@@ -280,6 +291,15 @@ transaction:
    and acknowledgement of authority terminal reconciliation; a fresh
    availability revision then makes released atoms schedulable. Authority
    terminality alone never asserts that provider release already occurred.
+
+For a same-host managed assignment, an owned, contained worker may exit
+successfully while producing a regular output larger than the 64 MiB transfer
+bound. The parent records that known publication failure as a failed attempt,
+without committing or transferring the oversized output, and releases capacity
+through the ordinary terminal acknowledgement sequence. The original worker
+result and containment evidence remain intact. Reopening the same assignment
+repairs or replays that failure; it does not launch the worker again. Unknown
+ownership and other publication conflicts still retain work for recovery.
 
 For the protected same-host resident route, Loom preserves the regular files in
 the stage artifact directory as one atomically published local tree and stages a
@@ -1115,3 +1135,163 @@ opens schema 2/3 supervisor journals without inventing historical boot proof.
 This route does not cover SLURM, remote Docker engines, cloned VM snapshots,
 state copied between hosts or hostile host attestation. Controlled-boot tests
 exercise native settlement; actual host reboot qualification is separate.
+
+### Maintenance admission
+
+The `maintenance-admission-v1` capability provides a durable native admission
+barrier. An operator needs the explicit `maintenance` action in its protected
+local-owner or transport-principal policy. Check authorization additionally
+requires that action's selected agent and pool scopes.
+
+```sh
+loom queue daemon-maintenance --connection operator.json --format json
+loom queue daemon-maintenance --connection operator.json --close --operation-id maintenance-018
+loom queue daemon-maintenance --connection operator.json --open --operation-id maintenance-018
+```
+
+Read-only use reports the gate's state, revision, owning maintenance ID/intent,
+coordinator identity and exact check permissions. Close/open obtain the expected
+coordinator and gate revision and retain an exact control ID. Repeating the CLI
+operation observes its retained receipt after a lost reply. A new maintenance
+window requires a new operation ID. Opening requires the same maintenance owner
+and intent and the observed revision; restart never opens the gate implicitly.
+
+Closure and new acceptance serialize at the coordinator transaction boundary.
+Already accepted requests replay; changed intent conflicts before maintenance
+classification. Existing preparations, later DAG stages and policy retries
+continue under their accepted owner. New submissions, preparations, reconciled
+observer requests and user retry/fresh intent receive `maintenance_in_progress`
+with `mutation_outcome=not_applied`, caller operation ID and maintenance ID.
+Refusal creates no accepted receipt: retrying that same ID after opening is
+allowed. Observation and cancellation keep their existing authorization and
+containment/release semantics. There is no cross-database transaction with the
+per-run authority and no result or scientific-success reinterpretation.
+
+`CoordinatorOperatorClient.observe_maintenance()`, `maintenance(control,
+expected_coordinator_id=...)` and `maintenance_operation(operation_id)` expose
+these guarded controls. A control has `operation_id`, `maintenance_id`, immutable
+`maintenance_intent_digest`, `action`, `expected_revision`, and `check`.
+Actions are `close`/`open` (`check=None`), `authorize` (the exact binding below),
+and `revoke` (`check` is the check's native preparation operation ID). A mutation
+receipt includes its exact control/digest, resulting gate and `applied` outcome.
+Timeouts remain `unknown`; observe the original control before exact replay.
+Remove all temporary check permissions before opening. The maintenance workflow
+owns checking completion and settlement before reopening or replacing a failed
+check; native admission does not turn a failed check into a successful upgrade.
+
+An authorized check binds the complete exact `RunRequest.to_dict()` in `request`,
+its `principal_id`, `agent_id`, `pool`, full resident `profile` descriptor, native
+`ResourceRequest.to_dict()` documents for target `resources` and
+`preparation_resources`, a positive `max_stages`, and `previous_check_id` (null
+for the first attempt). This is a finite permission for that request, including
+its source and options, not a caller-supplied bypass flag. It uses the same
+principal-bound preparation intent and replay rules as normal work. The profile
+must equal the protected selected preparation profile. Before each preparation
+child and target admission, the retained native intent must match the exact
+agent, pool, execution profile fingerprints and respective resource request;
+target stage count cannot exceed `max_stages`. Resource amounts and units retain
+the native resource codec's meaning. The fixed preparation child consumes the retained operator agent/pool selection;
+its resources continue to come from the protected native preparation profile. An out-of-bounds composition fails
+with no admission at that handoff. Revocation prevents future acceptance while
+accepted work retains its original constraint binding.
+
+Check IDs remain bound to their original permission after revocation. Explicit
+successors retain the previous check ID and unchanged agent/profile/resource
+slot under the same maintenance owner. The upgrade workflow must first verify
+the previous failure and native settlement; ordinary resume never allocates a
+new attempt. Schema 19 introduces this durable owner; the offline migration
+supports the schema-18 bridge while preserving existing older native readers and
+forward migration paths. Fleet's narrower automated population is a separate
+compatibility policy.
+
+
+### Conditional operator policy changes
+
+The `conditional-agent-control-v1` capability adds current `control.operation_id`
+to agent observations. `CoordinatorOperatorClient.control_agent` accepts
+`condition={"expected_control_id": id}` (use `None` for no prior control).
+The coordinator compares this predecessor in the same transaction that accepts
+the request; intervening applied controls conflict even when their values match.
+Omitting the condition retains ordinary operator behavior. The condition is part
+of immutable intent: replay returns the original effect without changing a later
+policy, and changing it under the same operation ID conflicts. Clients negotiate
+the capability before conditional dispatch. Agent delivery codecs are unchanged.
+The native maintenance observation also reports `settled` and bounded
+`wait_reasons` for preparation/admissions, assignment references and controls.
+Fleet waits for these native facts before drain and replacement; terminal compute
+alone is insufficient.
+
+### Quiescent executable profile promotion
+
+`AgentControlKind.PROMOTE` uses the existing operator control transport and
+`maintenance` authorization. Its `promotion` mapping binds the owning closed
+gate (ID, intent digest and revision), agent root, exact predecessor immutable
+and active fingerprints, target immutable and active fingerprints, and selected
+native profile descriptor. The coordinator requires settled admitted work and
+controls, the guarded current session/configuration, and an applied drain.
+The agent independently requires settled local assignments/polls and a clean
+supervisor cut before accepting its exact predecessor transition. Ordinary
+reload still refuses changed executable bindings.
+
+The existing agent control journal retains promotion intent and effect. An
+accepted incomplete transition records `profile_promotion_pending` and fences
+the active fingerprint before changing any protected binding. Startup recovers
+the selected target under agent/supervisor locks before offering capacity;
+restarting against the old or a different configuration refuses. The supervisor
+keeps its identity, secret, and historical launch/receipt rows; only its current
+configuration and the agent's protected current binding advance. Exact completed
+control replay, including after a later promotion, never installs old bindings.
+One selected resident profile is supported; resource and shared-storage policy,
+transport, credentials and root identity cannot change in this operation.
+
+`quiescent-profile-promotion-v2` is reported by the running coordinator and in
+the running native service's process-bound observation. A separate service
+upgrade installs this capability before workload maintenance. Root schema 19
+and supervisor schema 3 are unchanged: the existing metadata and control stores
+own the transition. Older software refuses the pending active fingerprint and
+cannot decode the new control. No database reset or old-history migration is
+required for the preceding service upgrade.
+
+A promotion may carry a protected `candidate_source` in the canonical source's
+path frame. The trusted native service loader qualifies that source while the
+canonical predecessor stays startable. After accepting its local recovery intent,
+native promotion publishes the canonical source and completes the protected
+bindings under native locks. Startup resolves partial publication before joining
+the supervisor. An exact completed replay never republishes an earlier source.
+
+### Project preparation failures
+
+When an installed project processor raises during preparation, its portable
+preflight report includes the exception class without copying exception text.
+The preparation attempt's private `logs/stderr.log` retains the full traceback,
+including chained causes, for the operator. Inspect that file on the assigned
+agent when `config.project_preparation` fails; an accepted submission alone does
+not establish that project preparation or execution succeeded.
+
+### Project metadata in shared preparation
+
+A shared installed project processor receives an `artifact_directory` in its
+private preparation request. It may write regular metadata companions beneath
+that directory. The native report and those companions are published together
+under the existing bounded shared artifact closure. The coordinator run-store
+URI remains an identity; it is not a worker filesystem grant.
+
+For checked shared stages, Loom transports the immutable preparation report as
+a native internal input. `StageContext.metadata["loom.project_report"]` contains
+its materialized `ArtifactRef`; the stage loads the report through
+`loom.preparation.load_preparation_report(reference, report_path)` and reads
+project-owned companions relative to that report. The loader verifies and
+hydrates the native composition companion; decoding only the primary JSON does
+not establish complete preparation evidence.
+This input is separate from user-authored stage ports and does not inline the
+whole report into worker metadata. Original references are bound to admitted
+bytes and worker paths use the selected host's shared-root mapping.
+
+Whole-run and action-result verification receive the same report access through
+their private artifact-access mappings. Native verification checks the original
+report identity and complete native companion before calling the processor.
+Action-result verification retains separate producer and desired report grants;
+a missing or swapped grant is rejected. Local non-shared preparations retain
+their existing storage contract. A companion write or read failure retains its
+private traceback rather than requiring an operator to reproduce it with wider
+filesystem access.

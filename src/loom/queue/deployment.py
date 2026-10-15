@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+import sqlite3
+
+from .operations import OperatorObservation
+
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
 import hashlib
@@ -796,6 +801,12 @@ def run_outbound_agent_service(
     """
     from ._agent_progress import _run_manager
 
+    from ._profile_promotion import recover
+    recovered = recover(config.client)
+    if recovered is not config.client:
+        config = load_outbound_agent_service_config(config.source_path, env_file=config.environment_path)
+        config = replace(config, client=replace(config.client, external_supervisor=recovered.external_supervisor))
+
     observing: list[LocalDaemonAgentHttpClient | None] = [None]
 
     def controls():
@@ -854,6 +865,23 @@ def _outbound_service_steps(
         pending = trusted_config_loader()
         return pending.client
 
+    def load_promotion(candidate: str) -> tuple[AgentTlsClientConfig, dict[str, Any]]:
+        nonlocal pending
+        path = Path(candidate)
+        if not path.is_absolute() or path.parent != active.source_path.parent:
+            raise QueueServiceError("promotion candidate must share the trusted source path frame")
+        pending = load_outbound_agent_service_config(path, env_file=active.environment_path)
+        pending = replace(pending, source_path=active.source_path, client=replace(
+            pending.client, external_supervisor=active.client.external_supervisor))
+        # The native owner retains the exact authored publication before cutover.
+        _, _, authored, _ = _load_protected_config(path, env_file=active.environment_path)
+        return pending.client, {
+            "path": str(active.source_path), "candidate": str(path),
+            "environment": None if active.environment_path is None else str(active.environment_path),
+            "before": active.source_path.read_text(),
+            "after": json.dumps(authored, sort_keys=True),
+        }
+
     def prepare_install(
         replacement: AgentTlsClientConfig,
     ) -> Callable[[], None]:
@@ -872,6 +900,7 @@ def _outbound_service_steps(
     client: LocalDaemonAgentHttpClient | None = _open_outbound_agent(
         active.client,
         trusted_config_loader=None if trusted_config_loader is None else load_client,
+        trusted_promotion_loader=load_promotion,
         prepare_role_reload=prepare_install,
     )
     client._service_progress = True
@@ -951,6 +980,7 @@ def _outbound_service_steps(
                     trusted_config_loader=(
                         None if trusted_config_loader is None else load_client
                     ),
+                    trusted_promotion_loader=load_promotion,
                     prepare_role_reload=prepare_install,
                 )
             client._service_progress = True
@@ -1127,7 +1157,7 @@ def _outbound_service_steps(
                 closing = client
                 client = None
                 try:
-                    if lifetime != "run" or stop.is_set():
+                    if not active.client.external_supervisor and (lifetime != "run" or stop.is_set()):
                         closing.shutdown_clean()
                 except (QueueConflictError, QueueServiceError):
                     # Retained or uncertain work deliberately keeps its process
@@ -1145,6 +1175,7 @@ def _open_outbound_agent(
     config: AgentTlsClientConfig,
     *,
     trusted_config_loader: Callable[[], AgentTlsClientConfig] | None = None,
+    trusted_promotion_loader: Callable[[str], tuple[AgentTlsClientConfig, dict[str, Any]]] | None = None,
     prepare_role_reload: (
         Callable[[AgentTlsClientConfig], Callable[[], None]] | None
     ) = None,
@@ -1153,10 +1184,11 @@ def _open_outbound_agent(
         return LocalDaemonAgentHttpClient(
             config,
             trusted_config_loader=trusted_config_loader,
+            trusted_promotion_loader=trusted_promotion_loader,
             prepare_role_reload=prepare_role_reload,
         )
     except QueueServiceError as exc:
-        if str(exc) != "managed supervisor endpoint is unavailable":
+        if config.external_supervisor or str(exc) != "managed supervisor endpoint is unavailable":
             raise
     if config.agent_root is None:
         raise QueueServiceError("outbound agent root is unavailable")
@@ -1173,6 +1205,7 @@ def _open_outbound_agent(
     return LocalDaemonAgentHttpClient(
         config,
         trusted_config_loader=trusted_config_loader,
+        trusted_promotion_loader=trusted_promotion_loader,
         prepare_role_reload=prepare_role_reload,
     )
 
@@ -1901,6 +1934,7 @@ def _local_agent_active_projection(
             for item in profile.gpu_devices
         ],
         "providers": local_agent.provider_configuration,
+        **({"temporary_mounts": list(profile.temporary_mounts)} if profile.temporary_mounts else {}),
         **({"shared_roots_digest": hashlib.sha256(json.dumps(dict(profile.shared_roots), sort_keys=True).encode()).hexdigest()} if profile.shared_roots else {}),
         **(
             {
@@ -1927,13 +1961,16 @@ def _outbound_active_projection(payload: Mapping[str, object]) -> dict[str, obje
         {
             key: item
             for key, item in _mapping_value(value, "resident profile").items()
-            if key not in {"readiness", "preparation_shared_roots", "container", "shared_roots"}
+            if key not in {"readiness", "preparation_shared_roots", "container", "shared_roots", "temporary_mounts"}
         }
         for value in _sequence(payload, "resident_profiles")
     ]
     for profile, value in zip(
         profiles, _sequence(payload, "resident_profiles"), strict=True
     ):
+        temporary = _mapping_value(value, "resident profile").get("temporary_mounts")
+        if temporary:
+            profile["temporary_mounts"] = temporary
         shared = _mapping_value(value, "resident profile").get("shared_roots")
         if shared:
             profile["shared_roots_digest"] = hashlib.sha256(json.dumps(shared, sort_keys=True).encode()).hexdigest()
@@ -2063,7 +2100,7 @@ def _resident_profile_arguments(
             "gpu_devices",
             "environment",
         },
-        {"readiness", "preparation_shared_roots", "container", "shared_roots"},
+        {"readiness", "preparation_shared_roots", "container", "shared_roots", "temporary_mounts"},
         label,
     )
     devices: list[ResidentGpuDevice] = []
@@ -2106,6 +2143,7 @@ def _resident_profile_arguments(
         readiness_requirements=requirements,
         container=cast(Mapping[str, PlainData] | None, value.get("container")),
         shared_roots=cast(Mapping[str, PlainData], value.get("shared_roots", {})),
+        **({"temporary_mounts": value["temporary_mounts"]} if "temporary_mounts" in value else {}),
         preparation_shared_roots={
             alias: _path({"root": path}, "root", base)
             for alias, path in _mapping_value(
@@ -2134,6 +2172,11 @@ def _resident_profile_declaration(
         preparation=preparation,
         preparation_staged=preparation_staged,
     )
+    from ._temporary_storage import temporary_mount_targets
+    temporary = temporary_mount_targets(arguments.get("temporary_mounts", ()), arguments["container"])
+    arguments.pop("temporary_mounts", None)
+    if temporary:
+        arguments["temporary_mounts"] = list(temporary)
     descriptor = arguments["descriptor"]
     requirements = asdict(arguments.pop("readiness_requirements"))
     project = arguments["project_root"]
@@ -2472,3 +2515,133 @@ __all__ = [
     "read_agent_spec",
     "run_outbound_agent_service",
 ]
+
+
+def inspect_role_declaration(
+    path: str | Path, *, role: str, env_file: str | Path | None = None
+) -> "OperatorObservation":
+    """Parse protected role declarations without qualification or factory imports.
+
+    The fingerprint identifies declarations, not installed software. Credentials,
+    environment values and private paths are omitted from the public projection.
+    Protected source failures are reported without echoing configuration values.
+    """
+    from .operations import OperatorObservation
+    from loom.timestamps import utc_timestamp
+
+    if role not in {"agent", "coordinator"}:
+        raise QueueConfigError("role must be agent or coordinator")
+    if role == "agent":
+        spec = read_agent_spec(path, env_file=env_file)
+        fingerprint = spec.declaration_digest
+        profiles = cast(Sequence[Mapping[str, object]], spec.declarations["resident_profiles"])
+        identities = [cast(PlainData, profile["descriptor"]) for profile in profiles]
+    else:
+        source, _, payload, _ = _load_protected_config(path, env_file=env_file)
+        _required_allowed(payload, {"schema_version", "kind", "deployment_root", "run_store_root", "machine_id", "poll_interval_seconds", "max_accepted_time_step_seconds", "local_agent", "remote_profiles", "agent_policy", "agent_server", "authority"}, {"scheduling", "slurm_profiles", "preparation", "event_sinks", "shared_roots", "assignment_payload_root_id"}, "coordinator service config")
+        _header(payload, "loom.coordinator-service")
+        normalized = dict(_normalize_coordinator_payload(payload))
+        if payload["agent_server"] is not None:
+            _agent_server(_mapping(payload, "agent_server"), source.parent)
+        for name in ("deployment_root", "run_store_root"):
+            normalized[name] = str(_path(payload, name, source.parent))
+        _string(payload, "machine_id")
+        _agent_policy(_mapping(payload, "agent_policy"))
+        authority = _mapping(payload, "authority")
+        if authority.get("kind") == "embedded":
+            _required_allowed(authority, {"kind"}, {"state_root"}, "embedded authority")
+            if "state_root" in authority:
+                _path(authority, "state_root", source.parent)
+        elif authority.get("kind") == "https":
+            _exact(authority, {"kind", "url", "service_id", "workspace_id", "tls"}, "HTTPS authority")
+            for key in ("url", "service_id", "workspace_id"):
+                _string(authority, key)
+            tls = _mapping(authority, "tls")
+            _exact(tls, {"ca", "certificate", "private_key"}, "HTTPS authority TLS")
+            for key in tls:
+                _path(tls, key, source.parent)
+        else:
+            raise QueueConfigError("authority kind is unsupported")
+        _slurm_profile_declarations(payload.get("slurm_profiles"))
+        identities = [cast(PlainData, _profile_descriptor(_mapping_value(item, "remote profile")).to_dict()) for item in _sequence(payload, "remote_profiles")]
+        if payload["local_agent"] is not None:
+            reference = _mapping(payload, "local_agent")
+            _exact(reference, {"config", "env_file"}, "local_agent")
+            local_source, _, local, _ = _load_protected_config(_path(reference, "config", source.parent), env_file=None if reference["env_file"] is None else _path(reference, "env_file", source.parent))
+            _required_allowed(local, {"schema_version", "kind", "agent_root", "resident_profiles"}, {"providers", "resources"}, "local agent service config")
+            _header(local, "loom.local-agent-service")
+            _path(local, "agent_root", local_source.parent)
+            _agent_resource_declaration(local.get("resources"))
+            occupancy = _gpu_occupancy_policy(local.get("resources"))
+            if occupancy is not None and local.get("providers") is not None:
+                raise QueueConfigError("NVIDIA occupancy cannot be bypassed by custom providers")
+            profiles = [_resident_profile_declaration(_mapping_value(item, "resident profile"), local_source.parent, "resident profile", preparation=False, preparation_staged=False) for item in _sequence(local, "resident_profiles")]
+            if len(profiles) != 1:
+                raise QueueConfigError("local agent service requires one resident profile")
+            normalized["local_agent"] = {**local, "resident_profiles": profiles}
+            identities.extend(cast(PlainData, profile["descriptor"]) for profile in profiles)
+        # Opaque trusted targets are declarations here. Their actual constructors
+        # own qualification; reading this document must never import them.
+        def targets(value: object) -> None:
+            if isinstance(value, Mapping):
+                if "_target_" in value:
+                    _trusted_target_name(value, "role declaration target")
+                for child in value.values():
+                    targets(child)
+            elif isinstance(value, (tuple, list)):
+                for child in value:
+                    targets(child)
+        targets(normalized)
+        fingerprint = _canonical_fingerprint(normalized)
+    return OperatorObservation("role-declaration", utc_timestamp(), fingerprint, "current", "available", {"role": role, "declaration_fingerprint": fingerprint, "protected_paths": "validated", "profile_identities": identities, "credentials": "redacted", "qualified": False})
+
+
+@contextmanager
+def service_backend_migration_guard(service, expected_root_id: str):
+    """Hold a stopped, settled native role during an explicit backend migration.
+
+    The caller has already drained admission/work and stopped the communication
+    service. Pending poll outcomes and missing native evidence refuse; no work is
+    cancelled, no root initialized and no identity replaced by this guard.
+    """
+    from .errors import QueueConflictError
+    from ._agent_session_journal import _RemoteAgentJournal
+    from .agent_session_transport import _has_retained_agent_work
+    from .retirement import _retained_agent_owners, require_unretired
+    from ._agent_process_supervisor import retained_supervisor_guard
+    from .local_daemon import _acquire_lock, _open_root
+    from ._service_lifetime import _retained_coordinator_operations
+    from .local_daemon_execution import local_daemon_owner_work_is_retained
+
+    if isinstance(service, OutboundAgentServiceConfig):
+        spec = read_agent_spec(service.source_path, env_file=service.environment_path)
+        journal = _RemoteAgentJournal(spec.agent_root,
+            expected_configuration_fingerprint=service.immutable_fingerprint,
+            expected_active_configuration_fingerprint=service.active_fingerprint)
+        try:
+            require_unretired(spec.agent_root)
+            if journal.root_id != expected_root_id:
+                raise QueueConflictError("migration native root identity changed")
+            execution, slurm = _retained_agent_owners(spec)
+            if (_has_retained_agent_work(journal, execution, slurm)
+                    or journal.recovery_poll(_OUTBOUND_POLL_WAIT_MS) is not None):
+                raise QueueConflictError("migration requires settled agent work and poll outcomes")
+            with retained_supervisor_guard(spec.agent_root, agent_id=journal.root_id):
+                yield
+        finally:
+            journal.close()
+    else:
+        config = service.daemon
+        if config.agent_root is not None:
+            raise QueueConflictError("migration requires a pure coordinator")
+        # Native store opening is noninitializing and the lock fences scheduling.
+        with _acquire_lock(config.coordinator_root):
+            require_unretired(config.coordinator_root)
+            actual = _open_root(config.coordinator_root, role="coordinator")
+            if actual != expected_root_id:
+                raise QueueConflictError("migration native root identity changed")
+            local_daemon_owner_work_is_retained(config, coordinator_id=actual, agent_id=None)
+            with sqlite3.connect(config.control_database) as conn:
+                if _retained_coordinator_operations(conn):
+                    raise QueueConflictError("migration requires settled coordinator work")
+            yield

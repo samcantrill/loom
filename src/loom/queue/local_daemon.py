@@ -37,6 +37,7 @@ from uuid import uuid4
 
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.timestamps import parse_timestamp, utc_timestamp
+from .operations import OperatorObservation
 from loom.pipeline.executors.slurm.ready_stage import SlurmReadyStageProfile
 from loom.scheduling import (
     CapacityAtom,
@@ -81,7 +82,7 @@ if TYPE_CHECKING:
     from .run import RunRequest
 
 
-_COORDINATOR_SCHEMA_VERSION = 18
+_COORDINATOR_SCHEMA_VERSION = 19
 _AGENT_SCHEMA_VERSION = 12
 # Outbound session roots and coordinator roots independently reject old forms.
 _LOCAL_DAEMON_SCHEMA_VERSION = _AGENT_SCHEMA_VERSION
@@ -2247,7 +2248,39 @@ class LocalDaemon:
         )
         if len(views) != 1 or not isinstance(views[0].get("authority"), Mapping):
             raise QueueStorageError("targeted admission owner detail is unavailable")
-        owners = views[0]
+        owners = dict(views[0])
+        # Extend the existing loose owner detail, not the strict inspection wire.
+        assignment = owners.get("assignment")
+        if isinstance(assignment, Mapping):
+            from .operations import _agent_observation
+
+            rows = assignment.get("assignments", ())
+            agent_ids = sorted({
+                cast(str, row["agent_id"]) for row in rows
+                if isinstance(row, Mapping) and isinstance(row.get("agent_id"), str)
+                and row["agent_id"] != self._agent_id
+            }) if isinstance(rows, (list, tuple)) else []
+            sessions: list[PlainData] = []
+            for agent_id in agent_ids[:_MAX_ADMISSION_PAGE_SIZE]:
+                try:
+                    observed = _agent_observation(self, agent_id)
+                except Exception:
+                    sessions.append({
+                        "owner": f"agent-session:{agent_id}", "availability": "unavailable",
+                        "state": "unavailable", "freshness": "unavailable",
+                        "diagnostic": "owner_unavailable",
+                    })
+                else:
+                    drained, connected = observed.value["drained"], observed.value["connected"]
+                    sessions.append({
+                        "owner": f"agent-session:{agent_id}", "availability": observed.availability,
+                        "state": "drained" if drained else "connected" if connected else "disconnected",
+                        "revision": observed.revision, "observed_at": observed.observed_at,
+                        "freshness": observed.freshness,
+                        "diagnostic": "agent_disconnected_or_drained" if drained or not connected else None,
+                    })
+            owners["agent_sessions"] = sessions
+            owners["agent_sessions_truncated"] = len(agent_ids) > len(sessions)
         authority = cast(Mapping[str, PlainData], owners["authority"])
         return LocalDaemonAdmissionDetail(
             admission=admission,
@@ -2673,234 +2706,21 @@ class LocalDaemon:
         preparation_operation_id: str | None = None,
         run_operation_id: str | None = None,
     ) -> LocalDaemonAdmission:
-        coordinator_id = self._require_started()
-        from .local_daemon_execution import load_managed_local_intent
+        from ._coordinator_admission import _submit
 
-        with self._cycle_lock:
-            self._lifetime.require_accepting()
-            from ._preparation_operations import (
-                PREPARATION_RUN_PREFIX,
-                PreparationChildReserved,
-            )
-            from loom.pipeline.stores import run_uri_to_path
-
-            if preparation_operation_id is None:
-                try:
-                    run_name = run_uri_to_path(request.run_uri).name
-                except ValueError:
-                    run_name = ""
-                if run_name.startswith(PREPARATION_RUN_PREFIX):
-                    raise PreparationChildReserved(
-                        "preparation child run identity is reserved"
-                    )
-
-            with self._connection() as conn:
-                reserved = conn.execute(
-                    "SELECT operation_id, child_name, selected_json FROM preparation_operations WHERE child_name = ?",
-                    (request.queue_item_id,),
-                ).fetchone()
-                if preparation_operation_id is not None:
-                    if (
-                        reserved is None
-                        or reserved["operation_id"] != preparation_operation_id
-                    ):
-                        raise QueueConflictError(
-                            "preparation child admission ownership conflicts"
-                        )
-                    selected = json.loads(str(reserved["selected_json"]))
-                    from loom.pipeline.stores import path_to_run_uri
-
-                    if request.run_uri != path_to_run_uri(
-                        Path(selected["run_store_root"]) / str(reserved["child_name"])
-                    ):
-                        raise QueueConflictError(
-                            "preparation child run identity conflicts"
-                        )
-                elif (
-                    request.queue_item_id.startswith(PREPARATION_RUN_PREFIX)
-                    or reserved is not None
-                ):
-                    raise PreparationChildReserved(
-                        "preparation child queue identity is reserved"
-                    )
-            self._preparations.check_target_submission(request, run_operation_id)
-            execution = self._execution
-            if execution is None:
-                raise QueueServiceError("coordinator execution is unavailable")
-            with self._connection() as conn:
-                row = conn.execute(
-                    "SELECT * FROM managed_admissions "
-                    "WHERE coordinator_id = ? AND run_uri = ?",
-                    (coordinator_id, request.run_uri),
-                ).fetchone()
-                other = conn.execute(
-                    "SELECT run_uri FROM managed_admissions WHERE queue_item_id = ?",
-                    (request.queue_item_id,),
-                ).fetchone()
-            if row is not None:
-                existing = _admission_from_row(row)
-                intent = load_managed_local_intent(
-                    self.config,
-                    request.run_uri,
-                    slurm_profiles=execution.slurm_profiles,
-                )
-                if (
-                    existing.intent_digest == intent.digest
-                    and existing.queue_item_id == request.queue_item_id
-                ):
-                    if request.retry_failed_revision is not None:
-                        return self._retry_failed_admission(
-                            existing, request, execution
-                        )
-                    return existing
-                raise QueueConflictError("managed run admission intent conflicts")
-            if other is not None:
-                raise QueueConflictError(
-                    "queue item identity already admits another run"
-                )
-            if request.retry_failed_revision is not None:
-                raise QueueConflictError("retry requires an existing failed admission")
-
-            intent = load_managed_local_intent(self.config, request.run_uri)
-            execution.validate_fresh_intent(intent)
-            run_priority = self._resolve_admission_priority(request.run_uri)
-            admission_id = f"admission-{uuid4()}"
-            operation_id = f"authority-bind-{uuid4()}"
-            with self._connection() as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                accepted_at = self._accepted_time(conn)
-                conn.execute(
-                    """
-                    INSERT INTO managed_admissions (
-                        admission_id, queue_item_id, coordinator_id, run_uri,
-                        intent_digest, execution_owner, state, accepted_at,
-                        authority_operation_id, run_priority, enqueue_sequence,
-                        revision, cancellation_operation_id,
-                        blocked_reason
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL)
-                    """,
-                    (
-                        admission_id,
-                        request.queue_item_id,
-                        coordinator_id,
-                        request.run_uri,
-                        intent.digest,
-                        "managed-stage",
-                        LocalDaemonAdmissionState.PENDING_AUTHORITY.value,
-                        accepted_at,
-                        operation_id,
-                        run_priority,
-                        self._next_enqueue_sequence(conn),
-                    ),
-                )
-                if run_operation_id is not None:
-                    admitted = conn.execute(
-                        "SELECT * FROM managed_admissions WHERE admission_id = ?",
-                        (admission_id,),
-                    ).fetchone()
-                    assert admitted is not None
-                    self._preparations.retain_admission(
-                        conn, run_operation_id, _admission_from_row(admitted)
-                    )
-                conn.commit()
-        self._wake.set()
-        return self._admission(admission_id)
-
-    def _retry_failed_admission(
-        self,
-        admission: LocalDaemonAdmission,
-        request: LocalDaemonAdmissionRequest,
-        execution: LocalDaemonExecution,
-    ) -> LocalDaemonAdmission:
-        # The coordinator journal bridges its local admission update and the
-        # authority's atomic, replayable lifecycle continuation across restart.
-        key = (
-            f"admission-retry:{admission.admission_id}:{request.retry_failed_revision}"
+        return _submit(
+            self, request, preparation_operation_id=preparation_operation_id,
+            run_operation_id=run_operation_id,
         )
-        with self._connection() as conn:
-            row = conn.execute(
-                "SELECT value FROM daemon_metadata WHERE key = ?", (key,)
-            ).fetchone()
-        if row is None:
-            if (
-                admission.state is not LocalDaemonAdmissionState.FAILED
-                or admission.revision != request.retry_failed_revision
-                or admission.cancellation_operation_id is not None
-            ):
-                raise QueueConflictError("retry failed admission revision is stale")
-            snapshot = execution.validate_admission_retry(admission)
-            record = {
-                "admission_id": admission.admission_id,
-                "failed_revision": admission.revision,
-                "authority_revision": snapshot.revision.to_dict(),
-                "state": "pending",
-            }
-            with self._connection() as conn:
-                conn.execute(
-                    "INSERT INTO daemon_metadata(key, value) VALUES (?, ?)",
-                    (key, json.dumps(record)),
-                )
-                conn.commit()
-        else:
-            record = json.loads(str(row["value"]))
-        if record["state"] == "pending":
-            self._apply_admission_retry(key, record, execution)
-        self._wake.set()
-        return self._admission(admission.admission_id)
 
-    def _apply_admission_retry(
-        self, key: str, record: dict[str, Any], execution: LocalDaemonExecution
-    ) -> None:
-        from loom.pipeline.stores.read_models import BackendRevision
 
-        admission = self._admission(record["admission_id"])
-        if (
-            admission.state is not LocalDaemonAdmissionState.FAILED
-            or admission.revision != record["failed_revision"]
-            or admission.cancellation_operation_id is not None
-        ):
-            raise QueueConflictError("pending admission retry conflicts")
-        execution.resume_failed_admission(
-            admission,
-            operation_id=key,
-            expected_revision=BackendRevision.from_dict(record["authority_revision"]),
-        )
-        record["state"] = "applied"
-        with self._connection() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            conn.execute(
-                "UPDATE managed_admissions SET state = ?, blocked_reason = NULL, "
-                "revision = revision + 1 WHERE admission_id = ?",
-                (
-                    LocalDaemonAdmissionState.PENDING_AUTHORITY.value,
-                    admission.admission_id,
-                ),
-            )
-            conn.execute(
-                "UPDATE daemon_metadata SET value = ? WHERE key = ?",
-                (json.dumps(record), key),
-            )
-            conn.commit()
 
     def _resume_pending_admission_retries(
         self, execution: LocalDaemonExecution
     ) -> None:
-        with self._connection() as conn:
-            pending = tuple(
-                conn.execute(
-                    "SELECT key, value FROM daemon_metadata "
-                    "WHERE key LIKE 'admission-retry:%' AND json_extract(value, '$.state') = 'pending'"
-                )
-            )
-        for row in pending:
-            try:
-                self._apply_admission_retry(
-                    str(row["key"]), json.loads(str(row["value"])), execution
-                )
-            except Exception:
-                self._record_admission_health(
-                    json.loads(str(row["value"]))["admission_id"], "unavailable"
-                )
+        from ._coordinator_admission import _resume_pending_admission_retries
+
+        _resume_pending_admission_retries(self, execution)
 
     def _repair_cancelled_admissions(self, execution: LocalDaemonExecution) -> None:
         if self._cancelled_admission_repairs is None:
@@ -2943,15 +2763,24 @@ class LocalDaemon:
         return admission
 
     def _control_agent(
-        self, principal: LocalDaemonPrincipal, control: AgentControl
+        self, principal: LocalDaemonPrincipal, control: AgentControl,
+        *, condition: Mapping[str, PlainData] | None = None,
     ) -> Mapping[str, PlainData]:
         """Commit one scoped control before the outbound agent may observe it."""
 
         _public_operation_id(control.operation_id)
+        if condition is not None:
+            if set(condition) != {"expected_control_id"}:
+                raise QueueServiceError("invalid conditional control")
+            expected = condition["expected_control_id"]
+            if expected is not None:
+                if not isinstance(expected, str):
+                    raise QueueServiceError("invalid conditional predecessor")
+                _public_operation_id(expected)
         authorizer = self._authorizer()
         authorizer.require_operator(
             principal,
-            control.kind.value,
+            "maintenance" if control.promotion is not None else control.kind.value,
             agent_id=control.agent_id,
             pool=control.pool,
         )
@@ -2970,7 +2799,13 @@ class LocalDaemon:
                 "WHERE operation_id = ?",
                 (control.operation_id,),
             ).fetchone()
+            condition_key = "agent-control-condition:" + control.operation_id
+            retained_condition = conn.execute(
+                "SELECT value FROM daemon_metadata WHERE key = ?", (condition_key,)
+            ).fetchone()
             if prior is not None:
+                if (None if retained_condition is None else json.loads(retained_condition[0])) != condition:
+                    raise QueueConflictError("agent control predecessor intent conflicts")
                 if (
                     str(prior["principal_id"]) != principal.subject
                     or str(prior["request_json"]) != encoded
@@ -3004,6 +2839,15 @@ class LocalDaemon:
                 raise QueueServiceError(
                     "pool-scoped control requires an independently controllable agent"
                 )
+            if condition is not None:
+                current = conn.execute(
+                    "SELECT operation_id FROM agent_controls WHERE session_id = ? ORDER BY rowid DESC LIMIT 1",
+                    (control.expected_session_id,),
+                ).fetchone()
+                if (None if current is None else current[0]) != condition["expected_control_id"]:
+                    raise QueueConflictError("agent control predecessor conflicts")
+                conn.execute("INSERT INTO daemon_metadata(key,value) VALUES (?,?)",
+                             (condition_key, json.dumps(dict(condition), sort_keys=True)))
             active = conn.execute(
                 "SELECT operation_id FROM agent_controls WHERE session_id = ? "
                 "AND state IN ('pending_delivery', 'applying') LIMIT 1",
@@ -3011,6 +2855,9 @@ class LocalDaemon:
             ).fetchone()
             if active is not None:
                 raise QueueConflictError("another agent control is still in progress")
+            if control.promotion is not None:
+                from ._profile_promotion import authorize
+                authorize(self, conn, control)
             conn.execute(
                 "INSERT INTO agent_controls(operation_id, principal_id, session_id, agent_id, request_json, state, result_code, acknowledged) VALUES (?, ?, ?, ?, ?, 'pending_delivery', NULL, 0)",
                 (
@@ -3023,7 +2870,7 @@ class LocalDaemon:
             )
             # Withdrawal is coordinator-owned and happens before delivery.  It
             # changes only future offers; it never releases a durable claim.
-            if control.kind.value in {"drain", "reload"}:
+            if control.kind.value in {"drain", "reload", "promote"}:
                 conn.execute(
                     "UPDATE agent_offers SET current = 0 WHERE session_id = ?",
                     (control.expected_session_id,),
@@ -3701,10 +3548,18 @@ class LocalDaemon:
             raise QueueConflictError("scheduling reload cannot replace assignment payload root")
         current_roots = self.config.coordinator_shared_roots
         replacement_roots = replacement.coordinator_shared_roots
-        if any(replacement_roots.get(alias) != root for alias, root in current_roots.items()):
-            raise QueueConflictError(
-                "scheduling reload cannot replace retained coordinator shared mappings"
-            )
+        from .shared_execution import _readonly_root_relocations
+
+        relocations = _readonly_root_relocations(current_roots, replacement_roots)
+        if relocations:
+            # Reload already holds the cycle lock shared with admission and
+            # maintenance. Same logical read-only storage may move only at a
+            # settled, closed gate; mutable output mappings remain fixed.
+            from ._maintenance import observe
+
+            gate = observe(self)
+            if gate["state"] != "closed" or not gate["settled"] or gate["checks"]:
+                raise QueueConflictError("read-only root relocation requires settled maintenance")
         if replacement.agent_policy != self._agent_policy:
             with self._connection() as conn:
                 active = conn.execute(
@@ -4245,6 +4100,58 @@ class LocalDaemonOperatorView:
         self._daemon._require_view_role(self._principal, LocalDaemonRole.OPERATOR)
         return self._daemon.status()
 
+    def observe_status(self) -> "OperatorObservation":
+        """Read accepted coordinator configuration with owner-local freshness."""
+        from .operations import _coordinator_observation
+        self._daemon._require_view_role(self._principal, LocalDaemonRole.OPERATOR)
+        return _coordinator_observation(self._daemon)
+
+    def observe_agent(self, agent_id: str) -> "OperatorObservation":
+        """Read one session, its retained offer and independent drain state."""
+        from .operations import _agent_observation
+        self._daemon._require_view_role(self._principal, LocalDaemonRole.OPERATOR)
+        return _agent_observation(self._daemon, agent_id)
+
+    def observe_assignment(self, assignment_id: str) -> "OperatorObservation":
+        """Read one assignment's coordinator acknowledgement and release proof."""
+        from .operations import _assignment_observation
+        self._daemon._require_view_role(self._principal, LocalDaemonRole.OPERATOR)
+        return _assignment_observation(self._daemon, assignment_id)
+
+    def observe_maintenance(self) -> Mapping[str, PlainData]:
+        """Read the durable gate, owner/revision and finite authorized checks."""
+        from ._maintenance import observe
+        self._daemon._require_view_role(self._principal, LocalDaemonRole.OPERATOR)
+        return observe(self._daemon)
+
+    def maintenance(self, control: Mapping[str, object], *, expected_coordinator_id: str) -> Mapping[str, PlainData]:
+        """Apply/replay an exact revision-guarded maintenance owner control."""
+        from ._maintenance import mutate
+        return mutate(self._daemon, self._principal, control, expected_coordinator_id)
+
+    def maintenance_operation(self, operation_id: str) -> Mapping[str, PlainData]:
+        """Resolve one exact control after a lost reply, without another mutation."""
+        from ._maintenance import operation
+        self._daemon._authorizer().require_operator(self._principal, "maintenance")
+        return operation(self._daemon, operation_id)
+
+    def observe_control(self, operation_id: str) -> Mapping[str, PlainData]:
+        """Read one authorized exact agent control, including its intent digest."""
+        import hashlib
+        self._daemon._require_view_role(self._principal, LocalDaemonRole.OPERATOR)
+        with self._daemon._connection() as conn:
+            row = conn.execute("SELECT request_json, state, result_code, acknowledged FROM agent_controls WHERE operation_id = ?", (operation_id,)).fetchone()
+        if row is None:
+            raise QueueServiceError("managed operation was not found")
+        control = AgentControl.from_value(json.loads(row["request_json"]))
+        self._daemon._authorizer().require_operator(self._principal, "maintenance" if control.promotion is not None else control.kind.value, agent_id=control.agent_id, pool=control.pool)
+        from .operations import control_intent_digest
+        with self._daemon._connection() as conn:
+            retained = conn.execute("SELECT value FROM daemon_metadata WHERE key = ?", ("agent-control-condition:" + operation_id,)).fetchone()
+        condition = None if retained is None else json.loads(retained[0])
+        intent_digest = hashlib.sha256(row["request_json"].encode()).hexdigest() if condition is None else control_intent_digest({"control": control.value(), "condition": condition})
+        return {"operation_id": operation_id, "intent_digest": intent_digest, "condition": condition, "state": row["state"], "code": row["result_code"], "acknowledged": bool(row["acknowledged"]), "mutation_outcome": "applied"}
+
     def retire(
         self, operation_id: str, expected_coordinator_id: str
     ) -> Mapping[str, PlainData]:
@@ -4275,9 +4182,15 @@ class LocalDaemonOperatorView:
         self._daemon._require_view_role(self._principal, LocalDaemonRole.OPERATOR)
         return self._daemon.reconcile_once()
 
-    def control_agent(self, control: AgentControl) -> Mapping[str, PlainData]:
+    def control_agent(self, control: AgentControl, *, condition: Mapping[str, PlainData] | None = None) -> Mapping[str, PlainData]:
+        """Accept a control, optionally only after the exact expected predecessor.
+
+        ``condition={"expected_control_id": None}`` expects no prior control;
+        omission preserves unconditional operator behavior. Exact replay retains
+        its original condition and never reapplies policy over a later control.
+        """
         with self._daemon._cycle_lock:
-            return self._daemon._control_agent(self._principal, control)
+            return self._daemon._control_agent(self._principal, control, condition=condition)
 
     def reload_scheduling(
         self, request: CoordinatorSchedulingReload
@@ -4595,6 +4508,8 @@ def _initialize_coordinator_schema(
         "request_json TEXT NOT NULL, request_digest TEXT NOT NULL, "
         "result_json TEXT NOT NULL)"
     )
+    from ._maintenance import initialize as initialize_maintenance
+    initialize_maintenance(conn)
     if preparation:
         _initialize_preparation_schema(conn)
     if action_results:
@@ -4713,7 +4628,7 @@ def _open_root(path: Path, *, role: str, schema_version: int | None = None) -> s
             )
         )
         if version != expected_version:
-            if role == "coordinator" and version in (12, 15, 16, 17):
+            if role == "coordinator" and version in (12, 15, 16, 17, 18):
                 raise QueueStorageError(
                     f"coordinator schema {version} requires an offline upgrade with loom queue daemon-upgrade"
                 )
@@ -4724,7 +4639,7 @@ def _open_root(path: Path, *, role: str, schema_version: int | None = None) -> s
         if role == "coordinator":
             _validate_coordinator_schema(
                 conn,
-                preparation=version in (15, 16, 17, _COORDINATOR_SCHEMA_VERSION),
+                preparation=version in (15, 16, 17, 18, _COORDINATOR_SCHEMA_VERSION),
                 legacy_preparation=version == 15,
                 action_results=version >= 17,
                 context=version >= 18,

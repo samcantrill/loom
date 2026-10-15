@@ -151,19 +151,9 @@ def _read_only_queue_repository(config_path: str | Path) -> object:
 
 
 def format_inspect_run_text(result: "RunInspectionResponse") -> str:
-    from loom.diagnostics.run_inspection import RunInspectionFailure
+    from loom.diagnostics.run_explanation import explain_run
 
-    if isinstance(result, RunInspectionFailure):
-        return f"inspection: {result.code.value}"
-    lines = [f"run: {result.run_uri}", f"summary: {result.summary}"]
-    if result.admission_id is not None:
-        lines.append(f"admission: {result.admission_id}")
-    if result.queue_item_id is not None:
-        lines.append(f"queue item: {result.queue_item_id}")
-    lines.extend(
-        f"{axis.name.value}: {axis.state} ({axis.availability})" for axis in result.axes
-    )
-    return "\n".join(lines)
+    return explain_run(result).format_text()
 
 
 __all__ = [

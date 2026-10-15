@@ -1077,6 +1077,13 @@ as validate, plan, run, stage, sweep, status, logs, and artifacts.
 
 The CLI must not duplicate config, pipeline, store, or resume logic.
 
+`cli.run_operations` owns early submission-reference presentation and connect-only
+follow/cancel actions registered by `cli.runs`. It consumes the coordinator's
+incremental native snapshot reads and bounded waits, keeping CLI interruption
+outside Python observation's detachment handling. `cli.run` and `_run` share
+the existing local argument/source-closure validation owners. Catalog actions,
+native acceptance and cancellation authority remain with their existing owners.
+
 ---
 
 ### 6.14 Coordinator Client
@@ -1404,3 +1411,80 @@ request's `managed_output_predecessor` metadata and supplies that exact predeces
 to initial and replayed managed output commits. The authority's existing fenced
 transaction owns immutable output history and terminal success; replay after a
 lost response does not substitute the new head for the original predecessor.
+
+## Outbound Agent Session Boundaries
+
+`queue/agent_session_transport.py` retains the public TLS configuration, HTTP
+client/server and application integration. Its private collaborators separate
+current responsibilities without adding processes or durable formats:
+
+- `_agent_session_codec.py`: bounded wire decoding and explicit transport
+  uncertainty; no session replay policy.
+- `_agent_session_protocol.py`: registration, reconciliation, resource-offer and
+  delivery decisions using the existing cooperative client owner. The client
+  entry points retain serialization and invoke these functions directly.
+- `_agent_session_journal.py`: the single outbound session journal, its durable
+  identity calculations and transaction boundaries. Retirement and GPU probing
+  use this same journal; assignment references remain in its existing store.
+
+The protocol and journal refer to client/configuration types only during type
+checking. Runtime dependencies flow from the public adapter to these private
+owners, and from protocol decisions through the journal to the existing native
+session models. `_agent_assignment.py` owns delivered/retained assignment
+progression and their shared result settlement on that same cooperative client.
+It composes the existing execution journal, providers, native supervisor and
+publication workspace. Containment and authority acknowledgement precede claim
+release and fresh capacity; unknown ownership retains claims. The client keeps
+service entry points and the existing cancellation/release interception seams,
+while private settlement helpers call each other within the assignment owner.
+Supervisor physical ownership, progress lanes and journal formats are unchanged.
+See [Queue](features/queue.md) for replay and concurrency behavior.
+
+## Coordinator Admission And Progression
+
+`local_daemon.py` retains the protected daemon, control store and service entry
+points. `_coordinator_admission.py` owns the existing fresh acceptance, exact
+replay and failed-admission retry transactions on that same daemon. Native
+operator, preparation and run-operation callers all use the daemon entry point;
+its cycle lock, lifetime check and acceptance order remain authoritative.
+
+`_coordinator_run_progress.py` owns reconciliation of already accepted runs and
+invocation of the current placement policy. It uses the composition's existing
+cycle contexts, scheduling epoch, launch lock, graph and cancellation owners.
+`LocalDaemonExecution` keeps its entry points and composes the native execution
+owners; its immutable outcome import remains available at the existing path.
+Progression can continue independently of future fresh-admission policy.
+
+`_coordinator_run_authority.py` owns the existing scoped adapter for one accepted
+run/coordinator binding. It preserves identity checks and guarded-recovery
+mutation restrictions while the per-run store remains the lifecycle and output
+commit authority. The original scoped-adapter import remains available for its
+current consumers. The extraction adds no store, process or scheduling policy.
+
+## Fleet administration
+
+`loom.fleet` owns optional inventory, immutable service-bundle verification and
+bounded operator observations. `loom.cli.fleet` registers import-light commands;
+implementation imports occur only on dispatch. Native `loom.queue.deployment`
+continues to own protected roles and `loom.deployment` owns connection-only
+selection export. Fleet consumes native projections and never reads native SQL
+or imports workload factories. See [Fleet administration](fleet.md).
+
+`fleet/probes.py` supplies ordinary workload stage targets for finite CPU,
+shared-storage and optional CUDA checks. `fleet/self_tests.py` joins retained
+native run intent, committed artifact reads and operator assignment/offer
+observations. It stores only its protected immutable client intent and reports;
+there is no Fleet scheduler or native SQL reader. The native remote workspace
+stamps actual launch UUIDs into existing execution metadata, replacing any
+worker assertion, and `queue/operations.py` exposes that evidence and native
+release proof through the existing targeted operator query.
+
+`queue/_profile_promotion.py` composes the existing authenticated agent control,
+local journal and supervisor owners for maintenance-only executable binding
+changes and startup recovery. It does not relax ordinary reload. Fleet's fixed
+`_workload_host.py` adapter qualifies candidates through native profile readiness
+and stages candidate agent sources. Native promotion owns canonical agent source
+publication, protected executable bindings and retained history.
+`fleet/workload_upgrades.py` composes this owner with the existing maintenance
+gate, conditional policy, check successor and versioned selection surfaces; it
+never installs a service runtime.

@@ -196,11 +196,8 @@ def _probe_owner(
     configuration: CoordinatorServiceConfig | OutboundAgentServiceConfig,
     profiles: tuple[ResidentExecutionProfile, ...],
 ) -> Iterator[tuple[str, SQLiteAgentJournal, dict[str, AgentResourceProvider]]]:
-    from .agent_session_transport import (
-        _RemoteAgentJournal,
-        _agent_active_fingerprint,
-        _configured_remote_provider_members,
-    )
+    from ._agent_session_journal import _RemoteAgentJournal, _agent_active_fingerprint
+    from .agent_session_transport import _configured_remote_provider_members
     from .deployment import CoordinatorServiceConfig
     from .errors import QueueServiceError
     from .local_daemon import _acquire_lock, _open_root, _validate_deployment_binding

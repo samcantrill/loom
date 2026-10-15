@@ -18,6 +18,11 @@ loom = "loom.cli.main:main"
 loom-mcp = "loom.mcp:main"
 
 [project.optional-dependencies]
+fleet = [
+    "python-dotenv>=1,<2",
+    "packaging>=24,<27",
+    "PyYAML>=6,<7",
+]
 mcp = [
     "mcp>=2.2,<3",
 ]

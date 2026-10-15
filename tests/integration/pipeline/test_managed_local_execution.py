@@ -31,11 +31,11 @@ from loom.queue._managed_local import (
     run_managed_local_assignment,
 )
 from loom.queue._agent_process_supervisor import (
-    AgentProcessSupervisorError,
     AgentProcessSupervisorClient,
     AgentProcessSupervisorService,
     ResidentWorkerLaunchProfile,
     SupervisorLaunchConfiguration,
+    _SupervisorNoStartError,
 )
 from loom.queue._remote_stage_execution import ResidentProfileDescriptor
 from loom.pipeline.orchestration import (
@@ -185,13 +185,14 @@ def _spec(*, counter_path: Path | None = None, terminal_mode: str = "clean") -> 
                     "factory": {
                         "_target_": (
                             "tests.support.pipeline_execution_stages."
-                            + ("JsonProducerStage" if terminal_mode in {"clean", "replacement"}
+                            + ("JsonProducerStage" if terminal_mode in {"clean", "replacement", "oversized"}
                                else "TerminalExitProducerStage")
                         )
                     },
                     "config": {
                         "value": 42,
                         "terminal_mode": terminal_mode,
+                        **({"padding_bytes": 64 * 1024 * 1024 + 1} if terminal_mode == "oversized" else {}),
                         **(
                             {}
                             if counter_path is None
@@ -293,15 +294,15 @@ def _offer_snapshot(
 
 
 @pytest.mark.parametrize(
-    ("release_crash_point", "reason_code"),
-    (
-        ("availability_published", "external_process_detected"),
-        ("final_event_acknowledged", None),
-    ),
-)
-@pytest.mark.parametrize(
-    "terminal_mode",
-    ["clean", "replacement", "nonzero", "signal", "descendant", "child_metadata", "legacy"],
+    ("terminal_mode", "release_crash_point", "reason_code"),
+    [
+        (mode, crash, reason)
+        for mode in ("clean", "replacement", "nonzero", "signal", "descendant", "child_metadata", "legacy")
+        for crash, reason in (
+            ("availability_published", "external_process_detected"),
+            ("final_event_acknowledged", None),
+        )
+    ] + [("oversized", "not_reached", None)],
 )
 def test_managed_local_assignment_commits_accessible_output_then_releases(
     tmp_path: Path,
@@ -314,7 +315,8 @@ def test_managed_local_assignment_commits_accessible_output_then_releases(
     run_store = LocalRunStore(tmp_path / "runs")
     run_uri = path_to_run_uri(tmp_path / "runs" / "run-1")
     run_store.create_run(run_uri)
-    spec = _spec(terminal_mode=terminal_mode)
+    counter_path = tmp_path / "oversized-launches.txt" if terminal_mode == "oversized" else None
+    spec = _spec(terminal_mode=terminal_mode, counter_path=counter_path)
     plan = plan_pipeline(
         spec,
         run_uri=run_uri,
@@ -439,6 +441,42 @@ def test_managed_local_assignment_commits_accessible_output_then_releases(
             supervisor=supervisor,
             resident_launch_profile=launch_profile,
         )
+
+    if terminal_mode == "oversized":
+        def failed_persistence(*_args, **_kwargs):
+            raise OSError("terminal-result persistence interrupted")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(journal, "record_result", failed_persistence)
+            with pytest.raises(OSError, match="terminal-result persistence interrupted"):
+                execute()
+        assert journal.read_state(assignment.assignment_id) is AssignmentState.PROCESS_STARTED
+        assert coordinator.state(assignment.assignment_id) == "running"
+        assert provider.observe(
+            ObserveRequest("agent-local", "session-1", "before-repair")
+        ).live_claim_ids
+        journal = SQLiteAgentJournal(agent_root / "journal.sqlite")
+        coordinator = SQLiteCoordinatorAssignments(coordinator_path, (atom,))
+        receipt = execute()
+        assert receipt.worker_result.status is StageStatus.FAILED
+        assert receipt.output_commit is None
+        assert isinstance(receipt.worker_result.failure, ExecutionFailure)
+        assert receipt.worker_result.failure.message == "remote transfer source exceeds its byte bound"
+        assert receipt.worker_result.executor_metadata["worker_result"] == "output_exceeds_byte_bound"
+        assert receipt.worker_result.exit_code == 0
+        assert authority.snapshot(run_uri).stages[0].status is StageStatus.FAILED
+        assert authority.list_output_commits(run_uri, stage_name="build") == ()
+        assert run_store.read_stage_failure(run_uri, "build") == receipt.worker_result.failure.to_dict()
+        raw_result = json.loads((agent_root / "assignments" / assignment.assignment_id / "worker-result.json").read_text())
+        assert raw_result["status"] == StageStatus.SUCCEEDED.value
+        assert execute() == receipt
+        assert counter_path is not None and counter_path.read_text() == "1"
+        assert coordinator.state(assignment.assignment_id) == "released"
+        assert journal.read_state(assignment.assignment_id) is AssignmentState.RELEASED
+        assert provider.observe(
+            ObserveRequest("agent-local", "session-1", "after-repair")
+        ).live_claim_ids == ()
+        return
 
     if terminal_mode in {"nonzero", "signal", "descendant"}:
         receipt = execute()
@@ -765,7 +803,7 @@ def test_managed_local_failure_terminalizes_before_capacity_release(
     if failure_mode == "supervisor_no_root":
 
         def no_process_root(_launch):
-            raise AgentProcessSupervisorError("resident root was not created")
+            raise _SupervisorNoStartError("resident root was not created")
 
         monkeypatch.setattr(supervisor, "launch", no_process_root)
     if failure_mode == "unknown":
