@@ -8,7 +8,7 @@ private queue application infrastructure; pipeline execution never imports it.
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import ExitStack, closing, contextmanager
 from dataclasses import dataclass, field
 from enum import StrEnum
 import fcntl
@@ -20,6 +20,7 @@ from pathlib import Path
 from multiprocessing import AuthenticationError
 from multiprocessing.connection import Connection, answer_challenge, deliver_challenge
 import secrets
+import shutil
 import socket
 import sqlite3
 import stat
@@ -221,7 +222,7 @@ class ResidentWorkerLaunch:
     profile: ResidentWorkerLaunchProfile
     environment: Mapping[str, str]
     resource_controls: tuple[Mapping[str, PlainData], ...] | None = None
-    schema_version: int | None = 2
+    schema_version: int = 2
 
     @property
     def command_argv(self) -> tuple[str, ...]:
@@ -304,12 +305,8 @@ class ResidentWorkerLaunch:
             raise AgentProcessSupervisorError("resident launch environment is invalid")
         object.__setattr__(self, "workspace_root", workspace)
         object.__setattr__(self, "environment", environment)
-        if self.schema_version is not None and (
-            type(self.schema_version) is not int or self.schema_version != 2
-        ):
+        if type(self.schema_version) is not int or self.schema_version != 2:
             raise AgentProcessSupervisorError("supervisor launch schema is invalid")
-        if self.schema_version is None and self.resource_controls is not None:
-            raise AgentProcessSupervisorError("legacy launch carries current evidence")
         try:
             controls = _validated_resource_controls(self.resource_controls)
         except ValueError as exc:
@@ -364,6 +361,91 @@ class SupervisorReceipt:
             if self.launch.backend_kind == "docker"
             else self.successful_exit
         )
+
+
+@contextmanager
+def _supervisor_inspection_connection(database: Path):
+    """Read committed storage, recovering an interrupted write only in a copy.
+
+    Service startup repeats admission under its owner lock before opening the
+    admitted original for normal recovery. A live SQLite writer does not produce
+    READONLY_ROLLBACK; that code identifies an abandoned hot rollback journal.
+    """
+    with ExitStack() as stack:
+        conn = stack.enter_context(closing(sqlite3.connect(
+            database.as_uri() + "?mode=ro", uri=True,
+        )))
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("BEGIN")
+            conn.execute("SELECT key, value FROM metadata").fetchall()
+        except sqlite3.OperationalError as exc:
+            if exc.sqlite_errorcode != sqlite3.SQLITE_READONLY_ROLLBACK:
+                raise
+            conn.close()
+            directory = Path(stack.enter_context(tempfile.TemporaryDirectory(
+                prefix="loom-supervisor-inspection-",
+            )))
+            paths = (database, Path(str(database) + "-journal"))
+            before = tuple(
+                (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+                for path in paths for info in (path.stat(),)
+            )
+            for path in paths:
+                shutil.copyfile(path, directory / path.name)
+            after = tuple(
+                (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+                for path in paths for info in (path.stat(),)
+            )
+            if after != before:
+                raise AgentProcessSupervisorError("supervisor storage changed during inspection")
+            conn = stack.enter_context(closing(sqlite3.connect(directory / database.name)))
+            conn.row_factory = sqlite3.Row
+            conn.execute("BEGIN")
+        yield conn
+
+
+def _inspect_current_supervisor(
+    database: Path, *, agent_id: str, configuration_fingerprint: str,
+) -> dict[str, str]:
+    """Validate current storage without changing rejected roots."""
+    if not database.is_file():
+        raise AgentProcessSupervisorError(
+            "managed_supervisor_state_requires_reinitialization"
+        )
+    try:
+        with _supervisor_inspection_connection(database) as conn:
+            values = {
+                str(row["key"]): str(row["value"])
+                for row in conn.execute("SELECT key, value FROM metadata")
+            }
+            if (
+                values.get("schema_version") != str(AgentProcessSupervisor._SCHEMA_VERSION)
+                or values.get("agent_id") != agent_id
+                or values.get("configuration_fingerprint")
+                != configuration_fingerprint
+            ):
+                raise AgentProcessSupervisorError(
+                    "managed_supervisor_state_requires_reinitialization"
+                )
+            conn.execute("SELECT assignment_id FROM rejected_assignments LIMIT 0")
+            conn.execute(
+                "SELECT operation_id, intent, result FROM reboot_recoveries LIMIT 0"
+            )
+            conn.execute(
+                "SELECT operation_id, digest, launch_json, state, revision, "
+                "pid, exit_code, result_digest, successful_exit, temporary_storage_pending, "
+                "temporary_storage_error, start_error FROM launches LIMIT 0"
+            )
+    except sqlite3.Error as exc:
+        raise AgentProcessSupervisorError(
+            "managed_supervisor_state_requires_reinitialization"
+        ) from exc
+    if not values.get("supervisor_id") or not values.get("continuity_epoch"):
+        raise AgentProcessSupervisorError(
+            "managed_supervisor_state_requires_reinitialization"
+        )
+    return values
 
 
 class AgentProcessSupervisor:
@@ -458,90 +540,12 @@ class AgentProcessSupervisor:
         self._path.chmod(0o600)
 
     def _open(self) -> None:
-        if not self._path.is_file():
-            raise AgentProcessSupervisorError(
-                "managed_supervisor_state_requires_reinitialization"
-            )
-        try:
-            with self._connect() as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                values = {
-                    str(row["key"]): str(row["value"])
-                    for row in conn.execute("SELECT key, value FROM metadata")
-                }
-                if (
-                    values.get("schema_version") not in {"2", "3", "4", "5", "6"}
-                    or values.get("agent_id") != self._agent_id
-                    or values.get("configuration_fingerprint")
-                    != self._configuration.fingerprint
-                ):
-                    raise AgentProcessSupervisorError(
-                        "managed_supervisor_state_requires_reinitialization"
-                    )
-                if (
-                    values.get("schema_version") == "2"
-                    and values.get("agent_id") == self._agent_id
-                    and values.get("configuration_fingerprint")
-                    == self._configuration.fingerprint
-                ):
-                    conn.execute(
-                        "ALTER TABLE launches ADD COLUMN successful_exit INTEGER NOT NULL DEFAULT 0"
-                    )
-                    conn.execute(
-                        "UPDATE metadata SET value = ? WHERE key = 'schema_version'",
-                        ("3",),
-                    )
-                    values["schema_version"] = "3"
-                if values.get("schema_version") == "3":
-                    # Legacy active generations have no retrospective boot proof.
-                    conn.execute(
-                        "UPDATE metadata SET value = '4' WHERE key = 'schema_version'"
-                    )
-                    values["schema_version"] = "4"
-                    conn.execute(
-                        "CREATE TABLE IF NOT EXISTS reboot_recoveries ("
-                        "operation_id TEXT PRIMARY KEY, intent TEXT NOT NULL, result TEXT NOT NULL)"
-                    )
-                if values.get("schema_version") == "4":
-                    conn.execute(
-                        "CREATE TABLE rejected_assignments (assignment_id TEXT PRIMARY KEY)"
-                    )
-                    conn.execute("UPDATE metadata SET value = '5' WHERE key = 'schema_version'")
-                    values["schema_version"] = "5"
-                if values.get("schema_version") == "5":
-                    conn.execute("ALTER TABLE launches ADD COLUMN temporary_storage_pending INTEGER NOT NULL DEFAULT 0")
-                    conn.execute("ALTER TABLE launches ADD COLUMN temporary_storage_error TEXT")
-                    conn.execute("ALTER TABLE launches ADD COLUMN start_error TEXT")
-                    conn.execute("CREATE INDEX pending_temporary_storage ON launches(state) WHERE temporary_storage_pending = 1")
-                    conn.execute("UPDATE metadata SET value = '6' WHERE key = 'schema_version'")
-                    values["schema_version"] = "6"
-                conn.execute("SELECT assignment_id FROM rejected_assignments LIMIT 0")
-                conn.execute(
-                    "SELECT operation_id, intent, result FROM reboot_recoveries LIMIT 0"
-                )
-                conn.execute(
-                    "SELECT operation_id, digest, launch_json, state, revision, "
-                    "pid, exit_code, result_digest, successful_exit, temporary_storage_pending, "
-                    "temporary_storage_error, start_error FROM launches LIMIT 0"
-                )
-        except sqlite3.Error as exc:
-            raise AgentProcessSupervisorError(
-                "managed_supervisor_state_requires_reinitialization"
-            ) from exc
-        if (
-            values.get("schema_version") != str(self._SCHEMA_VERSION)
-            or values.get("agent_id") != self._agent_id
-            or values.get("configuration_fingerprint") != self._configuration.fingerprint
-        ):
-            raise AgentProcessSupervisorError(
-                "managed_supervisor_state_requires_reinitialization"
-            )
-        self.supervisor_id = values.get("supervisor_id", "")
-        self.continuity_epoch = values.get("continuity_epoch", "")
-        if not self.supervisor_id or not self.continuity_epoch:
-            raise AgentProcessSupervisorError(
-                "managed_supervisor_state_requires_reinitialization"
-            )
+        values = _inspect_current_supervisor(
+            self._path, agent_id=self._agent_id,
+            configuration_fingerprint=self._configuration.fingerprint,
+        )
+        self.supervisor_id = values["supervisor_id"]
+        self.continuity_epoch = values["continuity_epoch"]
 
     def bind_execution_host(self) -> None:
         """Bind the final root and observed Linux boot before accepting a launch."""
@@ -1455,8 +1459,6 @@ def _preparation_root_bindings(value: Mapping[str, Path]) -> Mapping[str, Path]:
 
 
 def _launch_evidence_value(launch: ResidentWorkerLaunch) -> dict[str, object]:
-    if launch.schema_version is None:
-        return {}
     return {
         "schema_version": launch.schema_version,
         "resource_controls": None
@@ -1485,6 +1487,8 @@ def _launch_value(launch: ResidentWorkerLaunch) -> dict[str, object]:
 
 def _launch_from_value(value: object) -> ResidentWorkerLaunch:
     fields = {
+        "schema_version",
+        "resource_controls",
         "supervisor_id",
         "continuity_epoch",
         "agent_id",
@@ -1500,12 +1504,10 @@ def _launch_from_value(value: object) -> ResidentWorkerLaunch:
     }
     if not isinstance(value, Mapping):
         raise AgentProcessSupervisorError("supervisor launch request is invalid")
-    if "schema_version" in value:
-        fields |= {"schema_version", "resource_controls"}
-        if type(value["schema_version"]) is not int or value["schema_version"] != 2:
-            raise AgentProcessSupervisorError("supervisor launch schema is invalid")
     if set(value) != fields:
         raise AgentProcessSupervisorError("supervisor launch request is invalid")
+    if type(value["schema_version"]) is not int or value["schema_version"] != 2:
+        raise AgentProcessSupervisorError("supervisor launch schema is invalid")
     environment = value["environment"]
     if not isinstance(environment, Mapping):
         raise AgentProcessSupervisorError("supervisor launch environment is invalid")
@@ -1524,9 +1526,9 @@ def _launch_from_value(value: object) -> ResidentWorkerLaunch:
         environment={
             cast(str, key): cast(str, item) for key, item in environment.items()
         },
-        schema_version=cast(int | None, value.get("schema_version")),
+        schema_version=cast(int, value["schema_version"]),
         resource_controls=cast(
-            tuple[Mapping[str, PlainData], ...] | None, value.get("resource_controls")
+            tuple[Mapping[str, PlainData], ...] | None, value["resource_controls"]
         ),
     )
 
@@ -2006,6 +2008,13 @@ def retained_supervisor_guard(agent_root: Path, *, agent_id: str):
             details = path.stat()
             if details.st_uid != os.getuid() or stat.S_IMODE(details.st_mode) & 0o077:
                 raise AgentProcessSupervisorError("retained supervisor is not protected")
+        # Reject retired storage before contacting its owner or creating a lock.
+        with _supervisor_inspection_connection(database) as conn:
+            metadata = dict(conn.execute("SELECT key, value FROM metadata"))
+            if metadata.get("schema_version") != str(AgentProcessSupervisor._SCHEMA_VERSION):
+                raise AgentProcessSupervisorError(
+                    "managed_supervisor_state_requires_reinitialization"
+                )
         raw = json.loads(config.read_text(encoding="utf-8"))
         if (
             not isinstance(raw, dict)
@@ -2040,15 +2049,12 @@ def retained_supervisor_guard(agent_root: Path, *, agent_id: str):
                 fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as exc:
                 raise AgentProcessSupervisorError("retained supervisor is still owned") from exc
-            with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as conn:
-                conn.execute("BEGIN")
+            with _supervisor_inspection_connection(database) as conn:
                 metadata = dict(conn.execute("SELECT key,value FROM metadata"))
                 states = tuple(row[0] for row in conn.execute("SELECT state FROM launches"))
                 boot = json.loads(metadata.get("boot_evidence", "null"))
                 if (
-                    # V5 has the same ownership and clean-cut evidence. Its
-                    # optional cleanup columns migrate when the new owner opens.
-                    metadata.get("schema_version") not in {"5", str(AgentProcessSupervisor._SCHEMA_VERSION)}
+                    metadata.get("schema_version") != str(AgentProcessSupervisor._SCHEMA_VERSION)
                     or metadata.get("agent_id") != agent_id
                     or metadata.get("configuration_fingerprint") != fingerprint
                     or metadata.get("execution_root") != str(root)
@@ -2263,6 +2269,11 @@ def _serve(
     immutable_fingerprint: str | None = None, active_fingerprint: str | None = None,
 ) -> None:
     root = Path(root).resolve()
+    configuration = _service_configuration(root)
+    _inspect_current_supervisor(
+        root / "supervisor.sqlite", agent_id=configuration.agent_id,
+        configuration_fingerprint=configuration.fingerprint,
+    )
     lock_path = root / "service.lock"
     lock = lock_path.open("a+", encoding="utf-8")
     lock_path.chmod(0o600)
