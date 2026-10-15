@@ -23,8 +23,8 @@ tests. Current-format bytes remain unchanged unless a later row changes shape.
 | Current record writers → `serialization.load_versioned_document` | Exact owner-declared version, strict integer and fields; removed `DocumentMigration`, export, argument and conversion loop | merged #408 |
 | Supervisor initialization/launch → reopen and retained role guard | Journal 6 and launch 2 only; removed schema 2–5 upgrades/schema-less launches; current DDL retained; read-only refusal before owner contact or repair | merged #408 |
 | Coordinator/agent roots → service startup | Current 19/12 only, remove offline schema upgrade and older reconstruction | pending |
-| Authority/coordination → current stores and inspection | Current 11, complete fresh DDL, no automatic upgrades; preserve WAL-aware inspection | pending |
-| Authority-service repository → admission/read/write | Repository 12; remove v3–11 upgrade functions and audit-table conversion; fresh DDL and strict existing-root checks | pending |
+| Authority/coordination → current stores and inspection | Current 11, complete fresh DDL, no automatic upgrades; preserve WAL-aware inspection | implemented; local checks passed, review pending |
+| Authority-service repository → admission/read/write | Repository 12; remove v3–11 upgrade functions and audit-table conversion; fresh DDL and strict existing-root checks | implemented; local checks passed, review pending |
 
 Discovery before edits: `DocumentMigration` and `migrations=` have no production
 callers; only schema helper tests pass conversions. Current callers include
@@ -103,7 +103,7 @@ Discovery on the #408 merge identifies three reached owners:
 `pipeline/stores/sqlite_authority.py` (current 11),
 `pipeline/stores/sqlite_coordination.py` (current 11), and
 `authority/_repository.py` (current 12). Implemented current-only admission and
-complete fresh creation for all three; validation and independent review remain.
+complete fresh creation for all three; local checks passed and independent review remains.
 
 - Removed embedded authority read/write migrations, private retained-v10 upgrade,
   coordination v1 migration, repository v3–11 upgrades and audit-table repair.
@@ -180,6 +180,33 @@ Added live-WAL cases prove both latest committed state and schema rejection come
 from the WAL without changing the source. Because this correction affects shared
 inspection, rerun the full selected authority population and both config cases,
 not unrelated runtime/scientific suites.
+
+Final authority validation (2026-10-16), source/test head
+`837209c7476f7b0943986e91d9b052ce749d7115` on the #408 merge:
+
+| Scope | Receipt | Result |
+| --- | --- | --- |
+| Baseline selectors above | `build/current-contract-cutover/authority-final.xml` | 266 passed, 36.77 s; two config cases selected separately |
+| Config preparation/reconciliation | `build/current-contract-cutover/authority-config-final.xml` | 2 passed, 6.40 s |
+| Static checks | `authority-ruff-final.log`, `authority-types-final.log` in the same receipt directory | Ruff passed; affected Pyright 0 errors/warnings; diff check passed |
+
+All 268 selected cases pass; no required skip, failure or error remains. The
+pre-commit source/test diff fingerprint (including the new helper) is
+`33b4ef6807f1a7224e17d7fe23ab45cf9d10705e8c6b3474f7d47a5fa8aa6567`.
+Evidence-note changes after that head do not change runtime source, dependencies,
+configuration or fixtures. The earlier serialization/model results are reused as
+explained above; supervisor extraction is freshly covered by its exact selectors.
+Independent actual-diff review and remote merge remain the delivery gates.
+
+Next coordinator census: `_coordinator_upgrade.py` and `daemon-upgrade` have
+live consumers in fleet `_upgrade_host.py` and `_adoption_host.py`, as well as
+preparation/reconciliation tests. Removal must update current fleet upgrade and
+separately delete predecessor adoption; deleting the CLI alone would strand
+current runtime replacement. Coordinator `_open_root` accepts a historical
+schema selector and reconstructs earlier preparation layouts; agent session
+initialization also retains inline-delivery reconstruction. Inspect those
+producer/consumer contracts before changing them. No coordinator source changes
+are part of this authority delivery.
 
 Current coordinator transport and mandatory control waiting; event v2 APIs;
 runtime narrow-service adoption and aggregate removal; unified preparation
