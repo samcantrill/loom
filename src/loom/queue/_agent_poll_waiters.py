@@ -5,34 +5,11 @@ from contextlib import contextmanager
 from threading import Condition
 
 from .errors import QueueServiceError
+from ._service_signals import _ChangeSignal
 
 
-class _PollSignal:
-    def __init__(self) -> None:
-        self._condition = Condition()
-        self._generation = 0
-        self._closed = False
-
-    def snapshot(self) -> int:
-        with self._condition:
-            return self._generation
-
-    def notify(self) -> None:
-        with self._condition:
-            self._generation += 1
-            self._condition.notify_all()
-
-    def wait_for_change(self, observed: int, timeout: float) -> None:
-        with self._condition:
-            self._condition.wait_for(
-                lambda: self._closed or self._generation != observed,
-                timeout=timeout,
-            )
-
-    def close(self) -> None:
-        with self._condition:
-            self._closed = True
-            self._condition.notify_all()
+class _PollSignal(_ChangeSignal):
+    """Session-scoped hint, owned by the pending work-poll subscriptions."""
 
 
 class _PollWaiters:

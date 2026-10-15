@@ -26,6 +26,7 @@ from loom.queue._managed_local import (
 )
 
 from .agent_sessions import (
+    CONTROL_WAIT_CAPABILITY,
     AgentOffer,
     AgentOfferRenewal,
     AgentProviderDescriptor,
@@ -86,6 +87,7 @@ def handshake(self: LocalDaemonAgentHttpClient, *, role: str = "agent") -> Gener
             raise QueueServiceError(
                 "coordinator upgrade required: missing concurrent-resident-assignments-v1"
             )
+        self._control_wait_supported = CONTROL_WAIT_CAPABILITY in capabilities
     return result
 
 

@@ -32,6 +32,7 @@ from loom.queue._managed_local import (
 )
 
 from .agent_sessions import (
+    _MAX_RECEIVED_CONTROLS,
     AgentAssignmentControl,
     AgentOffer,
     AgentOfferRenewal,
@@ -1202,6 +1203,56 @@ class _RemoteAgentJournal:
                 )
             conn.commit()
         return None
+
+    def retain_control(self, control: AgentControl) -> None:
+        """Persist receipt only; do not withdraw an offer or fence a pending poll."""
+        encoded = _canonical_json(control.value())
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT request_json FROM agent_controls_local WHERE operation_id = ?",
+                (control.operation_id,),
+            ).fetchone()
+            if row is not None and str(row[0]) != encoded:
+                raise QueueConflictError("agent control operation conflicts")
+            conn.execute(
+                "INSERT OR IGNORE INTO agent_controls_local(operation_id, request_json, "
+                "replacement_fingerprint, effect_json, acknowledged) VALUES (?, ?, NULL, NULL, 0)",
+                (control.operation_id, encoded),
+            )
+            conn.commit()
+
+
+    def next_received_control(self, session_id: str) -> AgentControl | None:
+        with self._connection() as conn:
+            for row in conn.execute(
+                "SELECT request_json FROM agent_controls_local "
+                "WHERE acknowledged = 0 AND effect_json IS NULL ORDER BY operation_id"
+            ):
+                control = AgentControl.from_value(json.loads(str(row[0])))
+                if control.expected_session_id == session_id:
+                    return control
+        return None
+
+
+    def received_control_ids(self, session_id: str) -> list[str]:
+        """Bounded suppression hints from durable unacknowledged receipts only."""
+        ids: list[str] = []
+        with self._connection() as conn:
+            for kind, table, field in (
+                ("agent", "agent_controls_local", "expected_session_id"),
+                ("assignment", "remote_assignment_controls_local", "session_id"),
+            ):
+                for row in conn.execute(
+                    f"SELECT operation_id, request_json FROM {table} WHERE acknowledged = 0 "
+                    "ORDER BY operation_id"
+                ):
+                    if json.loads(str(row[1])).get(field) == session_id:
+                        ids.append(f"{kind}:{row[0]}")
+                        if len(ids) > _MAX_RECEIVED_CONTROLS:
+                            return ids  # Caller uses compatibility polling if the envelope is full.
+        return sorted(set(ids))
+
 
     def record_control_effect(
         self, control: AgentControl, effect: AgentControlEffect

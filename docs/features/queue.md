@@ -949,6 +949,73 @@ deliberately changed profile or deployment.
 
 ### Status and cancellation
 
+Coordinator reconciliation uses change notifications with a bounded safety
+fallback. `LocalDaemonConfig.poll_interval_seconds` defaults to one second;
+explicit protected configurations retain their authored value. Submissions,
+cancellations, changed offers and assignment transitions can wake scheduling
+immediately. A notification arriving during reconciliation is retained for the
+next cycle, and exhausting a scheduling batch does not impose a safety-interval
+delay on the next batch. An unchanged offer renewal does not itself request a
+new scheduling cycle.
+
+Operation and admission waits are passive: they check durable state, wait for a
+committed-change hint, then check again. They do not drive scheduling and do not
+query every 50 milliseconds. A one-second fallback covers changes made by other
+owners/processes and missed notifications; timeout expiry always performs a
+final state check. Shutdown wakes waiters. These intervals bound observation,
+not job duration, and never acknowledge controls or release resource claims.
+
+Outbound agents negotiate `agent-control-wait-v1` with the coordinator. When
+available, `POST /v1/agent/control_wait` takes `session_id`,
+`received_operation_ids` and `wait_timeout_ms` (0..5000), returning nullable
+`control` and `assignment_control` values. Committed controls wake the wait;
+five seconds is the maximum quiet wait, not an intentional cancellation delay.
+Session invalidation and shutdown also wake it. No database transaction or
+scheduling lock is retained during waiting, and empty checks do not acquire a
+SQLite write transaction. Notifications are hints; every delivery rechecks the
+authenticated session and current durable control state.
+
+Received IDs come from the existing durable local journal and suppress only
+redelivery. Each ID is encoded as `agent:<operation_id>` or
+`assignment:<operation_id>`; the independent operation namespaces cannot
+suppress one another. They do not acknowledge an effect, release claims, or authorize a
+new launch. Losing a reply before local receipt leaves the control eligible for
+redelivery. Receipt of drain/reload is separate from preparation of its effects:
+an unanswered work poll must be settled before the agent fences its session.
+Controls received before application restart resume from that same journal.
+
+Control waits have a dedicated agent execution slot, separate from work polling,
+short controls/renewals and bulk IO. The HTTPS listener admits at most 32 active
+work waits and 32 control waits independently; those limits do not consume its
+short-request capacity. The existing 1..1024 assignment ceiling is unchanged.
+The receipt list accepts up to 1025 unique bounded identifiers within the existing
+64 KiB request envelope. An agent whose receipt inventory exceeds that envelope,
+or whose coordinator lacks the capability, uses compatibility control polling.
+Resource renewal and GPU freshness policies are unchanged.
+
+Recoverable admission and retained-assignment failures are paced independently
+with exponential backoff (initial ceiling 0.1 seconds, maximum ceiling five
+seconds, jitter between 80% and 100% of that ceiling). Retry diagnostics report
+the operation identity, redacted failure type, delay and process-local monotonic
+deadline; unchanged failures are logged at most every 30 seconds. Relevant owner
+progress resets its delay; unrelated renewals do not. Coordinator admission
+revision/scheduling-epoch changes and committed remote start/result/release
+progress make that run eligible for immediate retry. Terminal authority conflicts
+still block the admission. This pacing does not modify resource renewal, GPU
+freshness, control receipt or execution ownership, and it never authorizes a
+replacement launch for an uncertain existing operation. Retry timing is volatile;
+restart reconstructs recovery work from its existing durable owners.
+
+An embedded assignment whose background observer fails retains that exact
+assignment and an independent retry deadline. Its journal state/fence or a new
+run cancellation resets the delay; other jobs continue using their own observers.
+An indeterminate outbound service exchange also backs off while replaying its
+original encoded request. Synchronous callers still receive the unknown-outcome
+error. Resource offers/renewals, control receipt and control acknowledgement keep
+their existing retry cadence; sleeping replays do not occupy a transport worker.
+Stopping the application during that delay prevents another dispatch but does
+not resolve the retained operation or release its claims.
+
 Queue status preserves separately versioned admission/control, authority
 lifecycle/cancellation, scheduling/route, assignment/execution, external-
 scheduler dispatch/observation, transfer/result, and service-health/freshness

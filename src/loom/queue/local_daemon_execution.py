@@ -10,6 +10,7 @@ from ._coordinator_run_progress import (
 from ._coordinator_run_authority import _ScopedCoordinatorAuthority as _ScopedCoordinatorAuthority
 
 from ._action_results import action_attempt_cancelled, action_attempt_needed, attach_action_fence
+from ._recovery_retry import _RecoveryRetry
 
 from .shared_execution import SHARED_EXECUTION_CAPABILITY, attributes as shared_attributes, qualifications
 
@@ -1187,12 +1188,7 @@ class LocalDaemonExecution:
             if config.agent_root is not None
             else None
         )
-        self.stage_work_store._open_existing()
-        self.coordinator._open_existing()
-        self.slurm_submissions._open_existing()
-        self.slurm_assignments._open_existing()
-        if self.journal is not None:
-            self.journal._open_existing()
+        self.open_owner_stores()
         self.supervisor = None
         if config.agent_root is not None:
             profile = config.resident_worker_launch_profile
@@ -1201,12 +1197,6 @@ class LocalDaemonExecution:
             self.supervisor = AgentProcessSupervisorClient(
                 config.agent_root, SupervisorLaunchConfiguration(agent_id, (profile,))
             )
-        if not local_daemon_owner_stores_available(
-            self.config,
-            coordinator_id=self.coordinator_id,
-            agent_id=self.agent_id,
-        ):
-            raise QueueServiceError("retained daemon owner state is unavailable")
         # A new in-memory provider must never begin by advertising capacity that
         # a durable accepted/granted/running/unknown assignment might retain.
         # The agent journal is the only owner that has an exact provider claim;
@@ -1260,6 +1250,7 @@ class LocalDaemonExecution:
         )
         self._local_assignment_futures: dict[str, Future[None]] = {}
         self._pending_local_assignment_reconciliation: dict[str, str] = {}
+        self._local_assignment_retries: dict[str, _RecoveryRetry] = {}
         self._cycle_contexts: dict[
             str, tuple[ManagedLocalIntent, _ScopedCoordinatorAuthority]
         ] = {}
@@ -1270,6 +1261,7 @@ class LocalDaemonExecution:
         self._local_assignment_workers.shutdown(wait=True)
         self._local_assignment_futures.clear()
         self._pending_local_assignment_reconciliation.clear()
+        self._local_assignment_retries.clear()
         self._cycle_contexts.clear()
 
     def shutdown_clean(self) -> None:
@@ -1354,7 +1346,7 @@ class LocalDaemonExecution:
             self._local_assignment_futures.pop(assignment_id, None)
             try:
                 future.result()
-            except Exception:
+            except Exception as error:
                 # The retained assignment is the replay identity; a failed
                 # observer must not disappear and permit replacement work.
                 run_uri = self._retained_local_assignment_run_uri(assignment_id)
@@ -1363,6 +1355,13 @@ class LocalDaemonExecution:
                         run_uri
                     )
                     self._record_assignment_health(run_uri, "unavailable")
+                    progress = self._local_recovery_progress(assignment_id, run_uri)
+                    fence = None if progress is None else progress[1]
+                    self._local_assignment_retries.setdefault(assignment_id, _RecoveryRetry()).failed(
+                        error, assignment_id=assignment_id,
+                        operation_id=None if fence is None else f"{assignment_id}:launch:{fence}",
+                        state=progress,
+                    )
             else:
                 run_uri = self._pending_local_assignment_reconciliation.get(
                     assignment_id
@@ -1372,8 +1371,12 @@ class LocalDaemonExecution:
                     self._pending_local_assignment_reconciliation.pop(
                         assignment_id, None
                     )
-        for assignment_id in tuple(self._pending_local_assignment_reconciliation):
+                    self._local_assignment_retries.pop(assignment_id, None)
+        for assignment_id, run_uri in tuple(self._pending_local_assignment_reconciliation.items()):
             if assignment_id in self._local_assignment_futures:
+                continue
+            retry = self._local_assignment_retries[assignment_id]
+            if not retry.ready(self._local_recovery_progress(assignment_id, run_uri)):
                 continue
             future = self._local_assignment_workers.submit(
                 self._reconcile_exact_local_assignment, assignment_id
@@ -1393,6 +1396,26 @@ class LocalDaemonExecution:
                 future.add_done_callback(wake_daemon)
             self._local_assignment_futures[assignment_id] = future
         self._cycle_contexts.clear()
+
+    def next_local_retry_at(self, now: float) -> float | None:
+        """Wake for a pending replay without rescheduling its running observer."""
+        return min(
+            (retry.retry_at for assignment_id, retry in self._local_assignment_retries.items()
+             if assignment_id not in self._local_assignment_futures and retry.retry_at > now),
+            default=None,
+        )
+
+    def _local_recovery_progress(
+        self, assignment_id: str, run_uri: str,
+    ) -> tuple[AssignmentState | None, str | None, str | None] | None:
+        try:
+            assert self.journal is not None
+            state = self.journal.find_state(assignment_id)
+            fence = None if state is None else self.journal.read_grant_fence(assignment_id)
+            return state, fence, self._run_cancellation_operation(run_uri)
+        except (ManagedLocalError, QueueServiceError, sqlite3.Error, OSError):
+            # An unavailable progress hint cannot discard the retained replay.
+            return None
 
     def _record_assignment_health(self, run_uri: str, health: str) -> None:
         daemon = self.daemon
@@ -1682,18 +1705,15 @@ class LocalDaemonExecution:
         """Recheck retained owners before any new scheduling mutation."""
 
         try:
-            self.stage_work_store._open_existing()
-            self.coordinator._open_existing()
-            self.slurm_submissions._open_existing()
-            self.slurm_assignments._open_existing()
             if self.journal is not None:
                 self.journal._open_existing()
-            if not local_daemon_owner_stores_available(
+            # This boundary validates coordinator structures and live owner
+            # bindings together; do not open those same structures twice.
+            _require_local_daemon_owner_stores(
                 self.config,
                 coordinator_id=self.coordinator_id,
                 agent_id=self.agent_id,
-            ):
-                raise QueueServiceError("retained daemon owner state is unavailable")
+            )
         except Exception:
             raise QueueServiceError(
                 "retained daemon owner state is unavailable"
@@ -2793,6 +2813,8 @@ class LocalDaemonExecution:
                     ),
                 )
                 conn.commit()
+                if self.daemon is not None:
+                    self.daemon._poll_waiters.notify(control.session_id)
                 return "pending", None
             retained = AgentAssignmentControl.from_value(
                 json.loads(str(row["request_json"]))
@@ -4122,6 +4144,7 @@ class LocalDaemonExecution:
         from .agent_sessions import AgentAssignmentControl
 
         settling = False
+        changed_sessions: set[str] = set()
         with sqlite3.connect(self.config.control_database) as conn:
             conn.row_factory = sqlite3.Row
             conn.execute("BEGIN IMMEDIATE")
@@ -4193,6 +4216,7 @@ class LocalDaemonExecution:
                             encoded,
                         ),
                     )
+                    changed_sessions.add(control.session_id)
                 else:
                     retained = AgentAssignmentControl.from_value(
                         json.loads(str(prior["request_json"]))
@@ -4212,6 +4236,9 @@ class LocalDaemonExecution:
                             "remote cancellation operation conflicts"
                         )
             conn.commit()
+        if self.daemon is not None:
+            for session_id in changed_sessions:
+                self.daemon._poll_waiters.notify(session_id)
         return settling
 
     def _candidate(self) -> Candidate:

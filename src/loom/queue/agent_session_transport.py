@@ -28,6 +28,7 @@ from ._agent_session_journal import (
     _AGENT_BINDING_FILE,
     _RemoteAgentJournal as _RemoteAgentJournal,
     _canonical_digest as _canonical_digest,
+    _canonical_json,
     _resident_profile_key,
     _agent_config_revision as _agent_config_revision,
     _agent_inventory_revision as _agent_inventory_revision,
@@ -78,12 +79,14 @@ from loom.pipeline.runtime import CpuResourcePlanner, MemoryResourcePlanner
 from loom.pipeline.runtime.scheduling_resources import GpuResourcePlanner
 from loom.pipeline.executors.slurm.ready_stage import SlurmReadyStageProfile
 from ._agent_slurm import AgentSlurmJobs
+from ._recovery_retry import _RecoveryRetry
 from loom.pipeline.stores.atomic import atomic_write_bytes
 from loom.pipeline.stores.errors import InvalidRunURIError
 from loom.pipeline.stores.run_uri import validate_run_uri
 from loom.scheduling import CapacityAtom
 
 from .agent_sessions import (
+    _MAX_RECEIVED_CONTROLS,
     AgentAssignmentControl,
     AgentOffer,
     AgentOfferRenewal,
@@ -833,6 +836,7 @@ class LocalDaemonAgentHttpClient:
         self._connection: http.client.HTTPSConnection | None = None
         self._closed = False
         self._service_progress = False
+        self._control_wait_supported = False
         self._service_control_due = True
         self._epoch_reconciliation_pending = False
         self._mutation_gate = _Gate()
@@ -1248,6 +1252,9 @@ class LocalDaemonAgentHttpClient:
     def poll_control(self, session_id: str) -> Generator[_Progress, Any, AgentControl | None]:
         (yield from _steps(self._replay_pending_resource_mutation, session_id))
         journal = self._require_journal()
+        if self._service_progress and journal.pending_poll() is not None:
+            self._service_control_due = True
+            return None
         pending = journal.next_unacknowledged_control()
         if pending is not None:
             control, effect = pending
@@ -1261,8 +1268,14 @@ class LocalDaemonAgentHttpClient:
             ))
             journal.acknowledge_control(control.operation_id)
             return control
-        result = (yield from _steps(self._call, "control", {"session_id": session_id}))
-        raw = result.get("control")
+        received = journal.next_received_control(session_id)
+        if received is not None:
+            raw = received.value()
+        elif self._service_progress and self._control_wait_supported:
+            return None
+        else:
+            result = (yield from _steps(self._call, "control", {"session_id": session_id}))
+            raw = result.get("control")
         if raw is None:
             return None
         if not isinstance(raw, Mapping):
@@ -2410,12 +2423,27 @@ class LocalDaemonAgentHttpClient:
         session = journal.active_session()
         if session is None:
             return
-        response = yield from _steps(self._call, "assignment_control", {"session_id": session.session_id})
+        waiting = False
+        request: dict[str, PlainData] = {}
+        if self._control_wait_supported:
+            ids = journal.received_control_ids(session.session_id)
+            request = {"session_id": session.session_id, "received_operation_ids": freeze_plain_data(ids),
+                       "wait_timeout_ms": 5000}
+            # Keep the full supported assignment ceiling: oversize suppression
+            # inventories use compatibility polling, not truncated receipts.
+            waiting = (len(ids) <= _MAX_RECEIVED_CONTROLS
+                       and len(_canonical_json(request).encode()) <= _MAX_BODY_BYTES)
+        if waiting:
+            response = yield from _steps(self._call, "control_wait", request)
+        else:
+            response = yield from _steps(self._call, "assignment_control", {"session_id": session.session_id})
         if self._closed or journal is not self._journal:
             return
-        raw = response.get("control")
+        raw = response.get("assignment_control" if waiting else "control")
         if raw is not None:
             control = AgentAssignmentControl.from_value(raw)
+            if control.session_id != session.session_id:
+                raise QueueConflictError("received control belongs to another session")
             journal.prepare_assignment_control(control)
             self._received_cancellations.add(control.assignment_id)
             encoded = _ResidentAssignmentWorkspace.read_supervisor_launch_json(
@@ -2429,18 +2457,19 @@ class LocalDaemonAgentHttpClient:
                     yield from _external("control", self._supervisor.request_stop, launch)
         # Native drain preparation fences polls, so it must wait for exact poll
         # settlement. Receipt of a late delivery is never replaced by withdrawal.
-        if self._closed or journal.pending_poll() is not None:
+        if self._closed or (not waiting and journal.pending_poll() is not None):
             return
-        response = yield from _steps(self._call, "control", {"session_id": session.session_id})
-        if self._closed or journal is not self._journal or journal.pending_poll() is not None:
+        if not waiting:
+            response = yield from _steps(self._call, "control", {"session_id": session.session_id})
+        if self._closed or journal is not self._journal:
             return
         raw = response.get("control")
         if raw is not None:
             control = AgentControl.from_value(raw)
+            if control.expected_session_id != session.session_id:
+                raise QueueConflictError("received control belongs to another session")
+            journal.retain_control(control)
             self._service_control_due = True
-            journal.prepare_control(control)
-            if control.kind.value in {"drain", "reload", "promote"}:
-                self._drained = True
             if control.cancel_active:
                 for _, assignment_id in journal.unresolved_assignment_references():
                     self._received_cancellations.add(assignment_id)
@@ -2885,26 +2914,40 @@ class LocalDaemonAgentHttpClient:
         }:
             _raise_if_application_suspended(self._suspend_requested)
             yield from _delay(0.01)
+        operation_id, assignment_id = value.get("operation_id"), value.get("assignment_id")
         body = json.dumps(
             value, sort_keys=True, separators=(",", ":"), allow_nan=False
         ).encode("utf-8")
         if (role, operation) in _FAILURE_REPORT_OPERATIONS:
             _decode(body, failure_report=True)
         connection, self._connection = self._connection, None
+        retry = _RecoveryRetry()
         while True:
             try:
                 reply = yield from _external(
-                    "poll" if operation == "poll" else "bulk" if operation in {"input", "output"} else "control",
+                    "control_wait" if operation == "control_wait" else "poll" if operation == "poll" else "bulk" if operation in {"input", "output"} else "control",
                     _exchange_agent_request, self._config, operation, body, role, connection,
                     not self._service_progress,
                 )
                 break
-            except _IndeterminateAgentProtocolError:
+            except _IndeterminateAgentProtocolError as error:
                 if not self._service_progress:
                     raise
                 connection = None
                 _raise_if_application_suspended(self._suspend_requested)
-                yield from _delay(0.05)
+                delay = 0.05
+                if operation not in {
+                    "offer", "renew", "control", "assignment_control", "control_wait",
+                    "control_ack", "assignment_control_ack",
+                }:
+                    delay = retry.failed(
+                        error, protocol_operation=operation,
+                        operation_id=operation_id if isinstance(operation_id, str) else None,
+                        assignment_id=assignment_id if isinstance(assignment_id, str) else None,
+                        state=(role, operation),
+                    )
+                yield from _delay(delay)
+                _raise_if_application_suspended(self._suspend_requested)
         if self._connection is None and not self._closed and not self._service_progress:
             self._connection = reply.connection
         else:
@@ -3099,7 +3142,17 @@ class _MutualTlsHttpServer(ThreadingHTTPServer):
         self.inspect_run = inspect_run
         self.client_slots = BoundedSemaphore(8)
         self.client_wait_slots = BoundedSemaphore(6)
+        self.agent_work_wait_slots = BoundedSemaphore(32)
+        self.agent_control_wait_slots = BoundedSemaphore(32)
         super().__init__(address, _Handler)
+
+    def acquire_agent_wait(self, role: str, operation: str) -> BoundedSemaphore | None:
+        if role != "agent" or operation not in {"poll", "control_wait"}:
+            return None
+        slot = self.agent_work_wait_slots if operation == "poll" else self.agent_control_wait_slots
+        if not slot.acquire(blocking=False):
+            raise QueueServiceError("agent wait capacity is exhausted")
+        return slot
 
     def get_request(self) -> tuple[ssl.SSLSocket, tuple[str, int]]:
         connection, address = super().get_request()
@@ -3145,6 +3198,36 @@ class _Handler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *_args: object) -> None:
         return
 
+    def _request_payload(self, role: str, operation: str) -> dict[str, object]:
+        if self.headers.get("Content-Type") != "application/json":
+            raise QueueServiceError("agent protocol content type is invalid")
+        lengths = self.headers.get_all("Content-Length", [])
+        length = lengths[0] if len(lengths) == 1 else None
+        if (self.headers.get("Transfer-Encoding") is not None or length is None
+            or not length.isdecimal() or int(length) > _MAX_BODY_BYTES):
+            raise QueueServiceError("agent protocol body is invalid")
+        raw = self.rfile.read(int(length))
+        if role == "client":
+            try:
+                return dict(decode_wire(raw))
+            except (ValueError, TypeError, RecursionError) as exc:
+                raise control_error(
+                    "invalid_request", operation, {}, boundary="client_protocol"
+                ) from exc
+        if role == "query" and operation in {
+            "describe_artifact", "read_artifact_chunk", "read_artifact", "trace_lineage",
+            "select_outputs", "list_output_commits",
+        }:
+            try:
+                return dict(decode_wire(raw))
+            except (ValueError, TypeError, RecursionError) as exc:
+                raise _RunInspectionHttpError("invalid_request", 400) from exc
+        if (role, operation) in _FAILURE_REPORT_OPERATIONS:
+            return dict(_decode(raw, failure_report=True))
+        if role == "agent" and operation == "control_wait":
+            return dict(_decode(raw, control_wait=True))
+        return dict(_decode(raw))
+
     def do_POST(self) -> None:  # noqa: N802
         query_path = self.path.startswith("/v1/query/")
         query_credential = False
@@ -3156,6 +3239,7 @@ class _Handler(BaseHTTPRequestHandler):
         operation = self.path.rsplit("/", 1)[-1] or "unknown"
         authenticated = dispatched = False
         client_acquired = wait_acquired = False
+        agent_wait_slot: BoundedSemaphore | None = None
         try:
             certificate = cast(ssl.SSLSocket, self.connection).getpeercert(
                 binary_form=True
@@ -3187,6 +3271,7 @@ class _Handler(BaseHTTPRequestHandler):
             if role_name != mapped_role:
                 raise QueueServiceError("agent TLS credential is not authorized")
             authenticated = True
+            agent_wait_slot = self._daemon_server.acquire_agent_wait(role_name, operation)
             if role_name == "client":
                 if operation in WAIT_OPERATIONS:
                     wait_acquired = self._daemon_server.client_wait_slots.acquire(
@@ -3206,36 +3291,7 @@ class _Handler(BaseHTTPRequestHandler):
                     raise control_error(
                         "capacity_exhausted", operation, payload, boundary="coordinator"
                     )
-            if self.headers.get("Content-Type") != "application/json":
-                raise QueueServiceError("agent protocol content type is invalid")
-            lengths = self.headers.get_all("Content-Length", [])
-            length = lengths[0] if len(lengths) == 1 else None
-            if (
-                self.headers.get("Transfer-Encoding") is not None
-                or length is None
-                or not length.isdecimal()
-                or int(length) > _MAX_BODY_BYTES
-            ):
-                raise QueueServiceError("agent protocol body is invalid")
-            raw = self.rfile.read(int(length))
-            if role_name == "client":
-                try:
-                    payload = dict(decode_wire(raw))
-                except (ValueError, TypeError, RecursionError) as exc:
-                    raise control_error(
-                        "invalid_request", operation, {}, boundary="client_protocol"
-                    ) from exc
-            elif role_name == "query" and operation in {"describe_artifact", "read_artifact_chunk", "read_artifact", "trace_lineage", "select_outputs", "list_output_commits"}:
-                try:
-                    payload = dict(decode_wire(raw))
-                except (ValueError, TypeError, RecursionError) as exc:
-                    raise _RunInspectionHttpError("invalid_request", 400) from exc
-            else:
-                payload = dict(
-                    _decode(raw, failure_report=True)
-                    if (role_name, operation) in _FAILURE_REPORT_OPERATIONS
-                    else _decode(raw)
-                )
+            payload = self._request_payload(role_name, operation)
             principal = LocalDaemonPrincipal(
                 principal_id, LocalDaemonRole(mapped_role), credential
             )
@@ -3262,6 +3318,7 @@ class _Handler(BaseHTTPRequestHandler):
                     "release",
                     "recovery_release_ready",
                     "control",
+                    "control_wait",
                     "control_ack",
                     "assignment_control",
                     "assignment_control_ack",
@@ -3357,6 +3414,8 @@ class _Handler(BaseHTTPRequestHandler):
             else:
                 self._reply(500, {"ok": False, "error": "agent_protocol_indeterminate"})
         finally:
+            if agent_wait_slot is not None:
+                agent_wait_slot.release()
             if client_acquired:
                 self._daemon_server.client_slots.release()
             if wait_acquired:
@@ -3659,6 +3718,15 @@ def _dispatch(
         _exact(value, {"session_id"})
         control = view.next_control(_string(value, "session_id"))
         return {"control": None if control is None else control.value()}
+    if operation == "control_wait":
+        _exact(value, {"session_id", "received_operation_ids", "wait_timeout_ms"})
+        ids = value["received_operation_ids"]
+        if not isinstance(ids, list) or any(not isinstance(item, str) for item in ids):
+            raise QueueServiceError("received control IDs must be a list of strings")
+        return view.wait_for_controls(
+            _string(value, "session_id"), received_operation_ids=ids,
+            wait_timeout_ms=_integer(value, "wait_timeout_ms"),
+        )
     if operation == "control_ack":
         _exact(value, {"session_id", "effect"})
         effect = value["effect"]

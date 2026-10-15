@@ -199,7 +199,7 @@ def _exact(value: Mapping[str, object], fields: set[str]) -> None:
         raise QueueServiceError("agent protocol fields are invalid")
 
 
-def _decode(raw: bytes, *, failure_report: bool = False) -> Mapping[str, object]:
+def _decode(raw: bytes, *, failure_report: bool = False, control_wait: bool = False) -> Mapping[str, object]:
     if len(raw) > _MAX_BODY_BYTES:
         raise QueueServiceError(
             "agent protocol body is too large (maximum 65536 bytes); "
@@ -215,6 +215,16 @@ def _decode(raw: bytes, *, failure_report: bool = False) -> Mapping[str, object]
         raise QueueServiceError("agent protocol JSON is invalid") from exc
     if not isinstance(value, Mapping):
         raise QueueServiceError("agent protocol body is not an object")
+    if control_wait:
+        from .agent_sessions import _MAX_RECEIVED_CONTROLS
+
+        # Only the flat receipt list gets the larger collection budget.
+        # The full request remains subject to the existing byte bound.
+        ids = value.get("received_operation_ids")
+        if not isinstance(ids, list) or len(ids) > _MAX_RECEIVED_CONTROLS or any(not isinstance(item, str) for item in ids):
+            raise QueueServiceError("received control IDs must be a bounded string list")
+        _bounded_json({**value, "received_operation_ids": None}, depth=0)
+        return value
     result = value.get("result")
     if isinstance(result, Mapping) and result.get("result") == "assignment":
         request = result.get("request")
