@@ -18,17 +18,6 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     build.add_argument("--release-id")
     build.add_argument("--format", dest="output_format", choices=("text", "json"), default="text")
     build.set_defaults(handler=handle)
-    adoption = commands.add_parser("adopt", help="adopt quiesced retained tmux installations")
-    adoption.add_argument("--fleet", required=True)
-    adoption.add_argument("--bindings", type=Path, required=True)
-    adoption.add_argument("--operation-id")
-    adoption.add_argument("--env-file", type=Path)
-    adoption.add_argument("--operator-exclusion", action="store_true", help="acknowledge maintained submission and administration exclusion")
-    adoption_mode = adoption.add_mutually_exclusive_group()
-    adoption_mode.add_argument("--plan", action="store_true")
-    adoption_mode.add_argument("--apply", action="store_true")
-    adoption.add_argument("--format", dest="output_format", choices=("text", "json"), default="text")
-    adoption.set_defaults(handler=handle)
     check = commands.add_parser(
         "self-test", help="run deliberate native infrastructure checks"
     )
@@ -71,13 +60,6 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
         "--format", dest="output_format", choices=("text", "json"), default="text"
     )
     apply_command.set_defaults(handler=handle)
-    migration = commands.add_parser("migrate-services", help="migrate stopped, settled tmux roles to systemd-user")
-    migration.add_argument("--fleet", required=True)
-    migration.add_argument("--operation-id", required=True)
-    migration.add_argument("--hosts")
-    migration.add_argument("--env-file", type=Path)
-    migration.add_argument("--format", dest="output_format", choices=("text", "json"), default="text")
-    migration.set_defaults(handler=handle)
     upgrade = commands.add_parser("upgrade", help="preview or apply service or selected workload maintenance")
     upgrade.add_argument("--fleet", required=True)
     target = upgrade.add_mutually_exclusive_group(required=True)
@@ -235,10 +217,7 @@ def handle(namespace: argparse.Namespace) -> int:
             if getattr(namespace, "hosts", None) is None
             else namespace.hosts.split(",")
         )
-        if command == "adopt":
-            from loom.fleet.adoption import adopt
-            result = adopt(inventory, bindings=namespace.bindings, operation_id=namespace.operation_id if namespace.apply else None, env_file=namespace.env_file, apply=namespace.apply, operator_exclusion=namespace.operator_exclusion)
-        elif command == "upgrade":
+        if command == "upgrade":
             from loom.fleet.upgrades import upgrade
             if not namespace.apply:
                 if namespace.defer_agents is not None or namespace.defer_reason is not None:
@@ -247,10 +226,6 @@ def handle(namespace: argparse.Namespace) -> int:
                 result = preview(inventory, runtime_release=namespace.runtime_release, workload_profile=namespace.workload_profile, image=namespace.image, workload_inventory=namespace.workload_inventory, deployment=namespace.deployment, connection=namespace.connection, config=namespace.config, env_file=namespace.env_file)
             else:
                 result = upgrade(inventory, operation_id=namespace.operation_id, runtime_release=namespace.runtime_release, workload_profile=namespace.workload_profile, image=namespace.image, workload_inventory=namespace.workload_inventory, deployment=namespace.deployment, connection=namespace.connection, config=namespace.config, env_file=namespace.env_file, timeout_seconds=namespace.timeout, apply=True, defer_agents=namespace.defer_agents, defer_reason=namespace.defer_reason)
-        elif command == "migrate-services":
-            from loom.fleet.ssh_operations import migrate_services
-            result = migrate_services(inventory, operation_id=namespace.operation_id,
-                                      hosts=hosts, env_file=namespace.env_file)
         elif command in {"apply", "operation"}:
             from loom.fleet.ssh_operations import apply, operation_status
 
@@ -260,11 +235,6 @@ def handle(namespace: argparse.Namespace) -> int:
                 intent = read(_directory(inventory, namespace.operation_id) / "intent.json")
                 if namespace.operation_command == "status":
                     result = operation_status(inventory, namespace.operation_id)
-                elif intent.get("kind") == "installation-adoption":
-                    if namespace.operation_command not in {"resume", "abort"}:
-                        raise ValueError("retry requires a maintenance upgrade")
-                    from loom.fleet.adoption import adopt
-                    result = adopt(inventory, operation_id=namespace.operation_id, action=namespace.operation_command)
                 elif intent.get("kind") in {"runtime-upgrade", "workload-upgrade"}:
                     from loom.fleet.upgrades import upgrade
                     result = upgrade(inventory, operation_id=namespace.operation_id, action=namespace.operation_command, failed_check=getattr(namespace, "failed_check", None), new_check=getattr(namespace, "new_check", None), failed_control=getattr(namespace, "failed_control", None), new_control=getattr(namespace, "new_control", None), workload_profile=getattr(namespace, "workload_profile", None), image=getattr(namespace, "image", None), workload_inventory=getattr(namespace, "workload_inventory", None), defer_agents=getattr(namespace, "defer_agents", None), defer_reason=getattr(namespace, "defer_reason", None))
@@ -408,7 +378,7 @@ def handle(namespace: argparse.Namespace) -> int:
         if "preview" in result:
             print("preview: " + json.dumps(result["preview"], sort_keys=True))
         print(result.get("next", ""))
-    if command in {"apply", "operation", "upgrade", "adopt"}:
+    if command in {"apply", "operation", "upgrade"}:
         return (
             0
             if result["outcome"] in {"complete", "aborted", "preview"}

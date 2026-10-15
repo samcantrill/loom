@@ -2181,49 +2181,6 @@ def test_rejected_poll_rewind_requires_original_predecessor_delivery(tmp_path):
         journal.close()
 
 
-@pytest.mark.parametrize("resolved", [False, True])
-def test_delivery_backfill_only_matches_unresolved_inline_receipt(tmp_path, resolved):
-    from loom.queue.agent_session_transport import _RemoteAgentJournal
-    from tests.unit.loom.queue.test_remote_stage_execution import _assignment_reference_fixture
-
-    _, request, encoded, ref, _ = _assignment_reference_fixture(tmp_path)
-    root = tmp_path / "agent"
-    journal, session = _delivery_journal(root)
-    try:
-        _prepare_delivery_poll(journal, session, 1)
-        journal.complete_poll(session.session_id, 1, {"result": "assignment", "request": request.to_dict()})
-        if resolved:
-            journal.resolve_assignment_reference(session.session_id, request.assignment_id)
-        journal.retain_assignment_reference(session.session_id, "missing-request")
-        journal.retain_assignment_reference(session.session_id, "resolved-request")
-        journal.resolve_assignment_reference(session.session_id, "resolved-request")
-        journal.retain_assignment_reference("other-session", request.assignment_id)
-        # Reproduce the supported legacy inline row, not a new durable owner.
-        with sqlite3.connect(root / "control.sqlite") as conn:
-            conn.execute("UPDATE agent_session_references SET reference_json = NULL")
-            shared_json = json.dumps(ref, sort_keys=True, separators=(",", ":"))
-            conn.execute("INSERT INTO agent_session_references VALUES (?, 'delivery', 'shared-request', 0, ?)",
-                (session.session_id, shared_json))
-    finally:
-        journal.close()
-    journal = _RemoteAgentJournal(root)
-    try:
-        with sqlite3.connect(root / "control.sqlite") as conn:
-            rows = conn.execute("SELECT session_id, reference_id, resolved, reference_json FROM agent_session_references ORDER BY session_id, reference_id").fetchall()
-        assert rows == sorted([
-            (session.session_id, request.assignment_id, int(resolved), None if resolved else encoded),
-            (session.session_id, "missing-request", 0, None),
-            (session.session_id, "resolved-request", 1, None),
-            ("other-session", request.assignment_id, 0, None),
-            (session.session_id, "shared-request", 0, shared_json),
-        ])
-        _prepare_delivery_poll(journal, session, 2)
-        journal.complete_poll(session.session_id, 2, {"result": "wait"})
-        assert journal.delivery_request(session.session_id, request.assignment_id) == (None if resolved else request.to_dict())
-    finally:
-        journal.close()
-
-
 def test_poll_identity_and_cleanup_are_scoped_to_the_principal(tmp_path: Path) -> None:
     policy = AgentPolicyConfig(
         agents=(
@@ -2599,8 +2556,8 @@ def test_gpu_availability_update_is_atomic_replayable_and_inspectable(
         daemon.stop()
 
 
-@pytest.mark.parametrize(("reference_capable", "legacy_inline", "restart_before_poll"), [(True, False, False), (False, False, False), (True, True, False), (True, False, True)])
-def test_shared_reference_target_publication_poll_restart_and_inline_migration(tmp_path, monkeypatch, reference_capable, legacy_inline, restart_before_poll):
+@pytest.mark.parametrize(("reference_capable", "restart_before_poll"), [(True, False), (False, False), (True, True)])
+def test_shared_reference_target_publication_poll_and_restart(tmp_path, monkeypatch, reference_capable, restart_before_poll):
     from tests.unit.loom.queue.test_remote_stage_execution import _assignment_reference_fixture, _agent_provider_descriptors
     from loom.queue.agent_sessions import _target_remote_delivery
     from loom.queue._remote_stage_execution import REMOTE_EXECUTION_CAPABILITY, REGULAR_FILE_RELAY_CAPABILITY
@@ -2613,9 +2570,6 @@ def test_shared_reference_target_publication_poll_restart_and_inline_migration(t
     config = replace(_config(tmp_path), agent_policy=policy,
         shared_roots=profile.shared_roots, assignment_payload_root_id="control")
     LocalDaemon.initialize(config)
-    # A pre-amendment coordinator has full request_json and no reference column.
-    with sqlite3.connect(config.control_database) as conn:
-        conn.execute("ALTER TABLE agent_deliveries DROP COLUMN reference_json")
     daemon = LocalDaemon(config)
     daemon.start()
     try:
@@ -2651,12 +2605,6 @@ def test_shared_reference_target_publication_poll_restart_and_inline_migration(t
         monkeypatch.setattr(payloads, "publish", real_publish)
         target()
         target()
-        if legacy_inline:
-            # Reconstruct a pre-amendment row through its native full-bundle
-            # producer. Absence of a reference means inline forever, not a
-            # request to republish according to today's shared configuration.
-            with sqlite3.connect(config.control_database) as conn:
-                conn.execute("UPDATE agent_deliveries SET reference_json = NULL")
         issuer_epoch = session.coordinator_epoch
         if restart_before_poll:
             daemon.stop()
@@ -2669,11 +2617,8 @@ def test_shared_reference_target_publication_poll_restart_and_inline_migration(t
         delivered = view.wait_for_work(session.session_id, "availability-1", sequence=1, wait_timeout_ms=1)
         ref = thaw_plain_data(delivered["request"])
         assert isinstance(ref, dict)
-        if legacy_inline:
-            assert ref == request.to_dict()
-        else:
-            assert ref["sha256"] == hashlib.sha256(encoded.encode()).hexdigest()
-            assert ref["issuer_epoch"] == issuer_epoch
+        assert ref["sha256"] == hashlib.sha256(encoded.encode()).hexdigest()
+        assert ref["issuer_epoch"] == issuer_epoch
         assert view.wait_for_work(session.session_id, "availability-1", sequence=1, wait_timeout_ms=1) == delivered
         assert view.recover_poll(
             session.session_id, "availability-1", sequence=1, wait_timeout_ms=1,
@@ -2694,9 +2639,6 @@ def test_shared_reference_target_publication_poll_restart_and_inline_migration(t
         with sqlite3.connect(config.control_database) as conn:
             assert conn.execute("SELECT request_json FROM agent_deliveries").fetchone()[0] == encoded
         daemon.stop()
-        if legacy_inline:
-            with sqlite3.connect(config.control_database) as conn:
-                conn.execute("ALTER TABLE agent_deliveries DROP COLUMN reference_json")
         daemon = LocalDaemon(config)
         daemon.start()
         recovered = _view(daemon).recover_poll(session.session_id, "availability-1", sequence=1, wait_timeout_ms=1, coordinator_epoch=session.coordinator_epoch)

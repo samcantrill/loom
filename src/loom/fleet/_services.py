@@ -240,56 +240,6 @@ def start(request):
     }
 
 
-def migrate(request):
-    """Move a stopped, natively settled tmux role to systemd with the same IDs."""
-    from loom.fleet._host import read, atomic, role, config, environment, owner
-    from loom.queue.deployment import (
-        load_coordinator_service_config,
-        load_outbound_agent_service_config,
-        service_backend_migration_guard,
-    )
-
-    if request.get("service_manager") != "systemd-user":
-        raise QueueConflictError(
-            "only explicit tmux to systemd-user migration is supported"
-        )
-    prerequisites()
-    readiness(request)
-    path = Path(request["admin"]) / "service.json"
-    old = read(path) if path.exists() else None
-    if old is not None and old.get("service_manager", "tmux") == "systemd-user":
-        return start(request)
-    if owner(request)["value"]["ownership"] == "live":
-        raise QueueConflictError(
-            "drain and stop the native tmux service before migration"
-        )
-    # A remaining tmux pane can still start the service after an observation.
-    pane = subprocess.run(
-        [
-            "tmux",
-            "-S",
-            str(Path(request["admin"]) / "tmux.sock"),
-            "has-session",
-            "-t",
-            "loom",
-        ],
-        capture_output=True,
-    )
-    if pane.returncode == 0:
-        raise QueueConflictError(
-            "tmux service session must be stopped before migration"
-        )
-    loader = (
-        load_coordinator_service_config
-        if role(request) == "coordinator"
-        else load_outbound_agent_service_config
-    )
-    service = loader(config(request), env_file=environment(request))
-    with service_backend_migration_guard(service, request["expected_root_id"]):
-        atomic(path, request)
-    return start(request)
-
-
 if __name__ == "__main__":
     from loom.fleet._host import read
 

@@ -424,13 +424,13 @@ preparation does not prevent other work from running. Published target stages
 retain their normal software requirements and authored placement; they do not
 inherit the child's preparation-only constraints.
 
-Coordinator roots use schema 14. Child input and report schemas are version 2;
+Coordinator roots use schema 19. Child input and report schemas are version 2;
 input receipts and the public preparation-operation projection remain version 1.
-Older schema-13 roots are rejected before mutation: settle their retained work
-with the original installation before replacing services. Outputs are not reset
-or rewritten. The existing schema-12 offline upgrade remains explicit. Worker
-roots and journals remain schema 12, with preparation-capable installations
-advertising `preparation-input-v2`.
+Worker control roots use schema 12, with preparation-capable installations
+advertising `preparation-input-v2`. Only complete current schemas reopen; older
+or incomplete roots are refused without column repair or evidence backfill.
+Settle unsupported installations with their original owner and preserve receipts
+before creating fresh current roots. Current roots preserve restart/replay.
 Then qualify participating installations, configure the allowed sources/profiles
 and worker mappings, and enable preparation through the protected role settings.
 Existing accepted operations retain their selected configuration after reload.
@@ -1110,10 +1110,11 @@ retrospectively: the failure identifies supervisor rejection during recovery.
 
 Any accepted launch, even terminal or uncertain, refuses this recovery path.
 Missing/corrupt supervisor state or an older service without this operation
-remains recovery-required. Supervisor schema 5 stores rejection tombstones for
-the lifetime of the root, migrates intact schema 4 in place, and cannot be opened
-by older binaries. Upgrade the supervisor as well as the agent through an owned
-shutdown/start transition; do not replace or reinitialize its state. Other unknown
+remains recovery-required. Current supervisor schema 6 stores rejection
+tombstones for the lifetime of the root. Compatible service replacement uses an
+owned shutdown/start transition. Older journals cannot be opened or converted;
+settle them with their original owner and retain their evidence before fresh
+initialization. Other unknown
 starts retain their existing guarded containment requirements.
 
 Remote execution with a selected shared publication root also supplies an

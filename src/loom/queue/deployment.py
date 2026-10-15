@@ -2597,8 +2597,8 @@ def inspect_role_declaration(
 
 
 @contextmanager
-def service_backend_migration_guard(service, expected_root_id: str):
-    """Hold a stopped, settled native role during an explicit backend migration.
+def service_replacement_guard(service, expected_root_id: str):
+    """Hold a stopped, settled native role during current runtime replacement.
 
     The caller has already drained admission/work and stopped the communication
     service. Pending poll outcomes and missing native evidence refuse; no work is
@@ -2621,11 +2621,11 @@ def service_backend_migration_guard(service, expected_root_id: str):
         try:
             require_unretired(spec.agent_root)
             if journal.root_id != expected_root_id:
-                raise QueueConflictError("migration native root identity changed")
+                raise QueueConflictError("replacement native root identity changed")
             execution, slurm = _retained_agent_owners(spec)
             if (_has_retained_agent_work(journal, execution, slurm)
                     or journal.recovery_poll(_OUTBOUND_POLL_WAIT_MS) is not None):
-                raise QueueConflictError("migration requires settled agent work and poll outcomes")
+                raise QueueConflictError("replacement requires settled agent work and poll outcomes")
             with retained_supervisor_guard(spec.agent_root, agent_id=journal.root_id):
                 yield
         finally:
@@ -2633,15 +2633,16 @@ def service_backend_migration_guard(service, expected_root_id: str):
     else:
         config = service.daemon
         if config.agent_root is not None:
-            raise QueueConflictError("migration requires a pure coordinator")
-        # Native store opening is noninitializing and the lock fences scheduling.
+            raise QueueConflictError("replacement requires a pure coordinator")
+        # Refuse unsupported roots before creating the lock, then recheck under it.
+        _open_root(config.coordinator_root, role="coordinator")
         with _acquire_lock(config.coordinator_root):
             require_unretired(config.coordinator_root)
             actual = _open_root(config.coordinator_root, role="coordinator")
             if actual != expected_root_id:
-                raise QueueConflictError("migration native root identity changed")
+                raise QueueConflictError("replacement native root identity changed")
             local_daemon_owner_work_is_retained(config, coordinator_id=actual, agent_id=None)
             with sqlite3.connect(config.control_database) as conn:
                 if _retained_coordinator_operations(conn):
-                    raise QueueConflictError("migration requires settled coordinator work")
+                    raise QueueConflictError("replacement requires settled coordinator work")
             yield

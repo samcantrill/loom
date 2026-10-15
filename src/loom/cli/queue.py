@@ -60,12 +60,6 @@ def register_subparser(
     _add_role_config_arguments(daemon_init)
     _add_output_options(daemon_init)
     daemon_init.set_defaults(handler=handle_daemon_init)
-    daemon_upgrade = queue_subparsers.add_parser(
-        "daemon-upgrade", help="offline upgrade a stopped coordinator root"
-    )
-    _add_role_config_arguments(daemon_upgrade)
-    _add_output_options(daemon_upgrade)
-    daemon_upgrade.set_defaults(handler=handle_daemon_upgrade)
     daemon_serve = queue_subparsers.add_parser(
         "daemon-serve", help="serve one initialized coordinator deployment bundle"
     )
@@ -587,24 +581,6 @@ def handle_daemon_submit(namespace: argparse.Namespace) -> int:
     return _emit_daemon_payload(namespace, result.to_dict())
 
 
-def handle_daemon_upgrade(namespace: argparse.Namespace) -> int:
-    from loom.queue import LocalDaemon
-    from loom.queue.deployment import load_coordinator_service_config
-
-    try:
-        service = load_coordinator_service_config(
-            namespace.config, env_file=namespace.env_file, _allow_unready=True
-        )
-        coordinator_id, schema_version = LocalDaemon.upgrade_coordinator_root(
-            service.daemon
-        )
-    except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
-    return _emit_daemon_payload(
-        namespace, {"coordinator_id": coordinator_id, "schema_version": schema_version}
-    )
-
-
 def handle_daemon_prepare(namespace: argparse.Namespace) -> int:
     from loom.queue.preparation import PrepareRunRequest
 
@@ -1063,7 +1039,6 @@ __all__ = [
     "handle_daemon_agents",
     "handle_daemon_agent_control",
     "handle_daemon_init",
-    "handle_daemon_upgrade",
     "handle_daemon_check",
     "handle_daemon_serve",
     "handle_daemon_status",

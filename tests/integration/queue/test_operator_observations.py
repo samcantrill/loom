@@ -165,7 +165,6 @@ def test_observation_matrix_preserves_roots_and_control_state(owner, monkeypatch
     assert set(daemon.config.coordinator_root.rglob("*")) == files
 
 
-
 @pytest.mark.parametrize("owner", [("drain", "resume")], indirect=True)
 @pytest.mark.parametrize("outcome", ["pending", "applying", "retained_work", "reload_rejected", "applied"])
 def test_resume_preserves_drain_until_agent_confirms_application(owner, outcome):
@@ -232,7 +231,9 @@ def test_offline_probe_identity_boot_and_compatibility(owner):
     )
     compatible = probe_upgrade_compatibility(root)
     assert compatible.value["compatible"] is True
-    assert compatible.value["migration_direction"] == "none"
+    assert compatible.value["current_storage_version"] == compatible.value["target_storage_version"]
+    assert "migration_direction" not in compatible.value
+    assert "offline_required" not in compatible.value
     assert (
         probe_upgrade_compatibility(root, required_capabilities=("future",)).reason
         == "unsupported_capability"
@@ -392,7 +393,6 @@ def test_role_declarations_are_protected_redacted_and_inert(
 
     with pytest.raises(QueueError):
         deployment.inspect_role_declaration(source, role=role)
-
 
 
 def test_coordinator_declaration_rejects_incomplete_agent_server(tmp_path, monkeypatch):
