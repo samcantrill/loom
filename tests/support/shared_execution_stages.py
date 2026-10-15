@@ -127,10 +127,15 @@ def _check_project_context(context):
         return
     from loom.artifacts import ArtifactRef
     from loom.io.uris import uri_to_path
+    from loom.preparation import load_preparation_report
     from loom.serialization import thaw_plain_data
+    from typing import Any, cast
 
     reference = ArtifactRef.from_dict(thaw_plain_data(context.metadata["loom.project_report"]))
-    report = context.load_artifact(reference)
+    report = cast(dict[str, Any], load_preparation_report(reference, uri_to_path(reference.uri)))
+    assert "manifest" in report["composition"]
+    assert "provenance" in report["composition"]
+    assert "evidence_ref" not in report["composition"]
     contract = report["project_contracts"][context.stage_name]
     assert contract == thaw_plain_data(context.metadata["loom.project_contract"])
     root = uri_to_path(reference.uri).parent

@@ -263,7 +263,7 @@ def _run_action_verification(binding: PreparationChildInput, artifact_access: ob
         materialized = ArtifactRef.from_dict(wire)
         if replace(materialized, uri=original.uri) != original:
             raise QueueConflictError("action verifier project report identity conflicts")
-        LocalArtifactStore(Path(uri_to_path(materialized.uri)).parent).validate(materialized)
+        load_preparation_report(original, uri_to_path(materialized.uri))
     selected = _plain_mapping(binding.project_preparation["processor"])
     response, failure = None, None
     try:
@@ -397,13 +397,16 @@ def _verify_project_candidate(binding: PreparationChildInput, composition: Mappi
         processor = getattr(processor, part)
     candidate = _plain_mapping(thaw_plain_data(binding.candidate))
     expected = {"schema_version": 1, "candidate_digest": hash_mapping(candidate), "verdict": "verified"}
+    expected_report = _plain_mapping(candidate["artifact_binding"]).get("project_report")
+    if (expected_report is None) != (project_report is None):
+        raise QueueConflictError("candidate project report materialization is incomplete")
     if project_report is not None:
         from loom.io.uris import uri_to_path
-        original = ArtifactRef.from_dict(_plain_mapping(candidate["artifact_binding"])["project_report"])
+        original = ArtifactRef.from_dict(expected_report)
         materialized = ArtifactRef.from_dict(project_report)
         if replace(materialized, uri=original.uri) != original:
             raise QueueConflictError("candidate project report identity conflicts")
-        LocalArtifactStore(Path(uri_to_path(materialized.uri)).parent).validate(materialized)
+        load_preparation_report(original, uri_to_path(materialized.uri))
     try:
         response = _plain_mapping(cast(Any, processor)({
             "schema_version": selected["schema_version"], "operation": "verify_candidate", "candidate": candidate,

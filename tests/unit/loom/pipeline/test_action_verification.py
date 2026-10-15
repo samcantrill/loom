@@ -1,7 +1,9 @@
 """Installed projects own reason vocabulary, while native code owns the wire."""
 
 from copy import deepcopy
+from dataclasses import replace
 from types import SimpleNamespace
+from typing import Any, cast
 import sys
 
 import pytest
@@ -14,7 +16,10 @@ from loom.queue.preparation import PreparationChildInput, SharedInputReceipt
 from loom.preparation import (
     _decode_action_verification_report,
     _run_action_verification,
+    _verify_project_candidate,
 )
+from loom.queue.errors import QueueConflictError
+from loom.serialization import thaw_plain_data
 
 
 def _candidate():
@@ -137,7 +142,9 @@ def test_callback_cannot_inject_data_or_lifecycle_instructions(change):
         action_verification_response(reply, candidate)
 
 
-def test_verifier_child_replays_checked_request_and_sanitizes_crash(monkeypatch):
+def test_verifier_child_replays_checked_request_and_sanitizes_crash(
+    monkeypatch, capsys
+):
     binding = _binding()
     assert binding.to_dict()["schema_version"] == 9
     assert PreparationChildInput.from_dict(binding.to_dict()) == binding
@@ -170,3 +177,159 @@ def test_verifier_child_replays_checked_request_and_sanitizes_crash(monkeypatch)
     assert failed["failure_code"] == "action_verification_invalid"
     assert failed["verification"] is None
     assert "private project exception text" not in str(failed)
+    assert "RuntimeError: private project exception text" in capsys.readouterr().err
+
+
+def _materialized_report(root, operation):
+    from loom._preparation_report import save_composition_evidence
+    from loom.pipeline.stores import LocalArtifactStore
+
+    store = LocalArtifactStore(root)
+    companion = store.local_artifact_path(
+        stage_name="prepare", name="report", codec_key="json.v1"
+    ).with_suffix(".composition.json")
+    primary = save_composition_evidence(
+        {
+            "operation_id": operation,
+            "composition": {
+                "resolved": {},
+                "redacted": {},
+                "recipe_manifest": [],
+                "manifest": {"metadata": {"operation": operation}},
+                "provenance": {"metadata": {"operation": operation}},
+            },
+        },
+        companion,
+    )
+    materialized = store.save(
+        primary,
+        stage_name="prepare",
+        name="report",
+        artifact_type="json",
+        codec_key="json.v1",
+    )
+    original = replace(
+        materialized, uri=f"loom-shared://reports/{operation}/report.json"
+    )
+    return original, materialized, companion
+
+
+@pytest.mark.parametrize(
+    "role,fault",
+    [
+        (None, None),
+        ("producer", "missing"),
+        ("desired", "missing"),
+        ("producer", "changed"),
+        ("desired", "changed"),
+        ("producer", "grant"),
+        ("desired", "grant"),
+        (None, "swapped"),
+    ],
+)
+def test_result_verifier_checks_both_relocated_report_closures_before_callback(
+    tmp_path,
+    monkeypatch,
+    role,
+    fault,
+):
+    reports = {
+        label: _materialized_report(tmp_path / label, label)
+        for label in ("producer", "desired")
+    }
+    binding = _binding()
+    requested = cast(dict[str, Any], thaw_plain_data(binding.action_verification))
+    candidate = requested["candidate"]
+    candidate["access"]["project_reports"] = {
+        label: refs[0].to_dict() for label, refs in reports.items()
+    }
+    candidate["candidate_digest"] = hash_mapping(
+        {key: value for key, value in candidate.items() if key != "candidate_digest"}
+    )
+    binding = replace(binding, action_verification=requested)
+    materialized = {label: refs[1].to_dict() for label, refs in reports.items()}
+    seen = []
+
+    def verify(request):
+        seen.append(request)
+        assert (
+            request["candidate"]["access"]["project_reports"]
+            == candidate["access"]["project_reports"]
+        )
+        assert request["artifact_access"]["project_reports"] == materialized
+        return {
+            "schema_version": 1,
+            "candidate_digest": candidate["candidate_digest"],
+            "verdict": "verified",
+        }
+
+    monkeypatch.setitem(
+        sys.modules, "installed_verifier", SimpleNamespace(inspect=verify)
+    )
+    if fault == "missing":
+        reports[role][2].unlink()
+    elif fault == "changed":
+        reports[role][2].write_bytes(b"changed companion")
+    elif fault == "grant":
+        del materialized[role]
+    elif fault == "swapped":
+        materialized["producer"], materialized["desired"] = (
+            materialized["desired"],
+            materialized["producer"],
+        )
+    if fault is not None:
+        with pytest.raises(QueueConflictError):
+            _run_action_verification(binding, project_reports=materialized)
+        assert seen == []
+    else:
+        report = _run_action_verification(binding, project_reports=materialized)
+        verification = report["verification"]
+        assert isinstance(verification, dict)
+        assert verification["verdict"] == "verified"
+        assert len(seen) == 1
+
+
+@pytest.mark.parametrize("fault", [None, "missing", "changed", "grant"])
+def test_candidate_verifier_checks_relocated_report_closure_before_callback(
+    tmp_path,
+    monkeypatch,
+    fault,
+):
+    original, materialized, companion = _materialized_report(tmp_path, "original")
+    candidate = {
+        "artifact_binding": {
+            "access": "read_only",
+            "project_report": original.to_dict(),
+        }
+    }
+    binding = replace(_binding(), action_verification=None, candidate=candidate)
+    seen = []
+
+    def verify(request):
+        seen.append(request)
+        assert request["candidate"] == candidate
+        assert request["artifact_access"]["project_report"] == materialized.to_dict()
+        return {
+            "schema_version": 1,
+            "candidate_digest": hash_mapping(candidate),
+            "verdict": "verified",
+        }
+
+    monkeypatch.setitem(
+        sys.modules, "installed_verifier", SimpleNamespace(inspect=verify)
+    )
+    if fault == "missing":
+        companion.unlink()
+    elif fault == "changed":
+        companion.write_bytes(b"changed companion")
+    supplied = None if fault == "grant" else materialized.to_dict()
+    if fault is not None:
+        with pytest.raises(QueueConflictError):
+            _verify_project_candidate(binding, {}, None, None, project_report=supplied)
+        assert seen == []
+    else:
+        result = _verify_project_candidate(
+            binding, {}, None, None, project_report=supplied
+        )
+        assert result["verdict"] == "verified"
+        assert len(seen) == 1
