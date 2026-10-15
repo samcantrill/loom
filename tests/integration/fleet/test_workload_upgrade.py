@@ -30,10 +30,11 @@ from tests.integration.fleet.test_ssh_operations import bundle, endpoint, site, 
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
 
-@pytest.mark.parametrize("promote_source", [False, True], ids=["image", "source-and-image"])
+@pytest.mark.parametrize("promote_source,defer_checks", [(False, False), (True, False), (True, True)],
+                         ids=["image", "source-and-image", "explicit-partial-qualification"])
 def test_workload_upgrade_native_promotion_history_versioned_selection_and_replay(
     site,  # noqa: F811
-    tmp_path, monkeypatch, promote_source
+    tmp_path, monkeypatch, promote_source, defer_checks
 ):
     from loom.fleet import _workload_host
     from loom.queue.deployment import _load_protected_config
@@ -226,15 +227,28 @@ def test_workload_upgrade_native_promotion_history_versioned_selection_and_repla
     retained_failure = failed_path.read_bytes()
     original_source.write_bytes(original_bytes)
     assert upgrades.upgrade(inventory, operation_id="workload-window")["outcome"] == "blocked"
-    result = upgrades.upgrade(inventory, operation_id="workload-window", action="retry-check",
-                              failed_check=failed, new_check="workload-successor")
+    if defer_checks:
+        result = upgrades.upgrade(inventory, operation_id="workload-window", action="defer-checks",
+                                  defer_agents=["worker"], defer_reason="Operator defers worker checks")
+    else:
+        result = upgrades.upgrade(inventory, operation_id="workload-window", action="retry-check",
+                                  failed_check=failed, new_check="workload-successor")
     deadline = time.monotonic() + 180
     while result["outcome"] == "waiting" and time.monotonic() < deadline:
         time.sleep(.2)
         result = upgrades.upgrade(inventory, operation_id="workload-window")
     assert result["outcome"] == "complete", json.dumps(result)
     assert failed_path.read_bytes() == retained_failure
-    assert [item["operation_id"] for item in result["checks"]["worker:cpu"]] == [failed, "workload-successor"]
+    assert [item["operation_id"] for item in result["checks"]["worker:cpu"]] == (
+        [failed] if defer_checks else [failed, "workload-successor"]
+    )
+    if defer_checks:
+        assert result["qualification"] == {
+            "state": "partial", "deferred_agents": ["worker"], "reason": "Operator defers worker checks"
+        }
+        assert "worker:storage" not in result["checks"]
+    else:
+        assert "qualification" not in result
     assert lost
     assert result["release"] == plan["release"]
     assert old_selection.read_bytes() == old_bytes
@@ -273,6 +287,7 @@ def test_workload_upgrade_native_promotion_history_versioned_selection_and_repla
     repeated = upgrades.upgrade(inventory, operation_id="workload-window")
     assert repeated["checks"] == result["checks"]
     assert repeated["deployment"] == result["deployment"]
+    assert repeated.get("qualification") == result.get("qualification")
 
 
 @pytest.mark.parametrize("missing", ["profile", "source"])

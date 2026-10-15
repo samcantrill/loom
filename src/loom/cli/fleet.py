@@ -97,16 +97,21 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     upgrade.add_argument("--config", default="fleet-check.yaml")
     upgrade.add_argument("--env-file", type=Path)
     upgrade.add_argument("--timeout", type=float, default=120)
+    upgrade.add_argument("--defer-checks-for", dest="defer_agents", action="append")
+    upgrade.add_argument("--qualification-reason", dest="defer_reason")
     upgrade.add_argument("--format", dest="output_format", choices=("text", "json"), default="text")
     upgrade.set_defaults(handler=handle)
     operation = commands.add_parser(
         "operation", help="inspect or continue retained setup"
     )
     operations = operation.add_subparsers(dest="operation_command", required=True)
-    for action in ("status", "resume", "abort", "retry-check", "retry-control", "repair-workload"):
+    for action in ("status", "resume", "abort", "retry-check", "retry-control", "repair-workload", "defer-checks"):
         item = operations.add_parser(action)
         item.add_argument("operation_id")
         item.add_argument("--fleet", required=True)
+        if action == "defer-checks":
+            item.add_argument("--agent-id", dest="defer_agents", action="append", required=True)
+            item.add_argument("--reason", dest="defer_reason", required=True)
         if action == "retry-check":
             item.add_argument("--failed-check", required=True)
             item.add_argument("--operation-id", dest="new_check", required=True)
@@ -236,10 +241,12 @@ def handle(namespace: argparse.Namespace) -> int:
         elif command == "upgrade":
             from loom.fleet.upgrades import upgrade
             if not namespace.apply:
+                if namespace.defer_agents is not None or namespace.defer_reason is not None:
+                    raise ValueError("qualification exceptions require --apply")
                 from loom.fleet.upgrades import preview
                 result = preview(inventory, runtime_release=namespace.runtime_release, workload_profile=namespace.workload_profile, image=namespace.image, workload_inventory=namespace.workload_inventory, deployment=namespace.deployment, connection=namespace.connection, config=namespace.config, env_file=namespace.env_file)
             else:
-                result = upgrade(inventory, operation_id=namespace.operation_id, runtime_release=namespace.runtime_release, workload_profile=namespace.workload_profile, image=namespace.image, workload_inventory=namespace.workload_inventory, deployment=namespace.deployment, connection=namespace.connection, config=namespace.config, env_file=namespace.env_file, timeout_seconds=namespace.timeout, apply=True)
+                result = upgrade(inventory, operation_id=namespace.operation_id, runtime_release=namespace.runtime_release, workload_profile=namespace.workload_profile, image=namespace.image, workload_inventory=namespace.workload_inventory, deployment=namespace.deployment, connection=namespace.connection, config=namespace.config, env_file=namespace.env_file, timeout_seconds=namespace.timeout, apply=True, defer_agents=namespace.defer_agents, defer_reason=namespace.defer_reason)
         elif command == "migrate-services":
             from loom.fleet.ssh_operations import migrate_services
             result = migrate_services(inventory, operation_id=namespace.operation_id,
@@ -260,7 +267,7 @@ def handle(namespace: argparse.Namespace) -> int:
                     result = adopt(inventory, operation_id=namespace.operation_id, action=namespace.operation_command)
                 elif intent.get("kind") in {"runtime-upgrade", "workload-upgrade"}:
                     from loom.fleet.upgrades import upgrade
-                    result = upgrade(inventory, operation_id=namespace.operation_id, action=namespace.operation_command, failed_check=getattr(namespace, "failed_check", None), new_check=getattr(namespace, "new_check", None), failed_control=getattr(namespace, "failed_control", None), new_control=getattr(namespace, "new_control", None), workload_profile=getattr(namespace, "workload_profile", None), image=getattr(namespace, "image", None), workload_inventory=getattr(namespace, "workload_inventory", None))
+                    result = upgrade(inventory, operation_id=namespace.operation_id, action=namespace.operation_command, failed_check=getattr(namespace, "failed_check", None), new_check=getattr(namespace, "new_check", None), failed_control=getattr(namespace, "failed_control", None), new_control=getattr(namespace, "new_control", None), workload_profile=getattr(namespace, "workload_profile", None), image=getattr(namespace, "image", None), workload_inventory=getattr(namespace, "workload_inventory", None), defer_agents=getattr(namespace, "defer_agents", None), defer_reason=getattr(namespace, "defer_reason", None))
                 elif namespace.operation_command == "resume":
                     result = apply(inventory, operation_id=namespace.operation_id, resume=True)
                 else:

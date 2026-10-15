@@ -534,6 +534,7 @@ def continue_upgrade(operation):
         "image_sha256": intent["image_sha256"],
         "profile": next(iter(intent["candidates"].values()))["target"]["profile"],
         "checks": maintenance._attempts(operation),
+        **maintenance._qualification_result(operation),
         "deployment": intent["check_selection"]["deployment"],
         "previous_deployment": intent["original_check_selection"]["deployment"],
         "operator_connection": intent["check_selection"]["operator_connection"],
