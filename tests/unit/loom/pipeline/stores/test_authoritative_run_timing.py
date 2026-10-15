@@ -1,4 +1,4 @@
-"""Durable timing through lifecycle, migration, and portable evidence boundaries."""
+"""Durable timing through current lifecycle and portable evidence boundaries."""
 
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
@@ -166,67 +166,39 @@ def test_interrupted_run_remains_unfinished_and_retains_first_start(authority):
     assert store.open_run(uri).started_at == start
 
 
-def test_legacy_unknown_start_survives_read_only_admission_and_retry(authority):
+def test_retired_timing_schema_is_refused_without_repair(authority):
+    from loom.authority._repository import AuthorityRepositoryCompatibilityError
+    from loom.pipeline.stores import AuthoritySchemaError
+
     store, clock, uri, database = authority
     _admit(store, uri, status=RunStatus.FAILED)
     local = isinstance(store, SQLitePerRunAuthorityStore)
     table, metadata, version = (
         ("run_state", "metadata", 10)
-        if local
-        else ("authority_runs", "repository_metadata", 11)
+        if local else ("authority_runs", "repository_metadata", 11)
     )
-    # Construct the real preceding schema, including its absent timing columns.
     with sqlite3.connect(database) as conn:
         for column in ("started_at", "finished_at", "started_at_known"):
             conn.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
         conn.execute(
-            f"UPDATE {metadata} SET value = ? WHERE key = 'schema_version'",
-            (str(version),),
+            f"UPDATE {metadata} SET value = ? WHERE key = 'schema_version'", (str(version),)
         )
         conn.commit()
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    conn.close()
+    before = {p.name: p.read_bytes() for p in database.parent.iterdir() if p.is_file()}
+    error = AuthoritySchemaError if local else AuthorityRepositoryCompatibilityError
+    with pytest.raises(error, match="older"):
+        store.open_run(uri)
     if local:
-        before = {
-            p.name: (p.read_bytes(), p.stat().st_mtime_ns)
-            for p in database.parent.iterdir()
-            if p.is_file()
-        }
-        historical = SQLitePerRunAuthorityStore(uri, read_only=True).open_run(uri)
-        assert historical.started_at_known is False
-        assert historical.started_at is None
-        assert historical.finished_at is None
-        after = {
-            p.name: (p.read_bytes(), p.stat().st_mtime_ns)
-            for p in database.parent.iterdir()
-            if p.is_file()
-        }
-        assert after == before
+        with pytest.raises(error, match="older"):
+            SQLitePerRunAuthorityStore(uri, read_only=True).open_run(uri)
+        with pytest.raises(error, match="older"):
+            store.create_run(uri)
     else:
-        store.initialize(service_generation="timing")
-    historical = store.open_run(uri)
-    assert historical.started_at_known is False
-    assert historical.started_at is None
-    assert historical.finished_at is None
-    clock.value = "2020-01-01T00:00:05Z"
-    store.transition_run(
-        uri,
-        from_status=RunStatus.FAILED,
-        to_status=RunStatus.PLANNED,
-        intent=TransitionIntent.RESUME,
-    )
-    clock.value = "2020-01-01T00:00:06Z"
-    store.transition_run(
-        uri, from_status=RunStatus.PLANNED, to_status=RunStatus.RUNNING
-    )
-    resumed = store.open_run(uri)
-    assert resumed.started_at is None
-    assert resumed.started_at_known is False
-    assert resumed.finished_at is None
-    clock.value = "2020-01-01T00:00:07Z"
-    store.transition_run(
-        uri, from_status=RunStatus.RUNNING, to_status=RunStatus.SUCCEEDED
-    )
-    assert store.open_run(uri).finished_at == clock.value
+        with pytest.raises(error, match="older"):
+            store.initialize(service_generation="timing")
+    assert {p.name: p.read_bytes() for p in database.parent.iterdir() if p.is_file()} == before
 
 
 def test_offline_export_preserves_authoritative_timing(tmp_path):

@@ -1,8 +1,6 @@
 """Caller data boundaries, digest compatibility and authority initialization."""
 
 from dataclasses import replace
-import json
-import sqlite3
 from typing import Any, cast
 
 import pytest
@@ -276,48 +274,3 @@ def test_authority_initialization_is_atomic_once_and_separate_from_lifecycle(
         )
         assert store.read_run_annotations(uri) == first
         assert store.open_run(uri).to_dict() == before
-
-
-@pytest.mark.parametrize("backend", ["embedded", "repository"])
-def test_additive_migration_preserves_legacy_metadata_without_inventing_context(
-    tmp_path, backend
-):
-    from loom.authority._repository import initialize_authority_repository
-    from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
-
-    uri = (tmp_path / "run").as_uri()
-    legacy = {
-        "tags": {"legacy": "value"},
-        "notes": ["old observation"],
-        "commit": "caller value",
-    }
-    if backend == "embedded":
-        store = SQLitePerRunAuthorityStore(uri)
-        store.create_run(uri, metadata=legacy)
-        database = tmp_path / "run" / ".loom" / "authority.sqlite3"
-        table, version = "metadata", 7
-    else:
-        store = initialize_authority_repository(
-            tmp_path / "authority", service_generation="generation"
-        )
-        store.admit_run(uri, metadata=legacy)
-        database = tmp_path / "authority" / "authority.sqlite3"
-        table, version = "repository_metadata", 8
-    with sqlite3.connect(database) as conn:
-        conn.execute("DROP TABLE run_annotations")
-        conn.execute(
-            f"UPDATE {table} SET value = ? WHERE key = 'schema_version'",
-            (str(version),),
-        )
-    if backend == "repository":
-        cast(Any, store).initialize(service_generation="generation")
-    assert store.read_run_annotations(uri) is None
-    with sqlite3.connect(database) as conn:
-        assert conn.execute("SELECT COUNT(*) FROM run_annotations").fetchone()[0] == 0
-        run_table = "run_state" if backend == "embedded" else "authority_runs"
-        assert (
-            json.loads(
-                conn.execute(f"SELECT metadata_json FROM {run_table}").fetchone()[0]
-            )
-            == legacy
-        )

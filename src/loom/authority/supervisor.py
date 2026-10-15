@@ -284,6 +284,7 @@ def start_authority_supervisor(
         command="start",
     )
     resolved_port = _port(port)
+    _inspect_existing_repository(resolved_state_dir)
     try:
         with AuthorityLifecycleLocks.acquire(
             state_dir=resolved_state_dir,
@@ -326,6 +327,7 @@ def _start_authority_supervisor_locked(
     resolved_workspace_root = workspace_root
     resolved_workspace_id = workspace_id
     resolved_port = port
+    _inspect_existing_repository(resolved_state_dir)
     existing = _read_state_if_present(resolved_state_dir)
     if existing is not None and _state_process_state(existing) is (
         AuthoritySupervisorProcessState.RUNNING
@@ -777,6 +779,7 @@ def restart_authority_supervisor(
     )
     resolved_workspace_id = _workspace_id(workspace_id, resolved_workspace_root)
     resolved_port = _port(port)
+    _inspect_existing_repository(resolved_state_dir)
     try:
         with AuthorityLifecycleLocks.acquire(
             state_dir=resolved_state_dir,
@@ -838,6 +841,13 @@ def restart_authority_supervisor(
             *result.diagnostics,
         ),
     )
+
+
+def _inspect_existing_repository(state_dir: Path) -> None:
+    """Refuse unsupported retained state before lifecycle locks or process effects."""
+    repository = AuthorityRepository(state_dir)
+    if repository.database_path.exists() or supervisor_state_path(state_dir).exists():
+        repository.read_identity()
 
 
 def rotate_authority_repository_generation(

@@ -8,20 +8,23 @@ rphys `docs/fleet-context-and-idle-integration-plan.md`, under
 “Current-contract cutover implementation”. This file records Loom's actual
 implementation evidence; it is not another planning or approval packet.
 
-Base: `25cb93c853da0e58646ff405be081b237f5b5147`. Isolated worktree
-`../loom-worktrees/current-contract-cutover`, branch
-`refactor/current-contract-cutover`. No active installation is modified by local
+Initial base: `25cb93c853da0e58646ff405be081b237f5b5147`. Isolated worktree
+`../loom-worktrees/current-contract-cutover`. The first branch
+`refactor/current-contract-cutover` merged through PR #408 as
+`0d860c47d30e8bfbe01023f3fc6260b91ba60e85`; its merged tree matches the reviewed
+head. The authority slice uses `refactor/current-authority-formats` from that
+exact merge. No active installation is modified by local
 tests. Current-format bytes remain unchanged unless a later row changes shape.
 
 ## Persistence slice
 
 | Producer → consumer | Contract / change | Evidence status |
 | --- | --- | --- |
-| Current record writers → `serialization.load_versioned_document` | Exact owner-declared version, strict integer and fields; removed `DocumentMigration`, export, argument and conversion loop | validated and independently reviewed; merge pending |
-| Supervisor initialization/launch → reopen and retained role guard | Journal 6 and launch 2 only; removed schema 2–5 upgrades/schema-less launches; current DDL retained; read-only refusal before owner contact or repair | validated and independently reviewed; merge pending |
+| Current record writers → `serialization.load_versioned_document` | Exact owner-declared version, strict integer and fields; removed `DocumentMigration`, export, argument and conversion loop | merged #408 |
+| Supervisor initialization/launch → reopen and retained role guard | Journal 6 and launch 2 only; removed schema 2–5 upgrades/schema-less launches; current DDL retained; read-only refusal before owner contact or repair | merged #408 |
 | Coordinator/agent roots → service startup | Current 19/12 only, remove offline schema upgrade and older reconstruction | pending |
-| Authority/coordination → current stores and inspection | Current 11, complete fresh DDL, no automatic upgrades; preserve WAL-aware inspection | pending |
-| Authority-service repository → admission/read/write | Repository 12; remove v3–11 upgrade functions and audit-table conversion; fresh DDL and strict existing-root checks | pending |
+| Authority/coordination → current stores and inspection | Current 11, complete fresh DDL, no automatic upgrades; preserve WAL-aware inspection | implemented; validation and independent review passed (#409) |
+| Authority-service repository → admission/read/write | Repository 12; remove v3–11 upgrade functions and audit-table conversion; fresh DDL and strict existing-root checks | implemented; validation and independent review passed (#409) |
 
 Discovery before edits: `DocumentMigration` and `migrations=` have no production
 callers; only schema helper tests pass conversions. Current callers include
@@ -93,6 +96,123 @@ consumers. Later edits to these notes only record evidence. No broad reference,
 distributed-training, STMap or scaling workload is claimed by these receipts.
 
 ## Remaining Loom boundaries
+
+### Authority storage
+
+Discovery on the #408 merge identifies three reached owners:
+`pipeline/stores/sqlite_authority.py` (current 11),
+`pipeline/stores/sqlite_coordination.py` (current 11), and
+`authority/_repository.py` (current 12). Implemented current-only admission and
+complete fresh creation for all three; local checks and independent review passed.
+
+- Removed embedded authority read/write migrations, private retained-v10 upgrade,
+  coordination v1 migration, repository v3–11 upgrades and audit-table repair.
+  Fresh DDL already contains current columns and per-run audit primary keys.
+- Removed the service repository constructor's historical version selector; its
+  only override consumer was an older-schema rejection test.
+- Existing roots undergo read-only, WAL-aware admission before writable open or
+  journal-mode changes. Missing metadata or tables never select fresh creation.
+  One shared private SQLite inspector retains the established supervisor hot
+  rollback-journal copy recovery, with each owner's previous lock timeout. WAL
+  inspection uses a stable private copy of the main database and committed WAL,
+  because even SQLite mode=ro can create sidecars and alter shared-memory read
+  marks. Concurrent changes retry within that timeout; snapshots never ignore
+  WAL frames. This adds temporary copy I/O for WAL inspection; deployment and
+  scaling qualification remain separate obligations for downstream adoption.
+  Current writers revalidate within their transaction. Retained checkpoint-only
+  memory inspection remains read-only and now also requires schema 11.
+- Authority start/restart preflight precedes lifecycle locks and process effects;
+  locked start repeats admission. Current service-generation preservation,
+  restart, transactional recovery and containment remain required.
+
+Selected coverage uses locked Python 3.12. Collection precedes execution. Exact
+baseline selectors (exclude `optional_dependency`, covered separately below):
+
+```text
+tests/unit/loom/pipeline/stores/test_sqlite_authority.py
+tests/unit/loom/pipeline/stores/test_sqlite_coordination.py
+tests/unit/loom/pipeline/stores/test_authoritative_run_timing.py
+tests/unit/loom/authority/test_supervisor.py
+tests/integration/authority/test_repository.py
+tests/integration/authority/test_repository_run_lifecycle.py
+tests/integration/authority/test_repository_stage_lifecycle.py
+tests/integration/authority/test_run_annotations.py
+tests/integration/authority/test_action_result_binding.py
+tests/integration/authority/test_action_producer_cancellation.py
+tests/integration/authority/test_mutation_api.py
+tests/integration/authority/test_coordinator_authority_api.py
+tests/integration/authority/test_supervisor_lifecycle.py
+tests/integration/pipeline/test_sqlite_authority_backend.py
+tests/integration/pipeline/test_service_authority_backend.py
+tests/integration/pipeline/test_workspace_coordination.py
+tests/contracts/test_authority_store_contract.py
+tests/contracts/test_authority_repository_contract.py
+tests/contracts/test_run_store_authority_contract.py
+tests/contracts/test_workspace_coordination_contract.py
+tests/contracts/test_managed_authority_contract.py
+tests/contracts/test_attempt_input_lineage_contract.py
+tests/contracts/test_run_context_contract.py
+tests/unit/loom/queue/test_agent_process_supervisor.py::test_retired_supervisor_journal_is_rejected_unchanged
+tests/unit/loom/queue/test_agent_process_supervisor.py::test_interrupted_write_recovers_only_current_supervisor
+tests/unit/loom/queue/test_agent_process_supervisor.py::test_service_start_refuses_retired_process_free_root_without_creating_lock
+```
+
+The config-extra environment additionally selects
+`tests/integration/authority/test_coordinator_authority_api.py::test_selected_authority_publisher_reconciles_unknown_reply`.
+These cover current commits, lineage, annotations, preparation grants,
+lease/cancellation fencing, timing, output replacement, concurrent snapshots,
+WAL reads, retained inspection and current service start/restart/stop. Old-schema
+and incomplete-current fixtures assert refusal without file changes. The three
+supervisor selectors recheck the moved inspection helper's actual interrupted
+write and before-lock behavior. Changed-file Ruff, affected Pyright and diff
+checks complete the local gate. Expand for a newly reached consumer, failure or
+missing assertion. Existing serialization/model evidence remains applicable:
+its source, dependencies, fixtures and configuration are unchanged. No broad
+reference, distributed-training or physical fleet rerun is claimed or required
+by this isolated storage delivery; paired downstream qualification remains open.
+
+Initial authority execution: 258 baseline cases passed, six failed; the separate
+config selection passed both cases. Four failures exposed WAL sidecar mutation
+during rejected admission; stable private WAL snapshots address that boundary.
+Two tests still required lineage migration; their retired fixtures now assert
+unchanged refusal, while current lineage/acknowledgement/retry assertions remain.
+Added live-WAL cases prove both latest committed state and schema rejection come
+from the WAL without changing the source. Because this correction affects shared
+inspection, rerun the full selected authority population and both config cases,
+not unrelated runtime/scientific suites.
+
+Final authority validation (2026-10-16), source/test head
+`837209c7476f7b0943986e91d9b052ce749d7115` on the #408 merge:
+
+| Scope | Receipt | Result |
+| --- | --- | --- |
+| Baseline selectors above | `build/current-contract-cutover/authority-final.xml` | 266 passed, 36.77 s; two config cases selected separately |
+| Config preparation/reconciliation | `build/current-contract-cutover/authority-config-final.xml` | 2 passed, 6.40 s |
+| Static checks | `authority-ruff-final.log`, `authority-types-final.log` in the same receipt directory | Ruff passed; affected Pyright 0 errors/warnings; diff check passed |
+
+All 268 selected cases pass; no required skip, failure or error remains. The
+pre-commit source/test diff fingerprint (including the new helper) is
+`33b4ef6807f1a7224e17d7fe23ab45cf9d10705e8c6b3474f7d47a5fa8aa6567`.
+Evidence-note changes after that head do not change runtime source, dependencies,
+configuration or fixtures. The earlier serialization/model results are reused as
+explained above; supervisor extraction is freshly covered by its exact selectors.
+Independent review of base `0d860c47` through PR #409 head `bcd00c56` passed
+with no accepted-contract blocker. It verified that changes after tested source
+head `837209c7` were documentation only. Review retained the documented WAL-copy
+temporary-space/I/O and sustained-churn timeout risks for downstream scaling
+qualification; fresh service and coordination stores use rollback journals.
+Subsequent edits to this receipt only record that review. Delivery is through
+PR #409; the following work must verify its remote merge before continuing.
+
+Next coordinator census: `_coordinator_upgrade.py` and `daemon-upgrade` have
+live consumers in fleet `_upgrade_host.py` and `_adoption_host.py`, as well as
+preparation/reconciliation tests. Removal must update current fleet upgrade and
+separately delete predecessor adoption; deleting the CLI alone would strand
+current runtime replacement. Coordinator `_open_root` accepts a historical
+schema selector and reconstructs earlier preparation layouts; agent session
+initialization also retains inline-delivery reconstruction. Inspect those
+producer/consumer contracts before changing them. No coordinator source changes
+are part of this authority delivery.
 
 Current coordinator transport and mandatory control waiting; event v2 APIs;
 runtime narrow-service adoption and aggregate removal; unified preparation

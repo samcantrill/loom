@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import sqlite3
-from pathlib import Path
 
 import pytest
 
@@ -203,7 +202,7 @@ def test_repository_event_retry_precedes_stale_revision_rejection(tmp_path) -> N
         )
 
 
-def test_legacy_audit_table_accepts_per_run_event_sequences(tmp_path) -> None:
+def test_current_audit_table_preserves_independent_run_sequences(tmp_path) -> None:
     repository = initialize_authority_repository(
         tmp_path, service_generation="generation-1"
     )
@@ -211,7 +210,9 @@ def test_legacy_audit_table_accepts_per_run_event_sequences(tmp_path) -> None:
     run_b = "file:///runs/integration-r2"
     repository.admit_run(run_a)
     repository.admit_run(run_b)
-    _replace_audit_events_with_legacy_table(repository.database_path, run_uri=run_a)
+    repository.append_audit_event(
+        run_a, PipelineEvent(scope=EventScope.run(), event_type="run.started")
+    )
 
     event_b = repository.append_audit_event(
         run_b,
@@ -225,7 +226,7 @@ def test_legacy_audit_table_accepts_per_run_event_sequences(tmp_path) -> None:
     assert event_b.sequence == 1
     assert event_a.sequence == 2
     assert [event.event_type for event in repository.list_audit_events(run_a)] == [
-        "run.legacy",
+        "run.started",
         "run.completed",
     ]
     assert repository.list_audit_events(run_b) == (event_b,)
@@ -289,47 +290,3 @@ def test_run_lifecycle_transaction_rolls_back_failed_write(tmp_path) -> None:
 
     with pytest.raises(AuthorityRepositoryError, match="unknown run"):
         repository.open_run("file:///runs/rolled-back")
-
-
-def _replace_audit_events_with_legacy_table(
-    database_path: Path, *, run_uri: str
-) -> None:
-    with sqlite3.connect(database_path) as conn:
-        conn.execute("DROP INDEX IF EXISTS idx_audit_events_run")
-        conn.execute("DROP TABLE audit_events")
-        conn.execute(
-            """
-            CREATE TABLE audit_events (
-                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-                run_uri TEXT NOT NULL,
-                timestamp TEXT NOT NULL,
-                scope_json TEXT NOT NULL,
-                event_type TEXT NOT NULL,
-                payload_json TEXT NOT NULL,
-                revision_sequence INTEGER NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_audit_events_run
-                ON audit_events(run_uri, sequence)
-            """
-        )
-        conn.execute(
-            """
-            INSERT INTO audit_events (
-                run_uri, timestamp, scope_json, event_type, payload_json,
-                revision_sequence
-            )
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                run_uri,
-                "2020-01-01T00:00:00Z",
-                '{"kind":"RUN","stage_name":null}',
-                "run.legacy",
-                "{}",
-                1,
-            ),
-        )

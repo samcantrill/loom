@@ -16,6 +16,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, cast
 
+from loom._sqlite_inspection import inspect_sqlite_database
 from loom.artifacts import ArtifactRef
 from loom.pipeline.cleanup.records import CleanupReport, CleanupResult
 from loom.pipeline.events import EventScope, PipelineEvent, PipelineEventRecord
@@ -95,7 +96,7 @@ from loom.serialization.errors import PlainDataError
 from loom.timestamps import parse_timestamp, utc_now, utc_timestamp
 from loom.runs.context import RunAnnotations, SubmissionContext
 from loom.pipeline.stores._run_annotations import ANNOTATION_COLUMNS, create_annotations_schema, initialize_annotations, read_annotations
-from loom.pipeline.stores._run_annotations import NOTE_COLUMNS, RECEIPT_COLUMNS, create_annotation_mutation_schema, mutate_annotations, read_notes
+from loom.pipeline.stores._run_annotations import NOTE_COLUMNS, RECEIPT_COLUMNS, mutate_annotations, read_notes
 from loom.runs.annotations import RunNote, RunNotePage
 
 
@@ -481,12 +482,11 @@ class AuthorityRepository:
         self,
         state_dir: str | Path,
         *,
-        schema_version: int = AUTHORITY_REPOSITORY_SCHEMA_VERSION,
         database_name: str = AUTHORITY_REPOSITORY_DB_NAME,
         clock: Callable[[], datetime | str] | None = None,
     ) -> None:
         self.state_dir = Path(state_dir)
-        self.schema_version = _positive_int(schema_version, "schema_version")
+        self.schema_version = AUTHORITY_REPOSITORY_SCHEMA_VERSION
         self.database_name = _database_name(database_name)
         self.database_path = self.state_dir / self.database_name
         self._clock = clock
@@ -502,27 +502,23 @@ class AuthorityRepository:
             else generate_service_generation()
         )
         now = self._now()
+        fresh = not self.database_path.exists()
         try:
-            with self._connection(create_parent=True) as conn:
+            with self._connection(create_parent=True, write=True) as conn:
                 conn.execute("BEGIN IMMEDIATE")
                 try:
-                    _migrate_v3_output_commits(
-                        conn, current_version=self.schema_version
-                    )
-                    _migrate_v5_coordinator_principals(
-                        conn, current_version=self.schema_version
-                    )
-                    _migrate_v7_action_bindings(conn, current_version=self.schema_version)
-                    _migrate_v8_run_annotations(conn, current_version=self.schema_version)
-                    _migrate_v9_annotation_mutations(conn, current_version=self.schema_version)
-                    _migrate_v10_input_lineage(conn, current_version=self.schema_version)
-                    _migrate_v11_run_timing(conn, current_version=self.schema_version)
-                    _initialize_schema(
-                        conn,
-                        schema_version=self.schema_version,
-                        service_generation=generation,
-                        timestamp=now,
-                    )
+                    if fresh:
+                        _initialize_schema(
+                            conn,
+                            schema_version=self.schema_version,
+                            service_generation=generation,
+                            timestamp=now,
+                        )
+                    else:
+                        conn.execute(
+                            "UPDATE repository_metadata SET value = ? WHERE key = 'updated_at'",
+                            (now,),
+                        )
                     failure = _compatibility_failure(
                         conn, current_version=self.schema_version
                     )
@@ -3195,7 +3191,6 @@ class AuthorityRepository:
         if not isinstance(event, PipelineEvent):
             raise AuthorityRepositoryError("event must be a PipelineEvent")
         with self.transaction() as conn:
-            _ensure_audit_event_json_column(conn)
             current = _current_run_revision(conn, run_uri)
             for row in conn.execute(
                 "SELECT * FROM audit_events WHERE run_uri = ? ORDER BY sequence",
@@ -4076,17 +4071,25 @@ class AuthorityRepository:
 
     @contextmanager
     def _read_connection(self) -> Iterator[sqlite3.Connection]:
-        with self._connection(create_parent=False) as conn:
-            failure = _compatibility_failure(conn, current_version=self.schema_version)
-            if failure is not None:
-                raise AuthorityRepositoryCompatibilityError(failure)
-            yield conn
+        try:
+            with self._connection(create_parent=False) as conn:
+                failure = _compatibility_failure(conn, current_version=self.schema_version)
+                if failure is not None:
+                    raise AuthorityRepositoryCompatibilityError(failure)
+                yield conn
+        except sqlite3.DatabaseError as exc:
+            raise AuthorityRepositoryCompatibilityError(
+                _corrupt_failure(
+                    "authority repository database is corrupt or unreadable",
+                    current_version=self.schema_version,
+                )
+            ) from exc
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
         """Open an explicit private repository write transaction."""
 
-        with self._connection(create_parent=False) as conn:
+        with self._connection(create_parent=False, write=True) as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
                 failure = _compatibility_failure(
@@ -4307,7 +4310,7 @@ class AuthorityRepository:
         )
 
     @contextmanager
-    def _connection(self, *, create_parent: bool) -> Iterator[sqlite3.Connection]:
+    def _connection(self, *, create_parent: bool, write: bool = False) -> Iterator[sqlite3.Connection]:
         if create_parent:
             self.state_dir.mkdir(parents=True, exist_ok=True)
         elif not self.database_path.exists():
@@ -4319,8 +4322,17 @@ class AuthorityRepository:
                     detail={"database_path": str(self.database_path)},
                 )
             )
+        if self.database_path.exists():
+            with inspect_sqlite_database(self.database_path, timeout=_SQLITE_TIMEOUT_SECONDS) as inspected:
+                if not write:
+                    yield inspected
+                    return
+                failure = _compatibility_failure(inspected, current_version=self.schema_version)
+                if failure is not None:
+                    raise AuthorityRepositoryCompatibilityError(failure)
         conn = sqlite3.connect(
-            self.database_path,
+            self.database_path.resolve().as_uri() + ("?mode=rwc" if create_parent else "?mode=rw"),
+            uri=True,
             timeout=_SQLITE_TIMEOUT_SECONDS,
             isolation_level=None,
         )
@@ -4348,307 +4360,6 @@ def generate_service_generation() -> str:
     """Return a new opaque service generation token."""
 
     return f"authority-generation-{uuid.uuid4().hex}"
-
-
-def _migrate_v3_output_commits(
-    conn: sqlite3.Connection, *, current_version: int
-) -> None:
-    """Atomically migrate one known-complete v3 repository to v4."""
-
-    if current_version != 4:
-        return
-    tables = {
-        cast(str, row["name"])
-        for row in conn.execute("SELECT name FROM sqlite_schema WHERE type = 'table'")
-    }
-    if _METADATA_TABLE not in tables:
-        return
-    metadata_columns = {
-        cast(str, row["name"])
-        for row in conn.execute(f"PRAGMA table_info({_METADATA_TABLE})")
-    }
-    if not _REQUIRED_SCHEMA_COLUMNS[_METADATA_TABLE].issubset(metadata_columns):
-        return
-    row = conn.execute(
-        f"SELECT value FROM {_METADATA_TABLE} WHERE key = 'schema_version'"
-    ).fetchone()
-    if row is None:
-        return
-    try:
-        version = int(cast(str, row["value"]))
-    except (TypeError, ValueError):
-        return
-    if version != 3:
-        return
-
-    missing_tables = set(_REQUIRED_SCHEMA_COLUMNS) - {"action_result_bindings", "action_producers", "run_annotations", "run_annotation_notes", "run_annotation_mutations"} - tables
-    if missing_tables:
-        raise AuthorityRepositoryCompatibilityError(
-            _corrupt_failure(
-                "authority repository v3 schema is incomplete",
-                current_version=current_version,
-            )
-        )
-    for table_name, expected_columns in _REQUIRED_SCHEMA_COLUMNS.items():
-        if table_name == "authority_runs":
-            expected_columns -= {"started_at", "finished_at", "started_at_known"}
-        if table_name in {"action_result_bindings", "action_producers", "run_annotations", "run_annotation_notes", "run_annotation_mutations"}:
-            continue
-        v3_columns = (
-            expected_columns - {"supersedes_commit_id"}
-            if table_name == "output_commits"
-            else expected_columns
-        )
-        actual_columns = {
-            cast(str, info["name"])
-            for info in conn.execute(f"PRAGMA table_info({table_name})")
-        }
-        if not v3_columns.issubset(actual_columns):
-            raise AuthorityRepositoryCompatibilityError(
-                _corrupt_failure(
-                    "authority repository v3 schema is incomplete",
-                    current_version=current_version,
-                )
-            )
-    metadata = {
-        cast(str, item["key"]): cast(str, item["value"])
-        for item in conn.execute(f"SELECT key, value FROM {_METADATA_TABLE}")
-    }
-    if not _REQUIRED_METADATA_KEYS.issubset(metadata):
-        raise AuthorityRepositoryCompatibilityError(
-            _corrupt_failure(
-                "authority repository v3 metadata is incomplete",
-                current_version=current_version,
-            )
-        )
-
-    conn.execute("DROP INDEX IF EXISTS idx_output_commits_stage")
-    conn.execute("ALTER TABLE output_commits RENAME TO output_commits_v3")
-    conn.execute(
-        """
-        CREATE TABLE output_commits (
-            commit_id TEXT PRIMARY KEY,
-            run_uri TEXT NOT NULL,
-            stage_name TEXT NOT NULL,
-            attempt_id TEXT NOT NULL,
-            committed_at TEXT NOT NULL,
-            revision_sequence INTEGER NOT NULL,
-            output_names_json TEXT NOT NULL,
-            materialized_refs_json TEXT NOT NULL,
-            supersedes_commit_id TEXT
-        )
-        """
-    )
-    conn.execute(
-        """
-        INSERT INTO output_commits (
-            commit_id, run_uri, stage_name, attempt_id, committed_at,
-            revision_sequence, output_names_json, materialized_refs_json,
-            supersedes_commit_id
-        )
-        SELECT commit_id, run_uri, stage_name, attempt_id, committed_at,
-               revision_sequence, output_names_json, materialized_refs_json,
-               NULL
-        FROM output_commits_v3
-        """
-    )
-    conn.execute("DROP TABLE output_commits_v3")
-    conn.execute(
-        f"UPDATE {_METADATA_TABLE} SET value = ? WHERE key = 'schema_version'",
-        (str(current_version),),
-    )
-
-
-def _migrate_v5_coordinator_principals(
-    conn: sqlite3.Connection, *, current_version: int
-) -> None:
-    """Atomically add authenticated coordinator ownership to a complete v5 DB."""
-
-    if current_version != 6:
-        return
-    tables = {
-        cast(str, row["name"])
-        for row in conn.execute("SELECT name FROM sqlite_schema WHERE type = 'table'")
-    }
-    if _METADATA_TABLE not in tables:
-        return
-    metadata_columns = {
-        cast(str, row["name"])
-        for row in conn.execute(f"PRAGMA table_info({_METADATA_TABLE})")
-    }
-    if not _REQUIRED_SCHEMA_COLUMNS[_METADATA_TABLE].issubset(metadata_columns):
-        return
-    row = conn.execute(
-        f"SELECT value FROM {_METADATA_TABLE} WHERE key = 'schema_version'"
-    ).fetchone()
-    if row is None:
-        return
-    try:
-        version = int(cast(str, row["value"]))
-    except (TypeError, ValueError):
-        return
-    if version != 5:
-        return
-    missing_tables = set(_REQUIRED_SCHEMA_COLUMNS) - {"action_result_bindings", "action_producers", "run_annotations", "run_annotation_notes", "run_annotation_mutations"} - tables
-    if missing_tables:
-        raise AuthorityRepositoryCompatibilityError(
-            _corrupt_failure(
-                "authority repository v5 schema is incomplete",
-                current_version=current_version,
-            )
-        )
-    for table_name, expected_columns in _REQUIRED_SCHEMA_COLUMNS.items():
-        if table_name == "authority_runs":
-            expected_columns -= {"started_at", "finished_at", "started_at_known"}
-        if table_name in {"action_result_bindings", "action_producers", "run_annotations", "run_annotation_notes", "run_annotation_mutations"}:
-            continue
-        v5_columns = (
-            expected_columns - {"service_principal"}
-            if table_name == "coordinator_admission_receipts"
-            else expected_columns
-        )
-        actual_columns = {
-            cast(str, info["name"])
-            for info in conn.execute(f"PRAGMA table_info({table_name})")
-        }
-        if not v5_columns.issubset(actual_columns):
-            raise AuthorityRepositoryCompatibilityError(
-                _corrupt_failure(
-                    "authority repository v5 schema is incomplete",
-                    current_version=current_version,
-                )
-            )
-    metadata = {
-        cast(str, item["key"]): cast(str, item["value"])
-        for item in conn.execute(f"SELECT key, value FROM {_METADATA_TABLE}")
-    }
-    if not _REQUIRED_METADATA_KEYS.issubset(metadata):
-        raise AuthorityRepositoryCompatibilityError(
-            _corrupt_failure(
-                "authority repository v5 metadata is incomplete",
-                current_version=current_version,
-            )
-        )
-    conn.execute(
-        "ALTER TABLE coordinator_admission_receipts ADD COLUMN service_principal TEXT"
-    )
-    conn.execute(
-        f"UPDATE {_METADATA_TABLE} SET value = ? WHERE key = 'schema_version'",
-        (str(current_version),),
-    )
-
-
-def _migrate_v7_action_bindings(conn: sqlite3.Connection, *, current_version: int) -> None:
-    if current_version not in {8, 9, 10, 11, 12}:
-        return
-    tables = {str(row["name"]) for row in conn.execute("SELECT name FROM sqlite_schema WHERE type = 'table'")}
-    if _METADATA_TABLE not in tables:
-        return
-    row = conn.execute(f"SELECT value FROM {_METADATA_TABLE} WHERE key = 'schema_version'").fetchone()
-    if row is None or row["value"] != "7":
-        return
-    for table, columns in _REQUIRED_SCHEMA_COLUMNS.items():
-        if table == "authority_runs":
-            columns -= {"started_at", "finished_at", "started_at_known"}
-        if table in {"action_result_bindings", "action_producers", "run_annotations", "run_annotation_notes", "run_annotation_mutations"}:
-            continue
-        actual = {str(info["name"]) for info in conn.execute(f"PRAGMA table_info({table})")}
-        if not columns.issubset(actual):
-            raise AuthorityRepositoryCompatibilityError(_corrupt_failure("authority repository v7 schema is incomplete", current_version=current_version))
-    conn.execute("""CREATE TABLE action_result_bindings (
-        run_uri TEXT NOT NULL, stage_name TEXT NOT NULL,
-        binding_json TEXT NOT NULL, revision_sequence INTEGER NOT NULL,
-        PRIMARY KEY (run_uri, stage_name))""")
-    conn.execute(f"UPDATE {_METADATA_TABLE} SET value = '8' WHERE key = 'schema_version'")
-
-
-def _migrate_v8_run_annotations(conn: sqlite3.Connection, *, current_version: int) -> None:
-    if current_version not in {9, 10, 11, 12}:
-        return
-    if conn.execute("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?",
-                    (_METADATA_TABLE,)).fetchone() is None:
-        return
-    row = conn.execute(f"SELECT value FROM {_METADATA_TABLE} WHERE key = 'schema_version'").fetchone()
-    if row is None or row["value"] != "8":
-        return
-    for table, columns in _REQUIRED_SCHEMA_COLUMNS.items():
-        if table == "authority_runs":
-            columns -= {"started_at", "finished_at", "started_at_known"}
-        if table in {"run_annotations", "run_annotation_notes", "run_annotation_mutations"}:
-            continue
-        actual = {str(info["name"]) for info in conn.execute(f"PRAGMA table_info({table})")}
-        if not columns.issubset(actual):
-            raise AuthorityRepositoryCompatibilityError(_corrupt_failure(
-                "authority repository v8 schema is incomplete", current_version=current_version))
-    create_annotations_schema(conn)
-    conn.execute(f"UPDATE {_METADATA_TABLE} SET value = '9' WHERE key = 'schema_version'")
-
-
-def _migrate_v9_annotation_mutations(conn: sqlite3.Connection, *, current_version: int) -> None:
-    if current_version not in {10, 11, 12}:
-        return
-    if conn.execute("SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?", (_METADATA_TABLE,)).fetchone() is None:
-        return
-    row = conn.execute(f"SELECT value FROM {_METADATA_TABLE} WHERE key='schema_version'").fetchone()
-    if row is None or row["value"] != "9":
-        return
-    for table, columns in _REQUIRED_SCHEMA_COLUMNS.items():
-        if table == "authority_runs":
-            columns -= {"started_at", "finished_at", "started_at_known"}
-        if table in {"run_annotation_notes", "run_annotation_mutations"}:
-            continue
-        actual = {str(info["name"]) for info in conn.execute(f"PRAGMA table_info({table})")}
-        if not columns.issubset(actual):
-            raise AuthorityRepositoryCompatibilityError(_corrupt_failure("authority repository v9 schema is incomplete", current_version=current_version))
-    create_annotation_mutation_schema(conn)
-    conn.execute(f"UPDATE {_METADATA_TABLE} SET value='10' WHERE key='schema_version'")
-
-
-def _migrate_v10_input_lineage(conn: sqlite3.Connection, *, current_version: int) -> None:
-    if current_version not in {11, 12}:
-        return
-    if conn.execute("SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?", (_METADATA_TABLE,)).fetchone() is None:
-        return
-    row = conn.execute(f"SELECT value FROM {_METADATA_TABLE} WHERE key='schema_version'").fetchone()
-    if row is None or row["value"] != "10":
-        return
-    for table, columns in _REQUIRED_SCHEMA_COLUMNS.items():
-        if table == "authority_runs":
-            columns -= {"started_at", "finished_at", "started_at_known"}
-        actual = {str(info["name"]) for info in conn.execute(f"PRAGMA table_info({table})")}
-        if not columns.issubset(actual):
-            raise AuthorityRepositoryCompatibilityError(_corrupt_failure("authority repository v10 schema is incomplete", current_version=current_version))
-    columns = {str(info["name"]) for info in conn.execute("PRAGMA table_info(stage_attempts)")}
-    for name, kind in (("input_bindings_json", "TEXT"), ("start_confirmed", "INTEGER"), ("start_confirmed_at", "TEXT")):
-        if name not in columns:
-            conn.execute(f"ALTER TABLE stage_attempts ADD COLUMN {name} {kind}")
-    conn.execute(f"UPDATE {_METADATA_TABLE} SET value='11' WHERE key='schema_version'")
-
-
-def _migrate_v11_run_timing(conn: sqlite3.Connection, *, current_version: int) -> None:
-    if current_version != 12:
-        return
-    if conn.execute("SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?", (_METADATA_TABLE,)).fetchone() is None:
-        return
-    row = conn.execute(f"SELECT value FROM {_METADATA_TABLE} WHERE key='schema_version'").fetchone()
-    if row is None or row["value"] != "11":
-        return
-    timing_columns = {"started_at", "finished_at", "started_at_known"}
-    for table, columns in _REQUIRED_SCHEMA_COLUMNS.items():
-        expected = columns - timing_columns if table == "authority_runs" else columns
-        actual = {str(info["name"]) for info in conn.execute(f"PRAGMA table_info({table})")}
-        if not expected.issubset(actual):
-            raise AuthorityRepositoryCompatibilityError(_corrupt_failure(
-                "authority repository v11 schema is incomplete", current_version=current_version))
-    columns = {str(info["name"]) for info in conn.execute("PRAGMA table_info(authority_runs)")}
-    for name, kind in (
-        ("started_at", "TEXT"),
-        ("finished_at", "TEXT"),
-        ("started_at_known", "INTEGER NOT NULL DEFAULT 0 CHECK(started_at_known IN (0, 1))"),
-    ):
-        if name not in columns:
-            conn.execute(f"ALTER TABLE authority_runs ADD COLUMN {name} {kind}")
-    conn.execute(f"UPDATE {_METADATA_TABLE} SET value='12' WHERE key='schema_version'")
 
 
 def _initialize_schema(
@@ -5063,7 +4774,6 @@ def _initialize_schema(
     for statement in schema_statements:
         conn.execute(statement)
     create_annotations_schema(conn)
-    _ensure_audit_event_json_column(conn)
     _insert_metadata_if_missing(conn, "schema_version", str(schema_version))
     _insert_metadata_if_missing(conn, "service_generation", service_generation)
     _insert_metadata_if_missing(conn, "created_at", timestamp)
@@ -5181,7 +4891,7 @@ def _schema_shape_failure(
 ) -> AuthorityRepositoryCompatibilityFailure | None:
     try:
         for table_name, expected_columns in _REQUIRED_SCHEMA_COLUMNS.items():
-            if table_name == "stage_attempts" and current_version >= 11:
+            if table_name == "stage_attempts":
                 expected_columns = expected_columns | {"input_bindings_json", "start_confirmed", "start_confirmed_at"}
             columns = {
                 cast(str, row["name"])
@@ -5447,7 +5157,6 @@ def _insert_import_audit_event(
     scope: EventScope | None = None,
 ) -> None:
     event_scope = scope or EventScope.run()
-    _ensure_audit_event_json_column(conn)
     sequence = _next_audit_event_sequence(conn, run_uri=run_uri)
     record = PipelineEventRecord(
         run_uri=run_uri,
@@ -6238,55 +5947,6 @@ def _audit_event_from_row(row: sqlite3.Row, *, run_uri: str) -> PipelineEventRec
         scope=EventScope.from_dict(_json_loads(cast(str, row["scope_json"]))),
         event_type=cast(str, row["event_type"]),
         payload=cast(Mapping[str, PlainData], payload),
-    )
-
-
-def _ensure_audit_event_json_column(conn: sqlite3.Connection) -> None:
-    table_info = tuple(conn.execute("PRAGMA table_info(audit_events)"))
-    columns = {cast(str, row["name"]) for row in table_info}
-    if "event_json" not in columns:
-        conn.execute("ALTER TABLE audit_events ADD COLUMN event_json TEXT")
-        columns.add("event_json")
-    pk_columns = {cast(str, row["name"]) for row in table_info if row["pk"]}
-    if pk_columns != {"run_uri", "sequence"}:
-        _migrate_audit_events_to_per_run_primary_key(conn)
-
-
-def _migrate_audit_events_to_per_run_primary_key(conn: sqlite3.Connection) -> None:
-    conn.execute("DROP INDEX IF EXISTS idx_audit_events_run")
-    conn.execute("ALTER TABLE audit_events RENAME TO audit_events_legacy_migration")
-    conn.execute(
-        """
-        CREATE TABLE audit_events (
-            sequence INTEGER NOT NULL,
-            run_uri TEXT NOT NULL,
-            timestamp TEXT NOT NULL,
-            scope_json TEXT NOT NULL,
-            event_type TEXT NOT NULL,
-            payload_json TEXT NOT NULL,
-            event_json TEXT,
-            revision_sequence INTEGER NOT NULL,
-            PRIMARY KEY(run_uri, sequence)
-        )
-        """
-    )
-    conn.execute(
-        """
-        INSERT INTO audit_events (
-            sequence, run_uri, timestamp, scope_json, event_type, payload_json,
-            event_json, revision_sequence
-        )
-        SELECT sequence, run_uri, timestamp, scope_json, event_type, payload_json,
-            event_json, revision_sequence
-        FROM audit_events_legacy_migration
-        """
-    )
-    conn.execute("DROP TABLE audit_events_legacy_migration")
-    conn.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_audit_events_run
-            ON audit_events(run_uri, sequence)
-        """
     )
 
 

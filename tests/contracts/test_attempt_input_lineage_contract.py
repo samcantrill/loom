@@ -199,9 +199,10 @@ def test_direct_running_allocation_retains_acknowledgement(tmp_path, backend):
 
 
 @pytest.mark.parametrize("backend", ["embedded", "authenticated"])
-def test_database_migration_preserves_absent_legacy_evidence(tmp_path, backend):
+def test_retired_lineage_database_is_refused_without_repair(tmp_path, backend):
     from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
-    from loom.authority._repository import AuthorityRepository
+    from loom.authority._repository import AuthorityRepository, AuthorityRepositoryCompatibilityError
+    from loom.pipeline.stores import AuthoritySchemaError
 
     uri, authority, database, tables = _consumer(tmp_path, backend)
     prepare(authority, uri)
@@ -213,16 +214,16 @@ def test_database_migration_preserves_absent_legacy_evidence(tmp_path, backend):
         conn.execute(
             f"UPDATE {metadata} SET value=? WHERE key='schema_version'", (version,)
         )
+    conn.close()
+    before = {path.name: path.read_bytes() for path in database.parent.iterdir() if path.is_file()}
     if backend == "embedded":
-        reopened = SQLitePerRunAuthorityStore(uri)
-        snapshot = reopened.open_run(uri)
+        with pytest.raises(AuthoritySchemaError, match="older"):
+            SQLitePerRunAuthorityStore(uri).open_run(uri)
     else:
         reopened = AuthorityRepository(database.parent, database_name=database.name)
-        reopened.initialize()
-        snapshot = reopened.open_run(uri)
-    attempt = snapshot.stages[0].attempts[0]
-    assert attempt.start_confirmed is None and attempt.start_confirmed_at is None
-    assert attempt.input_bindings is None
+        with pytest.raises(AuthorityRepositoryCompatibilityError, match="older"):
+            reopened.initialize()
+    assert {path.name: path.read_bytes() for path in database.parent.iterdir() if path.is_file()} == before
 
 
 @pytest.mark.parametrize("backend", ["embedded", "authenticated"])

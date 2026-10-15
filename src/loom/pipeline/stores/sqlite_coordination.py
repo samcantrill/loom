@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import cast
 
+from loom._sqlite_inspection import inspect_sqlite_database
 from loom.serialization import PlainData
 from loom.timestamps import parse_timestamp, utc_now, utc_timestamp
 
@@ -692,14 +693,21 @@ class SQLiteWorkspaceCoordinationStore:
             return tuple(records)
 
     @contextmanager
-    def _connection(self, *, initialize: bool) -> Iterator[sqlite3.Connection]:
+    def _connection(self, *, initialize: bool, write: bool = False) -> Iterator[sqlite3.Connection]:
         should_initialize = initialize and not self._database_path.exists()
         if should_initialize:
             self._database_path.parent.mkdir(parents=True, exist_ok=True)
         if not initialize and not self._database_path.exists():
             raise AuthoritySchemaError("SQLite coordination database is missing")
+        if not should_initialize:
+            with inspect_sqlite_database(self._database_path, timeout=_SQLITE_TIMEOUT_SECONDS) as inspected:
+                if not write:
+                    yield inspected
+                    return
+                _raise_for_schema(inspected)
         conn = sqlite3.connect(
-            self._database_path,
+            self._database_path.resolve().as_uri() + ("?mode=rwc" if should_initialize else "?mode=rw"),
+            uri=True,
             timeout=_SQLITE_TIMEOUT_SECONDS,
             isolation_level=None,
         )
@@ -714,10 +722,9 @@ class SQLiteWorkspaceCoordinationStore:
 
     @contextmanager
     def _transaction(self, *, initialize: bool) -> Iterator[sqlite3.Connection]:
-        with self._connection(initialize=initialize) as conn:
+        with self._connection(initialize=initialize, write=True) as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
-                _migrate_schema(conn)
                 _raise_for_schema(conn)
                 yield conn
             except Exception:
@@ -1151,33 +1158,6 @@ def _check_schema_connection(conn: sqlite3.Connection) -> AuthoritySchemaCheck:
     return AuthoritySchemaCheck(
         current_version=AUTHORITY_SCHEMA_VERSION,
         found_version=version,
-    )
-
-
-def _migrate_schema(conn: sqlite3.Connection) -> None:
-    """Atomically advance one known-complete v1 coordination database."""
-
-    try:
-        row = conn.execute(
-            "SELECT value FROM metadata WHERE key = 'schema_version'"
-        ).fetchone()
-    except sqlite3.DatabaseError:
-        return
-    if row is None:
-        return
-    try:
-        version = int(cast(str, row["value"]))
-    except (TypeError, ValueError):
-        return
-    if version != 1:
-        return
-    if _schema_shape_failure(conn) is not None:
-        raise AuthoritySchemaError(
-            "SQLite coordination v1 schema is incomplete or invalid"
-        )
-    conn.execute(
-        "UPDATE metadata SET value = ? WHERE key = 'schema_version'",
-        (str(AUTHORITY_SCHEMA_VERSION),),
     )
 
 

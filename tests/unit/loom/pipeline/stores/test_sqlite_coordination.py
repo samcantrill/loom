@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from loom.pipeline.stores import (
+    AuthoritySchemaError,
     AuthoritySchemaFailureKind,
     BackendCapability,
     BackendCapabilityRecord,
@@ -48,7 +49,7 @@ def test_schema_policy_reports_missing_supported_and_newer(tmp_path: Path) -> No
     assert newer.failure.kind is AuthoritySchemaFailureKind.UNSUPPORTED_NEWER
 
 
-def test_complete_v1_coordination_database_migrates_without_data_loss(
+def test_retired_coordination_database_is_refused_without_changes(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "coordination.sqlite3"
@@ -59,9 +60,14 @@ def test_complete_v1_coordination_database_migrates_without_data_loss(
     with sqlite3.connect(database_path) as conn:
         conn.execute("UPDATE metadata SET value = '1' WHERE key = 'schema_version'")
 
-    store.create_workspace(second)
-
-    assert store.check_schema().supported
+    conn.close()
+    before = {path.name: path.read_bytes() for path in tmp_path.iterdir()}
+    with pytest.raises(AuthoritySchemaError, match="unsupported older"):
+        store.create_workspace(second)
+    assert {path.name: path.read_bytes() for path in tmp_path.iterdir()} == before
+    check = store.check_schema()
+    assert check.failure is not None
+    assert check.failure.kind is AuthoritySchemaFailureKind.UNSUPPORTED_OLDER
     with sqlite3.connect(database_path) as conn:
         workspaces = tuple(
             row[0]
@@ -69,7 +75,29 @@ def test_complete_v1_coordination_database_migrates_without_data_loss(
                 "SELECT workspace_id FROM workspaces ORDER BY workspace_id"
             )
         )
-    assert workspaces == ("workspace-1", "workspace-2")
+    assert workspaces == ("workspace-1",)
+
+
+@pytest.mark.parametrize("damage", ["metadata", "workspaces"])
+def test_create_workspace_refuses_incomplete_current_database_without_repair(
+    tmp_path: Path, damage: str,
+) -> None:
+    database = tmp_path / "coordination.sqlite3"
+    store = SQLiteWorkspaceCoordinationStore(database, clock=FrozenClock())
+    workspace = WorkspaceIdentity(workspace_id="workspace-1")
+    store.create_workspace(workspace)
+    with sqlite3.connect(database) as conn:
+        if damage == "metadata":
+            conn.execute("DELETE FROM metadata WHERE key = 'schema_version'")
+        else:
+            conn.execute("DROP TABLE workspaces")
+    conn.close()
+    before = {path.name: path.read_bytes() for path in tmp_path.iterdir()}
+
+    with pytest.raises(AuthoritySchemaError):
+        store.create_workspace(workspace)
+
+    assert {path.name: path.read_bytes() for path in tmp_path.iterdir()} == before
 
 
 def test_capabilities_are_explicit_about_local_coordination_limits(
