@@ -1,11 +1,109 @@
 # Idle service efficiency
 
-Implementation of the approved 2026-10-05 service-efficiency brief. All generic
-behavior belongs to Loom; no project, training-progress or job-duration policy is
-introduced. Worktree: `../loom-worktrees/idle-service-efficiency`, branch
-`codex/idle-service-efficiency`, base `51f327c9`.
+Implementation of the approved 2026-10-05 service-efficiency brief, reconciled
+with current native ownership on 2026-10-15. All generic behavior belongs to Loom;
+no project, training-progress or job-duration policy is introduced. Worktree:
+`../loom-worktrees/idle-service-efficiency`, branch
+`codex/idle-service-efficiency`, draft [PR #406](https://github.com/samcantrill/loom/pull/406).
 
-## Current rollout target
+## Current integration and remaining gate
+
+Candidate `e5924853a533c8dc465e6d9f6fca413e4f0d4c9d` includes current develop
+`c4cf4126c37ce68cb3df18142b854dc90f76a952`, including #400's complete report
+transport and #403–407's temporary mounts, supervisor recovery, upgrade and
+explicit qualification-deferral behavior. The original three merge conflicts
+are resolved at current owners: control receipt storage in
+`_agent_session_journal`, wire bounds in `_agent_session_codec`, capability
+negotiation in `_agent_session_protocol`, and current coordinator execution.
+No retired inlined transport implementation is restored.
+
+Independent final-diff review found no supported-path implementation blocker.
+Its required causal cancellation check is implemented in `796e4153` and the
+targeted review confirmation passed. The test holds one failed assignment's
+recovery retry, proves its already-running peer completes and its exact original
+supervisor launch receives a stop before retry is released, then verifies
+cancellation/release and no duplicate launch. The timeout is a fixture watchdog,
+not a new product latency SLO. The opt-in benchmark now records per-operation
+request latency, including errors, with no production telemetry changes.
+
+All selected local checks pass. Receipts are retained in
+`build/idle-integration/` in this worktree; overlapping selections are not summed.
+
+| Tested revision | Environment / selected scope | Result / receipt |
+| --- | --- | --- |
+| `bef9c4bc2` | Python 3.12, isolated locked dev + config; service signals, agent waiting, local daemon, control waiting, transport retry, deployment, GPU resource provider and managed-local units | 268 passed, zero failures/errors/skips, 101.20 s; `units.xml` |
+| `bef9c4bc2` | Same environment; complete control-wait transport, agent-session transport, local-daemon production, concurrent outbound agent, role retirement, shared publication integration files and agent-process supervisor unit file | 366 passed, zero failures/errors/skips, 2,256.47 s; `integration.xml` |
+| `bef9c4bc2` | Separate isolated locked dev environment **without extras**; signal/wait/control/retry unit files plus queue public import and coordinator inert-import cases | 73 passed, zero failures/errors/skips, 7.20 s; `baseline.xml` |
+| `796e4153` | Isolated locked dev + config; `test_concurrent_outbound_agent.py::test_cancel_during_recovery_backoff_stops_exact_worker_and_peer_progresses` | 1 passed, zero failures/errors/skips, 16.72 s; `cancellation.xml` |
+
+Collection preceded each execution. Changed-file Ruff and diff checks pass;
+full Pyright passes with the declared config + MCP extras. An earlier broad
+Pyright invocation lacked those optional packages and reported import errors;
+the corrected declared environment has zero errors/warnings. The successful
+baseline environment remains separate from that type-checking environment.
+
+Reuse is change-driven: after `bef9c4bc2`, only the new cancellation test and
+opt-in benchmark changed before merging #407. That incoming delta changes fleet
+upgrade/CLI code and their docs/tests, not queue runtime, shared fixtures,
+dependency selection or the configurations exercised above. The isolated
+benchmark uses the unchanged real TLS/supervisor fixture helpers in both trees.
+No repetition of the 366-case run is justified by these test/measurement and
+unrelated upstream changes. Later documentation-only receipts do not invalidate
+the tested runtime.
+
+### Current synthetic measurements
+
+Both commands used Python 3.12.13, isolated locked dev + config, four retained
+history jobs, 5,000 ms outbound poll waits and 10-second sample windows on
+Sleipnir (112 logical/affinity CPUs). Runs were sequential after this task's test
+processes finished. Baseline native `c4cf4126` uses its 0.05-second coordinator
+default; candidate `e5924853` uses its proposed 1.0-second fallback. This compares
+the complete default change, not notifications with an artificially equalized
+poll interval. Both source trees were clean. Other owners' host work continued:
+one-minute load averages were approximately 55–58, so these are descriptive
+shared-host measurements, not an uncontended performance guarantee.
+
+| Scenario | CPU seconds before → after | Database opens before → after | Control requests before → after |
+| --- | --- | --- | --- |
+| Healthy idle | 4.486 → 0.255 | 2,245 → 164 | 95 → 2 |
+| Running without output | 9.534 → 2.375 | 4,598 → 1,375 | 107 → 2 |
+| Retained terminal history | 4.669 → 0.285 | 2,186 → 147 | 94 → 2 |
+| Recoverable error | 5.095 → 0.404 | 2,383 → 220 | 95 → 2 |
+
+Failed-owner recovery attempts fell from 136 to 7 in the error window. Completed
+short renewal requests averaged 51.96–94.51 ms before and 53.04–54.79 ms after,
+with zero measured request errors. Expected quiet `control_wait` requests average
+about 5,017 ms; they are reported separately from short requests and do not
+measure cancellation latency. Latency samples include requests completing in
+the window even if they started earlier; pending requests are excluded. CPU
+covers coordinator, agent and TLS threads in the fixture process, excluding
+worker/supervisor child CPU.
+
+Exact JSONL measurements, per-operation counts/means/maxima, host load and stderr
+are retained as `baseline-measurements.*` and `integrated-measurements.*` under
+`build/idle-integration/`. The baseline is a detached, unchanged
+`../loom-worktrees/idle-service-baseline-c4cf4126` checkout; it executes the same
+candidate diagnostic script via `runpy`, importing baseline runtime and fixtures.
+The candidate command is:
+
+```sh
+uv run --python 3.12 --isolated --locked --group dev --extra config \
+  python -m tools.service_benchmark --seconds 10 --history 4
+```
+
+**Pending:** matched physical cancellation timings (request reply, terminal
+observation, final release) and all four current CPU/GPU/mixed/cancellation
+acceptance cases. The historical settlement increase below remains unresolved
+by synthetic CPU and deterministic correctness tests. Physical scheduling stays
+with rphys #864's owner; its frozen image and active operation are untouched.
+No physical operation was started here. PR #406 remains draft until its required
+qualification is reconciled. Consumer adoption follows the scientific-context
+and native deliveries; it must retain matching installed provenance.
+
+## Historical October 8 rollout and receipts
+
+The following records describe the earlier tested/deployed revisions, not the
+current fleet state or qualification of the integrated candidate above.
 
 The user approved integration and qualification on `rphys-pure-current` on
 2026-10-08. The original `rphys` services are stopped; the pre-upgrade fleet selected
