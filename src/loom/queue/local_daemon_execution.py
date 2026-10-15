@@ -4910,6 +4910,7 @@ class LocalDaemonExecution:
             transfer_refs = _resident_input_refs(
                 worker_request.inputs,
                 cast(StageFingerprintRecord, worker_request.fingerprint).to_dict(),
+                worker_request.metadata,
             )
             for logical_name, ref in sorted(transfer_refs.items()):
                 transfer_id = (

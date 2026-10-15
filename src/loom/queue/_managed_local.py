@@ -3550,6 +3550,7 @@ def run_managed_local_assignment(
     transfer_refs = _resident_input_refs(
         worker_request.inputs,
         cast(StageFingerprintRecord, worker_request.fingerprint).to_dict(),
+        worker_request.metadata,
     )
     if retained_inputs is not None and set(retained_inputs) != set(transfer_refs):
         raise ManagedLocalError("retained resident input interface conflicts")

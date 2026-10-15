@@ -28,6 +28,7 @@ class SharedInputConsumer:
 
 class SharedClosureProducer:
     def run(self, context, inputs):
+        _check_project_context(context)
         assert not inputs
         root = context.local_output_path("manifest", suffix=".json").parent
         block = b"shared-native-payload\n" * 4096
@@ -50,6 +51,7 @@ class SharedClosureProducer:
 
 class SharedClosureConsumer:
     def run(self, context, inputs):
+        _check_project_context(context)
         from loom.io.uris import uri_to_path
         import json
         manifest = context.load_input("manifest")
@@ -101,3 +103,40 @@ class SharedRecoveryProducer:
         assert (previous / catalog["checkpoint"]).read_bytes() == b"completed-progress"
         (current / "restored").write_bytes(b"restored")
         return {"manifest": context.save_artifact("manifest", {"restored": True, "binding": binding}, artifact_type="json", codec_key="json.v1")}
+
+
+def inspect_shared_context(request):
+    """Write one metadata companion into the native publication closure."""
+    root = Path(request["artifact_directory"])
+    (root / "science.json").write_text('science belongs to preparation')
+    stages = request["composition"]["resolved"]["pipeline"]["stages"]
+    return {
+        "schema_version": 3,
+        "composition": request["composition"],
+        "evidence": {"namespace": "shared-context", "payload": {}},
+        "reconciliation_key": None,
+        "stage_contracts": {
+            stage["name"]: {"semantic_key": None, "payload": {"member": "science.json"}}
+            for stage in stages
+        },
+    }
+
+
+def _check_project_context(context):
+    if not context.stage_config.get("project_context"):
+        return
+    from loom.artifacts import ArtifactRef
+    from loom.io.uris import uri_to_path
+    from loom.preparation import load_preparation_report
+    from loom.serialization import thaw_plain_data
+    from typing import Any, cast
+
+    reference = ArtifactRef.from_dict(thaw_plain_data(context.metadata["loom.project_report"]))
+    report = cast(dict[str, Any], load_preparation_report(reference, uri_to_path(reference.uri)))
+    assert "manifest" in report["composition"]
+    assert "provenance" in report["composition"]
+    assert "evidence_ref" not in report["composition"]
+    contract = report["project_contracts"][context.stage_name]
+    assert contract == thaw_plain_data(context.metadata["loom.project_contract"])
+    root = uri_to_path(reference.uri).parent
+    assert (root / contract["payload"]["member"]).read_text() == 'science belongs to preparation'
