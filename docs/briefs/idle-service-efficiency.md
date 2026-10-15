@@ -91,14 +91,50 @@ uv run --python 3.12 --isolated --locked --group dev --extra config \
   python -m tools.service_benchmark --seconds 10 --history 4
 ```
 
-**Pending:** matched physical cancellation timings (request reply, terminal
-observation, final release) and all four current CPU/GPU/mixed/cancellation
-acceptance cases. The historical settlement increase below remains unresolved
-by synthetic CPU and deterministic correctness tests. Physical scheduling stays
-with rphys #864's owner; its frozen image and active operation are untouched.
-No physical operation was started here. PR #406 remains draft until its required
-qualification is reconciled. Consumer adoption follows the scientific-context
-and native deliveries; it must retain matching installed provenance.
+### Matched physical service and cancellation evidence
+
+The deployment owner completed native operation `idle-service-runtime-8a1b1f4a`:
+all six Quark/Shazza CPU, GPU and shared-storage checks passed. Sleipnir execution
+qualification remains explicitly deferred. The fixed-image comparison then
+qualified native `c4cf4126` before and `8a1b1f4a` after. Both used installed client
+and workload source `fc4de552c`, image
+`4a5bf5a6f975f3d2089dade8ee48df5d1270bd642980ae2210d26738f9b15dcf`, the same
+Shazza sleep workload and coordinator configuration with a 1.0-second interval.
+Request equality excludes only the three mutually agreeing unique probe IDs.
+
+| Observation | Before | After |
+| --- | ---: | ---: |
+| Cancellation reply, seconds | 0.131 | 0.256 |
+| Worker terminal first observed, seconds | 9.260 | 5.037 |
+| Final provider release first observed, seconds | 14.082 | 12.867 |
+| Coordinator CPU, percent of one core over 30 seconds | 44.57 | 19.00 |
+| Shazza agent CPU, same scope | 34.37 | 12.70 |
+| Shazza supervisor CPU, same scope | 5.73 | 4.83 |
+
+Both runs reached CANCELLED with positive provider release. This matched
+observation does not reproduce the historical settlement increase. It is one
+sample per revision, not a latency distribution or SLO: retained assignments
+increased from 103 to 117 and host load differed. CPU excludes child processes.
+Elapsed phases use coordinator monotonic time with 0.1-second observation
+sampling; worker UTC timestamps are separate evidence.
+
+The owner receipt is
+`/nas/home/can134/.local/share/rphys/cache-optimization/idle-service-physical/matched-qualification.json`,
+SHA-256 `f8664a0fba0ecf781086ee4f8a49d562a36545b02168073b8df976f04a779df7`.
+Adjacent `idle-matched-before-20261015T134421Z.jsonl` and
+`idle-matched-after-20261015T145157Z.jsonl` retain raw observations. Their hashes,
+fixed inputs, normalized request equality and cancellation/release observations
+were independently checked during integration. The
+[owner handoff](https://github.com/samcantrill/rphys/pull/864#issuecomment-6195159582)
+records the qualification and its limits.
+
+**Pending:** all four current CPU/GPU/mixed/cancellation acceptance cases on the
+final paired image. Physical scheduling stays with rphys #864's owner; its
+frozen source and active operation are untouched. PR #406 remains draft until
+this required qualification is reconciled. The agreed merge preserves qualified
+`8a1b1f4a` as native develop ancestry; documentation-only receipts do not require
+repinning or rebuilding an identical image. Consumer adoption retains matching
+installed provenance and checks final executable/dependency equivalence.
 
 ## Historical October 8 rollout and receipts
 
