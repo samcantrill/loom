@@ -15,7 +15,10 @@ from contextlib import contextmanager
 from dataclasses import replace
 from functools import wraps
 import json
+import os
+import platform
 import sqlite3
+import subprocess
 from threading import Lock
 import time
 
@@ -38,6 +41,7 @@ class Counters:
     def __init__(self) -> None:
         self.lock = Lock()
         self.values: Counter[str] = Counter()
+        self.request_timings = None
 
     def increment(self, name: str) -> None:
         with self.lock:
@@ -46,6 +50,36 @@ class Counters:
     def snapshot(self) -> Counter[str]:
         with self.lock:
             return self.values.copy()
+
+    def begin_requests(self):
+        with self.lock:
+            self.request_timings = {}
+
+    def request_completed(self, operation, seconds, failed):
+        with self.lock:
+            if self.request_timings is None:
+                return
+            record = self.request_timings.setdefault(
+                operation, {"count": 0, "errors": 0, "total_seconds": 0.0, "max_seconds": 0.0}
+            )
+            record["count"] += 1
+            record["errors"] += int(failed)
+            record["total_seconds"] += seconds
+            record["max_seconds"] = max(record["max_seconds"], seconds)
+
+    def end_requests(self):
+        with self.lock:
+            timings = self.request_timings
+            self.request_timings = None
+        return {
+            operation: {
+                "count": record["count"],
+                "errors": record["errors"],
+                "mean_ms": round(1000 * record["total_seconds"] / record["count"], 3),
+                "max_ms": round(1000 * record["max_seconds"], 3),
+            }
+            for operation, record in (timings or {}).items()
+        }
 
     def wrap(self, patch, owner, name, metric):
         original = getattr(owner, name)
@@ -85,7 +119,14 @@ def measured_calls(patch):
             counters.increment("control_requests")
         if operation == "renew":
             counters.increment("resource_renewals")
-        return exchange(config, operation, *args, **kwargs)
+        started = time.monotonic()
+        failed = True
+        try:
+            result = exchange(config, operation, *args, **kwargs)
+            failed = False
+            return result
+        finally:
+            counters.request_completed(operation, time.monotonic() - started, failed)
 
     patch.setattr(transport, "_exchange_agent_request", counted_exchange)
     yield counters
@@ -93,6 +134,8 @@ def measured_calls(patch):
 
 def sample(counters, scenario, seconds):
     before = counters.snapshot()
+    counters.begin_requests()
+    load_before = os.getloadavg()
     cpu = time.process_time()
     started = time.monotonic()
     time.sleep(seconds)
@@ -104,6 +147,10 @@ def sample(counters, scenario, seconds):
         "process_cpu_seconds": round(cpu, 3),
         "one_core_cpu_percent": round(100 * cpu / elapsed, 2),
         "counters": dict(counters.snapshot() - before),
+        "request_latency": counters.end_requests(),
+        "latency_scope": "requests completed in window; may start earlier; pending excluded",
+        "load_average_before": load_before,
+        "load_average_after": os.getloadavg(),
         "scope": "isolated coordinator+agent+TLS; child CPU excluded",
     }), flush=True)
 
@@ -132,6 +179,19 @@ def main():
                 case.daemon.config = replace(
                     case.daemon.config, poll_interval_seconds=args.coordinator_interval
                 )
+            print(json.dumps({
+                "measurement": "isolated_service_fixture",
+                "revision": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+                "dirty": bool(subprocess.check_output(["git", "status", "--porcelain"], text=True)),
+                "host": platform.node(),
+                "python": platform.python_version(),
+                "logical_cpus": os.cpu_count(),
+                "affinity_cpus": len(os.sched_getaffinity(0)),
+                "coordinator_interval_seconds": case.daemon.config.poll_interval_seconds,
+                "outbound_poll_wait_ms": deployment._OUTBOUND_POLL_WAIT_MS,
+                "window_seconds": args.seconds,
+                "history_count": args.history,
+            }), flush=True)
             time.sleep(1)
             sample(counters, "healthy_idle", args.seconds)
 

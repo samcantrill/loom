@@ -1762,6 +1762,128 @@ def test_recovery_transport_failure_is_logged_and_peer_work_still_progresses(mon
             _release_gate(gate)
 
 
+def test_cancel_during_recovery_backoff_stops_exact_worker_and_peer_progresses(
+    monkeypatch,
+):
+    from loom.queue._agent_progress import _cooperative, _external, _steps
+    from loom.queue._agent_process_supervisor import _SupervisorCommunicationError
+
+    resume = LocalDaemonAgentHttpClient._resume_retained_assignments
+    failed = deployment._RecoveryRetry.failed
+    delay = deployment._delay
+    request_stop = AgentProcessSupervisorClient.request_stop
+    retry_armed, allow_retry, stopped = Event(), Event(), Event()
+    target = {}
+    attempts = []
+    stopped_launches = []
+    held_delay = 12345.0
+
+    def unavailable_receipt():
+        raise _SupervisorCommunicationError(possibly_dispatched=True)
+
+    @_cooperative
+    def interrupted(client, references=None, **kwargs):
+        if references and references[0][1] == target.get("assignment_id"):
+            attempts.append(references[0])
+            if not allow_retry.is_set():
+                yield from _external("bulk", unavailable_receipt)
+        return (yield from _steps(resume, client, references, **kwargs))
+
+    def hold_retry(owner, error, **kwargs):
+        duration = failed(owner, error, **kwargs)
+        if kwargs.get("assignment_id") == target.get("assignment_id"):
+            return held_delay
+        return duration
+
+    def wait_retry(seconds):
+        if seconds == held_delay:
+            retry_armed.set()
+            while not allow_retry.is_set():
+                yield from delay(0.01)
+        else:
+            yield from delay(seconds)
+
+    def stop_exact(owner, launch):
+        receipt = request_stop(owner, launch)
+        if launch.assignment_id == target.get("assignment_id"):
+            stopped_launches.append(launch)
+            stopped.set()
+        return receipt
+
+    with _service(monkeypatch, ceiling=2, memory=2 * 1024**3) as case:
+        gates = []
+        try:
+            for name in ("cancel", "peer"):
+                gate, uri, _ = _submit_gated(case, name)
+                gates.append(gate)
+                _eventually(lambda: (gate / "build.started").exists())
+                if name == "cancel":
+                    target["assignment_id"] = _rows(
+                        case.database,
+                        "SELECT assignment_id FROM remote_assignments WHERE run_uri = ?",
+                        (uri,),
+                    )[0][0]
+            launches = _rows(
+                case.agent_root / "supervisor/supervisor.sqlite",
+                "SELECT launch_json FROM launches",
+            )
+            exact_launch = next(
+                supervisor_module._launch_from_value(json.loads(encoded))
+                for (encoded,) in launches
+                if json.loads(encoded)["assignment_id"] == target["assignment_id"]
+            )
+            assert len(launches) == 2
+            case.stop.set()
+            case.thread.join(10)
+            assert not case.thread.is_alive(), case.failures
+            monkeypatch.setattr(
+                LocalDaemonAgentHttpClient, "_resume_retained_assignments", interrupted
+            )
+            monkeypatch.setattr(deployment._RecoveryRetry, "failed", hold_retry)
+            monkeypatch.setattr(deployment, "_delay", wait_retry)
+            monkeypatch.setattr(AgentProcessSupervisorClient, "request_stop", stop_exact)
+            case.stop.clear()
+            case.thread = Thread(target=case.serve)
+            case.thread.start()
+            assert retry_armed.wait(20), case.failures
+
+            # The failed owner's retry stays held; an already-running peer and
+            # urgent stop must progress without advancing that owner's deadline.
+            _release_gate(gates[1])
+            assert (
+                case.client.wait("peer", timeout_seconds=30).state
+                is LocalDaemonAdmissionState.SUCCEEDED
+            )
+            case.client.cancel("cancel")
+            assert stopped.wait(20), case.failures
+            assert not allow_retry.is_set()
+            assert len(attempts) == 1
+            assert stopped_launches and all(
+                launch == exact_launch for launch in stopped_launches
+            )
+
+            allow_retry.set()
+            assert (
+                case.client.wait("cancel", timeout_seconds=30).state
+                is LocalDaemonAdmissionState.CANCELLED
+            )
+            _eventually(
+                lambda: _rows(
+                    case.database,
+                    "SELECT COUNT(*) FROM remote_assignments WHERE state = 'RELEASED'",
+                ) == [(2,)]
+            )
+            assert _rows(
+                case.agent_root / "supervisor/supervisor.sqlite",
+                "SELECT COUNT(*) FROM launches",
+            ) == [(2,)]
+            assert not case.failures
+        finally:
+            allow_retry.set()
+            for gate in gates:
+                _release_gate(gate)
+
+
 def test_stop_resume_preserves_running_owner_and_conservative_startup(monkeypatch):
     with _service(monkeypatch, ceiling=2) as case:
         uri, _ = _prepare_remote_sleep_run(
