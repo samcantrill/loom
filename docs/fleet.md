@@ -220,6 +220,32 @@ alone is insufficient. If fresh native resource status shows that an external
 process subsequently occupied the exact released GPU, the completed check can
 pass while that GPU remains unavailable for scheduling. Unknown observations,
 retained claims and unproven release still wait.
+An operator can explicitly defer execution checks for selected upgrade agents:
+
+```sh
+loom fleet operation defer-checks image-upgrade-1 --fleet lab \
+  --agent-id busy-worker --reason "Operator defers this host until GPU capacity returns"
+```
+
+For a new upgrade, use `upgrade --apply --defer-checks-for busy-worker
+--qualification-reason "..."` with the normal target arguments. The protected
+operation retains the selected agents and reason against its original intent;
+exact replay is supported, conflicting changes are refused. The default still
+checks every consuming agent. This exception skips only execution qualification:
+installation/source checks, ownership, promotion, native settlement and policy
+restoration remain required. It does not cancel any previously admitted probe.
+Cancel that exact probe through the existing native run cancellation command
+when needed, then resume the same upgrade after its effects settle.
+
+Completion with an exception reports `qualification.state: partial`, including
+the deferred agents and reason. Prior passing/failed/cancelled check evidence
+remains unchanged; deferred checks are never reported as passed. Follow-up
+qualification uses the ordinary explicit self-test command. An upgrade exception
+is not an automatic scheduling exclusion; place jobs on qualified agents.
+Deferral is unavailable once a runtime upgrade has bound a separate workload
+repair; it is rejected explicitly rather than changing a parent policy that
+would leave the repair's checks unchanged.
+
 Upgrade qualification selects a GPU probe when either the resident profile or
 the retained native resource inventory declares GPUs, including NVIDIA provider
 discovery. Occupancy before execution prevents dispatch until capacity is available.
