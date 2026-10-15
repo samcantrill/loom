@@ -186,13 +186,33 @@ def test_create_run_fails_loudly_for_incomplete_existing_schema(
 
     check = store.check_schema(run_uri)
     assert check.failure is not None
-    assert check.failure.kind is AuthoritySchemaFailureKind.INVALID
+    assert check.failure.kind is AuthoritySchemaFailureKind.UNSUPPORTED_OLDER
 
-    with pytest.raises(AuthoritySchemaError, match="incomplete or invalid"):
+    with pytest.raises(AuthoritySchemaError, match="unsupported older"):
         store.create_run(run_uri)
 
 
-def test_complete_v1_database_migrates_output_commit_without_losing_facts(
+@pytest.mark.parametrize("damage", ["metadata", "audit_events"])
+def test_create_run_refuses_incomplete_current_database_without_repair(tmp_path: Path, damage: str) -> None:
+    run_uri = path_to_run_uri(tmp_path / "run")
+    store = SQLitePerRunAuthorityStore(clock=FrozenClock())
+    store.create_run(run_uri)
+    database = _authority_database_path(run_uri)
+    with sqlite3.connect(database) as conn:
+        if damage == "metadata":
+            conn.execute("DELETE FROM metadata WHERE key = 'schema_version'")
+        else:
+            conn.execute("DROP TABLE audit_events")
+    conn.close()
+    before = {path.name: path.read_bytes() for path in database.parent.iterdir()}
+
+    with pytest.raises(AuthoritySchemaError):
+        store.create_run(run_uri)
+
+    assert {path.name: path.read_bytes() for path in database.parent.iterdir()} == before
+
+
+def test_retired_output_commit_database_is_refused_without_changes(
     tmp_path: Path,
 ) -> None:
     run_uri = path_to_run_uri(tmp_path / "run")
@@ -202,7 +222,7 @@ def test_complete_v1_database_migrates_output_commit_without_losing_facts(
         run_uri, "build", owner_id="one", lease_ttl_seconds=30
     )
     assert allocation.lease is not None
-    committed = store.record_output_commit(
+    store.record_output_commit(
         run_uri,
         "build",
         attempt_id=allocation.attempt.attempt_id,
@@ -230,12 +250,16 @@ def test_complete_v1_database_migrates_output_commit_without_losing_facts(
         """)
         conn.execute("DROP TABLE commits_v2")
         conn.execute("UPDATE metadata SET value = '1' WHERE key = 'schema_version'")
-    history = store.list_output_commits(run_uri)
-    assert history == (committed,)
-    assert store.check_schema(run_uri).supported
+    conn.close()
+    before = {path.name: path.read_bytes() for path in database_path.parent.iterdir()}
+    with pytest.raises(AuthoritySchemaError, match="unsupported older"):
+        store.list_output_commits(run_uri)
+    with pytest.raises(AuthoritySchemaError, match="unsupported older"):
+        store.create_run(run_uri)
+    assert {path.name: path.read_bytes() for path in database_path.parent.iterdir()} == before
 
 
-def test_incomplete_v1_database_rejects_migration_without_partial_changes(
+def test_incomplete_retired_database_is_refused_without_reconstruction(
     tmp_path: Path,
 ) -> None:
     run_uri = path_to_run_uri(tmp_path / "run")
@@ -246,7 +270,7 @@ def test_incomplete_v1_database_rejects_migration_without_partial_changes(
         conn.execute("DROP TABLE artifact_facts")
         conn.execute("UPDATE metadata SET value = '1' WHERE key = 'schema_version'")
 
-    with pytest.raises(AuthoritySchemaError, match="v1 schema is incomplete"):
+    with pytest.raises(AuthoritySchemaError, match="unsupported older"):
         store.list_output_commits(run_uri)
 
     with sqlite3.connect(database_path) as conn:
@@ -1113,52 +1137,6 @@ def test_recovery_close_is_fenced_and_an_ordinary_terminal_winner_supersedes(
         )
 
 
-def test_v3_authority_database_migrates_managed_fence_table(tmp_path: Path) -> None:
-    run_uri = path_to_run_uri(tmp_path / "v3-managed-migration")
-    store = SQLitePerRunAuthorityStore(clock=FrozenClock())
-    store.create_run(run_uri)
-    database = _authority_database_path(run_uri)
-    with sqlite3.connect(database) as conn:
-        conn.execute("DROP TABLE managed_attempt_bindings")
-        conn.execute("UPDATE metadata SET value = '3' WHERE key = 'schema_version'")
-
-    reopened = SQLitePerRunAuthorityStore(clock=FrozenClock())
-    reopened.open_run(run_uri)
-
-    assert reopened.check_schema(run_uri).failure is None
-    with sqlite3.connect(database) as conn:
-        columns = {
-            row[1]
-            for row in conn.execute("PRAGMA table_info(managed_attempt_bindings)")
-        }
-    assert {"terminal_status", "terminal_digest"}.issubset(columns)
-
-
-def test_v4_authority_database_migrates_managed_unbind_receipts(
-    tmp_path: Path,
-) -> None:
-    run_uri = path_to_run_uri(tmp_path / "v4-managed-unbind-migration")
-    store = SQLitePerRunAuthorityStore(clock=FrozenClock())
-    store.create_run(run_uri)
-    database = _authority_database_path(run_uri)
-    with sqlite3.connect(database) as conn:
-        conn.execute("DROP TABLE managed_attempt_unbind_receipts")
-        conn.execute("UPDATE metadata SET value = '4' WHERE key = 'schema_version'")
-
-    reopened = SQLitePerRunAuthorityStore(clock=FrozenClock())
-    reopened.open_run(run_uri)
-
-    assert reopened.check_schema(run_uri).failure is None
-    with sqlite3.connect(database) as conn:
-        tables = {
-            row[0]
-            for row in conn.execute(
-                "SELECT name FROM sqlite_schema WHERE type = 'table'"
-            )
-        }
-    assert "managed_attempt_unbind_receipts" in tables
-
-
 def test_coordinator_admission_binding_replays_exact_receipt_and_rejects_conflict(
     tmp_path: Path,
 ) -> None:
@@ -1397,37 +1375,6 @@ def test_final_cancellation_preserves_a_terminal_run_winner(
     assert store.open_run(run_uri).status is winner
 
 
-def test_v5_authority_database_migrates_daemon_authority_receipts(
-    tmp_path: Path,
-) -> None:
-    run_uri = path_to_run_uri(tmp_path / "v5-daemon-authority-migration")
-    store = SQLitePerRunAuthorityStore(clock=FrozenClock())
-    store.create_run(run_uri)
-    database = _authority_database_path(run_uri)
-    with sqlite3.connect(database) as conn:
-        conn.execute("DROP TABLE coordinator_admission_receipts")
-        conn.execute("DROP TABLE cancellation_epochs")
-        conn.execute("DROP TABLE cancellation_epoch_receipts")
-        conn.execute("UPDATE metadata SET value = '5' WHERE key = 'schema_version'")
-
-    reopened = SQLitePerRunAuthorityStore(clock=FrozenClock())
-    reopened.open_run(run_uri)
-
-    assert reopened.check_schema(run_uri).failure is None
-    with sqlite3.connect(database) as conn:
-        tables = {
-            row[0]
-            for row in conn.execute(
-                "SELECT name FROM sqlite_schema WHERE type = 'table'"
-            )
-        }
-    assert {
-        "coordinator_admission_receipts",
-        "cancellation_epochs",
-        "cancellation_epoch_receipts",
-    }.issubset(tables)
-
-
 def test_prepared_attempt_revalidates_revision_and_terminal_run(tmp_path: Path) -> None:
     run_uri = path_to_run_uri(tmp_path / "stale-preparation")
     store = SQLitePerRunAuthorityStore(clock=FrozenClock())
@@ -1514,42 +1461,32 @@ def test_concurrent_prepared_attempt_replay_creates_one_attempt(tmp_path: Path) 
     assert len(snapshot.stages[0].attempts) == 1
 
 
-def test_v2_migration_preserves_legacy_pending_attempt_without_backfill(
-    tmp_path: Path,
-) -> None:
-    run_uri = path_to_run_uri(tmp_path / "legacy-pending")
+@pytest.mark.parametrize("retired", [False, True])
+def test_inspection_observes_committed_wal_without_mutating_source(tmp_path: Path, retired: bool) -> None:
+    run_uri = path_to_run_uri(tmp_path / "run")
     store = SQLitePerRunAuthorityStore(clock=FrozenClock())
-    store.create_run(run_uri, status=RunStatus.RUNNING)
-    allocation = store.allocate_stage_attempt(run_uri, "build", owner_id="legacy")
-    database_path = _authority_database_path(run_uri)
-    with sqlite3.connect(database_path) as conn:
-        conn.execute(
-            "UPDATE attempts SET status = 'PENDING' WHERE attempt_id = ?",
-            (allocation.attempt.attempt_id,),
-        )
-        conn.execute("UPDATE stages SET status = 'PENDING' WHERE stage_name = 'build'")
-        conn.execute("DROP TABLE prepared_attempt_receipts")
-        conn.execute("UPDATE metadata SET value = '2' WHERE key = 'schema_version'")
+    store.create_run(run_uri)
+    database = _authority_database_path(run_uri)
+    with sqlite3.connect(database) as writer:
+        writer.execute("PRAGMA wal_autocheckpoint = 0")
+        if retired:
+            writer.execute("UPDATE metadata SET value = '10' WHERE key = 'schema_version'")
+        else:
+            writer.execute("UPDATE run_state SET status = 'PLANNED'")
+        writer.commit()
+        assert Path(str(database) + "-wal").stat().st_size > 0
+        before = {path.name: path.read_bytes() for path in database.parent.iterdir()}
 
-    snapshot = store.open_run(run_uri)
-    attempt = snapshot.stages[0].attempts[0]
-    assert attempt.attempt_id == allocation.attempt.attempt_id
-    assert attempt.status is StageStatus.PENDING
-    with sqlite3.connect(database_path) as conn:
-        count = conn.execute(
-            "SELECT COUNT(*) FROM prepared_attempt_receipts"
-        ).fetchone()
-    assert count == (0,)
-    with pytest.raises(AuthorityStoreError, match="does not permit"):
-        store.ensure_prepared_attempt(
-            run_uri,
-            _prepared_request(
-                snapshot.revision,
-                stage_status=StageStatus.PENDING,
-                attempt_id=attempt.attempt_id,
-                next_attempt=2,
-            ),
-        )
+        if retired:
+            with pytest.raises(AuthoritySchemaError, match="older"):
+                store.open_run(run_uri)
+            with pytest.raises(AuthoritySchemaError, match="older"):
+                store.create_run(run_uri)
+        else:
+            assert store.open_run(run_uri).status is RunStatus.PLANNED
+
+        assert {path.name: path.read_bytes() for path in database.parent.iterdir()} == before
+    writer.close()
 
 
 def test_separate_state_root_keeps_database_and_live_wal_out_of_materialization(tmp_path: Path) -> None:

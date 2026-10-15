@@ -8,7 +8,7 @@ private queue application infrastructure; pipeline execution never imports it.
 
 from __future__ import annotations
 
-from contextlib import ExitStack, closing, contextmanager
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import StrEnum
 import fcntl
@@ -20,7 +20,6 @@ from pathlib import Path
 from multiprocessing import AuthenticationError
 from multiprocessing.connection import Connection, answer_challenge, deliver_challenge
 import secrets
-import shutil
 import socket
 import sqlite3
 import stat
@@ -33,6 +32,7 @@ from time import monotonic, sleep
 from typing import Mapping, cast
 from uuid import uuid4
 
+from loom._sqlite_inspection import inspect_sqlite_database
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.pipeline.runtime._resource_controls import _validated_resource_controls
 from ._process_group import OwnedProcessGroup, require_group_wait_support
@@ -363,47 +363,6 @@ class SupervisorReceipt:
         )
 
 
-@contextmanager
-def _supervisor_inspection_connection(database: Path):
-    """Read committed storage, recovering an interrupted write only in a copy.
-
-    Service startup repeats admission under its owner lock before opening the
-    admitted original for normal recovery. A live SQLite writer does not produce
-    READONLY_ROLLBACK; that code identifies an abandoned hot rollback journal.
-    """
-    with ExitStack() as stack:
-        conn = stack.enter_context(closing(sqlite3.connect(
-            database.as_uri() + "?mode=ro", uri=True,
-        )))
-        conn.row_factory = sqlite3.Row
-        try:
-            conn.execute("BEGIN")
-            conn.execute("SELECT key, value FROM metadata").fetchall()
-        except sqlite3.OperationalError as exc:
-            if exc.sqlite_errorcode != sqlite3.SQLITE_READONLY_ROLLBACK:
-                raise
-            conn.close()
-            directory = Path(stack.enter_context(tempfile.TemporaryDirectory(
-                prefix="loom-supervisor-inspection-",
-            )))
-            paths = (database, Path(str(database) + "-journal"))
-            before = tuple(
-                (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
-                for path in paths for info in (path.stat(),)
-            )
-            for path in paths:
-                shutil.copyfile(path, directory / path.name)
-            after = tuple(
-                (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
-                for path in paths for info in (path.stat(),)
-            )
-            if after != before:
-                raise AgentProcessSupervisorError("supervisor storage changed during inspection")
-            conn = stack.enter_context(closing(sqlite3.connect(directory / database.name)))
-            conn.row_factory = sqlite3.Row
-            conn.execute("BEGIN")
-        yield conn
-
 
 def _inspect_current_supervisor(
     database: Path, *, agent_id: str, configuration_fingerprint: str,
@@ -414,7 +373,7 @@ def _inspect_current_supervisor(
             "managed_supervisor_state_requires_reinitialization"
         )
     try:
-        with _supervisor_inspection_connection(database) as conn:
+        with inspect_sqlite_database(database) as conn:
             values = {
                 str(row["key"]): str(row["value"])
                 for row in conn.execute("SELECT key, value FROM metadata")
@@ -2009,7 +1968,7 @@ def retained_supervisor_guard(agent_root: Path, *, agent_id: str):
             if details.st_uid != os.getuid() or stat.S_IMODE(details.st_mode) & 0o077:
                 raise AgentProcessSupervisorError("retained supervisor is not protected")
         # Reject retired storage before contacting its owner or creating a lock.
-        with _supervisor_inspection_connection(database) as conn:
+        with inspect_sqlite_database(database) as conn:
             metadata = dict(conn.execute("SELECT key, value FROM metadata"))
             if metadata.get("schema_version") != str(AgentProcessSupervisor._SCHEMA_VERSION):
                 raise AgentProcessSupervisorError(
@@ -2049,7 +2008,7 @@ def retained_supervisor_guard(agent_root: Path, *, agent_id: str):
                 fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as exc:
                 raise AgentProcessSupervisorError("retained supervisor is still owned") from exc
-            with _supervisor_inspection_connection(database) as conn:
+            with inspect_sqlite_database(database) as conn:
                 metadata = dict(conn.execute("SELECT key,value FROM metadata"))
                 states = tuple(row[0] for row in conn.execute("SELECT state FROM launches"))
                 boot = json.loads(metadata.get("boot_evidence", "null"))
