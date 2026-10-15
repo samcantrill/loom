@@ -284,14 +284,24 @@ def test_quiesced_migration_preserves_native_identity_and_refuses_live_owner(
                 conn.execute(f"ALTER TABLE launches DROP COLUMN {column}")
             conn.execute("UPDATE metadata SET value = '5' WHERE key = 'schema_version'")
         before = dict(conn.execute("SELECT key, value FROM metadata"))
+    if previous_schema == 5:
+        from loom.queue._agent_process_supervisor import AgentProcessSupervisorError
+
+        before_files = {path.name: path.read_bytes() for path in supervisor_root.iterdir()
+                        if path.is_file()}
+        with pytest.raises(AgentProcessSupervisorError, match="requires_reinitialization"):
+            with service_backend_migration_guard(service, root_id):
+                pytest.fail("retired supervisor was admitted for replacement")
+        assert {path.name: path.read_bytes() for path in supervisor_root.iterdir()
+                if path.is_file()} == before_files
+        return
     with service_backend_migration_guard(service, root_id):
         from loom.queue.operations import inspect_native_service
 
         assert inspect_native_service(service.client.agent_root).owner == root_id
     with sqlite3.connect(supervisor_database) as conn:
         assert dict(conn.execute("SELECT key, value FROM metadata")) == before
-    # The guard admits the old clean cut without rewriting it. Normal owner
-    # opening performs the supported migration and preserves retained identity.
+    # Current replacement and reopen preserve retained identity without conversion.
     from loom.queue._agent_process_supervisor import AgentProcessSupervisor
 
     configuration = _service_configuration(supervisor_root)
@@ -302,7 +312,7 @@ def test_quiesced_migration_preserves_native_identity_and_refuses_live_owner(
     assert owner.continuity_epoch == before["continuity_epoch"]
     with sqlite3.connect(supervisor_database) as conn:
         after = dict(conn.execute("SELECT key, value FROM metadata"))
-        assert after == {**before, "schema_version": "6"}
+        assert after == before
     with pytest.raises(QueueConflictError, match="identity changed"):
         with service_backend_migration_guard(service, "wrong-root"):
             pytest.fail("migration rebound native identity")

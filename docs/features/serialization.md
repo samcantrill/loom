@@ -1255,8 +1255,10 @@ load_versioned_document
 ```
 
 The goal is clear failure, not a full schema-validation framework.
-Migrations are owned by each persisted-document module and passed into
-`load_versioned_document()` rather than registered in global process state.
+`load_versioned_document()` accepts exactly the document owner's current version,
+validates required and optional fields, and returns a copy. Older and future
+versions are rejected without conversion. Producers must regenerate documents
+using the current contract; the serialization API has no migration hooks.
 
 ### 13.2 Version Field Names
 
@@ -1346,26 +1348,12 @@ return actual version if supported
 raise SchemaVersionError otherwise
 ```
 
-### 13.6 Migrations
+### 13.6 Current formats
 
-Do not build full migration machinery in v0.
-
-Recommended v0 policy:
-
-```text
-read exactly supported schema versions
-fail clearly for newer unsupported versions
-add small one-step compatibility conversions only when needed
-```
-
-Future migration support can add:
-
-```text
-Migration protocol
-MigrationRegistry
-document-specific migration chains
-CLI inspection commands
-```
+Each document family writes and reads one current schema. Older or future
+documents fail explicitly; readers never convert missing or historical fields.
+Regenerate documents through the current producer. No migration protocol,
+registry, callback or compatibility conversion is provided.
 
 ---
 
