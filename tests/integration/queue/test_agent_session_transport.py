@@ -7136,9 +7136,25 @@ def test_loopback_exposes_client_and_operator_views_only_to_configured_roles(
     try:
         handshake = client.handshake(role="client")
         assert handshake["role"] == "client"
+        # The current client surface advertises maintenance, conditional control,
+        # both quiescent promotions and bounded logs alongside run inspection.
+        expected_capabilities = (
+            "authenticated-application-v1",
+            "daemon-control-v1",
+            "operator-observations-v1",
+            "conditional-agent-control-v1",
+            "quiescent-profile-promotion-v2",
+            "quiescent-source-promotion-v1",
+            "maintenance-admission-v1",
+            "run-context-v1",
+            "run-query-v1",
+            "output-query-v1",
+            "lineage-query-v1",
+            "artifact-read-v1",
+            "bounded-run-logs-v1",
+        )
         assert handshake["capabilities"] in (
-            ("authenticated-application-v1", "daemon-control-v1", "operator-observations-v1", "run-context-v1", "run-query-v1", "output-query-v1", "lineage-query-v1", "artifact-read-v1"),
-            ["authenticated-application-v1", "daemon-control-v1", "operator-observations-v1", "run-context-v1", "run-query-v1", "output-query-v1", "lineage-query-v1", "artifact-read-v1"],
+            expected_capabilities, list(expected_capabilities)
         )
         remote_status = client.call_application("client", "status", {})
         direct_status = (

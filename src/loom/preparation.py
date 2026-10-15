@@ -83,6 +83,7 @@ _PREPARATION_GROUPS = (
 )
 _REPORT_FIELDS = {
     "schema_version",
+    "report_format",
     "operation_id",
     "input_manifest_digest",
     "preparation_profile",
@@ -225,9 +226,11 @@ class PreparationStage:
         }
         if _is_v3(binding):
             report["project_contracts"] = _report_contracts(report) if project_result is not None else None
+        from loom._preparation_report import save_composition_evidence
+
         return {
             "report": context.save_artifact(
-                "report", report, artifact_type="json", codec_key="json.v1"
+                "report", save_composition_evidence(report, context.local_output_path("report", suffix=".composition.json")), artifact_type="json", codec_key="json.v1"
             )
         }
 
@@ -640,6 +643,24 @@ class _ReceivedComposition:
     project_contracts_entry: Mapping[str, PlainData] | None = None
 
 
+def load_preparation_report(reference: ArtifactRef, report_path: str | Path) -> dict[str, PlainData]:
+    """Hydrate a canonical preparation report's complete retained evidence.
+
+    ``reference`` is the original committed JSON ArtifactRef; ``report_path`` is
+    its validated published local path, or an explicitly verified contained
+    archive copy for inspection. The latter never grants live run authority.
+    The primary checksum, sibling companion and exact metadata projections must
+    agree. Missing or old formats require fresh native preparation; no source
+    import, recomposition or legacy conversion occurs. Returned values are detached.
+    """
+    from loom._preparation_report import load_report
+
+    try:
+        return load_report(reference, report_path)
+    except (OSError, ValueError, ValidationError, SerializationError) as exc:
+        raise QueueConflictError("preparation retained report closure is invalid") from exc
+
+
 def decode_preparation_report(
     value: object,
     *,
@@ -670,6 +691,7 @@ def _decode_preparation_report(
                         | ({"candidate", "verification"} if "candidate" in expected.to_dict() else set())
                         | ({"project_contracts"} if _is_v3(expected) else set())
                         | ({"generations"} if expected.generations is not None else set()))
+        or report["report_format"] != "loom.preparation_report.v1"
         or type(report["schema_version"]) is not int
         or report["schema_version"] != expected.to_dict()["schema_version"]
     ):
@@ -1011,6 +1033,9 @@ class CoordinatorPreparation:
             preflight = PreflightResult((), ())
             return PreparationReport(reference, preflight.to_dict(), preflight.status.value,
                                      False, None, None, action_verification=checked)
+        value = load_preparation_report(
+            reference, LocalArtifactStore(store.local_artifact_root(admission.run_uri)).local_path(reference)
+        )
         composed, requirements, preflight = decode_preparation_report(
             value, expected=binding
         )

@@ -1102,6 +1102,15 @@ class SQLiteSlurmStageAssignments:
             item.logical_name for item in report.outputs
         ) != set(record.delivery.declared_outputs):
             raise QueueConflictError("SLURM result output interface conflicts")
+        from ._preparation_report_transfer import native_role
+        if report.schema_version == 5 and not native_role(record.delivery.fingerprint):
+            raise QueueConflictError("SLURM preparation transfer targets another stage role")
+        if (
+            report.status is StageStatus.SUCCEEDED
+            and native_role(record.delivery.fingerprint)
+            and report.schema_version != 5
+        ):
+            raise QueueConflictError("native preparation transfer capability is missing")
         encoded = _json(report.to_dict())
         with self._transaction() as conn:
             row = self._row(conn, assignment_id)
@@ -1171,11 +1180,16 @@ class SQLiteSlurmStageAssignments:
             part = (
                 self.transfer_root / assignment_id / "staging" / f"{transfer_id}.part"
             )
+            def publish_pair():
+                if descriptor.preparation_report_transfer is not None:
+                    from ._preparation_report_transfer import publish
+                    publish(descriptor, target)
             received = int(row["received_bytes"])
             if bool(row["finalized"]):
                 existing = _read_regular_file_range(target, offset, len(data))
                 if existing != data:
                     raise QueueConflictError("SLURM output replay conflicts")
+                publish_pair()
                 return descriptor.size_bytes
             if _published_file_matches(
                 target,
@@ -1192,6 +1206,7 @@ class SQLiteSlurmStageAssignments:
                     "WHERE assignment_id = ? AND transfer_id = ?",
                     (descriptor.size_bytes, assignment_id, transfer_id),
                 )
+                publish_pair()
                 return descriptor.size_bytes
             received = _append_exact_chunk(part, offset, received, data)
             if received > descriptor.size_bytes:
@@ -1206,6 +1221,7 @@ class SQLiteSlurmStageAssignments:
                         "SLURM output bytes conflict with manifest"
                     )
                 _publish_staged_file(part, target)
+                publish_pair()
             conn.execute(
                 f"UPDATE {_OUTPUT_TABLE} SET received_bytes = ?, finalized = ? "
                 "WHERE assignment_id = ? AND transfer_id = ?",
@@ -1245,6 +1261,10 @@ class SQLiteSlurmStageAssignments:
                 path, size_bytes=item.size_bytes, digest=item.digest
             ):
                 raise QueueConflictError("SLURM committed output bytes are unavailable")
+            if item.preparation_report_transfer is not None:
+                from ._preparation_report_transfer import publish
+                outputs[item.logical_name] = publish(item, path)
+                continue
             outputs[item.logical_name] = ArtifactRef(
                 artifact_id=item.artifact_id,
                 uri=path.resolve().as_uri(),
@@ -1498,11 +1518,20 @@ class SlurmBootstrapWorkspace:
             if set(result.outputs) != set(delivery.declared_outputs):
                 raise QueueConflictError("SLURM worker outputs conflict")
             for logical_name, ref in sorted(result.outputs.items()):
-                source = uri_to_path(ref.uri).resolve(strict=True)
+                unresolved_source = uri_to_path(ref.uri)
+                if unresolved_source.is_symlink():
+                    raise QueueConflictError("SLURM preparation output is a link")
+                source = unresolved_source.resolve(strict=True)
                 source.relative_to(self.root)
                 data = _read_regular_file_bytes(source)
+                from ._preparation_report_transfer import frame, native_role
+                transfer = None
+                if native_role(delivery.fingerprint):
+                    if logical_name != "report":
+                        raise QueueConflictError("SLURM preparation output role conflicts")
+                    data, transfer = frame(ref, source)
                 digest = hashlib.sha256(data).hexdigest()
-                if ref.checksum is not None and ref.checksum != f"sha256:{digest}":
+                if transfer is None and ref.checksum is not None and ref.checksum != f"sha256:{digest}":
                     raise QueueConflictError("SLURM output checksum conflicts")
                 transfer_id = (
                     "output-"
@@ -1528,6 +1557,7 @@ class SlurmBootstrapWorkspace:
                         producer_stage=ref.producer_stage,
                         created_at=ref.created_at,
                         metadata=ref.metadata,
+                        preparation_report_transfer=transfer,
                     )
                 )
         failure = cast(ExecutionFailure | None, result.failure)
@@ -1562,7 +1592,7 @@ class SlurmBootstrapWorkspace:
             ),
             process_created=True,
             executor_metadata=result.executor_metadata,
-            schema_version=3,
+            schema_version=5 if any(item.preparation_report_transfer is not None for item in outputs) else 3,
         )
         encoded = (_json(report.to_dict()) + "\n").encode()
         if self._retained_report_path.exists():

@@ -1,9 +1,24 @@
 """Upgrade qualification follows the retained native resource inventory."""
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from loom.fleet import upgrades
+
+
+def test_runtime_workload_repair_cli_retains_parent_and_target():
+    from loom.cli.main import build_parser
+
+    selected = build_parser().parse_args([
+        "fleet", "operation", "repair-workload", "runtime-window", "--fleet", "lab",
+        "--workload-profile", "analysis", "--image", "/shared/compatible.sif",
+        "--workload-inventory", "/private/candidate.json",
+    ])
+    assert selected.operation_id == "runtime-window"
+    assert selected.workload_profile == "analysis"
+    assert selected.image == Path("/shared/compatible.sif")
+    assert selected.workload_inventory == Path("/private/candidate.json")
 
 
 @pytest.mark.parametrize("device_source", ["native_inventory", "profile", "cpu_only"])

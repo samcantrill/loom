@@ -243,6 +243,7 @@ def test_promotion_replay_and_later_promotion_preserve_native_history(
             c._require_journal().prepare_control(changed)
         c._require_journal().acknowledge_control(second.operation_id)
         session = c._require_journal().active_session()
+        assert session is not None
         resume = AgentControl(
             "resume-promoted", AgentControlKind.RESUME, "agent-a",
             session.session_id, session.config_revision, None, False, "resume",
@@ -252,6 +253,7 @@ def test_promotion_replay_and_later_promotion_preserve_native_history(
         if transient_unknown:
             # Replaying an older promotion cannot clear newer ownership doubt.
             supervisor = c._supervisor
+            assert supervisor is not None
             workspace = tmp_path / "current"
             workspace.mkdir()
             current = ResidentWorkerLaunch(

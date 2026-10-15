@@ -247,6 +247,30 @@ free resources or proof of every platform constraint. JSON output from
 `agent-check` and `daemon-check` includes `effective_capacity` for the selected
 agent resources. A `null` CPU or memory value means no supported bound was
 available; a `null` whole object means no agent-level resources were selected.
+
+A container resident profile may declare `temporary_mounts: ["/loom/cache"]`.
+Each target must already select a writable installed container mount. Its source
+is the host-specific storage base; Loom substitutes an owned directory beneath
+`<base>/attempts/` for each assignment. All processes in that assignment see the
+same container target. Separate assignments have separate directories, and replay
+of the same launch retains the same directory. Omitting the declaration keeps the
+installed mount's existing lifetime. Empty declarations preserve the previous
+profile identity; a nonempty declaration changes the active launch identity and
+must be adopted through the normal profile update route.
+
+The supervisor records ownership before allocating storage. It removes only the
+owned directory after proving containment of the entire assignment, including
+failed launches and cancelled work. Unknown containment preserves the directory.
+Deletion failure is reported as `temporary_storage_cleanup_error` in execution
+metadata; an existing execution failure remains primary. It prevents an otherwise
+successful assignment from being qualified as successful, but does not retain
+compute claims after containment. Pending cleanup is retried on supervisor restart
+or agent reconnection using the journaled profile and host ownership. Checkpoints,
+results and other retained evidence must live outside temporary mounts. The base,
+other attempts and execution workspaces are never deletion targets. Mounts may not
+overlap other declared mounts or execution/project roots. There are no free-space
+estimates, reservations, eviction or storage-failure fallback.
+
 Before `daemon-check`, `agent-check`, initialization, serving, or explicit
 reload offers a resident profile, Loom runs the selected worker Python with the
 same cwd and allowlisted environment used for workers. A profile may add a
@@ -733,3 +757,71 @@ Changing a retained definition, even alongside its display metadata reference,
 does not change the protected admitted intent and fails admission. Protected
 runtime records remain mode 0600 and separate from safe `runtime.json` display
 metadata; neither display metadata nor offline evidence can authorize execution.
+
+### Canonical preparation report closure
+
+Composition-bearing native preparation reports require
+`report_format: loom.preparation_report.v1`, independently of the child-binding
+`schema_version`. The existing report ArtifactRef still identifies the primary
+JSON. Its `composition` and optional `requested_composition` keep full
+`resolved`, `redacted`, and `recipe_manifest` values inline; `evidence_ref` is a
+Loom ResourceRef naming one contained sibling `report.composition.json`, with
+resource type `loom.preparation_composition`, codec `json.v1`, schema version 1,
+SHA-256 checksum, and metadata `{document_schema_version: 1, pointer:
+/compositions/<id>}`.
+
+The companion has `{schema: loom.preparation_composition.v1, schema_version: 1,
+compositions}`. Each addressed entry contains the complete manifest and
+provenance. Only completely equal requested/effective logical views share an
+entry. Manifest metadata owns equal common fields once; provenance's optional
+`metadata_ref: {pointer, fields}` projects exact present fields from that entry's
+`/compositions/<id>/manifest/metadata`. Inline and projected fields cannot overlap.
+Provenance-only invocation and differing metadata remain inline. No source facts,
+authorship, bindings, scientific contracts, or fingerprint inputs are removed.
+
+Use `loom.preparation.load_preparation_report(reference, report_path)` for
+complete logical inspection. Normal readers supply the original committed
+ArtifactRef and its validated published path after native child/worker authority
+joins; `LocalArtifactStore.local_path` also validates any shared publication
+closure. The SDK verifies primary bytes, format, regular contained companion,
+checksum, entry, and metadata projection, returning detached full manifest and
+provenance without imports or recomposition. Existing publication retains the
+whole stage artifact directory, including the companion, across cleanup, restart,
+replay and reuse. Missing or altered closure refuses publication or complete
+retained contract inspection even when inline checked payloads still parse.
+
+An offline archive can pass a verified contained copied primary path with the
+original ArtifactRef, preserving its sibling companion and publication receipt
+closure. This is inspection only and grants no live execution authority. Reports
+without this canonical format require new native preparation from available
+original inputs into a compatible destination; no inline fallback or conversion
+is supported. Action-verification-only reports retain their existing contract.
+
+Nonshared native preparation output transport uses private remote result version
+5 and the existing single declared `report` output. Its optional descriptor
+`preparation_report_transfer` header version 1 names exactly `primary` and
+`companion` members with contained distinct filenames, sizes, and SHA-256 digests.
+The transferred bytes concatenate the exact primary then companion; the generic
+descriptor digest/size bind that entire framing. Both lengths count toward the
+unchanged aggregate 64MiB limit and existing 32KiB chunk and control-manifest
+bounds. Versions 1–4 remain for ordinary, action-verification and shared-publication
+results; a marked descriptor cannot downgrade to primary-only success.
+
+The receiver validates complete framing and member identities, then the SDK-owned
+canonical binding, before publishing both files through the existing atomic tree
+publisher. Only the original primary ArtifactRef is restored: its primary
+checksum, JSON codec, metadata and semantic identity retain their meaning at the
+relocated publication URI. No JSON ArtifactRef points to framing bytes, and the
+transient header never enters artifact metadata or scientific archives. Existing
+assignment/fence/profile/invocation joins and acknowledgement/replay gates remain
+required. Same-host and ready-stage Slurm result helpers use this finite pair;
+shared publication keeps its complete member inventory and receipt without
+repacking. This transport contract adds no Slurm preparation-input capability or
+physical cluster qualification.
+
+After native worker containment, unusable primary or companion evidence fails
+preparation publication through the existing failed-result and assignment-release
+path. The operation settles as `preparation_child_failed`; the immutable worker
+result and checksum-bound source bytes remain diagnostic evidence. This differs
+from `invalid_preparation_report` when committed evidence is subsequently refused
+at coordinator inspection. Neither failure publishes the target run.

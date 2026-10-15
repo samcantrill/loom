@@ -3790,8 +3790,18 @@ class AgentSessionService:
                 or output_mismatch
             ):
                 raise QueueConflictError("remote result does not match its request")
+            from ._preparation_report_transfer import native_role
+            if report.schema_version == 5 and not native_role(request.fingerprint):
+                raise QueueConflictError("preparation transfer targets another stage role")
             shared_outputs = None
             from ._shared_publication import selected, publish
+            if (
+                report.status is StageStatus.SUCCEEDED
+                and native_role(request.fingerprint)
+                and selected(request) is None
+                and report.schema_version != 5
+            ):
+                raise QueueConflictError("native preparation transfer capability is missing")
             if selected(request) is not None and report.status is StageStatus.SUCCEEDED:
                 if report.schema_version != 4:
                     raise QueueConflictError("shared publication report capability is missing")
@@ -3898,13 +3908,18 @@ class AgentSessionService:
             )
             row = conn.execute(
                 "SELECT digest, size_bytes, private_path, received_bytes, "
-                "finalized FROM remote_transfers WHERE assignment_id = ? AND "
+                "finalized, descriptor_json FROM remote_transfers WHERE assignment_id = ? AND "
                 "direction = 'output' AND transfer_id = ?",
                 (assignment_id, transfer_id),
             ).fetchone()
             if row is None:
                 raise QueueConflictError("remote output transfer is not declared")
+            descriptor = _RemoteOutputArtifact.from_dict(json.loads(str(row["descriptor_json"])))
             target = Path(str(row["private_path"]))
+            def publish_pair():
+                if descriptor.preparation_report_transfer is not None:
+                    from ._preparation_report_transfer import publish
+                    publish(descriptor, target)
             received = int(row["received_bytes"])
             size = int(row["size_bytes"])
             if bool(row["finalized"]):
@@ -3916,6 +3931,7 @@ class AgentSessionService:
                         raise QueueConflictError(
                             "output replay conflicts with durable bytes"
                         )
+                publish_pair()
                 return freeze_plain_data(
                     {"transfer_id": transfer_id, "received_bytes": size, "final": True},
                     path="remote output chunk",
@@ -3937,6 +3953,7 @@ class AgentSessionService:
                         "output replay conflicts with durable bytes"
                     )
                 conn.commit()
+                publish_pair()
                 return freeze_plain_data(
                     {"transfer_id": transfer_id, "received_bytes": size, "final": True},
                     path="remote output chunk",
@@ -3952,6 +3969,7 @@ class AgentSessionService:
                         "remote output bytes do not match their manifest"
                     )
                 _publish_staged_file(staging, target)
+                publish_pair()
                 conn.execute(
                     "UPDATE remote_transfers SET received_bytes = ?, finalized = 1 "
                     "WHERE assignment_id = ? AND direction = 'output' "
@@ -4431,6 +4449,10 @@ class AgentSessionService:
                 json.loads(str(row["descriptor_json"]))
             )
             path = Path(str(row["private_path"]))
+            if descriptor.preparation_report_transfer is not None:
+                from ._preparation_report_transfer import publish
+                outputs[str(row["logical_name"])] = publish(descriptor, path)
+                continue
             outputs[str(row["logical_name"])] = ArtifactRef(
                 artifact_id=descriptor.artifact_id,
                 uri=path.resolve().as_uri(),

@@ -89,6 +89,7 @@ from ._remote_stage_execution import (
     _RemoteExecutionReport,
     _RemoteOutputArtifact,
     _RemoteTransferLimitError,
+    _PreparationReportRetentionError,
     _read_regular_file_bytes,
     _resident_input_refs,
 )
@@ -4202,14 +4203,26 @@ def run_managed_local_assignment(
             worker_result = _managed_root_failed_worker_result(
                 worker_request,
                 ManagedLocalError(
-                    "worker success lacks successful complete owned-group exit"
+                    contained.temporary_storage_error
+                    or "worker success lacks successful complete owned-group exit"
                 ),
                 process_exit_code=contained.exit_code,
                 worker_result_state="unqualified_success",
             )
+            if contained.temporary_storage_error is not None:
+                worker_result = replace(worker_result, executor_metadata={
+                    **worker_result.executor_metadata,
+                    "temporary_storage_cleanup_error": contained.temporary_storage_error,
+                })
             return finalize_result(worker_result, coordinator_expected="running")
         try:
             report = workspace.retain_outputs()
+        except _PreparationReportRetentionError as exc:
+            worker_result = _managed_root_failed_worker_result(
+                worker_request, exc, process_exit_code=contained.exit_code,
+                worker_result_state="invalid_preparation_report_closure",
+            )
+            return finalize_result(worker_result, coordinator_expected="running")
         except _RemoteTransferLimitError as exc:
             # The exact owned group has exited and its result is contained.
             # An over-limit output is a known publication failure, not unknown work.
@@ -4232,6 +4245,9 @@ def run_managed_local_assignment(
         metadata = dict(worker_result.executor_metadata)
         metadata.pop("managed_successful_exit", None)
         metadata.pop("managed_backend_success", None)
+        metadata.pop("temporary_storage_cleanup_error", None)
+        if contained.temporary_storage_error is not None:
+            metadata["temporary_storage_cleanup_error"] = contained.temporary_storage_error
         if worker_result.status is StageStatus.SUCCEEDED:
             metadata[
                 "managed_backend_success"
@@ -4346,6 +4362,13 @@ def _project_resident_result(
             outputs = publish(workspace.request(), report, launch["profile"]["shared_roots"],
                               agent_id=str(owner["agent_id"]), fence=str(owner["fence"]))
         return _map_resident_result_identity(result, worker_request=worker_request, outputs=outputs)
+    from ._preparation_report_transfer import native_role
+    if (
+        report.status is StageStatus.SUCCEEDED
+        and native_role(workspace.request().fingerprint)
+        and report.schema_version != 5
+    ):
+        raise ManagedLocalError("native preparation transfer capability is missing")
     artifact_store = LocalArtifactStore(
         run_store.local_artifact_root(worker_request.run_uri)
     )
@@ -4365,6 +4388,12 @@ def _project_resident_result(
         digest = hashlib.sha256(data).hexdigest()
         if digest != item.digest or len(data) != item.size_bytes:
             raise ManagedLocalError("resident retained output identity conflicts")
+        if item.preparation_report_transfer is not None:
+            from ._preparation_report_transfer import native_role, publish
+            if not native_role(workspace.request().fingerprint):
+                raise ManagedLocalError("preparation transfer targets another stage role")
+            ref = publish(item, workspace.root / "retained-outputs" / item.logical_name, target_root=target_root)
+            return _map_resident_result_identity(result, worker_request=worker_request, outputs={item.logical_name: ref})
         try:
             source = uri_to_path(result.outputs[item.logical_name].uri)
             if source.is_symlink():

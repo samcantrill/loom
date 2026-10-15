@@ -54,13 +54,13 @@ def recovery(tmp_path, monkeypatch):
             raise QueueConflictError("independent native policy edit")
         return {"drained": state.drained, "session_id": "session", "config_revision": state.config}
 
-    operation.operator = SimpleNamespace(observe_control=observe, control_agent=control)
-    operation.recheck = lambda: None
+    monkeypatch.setattr(operation, "operator", SimpleNamespace(observe_control=observe, control_agent=control), raising=False)
+    monkeypatch.setattr(operation, "recheck", lambda: None)
     operation.gate = lambda: {"checks": {}}
     operation.settled = lambda: None
     operation.host_observe = lambda *a, **k: {"availability": "available", "value": {"settled": state.settled}}
     operation.verify_policy = verify
-    operation.maintenance = lambda *a: None
+    monkeypatch.setattr(operation, "maintenance", lambda *a: None)
 
     def continuation(op):
         identity = op.policy("worker", key, "resume", "promotion")

@@ -47,6 +47,7 @@ from loom.queue._remote_stage_execution import (
     REGULAR_FILE_RELAY_CAPABILITY,
     REMOTE_EXECUTION_CAPABILITY,
     TRANSFER_CHUNK_BYTES,
+    MAX_TRANSFER_BYTES,
     ResidentExecutionProfile,
     ResidentProfileDescriptor,
     _ResidentAssignmentBundle,
@@ -1451,8 +1452,11 @@ def test_owner_rejected_saved_launch_retains_identity_and_truthful_no_start_repo
     assert report.status is StageStatus.FAILED
     assert report.process_created is False
     assert workspace.supervisor_launch_json() == retained_launch
-    assert not any(record["disposition"] == "applied"
-                   for record in report.executor_metadata["resource_controls"])
+    assert report.executor_metadata is not None
+    controls = report.executor_metadata["resource_controls"]
+    assert isinstance(controls, (tuple, list))
+    assert all(isinstance(record, Mapping) and record["disposition"] != "applied"
+               for record in controls)
     (tmp_path / "unavailable").rename(data)
     with pytest.raises(_SupervisorNoStartError, match="durably rejected"):
         supervisor.launch(launch)
@@ -1537,11 +1541,14 @@ def test_completed_shared_container_reports_and_publishes_without_original_input
     original_command = launch.container_command
     (tmp_path / "data").rename(tmp_path / "unavailable-input")
 
-    restored = _launch_from_value(json.loads(workspace.supervisor_launch_json()))
+    retained_launch = workspace.supervisor_launch_json()
+    assert retained_launch is not None
+    restored = _launch_from_value(json.loads(retained_launch))
     assert restored.spec_digest == original_digest
     assert restored.container_command == original_command
     report = workspace.retain_outputs()
     assert report.status is StageStatus.SUCCEEDED
+    assert report.executor_metadata is not None
     assert (report.executor_metadata.get("resource_controls") is None) is legacy
     refs = publish(workspace.request(), report, profile.shared_roots, agent_id="agent-1", fence="fence-1")
     assert workspace.retain_outputs() == report
@@ -1811,3 +1818,174 @@ def test_unresolved_reference_journal_survives_restart_and_historical_schema(tmp
         assert not _ResidentAssignmentWorkspace(agent_root, request.assignment_id).has_request()
     finally:
         journal.close()
+
+
+def _preparation_output(tmp_path):
+    from tests.unit.loom.test_preparation_report import _write
+    from loom.queue._preparation_report_transfer import frame
+
+    logical, store, reference, companion = _write(tmp_path / "source")
+    data, transfer = frame(reference, store.local_path(reference))
+    item = _RemoteOutputArtifact(
+        transfer_id="output-report",
+        logical_name="report",
+        digest=hashlib.sha256(data).hexdigest(),
+        size_bytes=len(data),
+        artifact_id=reference.artifact_id,
+        artifact_type=reference.artifact_type,
+        codec_key=reference.codec_key,
+        artifact_schema_version=reference.schema_version,
+        fingerprint=reference.fingerprint,
+        producer_stage=reference.producer_stage,
+        created_at=reference.created_at,
+        metadata=reference.metadata,
+        preparation_report_transfer=transfer,
+    )
+    return logical, reference, companion, data, item
+
+
+def test_native_preparation_transfer_publishes_pair_and_restores_original_primary(
+    tmp_path,
+):
+    from loom.queue._preparation_report_transfer import publish
+    from loom.preparation import load_preparation_report
+
+    logical, original, _companion, data, item = _preparation_output(tmp_path)
+    wrapper = tmp_path / "relay" / "report"
+    wrapper.parent.mkdir()
+    wrapper.write_bytes(data)
+    with pytest.raises(QueueConflictError):
+        item.local_ref(wrapper)  # A JSON ArtifactRef must never point to framing.
+    published = publish(item, wrapper)
+    assert replace(original, uri=published.uri) == published
+    assert published.checksum != "sha256:" + item.digest
+    assert "preparation_report_transfer" not in published.metadata
+    from loom.io.uris import uri_to_path
+
+    primary = Path(uri_to_path(published.uri))
+    assert load_preparation_report(published, primary) == {
+        **logical,
+        "report_format": "loom.preparation_report.v1",
+    }
+    prior = {
+        path: (path.read_bytes(), path.stat().st_mtime_ns)
+        for path in primary.parent.iterdir()
+    }
+    assert publish(item, wrapper) == published
+    assert {
+        path: (path.read_bytes(), path.stat().st_mtime_ns) for path in prior
+    } == prior
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "old_result",
+        "future_result",
+        "unmarked_result",
+        "null_header",
+        "bool_header",
+        "future_header",
+        "missing_member",
+        "outside",
+        "equal_paths",
+        "overflow",
+        "wrong_role",
+    ],
+)
+def test_native_pair_wire_admission_rejects_role_versions_and_header_damage(
+    tmp_path, damage
+):
+    from copy import deepcopy
+    from loom.queue._remote_stage_execution import _RemoteExecutionReport
+
+    _logical, _ref, _companion, _data, item = _preparation_output(tmp_path)
+    report = _RemoteExecutionReport(
+        assignment_id="assignment-report",
+        stage_name="prepare",
+        attempt=1,
+        status=StageStatus.SUCCEEDED,
+        started_at="2020-01-01T00:00:00Z",
+        finished_at="2020-01-01T00:00:01Z",
+        executor_name="local",
+        outputs=(item,),
+        resource_controls=(),
+        process_created=True,
+        executor_metadata={},
+        schema_version=5,
+    ).to_dict()
+    report = cast(Any, report)
+    assert _RemoteExecutionReport.from_dict(report).outputs[0] == item
+    damaged = deepcopy(report)
+    descriptor = damaged["outputs"][0]
+    transfer = descriptor["preparation_report_transfer"]
+    if damage == "old_result":
+        damaged["schema_version"] = 3
+    elif damage == "future_result":
+        damaged["schema_version"] = 6
+    elif damage == "unmarked_result":
+        descriptor.pop("preparation_report_transfer")
+    elif damage == "null_header":
+        descriptor["preparation_report_transfer"] = None
+    elif damage == "bool_header":
+        transfer["schema_version"] = True
+    elif damage == "future_header":
+        transfer["schema_version"] = 2
+    elif damage == "missing_member":
+        transfer.pop("companion")
+    elif damage == "outside":
+        transfer["companion"]["path"] = "../report.composition.json"
+    elif damage == "equal_paths":
+        transfer["companion"]["path"] = transfer["primary"]["path"]
+    elif damage == "overflow":
+        transfer["companion"]["size_bytes"] = MAX_TRANSFER_BYTES
+    else:
+        descriptor["logical_name"] = "another-output"
+    with pytest.raises((QueueServiceError, QueueConflictError)):
+        _RemoteExecutionReport.from_dict(damaged)
+
+
+@pytest.mark.parametrize("damage", ["truncated", "trailing", "member", "symlink"])
+def test_native_pair_rejects_damaged_framing_before_any_publication(tmp_path, damage):
+    from loom.queue._preparation_report_transfer import publish
+
+    _logical, _ref, _companion, data, item = _preparation_output(tmp_path)
+    wrapper = tmp_path / "relay" / "report"
+    wrapper.parent.mkdir()
+    if damage == "truncated":
+        data = data[:-1]
+    elif damage == "trailing":
+        data += b"x"
+    elif damage == "member":
+        data = b"x" + data[1:]
+    wrapper.write_bytes(data)
+    if damage == "symlink":
+        other = wrapper.with_name("outside")
+        wrapper.rename(other)
+        wrapper.symlink_to(other)
+    with pytest.raises(QueueConflictError):
+        publish(item, wrapper)
+    assert not (wrapper.parent / "report-publication").exists()
+
+
+def test_native_pair_framing_refuses_primary_changed_after_sdk_validation(tmp_path, monkeypatch):
+    from loom.io.uris import uri_to_path
+    from loom.queue import _preparation_report_transfer as transfer
+
+    _logical, reference, _companion, _data, _item = _preparation_output(tmp_path)
+    primary = uri_to_path(reference.uri)
+    original = primary.read_bytes()
+    load = transfer.load_preparation_report
+
+    def load_then_change(reference, path):
+        report = load(reference, path)
+        # A reachable mutable filesystem boundary: JSON meaning is unchanged,
+        # but the bytes no longer belong to the original committed reference.
+        path.write_bytes(path.read_bytes() + b" ")
+        return report
+
+    monkeypatch.setattr(transfer, "load_preparation_report", load_then_change)
+    with pytest.raises(QueueConflictError, match="primary changed after SDK validation"):
+        transfer.frame(reference, primary)
+    assert primary.read_bytes() == original + b" "
+    assert reference.checksum == "sha256:" + hashlib.sha256(original).hexdigest()

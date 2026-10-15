@@ -357,6 +357,7 @@ def stopped_idle_poll(tmp_path, monkeypatch, *, drain=True, outcome="committed")
             stop.set()
             release.set()
             thread.join(10)
+            assert service.client.agent_root is not None
             _stop_fixture_supervisor(service.client.agent_root)
             assert not thread.is_alive(), errors
 
@@ -423,6 +424,7 @@ def test_stopped_service_retires_after_lost_idle_poll(
             assert _poll_rows(root)[0][2] is None
         assert retire_outbound_agent(config, **args) == receipt
         assert operations == ["recover_poll", "retire"]
+        assert root is not None
         with retired_role_guard(root, receipt):
             assert root.is_dir()
 
@@ -534,6 +536,8 @@ def test_retirement_reconciles_rejected_legacy_poll_without_replaying_work(
         owner = LocalDaemonAgentHttpClient(service.client)
         try:
             handshake = owner.handshake()
+            assert isinstance(handshake["coordinator_id"], str)
+            assert isinstance(handshake["coordinator_epoch"], str)
             registration = service.registration
             session = owner.register(
                 AgentRegistration(
