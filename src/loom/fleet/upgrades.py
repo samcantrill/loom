@@ -450,6 +450,51 @@ def _attempts(operation):
     return read(path) if path.exists() else {}
 
 
+def _deferred_checks(operation):
+    path = operation.directory / "deferred-checks.json"
+    if not path.exists():
+        return {}
+    value = read(path)
+    if value["intent_digest"] != digest(operation.intent):
+        raise QueueConflictError("qualification exception belongs to another upgrade")
+    return value
+
+
+def _bind_deferred_checks(operation, agents, reason):
+    """Retain an explicit operator exception without rewriting check evidence."""
+    if (operation.directory / "workload-repair" / "intent.json").exists():
+        raise QueueConfigError("qualification deferral is not supported during a bound workload repair")
+    if not agents or isinstance(agents, str) or not isinstance(reason, str) or not reason.strip():
+        raise QueueConfigError("deferred qualification requires agent IDs and a reason")
+    if any(not isinstance(name, str) or name not in operation.intent["agents"] for name in agents):
+        raise QueueConfigError("deferred qualification agent is not an upgrade consumer")
+    value = {
+        "intent_digest": digest(operation.intent),
+        "agents": sorted(set(agents)),
+        "reason": reason.strip(),
+    }
+    retained = _deferred_checks(operation)
+    if retained:
+        if retained != value:
+            raise QueueConflictError("retained qualification exception changed")
+        return
+    if any((operation.directory / name).exists() for name in ("complete.json", "restoring.json", "aborted.json")):
+        raise QueueConflictError("qualification exception requires unfinished checks")
+    operation.recheck()
+    atomic(operation.directory / "deferred-checks.json", value)
+
+
+def _qualification_result(operation) -> dict[str, Any]:
+    deferred = _deferred_checks(operation)
+    return {} if not deferred else {
+        "qualification": {
+            "state": "partial",
+            "deferred_agents": deferred["agents"],
+            "reason": deferred["reason"],
+        }
+    }
+
+
 def _prepare_attempt(operation, name, check, identity, previous=None):
     path = operation.inventory.path.parent / "checks" / identity / "intent.json"
     binding = _maintenance_binding(operation.intent)
@@ -561,8 +606,11 @@ def _prepare_attempt(operation, name, check, identity, previous=None):
 
 def _run_checks(operation):
     attempts = _attempts(operation)
+    deferred = _deferred_checks(operation).get("agents", ())
     for name, declaration in operation.intent.get("target_declarations", operation.intent["declarations"]).items():
         if name == "coordinator" or name not in operation.intent["agents"]:
+            continue
+        if name in deferred:
             continue
         profile = declaration["resident_profiles"][0]
         # Provider-backed GPUs belong to the native inventory, so their legacy
@@ -733,6 +781,7 @@ def _continue(operation):
         "state": "complete",
         "release": operation.intent["release"],
         "checks": _attempts(operation),
+        **_qualification_result(operation),
         "deployment": operation.intent["check_selection"]["deployment"],
         "operator_connection": operation.intent["check_selection"][
             "operator_connection"
@@ -761,11 +810,19 @@ def upgrade(
     new_check=None,
     failed_control=None,
     new_control=None,
+    defer_agents=None,
+    defer_reason=None,
 ):
     """Preview/apply or continue one immutable service upgrade; never cancel work."""
     _environment_files(inventory, env_file)
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise QueueConfigError("timeout must be positive and finite")
+    if action == "defer-checks" and not defer_agents:
+        raise QueueConfigError("defer-checks requires --agent-id and --reason")
+    if defer_reason is not None and not defer_agents:
+        raise QueueConfigError("qualification reason requires deferred agents")
+    if defer_agents is not None and not apply and operation_id is None:
+        raise QueueConfigError("qualification exceptions require an applied upgrade")
     if runtime_release is not None and (workload_profile is not None or image is not None or workload_inventory is not None):
         raise QueueConfigError("service and workload targets are mutually exclusive")
     if apply and runtime_release is None and (workload_profile is None or image is None):
@@ -855,6 +912,8 @@ def upgrade(
         else:
             operation = _Upgrade(inventory, directory, intent)
         try:
+            if defer_agents is not None:
+                _bind_deferred_checks(operation, defer_agents, defer_reason)
             if (directory / "aborted.json").exists():
                 result = {"state": "aborted"}
             elif action == "abort":
@@ -901,6 +960,7 @@ def upgrade(
             result = {"state": "blocked", "reason": str(exc)}
         finally:
             operation.close()
+        result.update(_qualification_result(operation))
         atomic(directory / "result.json", result)
         return sshops.operation_status(inventory, operation_id)
 
