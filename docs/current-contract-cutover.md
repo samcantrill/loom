@@ -1386,3 +1386,16 @@ bytes, scientific payloads and dependency selection are unchanged. Existing
 wire/scientific evidence remains applicable; physical Slurm and installed-image
 qualification remain with the paired adoption owner. The next upstream census
 is offline capture/import/query and lineage; these rows remain open.
+
+Independent review of PR #424 at `cc5cdec06b67f20eb9a57f88c414a1586e59e6c8`
+confirmed the 34-case reconciliation but identified one product blocker: the
+shared owner proof opened other execution-store readers in writable mode before
+Slurm admission, so an old Slurm database's hot journal could recover in place
+before refusal. The store-only interruption tests did not cover this daemon join.
+The bounded correction moves the existing read-only Slurm admission first in that
+same proof and adds actual interrupted SQLite writes at daemon startup for both
+current and retired schemas. Other owner checks and the locked proof remain.
+The 15 affected startup cases plus these two new cases collect and rerun; the
+19 store/agent passes remain applicable because their owners/fixtures/dependencies
+are unchanged and they do not invoke this reordered proof. Final reconciliation
+and targeted review confirmation follow; merge remains pending until they pass.

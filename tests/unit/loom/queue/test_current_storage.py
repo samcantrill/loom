@@ -191,3 +191,75 @@ def test_coordinator_refuses_retired_empty_slurm_store_before_owner_start(
     assert isinstance(error.value.__cause__, QueueServiceError)
     assert str(error.value.__cause__) == "SLURM assignment store schema is unsupported"
     assert files(tmp_path) == before
+
+
+@pytest.mark.parametrize("retired", [False, True])
+def test_daemon_recovers_interrupted_execution_write_only_for_current_slurm(
+    tmp_path: Path, retired: bool
+) -> None:
+    config = current_config(tmp_path)
+    identity = _open_root(config.coordinator_root, role="coordinator")
+    if retired:
+        with sqlite3.connect(config.execution_database) as conn:
+            for column in (
+                "start_consumed",
+                "agent_sequence",
+                "agent_evidence_json",
+                "agent_evidence_accepted_at",
+            ):
+                conn.execute(
+                    f"ALTER TABLE slurm_stage_assignments DROP COLUMN {column}"
+                )
+        conn.close()
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import os, sqlite3, sys
+conn = sqlite3.connect(sys.argv[1])
+conn.execute("PRAGMA cache_size = 1")
+conn.execute("BEGIN IMMEDIATE")
+conn.executemany(
+    "INSERT INTO slurm_stage_outputs VALUES (?, ?, ?, ?, ?)",
+    (("assignment", str(i), "x" * 1000, 0, 0) for i in range(1000)),
+)
+os._exit(0)
+""",
+            str(config.execution_database),
+        ],
+        check=True,
+    )
+    assert Path(str(config.execution_database) + "-journal").is_file()
+    before = files(tmp_path)
+    mtimes = {
+        str(path.relative_to(tmp_path)): path.stat().st_mtime_ns
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+    if retired:
+        with pytest.raises(
+            QueueError, match="retained daemon owner state is unavailable"
+        ) as error:
+            LocalDaemon(config).start()
+        assert isinstance(error.value.__cause__, QueueServiceError)
+        assert (
+            str(error.value.__cause__) == "SLURM assignment store schema is unsupported"
+        )
+        assert files(tmp_path) == before
+        assert {
+            str(path.relative_to(tmp_path)): path.stat().st_mtime_ns
+            for path in tmp_path.rglob("*")
+            if path.is_file()
+        } == mtimes
+    else:
+        daemon = LocalDaemon(config)
+        try:
+            assert daemon.start().coordinator_id == identity
+            with sqlite3.connect(config.execution_database) as conn:
+                assert conn.execute(
+                    "SELECT COUNT(*) FROM slurm_stage_outputs"
+                ).fetchone() == (0,)
+            conn.close()
+        finally:
+            daemon.stop()
