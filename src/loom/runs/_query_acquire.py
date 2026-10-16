@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from loom.pipeline.stores import LocalRunStore
 from loom.pipeline.stores.errors import StoreError
@@ -119,13 +119,6 @@ def acquire_run(
                 coordinator_id=annotations.initializer_coordinator_id or UNAVAILABLE,
             )
             record.observation["annotation_revision"] = annotations.revision
-        else:
-            from .context import SubmissionContext
-
-            legacy_context = SubmissionContext(tags=cast(Any, runtime.get("tags", {})))
-            record.sources.update(
-                tags=dict(legacy_context.tags), metadata={}, description=None
-            )
         if not include_notes:
             return record
         # Notes remain at their authority paging owner; no artifact payloads or
@@ -133,14 +126,7 @@ def acquire_run(
         notes: list[Any] = []
         cursor = None
         while True:
-            legacy = runtime.get("notes", ())
-            if not isinstance(legacy, (list, tuple)) or any(
-                not isinstance(note, str) for note in legacy
-            ):
-                raise ValueError("legacy notes unavailable")
-            page = authority.list_run_notes(
-                run_uri, 50, cursor, tuple(cast(list[str], legacy))
-            )
+            page = authority.list_run_notes(run_uri, 50, cursor)
             notes.extend(note.to_dict() for note in page.notes)
             cursor = page.next_cursor
             if cursor is None:

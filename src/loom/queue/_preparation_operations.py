@@ -1192,7 +1192,6 @@ class CoordinatorPreparations:
                     if reconciliation["verification_generation"] == 0:
                         raise QueueConflictError("candidate verifier is missing")
                     result["verification_report_ref"] = report.reference.to_dict()
-                    self._initialize_context(row, uri, legacy=True)
                     result["binding"] = {"run_uri": uri, "publication_operation_id": reconciliation["publication_owner"]}
                     result["prepared_run"] = candidate["prepared_run"]
                     result["decision"] = "retry" if reconciliation["failed_revision"] is not None else "reuse" if admission is not None and admission.state.value == "SUCCEEDED" else "observe" if admission is not None else "admit_prepared"
@@ -1213,7 +1212,7 @@ class CoordinatorPreparations:
         self._store_result(_with_report(operation_id, "applying", None, result, report.preflight))
         self._continue_run(self._read(operation_id))
 
-    def _initialize_context(self, row: sqlite3.Row, run_uri: str, *, legacy: bool = False) -> None:
+    def _initialize_context(self, row: sqlite3.Row, run_uri: str) -> None:
         from loom.pipeline.stores.local_runs import LocalRunStore
 
         factory = self.daemon.config.coordinator_authority_factory
@@ -1223,15 +1222,14 @@ class CoordinatorPreparations:
             return
         request = PrepareRunRequest.from_dict(_mapping(json.loads(str(row["request_json"]))))
         runtime = LocalRunStore(self.daemon.config.run_store_root).read_runtime_metadata(run_uri) or {}
-        context = SubmissionContext() if legacy else request.context or SubmissionContext()
+        context = request.context or SubmissionContext()
         try:
             effective = SubmissionContext(context.description,
                 {**cast(Mapping[str, str], runtime.get("tags", {})), **context.tags}, context.metadata)
         except ValueError as exc:
             raise _InvalidInitialContext(str(exc)) from exc
         authority.initialize_run_annotations(run_uri, effective,
-            None if legacy else str(row["operation_id"]),
-            None if legacy else self.daemon._require_started())
+            str(row["operation_id"]), self.daemon._require_started())
 
     def _check_run_budget(
         self, operation_id: str, result: Mapping[str, PlainData]

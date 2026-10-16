@@ -224,17 +224,14 @@ class AnnotationPatch:
 class RunNote:
     """An immutable observation with native UTC time and authenticated identity.
 
-    Legacy runtime notes have unknown author/time and ``source=legacy_runtime``.
-    Their retained text is not subject to the native append size limit; listing
-    reports an explicit error when an individual record cannot fit a page.
     Correction means appending another note, never replacing an existing entry.
     """
 
     run_uri: str
     note_id: str
     text: str
-    author: str | None
-    created_at: str | None
+    author: str
+    created_at: str
     source: str = "native"
 
     def __post_init__(self) -> None:
@@ -243,22 +240,12 @@ class RunNote:
             or not self.run_uri
             or not isinstance(self.note_id, str)
             or not self.note_id
-            or self.source not in {"native", "legacy_runtime"}
+            or self.source != "native"
         ):
             raise ValueError("invalid note identity")
-        if self.source == "native":
-            _text(self.text, "note text", RUN_CONTEXT_LIMITS["text_bytes"])
-        elif not isinstance(self.text, str):
-            raise ValueError("legacy note text must be text")
-        for value in (self.author, self.created_at):
-            if value is not None and (not isinstance(value, str) or not value):
-                raise ValueError("invalid note attribution")
-        if self.source == "native" and (not self.author or not self.created_at):
+        _text(self.text, "note text", RUN_CONTEXT_LIMITS["text_bytes"])
+        if any(not isinstance(value, str) or not value for value in (self.author, self.created_at)):
             raise ValueError("native notes require author and time")
-        if self.source == "legacy_runtime" and (
-            self.author is not None or self.created_at is not None
-        ):
-            raise ValueError("legacy attribution must remain unknown")
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
@@ -285,8 +272,8 @@ class RunNote:
             cast(str, data["run_uri"]),
             cast(str, data["note_id"]),
             cast(str, data["text"]),
-            cast(str | None, data["author"]),
-            cast(str | None, data["created_at"]),
+            cast(str, data["author"]),
+            cast(str, data["created_at"]),
             cast(str, data["source"]),
         )
 

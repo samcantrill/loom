@@ -716,3 +716,26 @@ def test_coordinator_observer_routes_preserve_identity_and_output_commit(tmp_pat
     assert authority.open_run(RUN_URI).revision == revision_before_refusal
     assert authority.read_event_sink_failures(RUN_URI) == (failure,)
     assert authority.read_event_observer_links(RUN_URI) == (link,)
+
+
+@pytest.mark.parametrize("operation", ["mutate", "notes"])
+def test_annotation_routes_refuse_retired_import_fields_without_effects(tmp_path, operation):
+    repository, authority = _authority(tmp_path)
+    repository.admit_run(RUN_URI)
+    before = authority.open_run(RUN_URI).to_dict()
+    body = (
+        {"principal": "caller", "mutation_id": "old-first-write", "operation": "patch_run_annotations",
+         "change": {"expected_revision": 0, "set_tags": {"new": "label"}}, "legacy_context": {"tags": {"old": "label"}},
+         "legacy_notes": ["old observation"]}
+        if operation == "mutate" else
+        {"limit": 50, "cursor": None, "legacy_notes": ["old observation"]}
+    )
+    from loom.pipeline.stores.coordinator_authority import COORDINATOR_AUTHORITY_ROUTE_PREFIX
+    from loom.pipeline.stores.authority_protocol import AuthorityProtocolErrorCategory
+
+    with pytest.raises(AuthenticatedCoordinatorAuthorityError) as error:
+        authority._call(f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/annotations/{operation}", RUN_URI, body=body)
+    assert error.value.category is AuthorityProtocolErrorCategory.VALIDATION
+    assert authority.read_run_annotations(RUN_URI) is None
+    assert authority.list_run_notes(RUN_URI).notes == ()
+    assert authority.open_run(RUN_URI).to_dict() == before

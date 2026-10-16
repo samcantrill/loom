@@ -67,7 +67,7 @@ def test_initial_effective_tag_limits_precede_binding_and_execution(tmp_path, ca
         daemon.stop()
 
 
-def test_oversized_legacy_projection_is_partial_and_nonmutating(tmp_path):
+def test_missing_annotations_remain_unknown_and_do_not_import_runtime(tmp_path):
     from loom.queue._run_context import get_run_context
 
     service = _service(tmp_path)
@@ -91,7 +91,7 @@ def test_oversized_legacy_projection_is_partial_and_nonmutating(tmp_path):
         authority_before = SQLitePerRunAuthorityStore(uri).open_run(uri).to_dict()
         context = get_run_context(daemon, uri, None)
         assert context.annotations is None
-        assert "legacy_runtime_annotations_unrepresentable" in context.unavailable
+        assert "annotations_unknown" in context.unavailable
         assert context.initializer_submission is None
         assert (run_dir / "runtime.json").read_bytes() == runtime_before
         assert store.read_runtime_metadata(uri) == legacy
@@ -100,15 +100,13 @@ def test_oversized_legacy_projection_is_partial_and_nonmutating(tmp_path):
             assert conn.execute("SELECT COUNT(*) FROM run_annotations").fetchone()[0] == 0
         from loom.queue._run_context import annotation_operation
 
-        store.write_runtime_metadata(uri, {"tags": {"legacy": "retained"}, "notes": ["old observation"]})
-        legacy_bytes = (run_dir / "runtime.json").read_bytes()
         changed = cast(Any, annotation_operation(daemon, "patch_run_annotations",
             {"run_uri": uri, "mutation_id": "first-write", "patch": {"expected_revision": 0, "set_tags": {"new": "label"}}}, "native-caller"))
-        assert changed.revision == 1 and changed.tags == {"legacy": "retained", "new": "label"}
+        assert changed.revision == 1 and changed.tags == {"new": "label"}
         notes = cast(Any, annotation_operation(daemon, "list_run_notes", {"run_uri": uri, "limit": 50, "cursor": None}, "native-caller"))
-        assert notes.notes[0].source == "legacy_runtime"
-        assert notes.notes[0].author is notes.notes[0].created_at is None
-        assert (run_dir / "runtime.json").read_bytes() == legacy_bytes
+        assert notes.notes == ()
+        assert get_run_context(daemon, uri, None).initializer_submission is None
+        assert (run_dir / "runtime.json").read_bytes() == runtime_before
         assert SQLitePerRunAuthorityStore(uri).open_run(uri).to_dict() == authority_before
     finally:
         daemon.stop()
@@ -310,7 +308,8 @@ def test_failed_preparation_keeps_original_intent_without_run(tmp_path):
         daemon.stop()
 
 
-def test_reconciled_submissions_retain_reasons_without_relabeling(tmp_path):
+@pytest.mark.parametrize("missing_annotations", [False, True])
+def test_reconciled_submissions_retain_reasons_without_relabeling(tmp_path, missing_annotations):
     from tests.integration.queue.test_reconciled_runs import (
         _reconciled_service,
         _reconciled_request,
@@ -341,10 +340,19 @@ def test_reconciled_submissions_retain_reasons_without_relabeling(tmp_path):
             uris.append(operation.result["prepared_run"]["run_uri"])
             assert operation.result["submission"]["context"]["description"] == reason
             daemon._wait(operation.result["queue_item_id"], timeout_seconds=60)
+            if operation_id == "first" and missing_annotations:
+                # Retained runs without an annotation owner remain uninitialized on reuse.
+                with sqlite3.connect(uri_to_path(uris[0]) / ".loom/authority.sqlite3") as conn:
+                    conn.execute("DELETE FROM run_annotations")
         assert uris[0] == uris[1]
         context: Any = get_run_context(daemon, uris[0], None)
-        assert context.annotations.description == "initial reason"
-        assert context.annotations.tags["purpose"] == "initial reason"
+        if missing_annotations:
+            assert context.annotations is None
+            assert "annotations_unknown" in context.unavailable
+            assert context.initializer_submission is None
+        else:
+            assert context.annotations.description == "initial reason"
+            assert context.annotations.tags["purpose"] == "initial reason"
         assert context.submission_count == 2
         assert {item["operation_id"] for item in context.submissions} == {
             "first",
@@ -353,8 +361,8 @@ def test_reconciled_submissions_retain_reasons_without_relabeling(tmp_path):
         authority = SQLitePerRunAuthorityStore(uris[0])
         snapshot = authority.open_run(uris[0]).to_dict()
         authority.mutate_run_annotations(uris[0], "caller", "reused-review", "patch_run_annotations",
-            {"expected_revision": 1, "set_tags": {"review": "done"}}, SubmissionContext())
-        authority.mutate_run_annotations(uris[0], "caller", "reused-note", "append_run_note", {"text": "Reviewed reused output"}, SubmissionContext())
+            {"expected_revision": 0 if missing_annotations else 1, "set_tags": {"review": "done"}})
+        authority.mutate_run_annotations(uris[0], "caller", "reused-note", "append_run_note", {"text": "Reviewed reused output"})
         assert authority.open_run(uris[0]).to_dict() == snapshot
         assert get_run_context(daemon, uris[0], None).initializer_submission == context.initializer_submission
     finally:
@@ -362,7 +370,7 @@ def test_reconciled_submissions_retain_reasons_without_relabeling(tmp_path):
 
 
 @pytest.mark.parametrize("backend,https", [("embedded", False), ("embedded", True), ("authenticated", False), ("authenticated", True)])
-def test_native_legacy_note_limits_and_service_forwarding(tmp_path, backend, https):
+def test_runtime_notes_are_not_imported_through_native_transports(tmp_path, backend, https):
     from tests.integration.mcp.test_stdio import _coordinator
     from tests.integration.authority.test_coordinator_authority_api import _authority_factory
 
@@ -383,23 +391,18 @@ def test_native_legacy_note_limits_and_service_forwarding(tmp_path, backend, htt
             runtime_path = uri_to_path(uri) / "runtime.json"
             retained = runtime_path.read_bytes()
             page = client.list_run_notes(uri)
-            assert len(page.notes) == 1 and page.notes[0].text == texts[0]
-            assert page.notes[0].author is page.notes[0].created_at is None
-            assert page.next_cursor is not None
-            with pytest.raises(CoordinatorClientError) as error:
-                client.list_run_notes(uri, cursor=page.next_cursor)
-            assert error.value.code == "unrepresentable_note"
-            assert error.value.ids["note_id"] == "legacy-000000000001"
+            assert page.notes == () and page.next_cursor is None
             annotations = client.get_run_context(uri).annotations
             assert annotations is not None
             revision = annotations.revision
             assert client.patch_run_annotations(
-                uri, mutation_id="legacy-patch", expected_revision=revision,
+                uri, mutation_id="patch", expected_revision=revision,
                 set_tags={"review": "yes"},
             ).tags["review"] == "yes"
-            note = client.append_run_note(uri, mutation_id="legacy-note", text="new")
-            assert client.append_run_note(uri, mutation_id="legacy-note", text="new") == note
-            assert client.list_run_notes(uri).notes == page.notes
+            note = client.append_run_note(uri, mutation_id="note", text="new")
+            assert client.append_run_note(uri, mutation_id="note", text="new") == note
+            assert client.list_run_notes(uri).notes == (note,)
+            assert note.author and note.created_at and note.source == "native"
             assert runtime_path.read_bytes() == retained
 
 

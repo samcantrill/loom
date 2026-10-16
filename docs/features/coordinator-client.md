@@ -39,18 +39,16 @@ total count, and existing run inspection. Use native operation lookup for each
 linked submission. Inspection preserves failed stages alongside committed output
 references; it does not download artifacts or execute work. Missing authority,
 original submission or inspection evidence is reported in `unavailable`.
-Legacy runtime tags may be projected at revision zero with unknown origin;
-reading them does not create writable annotations. Legacy notes also appear in
-the note view with unknown author/time; arbitrary legacy caller metadata remains
-accessible in its existing user metadata view.
+The authority store is the only source of mutable annotations and notes. Runs
+without annotations report `annotations_unknown`; inspection does not synthesize
+labels or note attribution from `runtime.json`. Captured runtime configuration
+remains immutable evidence, separate from annotations.
 
 Limits advertised by the handshake are 16 KiB UTF-8 description text, 48 KiB
 serialized context, 128 tag keys, 128-byte tag/metadata keys and 1 KiB tag values.
 These limits apply to all initial effective tags, including authored-only tags
 when context is omitted. Oversized resolved annotations fail preparation with
-`invalid_context` before successful binding or target execution. Legacy evidence
-is never rewritten by inspection: an oversized legacy tag view is omitted with
-`legacy_runtime_annotations_unrepresentable` in `unavailable`.
+`invalid_context` before successful binding or target execution.
 The complete encoded request must also fit the 64 KiB transport limit. Values
 are rejected, never silently truncated. `RunInspectionHttpClient.get_run_context`
 provides the same read for an enrolled HTTPS QUERY principal; that role cannot
@@ -92,18 +90,14 @@ Notes need no annotation CAS and do not advance its revision. The authority reco
 native UTC time and the authenticated caller; caller-supplied author/time fields
 are rejected. Notes are append-only: corrections are new notes. Pages contain at
 most 50 entries and 768 KiB of encoded note records in time/note-ID order,
-with unknown legacy times first. Pass
-`page.next_cursor` to continue the live view. Legacy notes are projected without
-writes; the first mutation retains them and establishes writable legacy labels
-once. First-write patches use the projected revision zero. Existing captured
-configuration, submission intent, lifecycle state, fingerprints and artifacts
-remain unchanged.
-
-Retained legacy note text keeps its full original length and unknown attribution.
-If one encoded legacy note cannot fit the 768-KiB page budget, listing that item
-reports `CoordinatorClientError(code="unrepresentable_note")` with `ids.note_id`. Earlier
-items can still be read in bounded pages. This limitation does not prevent tag
-patches or native note appends, and does not truncate or rewrite legacy evidence.
+and `page.next_cursor` continues the live view. For a run without annotations,
+an explicit first patch uses revision zero and starts from empty labels; a first
+note append leaves annotation revision zero. Neither operation imports runtime
+labels or notes or invents an original submission. Reusing a run preserves its
+existing annotations and original owner; absent original ownership stays unknown.
+Existing captured configuration, submission intent, lifecycle state, fingerprints
+and artifacts remain unchanged. Retired imported notes with unknown attribution
+are not accepted; regenerate obsolete state instead of importing it.
 
 `RunInspectionHttpClient.list_run_notes` is available to QUERY principals. Writes
 require CLIENT authority; reads never promote a caller or trigger a mutation.

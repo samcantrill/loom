@@ -282,15 +282,13 @@ class ServiceAuthorityStore(PerRunAuthorityStore):
         return None if value is None else RunAnnotations.from_dict(cast(Mapping[str, object], value))
 
     def mutate_run_annotations(self, run_uri: str, principal: str, mutation_id: str,
-                               operation: str, change: Mapping[str, object],
-                               legacy_context: SubmissionContext, legacy_notes: tuple[str, ...] = ()) -> RunAnnotations | RunNote:
+                               operation: str, change: Mapping[str, object]) -> RunAnnotations | RunNote:
         value = cast(Mapping[str, object], self._call("mutate_run_annotations", run_uri, principal,
-            mutation_id, operation, dict(change), legacy_context.to_dict(), legacy_notes))
+            mutation_id, operation, dict(change)))
         return RunAnnotations.from_dict(value) if operation == "patch_run_annotations" else RunNote.from_dict(value)
 
-    def list_run_notes(self, run_uri: str, limit: int = 50, cursor: str | None = None,
-                       legacy_notes: tuple[str, ...] = ()) -> RunNotePage:
-        return RunNotePage.from_dict(cast(Mapping[str, object], self._call("list_run_notes", run_uri, limit, cursor, legacy_notes)))
+    def list_run_notes(self, run_uri: str, limit: int = 50, cursor: str | None = None) -> RunNotePage:
+        return RunNotePage.from_dict(cast(Mapping[str, object], self._call("list_run_notes", run_uri, limit, cursor)))
 
     def transition_run(
         self,
@@ -974,18 +972,16 @@ class _ServiceAuthorityCore:
             return None if result is None else result.to_dict()
 
     def mutate_run_annotations(self, run_uri: str, principal: str, mutation_id: str,
-                               operation: str, change: Mapping[str, object],
-                               legacy_context: Mapping[str, object], legacy_notes: tuple[str, ...]) -> dict[str, PlainData]:
+                               operation: str, change: Mapping[str, object]) -> dict[str, PlainData]:
         with self._lock, self._annotation_db:
             self._require_run(run_uri)
             return mutate_annotations(self._annotation_db, run_uri, principal, mutation_id, operation,
-                                      change, SubmissionContext.from_dict(legacy_context), legacy_notes).to_dict()
+                                      change).to_dict()
 
-    def list_run_notes(self, run_uri: str, limit: int, cursor: str | None,
-                       legacy_notes: tuple[str, ...]) -> dict[str, PlainData]:
+    def list_run_notes(self, run_uri: str, limit: int, cursor: str | None) -> dict[str, PlainData]:
         with self._lock:
             self._require_run(run_uri)
-            return read_notes(self._annotation_db, run_uri, limit, cursor, legacy_notes).to_dict()
+            return read_notes(self._annotation_db, run_uri, limit, cursor).to_dict()
 
     def transition_run(
         self,

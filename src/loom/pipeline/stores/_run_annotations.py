@@ -6,7 +6,7 @@ import json
 import sqlite3
 import hashlib
 from datetime import datetime, timezone
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import cast
 from uuid import uuid4
 
@@ -40,13 +40,6 @@ def create_annotation_mutation_schema(conn: sqlite3.Connection) -> None:
         PRIMARY KEY (run_uri, principal, mutation_id))""")
 
 
-def legacy_run_notes(run_uri: str, texts: Sequence[str]) -> tuple[RunNote, ...]:
-    return tuple(
-        RunNote(run_uri, f"legacy-{index:012d}", text, None, None, "legacy_runtime")
-        for index, text in enumerate(texts)
-    )
-
-
 def mutate_annotations(
     conn: sqlite3.Connection,
     run_uri: str,
@@ -54,8 +47,6 @@ def mutate_annotations(
     mutation_id: str,
     operation: str,
     change: Mapping[str, object],
-    legacy_context: SubmissionContext,
-    legacy_notes: Sequence[str],
 ) -> RunAnnotations | RunNote:
     """Commit a run-scoped receipt and its effect in the caller's owner transaction."""
     request = mutation_request(run_uri, mutation_id, operation, change)
@@ -81,13 +72,7 @@ def mutate_annotations(
     change = cast(Mapping[str, object], request["change"])
     try:
         if current is None:
-            current = RunAnnotations(
-                run_uri,
-                0,
-                legacy_context.description,
-                legacy_context.tags,
-                legacy_context.metadata,
-            )
+            current = RunAnnotations(run_uri, 0, None, {}, {})
         if operation == "patch_run_annotations":
             result: RunAnnotations | RunNote = AnnotationPatch.from_dict(change).apply(
                 current
@@ -100,21 +85,15 @@ def mutate_annotations(
                 principal,
                 datetime.now(timezone.utc).isoformat(),
             )
-        imported_notes = legacy_run_notes(run_uri, legacy_notes)
     except AnnotationConflictError:
         raise
     except ValueError as exc:
         raise AnnotationValidationError(str(exc)) from exc
-    # First write establishes legacy annotations once; reads never do so.
+    # An explicit first write starts empty; reads never establish annotations.
     if read_annotations(conn, run_uri) is None:
         encoded = stable_json_bytes(current.to_dict()).decode()
         conn.execute(
             "INSERT INTO run_annotations VALUES (?, ?, ?)", (run_uri, encoded, encoded)
-        )
-    for note in imported_notes:
-        conn.execute(
-            "INSERT OR IGNORE INTO run_annotation_notes VALUES (?, ?, ?, ?)",
-            (run_uri, note.note_id, "", stable_json_bytes(note.to_dict()).decode()),
         )
     encoded_result = stable_json_bytes(result.to_dict()).decode()
     if isinstance(result, RunAnnotations):
@@ -139,16 +118,14 @@ def read_notes(
     run_uri: str,
     limit: int,
     cursor: str | None,
-    legacy_notes: Sequence[str],
 ) -> RunNotePage:
-    # Legacy evidence is projected without writes, including pre-annotation runs.
-    notes = {note.note_id: note for note in legacy_run_notes(run_uri, legacy_notes)}
+    notes = []
     for row in conn.execute(
         "SELECT note_json FROM run_annotation_notes WHERE run_uri=?", (run_uri,)
     ):
         note = RunNote.from_dict(json.loads(row[0]))
-        notes[note.note_id] = note
-    return page_notes(run_uri, tuple(notes.values()), limit, cursor)
+        notes.append(note)
+    return page_notes(run_uri, tuple(notes), limit, cursor)
 
 
 def create_annotations_schema(conn: sqlite3.Connection) -> None:

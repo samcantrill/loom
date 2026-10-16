@@ -1238,3 +1238,39 @@ nine unaffected poll/delivery cases. Current explicit-service retirement and
 read-only absence remain supported; missing declarations cannot authorize
 guarded ownership or retirement. The delivery is merge eligible. Its PR closeout
 owns merge and synchronization facts; only this review receipt changes afterward.
+
+## Authority-only run annotations
+
+Implementation base: `61410ff216172809d74efd6b25250209bd848919`.
+The current authority owns mutable labels, description, metadata and attributed
+append-only notes. Remove runtime-file projection, first-write import, synthetic
+legacy note records, and their parameters from every authority adapter and the
+coordinator/query consumers. Authenticated authority requests reject obsolete
+import fields before effects. Current native note bytes and database schemas
+remain unchanged; old imported note records fail the current reader.
+
+A run without annotations remains explicitly unknown on read. An explicit first
+mutation starts empty at revision zero without inventing original submission
+identity. Fresh preparation still combines authored tags with request context;
+reused runs retain their existing annotation owner, and missing ownership stays
+unknown. Authored runtime configuration remains captured evidence, not an
+alternative mutable annotation store. CAS, run/principal-scoped replay, append
+attribution, bounded paging, authorization and lifecycle independence are kept.
+
+Coverage selection: run-context contracts and authority annotation tests cover
+initialization, limits, atomic conflicts, rollback, replay, durable reopen, note
+paging and retired note refusal. Exact query acquisition cases cover unknown
+labels, no runtime import, current native metadata and notes. Configuration-backed
+run-context integration covers fresh preparation, post-initialization restart,
+failed preparation, reuse with/without original ownership, and Unix/HTTPS against
+embedded/authenticated authority. Exact native query and MCP composed consumers
+cover annotation text/search and CLI/SDK transport. Add explicit authority-route
+refusal cases for old import bodies. Collect in the no-extra, config and MCP
+locked Python 3.12 environments before execution; run lock, changed-file Ruff,
+affected Pyright and diff checks. Expand only for a reached contract or failure.
+
+Reuse prior pipeline execution, agent recovery and rphys scientific/size/scaling
+evidence: no processing, publication, artifact, checksum, source/membership,
+containment, dependency, fixture or scientific code changes in this delivery.
+Paired rphys dependency adoption and final image/physical qualification remain
+open. Independent actual-final-diff review and merge/synchronization are required.
