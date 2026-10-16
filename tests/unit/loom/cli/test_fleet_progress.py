@@ -1,6 +1,9 @@
 """Public parser/rendering and reporter lifecycle, without a second recovery matrix."""
 import io
 import json
+import subprocess
+import sys
+import textwrap
 import threading
 import time
 from types import SimpleNamespace
@@ -141,6 +144,70 @@ def test_broken_stderr_preserves_native_result_and_requests(cli, monkeypatch):
     assert main(["fleet", "operation", "resume", "window", "--fleet", str(cli.path), "--progress", "json", "--format", "json"], stdout=out, stderr=Broken()) == 0
     assert calls == ["window"]
     assert json.loads(out.getvalue()) == {"outcome": "complete"}
+
+
+def test_full_stderr_pipe_does_not_block_successful_process_exit(tmp_path):
+    script = textwrap.dedent('''
+        import json
+        import os
+        from pathlib import Path
+        import sys
+        import threading
+        from types import SimpleNamespace
+        from loom.cli.main import main
+        from loom.fleet import configuration, upgrades
+        from loom.fleet._host import atomic
+
+        root = Path(sys.argv[1])
+        inventory = SimpleNamespace(path=root / "fleet.json")
+        configuration.load_inventory = lambda path: inventory
+        (root / "operations/window").mkdir(parents=True)
+        atomic(root / "operations/window/intent.json", {"kind": "runtime-upgrade"})
+
+        # Model an operator whose progress reader has stopped draining stderr.
+        os.set_blocking(2, False)
+        try:
+            while True:
+                os.write(2, b"x" * 4096)
+        except BlockingIOError:
+            pass
+        os.set_blocking(2, True)
+
+        entered, finished = threading.Event(), threading.Event()
+        original = upgrades.upgrade
+        def observed(*args, progress=None, **options):
+            def sink(snapshot):
+                entered.set()
+                progress(snapshot)
+                finished.set()
+            return original(*args, progress=sink, **options)
+        def native(**options):
+            assert entered.wait(2), "reporter did not attempt progress"
+            assert not finished.wait(0.1), "stderr pipe unexpectedly drained"
+            return {"outcome": "complete"}
+        upgrades.upgrade = observed
+        upgrades._upgrade = native
+        raise SystemExit(main([
+            "fleet", "operation", "resume", "window", "--fleet", str(inventory.path),
+            "--progress", "json", "--format", "json",
+        ]))
+    ''')
+    process = subprocess.Popen(
+        [sys.executable, "-c", script, str(tmp_path)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    timed_out = False
+    try:
+        # communicate() would drain stderr and conceal the shutdown failure.
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        process.kill()
+    finally:
+        output, errors = process.communicate(timeout=5)
+    assert not timed_out, "successful native operation could not exit with a full stderr pipe"
+    assert process.returncode == 0, errors[-1000:]
+    assert json.loads(output) == {"outcome": "complete"}
 
 
 @pytest.mark.parametrize("exception,code", [

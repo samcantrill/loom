@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -178,6 +179,30 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     init.set_defaults(handler=handle)
 
 
+def _progress_sink(stream):
+    try:
+        # The callback owns its raw duplicate while a write is blocked. It must
+        # never hold stderr's buffered lock during interpreter shutdown.
+        raw = os.fdopen(os.dup(stream.fileno()), "wb", buffering=0)
+    except (AttributeError, OSError, ValueError):
+        raw = None
+
+    def emit(snapshot):
+        line = json.dumps(snapshot, allow_nan=False, separators=(",", ":")) + "\n"
+        if raw is None:
+            stream.write(line)
+            stream.flush()
+        else:
+            pending = memoryview(line.encode("utf-8"))
+            while pending:
+                written = raw.write(pending)
+                if not written:
+                    raise BlockingIOError("progress sink unavailable")
+                pending = pending[written:]
+
+    return emit
+
+
 def handle(namespace: argparse.Namespace) -> int:
     try:
         import yaml  # noqa: F401
@@ -193,11 +218,7 @@ def handle(namespace: argparse.Namespace) -> int:
     if getattr(namespace, "progress", "none") == "json":
         if command == "upgrade" and not namespace.apply:
             raise ValueError("progress requires --apply")
-        stream = sys.stderr
-        def emit_progress(snapshot):
-            stream.write(json.dumps(snapshot, allow_nan=False, separators=(",", ":")) + "\n")
-            stream.flush()
-        progress = emit_progress
+        progress = _progress_sink(sys.stderr)
     if command == "build-release":
         from loom.fleet.release_build import build_release
 
