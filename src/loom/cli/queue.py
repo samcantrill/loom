@@ -125,9 +125,8 @@ def register_subparser(
     retirement = queue_subparsers.add_parser(
         "daemon-retire", help="permanently fence an idle pure coordinator for removal"
     )
-    retirement.add_argument("--endpoint", required=True, type=Path)
+    _add_client_connection_arguments(retirement)
     retirement.add_argument("--operation-id", required=True)
-    retirement.add_argument("--expected-coordinator-id", required=True)
     retirement.set_defaults(handler=handle_daemon_retire)
     _add_output_options(retirement)
     for command, help_text, handler in (
@@ -247,7 +246,7 @@ def register_subparser(
         "daemon-scheduling-reload",
         help="reload protected coordinator scheduling configuration",
     )
-    scheduling_reload.add_argument("--endpoint", required=True, type=Path)
+    _add_client_connection_arguments(scheduling_reload)
     scheduling_reload.add_argument("--operation-id", required=True)
     scheduling_reload.add_argument("--expected-scheduling-epoch", required=True)
     scheduling_reload.add_argument("--reason", default="cli-scheduling-reload")
@@ -257,7 +256,7 @@ def register_subparser(
         "daemon-time-recover",
         help="recover one exact degraded coordinator time revision",
     )
-    time_recovery.add_argument("--endpoint", required=True, type=Path)
+    _add_client_connection_arguments(time_recovery)
     time_recovery.add_argument("--operation-id", required=True)
     time_recovery.add_argument("--expected-time-revision", required=True, type=int)
     time_recovery.add_argument("--expected-coordinator-epoch", required=True)
@@ -268,7 +267,7 @@ def register_subparser(
         "daemon-replace-agent-session",
         help="fence one completely classified lost agent session before re-registration",
     )
-    replacement.add_argument("--endpoint", required=True, type=Path)
+    _add_client_connection_arguments(replacement)
     replacement.add_argument("--operation-id", required=True)
     replacement.add_argument("--agent-id", required=True)
     replacement.add_argument("--reason", default="cli-session-replacement")
@@ -278,7 +277,7 @@ def register_subparser(
         "daemon-recover-unknown",
         help="close one exact unknown assignment from a guarded request",
     )
-    recovery.add_argument("--endpoint", required=True, type=Path)
+    _add_client_connection_arguments(recovery)
     recovery.add_argument("--request", required=True, type=Path)
     recovery.set_defaults(handler=handle_daemon_recover_unknown)
     _add_output_options(recovery)
@@ -479,10 +478,8 @@ def handle_agent_retire(namespace: argparse.Namespace) -> int:
 
 
 def handle_daemon_retire(namespace: argparse.Namespace) -> int:
-    from loom.queue import LocalDaemonSocketClient
-
     try:
-        receipt = LocalDaemonSocketClient(namespace.endpoint).retire(
+        receipt = _operator_client(namespace).retire(
             namespace.operation_id, namespace.expected_coordinator_id
         )
         _emit_daemon_payload(namespace, receipt)
@@ -745,7 +742,7 @@ def handle_daemon_cancel(namespace: argparse.Namespace) -> int:
 
 
 def handle_daemon_agent_control(namespace: argparse.Namespace) -> int:
-    from loom.queue import AgentControl, LocalDaemonSocketClient
+    from loom.queue import AgentControl
 
     try:
         control = AgentControl(
@@ -758,7 +755,7 @@ def handle_daemon_agent_control(namespace: argparse.Namespace) -> int:
             cancel_active=bool(namespace.cancel_active),
             reason=namespace.reason,
         )
-        client = _operator_client(namespace) if namespace.connection is not None or namespace.expected_coordinator_id is not None else LocalDaemonSocketClient(namespace.endpoint)
+        client = _operator_client(namespace)
         result = client.control_agent(control)
         if namespace.agent_control == "reload":
             deadline = time.monotonic() + _AGENT_RELOAD_RECEIPT_WAIT_SECONDS
@@ -780,10 +777,10 @@ def handle_daemon_agent_control(namespace: argparse.Namespace) -> int:
 
 
 def handle_daemon_scheduling_reload(namespace: argparse.Namespace) -> int:
-    from loom.queue import CoordinatorSchedulingReload, LocalDaemonSocketClient
+    from loom.queue import CoordinatorSchedulingReload
 
     try:
-        result = LocalDaemonSocketClient(namespace.endpoint).reload_scheduling(
+        result = _operator_client(namespace).reload_scheduling(
             CoordinatorSchedulingReload(
                 operation_id=namespace.operation_id,
                 expected_scheduling_epoch=namespace.expected_scheduling_epoch,
@@ -801,10 +798,10 @@ def handle_daemon_scheduling_reload(namespace: argparse.Namespace) -> int:
 
 
 def handle_daemon_time_recover(namespace: argparse.Namespace) -> int:
-    from loom.queue import LocalDaemonSocketClient, TimeRecoveryRequest
+    from loom.queue import TimeRecoveryRequest
 
     try:
-        result = LocalDaemonSocketClient(namespace.endpoint).recover_time(
+        result = _operator_client(namespace).recover_time(
             TimeRecoveryRequest(
                 operation_id=namespace.operation_id,
                 expected_time_revision=namespace.expected_time_revision,
@@ -818,10 +815,10 @@ def handle_daemon_time_recover(namespace: argparse.Namespace) -> int:
 
 
 def handle_daemon_replace_agent_session(namespace: argparse.Namespace) -> int:
-    from loom.queue import LocalDaemonSocketClient, SessionReplacementRequest
+    from loom.queue import SessionReplacementRequest
 
     try:
-        result = LocalDaemonSocketClient(namespace.endpoint).replace_agent_session(
+        result = _operator_client(namespace).replace_agent_session(
             SessionReplacementRequest(
                 operation_id=namespace.operation_id,
                 agent_id=namespace.agent_id,
@@ -834,7 +831,7 @@ def handle_daemon_replace_agent_session(namespace: argparse.Namespace) -> int:
 
 
 def handle_daemon_recover_unknown(namespace: argparse.Namespace) -> int:
-    from loom.queue import LocalDaemonSocketClient, RecoverUnknownAssignment
+    from loom.queue import RecoverUnknownAssignment
 
     try:
         raw = json.loads(namespace.request.read_text(encoding="utf-8"))
@@ -851,7 +848,7 @@ def handle_daemon_recover_unknown(namespace: argparse.Namespace) -> int:
             exit_code=ExitCode.USAGE,
         )
     try:
-        result = LocalDaemonSocketClient(namespace.endpoint).recover_unknown(
+        result = _operator_client(namespace).recover_unknown(
             RecoverUnknownAssignment.from_dict(raw)
         )
     except QueueError as exc:

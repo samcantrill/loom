@@ -1535,6 +1535,10 @@ class AdmissionNotFoundError(QueueServiceError):
     """The requested managed admission does not exist."""
 
 
+class _RecoveryNotAccepted(QueueConflictError):
+    """The guarded recovery request was refused before changing its intent."""
+
+
 @dataclass(frozen=True, slots=True)
 class AdmissionWaitResult:
     kind: AdmissionWaitKind
@@ -3096,7 +3100,7 @@ class LocalDaemon:
                         or str(prior["request_json"]) != encoded
                         or str(prior["request_digest"]) != digest
                     ):
-                        raise QueueConflictError("recovery operation conflicts")
+                        raise _RecoveryNotAccepted("recovery operation conflicts")
                     if str(prior["state"]) not in {"pending", "evidence_confirmed"}:
                         return freeze_plain_data(
                             json.loads(str(prior["result_json"])),
@@ -3104,7 +3108,10 @@ class LocalDaemon:
                         )
                     recorded_at = str(prior["recorded_at"])
                 else:
-                    execution.validate_recovery_admission(request)
+                    try:
+                        execution.validate_recovery_admission(request)
+                    except QueueConflictError as exc:
+                        raise _RecoveryNotAccepted(str(exc)) from exc
                     conn.execute("BEGIN IMMEDIATE")
                     raced = conn.execute(
                         "SELECT recovery_id FROM recovery_operations "
@@ -3112,7 +3119,7 @@ class LocalDaemon:
                         (request.recovery_id,),
                     ).fetchone()
                     if raced is not None:
-                        raise QueueConflictError("recovery operation conflicts")
+                        raise _RecoveryNotAccepted("recovery operation conflicts")
                     recorded_at = self._accepted_time(conn)
                     conn.execute(
                         "INSERT INTO recovery_operations("

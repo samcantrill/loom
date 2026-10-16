@@ -761,11 +761,11 @@ def test_dispatch_faults_resume_original_ids_and_refuse_edits_missing_root(
     result = apply(inventory, operation_id="interrupted", resume=True)
     assert result["outcome"] == "complete", json.dumps(result)
     from loom.queue.deployment import load_coordinator_service_config
-    from loom.queue import LocalDaemonSocketClient
+    from loom.coordinator import CoordinatorClient
 
     service = load_coordinator_service_config(inventory.hosts[0].config, env_file=inventory.hosts[0].env_file)
     assert (
-        LocalDaemonSocketClient(service.daemon.endpoint).status().scheduling_epoch
+        CoordinatorClient.from_unix_socket(service.daemon.endpoint).status().scheduling_epoch
         == enrollment_epoch
     )
     assert result["identities"]["coordinator"] == accepted

@@ -544,3 +544,35 @@ def test_conditional_controls_preserve_independent_policy_and_exact_replay(owner
             assert changed.value.code == "conflict"
     finally:
         server.stop()
+
+
+@pytest.mark.parametrize("marker, operation", [
+    (None, "agent_control"), (None, "operator_control"),
+    ("daemon-control-v1", "agent_control"), ("retired-control", "operator_control"),
+])
+def test_retired_socket_protocol_is_refused_before_operator_mutation(owner, tmp_path, marker, operation):
+    from loom.queue._coordinator_control import encode_wire
+    from loom.queue._coordinator_transport import read_unix_message
+
+    daemon, _agent, session, _operator = owner
+    endpoint = tmp_path / "current.sock"
+    server = LocalDaemonSocketServer(daemon, endpoint)
+    request = {"operation": operation, "control": drain(session).value()}
+    if marker is not None:
+        request["daemon_control"] = marker
+    server.start()
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(5)
+            connection.connect(str(endpoint))
+            connection.sendall(encode_wire(request) + b"\n")
+            response = read_unix_message(connection)
+        assert response["ok"] is False
+        detail = response["error_detail"]
+        assert isinstance(detail, Mapping)
+        assert detail["code"] == "unsupported"
+        with daemon._connection() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM agent_controls").fetchone()[0] == 0
+        assert daemon.agent(session.agent_id).session_id == session.session_id
+    finally:
+        server.stop()

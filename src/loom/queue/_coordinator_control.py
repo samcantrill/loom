@@ -1,6 +1,6 @@
 """Native coordinator control values, codecs and authenticated dispatch.
 
-Both transports and both Python adapters share this application boundary. It
+Both transports and public role-specific clients share this application boundary. It
 does not import diagnostics, the integration facade, or worker process owners.
 """
 
@@ -38,6 +38,12 @@ from .local_daemon import (
     LocalDaemonPrincipal,
     LocalDaemonRole,
     OperationWaitResult,
+    CoordinatorSchedulingReload,
+    RecoverUnknownAssignment,
+    SessionReplacementRequest,
+    TimeRecoveryRequest,
+    TimeRecoveryReceipt,
+    _RecoveryNotAccepted,
 )
 from .preparation import PrepareRunRequest
 from .run import RunRequest
@@ -48,7 +54,11 @@ from ._preparation_operations import PreparationChildReserved, PreparationNotAcc
 from .operations import OPERATOR_CAPABILITY, CONDITIONAL_CONTROL_CAPABILITY, OperatorObservation
 from ._maintenance import MaintenanceInProgress, MAINTENANCE_CAPABILITY
 
-OPERATOR_OPERATIONS = frozenset({"operator_handshake", "operator_status", "operator_agent", "operator_assignment", "operator_control", "operator_operation", "operator_maintenance", "operator_maintenance_control", "operator_maintenance_operation"})
+_OPERATOR_ADMIN_MUTATIONS = frozenset({
+    "operator_retire", "operator_scheduling_reload", "operator_recover_unknown",
+    "operator_recover_time", "operator_replace_agent_session", "operator_reconcile",
+})
+OPERATOR_OPERATIONS = _OPERATOR_ADMIN_MUTATIONS | frozenset({"operator_agent_retirement_ready"}) | frozenset({"operator_handshake", "operator_status", "operator_agent", "operator_assignment", "operator_control", "operator_operation", "operator_maintenance", "operator_maintenance_control", "operator_maintenance_operation"})
 CONTROL_CAPABILITY = "daemon-control-v1"
 MAX_RESPONSE_BYTES = 1_048_576
 MAX_OBSERVATION_SECONDS = 25.0
@@ -94,7 +104,7 @@ CONTROL_OPERATIONS = OPERATOR_OPERATIONS | frozenset(
     }
 )
 WAIT_OPERATIONS = frozenset({"wait_operation", "wait_admission"})
-MUTATION_OPERATIONS = frozenset({"operator_control", "operator_maintenance_control"}) | frozenset(
+MUTATION_OPERATIONS = _OPERATOR_ADMIN_MUTATIONS | frozenset({"operator_control", "operator_maintenance_control"}) | frozenset(
     {"startup_attach", "startup_release", "submit", "cancel", "prepare_run", "cancel_preparation", "start_run", "cancel_run_operation", "patch_run_annotations", "append_run_note"}
 )
 
@@ -141,6 +151,9 @@ def request_ids(payload: Mapping[str, object]) -> dict[str, PlainData]:
         "queue_item_id",
         "operation_id",
         "mutation_id",
+        "recovery_id",
+        "agent_id",
+        "session_id",
         "run_uri",
         "expected_coordinator_id",
     ):
@@ -365,12 +378,25 @@ def decode_envelope(
 
 
 def decode_result(operation: str, value: Mapping[str, object]) -> Any:
-    """Decode each native result at one owner shared by both Python adapters."""
+    """Decode each current result at its shared application boundary."""
     if operation in {"handshake", "operator_handshake"}:
         return CoordinatorConnectionDescription.from_dict(value)
     if operation in {"operator_status", "operator_agent", "operator_assignment"}:
         return OperatorObservation.from_dict(value)
     if operation in {"operator_control", "operator_operation", "operator_maintenance", "operator_maintenance_control", "operator_maintenance_operation"}:
+        return dict(value)
+    if operation == "operator_recover_time":
+        return TimeRecoveryReceipt.from_dict(value)
+    if operation == "operator_agent_retirement_ready":
+        if set(value) != {"ready"} or not isinstance(value["ready"], bool):
+            raise ValueError("agent retirement readiness is invalid")
+        return value["ready"]
+    if operation == "operator_reconcile":
+        rows = value.get("admissions")
+        if set(value) != {"admissions"} or not isinstance(rows, list):
+            raise ValueError("reconciliation result is invalid")
+        return tuple(LocalDaemonAdmission.from_dict(row) for row in rows)
+    if operation in _OPERATOR_ADMIN_MUTATIONS:
         return dict(value)
     if operation == "status":
         return DaemonStatus.from_dict(value)
@@ -442,9 +468,7 @@ def optional_id(value: object) -> str | None:
     return cast(str | None, value)
 
 
-def observation_timeout(value: object, *, legacy: bool = False) -> float | None:
-    if legacy and value is None:
-        return None
+def observation_timeout(value: object) -> float:
     if (
         isinstance(value, bool)
         or not isinstance(value, (int, float))
@@ -452,13 +476,13 @@ def observation_timeout(value: object, *, legacy: bool = False) -> float | None:
         or value < 0
     ):
         raise ValueError("observation timeout is invalid")
-    if not legacy and value > MAX_OBSERVATION_SECONDS:
+    if value > MAX_OBSERVATION_SECONDS:
         raise ValueError("observation timeout exceeds 25 seconds")
     return float(value)
 
 
 def validate_request(
-    operation: str, payload: Mapping[str, object], *, legacy: bool = False
+    operation: str, payload: Mapping[str, object]
 ) -> dict[str, object]:
     """Validate the finite public request before invoking application owners."""
     from ._run_queries import QUERY_OPERATIONS, validate_query_request
@@ -484,6 +508,13 @@ def validate_request(
     fields = {
         "operator_handshake": set(),
         "operator_status": set(),
+        "operator_retire": {"operation_id"},
+        "operator_agent_retirement_ready": {"agent_id", "session_id"},
+        "operator_scheduling_reload": {"request"},
+        "operator_recover_unknown": {"request"},
+        "operator_recover_time": {"request"},
+        "operator_replace_agent_session": {"request"},
+        "operator_reconcile": set(),
         "operator_maintenance": set(),
         "operator_maintenance_control": {"control", "intent_digest"},
         "operator_maintenance_operation": {"operation_id"},
@@ -521,6 +552,9 @@ def validate_request(
         raise control_error("unsupported", operation, payload)
     value = dict(payload)
     value.pop("expected_coordinator_id", None)
+    if operation in _OPERATOR_ADMIN_MUTATIONS:
+        if optional_id(payload.get("expected_coordinator_id")) is None:
+            raise ValueError("operator mutation requires coordinator identity")
     if operation == "operator_maintenance_control":
         from ._maintenance import validate_control
         from .operations import control_intent_digest
@@ -548,11 +582,6 @@ def validate_request(
     if operation == "service_lifetime":
         value.setdefault("agent_root_id", None)
         optional_id(value["agent_root_id"])
-    if legacy and operation in {"admissions", "agents"}:
-        value.setdefault("limit", 100)
-        value.setdefault("cursor", None)
-    if legacy and operation in WAIT_OPERATIONS:
-        value.setdefault("timeout", None)
     if set(value) != fields[operation]:
         raise ValueError("control request fields are invalid")
     if operation == "read_run_logs":
@@ -571,7 +600,7 @@ def validate_request(
             if not isinstance(change, Mapping):
                 raise ValueError("annotation patch must be an object")
             mutation_request(cast(str, value["run_uri"]), cast(str, value["mutation_id"]), operation, change)
-    for key in ("admission_id", "queue_item_id", "agent_id", "operation_id", "run_uri"):
+    for key in ("admission_id", "queue_item_id", "agent_id", "session_id", "operation_id", "run_uri"):
         if key in value and (not isinstance(value[key], str) or not value[key]):
             raise ValueError(f"control {key} is invalid")
     if "attachment_id" in value:
@@ -592,7 +621,18 @@ def validate_request(
         if type(revision) is not int or revision < 0:
             raise ValueError("admission revision is invalid")
     if "timeout" in value:
-        value["timeout"] = observation_timeout(value["timeout"], legacy=legacy)
+        value["timeout"] = observation_timeout(value["timeout"])
+    request_types = {
+        "operator_scheduling_reload": CoordinatorSchedulingReload,
+        "operator_recover_unknown": RecoverUnknownAssignment,
+        "operator_recover_time": TimeRecoveryRequest,
+        "operator_replace_agent_session": SessionReplacementRequest,
+    }
+    if operation in request_types:
+        request = value["request"]
+        if not isinstance(request, Mapping):
+            raise ValueError("operator request must be an object")
+        value["request"] = request_types[operation].from_dict(request)
     if operation == "submit":
         request = value["request"]
         if not isinstance(request, Mapping):
@@ -615,14 +655,12 @@ def dispatch_control(
     transport: str,
     wait_slice: float,
     inspect_run: Callable[[str], Mapping[str, PlainData]] | None,
-    legacy: bool = False,
 ) -> Mapping[str, PlainData]:
     """Authorize, guard and dispatch once, preserving mutation commitment truth."""
     dispatched = applied = False
     try:
         try:
-            if not (legacy and transport == "unix" and operation == "inspect_run"):
-                daemon._require_view_role(principal, LocalDaemonRole.OPERATOR if operation in OPERATOR_OPERATIONS else LocalDaemonRole.CLIENT)
+            daemon._require_view_role(principal, LocalDaemonRole.OPERATOR if operation in OPERATOR_OPERATIONS else LocalDaemonRole.CLIENT)
         except QueueError as exc:
             raise control_error(
                 "unauthorized", operation, payload, boundary="authentication"
@@ -646,7 +684,7 @@ def dispatch_control(
                 },
             )
         try:
-            value = validate_request(operation, payload, legacy=legacy)
+            value = validate_request(operation, payload)
         except (ValueError, TypeError, QueueError) as exc:
             if isinstance(exc, CoordinatorClientError):
                 raise
@@ -758,8 +796,7 @@ def dispatch_control(
                     "unsupported", operation, payload, boundary="coordinator"
                 )
             run_uri = cast(str, value["run_uri"])
-            if not legacy or transport == "https":
-                daemon.admission_for_run_uri(run_uri)
+            daemon.admission_for_run_uri(run_uri)
             result = inspect_run(run_uri)
         elif operation == "submit":
             dispatched = True
@@ -835,8 +872,6 @@ def dispatch_control(
             boundary="coordinator", dispatched=False,
         ) from exc
     except Exception as exc:
-        if legacy:
-            raise
         if isinstance(exc, AdmissionNotFoundError) or (
             isinstance(exc, QueueServiceError)
             and str(exc)
@@ -867,6 +902,41 @@ def dispatch_control(
 
 def _dispatch_operator(daemon: LocalDaemon, principal: LocalDaemonPrincipal, operation: str, value: Mapping[str, object], payload: Mapping[str, object]) -> Mapping[str, PlainData]:
     view = daemon.operator_view(principal)
+    if operation in _OPERATOR_ADMIN_MUTATIONS or operation == "operator_agent_retirement_ready":
+        actions = {
+            "operator_retire": "scheduling_reload",
+            "operator_agent_retirement_ready": "drain",
+            "operator_scheduling_reload": "scheduling_reload",
+            "operator_recover_unknown": "recover_unknown",
+            "operator_recover_time": "recover_time",
+            "operator_replace_agent_session": "replace_session",
+        }
+        agent_id = (
+            cast(SessionReplacementRequest, value["request"]).agent_id
+            if operation == "operator_replace_agent_session"
+            else cast(str | None, value.get("agent_id"))
+        )
+        try:
+            if operation in actions:
+                daemon._authorizer().require_operator(principal, actions[operation], agent_id=agent_id)
+        except QueueServiceError as exc:
+            raise control_error("unauthorized", operation, payload, boundary="authentication") from exc
+        try:
+            if operation == "operator_retire":
+                return view.retire(cast(str, value["operation_id"]), cast(str, payload["expected_coordinator_id"]))
+            if operation == "operator_agent_retirement_ready":
+                return {"ready": view.agent_retirement_ready(cast(str, value["agent_id"]), cast(str, value["session_id"]))}
+            if operation == "operator_scheduling_reload":
+                return view.reload_scheduling(cast(CoordinatorSchedulingReload, value["request"]))
+            if operation == "operator_recover_unknown":
+                return view.recover_unknown(cast(RecoverUnknownAssignment, value["request"]))
+            if operation == "operator_recover_time":
+                return view.recover_time(cast(TimeRecoveryRequest, value["request"])).to_dict()
+            if operation == "operator_replace_agent_session":
+                return view.replace_agent_session(cast(SessionReplacementRequest, value["request"]))
+            return {"admissions": [admission.to_dict() for admission in view.reconcile_once()]}
+        except _RecoveryNotAccepted as exc:
+            raise control_error("conflict", operation, payload, boundary="coordinator") from exc
     if operation == "operator_maintenance":
         return view.observe_maintenance()
     if operation in {"operator_maintenance_control", "operator_maintenance_operation"}:

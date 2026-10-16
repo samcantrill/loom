@@ -9,11 +9,8 @@ from pathlib import Path
 import pytest
 
 from loom.cli.main import main
-from loom.queue import (
-    LocalDaemonSocketClient,
-    ManagedRecoveryTarget,
-    RecoverUnknownAssignment,
-)
+from loom.queue import ManagedRecoveryTarget, RecoverUnknownAssignment
+from loom.coordinator import CoordinatorOperatorClient
 
 
 pytestmark = pytest.mark.optional_dependency
@@ -42,7 +39,7 @@ def test_guarded_recovery_cli_parses_the_exact_request_and_delegates(
     received: list[RecoverUnknownAssignment] = []
 
     def recover_unknown(
-        _client: LocalDaemonSocketClient, candidate: RecoverUnknownAssignment
+        _client: CoordinatorOperatorClient, candidate: RecoverUnknownAssignment
     ) -> dict[str, object]:
         received.append(candidate)
         return {
@@ -51,7 +48,7 @@ def test_guarded_recovery_cli_parses_the_exact_request_and_delegates(
             "evidence": "TEST_CONTAINMENT",
         }
 
-    monkeypatch.setattr(LocalDaemonSocketClient, "recover_unknown", recover_unknown)
+    monkeypatch.setattr(CoordinatorOperatorClient, "recover_unknown", recover_unknown)
     stdout = io.StringIO()
     stderr = io.StringIO()
 

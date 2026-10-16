@@ -13,20 +13,11 @@ from loom.diagnostics import (
     RunInspectionAxis,
     RunInspectionAxisName,
     RunInspectionResult,
-    decode_run_inspection_response,
     inspect_run,
     projection_callable,
 )
-from loom.queue import (
-    LocalDaemon,
-    LocalDaemonAdmissionRequest,
-    LocalDaemonAdmissionState,
-    LocalDaemonConfig,
-    LocalDaemonPrincipal,
-    LocalDaemonRole,
-    LocalDaemonSocketClient,
-    LocalDaemonSocketServer,
-)
+from loom.queue import LocalDaemon, LocalDaemonAdmissionRequest, LocalDaemonAdmissionState, LocalDaemonConfig, LocalDaemonPrincipal, LocalDaemonRole, LocalDaemonSocketServer
+from loom.coordinator import CoordinatorClient
 from loom.queue._agent_process_supervisor import (
     AgentProcessSupervisorClient,
     AgentProcessSupervisorService,
@@ -139,9 +130,7 @@ def test_managed_inspection_projects_targeted_owners_through_unix_socket(
         )
         server.start()
         assert stat.S_IMODE(config.endpoint.stat().st_mode) == 0o600
-        via_socket = decode_run_inspection_response(
-            LocalDaemonSocketClient(config.endpoint).inspect_run(run_uri)
-        )
+        via_socket = CoordinatorClient.from_unix_socket(config.endpoint).inspect_run(run_uri)
 
         assert isinstance(via_socket, RunInspectionResult)
         assert via_socket.run_uri == direct.run_uri

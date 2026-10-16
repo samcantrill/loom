@@ -51,7 +51,7 @@ if TYPE_CHECKING:
         TimeRecoveryReceipt,
         TimeRecoveryRequest,
     )
-    from .local_daemon_transport import LocalDaemonSocketClient, LocalDaemonSocketServer
+    from .local_daemon_transport import LocalDaemonSocketServer
     from .local_daemon_runtime import prepare_managed_local_runtime_record
     from .managed_local_preparation import (
         ManagedLocalPreparationReceipt,
@@ -132,8 +132,7 @@ _LOCAL_DAEMON_EXPORTS = frozenset(
         "ConfiguredGpuDevice",
         "LocalDaemonPrincipal",
         "LocalDaemonRole",
-        "LocalDaemonSocketClient",
-        "LocalDaemonSocketServer",
+            "LocalDaemonSocketServer",
         "DaemonStatus",
         "AdmissionPage",
         "AgentPage",
@@ -184,7 +183,7 @@ def __getattr__(name: str) -> object:
 
         return LocalOwnerOperatorPolicy
     if name in _LOCAL_DAEMON_EXPORTS:
-        if name in {"LocalDaemonSocketClient", "LocalDaemonSocketServer"}:
+        if name == "LocalDaemonSocketServer":
             from . import local_daemon_transport
 
             return getattr(local_daemon_transport, name)
@@ -247,7 +246,6 @@ __all__ = [
     "ConfiguredGpuDevice",
     "LocalDaemonPrincipal",
     "LocalDaemonRole",
-    "LocalDaemonSocketClient",
     "LocalDaemonSocketServer",
     "DaemonStatus",
     "AdmissionPage",

@@ -13,6 +13,8 @@ from time import monotonic, sleep
 
 import pytest
 
+from loom.coordinator import CoordinatorOperatorClient
+from loom.queue._coordinator_transport import HttpsControlTransport
 from loom.pipeline.status import StageStatus
 from loom.pipeline.stores import LocalRunStore
 from loom.queue._agent_process_supervisor import _host_boot_evidence, _launch_from_value
@@ -146,13 +148,15 @@ def test_reboot_containment_closes_and_releases_same_session(
     )
     LocalDaemonAgentHttpClient.initialize_agent_root(remote_config)
     agent = LocalDaemonAgentHttpClient(remote_config)
-    operator = LocalDaemonAgentHttpClient(
-        AgentTlsClientConfig(
+    operator = CoordinatorOperatorClient(
+        HttpsControlTransport(
             f"https://localhost:{server.port}",
             credentials["ca"].with_suffix(".crt"),
             credentials["other"].with_suffix(".crt"),
             credentials["other"].with_suffix(".key"),
-        )
+            role="operator",
+        ),
+        expected_coordinator_id=daemon.status().coordinator_id,
     )
     release_agent = Event()
     worker = None

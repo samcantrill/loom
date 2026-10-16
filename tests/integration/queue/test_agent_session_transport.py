@@ -2249,13 +2249,18 @@ def test_remote_guarded_recovery_persists_supervisor_receipt_before_close(
     )
     LocalDaemonAgentHttpClient.initialize_agent_root(remote_config)
     agent = LocalDaemonAgentHttpClient(remote_config)
-    operator = LocalDaemonAgentHttpClient(
-        AgentTlsClientConfig(
+    from loom.coordinator import CoordinatorOperatorClient
+    from loom.queue._coordinator_transport import HttpsControlTransport
+
+    operator = CoordinatorOperatorClient(
+        HttpsControlTransport(
             f"https://localhost:{server.port}",
             credentials["ca"].with_suffix(".crt"),
             credentials["other"].with_suffix(".crt"),
             credentials["other"].with_suffix(".key"),
-        )
+            role="operator",
+        ),
+        expected_coordinator_id=daemon.status().coordinator_id,
     )
     release_agent = Event()
     evidence_acknowledged = Event()
@@ -2368,8 +2373,10 @@ def test_remote_guarded_recovery_persists_supervisor_receipt_before_close(
             recovery_id="remote-active-recovery",
             reason="must not close a currently observed remote process",
         )
-        with pytest.raises(QueueConflictError, match="agent protocol conflict"):
+        with pytest.raises(CoordinatorClientError) as active:
             operator.recover_unknown(active_request)
+        assert active.value.code == "conflict"
+        assert active.value.mutation_outcome == "not_applied"
         with sqlite3.connect(config.control_database) as conn:
             assert (
                 conn.execute("SELECT COUNT(*) FROM recovery_operations").fetchone()[0]
@@ -6299,13 +6306,18 @@ def test_loopback_operator_scope_denial_matches_direct_before_persistence(
             _remote_agent_root(tmp_path),
         )
     )
-    operator = LocalDaemonAgentHttpClient(
-        AgentTlsClientConfig(
+    from loom.coordinator import CoordinatorOperatorClient
+    from loom.queue._coordinator_transport import HttpsControlTransport
+
+    operator = CoordinatorOperatorClient(
+        HttpsControlTransport(
             f"https://localhost:{server.port}",
             credentials["ca"].with_suffix(".crt"),
             credentials["other"].with_suffix(".crt"),
             credentials["other"].with_suffix(".key"),
-        )
+            role="operator",
+        ),
+        expected_coordinator_id=daemon.status().coordinator_id,
     )
     try:
         handshake = agent.handshake()
@@ -6329,9 +6341,11 @@ def test_loopback_operator_scope_denial_matches_direct_before_persistence(
         )
         with pytest.raises(QueueServiceError, match="not authorized"):
             direct.control_agent(control)
-        operator.handshake(role="operator")
-        with pytest.raises(QueueServiceError, match="agent_protocol_rejected"):
+        operator.describe_connection()
+        with pytest.raises(CoordinatorClientError) as denied:
             operator.control_agent(control)
+        assert denied.value.code == "unauthorized"
+        assert denied.value.mutation_outcome == "not_applied"
         with sqlite3.connect(config.control_database) as conn:
             assert (
                 conn.execute("SELECT COUNT(*) FROM agent_controls").fetchone()[0] == 0
@@ -6351,7 +6365,8 @@ def test_native_control_lost_reply_reconciles_same_id_and_guards_before_dispatch
 ) -> None:
     """A committed admission survives a dropped reply on either real transport."""
     import loom.queue.local_daemon_transport as unix_transport
-    from loom.queue import LocalDaemonSocketClient, LocalDaemonSocketServer
+    from loom.queue import LocalDaemonSocketServer
+    from loom.coordinator import CoordinatorClient
 
     store = LocalRunStore(tmp_path / "runs")
     run_uri, _authority = _prepare_remote_producer_run(
@@ -6501,12 +6516,6 @@ def test_native_control_lost_reply_reconciles_same_id_and_guards_before_dispatch
             client.inspect_run(run_uri)
         assert caught.value.code == "not_found"
         assert projection_calls == []
-        if transport == "unix":
-            assert (
-                LocalDaemonSocketClient(config.endpoint).inspect_run(run_uri)["code"]
-                == "unavailable"
-            )
-            assert projection_calls == [run_uri]
         with pytest.raises(CoordinatorClientError) as lost:
             client.submit(request)
         assert dropped.is_set(), (lost.value.code, str(lost.value))
@@ -7089,142 +7098,87 @@ def test_loopback_exposes_client_and_operator_views_only_to_configured_roles(
         ),
     )
     server.start()
-    client = LocalDaemonAgentHttpClient(
-        AgentTlsClientConfig(
-            f"https://localhost:{server.port}",
-            credentials["ca"].with_suffix(".crt"),
-            credentials["other"].with_suffix(".crt"),
-            credentials["other"].with_suffix(".key"),
-        )
-    )
-    agent = LocalDaemonAgentHttpClient(
-        AgentTlsClientConfig(
-            f"https://localhost:{server.port}",
-            credentials["ca"].with_suffix(".crt"),
-            credentials["agent"].with_suffix(".crt"),
-            credentials["agent"].with_suffix(".key"),
-        )
-    )
+    from loom.coordinator import CoordinatorOperatorClient
+
+    connection_path = tmp_path / "coordinator-client.json"
+    settings = {
+        "schema_version": 1,
+        "kind": "loom.coordinator-client",
+        "transport": {
+            "kind": "https",
+            "url": f"https://localhost:{server.port}",
+            "server_ca_path": str(credentials["ca"].with_suffix(".crt")),
+            "certificate_path": str(credentials["other"].with_suffix(".crt")),
+            "private_key_path": str(credentials["other"].with_suffix(".key")),
+        },
+        "expected_coordinator_id": daemon._coordinator_id,
+    }
+    connection_path.write_text(json.dumps(settings))
+    connection_path.chmod(0o600)
+    facade = CoordinatorClient.from_connection_file(connection_path)
+    operator = CoordinatorOperatorClient.from_connection_file(connection_path)
     try:
-        handshake = client.handshake(role="client")
-        assert handshake["role"] == "client"
-        # The current client surface advertises maintenance, conditional control,
-        # both quiescent promotions and bounded logs alongside run inspection.
-        expected_capabilities = (
-            "authenticated-application-v1",
-            "daemon-control-v1",
-            "operator-observations-v1",
-            "conditional-agent-control-v1",
-            "quiescent-profile-promotion-v2",
-            "quiescent-source-promotion-v1",
-            "maintenance-admission-v1",
-            "run-context-v1",
-            "run-query-v1",
-            "output-query-v1",
-            "lineage-query-v1",
-            "artifact-read-v1",
+        handshake = facade.describe_connection()
+        assert handshake.transport == "https"
+        assert handshake.capabilities == (
+            "authenticated-application-v1", "daemon-control-v1",
+            "operator-observations-v1", "conditional-agent-control-v1",
+            "quiescent-profile-promotion-v2", "quiescent-source-promotion-v1",
+            "maintenance-admission-v1", "run-context-v1", "run-query-v1",
+            "output-query-v1", "lineage-query-v1", "artifact-read-v1",
             "bounded-run-logs-v1",
         )
-        assert handshake["capabilities"] in (
-            expected_capabilities, list(expected_capabilities)
-        )
-        remote_status = client.call_application("client", "status", {})
-        direct_status = (
-            daemon.client_view(
-                LocalDaemonPrincipal(
-                    "client-principal", LocalDaemonRole.CLIENT, "client-credential"
-                )
-            )
-            .status()
-            .to_dict()
-        )
-        assert remote_status["coordinator_id"] == direct_status["coordinator_id"]
-        assert remote_status["coordinator_epoch"] == direct_status["coordinator_epoch"]
-        assert remote_status["active_admissions"] == 0
-        assert remote_status["waiting_admissions"] == 0
-        assert direct_status["active_admissions"] == 0
-        assert direct_status["waiting_admissions"] == 0
-        connection_path = tmp_path / "coordinator-client.yaml"
-        connection_path.write_text(
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "kind": "loom.coordinator-client",
-                    "transport": {
-                        "kind": "https",
-                        "url": f"https://localhost:{server.port}",
-                        "server_ca_path": str(credentials["ca"].with_suffix(".crt")),
-                        "certificate_path": str(
-                            credentials["other"].with_suffix(".crt")
-                        ),
-                        "private_key_path": str(
-                            credentials["other"].with_suffix(".key")
-                        ),
-                    },
-                    "expected_coordinator_id": daemon._coordinator_id,
-                }
-            ),
-            encoding="utf-8",
-        )
-        connection_path.chmod(0o600)
-        facade = CoordinatorClient.from_connection_file(connection_path)
-        assert facade.describe_connection().transport == "https"
-        assert facade.status().coordinator_id == daemon._coordinator_id
+        remote_status = facade.status()
+        direct_status = daemon.client_view(LocalDaemonPrincipal(
+            "client-principal", LocalDaemonRole.CLIENT, "client-credential"
+        )).status()
+        assert remote_status.coordinator_id == direct_status.coordinator_id
+        assert remote_status.coordinator_epoch == direct_status.coordinator_epoch
+        assert remote_status.active_admissions == direct_status.active_admissions == 0
+        assert remote_status.waiting_admissions == direct_status.waiting_admissions == 0
         with pytest.raises(CoordinatorClientError, match="conflict"):
-            CoordinatorClient.from_connection_file(
-                connection_path, expected_coordinator_id="different-coordinator"
-            )
-        daemon.replace_agent_policy(
-            AgentPolicyConfig(revision="policy-2", agents=policy.agents)
-        )
+            CoordinatorClient.from_connection_file(connection_path, expected_coordinator_id="different-coordinator")
+        with pytest.raises(CoordinatorClientError) as client_role:
+            operator.observe_status()
+        assert client_role.value.code == "unauthorized"
+
+        daemon.replace_agent_policy(AgentPolicyConfig(revision="policy-2", agents=policy.agents))
         with pytest.raises(CoordinatorClientError) as revoked:
             facade.status()
-        assert revoked.value.code == "unauthorized", repr(revoked.value.__cause__)
+        assert revoked.value.code == "unauthorized"
         assert revoked.value.boundary == "authentication"
         assert revoked.value.mutation_outcome is None
-        with pytest.raises(QueueServiceError, match="agent_protocol_rejected"):
-            client.handshake(role="client")
-        daemon.replace_agent_policy(
-            AgentPolicyConfig(
-                revision="policy-3",
-                agents=policy.agents,
-                principals=(
-                    TransportPrincipalPolicy(
-                        "client-credential", "operator-principal", "operator"
-                    ),
-                ),
-            )
-        )
-        operator_handshake = client.handshake(role="operator")
-        assert operator_handshake["role"] == "operator"
+        daemon.replace_agent_policy(AgentPolicyConfig(
+            revision="policy-3", agents=policy.agents,
+            principals=(TransportPrincipalPolicy("client-credential", "operator-principal", "operator"),),
+        ))
+        assert operator.describe_connection().coordinator_id == daemon._coordinator_id
         with pytest.raises(CoordinatorClientError) as wrong_role:
             facade.cancel("never-admitted")
         assert wrong_role.value.code == "unauthorized"
         assert wrong_role.value.mutation_outcome == "not_applied"
-        remote_operator = client.call_application("operator", "status", {})
-        direct_operator = (
-            daemon.operator_view(
-                LocalDaemonPrincipal(
-                    "operator-principal",
-                    LocalDaemonRole.OPERATOR,
-                    "client-credential",
-                )
-            )
-            .status()
-            .to_dict()
-        )
-        assert remote_operator["coordinator_id"] == direct_operator["coordinator_id"]
-        assert client.call_application("operator", "reconcile", {})["admissions"] in (
-            (),
-            [],
-        )
-        with pytest.raises(QueueServiceError, match="agent_protocol_rejected"):
-            agent.handshake(role="client")
-        with pytest.raises(QueueServiceError, match="agent_protocol_rejected"):
-            agent.call_application("client", "status", {})
+        remote_operator = operator.observe_status()
+        direct_operator = daemon.operator_view(LocalDaemonPrincipal(
+            "operator-principal", LocalDaemonRole.OPERATOR, "client-credential"
+        )).observe_status()
+        assert remote_operator.owner == direct_operator.owner
+        assert {k: v for k, v in remote_operator.value.items() if k != "as_of"} == {
+            k: v for k, v in direct_operator.value.items() if k != "as_of"
+        }
+        assert operator.reconcile_once() == ()
+
+        settings["transport"]["certificate_path"] = str(credentials["agent"].with_suffix(".crt"))
+        settings["transport"]["private_key_path"] = str(credentials["agent"].with_suffix(".key"))
+        connection_path.write_text(json.dumps(settings))
+        with CoordinatorClient.from_connection_file(connection_path) as wrong_agent:
+            with pytest.raises(CoordinatorClientError) as denied:
+                wrong_agent.cancel("never-admitted")
+        assert denied.value.code == "unauthorized"
+        assert denied.value.mutation_outcome == "not_applied"
+        assert daemon.admissions().admissions == ()
     finally:
-        client.close()
-        agent.close()
+        facade.close()
+        operator.close()
         server.stop()
         daemon.stop()
 
@@ -7380,7 +7334,7 @@ def test_loopback_query_role_is_read_only_current_policy_and_capability_gated(
             with pytest.raises(
                 QueueServiceError, match="agent protocol request failed"
             ):
-                mutation_client.call_application(role, operation, value)
+                mutation_client._call(operation, value, role=role)
         # The generic application client excludes QUERY roles locally; exercise
         # the actual authenticated read-only server boundary with its envelope.
         with pytest.raises(QueueServiceError, match="agent protocol request failed"):
@@ -7628,7 +7582,7 @@ def test_loopback_maps_slurm_certificate_only_to_fixed_bootstrap_role(
                 )
             )
         with pytest.raises(QueueServiceError, match="agent_protocol_rejected"):
-            client.handshake(role="client")
+            client._call("handshake", {}, role="client")
     finally:
         client.close()
         server.stop()

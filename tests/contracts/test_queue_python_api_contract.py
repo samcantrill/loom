@@ -75,7 +75,6 @@ def test_local_daemon_public_request_has_no_executable_or_privileged_fields(
         "LocalDaemon",
         "LocalDaemonAdmissionRequest",
         "LocalDaemonOperation",
-        "LocalDaemonSocketClient",
         "LocalOwnerOperatorPolicy",
         "MemoryResourceProvider",
         "ObserveRequest",
