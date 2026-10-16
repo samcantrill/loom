@@ -1959,6 +1959,21 @@ publication, synchronization and exact branch retirement are recorded on #431.
 All selected raw receipts, including superseded failures and diagnostic logs,
 are retained outside the worktree at
 `/nas/home/can134/.config/rphys/qualification/stage112-native-upgrade-progress-8c342aa5/`,
-with byte-for-byte copy verification. Downstream paired dependency adoption and
-its installed process checks remain rphys phase 2; broader image/physical
-qualification remains with the original cutover owner.
+with byte-for-byte copy verification. Rphys phase 2 now merged in
+[rphys #923](https://github.com/samcantrill/rphys/pull/923), merge
+`1b1b7fd255f88dc8267a613eab4e512010d3f29e`, and adopts both native packages at
+`827f0b45e5f895632e1d2e3b722eec285e8bc57c`. Its actual final diff passed
+independent review and 166 distinct selected consumer/native cases, including
+live delegated progress, scientific composition, reuse/recovery, relocated
+archives, and the fixed-workload native writer/scaling/accounting requirement.
+The primary report is 1,050,581 bytes; its complete retained-byte accounting is
+preserved separately. Rphys completion metadata is published and synchronized
+at `7b63337371d25f0c5132808656a883d3a38179f4`.
+
+This upstream closeout changes documentation only, so the adopted revision's
+runtime, dependency and native semantic evidence remain valid. Publish and
+synchronize this named coordination branch, then retire only the clean exact
+Stage 112 worktree/coordination branch; the final handoff records actual removal.
+Broader image/physical qualification, rphys Stage 111, the remaining artifact/API
+census and final regeneration remain with the original cutover owner. Client
+adoption neither mutates current service roots nor converts unsupported state.
