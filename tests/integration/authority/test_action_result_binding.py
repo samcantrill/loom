@@ -104,6 +104,7 @@ def test_binding_projects_original_commit_without_new_attempt_or_commit(
     assert stage.latest_commit == binding.commit
     assert stage.artifact_facts == binding.artifact_facts
     assert stage.result_binding == binding
+    assert stage.execution_timing(uri) == (None, None)
     assert AuthoritativeRunSnapshot.from_dict(snapshot.to_dict()) == snapshot
     with sqlite3.connect(database) as conn:
         for table in tables:

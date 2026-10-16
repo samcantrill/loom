@@ -178,6 +178,7 @@ def test_native_run_projects_current_fingerprints_timing_and_only_committed_arti
     from loom.runs._query_acquire import acquire_run
     from tests.support.native_run_fixture import run_native_fixture
     from tests.support.pipeline_execution_configs import local_execution_config
+    from loom.pipeline.execution.authority_adapter import AuthorityBackedSerialRunStore
 
     config = tmp_path / "pipeline.json"
     config.write_text(
@@ -217,6 +218,7 @@ def test_native_run_projects_current_fingerprints_timing_and_only_committed_arti
     assert snapshot.finished_at and summary.finished_at == snapshot.finished_at
     assert {a.logical_name for a in summary.artifacts} == {"source.data", "report.text"}
     record = acquire_run(local.root, admission.run_uri, authority)
+    adapter = AuthorityBackedSerialRunStore(local_store=local, authority_store=authority)
     assert record.warnings == []
     assert record.sources["native"]["config_fingerprint"] == identities[0]
     assert record.sources["native"]["started_at"] == snapshot.started_at
@@ -226,14 +228,18 @@ def test_native_run_projects_current_fingerprints_timing_and_only_committed_arti
     ):
         attempt = stage.attempts[-1]
         commit = stage.latest_commit
+        status = adapter.read_stage_status(admission.run_uri, stage.stage_name)
+        assert status is not None
         assert attempt.start_confirmed_at and commit is not None
         assert (
             actual.started_at
+            == status.started_at
             == projected.sources["native"]["started_at"]
             == attempt.start_confirmed_at
         )
         assert (
             actual.finished_at
+            == status.finished_at
             == projected.sources["native"]["finished_at"]
             == commit.committed_at
         )

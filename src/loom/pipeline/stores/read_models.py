@@ -1122,6 +1122,29 @@ class StageLifecycleSnapshot:
         if self.reason is not None and not isinstance(self.reason, LifecycleReason):
             raise AuthorityModelError("reason must be a LifecycleReason or None")
 
+    def execution_timing(self, run_uri: str) -> tuple[str | None, str | None]:
+        """Return the latest attempt's confirmed start and owned commit finish.
+
+        Preparation/revision times are not execution witnesses. Reused results
+        keep their producer's commit but cannot establish this run's execution
+        finish. A terminal stage without an owned successful commit has no
+        retained finish witness and returns ``None`` for that timestamp.
+        """
+        latest = self.attempts[-1] if self.attempts else None
+        started_at = None if latest is None else latest.start_confirmed_at
+        commit = self.latest_commit
+        finished_at = (
+            commit.committed_at
+            if commit is not None
+            and latest is not None
+            and self.status is StageStatus.SUCCEEDED
+            and commit.run_uri == run_uri
+            and commit.stage_name == self.stage_name
+            and commit.attempt_id == latest.attempt_id
+            else None
+        )
+        return started_at, finished_at
+
     def to_dict(self) -> dict[str, PlainData]:
         return {
             "stage_name": self.stage_name,
@@ -1181,9 +1204,9 @@ class StageLifecycleSnapshot:
             },
             "StageLifecycleSnapshot",
         )
-        active_lease = mapping.get("active_lease")
-        latest_commit = mapping.get("latest_commit")
-        static_outcome = mapping.get("static_outcome")
+        active_lease = _required(mapping, "active_lease")
+        latest_commit = _required(mapping, "latest_commit")
+        static_outcome = _required(mapping, "static_outcome")
         return cls(
             stage_name=_non_empty_string(
                 _required(mapping, "stage_name"), "stage_name"
@@ -1193,7 +1216,7 @@ class StageLifecycleSnapshot:
             revision=BackendRevision.from_dict(_required(mapping, "revision")),
             attempts=tuple(
                 StageAttempt.from_dict(attempt)
-                for attempt in _sequence(mapping.get("attempts", ()), "attempts")
+                for attempt in _sequence(_required(mapping, "attempts"), "attempts")
             ),
             active_lease=None
             if active_lease is None
@@ -1204,7 +1227,7 @@ class StageLifecycleSnapshot:
             artifact_facts=tuple(
                 ArtifactFactRecord.from_dict(fact)
                 for fact in _sequence(
-                    mapping.get("artifact_facts", ()), "artifact_facts"
+                    _required(mapping, "artifact_facts"), "artifact_facts"
                 )
             ),
             static_outcome=None
@@ -1213,37 +1236,37 @@ class StageLifecycleSnapshot:
             reliability_policy_facts=tuple(
                 ReliabilityPolicyFact.from_dict(fact)
                 for fact in _sequence(
-                    mapping.get("reliability_policy_facts", ()),
+                    _required(mapping, "reliability_policy_facts"),
                     "reliability_policy_facts",
                 )
             ),
             reliability_status_details=tuple(
                 ReliabilityStatusDetail.from_dict(detail)
                 for detail in _sequence(
-                    mapping.get("reliability_status_details", ()),
+                    _required(mapping, "reliability_status_details"),
                     "reliability_status_details",
                 )
             ),
             reliability_transactions=tuple(
                 StageAttemptTransaction.from_dict(transaction)
                 for transaction in _sequence(
-                    mapping.get("reliability_transactions", ()),
+                    _required(mapping, "reliability_transactions"),
                     "reliability_transactions",
                 )
             ),
             retry_decisions=tuple(
                 RetryDecisionRecord.from_dict(decision)
                 for decision in _sequence(
-                    mapping.get("retry_decisions", ()), "retry_decisions"
+                    _required(mapping, "retry_decisions"), "retry_decisions"
                 )
             ),
             timeout_outcomes=tuple(
                 TimeoutOutcomeRecord.from_dict(outcome)
                 for outcome in _sequence(
-                    mapping.get("timeout_outcomes", ()), "timeout_outcomes"
+                    _required(mapping, "timeout_outcomes"), "timeout_outcomes"
                 )
             ),
-            reason=_optional_reason(mapping.get("reason")),
+            reason=_optional_reason(_required(mapping, "reason")),
         )
 
 
@@ -1253,7 +1276,7 @@ class AuthoritativeRunSnapshot:
 
     ``started_at`` is the first authoritative running transition, preserved on
     retry. ``started_at_known`` distinguishes a new run that has never started
-    from historical unknown timing; absent legacy fields remain unknown.
+    from explicit unknown timing. Current wire payloads require all timing fields.
     ``finished_at`` is the current success/failure/cancellation time and clears
     on reopening. All populated timestamps use Loom's UTC timestamp format.
     """
@@ -1402,60 +1425,60 @@ class AuthoritativeRunSnapshot:
         return cls(
             run_uri=_non_empty_string(_required(mapping, "run_uri"), "run_uri"),
             status=_run_status(_required(mapping, "status")),
-            reason=None if mapping.get("reason") is None else LifecycleReason.from_dict(mapping["reason"]),
-            started_at=None if mapping.get("started_at") is None else _timestamp(mapping["started_at"], "started_at"),
-            finished_at=None if mapping.get("finished_at") is None else _timestamp(mapping["finished_at"], "finished_at"),
-            started_at_known=cast(bool, mapping.get("started_at_known", False)),
+            reason=None if _required(mapping, "reason") is None else LifecycleReason.from_dict(mapping["reason"]),
+            started_at=None if _required(mapping, "started_at") is None else _timestamp(mapping["started_at"], "started_at"),
+            finished_at=None if _required(mapping, "finished_at") is None else _timestamp(mapping["finished_at"], "finished_at"),
+            started_at_known=cast(bool, _required(mapping, "started_at_known")),
             schema_version=_positive_int(
                 _required(mapping, "schema_version"), "schema_version"
             ),
             revision=BackendRevision.from_dict(_required(mapping, "revision")),
-            metadata=_plain_mapping(mapping.get("metadata", {}), "metadata"),
+            metadata=_plain_mapping(_required(mapping, "metadata"), "metadata"),
             stages=tuple(
                 StageLifecycleSnapshot.from_dict(stage)
-                for stage in _sequence(mapping.get("stages", ()), "stages")
+                for stage in _sequence(_required(mapping, "stages"), "stages")
             ),
             submitted_operations=tuple(
                 SubmittedOperationRecord.from_dict(operation)
                 for operation in _sequence(
-                    mapping.get("submitted_operations", ()),
+                    _required(mapping, "submitted_operations"),
                     "submitted_operations",
                 )
             ),
             cleanup_candidates=tuple(
                 CleanupCandidate.from_dict(candidate)
                 for candidate in _sequence(
-                    mapping.get("cleanup_candidates", ()), "cleanup_candidates"
+                    _required(mapping, "cleanup_candidates"), "cleanup_candidates"
                 )
             ),
             cleanup_reports=tuple(
                 CleanupReportFact.from_dict(fact)
                 for fact in _sequence(
-                    mapping.get("cleanup_reports", ()), "cleanup_reports"
+                    _required(mapping, "cleanup_reports"), "cleanup_reports"
                 )
             ),
             cleanup_results=tuple(
                 CleanupResultFact.from_dict(fact)
                 for fact in _sequence(
-                    mapping.get("cleanup_results", ()), "cleanup_results"
+                    _required(mapping, "cleanup_results"), "cleanup_results"
                 )
             ),
             materialized_refs=tuple(
                 MaterializedRef.from_dict(ref)
                 for ref in _sequence(
-                    mapping.get("materialized_refs", ()), "materialized_refs"
+                    _required(mapping, "materialized_refs"), "materialized_refs"
                 )
             ),
             reliability_policy_facts=tuple(
                 ReliabilityPolicyFact.from_dict(fact)
                 for fact in _sequence(
-                    mapping.get("reliability_policy_facts", ()),
+                    _required(mapping, "reliability_policy_facts"),
                     "reliability_policy_facts",
                 )
             ),
             warnings=tuple(
                 ReadModelWarning.from_dict(warning)
-                for warning in _sequence(mapping.get("warnings", ()), "warnings")
+                for warning in _sequence(_required(mapping, "warnings"), "warnings")
             ),
         )
 

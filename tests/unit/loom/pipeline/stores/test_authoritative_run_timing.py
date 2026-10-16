@@ -18,7 +18,7 @@ from loom.pipeline.stores.authority import (
     CoordinatorAdmissionRequest,
     PreparedAttemptRequest,
 )
-from loom.pipeline.stores.read_models import AuthoritativeRunSnapshot
+from loom.pipeline.stores.read_models import AuthoritativeRunSnapshot, AuthorityModelError
 from loom.pipeline.stores.sqlite_authority import (
     SQLitePerRunAuthorityStore,
     _authority_database_path,
@@ -138,12 +138,20 @@ def test_initial_running_admission_and_snapshot_round_trip(authority):
         == snapshot
     )
     assert pickle.loads(pickle.dumps(snapshot)) == snapshot
-    legacy = snapshot.to_dict()
-    for key in ("started_at", "finished_at", "started_at_known"):
-        del legacy[key]
-    historical = AuthoritativeRunSnapshot.from_dict(legacy)
-    assert historical.started_at is None
-    assert historical.started_at_known is False
+    unknown = replace(snapshot, started_at=None, started_at_known=False)
+    assert AuthoritativeRunSnapshot.from_dict(unknown.to_dict()) == unknown
+
+
+@pytest.mark.parametrize("missing", ["started_at", "finished_at", "started_at_known"])
+def test_snapshot_refuses_missing_timing_evidence(authority, missing):
+    store, _, uri, database = authority
+    _admit(store, uri)
+    payload = store.open_run(uri).to_dict()
+    del payload[missing]
+    before = database.read_bytes()
+    with pytest.raises(AuthorityModelError, match=missing):
+        AuthoritativeRunSnapshot.from_dict(payload)
+    assert database.read_bytes() == before
 
 
 def test_interrupted_run_remains_unfinished_and_retains_first_start(authority):

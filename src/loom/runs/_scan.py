@@ -41,8 +41,6 @@ from loom.timestamps import utc_timestamp
 
 from ._extract import (
     CurrentRunSummary,
-    _stage_finished_at,
-    _stage_started_at,
     extract_current_summary_with_warning_record,
 )
 from .models import CatalogWarning, CatalogWarningCode, ListRunsResult
@@ -285,14 +283,15 @@ class _AuthoritativeSummaryStore:
         attempt = stage.attempts[-1].attempt if stage.attempts else 1
         updated_at = stage.revision.created_at or utc_timestamp()
         reason = stage.reason
+        started_at, finished_at = stage.execution_timing(run_uri)
         return StageStatusRecord(
             run_uri=run_uri,
             stage_name=stage.stage_name,
             status=stage.status,
             attempt=attempt,
             updated_at=updated_at,
-            started_at=_stage_started_at(stage),
-            finished_at=_stage_finished_at(stage, run_uri),
+            started_at=started_at,
+            finished_at=finished_at,
             message=None if reason is None else reason.message,
             metadata={} if reason is None else dict(reason.detail),
         )

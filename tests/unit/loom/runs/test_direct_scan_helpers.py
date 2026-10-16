@@ -294,6 +294,7 @@ def test_preparation_and_failure_do_not_manufacture_execution_times(
     from loom.runs import RunCatalog
     from loom.runs._query_acquire import acquire_run
     from loom.runs.query import UNAVAILABLE
+    from loom.pipeline.execution.authority_adapter import AuthorityBackedSerialRunStore
 
     local = LocalRunStore(tmp_path / "runs")
     uri = path_to_run_uri(local.root / "prepared")
@@ -322,6 +323,10 @@ def test_preparation_and_failure_do_not_manufacture_execution_times(
             upstream_commits={},
         ),
     )
+    adapter = AuthorityBackedSerialRunStore(local_store=local, authority_store=authority)
+    status = adapter.read_stage_status(uri, "build")
+    assert status is not None
+    assert status.started_at is status.finished_at is None
     record = acquire_run(local.root, uri, authority)
     assert (
         record.stages[0].sources["native"]["created_at"] == prepared.attempt.created_at
@@ -349,3 +354,6 @@ def test_preparation_and_failure_do_not_manufacture_execution_times(
     assert summary.stages[0].started_at is summary.stages[0].finished_at is None
     record = acquire_run(local.root, uri, authority)
     assert record.stages[0].sources["native"]["finished_at"] is UNAVAILABLE
+    status = adapter.read_stage_status(uri, "build")
+    assert status is not None and status.status is StageStatus.FAILED
+    assert status.started_at is status.finished_at is None
