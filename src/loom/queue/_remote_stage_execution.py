@@ -21,7 +21,7 @@ from pathlib import Path
 import sqlite3
 import stat
 import tempfile
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 if TYPE_CHECKING:
     from .preparation import PreparationChildInput
@@ -69,8 +69,9 @@ from ._agent_process_supervisor import (
 from .errors import QueueConflictError, QueueServiceError
 
 
-RESIDENT_ASSIGNMENT_BUNDLE_SCHEMA_VERSION = 4
-REMOTE_EXECUTION_CAPABILITY = "remote-stage-execution-v3"
+RESIDENT_ASSIGNMENT_BUNDLE_SCHEMA_VERSION = 6
+REMOTE_EXECUTION_REPORT_SCHEMA_VERSION = 6
+REMOTE_EXECUTION_CAPABILITY = "remote-stage-execution-v4"
 REGULAR_FILE_RELAY_CAPABILITY = "regular-file-relay-v1"
 MAX_TRANSFER_BYTES = 64 * 1024 * 1024
 TRANSFER_CHUNK_BYTES = 32 * 1024
@@ -821,7 +822,7 @@ class _ResidentAssignmentBundle:
     schema_version: int = RESIDENT_ASSIGNMENT_BUNDLE_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
-        if self.schema_version not in (RESIDENT_ASSIGNMENT_BUNDLE_SCHEMA_VERSION, 5):
+        if type(self.schema_version) is not int or self.schema_version != RESIDENT_ASSIGNMENT_BUNDLE_SCHEMA_VERSION:
             raise QueueServiceError("resident assignment bundle schema is unsupported")
         for name in (
             "assignment_id",
@@ -869,11 +870,7 @@ class _ResidentAssignmentBundle:
         object.__setattr__(self, "fingerprint", fingerprint)
         object.__setattr__(self, "resolved_runtime", runtime)
         object.__setattr__(self, "worker_metadata", metadata)
-        shared = assignment_scope(fingerprint)
-        if shared is not None:
-            object.__setattr__(self, "schema_version", 5)
-        elif self.schema_version == 5:
-            raise QueueServiceError("shared assignment requires explicit scope")
+        assignment_scope(fingerprint)
         from ._shared_recovery import validate_wire
         validate_wire(self)
         preparation = _preparation_input_from_fingerprint(fingerprint)
@@ -1102,7 +1099,7 @@ class _ResidentAssignmentBundle:
         }
         if not isinstance(value, Mapping) or set(value) != expected:
             raise QueueServiceError("resident assignment bundle is invalid")
-        if value.get("schema_version") not in (RESIDENT_ASSIGNMENT_BUNDLE_SCHEMA_VERSION, 5):
+        if type(value.get("schema_version")) is not int or value["schema_version"] != RESIDENT_ASSIGNMENT_BUNDLE_SCHEMA_VERSION:
             raise QueueServiceError(
                 "resident assignment bundle schema is unsupported; finish or cancel "
                 "the saved work in its pinned environment and prepare a fresh identity"
@@ -1141,8 +1138,6 @@ class _ResidentAssignmentBundle:
             ),
             schema_version=cast(int, value["schema_version"]),
         )
-        if request.schema_version != value["schema_version"]:
-            raise QueueServiceError("shared assignment schema capability conflicts")
         return request
 
     @classmethod
@@ -1299,11 +1294,14 @@ class _RemoteExecutionReport:
     resource_controls: tuple[Mapping[str, PlainData], ...] | None = None
     process_created: bool | None = None
     executor_metadata: Mapping[str, PlainData] | None = None
-    schema_version: int = 1
+    output_kind: Literal["relay", "shared", "preparation_report"] = "relay"
+    schema_version: int = REMOTE_EXECUTION_REPORT_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
-        if type(self.schema_version) is not int or self.schema_version not in {1, 2, 3, 4, 5}:
+        if type(self.schema_version) is not int or self.schema_version != REMOTE_EXECUTION_REPORT_SCHEMA_VERSION:
             raise QueueServiceError("remote result schema is unsupported")
+        if self.output_kind not in ("relay", "shared", "preparation_report"):
+            raise QueueServiceError("remote result output kind is unsupported")
         for value, name in (
             (self.assignment_id, "assignment_id"),
             (self.stage_name, "stage_name"),
@@ -1336,10 +1334,10 @@ class _RemoteExecutionReport:
             raise QueueServiceError("remote result output manifest is invalid")
         if self.status is not StageStatus.SUCCEEDED and outputs:
             raise QueueServiceError("failed remote result must not expose outputs")
-        if any(shared_binding(item.metadata) is not None for item in outputs) and self.schema_version != 4:
+        if any(shared_binding(item.metadata) is not None for item in outputs) and self.output_kind != "shared":
             raise QueueServiceError("shared output requires shared publication report capability")
         marked = [item for item in outputs if item.preparation_report_transfer is not None]
-        if (marked and self.schema_version != 5) or (self.schema_version == 5 and (self.status is not StageStatus.SUCCEEDED or len(outputs) != 1 or len(marked) != 1 or outputs[0].logical_name != "report")):
+        if (marked and self.output_kind != "preparation_report") or (self.output_kind == "preparation_report" and (self.status is not StageStatus.SUCCEEDED or len(outputs) != 1 or len(marked) != 1 or outputs[0].logical_name != "report")):
             raise QueueServiceError("preparation transfer remote report capability or role is invalid")
         object.__setattr__(self, "outputs", outputs)
         for value, name in (
@@ -1348,10 +1346,7 @@ class _RemoteExecutionReport:
         ):
             if value is not None:
                 _identifier(value, name)
-        if self.message is not None and (
-            not isinstance(self.message, str)
-            or (self.schema_version == 1 and len(self.message) > 1024)
-        ):
+        if self.message is not None and not isinstance(self.message, str):
             raise QueueServiceError("remote failure message is invalid")
         if self.status is StageStatus.SUCCEEDED and any(
             value is not None
@@ -1383,32 +1378,16 @@ class _RemoteExecutionReport:
             isinstance(self.exit_code, bool) or not isinstance(self.exit_code, int)
         ):
             raise QueueServiceError("remote result exit code is invalid")
-        if self.schema_version < 3 and self.executor_metadata is not None:
-            raise QueueServiceError(
-                "retained remote result cannot carry route metadata"
-            )
-        if self.schema_version >= 3:
-            if not isinstance(self.executor_metadata, Mapping):
-                raise QueueServiceError("remote result route metadata is invalid")
-            object.__setattr__(
-                self,
-                "executor_metadata",
-                freeze_plain_data(
-                    redact_executor_metadata(self.executor_metadata, public=True),
-                    path="remote route metadata",
-                ),
-            )
-        if self.schema_version == 1:
-            if any(
-                value is not None
-                for value in (
-                    self.failure,
-                    self.resource_controls,
-                    self.process_created,
-                )
-            ):
-                raise QueueServiceError("legacy remote result carries current evidence")
-            return
+        if not isinstance(self.executor_metadata, Mapping):
+            raise QueueServiceError("remote result route metadata is invalid")
+        object.__setattr__(
+            self,
+            "executor_metadata",
+            freeze_plain_data(
+                redact_executor_metadata(self.executor_metadata, public=True),
+                path="remote route metadata",
+            ),
+        )
         failure = self.failure
         if failure is not None and not isinstance(failure, ExecutionFailure):
             raise QueueServiceError("remote result failure is invalid")
@@ -1451,27 +1430,25 @@ class _RemoteExecutionReport:
             "exception_type": self.exception_type,
             "exit_code": self.exit_code,
         }
-        if self.schema_version >= 2:
-            result.update(
-                {
-                    "failure": None if self.failure is None else self.failure.to_dict(),
-                    "resource_controls": (
-                        None
-                        if self.resource_controls is None
-                        else [dict(item) for item in self.resource_controls]
-                    ),
-                    "process_created": self.process_created,
-                }
-            )
-        if self.schema_version >= 3:
-            result["executor_metadata"] = thaw_plain_data(
-                self.executor_metadata, path="remote route metadata"
-            )
+        result.update(
+            {
+                "output_kind": self.output_kind,
+                "failure": None if self.failure is None else self.failure.to_dict(),
+                "resource_controls": (
+                    None if self.resource_controls is None
+                    else [dict(item) for item in self.resource_controls]
+                ),
+                "process_created": self.process_created,
+                "executor_metadata": thaw_plain_data(
+                    self.executor_metadata, path="remote route metadata"
+                ),
+            }
+        )
         return result
 
     @classmethod
     def from_dict(cls, value: object) -> "_RemoteExecutionReport":
-        legacy = {
+        expected = {
             "schema_version",
             "assignment_id",
             "stage_name",
@@ -1486,21 +1463,14 @@ class _RemoteExecutionReport:
             "exception_type",
             "exit_code",
         }
-        current = legacy | {"failure", "resource_controls", "process_created"}
-        with_routes = current | {"executor_metadata"}
-        if not isinstance(value, Mapping) or set(value) not in (
-            legacy,
-            current,
-            with_routes,
-        ):
+        expected |= {"failure", "resource_controls", "process_created", "executor_metadata", "output_kind"}
+        if not isinstance(value, Mapping):
             raise QueueServiceError("remote execution report is invalid")
         schema_version = value.get("schema_version")
-        if schema_version == 1 and set(value) != legacy:
-            raise QueueServiceError("legacy remote execution report shape is invalid")
-        if schema_version == 2 and set(value) != current:
+        if type(schema_version) is not int or schema_version != REMOTE_EXECUTION_REPORT_SCHEMA_VERSION:
+            raise QueueServiceError("remote result schema is unsupported")
+        if set(value) != expected:
             raise QueueServiceError("remote execution report shape is invalid")
-        if schema_version in {3, 4, 5} and set(value) != with_routes:
-            raise QueueServiceError("remote route report shape is invalid")
         outputs = value["outputs"]
         if not isinstance(outputs, Sequence) or isinstance(outputs, (str, bytes)):
             raise QueueServiceError("remote execution report is invalid")
@@ -1519,21 +1489,22 @@ class _RemoteExecutionReport:
             exit_code=cast(int | None, value["exit_code"]),
             failure=(
                 None
-                if value.get("failure") is None
+                if value["failure"] is None
                 else ExecutionFailure.from_dict(value["failure"])
             ),
             resource_controls=(
                 None
-                if value.get("resource_controls") is None
+                if value["resource_controls"] is None
                 else tuple(
                     cast(Sequence[Mapping[str, PlainData]], value["resource_controls"])
                 )
             ),
-            process_created=cast(bool | None, value.get("process_created")),
+            process_created=cast(bool | None, value["process_created"]),
             executor_metadata=cast(
-                Mapping[str, PlainData] | None, value.get("executor_metadata")
+                Mapping[str, PlainData] | None, value["executor_metadata"]
             ),
-            schema_version=cast(int, schema_version),
+            output_kind=cast(Literal["relay", "shared", "preparation_report"], value["output_kind"]),
+            schema_version=schema_version,
         )
 
 
@@ -2446,7 +2417,7 @@ class _ResidentAssignmentWorkspace:
             ),
             process_created=process_created,
             executor_metadata=redact_executor_metadata(route_metadata, public=True),
-            schema_version=4 if shared_publication else 5 if any(item.preparation_report_transfer is not None for item in outputs) else 3,
+            output_kind="shared" if shared_publication else "preparation_report" if any(item.preparation_report_transfer is not None for item in outputs) else "relay",
         )
 
     def output_chunk(self, transfer_id: str, offset: int) -> tuple[bytes, bool]:

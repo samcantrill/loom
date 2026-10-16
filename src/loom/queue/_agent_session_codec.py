@@ -17,6 +17,10 @@ from .agent_sessions import (
 )
 
 from .errors import QueueServiceError
+from ._remote_stage_execution import (
+    RESIDENT_ASSIGNMENT_BUNDLE_SCHEMA_VERSION,
+    REMOTE_EXECUTION_REPORT_SCHEMA_VERSION,
+)
 
 _MAX_BODY_BYTES = 65_536
 
@@ -228,9 +232,9 @@ def _decode(raw: bytes, *, failure_report: bool = False, control_wait: bool = Fa
     result = value.get("result")
     if isinstance(result, Mapping) and result.get("result") == "assignment":
         request = result.get("request")
-        if isinstance(request, Mapping) and request.get("schema_version") == 5:
-            # Shared assignments add a versioned location/scope envelope. Keep
-            # their finite body budget independent of the polling response.
+        if isinstance(request, Mapping) and type(request.get("schema_version")) is int and request["schema_version"] == RESIDENT_ASSIGNMENT_BUNDLE_SCHEMA_VERSION:
+            # Keep the current assignment's finite body budget independent of
+            # the polling response, including fingerprint-bound shared scope.
             _bounded_json(request, depth=0)
             _bounded_json({**value, "result": {**result, "request": None}}, depth=0)
             return value
@@ -241,7 +245,7 @@ def _decode(raw: bytes, *, failure_report: bool = False, control_wait: bool = Fa
         and evidence.get("result_operation") == "report"
     ):
         # Validate the existing report at its existing depth budget; the extra
-        # authenticated Slurm relay envelope must not narrow report-v3 support.
+        # authenticated Slurm relay envelope must not narrow the current report budget.
         _decode(
             json.dumps({"report": evidence.get("report")}).encode(), failure_report=True
         )
@@ -251,12 +255,12 @@ def _decode(raw: bytes, *, failure_report: bool = False, control_wait: bool = Fa
     if (
         isinstance(report, Mapping)
         and type(report.get("schema_version")) is int
-        and report["schema_version"] in {2, 3, 4}
+        and report["schema_version"] == REMOTE_EXECUTION_REPORT_SCHEMA_VERSION
         and "failure" in report
     ):
         _bounded_failure_json(report["failure"])
         envelope_report = {**report, "failure": None}
-        if report["schema_version"] in {3, 4} and "executor_metadata" in report:
+        if "executor_metadata" in report:
             # Route metadata is plain data; keep its original envelope depth.
             _bounded_json(report["executor_metadata"], depth=2, plain_scalars=True)
             envelope_report["executor_metadata"] = None

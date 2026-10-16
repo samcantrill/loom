@@ -296,7 +296,7 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, s
             assert workspaces
             request = _ResidentAssignmentWorkspace(config.agent_root, workspaces[0].name).request()
             from loom.pipeline.stores.shared_artifacts import binding as publication_binding
-            assert request.schema_version == 5
+            assert request.schema_version == 6
             assert [item.logical_name for item in request.inputs] == ["loom_project_report"]
             report_input = request.inputs[0]
             report_binding = publication_binding(report_input.metadata)

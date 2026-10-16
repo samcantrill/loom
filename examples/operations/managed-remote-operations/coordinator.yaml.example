@@ -17,7 +17,7 @@ agent_policy:
       principal_id: remote-agent-principal
       agent_id: machine-B
       pools: [default]
-      capabilities: [python, remote-stage-execution-v3, regular-file-relay-v1]
+      capabilities: [python, remote-stage-execution-v4, regular-file-relay-v1]
       gpu_devices: []
   principals: []
   local_owner:

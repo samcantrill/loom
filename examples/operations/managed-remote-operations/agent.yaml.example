@@ -26,4 +26,4 @@ registration:
   inventory_revision: remote-inventory-v1
   availability_revision: remote-availability-v1
   pools: [default]
-  capabilities: [python, remote-stage-execution-v3, regular-file-relay-v1]
+  capabilities: [python, remote-stage-execution-v4, regular-file-relay-v1]
