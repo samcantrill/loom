@@ -1301,3 +1301,12 @@ Lock check, changed-file Ruff, affected config-extra Pyright (zero errors or
 warnings) and diff checks pass. The corrected test file also passes its own Ruff
 and Pyright checks. Only these evidence notes change after final validation.
 The required independent actual-final-diff review remains before merge.
+
+Independent actual-final-diff review of PR #423 at
+`30288df736d59e066cf8b4df439861fd6ab5d471` against the recorded base passed with
+no product blocker or required correction. The reviewer verified all 69 unique
+cases against their XML receipts, identical production source trees, current
+initialization/unknown ownership, strict obsolete-input refusal and preserved
+CAS/replay/authorization/attribution/lifecycle/query/preparation behavior. The PR
+is merge eligible; its closeout owns merge and synchronization facts. Only this
+review receipt changes afterward.
