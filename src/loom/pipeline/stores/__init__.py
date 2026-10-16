@@ -312,7 +312,6 @@ from .run_uri import (
     validate_run_uri,
 )
 from .run_store import (
-    LegacyRunStore,
     LocalRunStorePaths,
     RunArtifactIndexStore,
     RunConfigStore,
@@ -575,7 +574,6 @@ __all__ = [
     "DeferredReconciliationResult",
     "DeferredResultEnvelope",
     "reconcile_deferred_result",
-    "LegacyRunStore",
     "RunLifecycleStore",
     "RunDocumentStore",
     "RunFreshnessStore",

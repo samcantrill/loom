@@ -12,7 +12,7 @@ from loom.pipeline.execution.stage_worker import execute_resident_stage_worker_r
 from loom.pipeline.execution.models import StageWorkerRequest
 from loom.pipeline.planning import plan_pipeline
 from loom.pipeline.runtime import ResolvedStageRuntimeOptions
-from loom.pipeline.status import StageStatus
+from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
 
 
@@ -48,7 +48,13 @@ def test_resident_worker_returns_outputs_without_finalizing_canonical_state(
         persist=True,
     )
     prepare_stage_attempt(
-        run_store=store,
+        stage_state=store,
+        stage_workspaces=store,
+        local_paths=store,
+        reliability=store,
+        prepared_runs=store,
+        config=store,
+        run_status=RunStatus.RUNNING,
         run_uri=run_uri,
         stage=spec.get_stage("build"),
         stage_plan=plan.ordered_stage_plans[0],

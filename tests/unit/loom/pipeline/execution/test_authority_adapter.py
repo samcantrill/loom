@@ -311,7 +311,13 @@ def _prepare_authority_stage_job(
         ).to_dict(),
     )
     prepare_stage_attempt(
-        run_store=run_store,
+        stage_state=run_store,
+        stage_workspaces=run_store,
+        local_paths=run_store,
+        reliability=run_store,
+        prepared_runs=run_store,
+        config=run_store,
+        run_status=RunStatus.RUNNING,
         run_uri=run_uri,
         stage=spec.get_stage("build"),
         stage_plan=plan.ordered_stage_plans[0],
@@ -454,7 +460,13 @@ def test_authority_backed_worker_request_carries_attempt_fencing_metadata(
         persist=True,
     )
     request = prepare_stage_attempt(
-        run_store=run_store,
+        stage_state=run_store,
+        stage_workspaces=run_store,
+        local_paths=run_store,
+        reliability=run_store,
+        prepared_runs=run_store,
+        config=run_store,
+        run_status=RunStatus.RUNNING,
         run_uri=run_uri,
         stage=_pipeline().get_stage("build"),
         stage_plan=plan.ordered_stage_plans[0],

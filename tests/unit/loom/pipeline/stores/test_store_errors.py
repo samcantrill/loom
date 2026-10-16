@@ -259,7 +259,6 @@ def test_store_error_exports() -> None:
         "DeferredReconciliationResult",
         "DeferredResultEnvelope",
         "reconcile_deferred_result",
-        "LegacyRunStore",
         "RunLifecycleStore",
         "RunDocumentStore",
         "RunFreshnessStore",

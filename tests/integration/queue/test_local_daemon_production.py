@@ -433,7 +433,13 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
 
         intent = load_managed_local_intent(config, run_uri)
         saved = prepare_stage_attempt(
-            run_store=run_store,
+            stage_state=run_store,
+            stage_workspaces=run_store,
+            local_paths=run_store,
+            reliability=run_store,
+            prepared_runs=run_store,
+            config=run_store,
+            run_status=RunStatus.RUNNING,
             run_uri=run_uri,
             stage=spec.get_stage("preprocess"),
             stage_plan=plan.ordered_stage_plans[0],

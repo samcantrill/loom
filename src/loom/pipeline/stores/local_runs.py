@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from loom.pipeline.transition_policy import TransitionIntent
+
 import hashlib
 import os
 import socket
@@ -446,8 +448,13 @@ class LocalRunStore:
                 f"Malformed run status at {status_path}: {exc}"
             ) from exc
 
-    def write_run_status(self, run_uri: str, status: RunStatusRecord) -> None:
-        """Write explicit legacy evidence; native execution does not use this writer."""
+    def write_run_status(
+        self, run_uri: str, status: RunStatusRecord, *,
+        intent: TransitionIntent = TransitionIntent.NORMAL,
+    ) -> None:
+        """Write an ordinary evidence projection, never an authority transition."""
+        if intent is not TransitionIntent.NORMAL:
+            raise ValueError("local status evidence cannot apply authority transition intent")
         self._validate_run_uri_for_status(run_uri, status.run_uri)
         run_uri_text = validate_run_uri(run_uri, field="run_uri")
         payload = status.to_dict()

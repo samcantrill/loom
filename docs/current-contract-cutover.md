@@ -660,3 +660,43 @@ corrections and merge eligibility confirmed. Only this receipt follows the
 reviewed head. [Loom #414](https://github.com/samcantrill/loom/pull/414) owns
 remote merge and matching-tree synchronization metadata. The remaining
 aggregate consumers and downstream paired adoption remain open.
+
+## Current execution service dependencies
+
+Base `d29da7150a1123d091a1873a8b0f4e430c38d94d`, branch
+`refactor/current-execution-services`. Lifecycle, reliability, attempt preparation
+and CLI status now name their existing owners; the aggregate `LegacyRunStore`
+and `RuntimeServices.from_legacy` are removed. Explicit `RuntimeServices`
+construction remains the executor-factory contract. No replacement aggregate,
+forwarding constructor or compatibility keyword is introduced.
+
+Reliability receives authoritative run status explicitly and refuses missing
+persistence capabilities. Lifecycle preserves failure/timeout ordering,
+transaction chains, output/index/provenance commit and terminal event order.
+Status writing has one explicit transition-intent API: authority applies its
+existing guards, while local evidence refuses non-normal intent before effects.
+Managed local and Slurm preparation pass the admitted snapshot status and exact
+attempt/input bindings; standalone preparation retains local allocation.
+Protected report helpers use prepared-run/config/path owners with existing
+native companion, checksum, namespace, declaration and attachment verification.
+Current no-project preparation still requires no project metadata.
+
+Reached consumers include native preparation/candidate capture, action-result
+resolution, installed project execution/reuse, guarded recovery and catalog
+resume. The rphys routine fixture moves with paired dependency adoption. No
+wire format, dependency, numerical operation or scientific fixture changed.
+Historical fingerprint admission, input-lineage compatibility, event sink
+capability discovery and remaining preparation wire consolidation retain their
+separate inventory owners; this delivery does not claim those rows closed.
+
+Validation selects lifecycle, timeout, attempt/worker, authority-adapter,
+store/import contracts and local-store checks, plus exact managed local/Slurm,
+protected installed project, retry/restart/recovery/cancellation and current
+catalog consumers. New assertions distinguish owners, refuse missing services
+before writes, preserve finalization-time timeout status, and prove commit/failure
+order. Collection/static checks precede execution in locked Python 3.12 baseline
+and config environments. Expand only for reached failures or uncovered current
+contracts. Existing planning/event/persistence evidence is reusable where source,
+dependencies, configuration and fixtures are unchanged; no physical/scientific
+qualification is inferred from this runtime selection. Independent actual-diff
+review and final result reconciliation remain required before merge.

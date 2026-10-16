@@ -93,7 +93,7 @@ def test_run_catalog_list_reconciles_new_changed_deleted_and_stale_rows(
         authority_store=SQLitePerRunAuthorityStore(),
     )
     first_store.open_run(first_uri)
-    first_store.write_run_status_with_intent(
+    first_store.write_run_status(
         first_uri,
         RunStatusRecord(
             run_uri=first_uri,

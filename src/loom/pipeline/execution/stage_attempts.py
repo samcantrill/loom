@@ -14,8 +14,11 @@ from loom.pipeline.planning import (
 from loom.pipeline.reliability import StageAttemptTransactionState
 from loom.pipeline.runtime import ResolvedStageRuntimeOptions
 from loom.pipeline.specs import StageSpec
-from loom.pipeline.status import StageStatus, StageStatusRecord
-from loom.pipeline.stores import LegacyRunStore as RunStore, LocalRunStorePaths
+from loom.pipeline.status import RunStatus, StageStatus, StageStatusRecord
+from loom.pipeline.stores import (
+    LocalRunStorePaths, RunConfigStore, RunPreparedRunStore, RunReliabilityStore,
+    StageStateStore, StageWorkspaceStore,
+)
 from loom.pipeline.stores.read_models import StageAttempt
 from loom.pipeline.stores.input_lineage import AttemptInputBinding, binding_evidence, capture_bindings
 from loom.serialization import PlainData
@@ -37,7 +40,13 @@ Clock = Callable[[], str]
 
 def prepare_stage_attempt(
     *,
-    run_store: RunStore,
+    stage_state: StageStateStore,
+    stage_workspaces: StageWorkspaceStore,
+    local_paths: LocalRunStorePaths,
+    reliability: RunReliabilityStore,
+    prepared_runs: RunPreparedRunStore,
+    config: RunConfigStore,
+    run_status: RunStatus,
     run_uri: str,
     stage: StageSpec,
     stage_plan: StagePlan,
@@ -56,19 +65,26 @@ def prepare_stage_attempt(
     """Prepare durable request evidence without running stage code.
 
     Managed callers provide the admitted ``authority_attempt``. Its positive
-    attempt number is preserved and no lifecycle projection is written. Legacy
-    callers allocate from their supplied lifecycle store.
+    attempt number is preserved and no lifecycle projection is written. Standalone
+    callers allocate from their explicit stage-state owner. ``run_status`` comes
+    from the caller's admitted authority or standalone lifecycle context.
     """
 
     from loom.pipeline._project_contracts import reject_overrides, worker_contract_metadata
 
     reject_overrides(metadata)
-    if not isinstance(run_store, RunStore):
-        raise PipelineExecutionError("prepare_stage_attempt requires RunStore")
-    if not isinstance(run_store, LocalRunStorePaths):
-        raise PipelineExecutionError(
-            "prepare_stage_attempt requires local run-store path helpers"
-        )
+    for name, service, protocol in (
+        ("stage_state", stage_state, StageStateStore),
+        ("stage_workspaces", stage_workspaces, StageWorkspaceStore),
+        ("local_paths", local_paths, LocalRunStorePaths),
+        ("reliability", reliability, RunReliabilityStore),
+        ("prepared_runs", prepared_runs, RunPreparedRunStore),
+        ("config", config, RunConfigStore),
+    ):
+        if not isinstance(service, protocol):
+            raise PipelineExecutionError(f"prepare_stage_attempt requires {name}")
+    if not isinstance(run_status, RunStatus):
+        raise PipelineExecutionError("prepare_stage_attempt requires run_status")
     if not isinstance(stage, StageSpec):
         raise PlanExecutionError("prepare_stage_attempt.stage must be StageSpec")
     if not isinstance(stage_plan, StagePlan):
@@ -91,7 +107,7 @@ def prepare_stage_attempt(
             raise PlanExecutionError("prepared attempt differs from authority identity")
         attempt = authority_attempt.attempt
     else:
-        attempt = next_stage_attempt(run_store, run_uri, stage.name)
+        attempt = next_stage_attempt(stage_state, run_uri, stage.name)
     prepared_at = clock()
     produced = produced_outputs or {}
     inputs = _bind_inputs(stage, stage_plan, produced)
@@ -99,8 +115,8 @@ def prepare_stage_attempt(
         if inputs != {b.input_name: b.artifact for b in input_bindings}:
             raise PlanExecutionError("worker inputs differ from retained attempt bindings")
     else:
-        # Legacy preparation has no authority source selectors. Retain refs with
-        # unknown origin; managed preparation supplies the authoritative receipt.
+        # Standalone preparation retains external refs without inventing a managed
+        # producer. Managed preparation supplies the authoritative receipt.
         from dataclasses import replace
         from loom.pipeline.planning.models import BoundInput
 
@@ -123,41 +139,43 @@ def prepare_stage_attempt(
         executor_name=executor_name,
         inputs=inputs,
         fingerprint=fingerprint,
-        stdout_path=str(run_store.local_stage_log_path(run_uri, stage.name, "stdout")),
-        stderr_path=str(run_store.local_stage_log_path(run_uri, stage.name, "stderr")),
+        stdout_path=str(local_paths.local_stage_log_path(run_uri, stage.name, "stdout")),
+        stderr_path=str(local_paths.local_stage_log_path(run_uri, stage.name, "stderr")),
         traceback_path=str(
             traceback_log_path(
-                run_store=run_store,
+                run_store=local_paths,
                 run_uri=run_uri,
                 stage_name=stage.name,
             )
         ),
-        result_path=str(run_store.local_stage_worker_result_path(run_uri, stage.name)),
+        result_path=str(local_paths.local_stage_worker_result_path(run_uri, stage.name)),
         resolved_runtime=_resolved_runtime_metadata(
             resolved_runtime, stage_name=stage.name
         ),
         executor_metadata=redact_executor_metadata(executor_metadata),
-        metadata={**dict(metadata or {}), **worker_contract_metadata(run_store, run_uri, stage),
+        metadata={**dict(metadata or {}), **worker_contract_metadata(prepared_runs, run_uri, stage,
+        config=config,
+        local_paths=local_paths),
                   "attempt_input_bindings": [binding.to_dict() for binding in input_bindings],
                   "attempt_input_evidence": binding_evidence(input_bindings)},
     )
 
-    run_store.write_stage_inputs(run_uri, stage.name, inputs, attempt=attempt)
-    run_store.write_stage_fingerprint(
+    stage_state.write_stage_inputs(run_uri, stage.name, inputs, attempt=attempt)
+    stage_state.write_stage_fingerprint(
         run_uri,
         stage.name,
         fingerprint.to_dict(),
         attempt=attempt,
     )
-    run_store.prepare_stage_workspace(run_uri, stage.name)
-    run_store.write_stage_worker_request(
+    stage_workspaces.prepare_stage_workspace(run_uri, stage.name)
+    stage_state.write_stage_worker_request(
         run_uri,
         stage.name,
         request.to_dict(),
         attempt=attempt,
     )
     if authority_attempt is None:
-        run_store.write_stage_status(
+        stage_state.write_stage_status(
             run_uri,
             stage.name,
             StageStatusRecord(
@@ -171,15 +189,15 @@ def prepare_stage_attempt(
                     "prepared": True,
                     "action": PlanAction.RUN.value,
                     "worker_request": str(
-                        run_store.local_stage_worker_request_path(run_uri, stage.name)
+                        local_paths.local_stage_worker_request_path(run_uri, stage.name)
                     ),
                     **dict(metadata or {}),
                 },
             ),
         )
     record_stage_reliability_transition(
-        run_store,
-        run_uri=run_uri,
+        reliability,
+        run_status=run_status, run_uri=run_uri,
         stage_name=stage.name,
         attempt=attempt,
         state=StageAttemptTransactionState.PREPARED,

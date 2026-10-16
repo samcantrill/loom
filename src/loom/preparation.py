@@ -1106,7 +1106,7 @@ class CoordinatorPreparation:
             raise QueueConflictError("candidate configuration is unavailable")
         record = load_managed_local_runtime_record(store, run_uri)
         from loom.pipeline._project_contracts import load_contract_report
-        contract_report = load_contract_report(store, run_uri)
+        contract_report = load_contract_report(store, run_uri, config=store, local_paths=store)
         project_reference = {}
         if contract_report is not None:
             from loom.pipeline._project_contracts import CONTRACTS, report_entry

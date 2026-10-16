@@ -73,7 +73,6 @@ users can also use it as a quick map to stable repository terms.
 | `RunStore` | The current public authority-backed run lifecycle surface exported from `loom.pipeline.stores`. | Prefer when referring to the public run lifecycle contract. Do not use it for the older path-shaped local aggregate by default. |
 | `StageStore` | The run-scoped stage lifecycle surface obtained from `RunStore.stage_store(...)`. | Distinguish from run-level APIs and from artifact materialization helpers. |
 | `LocalRunStore` | The local filesystem implementation and materialization surface. | Use only when local path-based behavior matters. It is not the public authority `RunStore` contract. |
-| `LegacyRunStore` | The older path-shaped aggregate retained during the store naming transition. | Use only for migration or compatibility discussion. Avoid using plain `RunStore` when this older surface is actually meant. |
 | authority | The authoritative, backend-neutral source of run and stage lifecycle truth. | Distinguish from local materialized files, projections, and catalogs. |
 | authority reference | The portable reference or configuration summary that lets commands and workers reconnect to the selected authority. | Distinguish from endpoint-only prose and from raw local state paths. |
 | run collection | A directory containing many runs. | Distinguish from an individual run and from the derived catalog index. |
@@ -155,8 +154,8 @@ users can also use it as a quick map to stable repository terms.
   assignment, dispatch attempt, and process execution; never collapse them into
   an ambiguous "job id" or "daemon id".
 - Prefer `RunStore` and `StageStore` for public lifecycle APIs; spell
-  `LocalRunStore` or `LegacyRunStore` explicitly when local-file or migration
-  behavior is intended.
+  `LocalRunStore` or the relevant narrow protocol explicitly when local-file
+  materialization or projection behavior is intended.
 - Qualify overloaded nouns such as manifest, backend, service, snapshot, and
   reference with the owning subsystem when ambiguity is possible.
 - Describe authority, run-store state, and authoritative read models as

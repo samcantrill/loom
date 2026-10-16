@@ -242,7 +242,6 @@ def test_pipeline_store_public_exports() -> None:
         "DeferredReconciliationResult",
         "DeferredResultEnvelope",
         "reconcile_deferred_result",
-        "LegacyRunStore",
         "RunLifecycleStore",
         "RunDocumentStore",
         "RunFreshnessStore",
