@@ -138,7 +138,6 @@ def test_run_catalog_list_filters_all_supported_kinds(tmp_path: Path) -> None:
         tag_value="other",
         checksum=format_digest("sha256", "2" * 64),
         config_fingerprint="config-other",
-        pipeline_fingerprint="pipeline-other",
         git_commit="def456",
         executor="remote",
         backend="remote",
@@ -150,7 +149,6 @@ def test_run_catalog_list_filters_all_supported_kinds(tmp_path: Path) -> None:
         [RunFilter(RunFilterKind.RUN_STATUS, "SUCCEEDED")],
         [RunFilter(RunFilterKind.TAG, "demo", key="project")],
         [RunFilter(RunFilterKind.CONFIG_FINGERPRINT, "config-demo")],
-        [RunFilter(RunFilterKind.PIPELINE_FINGERPRINT, "pipeline-demo")],
         [RunFilter(RunFilterKind.GIT_COMMIT, "abc123")],
         [RunFilter(RunFilterKind.STAGE_STATUS, "SUCCEEDED", key="build")],
         [RunFilter(RunFilterKind.ARTIFACT_IDENTITY, "build/out", key="build.out")],
@@ -236,7 +234,6 @@ def _create_catalog_run(
     tag_value: str,
     checksum: str | None = None,
     config_fingerprint: str = "config-demo",
-    pipeline_fingerprint: str = "pipeline-demo",
     git_commit: str = "abc123",
     executor: str = "local",
     backend: str = "local",
@@ -268,8 +265,19 @@ def _create_catalog_run(
             updated_at="2020-01-01T00:00:01Z",
         ),
     )
-    store.write_composition_manifest(run_uri, {"fingerprint": config_fingerprint})
-    store.write_plan(run_uri, {"pipeline_fingerprint": pipeline_fingerprint})
+    store.write_composition_manifest(
+        run_uri,
+        {
+            "schema_version": 1,
+            "fingerprint_records": [
+                {
+                    "algorithm": "sha256",
+                    "label": "artifact_safe_config",
+                    "digest": config_fingerprint,
+                }
+            ],
+        },
+    )
     store.write_runtime_metadata(run_uri, {"executor": executor, "backend": backend})
     store.write_provenance_document(run_uri, "git", {"commit": git_commit})
     if status is RunStatus.SUCCEEDED:

@@ -8,6 +8,13 @@ from loom.runs._query_page import QueryPage, collect_pages, search_page
 from loom.runs.query import Compare, Field, InvalidCursorError, QueryRecord, RunQuery
 
 
+def test_unproduced_pipeline_fingerprint_is_not_a_native_query_field():
+    from loom.runs.query import QueryError
+
+    with pytest.raises(QueryError, match="native"):
+        RunQuery(select=(Field("native", ("pipeline_fingerprint",)),)).checked()
+
+
 def test_vocabulary_rereads_pending_values_and_unions_page_observations():
     from loom.runs._query_vocabulary import collect_vocabulary, vocabulary_page
 

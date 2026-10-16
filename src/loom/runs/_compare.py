@@ -110,7 +110,6 @@ def _fingerprint_entries(
         _scalar_entry(left, right, key, field)
         for key, field in (
             ("fingerprints.config", "config_fingerprint"),
-            ("fingerprints.pipeline", "pipeline_fingerprint"),
         )
     )
 

@@ -136,7 +136,6 @@ def test_filter_model_represents_exact_match_filter_set() -> None:
         "run_status",
         "tag",
         "config_fingerprint",
-        "pipeline_fingerprint",
         "git_commit",
         "stage_status",
         "artifact_identity",
@@ -146,6 +145,8 @@ def test_filter_model_represents_exact_match_filter_set() -> None:
     } <= kinds
     with pytest.raises(CatalogValidationError, match="tag filters require key"):
         RunFilter(RunFilterKind.TAG, "demo")
+    with pytest.raises(CatalogValidationError):
+        RunFilter("pipeline_fingerprint", "retired")
 
 
 def test_result_and_comparison_models_serialize() -> None:

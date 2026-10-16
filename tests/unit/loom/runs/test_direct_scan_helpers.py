@@ -6,6 +6,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from loom.pipeline.stores import RunFreshnessRecord, path_to_run_uri
 from loom.pipeline.stores.sqlite_authority import _authority_database_path
 from loom.runs import CatalogWarningCode
@@ -223,7 +225,20 @@ def test_catalog_and_query_resolve_retained_composition_without_rewriting(tmp_pa
     local = LocalRunStore(tmp_path / "runs")
     uri = path_to_run_uri(tmp_path / "runs" / "referenced")
     local.create_run(uri)
-    local.write_composition_manifest(uri, {"artifact_fingerprint": "science-unchanged", "metadata": {"source": "overlay.yaml"}})
+    local.write_composition_manifest(
+        uri,
+        {
+            "schema_version": 1,
+            "fingerprint_records": [
+                {
+                    "algorithm": "sha256",
+                    "label": "artifact_safe_config",
+                    "digest": "science-unchanged",
+                }
+            ],
+            "metadata": {"source": "overlay.yaml"},
+        },
+    )
     metadata: dict[str, Any] = {"config_provenance": {"metadata": {"source": "overlay.yaml"}}}
     local.write_run_user_metadata(uri, metadata)
     root = local.local_run_dir(uri)
@@ -235,3 +250,102 @@ def test_catalog_and_query_resolve_retained_composition_without_rewriting(tmp_pa
     record = acquire_run(local.root, uri)
     assert record.sources["native"]["config_fingerprint"] == "science-unchanged"
     assert {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in before} == before
+
+
+@pytest.mark.parametrize(
+    "alias",
+    [
+        "config_fingerprint",
+        "fingerprint",
+        "artifact_fingerprint",
+        "content_fingerprint",
+    ],
+)
+def test_flat_composition_alias_cannot_supply_current_config_identity(
+    tmp_path: Path, alias: str
+) -> None:
+    from loom.pipeline.stores import LocalRunStore
+    from loom.runs._query_acquire import acquire_run
+    from loom.runs.query import UNAVAILABLE
+
+    local = LocalRunStore(tmp_path / "runs")
+    uri = path_to_run_uri(local.root / "retired")
+    local.create_run(uri)
+    local.write_composition_manifest(uri, {alias: "retired-config"})
+    local.write_provenance_document(uri, "git", {"sha": "retired-commit"})
+    local.write_run_user_metadata(uri, {"executor": "retired-executor"})
+    summary, warning = extract_current_summary(
+        local, run_uri=uri, path=local.local_run_dir(uri)
+    )
+    assert warning is None and summary is not None
+    assert summary.config_fingerprint is summary.git_commit is summary.executor is None
+    record = acquire_run(local.root, uri)
+    assert record.sources["native"]["config_fingerprint"] is UNAVAILABLE
+    assert record.sources["native"]["git_commit"] is UNAVAILABLE
+
+
+def test_preparation_and_failure_do_not_manufacture_execution_times(
+    tmp_path: Path,
+) -> None:
+    from loom.pipeline.stores import LocalRunStore, PreparedAttemptRequest
+    from loom.pipeline.stores.read_models import LifecycleReason
+    from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+    from loom.pipeline.status import StageStatus
+    from loom.runs import RunCatalog
+    from loom.runs._query_acquire import acquire_run
+    from loom.runs.query import UNAVAILABLE
+
+    local = LocalRunStore(tmp_path / "runs")
+    uri = path_to_run_uri(local.root / "prepared")
+    local.create_run(uri)
+    authority = SQLitePerRunAuthorityStore()
+    revision = authority.create_run(uri)
+    assert (
+        acquire_run(local.root, uri, authority).sources["native"]["started_at"] is None
+    )
+    prepared = authority.ensure_prepared_attempt(
+        uri,
+        PreparedAttemptRequest(
+            operation_id="prepare",
+            request_digest="digest",
+            admission_id="admission",
+            stage_name="build",
+            readiness_generation="ready",
+            expected_revision=revision,
+            expected_stage_status=None,
+            expected_attempt_id=None,
+            next_attempt=1,
+            owner_id="coordinator",
+            plan_fingerprint="plan",
+            input_bindings=(),
+            bound_inputs={},
+            upstream_commits={},
+        ),
+    )
+    record = acquire_run(local.root, uri, authority)
+    assert (
+        record.stages[0].sources["native"]["created_at"] == prepared.attempt.created_at
+    )
+    assert record.stages[0].sources["native"]["started_at"] is UNAVAILABLE
+    summary = RunCatalog.open(local.root).scan_current().summaries[0]
+    assert summary.stages[0].started_at is None
+
+    authority.bind_prepared_attempt(
+        uri, assignment_id="assignment", attempt_id=prepared.attempt.attempt_id
+    )
+    fence = authority.grant_prepared_attempt(
+        uri, assignment_id="assignment", attempt_id=prepared.attempt.attempt_id
+    )
+    authority.record_managed_attempt_terminal(
+        uri,
+        fence=fence,
+        status=StageStatus.FAILED,
+        reason=LifecycleReason(
+            code="managed_worker_failed", message="failed before start"
+        ),
+    )
+    summary = RunCatalog.open(local.root).scan_current().summaries[0]
+    assert summary.stages[0].status == "FAILED"
+    assert summary.stages[0].started_at is summary.stages[0].finished_at is None
+    record = acquire_run(local.root, uri, authority)
+    assert record.stages[0].sources["native"]["finished_at"] is UNAVAILABLE

@@ -196,8 +196,19 @@ def _create_run(
             updated_at="2020-01-01T00:00:01Z",
         ),
     )
-    store.write_composition_manifest(run_uri, {"fingerprint": config_fingerprint})
-    store.write_plan(run_uri, {"pipeline_fingerprint": "pipeline-demo"})
+    store.write_composition_manifest(
+        run_uri,
+        {
+            "schema_version": 1,
+            "fingerprint_records": [
+                {
+                    "algorithm": "sha256",
+                    "label": "artifact_safe_config",
+                    "digest": config_fingerprint,
+                }
+            ],
+        },
+    )
     store.write_runtime_metadata(run_uri, {"executor": "local", "backend": "local"})
     if status is RunStatus.SUCCEEDED:
         store.write_stage_status(

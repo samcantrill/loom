@@ -12,7 +12,7 @@ from loom.state_sources import (
     local_materialization_source,
     unavailable_authority_source,
 )
-from loom.pipeline.status import RunStatusRecord, StageStatus, StageStatusRecord
+from loom.pipeline.status import RunStatusRecord, StageStatusRecord
 from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.pipeline.stores import (
     AuthoritativeReadOptions,
@@ -39,7 +39,12 @@ from loom.pipeline.stores.read_models import (
 from loom.serialization import PlainData
 from loom.timestamps import utc_timestamp
 
-from ._extract import CurrentRunSummary, extract_current_summary_with_warning_record
+from ._extract import (
+    CurrentRunSummary,
+    _stage_finished_at,
+    _stage_started_at,
+    extract_current_summary_with_warning_record,
+)
 from .models import CatalogWarning, CatalogWarningCode, ListRunsResult
 
 _CATALOG_SIDECAR_DIR = ".loom_catalog"
@@ -263,9 +268,6 @@ class _AuthoritativeSummaryStore:
     ) -> dict[str, PlainData] | None:
         return self._local_store.read_composition_manifest(run_uri)
 
-    def read_plan(self, run_uri: str) -> dict[str, PlainData] | None:
-        return self._local_store.read_plan(run_uri)
-
     def read_provenance_document(
         self, run_uri: str, name: str
     ) -> dict[str, PlainData] | None:
@@ -290,7 +292,7 @@ class _AuthoritativeSummaryStore:
             attempt=attempt,
             updated_at=updated_at,
             started_at=_stage_started_at(stage),
-            finished_at=_stage_finished_at(stage, updated_at),
+            finished_at=_stage_finished_at(stage, run_uri),
             message=None if reason is None else reason.message,
             metadata={} if reason is None else dict(reason.detail),
         )
@@ -301,10 +303,7 @@ class _AuthoritativeSummaryStore:
         return self._local_store.read_stage_fingerprint(run_uri, stage_name)
 
     def read_artifact_index(self, run_uri: str) -> dict[str, ArtifactRef]:
-        try:
-            index = dict(self._local_store.read_artifact_index(run_uri))
-        except Exception:
-            index = {}
+        index: dict[str, ArtifactRef] = {}
         for stage in self._snapshot(run_uri).stages:
             for fact in stage.artifact_facts:
                 index[format_artifact_key(stage.stage_name, fact.artifact_name)] = (
@@ -350,25 +349,6 @@ def _run_created_at(
         return fallback or utc_timestamp()
     created_at = document.get("created_at")
     return created_at if isinstance(created_at, str) else fallback or utc_timestamp()
-
-
-def _stage_started_at(stage: StageLifecycleSnapshot) -> str | None:
-    if not stage.attempts:
-        return None
-    return stage.attempts[-1].created_at
-
-
-def _stage_finished_at(stage: StageLifecycleSnapshot, updated_at: str) -> str | None:
-    if stage.status is StageStatus.SUCCEEDED and stage.latest_commit is not None:
-        return stage.latest_commit.committed_at
-    if stage.status in {
-        StageStatus.FAILED,
-        StageStatus.BLOCKED,
-        StageStatus.SKIPPED,
-        StageStatus.CANCELLED,
-    }:
-        return updated_at
-    return None
 
 
 def _warning_for_store_exception(

@@ -65,6 +65,23 @@ cleanup policy
 
 The run store remains authoritative for an individual run.
 
+Live summaries take lifecycle timestamps and committed artifact facts from the
+current authority snapshot. Attempt creation is preparation evidence, not an
+execution start; revision changes are not stage completion timestamps. Stage
+completion time is available only for a successful current-attempt commit owned
+by that run and stage. Uncommitted entries in a local artifact index do not appear
+as authoritative outputs. Authored run/runtime metadata retain their own meaning;
+mutable annotations remain owned by the run-annotation API.
+
+Configuration identity comes from the retained composition manifest's
+`artifact_safe_config` fingerprint record. Git and stage identities use their
+current `commit` and `fingerprint` members. Flat historical aliases are not
+interpreted. There is no native whole-pipeline fingerprint, summary member or
+`--pipeline-fingerprint` filter; compare the current configuration and individual
+stage fingerprints. List and diff JSON responses use `loom.cli.runs.list.v2`
+and `loom.cli.runs.diff.v2`. The disposable catalogue cache is rebuilt from current run
+sources when its schema changes, without converting retained run products.
+
 ## Design Goals
 
 The design should:
@@ -168,7 +185,6 @@ class RunSummary:
     started_at: str | None
     finished_at: str | None
     config_fingerprint: str | None
-    pipeline_fingerprint: str | None
     git_commit: str | None
     tags: Mapping[str, str]
     stage_counts: Mapping[str, int]

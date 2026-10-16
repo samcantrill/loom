@@ -19,6 +19,7 @@ from loom.pipeline.stores import (
     RunNotFoundError,
     UnsafeStorePathError,
 )
+from loom.pipeline.stores.read_models import StageLifecycleSnapshot
 from loom.serialization import PlainData, thaw_plain_data
 
 from .models import (
@@ -55,8 +56,6 @@ class _SummaryStore(Protocol):
     def read_composition_manifest(
         self, run_uri: str
     ) -> dict[str, PlainData] | None: ...
-
-    def read_plan(self, run_uri: str) -> dict[str, PlainData] | None: ...
 
     def read_provenance_document(
         self, run_uri: str, name: str
@@ -191,7 +190,6 @@ def _extract_summary(store: _SummaryStore, *, run_uri: str, path: Path) -> RunSu
     run_status = store.read_run_status(run_uri)
     runtime = store.read_runtime_metadata(run_uri) or {}
     composition = store.read_composition_manifest(run_uri) or {}
-    plan = store.read_plan(run_uri) or {}
     git = store.read_provenance_document(run_uri, "git") or {}
     artifacts = store.read_artifact_index(run_uri)
     submitted_operations = tuple(store.list_submitted_operations(run_uri))
@@ -208,23 +206,10 @@ def _extract_summary(store: _SummaryStore, *, run_uri: str, path: Path) -> RunSu
         finished_at=None if run_status is None else run_status.finished_at,
         metadata=user_metadata,
         tags=_extract_tags(user_metadata, runtime),
-        config_fingerprint=_first_string(
-            composition,
-            "config_fingerprint",
-            "fingerprint",
-            "artifact_fingerprint",
-            "content_fingerprint",
-        ),
-        pipeline_fingerprint=_first_string(
-            plan,
-            "pipeline_fingerprint",
-            "fingerprint",
-            "plan_fingerprint",
-        ),
-        git_commit=_first_string(git, "commit", "sha", "head_commit", "revision"),
-        executor=_first_string(runtime, "executor")
-        or _first_string(user_metadata, "executor"),
-        backend=_first_string(runtime, "backend")
+        config_fingerprint=_composition_fingerprint(composition),
+        git_commit=_string_or_none(git.get("commit")),
+        executor=_string_or_none(runtime.get("executor")),
+        backend=_string_or_none(runtime.get("backend"))
         or _first_submitted_backend(submitted_operations),
         state_source=state_source,
         stages=_extract_stages(store, run_uri, state_source=state_source),
@@ -269,7 +254,7 @@ def _extract_stages(
                 stage_name=stage_name,
                 status=None if status is None else status.status.value,
                 attempt=None if status is None else status.attempt,
-                fingerprint=_first_string(fingerprint, "fingerprint", "digest"),
+                fingerprint=_string_or_none(fingerprint.get("fingerprint")),
                 started_at=None if status is None else status.started_at,
                 finished_at=None if status is None else status.finished_at,
                 metadata={} if status is None else status.metadata,
@@ -327,11 +312,35 @@ def _extract_tags(
     return tags
 
 
-def _first_string(mapping: Mapping[str, PlainData], *keys: str) -> str | None:
-    for key in keys:
-        value = mapping.get(key)
-        if isinstance(value, str) and value:
-            return value
+def _composition_fingerprint(composition: Mapping[str, PlainData]) -> str | None:
+    """Read the current Weave artifact-safe config identity without importing it."""
+    records = composition.get("fingerprint_records")
+    if not isinstance(records, (list, tuple)):
+        return None
+    matches = [
+        record.get("digest")
+        for record in records
+        if isinstance(record, Mapping) and record.get("label") == "artifact_safe_config"
+    ]
+    return _string_or_none(matches[0]) if len(matches) == 1 else None
+
+
+def _stage_started_at(stage: StageLifecycleSnapshot) -> str | None:
+    return stage.attempts[-1].start_confirmed_at if stage.attempts else None
+
+
+def _stage_finished_at(stage: StageLifecycleSnapshot, run_uri: str) -> str | None:
+    latest = stage.attempts[-1] if stage.attempts else None
+    commit = stage.latest_commit
+    if (
+        commit is not None
+        and latest is not None
+        and stage.status.value == "SUCCEEDED"
+        and commit.run_uri == run_uri
+        and commit.stage_name == stage.stage_name
+        and commit.attempt_id == latest.attempt_id
+    ):
+        return commit.committed_at
     return None
 
 

@@ -62,7 +62,6 @@ def test_run_catalog_compare_reports_differences_and_one_sided_children(
         root / "left",
         status=RunStatus.SUCCEEDED,
         config="config-left",
-        pipeline="pipeline-left",
         checksum=format_digest("sha256", "1" * 64),
         stage_name="build",
         artifact_logical_name="build.out",
@@ -73,7 +72,6 @@ def test_run_catalog_compare_reports_differences_and_one_sided_children(
         root / "right",
         status=RunStatus.FAILED,
         config="config-right",
-        pipeline="pipeline-right",
         checksum=format_digest("sha256", "2" * 64),
         stage_name="eval",
         artifact_logical_name="eval.out",
@@ -85,7 +83,6 @@ def test_run_catalog_compare_reports_differences_and_one_sided_children(
     entries = _entries(result)
     assert entries["run.status"].status == ComparisonStatus.DIFFERENT
     assert entries["fingerprints.config"].status == ComparisonStatus.DIFFERENT
-    assert entries["fingerprints.pipeline"].status == ComparisonStatus.DIFFERENT
     assert entries["stages.build"].status == ComparisonStatus.LEFT_ONLY
     assert entries["stages.eval"].status == ComparisonStatus.RIGHT_ONLY
     assert entries["artifacts.build.out"].status == ComparisonStatus.LEFT_ONLY
@@ -153,7 +150,6 @@ def _create_run(
     status: RunStatus = RunStatus.SUCCEEDED,
     config: str,
     checksum: str,
-    pipeline: str = "pipeline",
     stage_name: str = "build",
     artifact_logical_name: str = "build.out",
     git_commit: str = "abc123",
@@ -183,8 +179,19 @@ def _create_run(
             updated_at="2020-01-01T00:00:01Z",
         ),
     )
-    store.write_composition_manifest(run_uri, {"fingerprint": config})
-    store.write_plan(run_uri, {"pipeline_fingerprint": pipeline})
+    store.write_composition_manifest(
+        run_uri,
+        {
+            "schema_version": 1,
+            "fingerprint_records": [
+                {
+                    "algorithm": "sha256",
+                    "label": "artifact_safe_config",
+                    "digest": config,
+                }
+            ],
+        },
+    )
     store.write_runtime_metadata(run_uri, {"executor": "local", "backend": "local"})
     store.write_provenance_document(run_uri, "git", {"commit": git_commit})
     if status is RunStatus.SUCCEEDED:

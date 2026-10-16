@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import cast
 
+import pytest
+
 from loom.artifacts import ArtifactRef
 from loom.fingerprints import format_digest
 from loom.pipeline.execution import create_authority_backed_serial_run_store
@@ -64,8 +66,19 @@ def test_run_catalog_scan_current_extracts_metadata_summary(tmp_path: Path) -> N
             finished_at="2020-01-01T00:00:04Z",
         ),
     )
-    store.write_composition_manifest(run_uri, {"fingerprint": "config-fp"})
-    store.write_plan(run_uri, {"pipeline_fingerprint": "pipeline-fp"})
+    store.write_composition_manifest(
+        run_uri,
+        {
+            "schema_version": 1,
+            "fingerprint_records": [
+                {
+                    "algorithm": "sha256",
+                    "label": "artifact_safe_config",
+                    "digest": "config-fp",
+                }
+            ],
+        },
+    )
     store.write_runtime_metadata(
         run_uri,
         {"executor": "local", "backend": "local", "tags": {"runtime": "yes"}},
@@ -131,7 +144,6 @@ def test_run_catalog_scan_current_extracts_metadata_summary(tmp_path: Path) -> N
     assert summary.updated_at is not None
     assert summary.tags == {"project": "demo", "runtime": "yes"}
     assert summary.config_fingerprint == "config-fp"
-    assert summary.pipeline_fingerprint == "pipeline-fp"
     assert summary.git_commit == "abc123"
     assert summary.executor == "local"
     assert summary.backend == "local"
@@ -174,3 +186,73 @@ def test_run_catalog_scan_current_returns_warnings_for_bad_candidates(
         CatalogWarningCode.INVALID_RUN,
         CatalogWarningCode.LOCAL_LIFECYCLE_UNSUPPORTED,
     ]
+
+
+@pytest.mark.optional_dependency
+def test_native_run_projects_current_fingerprints_timing_and_only_committed_artifacts(
+    tmp_path: Path,
+) -> None:
+    import json
+    from loom.runs._query_acquire import acquire_run
+    from tests.support.native_run_fixture import run_native_fixture
+    from tests.support.pipeline_execution_configs import local_execution_config
+
+    config = tmp_path / "pipeline.json"
+    config.write_text(
+        json.dumps(local_execution_config(value=7)).replace("build", "source")
+    )
+    admission, local = run_native_fixture(config)
+    assert admission.state.value == "SUCCEEDED"
+    authority = SQLitePerRunAuthorityStore(admission.run_uri, read_only=True)
+    snapshot = authority.open_run(admission.run_uri)
+    composition = local.read_composition_manifest(admission.run_uri)
+    assert composition is not None
+    records = composition["fingerprint_records"]
+    assert isinstance(records, list)
+    identities = [
+        r["digest"]
+        for r in records
+        if isinstance(r, dict) and r.get("label") == "artifact_safe_config"
+    ]
+    assert len(identities) == 1 and identities[0]
+
+    index = local.read_artifact_index(admission.run_uri)
+    index["source.uncommitted"] = ArtifactRef(
+        artifact_id="uncommitted", uri="file:///not-published", artifact_type="json"
+    )
+    local.write_artifact_index(admission.run_uri, index)
+    before = {
+        p: (p.read_bytes(), p.stat().st_mtime_ns)
+        for p in local.local_run_dir(admission.run_uri).rglob("*.json")
+    }
+
+    scan = RunCatalog.open(local.root).scan_current()
+    assert scan.warnings == ()
+    summary = scan.summaries[0]
+    assert summary.config_fingerprint == identities[0]
+    assert "pipeline_fingerprint" not in summary.to_dict()
+    assert snapshot.started_at and summary.started_at == snapshot.started_at
+    assert snapshot.finished_at and summary.finished_at == snapshot.finished_at
+    assert {a.logical_name for a in summary.artifacts} == {"source.data", "report.text"}
+    record = acquire_run(local.root, admission.run_uri, authority)
+    assert record.warnings == []
+    assert record.sources["native"]["config_fingerprint"] == identities[0]
+    assert record.sources["native"]["started_at"] == snapshot.started_at
+    assert record.sources["native"]["finished_at"] == snapshot.finished_at
+    for actual, projected, stage in zip(
+        summary.stages, record.stages, snapshot.stages, strict=True
+    ):
+        attempt = stage.attempts[-1]
+        commit = stage.latest_commit
+        assert attempt.start_confirmed_at and commit is not None
+        assert (
+            actual.started_at
+            == projected.sources["native"]["started_at"]
+            == attempt.start_confirmed_at
+        )
+        assert (
+            actual.finished_at
+            == projected.sources["native"]["finished_at"]
+            == commit.committed_at
+        )
+    assert {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in before} == before

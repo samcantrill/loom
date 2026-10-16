@@ -739,12 +739,9 @@ def format_runs_list_text(
         status_text = "<unknown>" if status is None else str(status)
         parts = [status_text, run_uri]
         config = getattr(summary, "config_fingerprint")
-        pipeline = getattr(summary, "pipeline_fingerprint")
         commit = getattr(summary, "git_commit")
         if config is not None:
             parts.append(f"config={config}")
-        if pipeline is not None:
-            parts.append(f"pipeline={pipeline}")
         if commit is not None:
             parts.append(f"commit={commit}")
         parts.append(f"stages={len(getattr(summary, 'stages'))}")

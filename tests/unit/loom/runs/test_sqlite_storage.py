@@ -5,6 +5,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from loom.pipeline.stores import RunFreshnessRecord
 from loom.runs import (
     ArtifactSummary,
@@ -100,7 +102,8 @@ def test_replace_catalog_records_removes_stale_rows(tmp_path: Path) -> None:
     ]
 
 
-def test_incompatible_catalog_db_is_rebuilt(tmp_path: Path) -> None:
+@pytest.mark.parametrize("version", [1, 999])
+def test_incompatible_catalog_db_is_rebuilt(tmp_path: Path, version: int) -> None:
     collection = tmp_path / "runs"
     db_path = catalog_db_path(collection)
     db_path.parent.mkdir(parents=True)
@@ -109,8 +112,11 @@ def test_incompatible_catalog_db_is_rebuilt(tmp_path: Path) -> None:
             "CREATE TABLE catalog_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
         )
         connection.execute(
-            "INSERT INTO catalog_metadata(key, value) VALUES('schema_version', '999')"
+            "INSERT INTO catalog_metadata(key, value) VALUES('schema_version', ?)",
+            (str(version),),
         )
+        connection.execute("CREATE TABLE run_summaries (pipeline_fingerprint TEXT)")
+        connection.execute("INSERT INTO run_summaries VALUES ('retired')")
 
     _replace_catalog_records(
         collection,
@@ -121,6 +127,10 @@ def test_incompatible_catalog_db_is_rebuilt(tmp_path: Path) -> None:
     assert [summary.run_uri for summary in read_catalog_summaries(collection)] == [
         "file:///runs/rebuilt"
     ]
+    with sqlite3.connect(db_path) as connection:
+        assert "pipeline_fingerprint" not in {
+            row[1] for row in connection.execute("PRAGMA table_info(run_summaries)")
+        }
 
 
 def _current_record(run_uri: str) -> CurrentRunSummary:
@@ -135,7 +145,6 @@ def _current_record(run_uri: str) -> CurrentRunSummary:
             metadata={"owner": "unit"},
             tags={"project": "demo"},
             config_fingerprint="config-fp",
-            pipeline_fingerprint="pipeline-fp",
             git_commit="abc123",
             executor="local",
             backend="local",
