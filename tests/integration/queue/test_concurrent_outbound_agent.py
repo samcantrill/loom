@@ -2023,8 +2023,11 @@ def test_restart_recovers_rejected_next_poll_without_losing_queued_work(monkeypa
     require_offer = AgentSessionService._require_current_offer
     original = transport._dispatch
     recoveries = []
+    polls = []
 
     def dispatch(view, operation, value):
+        if operation == "poll":
+            polls.append(dict(value))
         result = original(view, operation, value)
         if operation == "recover_poll":
             recoveries.append(dict(result))
@@ -2081,11 +2084,17 @@ def test_restart_recovers_rejected_next_poll_without_losing_queued_work(monkeypa
         if restart_coordinator:
             case.daemon.stop()
             case.daemon.start()
+        resume_poll_offset = len(polls)
         case.stop.clear()
         case.thread = Thread(target=case.serve)
         case.thread.start()
         assert case.client.wait("queued-through-rejection", timeout_seconds=30).state is LocalDaemonAdmissionState.SUCCEEDED
-        assert any(item.get("predecessor_sequence") == predecessor for item in recoveries)
+        if restart_coordinator:
+            assert any(item.get("predecessor_sequence") == predecessor for item in recoveries)
+        else:
+            # A current same-epoch request can replay directly once the offer
+            # is usable again; its original identity must precede a new poll.
+            assert polls[resume_poll_offset] == value
         assert len(_rows(case.database, "SELECT admission_id FROM managed_admissions WHERE queue_item_id = 'queued-through-rejection'")) == 1
 
 
