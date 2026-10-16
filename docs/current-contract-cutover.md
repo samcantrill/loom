@@ -1179,3 +1179,62 @@ runtime trees and offer writer, the patch hash, current control-fence recovery
 and exact owner/checksum preservation. The delivery is merge eligible; its PR
 closeout owns merge and synchronization facts. Only this review receipt changes
 afterward.
+
+## Accepted declarations for guarded retirement
+
+Implementation base: `edcdfdff621cb12210aea611355d48afe336d435`.
+`read_agent_spec` produces protected declarations; initialization and guarded
+reload bind them to native configuration revisions. `agent_declaration_guard`,
+candidate verification and declaration-based retirement now require that accepted
+binding. Remove the guard's unbound fallback and retirement's requalification of
+missing historical evidence. Missing/conflicting evidence fails before an owner
+lock, workload probe, supervisor startup or retirement mutation.
+
+Explicitly qualified `OutboundAgentServiceConfig` remains the current
+programmatic service API, with its existing owner, retained-work and shutdown
+checks. The read-only binding inspector can still report absence for a current
+programmatic configuration that never supplied declarations; this grants no
+declaration guard or retirement authority. No new representation or state is
+introduced. Current native schemas and retirement receipts remain unchanged.
+
+Selected coverage: the complete declaration-binding unit owner, clean retirement
+through explicit service and protected-spec callers, missing-binding refusal,
+retirement with an unavailable old workload, lost-response replay, and the CLI's
+explicit identity fences. Reuse #421's unaffected pending-poll/delivery retirement
+and concurrency evidence: runtime differences here are only the missing-binding
+and optional-guard branches, with unchanged bound retirement, poll recovery,
+dependencies, fixtures and scientific behavior. Collect and run cheap static
+checks first; expand for reached consumers or a failure. Independent review
+checks the actual final diff before merge.
+
+Validation: `build/current-contract-cutover/declaration-coverage.json` reconciles
+all **20 collected cases to passing receipts**, with no unresolved failure,
+error or skip. `declaration-tests.xml` records 19 passes at
+`3009e2a7ff1ad91d1ff07afa5886c3a971da3cb9` and one fixture-cleanup failure
+(36.87 s total). The refusal and unchanged-file assertions had passed; cleanup
+then hit the same monkeypatch that prohibited workload probing during the call.
+The correction restores the decoder only in cleanup, after those assertions,
+and shuts down the fixture's own supervisor. Its exact recheck passes at
+`038a56cb33ac9f7eeb0569984a206cd7ae2ba28b` (`declaration-refusal.xml`, 7.99 s).
+The failed invocation's supervisor was also closed through its native fixture
+helper. No unrelated runtime owner was changed.
+
+Both tested commits have source tree `46bc9325cb85419f374c5b73f0c58da60964daa1`;
+their only difference is the test's post-assertion cleanup. The other 19 passes
+remain applicable with unchanged source, dependencies, configuration and
+fixtures. Collection/execution logs are `declaration-*.log`; lock, changed-file
+Ruff, affected Pyright and diff checks pass, including affected test Pyright
+after cleanup correction. #421's `agent-retirement.xml` at `475e97e6` remains
+valid for the nine unchanged bound pending-poll/delivery retirement cases:
+the bound retirement implementation, poll codecs and recovery, shared fixtures
+and dependency lock are unchanged. No scientific or physical rerun is warranted.
+
+Independent actual-final-diff review of PR #422 at
+`38cee2d99a76b868a1397c04099b24d5edb895a0` against the recorded base passed
+with no findings requiring correction. The reviewer verified the 20 collected
+IDs against passing XML receipts, the source/test/feature-guide patch hash,
+identical tested runtime trees, the cleanup-only correction and reuse of the
+nine unaffected poll/delivery cases. Current explicit-service retirement and
+read-only absence remain supported; missing declarations cannot authorize
+guarded ownership or retirement. The delivery is merge eligible. Its PR closeout
+owns merge and synchronization facts; only this review receipt changes afterward.

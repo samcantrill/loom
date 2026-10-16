@@ -97,7 +97,7 @@ def test_existing_candidate_is_not_success_merely_because_it_exists(tmp_path, da
     assert spec.agent_root.is_dir()
 
 
-def test_programmatic_config_does_not_fabricate_declaration_evidence(tmp_path):
+def test_programmatic_config_does_not_fabricate_declaration_evidence(tmp_path, monkeypatch):
     source = _agent_config(tmp_path)
     service = load_outbound_agent_service_config(source)
     LocalDaemonAgentHttpClient.initialize_agent_root(
@@ -107,6 +107,22 @@ def test_programmatic_config_does_not_fabricate_declaration_evidence(tmp_path):
     assert (
         read_agent_declaration_binding(spec.agent_root, spec.declaration_digest) is None
     )
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("unbound declaration guard contacted a native owner")
+
+    monkeypatch.setattr("loom.queue._agent_session_journal._RemoteAgentJournal", forbidden)
+    before = {
+        path.relative_to(spec.agent_root): (path.read_bytes(), path.stat().st_mtime_ns)
+        for path in spec.agent_root.rglob("*") if path.is_file()
+    }
+    with pytest.raises(QueueError, match="lacks accepted declaration binding"):
+        with agent_declaration_guard(spec.agent_root, spec.declaration_digest):
+            pytest.fail("an unbound declaration acquired an owner guard")
+    assert {
+        path.relative_to(spec.agent_root): (path.read_bytes(), path.stat().st_mtime_ns)
+        for path in spec.agent_root.rglob("*") if path.is_file()
+    } == before
 
 
 @pytest.mark.parametrize(

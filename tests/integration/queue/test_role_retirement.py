@@ -108,11 +108,13 @@ def test_pending_work_prevents_retirement_without_fencing_acceptance(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "mode", ["service", "spec", "broken-workload", "lost-response", "legacy"]
+    "mode", ["service", "spec", "broken-workload", "lost-response", "missing-binding"]
 )
 def test_agent_clean_retirement_before_revoke_and_native_guard(
     tmp_path, monkeypatch, mode
 ):
+    from loom.queue._agent_process_supervisor import _profile_from_value
+
     with fleet(tmp_path) as (daemon, operator):
         path = tmp_path / "agent.json"
         workload = tmp_path / "old-workload"
@@ -159,12 +161,12 @@ def test_agent_clean_retirement_before_revoke_and_native_guard(
         finally:
             agent.close()
         root = spec.agent_root
-        if mode == "legacy":
+        if mode == "missing-binding":
             with sqlite3.connect(root / "control.sqlite") as conn:
                 conn.execute(
                     "DELETE FROM root_metadata WHERE key='declaration_binding'"
                 )
-        elif mode != "service":
+        if mode != "service":
             if mode == "broken-workload":
                 workload.rmdir()
                 with pytest.raises(QueueError):
@@ -183,6 +185,27 @@ def test_agent_clean_retirement_before_revoke_and_native_guard(
                 "loom.queue.agent_session_transport.LocalDaemonAgentHttpClient",
                 forbidden,
             )
+        if mode == "missing-binding":
+            before = {
+                path.relative_to(root): (path.read_bytes(), path.stat().st_mtime_ns)
+                for path in root.rglob("*") if path.is_file()
+            }
+            try:
+                with pytest.raises(QueueError, match="lacks accepted declaration binding"):
+                    retire_outbound_agent(retirement_config, **args)
+                assert {
+                    path.relative_to(root): (path.read_bytes(), path.stat().st_mtime_ns)
+                    for path in root.rglob("*") if path.is_file()
+                } == before
+                assert retirement_receipt(root) is None
+                assert operator.agent("worker").state == "ACTIVE"
+            finally:
+                monkeypatch.setattr(
+                    "loom.queue._agent_process_supervisor._profile_from_value",
+                    _profile_from_value,
+                )
+                _stop_fixture_supervisor(root)
+            return
         if mode == "lost-response":
             from loom.queue import agent_session_transport as transport
 
