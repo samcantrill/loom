@@ -5217,16 +5217,19 @@ def test_outbound_service_rejects_missing_current_capability_before_offering(
                 REGULAR_FILE_RELAY_CAPABILITY,
                 "concurrent-resident-assignments-v1",
                 "agent-control-wait-v1",
-            ) if capability != missing],
+            ) if capability != missing] + (["remote-stage-execution-v3"] if missing == REMOTE_EXECUTION_CAPABILITY else []),
             "coordinator_id": "coordinator-1",
             "coordinator_epoch": "epoch-1",
             "role": role,
         }
 
     monkeypatch.setattr(client, "_call", old_coordinator)
-    with pytest.raises(
-        QueueServiceError, match=f"upgrade required.*{missing}"
-    ):
+    refusal = (
+        "protocol is unsupported"
+        if missing == REMOTE_EXECUTION_CAPABILITY
+        else f"upgrade required.*{missing}"
+    )
+    with pytest.raises(QueueServiceError, match=refusal):
         client.handshake()
     stop.clear()
     calls.clear()
