@@ -8,8 +8,14 @@ from typing import Any, cast
 
 from loom.artifacts import ArtifactRef
 from loom.io.uris import path_to_file_uri, uri_to_path
+from loom.pipeline.reliability import ReliabilityPolicy, RetryPolicy
 from loom.pipeline.status import RunStatus
-from loom.pipeline.stores import LocalRunStore, path_to_run_uri
+from loom.pipeline.stores import (
+    LocalRunStore,
+    ReliabilityPolicyFact,
+    ReliabilityPolicyScope,
+    path_to_run_uri,
+)
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.runs import (
     RunBundleExportOptions,
@@ -59,6 +65,10 @@ def test_import_completed_bundle_rebases_payloads_and_refreshes_catalog(
     assert historical["stages"][0]["attempts"][0]["run_uri"] == source.run_uri
     assert historical["stages"][0]["attempts"][0]["start_confirmed"] is True
     assert historical["stages"][0]["attempts"][0]["input_bindings"] is None
+    policies = historical["stages"][0]["reliability_policy_facts"]
+    assert policies[0]["run_uri"] == source.run_uri
+    assert policies[0]["policy"]["retry"] == {"enabled": True, "max_attempts": 2}
+    assert store.list_reliability_policy_facts(result.target_run_uri) == ()
     assert not (target_run_dir / ".loom" / "authority.sqlite3").exists()
     listed = RunCatalog.open(target_collection).list()
     assert [summary.run_uri for summary in listed.summaries] == [result.target_run_uri]
@@ -108,11 +118,12 @@ def test_import_preserves_nonempty_source_lineage_without_graph_stitching(tmp_pa
         page = lineage_operation(daemon, LineageQuery(start={"run_uri": imported.target_run_uri}, scope=CollectionScope()).checked())
         assert not page.items and not page.complete
         assert any(w["code"] == "authority_unavailable" for w in page.warnings)
-    old_bundle = tmp_path / "old.tar"
-    export_completed_run_bundle(replace(metadata, lineage_evidence=None), old_bundle)
-    imported = import_run_bundle(old_bundle, tmp_path / "old")
+    unknown_bundle = tmp_path / "unknown-lineage.tar"
+    export_completed_run_bundle(replace(metadata, lineage_evidence=None), unknown_bundle)
+    imported = import_run_bundle(unknown_bundle, tmp_path / "unknown")
+    assert imported.status is RunExchangeOperationStatus.SUCCEEDED
     assert imported.target_run_uri is not None
-    assert cast(Any, LocalRunStore(tmp_path / "old").read_runtime_metadata(imported.target_run_uri))["historical_lineage"] is None
+    assert cast(Any, LocalRunStore(tmp_path / "unknown").read_runtime_metadata(imported.target_run_uri))["historical_lineage"] is None
 
 
 def _export_completed_bundle(tmp_path: Path) -> ExportedBundle:
@@ -124,6 +135,16 @@ def _export_completed_bundle(tmp_path: Path) -> ExportedBundle:
     clock = FrozenClock("2020-01-01T00:00:00Z")
     store = SQLitePerRunAuthorityStore(run_uri, clock=clock)
     store.create_run(run_uri)
+    store.write_reliability_policy_fact(
+        run_uri,
+        ReliabilityPolicyFact(
+            run_uri=run_uri,
+            scope=ReliabilityPolicyScope.STAGE,
+            stage_name="build",
+            recorded_at=clock(),
+            policy=ReliabilityPolicy(retry=RetryPolicy(enabled=True, max_attempts=2)),
+        ),
+    )
     allocation = store.allocate_stage_attempt(
         run_uri,
         "build",
