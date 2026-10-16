@@ -648,6 +648,28 @@ def test_http_authority_admission_forwards_idempotency_key(tmp_path: Path) -> No
         store.create_run(run_uri, metadata={"owner": "unit"}, idempotency_key="r2")
 
 
+def test_http_event_projection_preserves_producer_identity_and_occurrence(tmp_path: Path) -> None:
+    store = _http_authority_run_store(tmp_path)
+    run_uri = _run_uri(tmp_path)
+    store.create_run(run_uri)
+    event = PipelineEvent(
+        event_id="producer-event",
+        scope=EventScope.stage("build"),
+        event_type="stage.started",
+        timestamp="2020-01-01T00:00:00Z",
+        payload={"attempt": 1},
+    )
+
+    record = store.append_event(run_uri, event)
+
+    assert record.event_id == "producer-event"
+    assert record.occurred_at == "2020-01-01T00:00:00Z"
+    assert record.sequence == 1
+    assert record.primary_resource.identifiers["stage_name"] == "build"
+    assert record.payload == {"attempt": 1}
+    assert store.local_store.read_events(run_uri) == (record,)
+
+
 def test_http_authority_reports_a_confirmed_local_orphan(tmp_path: Path) -> None:
     store = _http_authority_run_store(tmp_path)
     run_uri = _run_uri(tmp_path)

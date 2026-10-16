@@ -86,7 +86,7 @@ def test_swallowed_failure_record_write_is_diagnostic_and_not_scientific(
 
     observers._registry.register("failing", fail_callback)
     monkeypatch.setattr(store, "append_event_sink_failure", fail_persistence)
-    monkeypatch.setattr(module, "_project_event", lambda record: None)
+    monkeypatch.setattr(module, "_project_event", lambda run_uri, event: None)
     with caplog.at_level(logging.ERROR):
         observers.emit(store, uri, event_type="run.created", revision=snapshot.revision)
     assert "native observer fact persistence failed" in caplog.text

@@ -54,6 +54,28 @@ from loom.pipeline.stores.sqlite_authority import (
 pytestmark = pytest.mark.unit
 
 
+def test_audit_events_require_retained_current_record_before_mutation(
+    tmp_path: Path,
+) -> None:
+    run_uri = path_to_run_uri(tmp_path / "run")
+    store = SQLitePerRunAuthorityStore()
+    store.create_run(run_uri)
+    event = PipelineEvent(scope=EventScope.run(), event_type="run.created")
+    store.append_audit_event(run_uri, event)
+    database = _authority_database_path(run_uri)
+    # Older audit writers retained only the individual columns after schema upgrades.
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE audit_events SET event_json = NULL")
+    before = database.read_bytes()
+
+    with pytest.raises(AuthorityStoreError, match="requires current event_json"):
+        store.list_audit_events(run_uri)
+    with pytest.raises(AuthorityStoreError, match="requires current event_json"):
+        store.append_audit_event(run_uri, event)
+
+    assert database.read_bytes() == before
+
+
 @dataclass(slots=True)
 class FrozenClock:
     value: str = "2020-01-01T00:00:00Z"

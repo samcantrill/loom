@@ -112,6 +112,38 @@ def test_offline_import_api_rejects_invalid_manifest_without_mutating(
         repository.open_run(manifest.run_uri)
 
 
+def test_offline_import_rejects_retired_event_before_admission(tmp_path: Path) -> None:
+    manifest = _complete_manifest(tmp_path)
+    payload = manifest.to_dict()
+    payload["events"] = [
+        {
+            "schema_version": 1,
+            "run_uri": manifest.run_uri,
+            "sequence": 1,
+            "timestamp": "2020-01-01T00:00:00Z",
+            "scope": {"kind": "RUN", "stage_name": None},
+            "event_type": "run.created",
+            "payload": {},
+        }
+    ]
+    repository = initialize_authority_repository(
+        tmp_path / "authority", service_generation="generation-1"
+    )
+    response = _client(repository).import_offline_evidence(
+        payload,
+        request_id="retired-event",
+        service_generation="generation-1",
+        workspace_id="workspace-a",
+    )
+
+    assert response.accepted is False
+    assert response.rejection is not None
+    assert response.rejection.category is AuthorityProtocolErrorCategory.VALIDATION
+    assert "event" in response.rejection.code
+    with pytest.raises(AuthorityRepositoryError, match="unknown run"):
+        repository.open_run(manifest.run_uri)
+
+
 def _client(repository: AuthorityRepository) -> AuthorityClient:
     app_client = TestClient(
         create_authority_app(

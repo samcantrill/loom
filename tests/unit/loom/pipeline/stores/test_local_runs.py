@@ -592,11 +592,16 @@ def test_local_run_rejects_corrupt_event_log(tmp_path: Path) -> None:
     path.write_text(
         json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": 2,
+                "event_id": "event-with-sequence-gap",
                 "run_uri": run_uri,
                 "sequence": 2,
-                "timestamp": "2020-01-01T00:00:00Z",
-                "scope": {"kind": "RUN", "stage_name": None},
+                "occurred_at": "2020-01-01T00:00:00Z",
+                "primary_resource": {
+                    "kind": "run",
+                    "identifiers": {"run_uri": run_uri},
+                },
+                "related_resources": [],
                 "event_type": "run.created",
                 "payload": {},
             }
@@ -609,6 +614,33 @@ def test_local_run_rejects_corrupt_event_log(tmp_path: Path) -> None:
         store.read_events(run_uri)
     assert "sequence gap" in str(exc_info.value)
     assert f"{path}:1" in str(exc_info.value)
+
+
+def test_local_run_rejects_retired_event_before_read_or_append(tmp_path: Path) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
+    store.create_run(run_uri)
+    path = store.local_run_dir(run_uri) / "events.jsonl"
+    retired = {
+        "schema_version": 1,
+        "run_uri": run_uri,
+        "sequence": 1,
+        "timestamp": "2020-01-01T00:00:00Z",
+        "scope": {"kind": "RUN", "stage_name": None},
+        "event_type": "run.created",
+        "payload": {},
+    }
+    path.write_text(json.dumps(retired) + "\n", encoding="utf-8")
+    before = path.read_bytes()
+
+    with pytest.raises(CorruptStoreDocumentError, match="unsupported schema_version 1"):
+        store.read_events(run_uri)
+    with pytest.raises(CorruptStoreDocumentError, match="unsupported schema_version 1"):
+        store.append_event(
+            run_uri, PipelineEvent(scope=EventScope.run(), event_type="run.started")
+        )
+
+    assert path.read_bytes() == before
 
 
 def test_local_run_acquires_reads_and_releases_lock(tmp_path: Path) -> None:

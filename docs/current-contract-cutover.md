@@ -24,7 +24,7 @@ tests. Current-format bytes remain unchanged unless a later row changes shape.
 | --- | --- | --- |
 | Current record writers → `serialization.load_versioned_document` | Exact owner-declared version, strict integer and fields; removed `DocumentMigration`, export, argument and conversion loop | merged #408 |
 | Supervisor initialization/launch → reopen and retained role guard | Journal 6 and launch 2 only; removed schema 2–5 upgrades/schema-less launches; current DDL retained; read-only refusal before owner contact or repair | merged #408 |
-| Coordinator/agent roots → service startup | Current 19/12 only, remove offline schema upgrade and older reconstruction | pending |
+| Coordinator/agent roots → service startup | Current 19/12 only, remove offline schema upgrade and older reconstruction | merged #410 |
 | Authority/coordination → current stores and inspection | Current 11, complete fresh DDL, no automatic upgrades; preserve WAL-aware inspection | merged #409 |
 | Authority-service repository → admission/read/write | Repository 12; remove v3–11 upgrade functions and audit-table conversion; fresh DDL and strict existing-root checks | merged #409 |
 
@@ -495,3 +495,74 @@ corrected, with their actual current behavior executed. Documentation now states
 current complete schemas and no startup request backfill; historical delivery
 notes no longer promise those removed behaviors. Independent final-diff review
 and the delivery PR own merge eligibility and synchronization metadata.
+
+## Current event records
+
+Base `70fb8861ca3fcbbe44abe66588e3edd2ed2ffe67` (merged coordinator API #412),
+branch `refactor/current-pipeline-events`. Rphys public-client consumers and the
+detailed cross-repository plan subsequently merged in rphys #891; newer paired
+dependency/image adoption remains open.
+
+`PipelineEventRecord` admits/writes only current v2, with `occurred_at`, primary/
+related resources, retained identity and optional causal reference. Remove v1
+read/write helpers, compatibility identity reconstruction and timestamp/scope
+constructor/property aliases. Current append requests (`PipelineEvent`) still
+express run/stage scope and an optional timestamp: these are current intent
+fields, before the store allocates the durable sequence. Shared `from_event`
+construction preserves the producer identity/time; `matches_event` owns replay
+equality for local, SQLite, service and repository stores. New records without
+an explicit ID receive an opaque ID; current stored IDs remain unchanged.
+
+Producer/consumer census: local and per-run SQLite stores, service authority,
+authority repository and execution adapter; native lifecycle projection; offline
+export/import; observer sinks and Discord; test store implementations and public
+import boundaries. Database readers now require their retained current event
+JSON, refusing the historical column-only reconstruction. Current database DDL
+and its existing columns remain unchanged. Native local projection reuses its
+original append request after authority acceptance; it does not reconstruct an
+intent through a retired record alias. Offline imports retain the original v2
+event in their audit payload and derive current run/stage intent explicitly.
+
+Selected core checks cover model round trips/refusal/causality, append replay,
+ordered/concurrent local events, observer sidecars, current SQLite/service/
+repository consumers, cleanup event dispatch, offline evidence and lightweight
+imports. Exact selectors: `build/current-contract-cutover/events-core-selectors.txt`.
+New refusal cases prove retired logs cannot be read/appended, column-only rows
+cannot be read/replayed with database bytes unchanged, and a retired event
+cannot be admitted through the offline-import API. Existing sequence-gap,
+ownership, revision, idempotency and callback-failure assertions are retained.
+
+The config-enabled integration selection in
+`build/current-contract-cutover/events-integration-selectors.txt` covers offline
+API import/refusal, native observer routes and real lifecycle execution/failure/
+cancellation, plus the Discord sink/CLI consumers. Collect both selections
+before execution; use isolated locked Python 3.12 environments, with config
+enabled for integration. Run full Pyright and affected Ruff/diff checks. Expand
+only for an affected consumer or actual failure; no scientific kernels, rphys
+dependencies, preparation wire families or payload writers change here.
+Validation passed with 115 distinct cases and no failures, errors, skips or
+deselections:
+
+| Scope | Receipt | Result |
+| --- | --- | --- |
+| Core models/stores/consumers and import boundary | `build/current-contract-cutover/events-core.xml` and `.log` | 93 passed, 5.54 s |
+| Config-enabled offline/native/Discord integration | `build/current-contract-cutover/events-integration.xml` and `.log` | 21 passed, 72.83 s |
+| Reached HTTP execution adapter's identity/time/local projection | `build/current-contract-cutover/events-adapter.xml` and `.log` | 1 passed, 2.88 s |
+
+Both initial selections collected successfully before execution. Their tested
+source/test/feature-doc patch from the base above has SHA-256
+`f95526405bdcdac7348439df3ad9d27071631dc461a14676dba8ca19cfab38e5`.
+The final patch is
+`1a1f1b0f65d4fa0b9a01b44eca8207c4c4a999b0b4b891533d0575c98ab16e6d`:
+the sole additional change is a test for the HTTP adapter's reached append
+path, proving its returned record and local projection retain the producer ID
+and occurrence time. Its selector is in `events-adapter-selectors.txt`. This
+test would fail under the removed historical-ID default. The initial 114 passes
+remain applicable because production source, dependencies, config and fixtures
+are unchanged; only that new test and these evidence notes followed them.
+
+Full Pyright passed before the added test; focused Pyright of that final file
+also passed, both with zero errors/warnings. Affected Ruff and diff checks pass.
+No remaining selected coverage gaps. No physical or rphys dependency/image
+qualification is claimed. Independent actual-diff review and delivery remain
+pending.

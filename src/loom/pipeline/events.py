@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import re
 import uuid
 from collections.abc import Mapping
@@ -20,7 +19,6 @@ from loom.serialization.errors import PlainDataError
 from loom.timestamps import parse_timestamp
 
 EVENT_SCHEMA_VERSION = 2
-LEGACY_EVENT_SCHEMA_VERSION = 1
 
 _IDENTIFIER_RE = re.compile(r"[a-z0-9_]+(?:\.[a-z0-9_]+)*")
 
@@ -291,9 +289,8 @@ class PipelineEvent:
 class PipelineEventRecord:
     """Canonical durable pipeline event record.
 
-    New records serialize as schema-version 2. Schema-version 1 records remain
-    readable through explicit projection helpers for existing local logs and
-    offline evidence manifests.
+    Only schema-version 2 is supported. New records receive an opaque identity
+    unless the producer supplies one; reading always requires the retained ID.
     """
 
     run_uri: str
@@ -312,10 +309,9 @@ class PipelineEventRecord:
         *,
         run_uri: str,
         sequence: int,
+        occurred_at: str,
         event_type: str,
         payload: Mapping[str, PlainData] | None = None,
-        occurred_at: str | None = None,
-        timestamp: str | None = None,
         primary_resource: EventResourceRef | Mapping[str, object] | None = None,
         related_resources: (
             tuple[EventResourceRef | Mapping[str, object], ...]
@@ -326,34 +322,25 @@ class PipelineEventRecord:
             EventResourceRef | EventReference | Mapping[str, object] | None
         ) = None,
         event_id: str | None = None,
-        scope: EventScope | None = None,
         schema_version: int = EVENT_SCHEMA_VERSION,
     ) -> None:
-        if schema_version != EVENT_SCHEMA_VERSION:
+        if type(schema_version) is not int or schema_version != EVENT_SCHEMA_VERSION:
             raise PipelineEventError(
                 f"unsupported schema_version {schema_version!r}, "
                 f"expected {EVENT_SCHEMA_VERSION}"
             )
         run_uri_text = _require_non_empty_string(run_uri, field="run_uri")
         sequence_int = _positive_int(sequence, field="sequence")
-        timestamp_text = _resolve_occurred_at(
-            occurred_at=occurred_at, timestamp=timestamp
+        timestamp_text = _timestamp(occurred_at, field="occurred_at")
+        primary = (
+            EventResourceRef.run(run_uri_text)
+            if primary_resource is None
+            else EventResourceRef.from_dict(primary_resource)
         )
-        if primary_resource is None:
-            if scope is None:
-                primary = EventResourceRef.run(run_uri_text)
-                related: tuple[EventResourceRef, ...] = ()
-            else:
-                primary, related = _resources_from_scope(
-                    run_uri=run_uri_text, scope=scope
-                )
-        else:
-            primary = EventResourceRef.from_dict(primary_resource)
-            related = ()
-        if related_resources is not None:
-            related = tuple(
-                EventResourceRef.from_dict(resource) for resource in related_resources
-            )
+        related = tuple(
+            EventResourceRef.from_dict(resource)
+            for resource in (() if related_resources is None else related_resources)
+        )
         object.__setattr__(self, "schema_version", EVENT_SCHEMA_VERSION)
         object.__setattr__(self, "run_uri", run_uri_text)
         object.__setattr__(self, "sequence", sequence_int)
@@ -373,9 +360,7 @@ class PipelineEventRecord:
             self,
             "event_id",
             _require_non_empty_string(
-                compatibility_event_id(run_uri_text, sequence_int)
-                if event_id is None
-                else event_id,
+                uuid.uuid4().hex if event_id is None else event_id,
                 field="event_id",
             ),
         )
@@ -385,17 +370,47 @@ class PipelineEventRecord:
             _optional_causal_predecessor(causal_predecessor),
         )
 
-    @property
-    def timestamp(self) -> str:
-        """Compatibility alias for schema-v1 callers."""
+    @classmethod
+    def from_event(
+        cls,
+        event: PipelineEvent,
+        *,
+        run_uri: str,
+        sequence: int,
+        occurred_at: str,
+    ) -> "PipelineEventRecord":
+        """Bind a current append request to its store-assigned run and sequence.
 
-        return self.occurred_at
+        ``occurred_at`` is the store clock used when the request omits a timestamp.
+        The producer's event identity and explicit occurrence time are preserved.
+        """
 
-    @property
-    def scope(self) -> EventScope:
-        """Compatibility projection for run and stage event records."""
+        primary, related = _resources_from_scope(run_uri=run_uri, scope=event.scope)
+        return cls(
+            run_uri=run_uri,
+            sequence=sequence,
+            occurred_at=event.timestamp or occurred_at,
+            event_type=event.event_type,
+            primary_resource=primary,
+            related_resources=related,
+            payload=event.payload,
+            event_id=event.event_id,
+        )
 
-        return _scope_from_resource(self.primary_resource)
+    def matches_event(self, event: PipelineEvent) -> bool:
+        """Whether a replayed append request matches this retained event."""
+
+        primary, related = _resources_from_scope(
+            run_uri=self.run_uri, scope=event.scope
+        )
+        return (
+            self.event_id == event.event_id
+            and self.primary_resource == primary
+            and self.related_resources == related
+            and self.event_type == event.event_type
+            and self.payload == event.payload
+            and (event.timestamp is None or self.occurred_at == event.timestamp)
+        )
 
     def to_dict(self) -> dict[str, PlainData]:
         payload: dict[str, PlainData] = {
@@ -415,17 +430,6 @@ class PipelineEventRecord:
             payload["causal_predecessor"] = self.causal_predecessor.to_dict()
         return payload
 
-    def to_schema_v1_dict(self) -> dict[str, PlainData]:
-        return {
-            "schema_version": LEGACY_EVENT_SCHEMA_VERSION,
-            "run_uri": self.run_uri,
-            "sequence": self.sequence,
-            "timestamp": self.occurred_at,
-            "scope": self.scope.to_dict(),
-            "event_type": self.event_type,
-            "payload": thaw_plain_data(self.payload, path="payload"),
-        }
-
     def to_event_reference(self) -> EventReference:
         return EventReference(
             event_id=self.event_id,
@@ -443,8 +447,6 @@ class PipelineEventRecord:
             _required(mapping, "schema_version", field="PipelineEventRecord"),
             field="schema_version",
         )
-        if schema_version == LEGACY_EVENT_SCHEMA_VERSION:
-            return cls.from_schema_v1_dict(mapping)
         if schema_version != EVENT_SCHEMA_VERSION:
             raise PipelineEventError(
                 "PipelineEventRecord.from_dict: unsupported schema_version "
@@ -503,76 +505,6 @@ class PipelineEventRecord:
                 field="event_id",
             ),
         )
-
-    @classmethod
-    def from_schema_v1_dict(cls, data: object) -> "PipelineEventRecord":
-        mapping = _require_mapping(data, field="PipelineEventRecord.schema_v1")
-        _reject_unknown(
-            mapping,
-            allowed={
-                "schema_version",
-                "run_uri",
-                "sequence",
-                "timestamp",
-                "scope",
-                "event_type",
-                "payload",
-            },
-            field="PipelineEventRecord.schema_v1",
-        )
-        schema_version = _positive_int(
-            _required(mapping, "schema_version", field="PipelineEventRecord"),
-            field="schema_version",
-        )
-        if schema_version != LEGACY_EVENT_SCHEMA_VERSION:
-            raise PipelineEventError(
-                "PipelineEventRecord.from_schema_v1_dict: unsupported "
-                f"schema_version {schema_version!r}, expected "
-                f"{LEGACY_EVENT_SCHEMA_VERSION}"
-            )
-        run_uri = _require_non_empty_string(
-            _required(mapping, "run_uri", field="PipelineEventRecord"),
-            field="run_uri",
-        )
-        sequence = _positive_int(
-            _required(mapping, "sequence", field="PipelineEventRecord"),
-            field="sequence",
-        )
-        primary, related = _resources_from_scope(
-            run_uri=run_uri,
-            scope=EventScope.from_dict(
-                _required(mapping, "scope", field="PipelineEventRecord")
-            ),
-        )
-        return cls(
-            run_uri=run_uri,
-            sequence=sequence,
-            occurred_at=_timestamp(
-                _required(mapping, "timestamp", field="PipelineEventRecord"),
-                field="timestamp",
-            ),
-            event_type=_validate_event_type(
-                _required(mapping, "event_type", field="PipelineEventRecord")
-            ),
-            primary_resource=primary,
-            related_resources=related,
-            payload=_plain_mapping(
-                _required(mapping, "payload", field="PipelineEventRecord"),
-                field="payload",
-            ),
-            event_id=compatibility_event_id(run_uri, sequence),
-        )
-
-
-def compatibility_event_id(run_uri: str, sequence: int) -> str:
-    """Return the deterministic event id used for projected schema-v1 records."""
-
-    run_uri_text = _require_non_empty_string(run_uri, field="run_uri")
-    sequence_int = _positive_int(sequence, field="sequence")
-    digest = hashlib.sha256(
-        f"{run_uri_text}\0{sequence_int}".encode("utf-8")
-    ).hexdigest()[:32]
-    return f"evt_v1_{digest}"
 
 
 def _coerce_scope_kind(value: object) -> EventScopeKind:
@@ -658,15 +590,6 @@ def _optional_timestamp(value: object | None, *, field: str) -> str | None:
     return _timestamp(value, field=field)
 
 
-def _resolve_occurred_at(*, occurred_at: str | None, timestamp: str | None) -> str:
-    if occurred_at is not None and timestamp is not None and occurred_at != timestamp:
-        raise PipelineEventError("occurred_at and timestamp must match when both set")
-    return _timestamp(
-        occurred_at if occurred_at is not None else timestamp,
-        field="occurred_at",
-    )
-
-
 def _validate_identifier(value: object, *, field: str) -> str:
     text = _require_non_empty_string(value, field=field)
     if _IDENTIFIER_RE.fullmatch(text) is None:
@@ -692,25 +615,6 @@ def _resources_from_scope(
     return EventResourceRef.stage(run_uri, scope.stage_name), (
         EventResourceRef.run(run_uri),
     )
-
-
-def _scope_from_resource(resource: EventResourceRef) -> EventScope:
-    identifiers = _plain_mapping(resource.identifiers, field="identifiers")
-    if resource.kind == "run":
-        _require_matching_run_uri(identifiers)
-        return EventScope.run()
-    if resource.kind == "stage":
-        _require_matching_run_uri(identifiers)
-        return EventScope.stage(
-            _require_non_empty_string(identifiers.get("stage_name"), field="stage_name")
-        )
-    raise PipelineEventError(
-        "scope compatibility alias is only available for run and stage resources"
-    )
-
-
-def _require_matching_run_uri(identifiers: Mapping[str, PlainData]) -> None:
-    _require_non_empty_string(identifiers.get("run_uri"), field="run_uri")
 
 
 def _resource_refs_from_sequence(
@@ -744,7 +648,6 @@ def _optional_causal_predecessor(
 
 __all__ = [
     "EVENT_SCHEMA_VERSION",
-    "LEGACY_EVENT_SCHEMA_VERSION",
     "PipelineEventError",
     "EventScopeKind",
     "EventScope",
@@ -752,5 +655,4 @@ __all__ = [
     "EventReference",
     "PipelineEvent",
     "PipelineEventRecord",
-    "compatibility_event_id",
 ]
