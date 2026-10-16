@@ -172,19 +172,17 @@ class LifecycleObservers:
                     raise QueueServiceError(
                         "native event occurrence time is unavailable"
                     )
-                record = store.append_audit_event(
-                    run_uri,
-                    PipelineEvent(
-                        scope=EventScope.run()
-                        if stage_name is None
-                        else EventScope.stage(stage_name),
-                        event_type=event_type,
-                        event_id=event_id,
-                        timestamp=revision.created_at,
-                        payload=dict(payload or {}),
-                    ),
+                event = PipelineEvent(
+                    scope=EventScope.run()
+                    if stage_name is None
+                    else EventScope.stage(stage_name),
+                    event_type=event_type,
+                    event_id=event_id,
+                    timestamp=revision.created_at,
+                    payload=dict(payload or {}),
                 )
-                _project_event(record)
+                record = store.append_audit_event(run_uri, event)
+                _project_event(run_uri, event)
                 self._registry.dispatch(record, _ObserverContext(store, record))
         except Exception:
             # Audit/delivery failure is diagnostic, never scientific failure.
@@ -234,20 +232,11 @@ class LifecycleObservers:
             )
 
 
-def _project_event(record: PipelineEventRecord) -> None:
+def _project_event(run_uri: str, event: PipelineEvent) -> None:
     from loom.pipeline.stores import LocalRunStore, run_uri_to_path
 
     try:
-        LocalRunStore(run_uri_to_path(record.run_uri).parent).append_event(
-            record.run_uri,
-            PipelineEvent(
-                scope=record.scope,
-                event_type=record.event_type,
-                timestamp=record.timestamp,
-                event_id=record.event_id,
-                payload=record.payload,
-            ),
-        )
+        LocalRunStore(run_uri_to_path(run_uri).parent).append_event(run_uri, event)
     except Exception:
         _LOG.exception(
             "native event local projection failed; authority evidence remains retained"

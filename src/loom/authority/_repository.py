@@ -3196,9 +3196,9 @@ class AuthorityRepository:
                 "SELECT * FROM audit_events WHERE run_uri = ? ORDER BY sequence",
                 (run_uri,),
             ):
-                existing = _audit_event_from_row(row, run_uri=run_uri)
+                existing = _audit_event_from_row(row)
                 if existing.event_id == event.event_id:
-                    if not _event_matches_record(event, existing):
+                    if not existing.matches_event(event):
                         raise AuthorityRepositoryError(
                             f"event_id {event.event_id!r} conflicts with an existing event"
                         )
@@ -3211,14 +3211,8 @@ class AuthorityRepository:
                 thaw_plain_data(event.payload, path="event.payload"),
             )
             sequence = _next_audit_event_sequence(conn, run_uri=run_uri)
-            record = PipelineEventRecord(
-                run_uri=run_uri,
-                sequence=sequence,
-                timestamp=timestamp,
-                scope=event.scope,
-                event_type=event.event_type,
-                payload=payload,
-                event_id=event.event_id,
+            record = PipelineEventRecord.from_event(
+                event, run_uri=run_uri, sequence=sequence, occurred_at=timestamp
             )
             conn.execute(
                 """
@@ -3313,7 +3307,7 @@ class AuthorityRepository:
         with self._read_connection() as conn:
             _require_run_row(conn, run_uri)
             return tuple(
-                _audit_event_from_row(row, run_uri=run_uri)
+                _audit_event_from_row(row)
                 for row in conn.execute(
                     """
                     SELECT *
@@ -3361,9 +3355,13 @@ class AuthorityRepository:
                 _plain_mapping(run_status.get("metadata", {}), "metadata")
             )
             run_metadata["authority_import"] = import_provenance
-            run_metadata["historical_lineage"] = (manifest.runtime or {}).get("historical_lineage")
+            run_metadata["historical_lineage"] = (manifest.runtime or {}).get(
+                "historical_lineage"
+            )
             run_revision = self._next_revision(conn)
-            started_at, finished_at, started_at_known = _offline_import_run_timing(manifest)
+            started_at, finished_at, started_at_known = _offline_import_run_timing(
+                manifest
+            )
             conn.execute(
                 """
                 INSERT INTO authority_runs (
@@ -3410,14 +3408,25 @@ class AuthorityRepository:
             for event in manifest.events:
                 latest_revision = self._next_revision(conn)
                 record = PipelineEventRecord.from_dict(event)
+                resource = record.primary_resource
+                if resource.kind == "stage":
+                    scope = EventScope.stage(
+                        _non_empty(resource.identifiers.get("stage_name"), "stage_name")
+                    )
+                elif resource.kind == "run":
+                    scope = EventScope.run()
+                else:
+                    raise AuthorityRepositoryError(
+                        "offline import requires run or stage event resources"
+                    )
                 _insert_import_audit_event(
                     conn,
                     run_uri=run_uri,
                     event_type=f"offline_import.replay.{record.event_type}",
-                    timestamp=record.timestamp,
+                    timestamp=record.occurred_at,
                     payload={"offline_event": record.to_dict()},
                     revision=latest_revision,
-                    scope=record.scope,
+                    scope=scope,
                 )
             _touch_run(conn, run_uri=run_uri, revision=latest_revision)
             return _run_snapshot(
@@ -5041,16 +5050,6 @@ def _public_run_metadata(metadata: Mapping[str, PlainData]) -> dict[str, PlainDa
     }
 
 
-def _event_matches_record(event: PipelineEvent, record: PipelineEventRecord) -> bool:
-    if (
-        record.scope != event.scope
-        or record.event_type != event.event_type
-        or record.payload != event.payload
-    ):
-        return False
-    return event.timestamp is None or record.timestamp == event.timestamp
-
-
 def _offline_import_provenance(
     manifest: OfflineEvidenceManifest,
     *,
@@ -5158,13 +5157,16 @@ def _insert_import_audit_event(
 ) -> None:
     event_scope = scope or EventScope.run()
     sequence = _next_audit_event_sequence(conn, run_uri=run_uri)
-    record = PipelineEventRecord(
+    record = PipelineEventRecord.from_event(
+        PipelineEvent(
+            scope=event_scope,
+            event_type=event_type,
+            payload=payload,
+            timestamp=timestamp,
+        ),
         run_uri=run_uri,
         sequence=sequence,
-        timestamp=timestamp,
-        scope=event_scope,
-        event_type=event_type,
-        payload=payload,
+        occurred_at=timestamp,
     )
     conn.execute(
         """
@@ -5934,20 +5936,10 @@ def _recovery_records(
     )
 
 
-def _audit_event_from_row(row: sqlite3.Row, *, run_uri: str) -> PipelineEventRecord:
-    if "event_json" in row.keys() and row["event_json"] is not None:
-        return PipelineEventRecord.from_dict(_json_loads(cast(str, row["event_json"])))
-    payload = _json_loads(cast(str, row["payload_json"]))
-    if not isinstance(payload, Mapping):
-        raise AuthorityRepositoryError("stored audit event payload must be a mapping")
-    return PipelineEventRecord(
-        run_uri=run_uri,
-        sequence=cast(int, row["sequence"]),
-        timestamp=cast(str, row["timestamp"]),
-        scope=EventScope.from_dict(_json_loads(cast(str, row["scope_json"]))),
-        event_type=cast(str, row["event_type"]),
-        payload=cast(Mapping[str, PlainData], payload),
-    )
+def _audit_event_from_row(row: sqlite3.Row) -> PipelineEventRecord:
+    if row["event_json"] is None:
+        raise AuthorityRepositoryError("stored audit event requires current event_json")
+    return PipelineEventRecord.from_dict(_json_loads(cast(str, row["event_json"])))
 
 
 def _require_no_repository_cancellation_epoch(

@@ -18,7 +18,7 @@ from loom._sqlite_inspection import inspect_sqlite_database
 from loom.artifacts import ArtifactRef
 from loom.pipeline.cleanup.records import CleanupReport, CleanupResult
 from loom.pipeline.event_sinks import EventObserverLinkRecord, EventSinkFailureRecord
-from loom.pipeline.events import EventScope, PipelineEvent, PipelineEventRecord
+from loom.pipeline.events import PipelineEvent, PipelineEventRecord
 from loom.pipeline.reliability import (
     ReliabilityStatusDetail,
     RetryDecisionRecord,
@@ -2597,9 +2597,9 @@ class SQLitePerRunAuthorityStore:
             raise AuthorityStoreError("event must be a PipelineEvent")
         with self._transaction(run_uri) as conn:
             for row in conn.execute("SELECT * FROM audit_events ORDER BY sequence"):
-                existing = _audit_event_from_row(row, run_uri=run_uri)
+                existing = _audit_event_from_row(row)
                 if existing.event_id == event.event_id:
-                    if not _event_matches_record(event, existing):
+                    if not existing.matches_event(event):
                         raise AuthorityStoreError(
                             f"event_id {event.event_id!r} conflicts with an existing event"
                         )
@@ -2611,14 +2611,8 @@ class SQLitePerRunAuthorityStore:
                 thaw_plain_data(event.payload, path="event.payload"),
             )
             sequence = _next_audit_event_sequence(conn)
-            record = PipelineEventRecord(
-                run_uri=run_uri,
-                sequence=sequence,
-                timestamp=timestamp,
-                scope=event.scope,
-                event_type=event.event_type,
-                payload=payload,
-                event_id=event.event_id,
+            record = PipelineEventRecord.from_event(
+                event, run_uri=run_uri, sequence=sequence, occurred_at=timestamp
             )
             conn.execute(
                 """
@@ -2648,7 +2642,7 @@ class SQLitePerRunAuthorityStore:
             _raise_for_schema(conn)
             _require_run_status(conn)
             return tuple(
-                _audit_event_from_row(row, run_uri=run_uri)
+                _audit_event_from_row(row)
                 for row in conn.execute("SELECT * FROM audit_events ORDER BY sequence")
             )
 
@@ -3569,20 +3563,11 @@ def _next_audit_event_sequence(conn: sqlite3.Connection) -> int:
     return cast(int, row[0])
 
 
-def _audit_event_from_row(row: sqlite3.Row, *, run_uri: str) -> PipelineEventRecord:
+def _audit_event_from_row(row: sqlite3.Row) -> PipelineEventRecord:
     event_json = row["event_json"]
-    if event_json is not None:
-        return PipelineEventRecord.from_dict(_json_loads(cast(str, event_json)))
-    return PipelineEventRecord(
-        run_uri=run_uri,
-        sequence=cast(int, row["sequence"]),
-        timestamp=cast(str, row["timestamp"]),
-        scope=EventScope.from_dict(_json_loads(cast(str, row["scope_json"]))),
-        event_type=cast(str, row["event_type"]),
-        payload=cast(
-            Mapping[str, PlainData], _json_loads(cast(str, row["payload_json"]))
-        ),
-    )
+    if event_json is None:
+        raise AuthorityStoreError("stored audit event requires current event_json")
+    return PipelineEventRecord.from_dict(_json_loads(cast(str, event_json)))
 
 
 def _check_schema_connection(conn: sqlite3.Connection) -> AuthoritySchemaCheck:
@@ -4429,16 +4414,6 @@ def _admission_matches(
         for key, value in existing.items()
         if key != _ADMISSION_IDEMPOTENCY_METADATA_KEY
     } == dict(metadata)
-
-
-def _event_matches_record(event: PipelineEvent, record: PipelineEventRecord) -> bool:
-    if (
-        record.scope != event.scope
-        or record.event_type != event.event_type
-        or record.payload != event.payload
-    ):
-        return False
-    return event.timestamp is None or record.timestamp == event.timestamp
 
 
 def _validate_observer_fact_run_uri(actual: str, expected: str, label: str) -> None:

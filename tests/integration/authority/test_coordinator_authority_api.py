@@ -690,11 +690,11 @@ def test_coordinator_observer_routes_preserve_identity_and_output_commit(tmp_pat
     assert authority.read_event_observer_links(RUN_URI) == ()
     failure = EventSinkFailureRecord.from_exception(
         sink_name="test.capture", event_reference=record.to_event_reference(),
-        exc=RuntimeError("synthetic callback failure"), failed_at=record.timestamp,
+        exc=RuntimeError("synthetic callback failure"), failed_at=record.occurred_at,
     )
     link = EventObserverLinkRecord(
         sink_name="test.capture", run_uri=RUN_URI,
-        event_reference=record.to_event_reference(), recorded_at=record.timestamp,
+        event_reference=record.to_event_reference(), recorded_at=record.occurred_at,
         external_ref=EventObserverExternalRef("test.message", {"message_id": "retained-1"}),
     )
     before_facts = authority.open_run(RUN_URI)

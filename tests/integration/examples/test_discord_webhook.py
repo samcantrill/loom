@@ -15,7 +15,7 @@ import httpx
 import pytest
 
 from loom.pipeline.event_sinks import EventSinkContext, EventSinkRegistry
-from loom.pipeline.events import EventScope, PipelineEventRecord
+from loom.pipeline.events import EventResourceRef, PipelineEventRecord
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.queue import (
     LocalDaemonAdmission,
@@ -745,6 +745,7 @@ def _event(
         sequence=1,
         event_type=event_type,
         occurred_at="2026-08-28T00:00:00Z",
-        scope=EventScope.stage("publish"),
+        primary_resource=EventResourceRef.stage(run_uri, "publish"),
+        related_resources=(EventResourceRef.run(run_uri),),
         payload={} if payload is None else payload,
     )

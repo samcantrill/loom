@@ -6,7 +6,6 @@ import pytest
 
 from loom.pipeline.events import (
     EVENT_SCHEMA_VERSION,
-    LEGACY_EVENT_SCHEMA_VERSION,
     EventReference,
     EventResourceRef,
     EventScope,
@@ -14,7 +13,6 @@ from loom.pipeline.events import (
     PipelineEvent,
     PipelineEventError,
     PipelineEventRecord,
-    compatibility_event_id,
 )
 from loom.timestamps import utc_timestamp
 
@@ -181,15 +179,17 @@ def test_pipeline_event_record_round_trips_schema_v2() -> None:
     record = PipelineEventRecord(
         run_uri="run1",
         sequence=1,
-        timestamp=timestamp,
-        scope=EventScope.stage("build"),
+        occurred_at=timestamp,
+        primary_resource=EventResourceRef.stage("run1", "build"),
+        related_resources=(EventResourceRef.run("run1"),),
         event_type="stage.blocked",
         payload={"reason": "upstream"},
+        event_id="event-blocked",
     )
 
     assert record.to_dict() == {
         "schema_version": EVENT_SCHEMA_VERSION,
-        "event_id": compatibility_event_id("run1", 1),
+        "event_id": "event-blocked",
         "run_uri": "run1",
         "sequence": 1,
         "occurred_at": timestamp,
@@ -201,8 +201,8 @@ def test_pipeline_event_record_round_trips_schema_v2() -> None:
         "related_resources": [{"kind": "run", "identifiers": {"run_uri": "run1"}}],
         "payload": {"reason": "upstream"},
     }
-    assert record.timestamp == timestamp
-    assert record.scope == EventScope.stage("build")
+    assert record.occurred_at == timestamp
+    assert record.primary_resource == EventResourceRef.stage("run1", "build")
     assert PipelineEventRecord.from_dict(record.to_dict()) == record
     assert record.to_event_reference() == EventReference(
         event_id=record.event_id,
@@ -214,10 +214,10 @@ def test_pipeline_event_record_round_trips_schema_v2() -> None:
     )
 
 
-def test_pipeline_event_record_projects_schema_v1_without_rewriting_shape() -> None:
+def test_pipeline_event_record_rejects_schema_v1() -> None:
     timestamp = utc_timestamp()
     legacy = {
-        "schema_version": LEGACY_EVENT_SCHEMA_VERSION,
+        "schema_version": 1,
         "run_uri": "run1",
         "sequence": 2,
         "timestamp": timestamp,
@@ -226,15 +226,47 @@ def test_pipeline_event_record_projects_schema_v1_without_rewriting_shape() -> N
         "payload": {"source": "legacy"},
     }
 
-    record = PipelineEventRecord.from_dict(legacy)
+    with pytest.raises(PipelineEventError, match="unsupported schema_version 1"):
+        PipelineEventRecord.from_dict(legacy)
 
-    assert record.schema_version == EVENT_SCHEMA_VERSION
-    assert record.event_id == compatibility_event_id("run1", 2)
-    assert record.occurred_at == timestamp
+
+@pytest.mark.parametrize("old_argument", ["timestamp", "scope"])
+def test_pipeline_event_record_has_no_historical_constructor_alias(old_argument):
+    with pytest.raises(TypeError, match=old_argument):
+        PipelineEventRecord(
+            run_uri="run1",
+            sequence=1,
+            occurred_at=utc_timestamp(),
+            event_type="run.created",
+            **{old_argument: cast(Any, None)},
+        )
+
+
+def test_append_request_preserves_identity_time_and_replay_equality() -> None:
+    event = PipelineEvent(
+        scope=EventScope.stage("build"),
+        event_type="stage.started",
+        timestamp="2020-01-01T00:00:00Z",
+        event_id="producer-event",
+        payload={"attempt": 1},
+    )
+    record = PipelineEventRecord.from_event(
+        event, run_uri="run1", sequence=1, occurred_at="2020-01-01T00:00:01Z"
+    )
+
+    assert record.event_id == "producer-event"
+    assert record.occurred_at == "2020-01-01T00:00:00Z"
     assert record.primary_resource == EventResourceRef.stage("run1", "build")
     assert record.related_resources == (EventResourceRef.run("run1"),)
-    assert record.payload == {"source": "legacy"}
-    assert record.to_schema_v1_dict() == legacy
+    assert record.matches_event(event)
+    assert not record.matches_event(
+        PipelineEvent(
+            scope=event.scope,
+            event_type=event.event_type,
+            event_id=event.event_id,
+            payload={"attempt": 2},
+        )
+    )
 
 
 def test_pipeline_event_record_accepts_causal_predecessor_reference() -> None:

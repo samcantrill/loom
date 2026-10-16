@@ -30,7 +30,6 @@ from loom.pipeline.stores import (
     PerRunAuthorityStore,
     path_to_run_uri,
 )
-from loom.serialization import PlainData, thaw_plain_data
 
 
 pytestmark = pytest.mark.unit
@@ -67,16 +66,11 @@ class ExecutionStore:
         event: PipelineEvent,
     ) -> PipelineEventRecord:
         self.operations.append("event")
-        record = PipelineEventRecord(
+        record = PipelineEventRecord.from_event(
+            event,
             run_uri=run_uri,
             sequence=len(self.events) + 1,
-            timestamp=event.timestamp,
-            scope=event.scope,
-            event_type=event.event_type,
-            payload=cast(
-                dict[str, PlainData],
-                thaw_plain_data(event.payload, path="event.payload"),
-            ),
+            occurred_at="2020-01-01T00:00:00Z",
         )
         self.events.append(record)
         return record

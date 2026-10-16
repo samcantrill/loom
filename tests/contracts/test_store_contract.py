@@ -6,7 +6,7 @@ from pathlib import Path
 from loom.artifacts import ArtifactRef
 from loom.pipeline.event_sinks import EventObserverLinkRecord, EventSinkFailureRecord
 from loom.diagnostics.inspection import inspect_run_artifact, inspect_run_artifacts
-from loom.pipeline.events import EventScope, PipelineEvent, PipelineEventRecord
+from loom.pipeline.events import PipelineEvent, PipelineEventRecord
 from loom.pipeline.locks import RunLockRecord
 from loom.pipeline import RunStatusRecord, StageStatusRecord
 from loom.pipeline.reliability import (
@@ -294,13 +294,8 @@ class DummyRunStore:
         return None
 
     def append_event(self, run_uri: str, event: PipelineEvent) -> PipelineEventRecord:
-        return PipelineEventRecord(
-            run_uri=run_uri,
-            sequence=1,
-            timestamp="2020-01-01T00:00:00Z",
-            scope=EventScope.run(),
-            event_type=event.event_type,
-            payload=event.payload,
+        return PipelineEventRecord.from_event(
+            event, run_uri=run_uri, sequence=1, occurred_at="2020-01-01T00:00:00Z"
         )
 
     def read_events(self, run_uri: str) -> tuple[PipelineEventRecord, ...]:
