@@ -1910,3 +1910,55 @@ tree is byte-identical to the reviewed tree. This closes the current resident
 workspace delivery; only these review/merge facts follow the tested source.
 Paired downstream adoption and affected installed/physical qualification remain
 open. The existing PR publishes the matching-tree synchronization receipt.
+
+
+## Current local-run metadata and lineage census
+
+The finite local-run/lineage audit retains the existing current representations.
+`pipeline/stores/local_runs.py` enforces exact current wrapper schema/keys;
+`write_run_user_metadata` factors matching authored data into a checked retained
+composition reference. Inline user metadata remains a distinct current producer
+case, not a historical decoder. Reference resolution checks relative containment,
+checksum, schema and pointer; reads preserve retained bytes/mtime. Current
+produced/external lineage remains distinct, and unknown lineage is not known-empty
+input membership. The executable lineage removal and binding checks are already
+qualified by #426; this audit adds no compatibility path or format.
+
+Fresh evidence at `9492b6fa560f7e9279aee8480ee7d8d807e13537` (tree
+`81677357f4feb17973c5f96a4ebcf431d441584c`): 12 selected local-run cases pass,
+covering fresh layout, optional metadata, strict prepared/composition wrappers,
+logical referenced metadata, mutation-free reads, and missing/altered/wrong
+retained definitions. Exact collection/execution commands and XML/logs are
+`local-run-current-census*` under the preserved qualification directory below's
+`local-run-census/`. Subsequent #431 changes Fleet/CLI only; these source,
+dependency, configuration and fixture contracts are unchanged. This closes the
+named read-only census row as retain-current, not a claim about every artifact.
+
+## Native upgrade progress delivery
+
+Stage 112 phase 1 merged in #431 as
+`4c48b65a80fc407b9e38b41462b34ddfaebddb0e`, from independently reviewed head
+`8c342aa52aae333c63499f7e8dfb15fb6b7ce124`. The accepted contract and canonical
+phase evidence live in rphys `docs/roadmap/stage-112/`.
+
+Native runtime/workload apply/resume/abort/retry now support opt-in bounded
+JSONL progress on stderr, preserving native stdout/exit, invocation-local clocks
+and authoritative recovery. The bounded publication correction binds current
+operator mutations to the verified original service owner before writes. Review
+also found and confirmed the fix for buffered stderr shutdown backpressure;
+real healthy/full-pipe subprocesses qualify normal process exit. No durable
+progress artifact, migration path or physical performance claim is introduced.
+
+Final coverage: 78 distinct passing cases, zero unresolved failures/errors/skips;
+exact source/evidence reconciliation and both bounded corrections are in the
+canonical phase card. Lock checks, changed-file Ruff, Fleet/CLI Pyright and diff
+checks pass. Independent review and affected confirmation pass on the exact
+merged source. Required transition to `agent/stage-112` passed. Completion
+publication, synchronization and exact branch retirement are recorded on #431.
+
+All selected raw receipts, including superseded failures and diagnostic logs,
+are retained outside the worktree at
+`/nas/home/can134/.config/rphys/qualification/stage112-native-upgrade-progress-8c342aa5/`,
+with byte-for-byte copy verification. Downstream paired dependency adoption and
+its installed process checks remain rphys phase 2; broader image/physical
+qualification remains with the original cutover owner.
