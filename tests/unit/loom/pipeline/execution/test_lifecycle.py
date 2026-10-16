@@ -630,10 +630,15 @@ def test_output_commit_uses_distinct_owners_and_preserves_commit_order(
         assert store.read_stage_provenance(run_uri, "build") is not None
         assert [event.event_type for event in events.read_events(run_uri)] == ["stage.completed"]
         assert artifacts.load(ref) == {"answer": 42}
-    assert [item.state for item in reliability.list_stage_attempt_transactions(
-        run_uri, stage_name="build"
-    )] == [
-        StageAttemptTransactionState.STAGED,
+    transactions = reliability.list_stage_attempt_transactions(run_uri, stage_name="build")
+    assert len(transactions) == 2
+    by_state = {item.state: item for item in transactions}
+    terminal_state = (
         StageAttemptTransactionState.COMMIT_FAILED if index_failure
-        else StageAttemptTransactionState.COMMITTED,
-    ]
+        else StageAttemptTransactionState.COMMITTED
+    )
+    assert set(by_state) == {StageAttemptTransactionState.STAGED, terminal_state}
+    staged, terminal = by_state[StageAttemptTransactionState.STAGED], by_state[terminal_state]
+    assert staged.causal_parent_id is None
+    assert terminal.causal_parent_id == staged.transaction_id
+    assert reliability.read_transaction_chain(run_uri, terminal.transaction_id) == (staged, terminal)
