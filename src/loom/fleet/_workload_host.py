@@ -117,6 +117,14 @@ def publish(request, directory):
     """Retain before/after source and reload only through native control owners."""
     if role(request) != "coordinator":
         raise QueueConflictError("native promotion owns agent source publication")
+    binding = read(Path(request["admin"]) / "service.json")
+    if any(binding.get(key) != request.get(key) for key in ("root", "config", "release")):
+        raise QueueConflictError("workload retained service binding differs")
+    if owner(request)["owner"] != binding["expected_root_id"]:
+        raise QueueConflictError("workload native root identity changed")
+    # Bind the connection from the already verified service identity, leaving
+    # retained host requests and exact reload replay bytes unchanged.
+    bound_request = {**request, "coordinator_id": binding["expected_root_id"]}
     current = payload(request)
     target = request["declaration"]
     retained = directory / "reload.json"
@@ -130,7 +138,7 @@ def publish(request, directory):
             from loom.fleet._host import coordinator_client
             from loom.queue.local_daemon import CoordinatorSchedulingReload
 
-            _, client = coordinator_client(request)
+            _, client = coordinator_client(bound_request)
             intent["reload"] = CoordinatorSchedulingReload(
                 request["request_id"],
                 client.status().scheduling_epoch,
@@ -146,7 +154,7 @@ def publish(request, directory):
         from loom.fleet._host import coordinator_client
         from loom.queue.local_daemon import CoordinatorSchedulingReload
 
-        _, client = coordinator_client(request)
+        _, client = coordinator_client(bound_request)
         result["reload"] = cast(
             dict[str, Any],
             thaw_plain_data(
