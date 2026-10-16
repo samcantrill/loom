@@ -105,6 +105,7 @@ def _prepared_request(
         next_attempt=next_attempt,
         owner_id="coordinator",
         plan_fingerprint="plan-1",
+        input_bindings=(),
         bound_inputs={},
         upstream_commits={},
         retry_decision_id=retry_decision_id,
@@ -757,6 +758,7 @@ def test_prepared_attempt_is_pending_and_replays_the_authority_receipt(
         next_attempt=1,
         owner_id="coordinator",
         plan_fingerprint="plan-1",
+        input_bindings=(),
         bound_inputs={},
         upstream_commits={},
     )

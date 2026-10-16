@@ -1632,6 +1632,7 @@ def test_reload_collects_nonterminal_stage_work_and_retains_its_exact_planner(
             next_attempt=1,
             owner_id="coordinator",
             plan_fingerprint="plan-1",
+            input_bindings=(),
             bound_inputs={},
             upstream_commits={},
         ),

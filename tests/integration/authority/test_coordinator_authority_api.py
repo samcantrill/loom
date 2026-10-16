@@ -110,6 +110,7 @@ def _prepared_request(revision) -> PreparedAttemptRequest:
         next_attempt=1,
         owner_id="coordinator-1",
         plan_fingerprint="plan-1",
+        input_bindings=(),
         bound_inputs={},
         upstream_commits={},
     )

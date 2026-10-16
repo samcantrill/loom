@@ -363,8 +363,12 @@ def test_managed_local_assignment_commits_accessible_output_then_releases(
         prior_attempt_id = prior.attempt.attempt_id
         revision = authority.snapshot(run_uri).revision
         worker_request = replace(
-            worker_request, attempt=2,
-            metadata={"managed_output_predecessor": initial.commit.commit_id},
+            worker_request,
+            attempt=2,
+            metadata={
+                **worker_request.metadata,
+                "managed_output_predecessor": initial.commit.commit_id,
+            },
         )
     prepared = authority.ensure_prepared_attempt(
         run_uri,
@@ -380,6 +384,7 @@ def test_managed_local_assignment_commits_accessible_output_then_releases(
             next_attempt=worker_request.attempt,
             owner_id="coordinator",
             plan_fingerprint="plan-1",
+            input_bindings=(),
             bound_inputs={},
             upstream_commits={},
         ),
@@ -755,6 +760,7 @@ def test_managed_local_failure_terminalizes_before_capacity_release(
             next_attempt=1,
             owner_id="coordinator",
             plan_fingerprint="plan-failed",
+            input_bindings=(),
             bound_inputs={},
             upstream_commits={},
         ),
@@ -1009,6 +1015,7 @@ def test_definitive_decline_replays_after_unbind_response_is_lost(
             next_attempt=1,
             owner_id="coordinator",
             plan_fingerprint="plan-declined",
+            input_bindings=(),
             bound_inputs={},
             upstream_commits={},
         ),
@@ -1251,6 +1258,7 @@ def test_managed_independent_same_run_workers_overlap_without_run_lock(
                 next_attempt=1,
                 owner_id="coordinator",
                 plan_fingerprint="plan-parallel",
+                input_bindings=(),
                 bound_inputs={},
                 upstream_commits={},
             ),

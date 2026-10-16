@@ -29,6 +29,7 @@ def _prepare(authority, uri, node):
             next_attempt=1,
             owner_id="coordinator",
             plan_fingerprint="plan",
+            input_bindings=(),
             bound_inputs={},
             upstream_commits={},
         ),

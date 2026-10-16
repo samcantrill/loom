@@ -165,19 +165,67 @@ def test_reused_pending_input_retains_original_commit_and_rejects_forged_source(
 
 
 @pytest.mark.parametrize("backend", ["embedded", "authenticated"])
-def test_absent_empty_and_legacy_evidence_remain_distinct(tmp_path, backend):
-    uri, authority, _, _ = _consumer(tmp_path, backend)
+def test_explicit_unknown_inspection_and_empty_input_evidence_remain_distinct(
+    tmp_path, backend
+):
+    from loom.pipeline.stores import AuthorityStoreError
+    from loom.pipeline.stores.read_models import AuthorityModelError
+
+    uri, authority, database, _ = _consumer(tmp_path, backend)
     known = prepare(authority, uri)
-    unknown = prepare(authority, uri, stage="legacy", bindings=None)
+    allocation_owner = authority
+    if backend == "authenticated":
+        from loom.authority._repository import AuthorityRepository
+
+        allocation_owner = AuthorityRepository(
+            database.parent, database_name=database.name
+        )
+    allocation_owner.allocate_stage_attempt(
+        uri,
+        "unrecorded",
+        owner_id="direct-reader",
+        lease_ttl_seconds=30,
+    )
+    unknown = next(
+        stage.attempts[0]
+        for stage in authority.open_run(uri).stages
+        if stage.stage_name == "unrecorded"
+    )
     assert known.attempt.input_bindings == ()
-    assert unknown.attempt.input_bindings is None
-    assert "input_bindings" not in unknown.request.to_dict()
-    legacy = known.attempt.to_dict()
+    assert unknown.input_bindings is None
+    assert StageAttempt.from_dict(unknown.to_dict()) == unknown
+    assert known.request.to_dict()["input_bindings"] == []
+
+    for retired in (None, "absent"):
+        payload = known.request.to_dict()
+        if retired == "absent":
+            del payload["input_bindings"]
+        else:
+            payload["input_bindings"] = None
+        with pytest.raises(AuthorityStoreError, match="input.bindings"):
+            PreparedAttemptRequest.from_dict(payload)
     for key in ("input_bindings", "start_confirmed", "start_confirmed_at"):
-        legacy.pop(key)
-    decoded = StageAttempt.from_dict(legacy)
-    assert decoded.input_bindings is None and decoded.start_confirmed is None
-    assert decoded.start_confirmed_at is None
+        payload = known.attempt.to_dict()
+        del payload[key]
+        with pytest.raises(AuthorityModelError, match=key):
+            StageAttempt.from_dict(payload)
+
+
+def test_retired_input_kind_is_refused():
+    binding = AttemptInputBinding(
+        "data",
+        None,
+        None,
+        ArtifactRef(
+            artifact_id="external", uri="file:///external", artifact_type="bytes"
+        ),
+        None,
+        "external",
+    )
+    payload = binding.to_dict()
+    payload["source_kind"] = "legacy_unresolved"
+    with pytest.raises(ValueError, match="source kind"):
+        AttemptInputBinding.from_dict(payload)
 
 
 @pytest.mark.parametrize("backend", ["embedded", "authenticated"])

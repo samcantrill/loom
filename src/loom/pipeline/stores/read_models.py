@@ -236,9 +236,11 @@ class StageAttempt:
             status=_stage_status(_required(mapping, "status")),
             revision=BackendRevision.from_dict(_required(mapping, "revision")),
             created_at=_timestamp(_required(mapping, "created_at"), "created_at"),
-            input_bindings=decode_bindings(mapping.get("input_bindings")),
-            start_confirmed=cast(bool | None, mapping.get("start_confirmed")),
-            start_confirmed_at=_optional_string(mapping.get("start_confirmed_at"), "start_confirmed_at"),
+            input_bindings=decode_bindings(_required(mapping, "input_bindings")),
+            start_confirmed=cast(bool | None, _required(mapping, "start_confirmed")),
+            start_confirmed_at=_optional_string(
+                _required(mapping, "start_confirmed_at"), "start_confirmed_at"
+            ),
             owner=_optional_string(mapping.get("owner"), "owner"),
             reason=_optional_reason(mapping.get("reason")),
         )

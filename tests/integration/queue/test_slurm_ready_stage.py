@@ -1884,10 +1884,38 @@ def test_actual_native_preparation_pair_crosses_slurm_ready_helpers_and_ack_repl
         agent_root_id="root-pair",
     )
     from loom.pipeline.resources import ResourceRequest
+    from loom.pipeline.stores.input_lineage import binding_evidence
+
     source_request = native_workspace.worker_request(resolve_shared=True)
-    # Normalize the fixture's empty resource envelope through its current owner.
-    transport_request = replace(source_request, run_uri=assignment.run_uri,
-        resolved_runtime={**source_request.resolved_runtime, "resources": ResourceRequest().to_dict()})
+    assert source_request.inputs == {}
+    assert source_request.metadata["attempt_input_evidence"] == binding_evidence(())
+    # Localized transport retains a digest; a new delivery requires the original
+    # authority bindings. This fixture's native preparation has zero inputs.
+    transport_request = replace(
+        source_request,
+        run_uri=assignment.run_uri,
+        resolved_runtime={
+            **source_request.resolved_runtime,
+            "resources": ResourceRequest().to_dict(),
+        },
+        metadata={**source_request.metadata, "attempt_input_bindings": []},
+    )
+    for missing in ("absent", "null"):
+        metadata = dict(transport_request.metadata)
+        if missing == "absent":
+            del metadata["attempt_input_bindings"]
+        else:
+            metadata["attempt_input_bindings"] = None
+        with pytest.raises(ValueError, match="requires retained input bindings"):
+            SlurmStageDelivery.from_worker_request(
+                assignment=assignment,
+                worker_request=replace(transport_request, metadata=metadata),
+                project_fingerprint=profile.project_fingerprint,
+                environment_fingerprint=profile.environment_fingerprint,
+                executor_fingerprint=profile.executor_fingerprint,
+                inputs=(),
+                declared_outputs=("report",),
+            )
     delivery = SlurmStageDelivery.from_worker_request(
         assignment=assignment,
         worker_request=transport_request,

@@ -1507,3 +1507,101 @@ passes, verified the source delta and unchanged 19-case reuse boundary, and
 confirmed GitHub merge eligibility. Only this prose receipt follows reviewed
 source; no runtime evidence is invalidated. PR #425 owns merge/synchronization
 facts; the broader cutover remains open.
+
+
+## Current executable input evidence
+
+Status: implemented, locally validated and independently reviewed in PR #426;
+manager merge/synchronization pending. Branch `fix/current-input-evidence`, base
+`c935de44808976203360b528ed4dcfb7ec2c9e1d` (offline capture PR #425).
+The lineage census finds one live managed preparation producer: orchestration
+captures produced/external bindings before persisting its preparation intent.
+Close the remaining optional old request/transport readers around that producer:
+require explicit bindings on PreparedAttemptRequest, validate missing worker
+bindings before resident or Slurm delivery, and remove the unproduced
+`legacy_unresolved` source kind. Preserve produced/external identity, original
+commit owner, request digest, current retry/result binding and containment.
+
+StageAttempt's current writer already emits input bindings and start-witness
+members, including explicit null for genuinely unknown inspection evidence.
+Require those existing wire members on read; remove missing-field reconstruction.
+Keep explicit null distinct from known-empty inputs. Current generic direct
+allocation and historical-only imports still produce unknown read-model evidence;
+they cannot use missing evidence to pass a managed worker handoff.
+
+Keep current producers, serialization/authority stores, orchestrator, resident and
+Slurm delivery consumers and fixtures together. Existing zero-input preparation
+fixtures must state empty bindings explicitly, not fabricate provenance. Add
+old/missing request and wire refusal at actual boundaries, preserve the unknown
+inspection and restart/start acknowledgement assertions, and select reached
+orchestration/authority/lineage plus resident/Slurm and native execution checks.
+Use cheap collection, committed stable candidates, raw receipts and targeted
+rechecks. This is no schema/table migration, query redesign, new lineage store,
+physical qualification or optional hardening. Broader query/local-run/workspace
+census and paired deployment remain open. Independent final review follows.
+
+
+Selection: the baseline scope covers preparation request/attempt codecs on both
+authority implementations, current binding/start-witness round trips, orchestrator
+intent replay, source/result ownership, resident delivery, daemon reload and the
+four reached managed-local execution/retry/concurrency cases. The config scope
+covers native lineage through Python/CLI/query roles, actual preparation child
+publication/failure/replay, its resident-to-Slurm transport fixture, mixed
+Slurm/agent execution and selected-authority publication after a lost reply.
+Exact selectors are retained in
+`build/current-contract-cutover/input-evidence-{base,config}-selection.txt`.
+Baseline collection found 242 cases including two optional config cases; those
+two run in the config environment instead. Initial config collection found 18
+cases; its final scope adds the two selected-authority publisher cases. Collection
+succeeded, changed-source Pyright reports zero errors, and changed-file Ruff
+passes. Run each selected scope on a committed clean tree; no physical Slurm or
+fleet claim follows from these local transport fixtures. Expand only for a
+reached consumer failure or a concrete missing accepted assertion.
+
+
+Initial stable-tree execution at `9358e1b69784cfcad71bf8ec85022522485ec09b`:
+baseline 237 passed, 3 failed, 2 optional cases deselected; config 19 passed,
+1 failed, no skips. Raw `input-evidence-{base,config}-9358e1b6` logs, XML and
+run JSON record exact commands and unchanged source status. The three baseline
+failures were fixture contract gaps: authenticated inspection cannot allocate
+through its restricted client, so the real repository owner now allocates before
+inspection through the client; the two replacement fixtures previously replaced
+all worker metadata and now preserve the original zero-input binding/digest when
+adding the predecessor. No production correction or assertion weakening was
+needed. The config failure exceeded AF_UNIX path length under a long worktree
+`--basetemp`; rerun its exact Unix-socket case with a short dedicated temporary
+root. Existing 256 passes remain applicable: production, dependencies, configs
+and unrelated fixtures are unchanged. The two changed fixture functions are
+selected again; cheap collection found 22 baseline recheck cases. The delta is
+retained in `input-evidence-fixture-correction.patch`.
+
+
+Final selected coverage: **260 distinct passing cases**, no unresolved failures,
+errors or required skips. On clean `5472172b5fbfe1bb80b65f4efbc0c62f998b7a35`,
+the 22 baseline rechecks passed in 12.22 s test time (26.29 s command wall);
+the exact Unix-socket query passed in 14.18 s (28.44 s command wall). Their
+`input-evidence-{base,config}-5472172b` XML/log/run JSON preserve source identity,
+commands and clean end state. `input-evidence-coverage.json` maps every current
+case to its final passing receipt. The two baseline optional deselections ran
+and passed in the config scope. The changed delta contains only the two fixture
+functions and this owner document: production source, dependencies, config and
+other fixtures are byte-equivalent to the first passing receipts. Thus all
+unaffected passes remain applicable. Original failures remain recorded, with
+replacement receipts rather than relabelled outcomes.
+
+Changed-file Ruff and `uv lock --check` pass (`input-evidence-static.log`), as do
+changed-source Pyright (zero errors; `input-evidence-pyright.log`), formatting of
+changed ranges and diff checks. Existing format debt outside changed ranges is
+untouched. Final changes after this tested head are documentation only. No
+physical deployment or unrelated query/local-run/workspace census is closed by
+this delivery. Independent actual-diff review and PR merge remain the next gates.
+
+
+Independent review passed on `52bc501b15a90f4d7ace3e9f3826758217be7ac4` against
+`c935de44808976203360b528ed4dcfb7ec2c9e1d`: no blocking or required correction.
+The reviewer verified all 260 current outcomes against raw XML, the four
+replacement receipts and source equivalence. Required current fields, unknown
+inspection, produced/external ownership, start witnesses, digest transport and
+current replay/containment remain preserved. PR #426 is merge-eligible under
+its selected local gate. This final receipt changes only documentation; broader
+census and physical/paired adoption remain separate obligations.
