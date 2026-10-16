@@ -1676,3 +1676,18 @@ changed by this delivery. These corrections are test-only: production source,
 dependencies and executable configuration remain exactly `9290edb2`. Recheck all
 consumers of the changed shared fixture and all three new config cases; retain
 unaffected passing baseline evidence. No failed assertion counts as a pass.
+
+
+Final local reconciliation: all **104 distinct selected cases pass**. At clean
+`da8edc987d49ef4f5fded5e700d0199adea48796`, all 17 affected baseline consumers and
+all three config cases passed (actual native execution plus Unix and HTTPS
+query transport). Together with unaffected passing `9290edb2` outcomes, there
+are no unresolved failures/errors/skips. The baseline's one deselected native
+case is explicitly included and passed in config. Raw XML, stable-tree metadata,
+source/correction diffs and per-case reconciliation are retained under
+`build/current-contract-cutover/run-query-*`; `run-query-coverage.json` owns the
+104-case union. The source tree stayed unchanged during both concurrent scopes.
+Final changed-file Ruff and diff checks pass; changed-source Pyright and locked
+dependency checks pass. No dependency, configuration, production code or fixture
+changes follow the final successful runs; only this receipt and removal of stale
+public documentation references follow them. Independent PR review is next.

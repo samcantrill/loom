@@ -139,7 +139,6 @@ created_at
 started_at
 finished_at
 config fingerprint
-pipeline fingerprint
 git commit when available
 tags
 notes summary
@@ -212,7 +211,6 @@ Useful filters:
 run status
 tag
 config fingerprint
-pipeline fingerprint
 git commit
 stage status
 logical artifact identity
@@ -256,7 +254,6 @@ Comparison should include:
 run status
 resolved config summaries
 config fingerprints
-pipeline fingerprints
 stage actions and statuses
 stage fingerprints
 input artifact identities
