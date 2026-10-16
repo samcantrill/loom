@@ -326,3 +326,68 @@ dependencies, configurations and fixtures unchanged. Earlier authority and
 serialization receipts therefore remain applicable within their stated scopes.
 The paired rphys pin/wrapper and physical qualification remain open. The delivery
 PR owns the exact commit, remote merge and tree-synchronization receipt.
+
+
+### Current agent control contract
+
+Base is coordinator/fleet merge `7639ac3a90ea768cc78849b53422c4e680e9f1d9`
+(Loom #410); merged and reviewed head trees matched, and the PR owns the
+synchronization receipt. This delivery requires `agent-control-wait-v1` during
+agent handshake and removes the optional-capability state and old-peer polling
+branch. Current service progress always uses bounded control waits; explicit
+synchronous control polling and the full-population oversize-request fallback
+remain current operations.
+
+Owners: `_agent_session_protocol.handshake`,
+`LocalDaemonAgentHttpClient.poll_control` / `_receive_service_controls`, and
+`_RemoteAgentJournal.received_control_ids`. Current `AgentSessionView.handshake`
+already advertises the capability. The outbound service handshakes before
+registration/offering; missing capability must fail there without a retained
+session. Reached consumers are control receipt/replay, reconnect, cancellation
+while transfers are held, notification/wait capacity and exact transport retry.
+No storage or wire format changes and no new dependency.
+
+Remove only the predecessor-capability success variants from reconnect tests;
+retain before/after-close lost-reply assertions. Add refusal to the existing
+before-offer handshake test and explicit current suppression-envelope checks:
+real retained receipts use bounded polling when count/byte limits are exceeded,
+without truncation or acknowledgment. Select control-wait unit and transport
+checks, retry checks, and exact reached concurrent-agent cases. Collect first;
+record execution and independent review below. Reuse #410's storage/Fleet
+results because schema admission, runtime replacement, dependencies/configs and
+fixtures do not change here. The wider transport adapter and historical journal
+fallback census remains open.
+
+Selected locked Python 3.12 config-environment checks:
+
+```text
+tests/unit/loom/queue/test_agent_control_waiting.py
+tests/unit/loom/queue/test_transport_retry.py
+tests/integration/queue/test_control_wait_transport.py
+tests/integration/queue/test_agent_session_transport.py::test_agent_client_rejects_an_old_protocol_without_compatibility
+tests/integration/queue/test_agent_session_transport.py::test_outbound_service_rejects_missing_current_capability_before_offering
+tests/integration/queue/test_concurrent_outbound_agent.py::test_control_receipts_survive_lost_reply_from_reconnecting_client
+tests/integration/queue/test_concurrent_outbound_agent.py::test_serial_service_retains_cancel_while_real_transfer_is_held
+tests/integration/queue/test_concurrent_outbound_agent.py::test_two_bulk_holds_preserve_exact_stop_and_unrelated_observation
+```
+
+Changed-file Ruff, affected source Pyright and diff checks also apply.
+
+Final receipt: all 48 collected cases passed in 159.15 s, with zero failures,
+errors, skips or deselections (`build/current-contract-cutover/agent-control.xml`).
+Source/test diff SHA-256:
+`aeee50cfc1637fc5eda81fd78c8df5af210466a07534ef8c77252904a281b2f6`.
+Changed-file Ruff and affected Pyright passed; diff checks passed. The selection
+covers notification wakeup, independent wait capacity, exact retries, refusal
+before registration/offering, preserved oversize fallback, lost replies across
+reconnect/close and cancellation while real bulk operations are held. Existing
+bounded response/settlement assertions remain unchanged; receipt wall duration
+is not presented as measured cancellation latency.
+
+Independent actual-diff review passed after correcting the public queue guide's
+stale optional-capability promise. Only documentation changed during/after the
+selected execution; the source/test fingerprint is unchanged. No dependency,
+configuration, storage fixture or scientific behavior changed. #410's current
+storage/Fleet results remain applicable within their recorded scope; physical
+qualification and downstream paired adoption remain pending. The delivery PR
+owns exact commit, merge and matching-tree synchronization metadata.

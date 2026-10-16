@@ -2238,9 +2238,8 @@ def test_drain_retains_late_poll_delivery_and_settles_it_without_fresh_admission
 
 
 @pytest.mark.parametrize("after_close", [False, True])
-@pytest.mark.parametrize("legacy", [False, True])
 def test_control_receipts_survive_lost_reply_from_reconnecting_client(
-    monkeypatch, after_close, legacy
+    monkeypatch, after_close
 ):
     armed, held, release, reconnecting, closed = (Event() for _ in range(5))
     publishing, release_publication, control_suspended = (Event() for _ in range(3))
@@ -2271,11 +2270,6 @@ def test_control_receipts_survive_lost_reply_from_reconnecting_client(
 
     def lost_control_reply(view, operation, value):
         result = dispatch(view, operation, value)
-        if operation == "handshake" and legacy:
-            capabilities = result["capabilities"]
-            assert isinstance(capabilities, (list, tuple))
-            result = {**result, "capabilities": [item for item in capabilities
-                      if item != "agent-control-wait-v1"]}
         if operation in {"assignment_control", "control_wait"} and armed.is_set() and not held.is_set():
             held.set()
             assert release.wait(30)

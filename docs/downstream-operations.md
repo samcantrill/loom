@@ -316,6 +316,14 @@ are rejected. Initialization never overwrites a populated root. Only complete
 current coordinator schema 19 and agent schema 12 are accepted; there is no
 schema migration or repair path. See [current control roots](#current-control-roots).
 
+Current outbound agents require the `agent-control-wait-v1` capability during
+handshake, before registration or capacity offers. A coordinator lacking it is
+refused. Service progress uses bounded notification-driven control waits; when a
+current durable-receipt suppression inventory exceeds the request count or byte
+limit, bounded polling preserves the complete population without truncating or
+acknowledging receipts. Synchronous control polling remains an explicit current
+operation.
+
 For an embedded or outbound agent, the worker supervisor is a separate local
 service and remains the process owner
 when the daemon application stops. Restart the daemon with the same protected

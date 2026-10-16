@@ -836,7 +836,6 @@ class LocalDaemonAgentHttpClient:
         self._connection: http.client.HTTPSConnection | None = None
         self._closed = False
         self._service_progress = False
-        self._control_wait_supported = False
         self._service_control_due = True
         self._epoch_reconciliation_pending = False
         self._mutation_gate = _Gate()
@@ -1271,7 +1270,7 @@ class LocalDaemonAgentHttpClient:
         received = journal.next_received_control(session_id)
         if received is not None:
             raw = received.value()
-        elif self._service_progress and self._control_wait_supported:
+        elif self._service_progress:
             return None
         else:
             result = (yield from _steps(self._call, "control", {"session_id": session_id}))
@@ -2423,16 +2422,15 @@ class LocalDaemonAgentHttpClient:
         session = journal.active_session()
         if session is None:
             return
-        waiting = False
-        request: dict[str, PlainData] = {}
-        if self._control_wait_supported:
-            ids = journal.received_control_ids(session.session_id)
-            request = {"session_id": session.session_id, "received_operation_ids": freeze_plain_data(ids),
-                       "wait_timeout_ms": 5000}
-            # Keep the full supported assignment ceiling: oversize suppression
-            # inventories use compatibility polling, not truncated receipts.
-            waiting = (len(ids) <= _MAX_RECEIVED_CONTROLS
-                       and len(_canonical_json(request).encode()) <= _MAX_BODY_BYTES)
+        ids = journal.received_control_ids(session.session_id)
+        request: dict[str, PlainData] = {
+            "session_id": session.session_id,
+            "received_operation_ids": freeze_plain_data(ids),
+            "wait_timeout_ms": 5000,
+        }
+        # Preserve the full assignment ceiling without truncating durable receipts.
+        waiting = (len(ids) <= _MAX_RECEIVED_CONTROLS
+                   and len(_canonical_json(request).encode()) <= _MAX_BODY_BYTES)
         if waiting:
             response = yield from _steps(self._call, "control_wait", request)
         else:
