@@ -1882,3 +1882,12 @@ isolated baseline environment; changed-file Ruff, lock and diff checks pass.
 Changed-source Pyright reports zero errors/warnings. Collection and static logs
 are `resident-workspace-final-collection.log` and `resident-workspace-static.log`
 under the same receipt directory. Committed-tree execution follows.
+
+Final selected execution passes 29/29 cases on clean unchanged
+`128253b87f821b3ab47b6910b30c0b084eee6941`, with zero failures, errors,
+skips or deselections. JUnit time is 62.508 seconds; wall time including isolated
+setup is 78.046 seconds. Exact argv, raw output, XML and before/after Git facts
+are `resident-workspace-command.json`, `resident-workspace-validation.log`,
+`resident-workspace-results.xml` and `resident-workspace-validation.json` under
+`build/current-contract-cutover/`. Only this receipt follows the tested source;
+no runtime, dependency, configuration or fixture delta invalidates that evidence.
