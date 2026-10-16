@@ -1951,7 +1951,7 @@ def test_actual_native_preparation_pair_crosses_slurm_ready_helpers_and_ack_repl
             ),
         )
     downgraded = replace(
-        report, schema_version=3,
+        report, output_kind="relay",
         outputs=tuple(replace(item, preparation_report_transfer=None) for item in report.outputs),
     )
     with pytest.raises(QueueConflictError, match="native preparation transfer capability"):
