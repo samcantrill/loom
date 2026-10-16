@@ -700,3 +700,33 @@ contracts. Existing planning/event/persistence evidence is reusable where source
 dependencies, configuration and fixtures are unchanged; no physical/scientific
 qualification is inferred from this runtime selection. Independent actual-diff
 review and final result reconciliation remain required before merge.
+
+Validation reconciliation:
+
+| Scope | Tested revision and receipt | Result |
+| --- | --- | --- |
+| Baseline execution/store/API/CLI selection, 12 files | `9c8a49a857395d2aa006fa0acfbf4a07d2cc7bef`; `build/current-contract-cutover/execution-core-selectors.txt`, `execution-core.log` and `execution-core.xml` | 143 passed; two new causal-order assertions failed and were corrected below |
+| Config-backed installed project, guarded recovery, cancellation, retry, managed local/Slurm handoff and catalog selection | Same stable source revision; `execution-config-selectors.txt`, `execution-config.log` and `execution-config.xml` in that directory | 22 passed in 238.09 seconds; no skips |
+| Two commit-order cases | `a543844af047cf1e7e6c7e34c42af7c12764371f`; `execution-commit-recheck.log` and `execution-commit-recheck.xml` | 2 passed |
+| Collection and static checks | `execution-core-collection.log`, `execution-api-collection.log`, `execution-config-collection.log`, `execution-types.log`, `execution-ruff.log`; corrected test rechecked in `execution-types-recheck.log` and `execution-ruff-recheck.log` | 145 baseline and 22 config cases collected; full Pyright and affected-file Ruff passed, including the corrected test |
+
+The first run's two failures were test assumptions about transaction listing
+order: opaque transaction IDs do not encode causality. The correction verifies
+the exact two states, root/parent links and the existing `read_transaction_chain`
+result. It preserves success/publication-failure, durable output/index/provenance,
+terminal status and event assertions. No production correction was needed.
+
+The 143 unaffected baseline passes and 22 integration passes remain applicable:
+the only subsequent executable diff is those two assertions in
+`tests/unit/loom/pipeline/execution/test_lifecycle.py`. Runtime source, dependency
+selection, configuration, fixtures and setup are identical. The final union is
+**167 distinct passing cases**, with no unresolved selected failures, errors or
+skips. Reconciliation uses `(classname, name)` from the three JUnit receipts;
+the initial failed outcomes are retained, not counted as passes.
+
+The source/test/feature-doc/glossary patch from the base to `a543844a` has SHA-256
+`e904b88287bbe857c5ad8fe1f91826f44991bf7a5e6956dd4f7f3eb09f03abf5`.
+Subsequent execution-note edits do not change that patch. Complete base-to-head
+`git diff --check` passes. Required independent actual-PR review is pending;
+downstream paired pins and physical qualification remain open at their existing
+inventory owners.
