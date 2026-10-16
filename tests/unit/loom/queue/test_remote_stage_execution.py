@@ -1481,7 +1481,7 @@ def test_owner_rejected_saved_launch_retains_identity_and_truthful_no_start_repo
     assert workspace.retain_outputs() == report
 
 
-def _shared_publication_workspace(tmp_path, *, limits=None, assignment_id="assignment-1", container=False, data=False, legacy=False):
+def _shared_publication_workspace(tmp_path, *, limits=None, assignment_id="assignment-1", container=False, data=False):
     from loom.queue.shared_execution import SHARED_EXECUTION_SCOPE, qualifications, stage_scope
     from loom.queue._shared_publication import worker_artifact_root
     root = tmp_path / "shared"
@@ -1524,13 +1524,11 @@ def _shared_publication_workspace(tmp_path, *, limits=None, assignment_id="assig
         execution_fence="fence-1", launch_operation_id="launch-1",
         bundle_digest=hashlib.sha256(remote_stage_execution._canonical_json(request.to_dict()).encode()).hexdigest(),
         workspace_root=workspace.root, profile=profile.launch_profile, environment={})
-    if container and not legacy:
+    if container:
         from loom.pipeline.runtime._resource_controls import _validated_resource_controls
 
         launch = replace(launch, resource_controls=_validated_resource_controls(
             launch.container_command.metadata.get("resource_controls")))
-    if legacy:
-        launch = replace(launch, schema_version=None, resource_controls=None)
     workspace.persist_supervisor_launch(json.dumps(_launch_value(launch)))
     workspace.mark_process_started("execution-1", 101)
     artifacts = worker_artifact_root(workspace)
@@ -1549,12 +1547,11 @@ def _shared_publication_workspace(tmp_path, *, limits=None, assignment_id="assig
     return workspace, profile, launch, result
 
 
-@pytest.mark.parametrize("legacy", [False, True])
-def test_completed_shared_container_reports_and_publishes_without_original_input(tmp_path, legacy):
+def test_completed_shared_container_reports_and_publishes_without_original_input(tmp_path):
     from loom.queue._shared_publication import publish
     from loom.queue._agent_process_supervisor import _launch_from_value
 
-    workspace, profile, launch, _ = _shared_publication_workspace(tmp_path, container=True, data=True, legacy=legacy)
+    workspace, profile, launch, _ = _shared_publication_workspace(tmp_path, container=True, data=True)
     original_digest = launch.spec_digest
     original_command = launch.container_command
     (tmp_path / "data").rename(tmp_path / "unavailable-input")
@@ -1567,7 +1564,7 @@ def test_completed_shared_container_reports_and_publishes_without_original_input
     report = workspace.retain_outputs()
     assert report.status is StageStatus.SUCCEEDED
     assert report.executor_metadata is not None
-    assert (report.executor_metadata.get("resource_controls") is None) is legacy
+    assert report.executor_metadata.get("resource_controls") is not None
     refs = publish(workspace.request(), report, profile.shared_roots, agent_id="agent-1", fence="fence-1")
     assert workspace.retain_outputs() == report
     assert publish(workspace.request(), report, profile.shared_roots, agent_id="agent-1", fence="fence-1") == refs
@@ -1814,13 +1811,21 @@ def test_assignment_reference_fails_before_workspace_and_can_replay(tmp_path, da
     assert resolve(cast(dict, reference(original)), profile, session_id="session-1") == request
 
 
-def test_unresolved_reference_journal_survives_restart_and_historical_schema(tmp_path):
+@pytest.mark.parametrize("retired", [False, True])
+def test_unresolved_reference_journal_current_restart_and_retired_refusal(tmp_path, retired):
     profile, request, encoded, ref, path = _assignment_reference_fixture(tmp_path)
     agent_root = tmp_path / "agent"
     LocalDaemon.initialize_agent_root(agent_root)
     with sqlite3.connect(agent_root / "control.sqlite") as conn:
-        conn.execute("ALTER TABLE agent_session_references DROP COLUMN reference_json")
+        if retired:
+            conn.execute("ALTER TABLE agent_session_references DROP COLUMN reference_json")
         conn.execute("INSERT INTO agent_poll_state_local VALUES ('session-1', 'availability-1', 1, 'digest', 'PENDING', NULL)")
+    if retired:
+        before = {p: p.read_bytes() for p in agent_root.rglob("*") if p.is_file()}
+        with pytest.raises(QueueServiceError, match="schema is incomplete"):
+            _RemoteAgentJournal(agent_root)
+        assert {p: p.read_bytes() for p in agent_root.rglob("*") if p.is_file()} == before
+        return
     result = {"result": "assignment", "sequence": 1, "coordinator_epoch": "new-epoch", "request": ref}
     journal = _RemoteAgentJournal(agent_root)
     journal.complete_poll("session-1", 1, result)

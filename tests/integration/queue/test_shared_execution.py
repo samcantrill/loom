@@ -290,7 +290,14 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, s
             workspaces = tuple((config.agent_root / "assignments").glob("*"))
             assert workspaces
             request = _ResidentAssignmentWorkspace(config.agent_root, workspaces[0].name).request()
-            assert request.schema_version == 5 and request.inputs == ()
+            from loom.pipeline.stores.shared_artifacts import binding as publication_binding
+            assert request.schema_version == 5
+            assert [item.logical_name for item in request.inputs] == ["loom_project_report"]
+            report_input = request.inputs[0]
+            report_binding = publication_binding(report_input.metadata)
+            assert report_binding is not None and report_binding["root_id"] == "control"
+            assert "sha256:" + report_input.digest == child_result.outputs["report"].checksum
+            assert not cast(Any, request.fingerprint)["payload"]["declared_inputs"]
             with sqlite3.connect(service.daemon.control_database) as conn:
                 full, reference_json = conn.execute("SELECT request_json, reference_json FROM agent_deliveries WHERE assignment_id = ?", (request.assignment_id,)).fetchone()
             ref = json.loads(reference_json)

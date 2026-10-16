@@ -146,7 +146,7 @@ def test_verifier_child_replays_checked_request_and_sanitizes_crash(
     monkeypatch, capsys
 ):
     binding = _binding()
-    assert binding.to_dict()["schema_version"] == 9
+    assert binding.to_dict()["schema_version"] == 10
     assert PreparationChildInput.from_dict(binding.to_dict()) == binding
     seen = []
 

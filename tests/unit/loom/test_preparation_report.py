@@ -235,7 +235,7 @@ def test_failed_companion_publication_preserves_existing_report_authority(
         monkeypatch.setattr(atomic, "_fsync_file", fail)
     else:
         monkeypatch.setattr(atomic.os, "replace", fail)
-    changed: dict[str, Any] = {"composition": _composition()}
+    changed: dict[str, Any] = {"schema_version": 10, "composition": _composition()}
     changed["composition"]["resolved"]["value"] = 42
     with pytest.raises(AtomicWriteError):
         save_composition_evidence(changed, companion)
