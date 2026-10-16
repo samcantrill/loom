@@ -1137,3 +1137,36 @@ new affected consumer, changed wire ownership, missing current mode or failed
 recovery assertion. Dependencies, scientific algorithms, reference writer and
 scaling behavior are unchanged; those passing receipts remain applicable and
 are not rerun by this bounded agent change.
+
+### Agent offer/recovery validation evidence
+
+Final source tree: `5ec2babb968ccf492645a3c4c9a019d5b37bdccf`.
+`build/current-contract-cutover/agent-coverage.json` reconciles every collected
+case to its latest receipt: **104 distinct passes**, no unresolved failures,
+errors, skips or missing cases. Exact selectors, collection/execution commands,
+logs, tested revisions and XML receipts share the `agent-` prefix there.
+
+| Scope | Tested revision | Result |
+| --- | --- | --- |
+| No-extra agent-session owner and reached control/status consumers | `475e97e6752c79c90d22bdd111d5d156efc9f830` | 82 passed, 34.60 s |
+| Config-backed outbound concurrency, rejection/restart, exact replay, late-delivery drain and GPU admission | same `475e97e6` | 12 passed, one fixture assertion failed, 132.11 s; affected restart cases replaced below |
+| Lost-poll retirement, unresolved refusal, retained delivered work and rejected-next-poll retirement | same `475e97e6` | Nine passed, 97.94 s |
+| Corrected same-epoch replay and cross-epoch recovery | `1ea20b4da1637f5ffbe289c345fca1c195000197` | Two passed, 21.81 s |
+
+The failed fixture assumed every restart must use `recover_poll`. A current
+same-epoch request instead replays directly when its offer is usable again;
+the work completed with exactly one admission and release. The corrected test
+records and compares the exact first replayed request, retains the cross-epoch
+predecessor-proof assertion and preserves the single-admission/completion checks.
+Both modes pass freshly. This is the only post-validation source/test difference;
+runtime, dependencies, configuration and shared fixtures are unchanged, so all
+other passing cases remain applicable. The optional assignment ceiling still
+uses identical current writer bytes; `AgentOffer.value` is AST-identical to base.
+
+Lock check, changed-file Ruff, config-extra Pyright and diff checks pass. Affected
+test-file Pyright and Ruff also pass after the fixture correction. Final
+source/test/feature-guide patch SHA-256:
+`79968b5ede8041a06afbf6f3400192756a276229e5db59fc82d7a137ac76d404`.
+Only evidence notes change after these checks. No image/physical qualification,
+paired rphys adoption or repository-wide completion is claimed. Independent
+actual-final-diff review and merge remain this delivery's closeout gate.
