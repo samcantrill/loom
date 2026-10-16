@@ -35,7 +35,12 @@ stage association. Equal tags, filenames or checksums do not create edges.
 Path-free resident handoffs carry a digest referencing those retained bindings,
 scoped by the existing assignment/attempt identity. Original coordinator paths
 stay at the authority; this evidence digest does not enter action fingerprints.
-Missing historical bindings and external inputs are explicit evidence boundaries.
+Managed preparation requires explicit produced/external bindings; an empty list
+means a known zero-input attempt. Missing or null bindings cannot pass resident
+or Slurm worker handoff. Current inspection records retain explicit null when
+input evidence is unknown; missing wire members and the retired
+`legacy_unresolved` kind are refused. External inputs remain an explicit evidence
+boundary without an authoritative producer.
 Declared ordering requires `relations=("declared_dependency",)` and may include
 unexecuted nodes. Input, output and intermediate node identities remain visible
 when `artifact_type` marks only matching output nodes with `selected=true`.

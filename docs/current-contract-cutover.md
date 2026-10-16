@@ -1507,3 +1507,52 @@ passes, verified the source delta and unchanged 19-case reuse boundary, and
 confirmed GitHub merge eligibility. Only this prose receipt follows reviewed
 source; no runtime evidence is invalidated. PR #425 owns merge/synchronization
 facts; the broader cutover remains open.
+
+
+## Current executable input evidence
+
+Status: implementation in progress on `fix/current-input-evidence`, base
+`c935de44808976203360b528ed4dcfb7ec2c9e1d` (offline capture PR #425).
+The lineage census finds one live managed preparation producer: orchestration
+captures produced/external bindings before persisting its preparation intent.
+Close the remaining optional old request/transport readers around that producer:
+require explicit bindings on PreparedAttemptRequest, validate missing worker
+bindings before resident or Slurm delivery, and remove the unproduced
+`legacy_unresolved` source kind. Preserve produced/external identity, original
+commit owner, request digest, current retry/result binding and containment.
+
+StageAttempt's current writer already emits input bindings and start-witness
+members, including explicit null for genuinely unknown inspection evidence.
+Require those existing wire members on read; remove missing-field reconstruction.
+Keep explicit null distinct from known-empty inputs. Current generic direct
+allocation and historical-only imports still produce unknown read-model evidence;
+they cannot use missing evidence to pass a managed worker handoff.
+
+Keep current producers, serialization/authority stores, orchestrator, resident and
+Slurm delivery consumers and fixtures together. Existing zero-input preparation
+fixtures must state empty bindings explicitly, not fabricate provenance. Add
+old/missing request and wire refusal at actual boundaries, preserve the unknown
+inspection and restart/start acknowledgement assertions, and select reached
+orchestration/authority/lineage plus resident/Slurm and native execution checks.
+Use cheap collection, committed stable candidates, raw receipts and targeted
+rechecks. This is no schema/table migration, query redesign, new lineage store,
+physical qualification or optional hardening. Broader query/local-run/workspace
+census and paired deployment remain open. Independent final review follows.
+
+
+Selection: the baseline scope covers preparation request/attempt codecs on both
+authority implementations, current binding/start-witness round trips, orchestrator
+intent replay, source/result ownership, resident delivery, daemon reload and the
+four reached managed-local execution/retry/concurrency cases. The config scope
+covers native lineage through Python/CLI/query roles, actual preparation child
+publication/failure/replay, its resident-to-Slurm transport fixture, mixed
+Slurm/agent execution and selected-authority publication after a lost reply.
+Exact selectors are retained in
+`build/current-contract-cutover/input-evidence-{base,config}-selection.txt`.
+Baseline collection found 242 cases including two optional config cases; those
+two run in the config environment instead. Initial config collection found 18
+cases; its final scope adds the two selected-authority publisher cases. Collection
+succeeded, changed-source Pyright reports zero errors, and changed-file Ruff
+passes. Run each selected scope on a committed clean tree; no physical Slurm or
+fleet claim follows from these local transport fixtures. Expand only for a
+reached consumer failure or a concrete missing accepted assertion.

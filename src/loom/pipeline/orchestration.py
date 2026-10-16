@@ -999,8 +999,8 @@ class RunOrchestrator:
                 readiness=readiness,
                 expected_revision=expected_revision,
                 owner_id=self.owner_id,
+                stage_facts=stage_facts,
             )
-            request = replace(request, input_bindings=capture_bindings(readiness.stage_plan, stage_facts))
             intent = PreparationIntent(request=request, ready_at=ready_at)
         else:
             intent = prior_intent
@@ -1062,6 +1062,7 @@ def _preparation_request(
     readiness: AttemptReadiness,
     expected_revision: BackendRevision,
     owner_id: str,
+    stage_facts: Mapping[str, StageLifecycleSnapshot],
 ) -> PreparedAttemptRequest:
     evidence = readiness.evidence_dict()
     digest_payload: dict[str, PlainData] = {
@@ -1084,6 +1085,7 @@ def _preparation_request(
         owner_id=owner_id,
         plan_fingerprint=cast(str, evidence["plan_fingerprint"]),
         bound_inputs=readiness.bound_inputs,
+        input_bindings=capture_bindings(readiness.stage_plan, stage_facts),
         upstream_commits=readiness.upstream_commits,
         retry_decision_id=readiness.retry_decision_id,
     )

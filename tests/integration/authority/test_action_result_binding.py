@@ -155,6 +155,7 @@ def test_new_downstream_attempt_binds_the_original_reused_upstream_commit(
             next_attempt=1,
             owner_id="coordinator",
             plan_fingerprint="plan",
+            input_bindings=(),
             bound_inputs={},
             upstream_commits={"reused": binding.commit.commit_id},
         ),

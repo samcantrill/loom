@@ -126,6 +126,7 @@ def _request(
     profile: ResidentExecutionProfile,
     *,
     stage_config: dict[str, str] | None = None,
+    input_binding_state: str = "current",
 ) -> _ResidentAssignmentBundle:
     worker = StageWorkerRequest(
         STAGE_WORKER_REQUEST_SCHEMA_VERSION,
@@ -179,6 +180,14 @@ def _request(
     from loom.pipeline.stores.input_lineage import AttemptInputBinding, binding_evidence
     retained = (AttemptInputBinding("source", "seed", "data", worker.inputs["source"], None, "external"),)
     worker = replace(worker, metadata={"attempt_input_bindings": [b.to_dict() for b in retained], "attempt_input_evidence": binding_evidence(retained)})
+    if input_binding_state != "current":
+        metadata = dict(worker.metadata)
+        if input_binding_state == "absent":
+            del metadata["attempt_input_bindings"]
+        else:
+            assert input_binding_state == "null"
+            metadata["attempt_input_bindings"] = None
+        worker = replace(worker, metadata=metadata)
     data = b"input"
     atom = CapacityAtom(
         "cpu", "agent-1:cpu", ExactQuantity(1), "count", ExactQuantity(1)
@@ -211,6 +220,12 @@ def _request(
         claims=(claim,),
         provider_descriptors=_provider_descriptors("cpu"),
     )
+
+
+@pytest.mark.parametrize("input_binding_state", ["absent", "null"])
+def test_resident_handoff_refuses_unknown_input_bindings(tmp_path, input_binding_state):
+    with pytest.raises(ValueError, match="requires retained input bindings"):
+        _request(_profile(tmp_path), input_binding_state=input_binding_state)
 
 
 def test_remote_request_excludes_coordinator_paths_and_derives_agent_paths(

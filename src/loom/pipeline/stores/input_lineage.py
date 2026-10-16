@@ -37,7 +37,7 @@ class AttemptInputBinding:
                 raise ValueError(f"{name} must be a nonempty string")
         if not isinstance(self.artifact, ArtifactRef):
             raise ValueError("binding artifact must be an ArtifactRef")
-        if self.source_kind not in {"produced", "external", "legacy_unresolved"}:
+        if self.source_kind not in {"produced", "external"}:
             raise ValueError("invalid input source kind")
         if (self.source_kind == "produced") != isinstance(self.producer, OutputLocator):
             raise ValueError("only produced inputs have an exact producer")
@@ -81,7 +81,7 @@ class AttemptInputBinding:
 
 
 def decode_bindings(value: Any) -> tuple[AttemptInputBinding, ...] | None:
-    """Keep absent legacy evidence distinct from a known zero-input attempt."""
+    """Keep explicitly unknown evidence distinct from a known zero-input attempt."""
     if value is None:
         return None
     if not isinstance(value, (tuple, list)):
@@ -175,7 +175,7 @@ def validate_worker_inputs(
 ) -> None:
     """Check the common handoff before any worker-local materialization."""
     if bindings is None:
-        return
+        raise ValueError("managed worker handoff requires retained input bindings")
     if (
         request.inputs != {b.input_name: b.artifact for b in bindings}
         or decode_bindings(request.metadata.get("attempt_input_bindings"))

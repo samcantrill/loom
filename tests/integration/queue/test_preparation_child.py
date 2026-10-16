@@ -26,6 +26,7 @@ from loom.pipeline.planning import ExecutionPlan
 from loom.pipeline.runtime.options import RunOptions
 from loom.pipeline.status import StageStatus
 from loom.pipeline.stores import LocalRunStore
+from loom.pipeline.stores.input_lineage import binding_evidence
 from loom.preparation import (
     decode_preparation_report,
     preparation_checks_allow_publication,
@@ -236,6 +237,13 @@ def _child(tmp_path: Path, *, fault: str | None = None, invocation: bool = False
             "resources": {"entries": {}},
             "resource_policy": {"account_for": "all", "enforce": []},
             "resource_selection": {"account_for": [], "enforce": []},
+        },
+    )
+    worker_request = replace(
+        worker_request,
+        metadata={
+            "attempt_input_bindings": [],
+            "attempt_input_evidence": binding_evidence(()),
         },
     )
     claim = ResourceClaim(

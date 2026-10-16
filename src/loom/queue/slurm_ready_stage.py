@@ -268,16 +268,15 @@ class SlurmStageDelivery:
     ) -> "SlurmStageDelivery":
         if not isinstance(worker_request, StageWorkerRequest):
             raise QueueServiceError("SLURM delivery requires a prepared worker request")
-        if "attempt_input_bindings" in worker_request.metadata:
-            from loom.pipeline.stores.input_lineage import (
-                decode_bindings,
-                validate_worker_inputs,
-            )
+        from loom.pipeline.stores.input_lineage import (
+            decode_bindings,
+            validate_worker_inputs,
+        )
 
-            validate_worker_inputs(
-                worker_request,
-                decode_bindings(worker_request.metadata["attempt_input_bindings"]),
-            )
+        validate_worker_inputs(
+            worker_request,
+            decode_bindings(worker_request.metadata.get("attempt_input_bindings")),
+        )
         from ._execution_binding import execution_binding
 
         metadata: dict[str, PlainData] = {
