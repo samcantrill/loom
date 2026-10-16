@@ -1634,3 +1634,23 @@ verification using the same binding as ordinary downstream stage inputs.
 [Shared artifact publication](agent-preparation.md#shared-artifact-publication)
 owns the protected configuration, finite budgets, native fencing, atomic
 publication, container mount scope and conservative retention policy.
+# Inspecting an artifact inventory
+
+`LocalArtifactStore.inspect(ref)` returns an `ArtifactInspection` containing the
+publication root, relative primary path, declared members and optional publication
+receipt. Shared receipt identity/checksum and operator budgets are verified without
+opening payload members. Local artifacts retain their native checksum and stat size.
+This supports read-only viewers: listing a checkpoint must not hash every file in
+the publication. The returned inventory describes declarations, not current payload
+integrity. A consumer must securely open selected members and verify the recorded
+size/digest before publishing a completed download. It must not treat an inspection
+as authority to execute, reuse or resume outputs.
+
+`local_path`, `validate`, native loading and recovery retain full publication
+verification. `shared_artifacts.inspect_receipt` is the metadata-only counterpart
+of `read_receipt`; neither creates another catalog or a persistent cache.
+
+The focused inventory change was checked with the shared/local artifact store
+tests (42 passed), selected Ruff checks and Pyright (no errors). The regression
+asserts inspection opens only the receipt and full validation still rejects a
+changed companion. Consumers must additionally test selected download integrity.

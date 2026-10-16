@@ -92,6 +92,50 @@ def test_retained_candidate_reference_resolves_before_opening_foreign_uri(tmp_pa
     assert not store.root.exists()
 
 
+def test_inspection_reads_only_committed_inventory_and_audit_still_checks_payloads(
+    tmp_path, monkeypatch
+):
+    import os
+    from loom.pipeline.stores.shared_artifacts import RECEIPT
+
+    workspace, profile, _, _ = _shared_publication_workspace(tmp_path)
+    refs = publish(workspace.request(), workspace.retain_outputs(), profile.shared_roots,
+                   agent_id="agent-1", fence="fence-1")
+    store = LocalArtifactStore(tmp_path / "consumer", shared_roots=profile.shared_roots)
+    original = os.open
+    opened = []
+
+    def receipt_only(path, *args, **kwargs):
+        opened.append(Path(path).name)
+        assert Path(path).name == RECEIPT, "inspection opened a member payload"
+        return original(path, *args, **kwargs)
+
+    with monkeypatch.context() as guard:
+        guard.setattr(os, "open", receipt_only)
+        inspected = store.inspect(refs["result"])
+    assert opened == [RECEIPT]
+    assert inspected.receipt is not None
+    assert any(row["path"] == "values.bin" for row in inspected.members)
+    (inspected.root / "values.bin").write_bytes(b"changed companion")
+    assert store.inspect(refs["result"]).members == inspected.members
+    with pytest.raises(ArtifactStoreError, match="integrity"):
+        store.validate(refs["result"])
+    (inspected.root / RECEIPT).write_bytes(b"changed inventory")
+    with pytest.raises(ArtifactStoreError, match="integrity"):
+        store.inspect(refs["result"])
+
+
+def test_local_inspection_retains_selected_checksum_without_reading_bytes(tmp_path, monkeypatch):
+    store = LocalArtifactStore(tmp_path)
+    ref = store.save(b"payload", stage_name="fit", name="weights", artifact_type="bytes",
+                     codec_key="bytes.v1")
+    monkeypatch.setattr(Path, "open", lambda *a, **k: pytest.fail("payload was read"))
+    inspected = store.inspect(ref)
+    assert inspected.root / inspected.primary == Path(ref.uri.removeprefix("file://"))
+    assert inspected.members[0]["size_bytes"] == 7
+    assert "sha256:" + inspected.members[0]["digest"] == ref.checksum
+
+
 def test_publication_payload_budget_is_checked_before_reading_file_bytes(tmp_path, monkeypatch):
     import os
     from loom.pipeline.stores.shared_artifacts import inventory
