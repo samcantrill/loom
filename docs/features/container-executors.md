@@ -68,7 +68,7 @@ removal, so removal/result-reply loss cannot erase the completion proof.
 
 Readiness probes use the selected environment. Uncertain probe containment keeps
 its evidence and blocks qualification. Public reports retain safe executor,
-resource and container metadata through the existing report-v3 redaction owner;
+resource and container metadata through the current terminal-report redaction owner;
 raw environment values and host paths are not a public execution interface.
 
 The Docker and Apptainer examples exercise complete public runs using explicit

@@ -1016,7 +1016,7 @@ Pyright and changed-file Ruff passed on the implementation tree; each later
 changed test file passed its affected type/Ruff checks (`assignment-affected-*`
 and `assignment-slurm-*`). Seven feature-guide Python examples parse and
 base-to-head diff checks pass. Source/test/example/feature-doc patch SHA-256:
-`fe62318da17fab956c266c44dcfa5a5f9ec6b0d08e30e08577b3429ee958698f`.
+`cf7d465563c3fe6fccf326befd31da208d25f112b76d95400852e24e66004bf3`.
 Subsequent edits record evidence only.
 
 This does not close the separate managed-run intent boundary:
@@ -1026,3 +1026,13 @@ remain inventory obligations, along with agent/fleet, offline evidence and rphys
 scientific/product cleanup. The native-pair test uses real preparation output
 through Slurm storage/transport helpers; it does not claim physical Slurm
 preparation scheduling or deployed fleet compatibility.
+
+
+Independent actual-diff review of PR #419 at
+`2ddc8a6b366e8f7c22081997b0c89b4814cb21c4` against the recorded base passed with
+no product blockers, localized corrections or workflow issues. The reviewer
+verified all 188 cases, source-tree equivalence, static/collection receipts and
+merge eligibility. The final maintained-document census also replaces one stale
+`report-v3` label in the container guide with the current terminal-report owner;
+no runtime, test, dependency or fixture changes follow validation. The final
+patch hash above includes both affected feature guides.
