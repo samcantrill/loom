@@ -1423,3 +1423,87 @@ is resolved, with no remaining required correction. The reviewer verified the
 actual reordered proof, both new daemon assertions, all 36 mapped passes and
 source/test equality to the tested candidate. No additional tests ran. Only this
 review receipt follows; PR #424 owns verified merge and synchronization facts.
+
+
+## Current offline capture authority
+
+Status: implemented, locally validated and independently reviewed; manager delivery
+remains. Branch `fix/current-offline-evidence-authority`,
+base `7ecee51a57bab3366807a033833d0494e033dfcd` (Slurm PR #424). The bounded change
+removes the local-only lifecycle reader in `collect_offline_evidence_manifest`:
+all current captures require the explicit or retained current authority snapshot.
+Unavailable authority stays incomplete, including when `.loom` is absent; local
+run/stage status files cannot supply lifecycle facts. Current configuration,
+provenance and artifact capture, revision/timing labels, the current wire codec,
+and explicitly historical-only non-executable imports remain supported.
+
+Affected coverage: offline capture/codec contracts, current authoritative timing,
+offline import adapter/authority/API refusal and successful historical inspection,
+and the managed preparation consumer that verifies read-only evidence capture.
+Add a complete native terminal capture/import check if the existing consumer does
+not establish that path. Refusal covers absent and empty authority roots with
+stale local success projections; original bytes/mtimes remain unchanged and the
+import target has no admitted run. Select exact files/nodes after collection;
+no full pipeline, fleet, physical or distributed matrix is warranted. Expand for
+an actually reached changed consumer or a review finding. Query aliases, lineage,
+workspace and result census rows remain open.
+
+The first stable committed candidate `8e33eedee13684963fa1204ded826dd9cbdb3eb5`
+collected 30 exact cases; 29 passed and the new actual native capture failed:
+status was complete but each stage had zero artifacts because output/index reads
+still used retired local projections. The native run writes current inputs and
+fingerprints locally, but committed output facts belong to authority. Correct
+capture to derive output refs and the artifact index from the same admitted
+snapshot, retaining local input/fingerprint/config evidence and existing payload
+inspection. Also preserve execution-plan order rather than sorting stage names,
+so nonalphabetical dependency order passes the existing import contract. The
+real two-stage test deliberately uses that order and asserts both checked payloads,
+input evidence, index members and imported artifact count. No assertion was
+weakened. This bounded correction remains within current capture/import closure.
+
+Validation reconciliation:
+
+- Cheap collection: 30 exact cases. Stable clean committed candidate
+  `8e33eedee13684963fa1204ded826dd9cbdb3eb5`: 29 passed, one native-output
+  omission failed, zero errors/skips. Raw JUnit/log and command/revision metadata:
+  `build/current-contract-cutover/offline-capture-8e33eede{.xml,.log,-run.json}`.
+- Corrected stable clean candidate `03b3123b`: collect and rerun exactly the
+  capture unit file, authoritative-timing node, detached-composition import node,
+  real native capture/import file and managed-preparation redaction node:
+  **11 passed**, zero errors/skips, 16.83 seconds. Raw receipts use
+  `offline-capture-03b3123b{.xml,.log,-run.json}` in the same directory.
+- Reuse 19 unaffected passing cases from the first candidate: current offline
+  codec, historical import validation/adapter and API cases construct retained
+  evidence directly and never call the changed collector. Their source,
+  dependencies, config and fixtures are unchanged; the Git delta changes only
+  capture/output projection, its tests and docs. Latest-node reconciliation is
+  **30 unique passes**, with no unresolved failed/skipped cases, in
+  `offline-capture-coverage.json`; `offline-capture-after-first-run.patch`
+  retains the exact source delta. This does not label the first run a full pass.
+- Python 3.12, locked dev plus config-extra environment. Both collections and
+  selected commands are retained in the logs/run metadata. Changed Python Ruff
+  checks pass; source format is checked over changed collector/helper ranges
+  because the surrounding module has existing formatting debt, test files are
+  fully checked. Pyright on all three changed Python files passes; lock and
+  diff checks pass. No dependency, fixture or validation configuration changed.
+
+Current native local input/fingerprint documents and event projection are
+retained: the actual two-stage run emitted both input documents, both fingerprint
+documents and ten lifecycle events through current owners. The removed local
+output/index readers had no corresponding native output writer; their existing
+public projection APIs remain available for historical inspection/import. The
+current capture wire fields/schema remain unchanged. Missing authority and stale
+status/output/index projections cannot produce a complete or importable capture;
+original files and modification times remain unchanged. Native output payloads,
+timing/revision, plan order, import artifact count and non-resumable historical
+policy are covered. Broader query/lineage/workspace rows, paired downstream pins
+and physical deployment remain outside this delivery.
+
+Independent actual-diff review passed for PR #425 at exact head
+`f876c13239f6728fef44f0338b17b39585f6d64c`, base
+`7ecee51a57bab3366807a033833d0494e033dfcd`: no product blocker, localized
+correction or workflow issue. The reviewer independently reconciled all 30 latest
+passes, verified the source delta and unchanged 19-case reuse boundary, and
+confirmed GitHub merge eligibility. Only this prose receipt follows reviewed
+source; no runtime evidence is invalidated. PR #425 owns merge/synchronization
+facts; the broader cutover remains open.

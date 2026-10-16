@@ -714,6 +714,22 @@ Current coordinator roots retain exact operation, cancellation and admission row
 across restart. Historical layouts require fresh initialization; they are never
 converted during replay or service replacement.
 
+### Offline evidence capture
+
+Offline exports capture lifecycle status and timing from one current authority
+snapshot, with its revision and observation time. Output references and the
+artifact index come from that same snapshot's committed artifact facts, preserving
+execution-plan stage order. An explicit authority store or
+the retained native authority supplies these facts. Missing or unreadable
+authority yields an incomplete manifest with an
+`offline_evidence.authority_unavailable` diagnostic; local run and stage status
+files cannot replace it. Capture does not initialize or repair authority.
+Configuration, provenance and artifacts remain available as local evidence.
+
+Incomplete captures are refused before offline import admits a run. Complete
+current-format historical evidence remains importable for inspection only;
+its import does not authorize live execution or resume.
+
 ### Retained configuration references
 
 New managed preparations keep the Weave composition/authorship definition in
