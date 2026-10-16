@@ -1179,3 +1179,30 @@ runtime trees and offer writer, the patch hash, current control-fence recovery
 and exact owner/checksum preservation. The delivery is merge eligible; its PR
 closeout owns merge and synchronization facts. Only this review receipt changes
 afterward.
+
+## Accepted declarations for guarded retirement
+
+Implementation base: `edcdfdff621cb12210aea611355d48afe336d435`.
+`read_agent_spec` produces protected declarations; initialization and guarded
+reload bind them to native configuration revisions. `agent_declaration_guard`,
+candidate verification and declaration-based retirement now require that accepted
+binding. Remove the guard's unbound fallback and retirement's requalification of
+missing historical evidence. Missing/conflicting evidence fails before an owner
+lock, workload probe, supervisor startup or retirement mutation.
+
+Explicitly qualified `OutboundAgentServiceConfig` remains the current
+programmatic service API, with its existing owner, retained-work and shutdown
+checks. The read-only binding inspector can still report absence for a current
+programmatic configuration that never supplied declarations; this grants no
+declaration guard or retirement authority. No new representation or state is
+introduced. Current native schemas and retirement receipts remain unchanged.
+
+Selected coverage: the complete declaration-binding unit owner, clean retirement
+through explicit service and protected-spec callers, missing-binding refusal,
+retirement with an unavailable old workload, lost-response replay, and the CLI's
+explicit identity fences. Reuse #421's unaffected pending-poll/delivery retirement
+and concurrency evidence: runtime differences here are only the missing-binding
+and optional-guard branches, with unchanged bound retirement, poll recovery,
+dependencies, fixtures and scientific behavior. Collect and run cheap static
+checks first; expand for reached consumers or a failure. Independent review
+checks the actual final diff before merge.

@@ -43,8 +43,8 @@ def read_agent_declaration_binding(
 ) -> AgentDeclarationBinding | None:
     """Inspect one existing protected root without probes or creating state.
 
-    Only missing legacy declaration evidence returns ``None``. Conflicting or
-    malformed evidence fails. The result is a snapshot: mutating consumers must
+    A programmatic configuration without declaration evidence returns ``None``.
+    Conflicting or malformed evidence fails. The result is a snapshot: mutating consumers must
     repeat this check while holding native ownership. A launcher still awaits
     fresh qualification and the exact native process/session after starting.
     """
@@ -154,20 +154,18 @@ def read_agent_declaration_binding(
 def agent_declaration_guard(
     root: Path,
     declaration_digest: str,
-) -> Iterator[AgentDeclarationBinding | None]:
+) -> Iterator[AgentDeclarationBinding]:
     """Hold an existing bound agent's native owner lock without execution probes.
 
-    The bound path rejects retired roots and conflicting declarations. ``None``
-    denotes missing legacy evidence and grants no ownership proof: callers must
-    use their previous fully checked path. Nothing initializes a missing root.
+    Missing accepted declaration evidence, retired roots and conflicting
+    declarations are rejected. Nothing initializes a missing root.
     Retained work is allowed for ordinary startup recovery, not silently released.
     """
     from ._agent_session_journal import _RemoteAgentJournal
 
     binding = read_agent_declaration_binding(root, declaration_digest)
     if binding is None:
-        yield None
-        return
+        raise QueueServiceError("agent lacks accepted declaration binding")
     journal = _RemoteAgentJournal(
         root,
         expected_configuration_fingerprint=binding.immutable_fingerprint,
@@ -219,8 +217,6 @@ def verify_agent_candidate(spec: AgentSpec) -> AgentDeclarationBinding:
         with agent_declaration_guard(
             spec.agent_root, spec.declaration_digest
         ) as binding:
-            if binding is None:
-                raise QueueServiceError("candidate lacks accepted declaration binding")
             # The guard owns this journal's lock. Inspection itself stays read-only.
             with closing(
                 sqlite3.connect(
@@ -302,8 +298,9 @@ def retire_outbound_agent(
     this never cancels work, initializes roots or forces a process to exit.
     Repeating the same operation recovers a lost response without new identity.
     A protected ``AgentSpec`` uses accepted native declaration evidence without
-    probing its old workload environment. Missing legacy evidence alone falls
-    back to full qualification; conflicting evidence never does.
+    probing its workload environment. Missing or conflicting accepted evidence
+    is rejected; retirement never reconstructs it through fresh qualification.
+    An explicitly qualified service remains a separate current caller contract.
     An unanswered service poll is reconciled through authenticated outcome
     inspection, never replayed as a work request. A recovered delivery remains
     owned and refuses retirement until normal retained-work settlement completes.
@@ -318,7 +315,6 @@ def retire_outbound_agent(
         AgentSpec,
         OutboundAgentServiceConfig,
         _OUTBOUND_POLL_WAIT_MS,
-        qualify_agent_spec,
     )
 
     _identifiers(operation_id, expected_coordinator_id, expected_session_id)
@@ -326,15 +322,15 @@ def retire_outbound_agent(
         binding = read_agent_declaration_binding(
             config.agent_root, config.declaration_digest
         )
-        if binding is not None:
-            return _retire_bound_agent(
-                config,
-                binding,
-                operation_id=operation_id,
-                expected_coordinator_id=expected_coordinator_id,
-                expected_session_id=expected_session_id,
-            )
-        config = qualify_agent_spec(config)
+        if binding is None:
+            raise QueueServiceError("agent lacks accepted declaration binding")
+        return _retire_bound_agent(
+            config,
+            binding,
+            operation_id=operation_id,
+            expected_coordinator_id=expected_coordinator_id,
+            expected_session_id=expected_session_id,
+        )
 
     if (
         not isinstance(config, OutboundAgentServiceConfig)

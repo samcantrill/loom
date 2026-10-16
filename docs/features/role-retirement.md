@@ -23,11 +23,11 @@ shutdown, and holds the supervisor lock through retirement. A stopped supervisor
 needs durable clean-shutdown evidence (or an empty, process-free root).
 
 The binding is not cached readiness. Changed declarations, a pending reload,
-conflicting identity or malformed evidence refuse. Only missing legacy binding
-evidence falls back to full qualification and the previous checked path, which
-may restart a provably empty initialized supervisor for clean shutdown. Python
-callers can pass `read_agent_spec(...)` to `retire_outbound_agent`; callers passing
-an already qualified service retain the checked path. Neither path polls for jobs.
+conflicting identity, missing accepted binding or malformed evidence refuse
+before qualification, supervisor startup or retirement mutation. Python callers
+can pass `read_agent_spec(...)` to `retire_outbound_agent`; callers passing an
+explicitly qualified service retain the current service path, including native
+owner, retained-work and shutdown checks. Neither path polls for jobs.
 Keep the coordinator available and the agent's credentials authorized until the
 receipt is returned; revocation belongs after native `RETIRED_CLEAN` confirmation.
 
