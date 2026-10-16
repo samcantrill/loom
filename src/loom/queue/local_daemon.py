@@ -1743,9 +1743,17 @@ class LocalDaemon:
         if self.config.deployment_root is not None:
             _validate_deployment_binding(self.config)
         _validate_distinct_roots(self.config)
-        _open_root(self.config.coordinator_root, role="coordinator")
-        if self.config.agent_root is not None:
-            _open_root(self.config.agent_root, role="local-agent")
+        coordinator_id = _open_root(self.config.coordinator_root, role="coordinator")
+        agent_id = (
+            None
+            if self.config.agent_root is None
+            else _open_root(self.config.agent_root, role="local-agent")
+        )
+        from .local_daemon_execution import _require_local_daemon_owner_stores
+
+        _require_local_daemon_owner_stores(
+            self.config, coordinator_id=coordinator_id, agent_id=agent_id
+        )
         coordinator_lock = _acquire_lock(self.config.coordinator_root)
         agent_lock = None
         if self.config.agent_root is not None:
