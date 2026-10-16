@@ -654,5 +654,9 @@ plan owner performs persistence; the planner itself issues no lifecycle
 mutation. Executable behavior, tests, fixtures, dependencies and configuration
 are unchanged, so all 98 passes and static checks remain applicable. These
 evidence notes are excluded from both patch hashes. No required selected gap
-remains. Independent actual-diff review and PR merge/synchronization are next;
-the remaining aggregate consumers and downstream paired adoption remain open.
+remains. Independent actual-diff review passed at
+`84dd163356c9fcfed94a8d996e7e0e98a2cb5150`, with no findings or required
+corrections and merge eligibility confirmed. Only this receipt follows the
+reviewed head. [Loom #414](https://github.com/samcantrill/loom/pull/414) owns
+remote merge and matching-tree synchronization metadata. The remaining
+aggregate consumers and downstream paired adoption remain open.
