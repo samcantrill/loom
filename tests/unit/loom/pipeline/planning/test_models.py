@@ -124,6 +124,12 @@ def test_execution_plan_round_trips_through_plain_data() -> None:
 
     assert ExecutionPlan.from_dict(plan.to_dict()).to_dict() == plan.to_dict()
 
+    for version in (2, 0, -1, True, 1.0, "1"):
+        with pytest.raises(PlanningValidationError, match="schema_version"):
+            replace(plan, schema_version=version)
+        with pytest.raises(PlanningValidationError, match="schema_version"):
+            ExecutionPlan.from_dict({**plan.to_dict(), "schema_version": version})
+
 
 def test_model_parsers_reject_unknown_fields_and_invalid_enums() -> None:
     with pytest.raises(PlanSerializationError, match="unknown"):

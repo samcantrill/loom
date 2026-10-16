@@ -938,8 +938,11 @@ class ExecutionPlan:
     summary: Mapping[str, int]
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self, "schema_version", positive_int(self.schema_version, "schema_version")
+        require_schema_version(
+            self.schema_version,
+            field="ExecutionPlan.schema_version",
+            current=PLAN_SCHEMA_VERSION,
+            error_type=PlanSerializationError,
         )
         object.__setattr__(self, "run_uri", require_str(self.run_uri, "run_uri"))
         object.__setattr__(

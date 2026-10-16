@@ -1036,3 +1036,31 @@ merge eligibility. The final maintained-document census also replaces one stale
 `report-v3` label in the container guide with the current terminal-report owner;
 no runtime, test, dependency or fixture changes follow validation. The final
 patch hash above includes both affected feature guides.
+
+
+## Current execution intent and plan admission
+
+Base `7aa7af4fcf27df3196f51110e1a9bda67b94afb5` (PR #419), branch
+`refactor/current-execution-intent`. Managed runtime intent moves from mode-based
+schemas 3–6 to schema 7 with optional current composition/project bindings.
+ExecutionPlan keeps its schema 1 bytes and now refuses other versions at
+construction and decoding. The native writer, loader and replay comparison move
+together; old-schema composition opt-out is removed. Retired intent fails before
+binding inspection, admission or mutation. Current placement, installation,
+options, concurrency, plan/pipeline digests and protected reference checks remain.
+
+The obsolete inline-authorship success variant is removed from managed replay
+coverage; the current reference variant retains logical metadata, exact replay
+and byte/mtime preservation assertions. General logical user metadata and
+inline/reference composition persistence have a separate owner in `local_runs`;
+that remaining representation inventory is not declared closed by this delivery.
+
+Validation will cover strict plan admission and current planner/resume behavior,
+fresh managed preparation, exact nonmutating replay, obsolete intent refusal,
+protected composition/project binding changes, current generic runs without a
+project processor, and representative resident/remote/Slurm execution and
+candidate reuse. Collection/static checks precede execution; exact selectors and
+receipts use `build/current-contract-cutover/intent-*`. Prior wire/authority
+receipts remain valid where their inputs are unchanged, but fresh current intent
+consumers are required. No blanket reference/fleet/physical rerun is authorized
+by this bounded shape change alone; widen only for affected contracts or gaps.

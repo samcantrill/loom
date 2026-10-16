@@ -48,7 +48,7 @@ from .local_daemon import (
 )
 
 
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 7
 _RECORD_NAME = "managed_local_runtime.json"
 
 
@@ -115,7 +115,6 @@ def _runtime_record_matches_current_intent(
         options=options,
         slurm_profiles=slurm_profiles,
         scheduling_components=scheduling_components,
-        bind_composition=record.get("schema_version") in (5, 6),
     )
     expected["digest"] = _digest(expected)
     return dict(record) == expected
@@ -131,7 +130,6 @@ def _runtime_payload(
     options: RunOptions | Mapping[str, object] | None = None,
     slurm_profiles: Sequence[SlurmReadyStageProfile] = (),
     scheduling_components: LocalDaemonSchedulingComponents | None = None,
-    bind_composition: bool = True,
 ) -> dict[str, PlainData]:
     """Build the exact payload shared by preparation and replay comparison."""
 
@@ -200,14 +198,11 @@ def _runtime_payload(
         ).to_dict()
     from loom.pipeline._project_contracts import prepared_contracts_digest
     contracts_digest = prepared_contracts_digest(store, run_uri)
-    composition_ref = (
-        store._composition_reference_from_metadata(run_uri) if bind_composition else None
-    )
+    composition_ref = store._composition_reference_from_metadata(run_uri)
     if composition_ref is not None:
         store.read_composition_manifest(run_uri)
     return {
-        "schema_version": (6 if contracts_digest is not None else 5)
-        if composition_ref is not None else (4 if contracts_digest is not None else _SCHEMA_VERSION),
+        "schema_version": _SCHEMA_VERSION,
         **({"composition_manifest_ref": composition_ref} if composition_ref is not None else {}),
         **({"project_contracts_digest": contracts_digest} if contracts_digest is not None else {}),
         "run_uri": run_uri,
@@ -504,7 +499,16 @@ def load_managed_local_runtime_record(
         data = json_loads(path.read_text(encoding="utf-8"), path=str(path))
     except Exception as exc:
         raise QueueServiceError("managed-local runtime record is corrupt") from exc
-    if not isinstance(data, Mapping) or set(data) != ({
+    if (
+        not isinstance(data, Mapping)
+        or type(data.get("schema_version")) is not int
+        or data["schema_version"] != _SCHEMA_VERSION
+    ):
+        raise QueueServiceError(
+            "managed-local runtime record schema is unsupported; finish or cancel "
+            "the saved work in its pinned environment and prepare a fresh identity"
+        )
+    required = {
         "schema_version",
         "run_uri",
         "plan",
@@ -515,33 +519,28 @@ def load_managed_local_runtime_record(
         "execution_requirements",
         "max_parallel_stages",
         "digest",
-    } | ({"project_contracts_digest"} if data.get("schema_version") in (4, 6) else set())
-        | ({"composition_manifest_ref"} if data.get("schema_version") in (5, 6) else set())):
+    }
+    optional = {"project_contracts_digest", "composition_manifest_ref"}
+    if not required.issubset(data) or set(data) - required - optional:
         raise QueueServiceError("managed-local runtime record is unsupported")
     try:
         payload = ensure_plain_data(dict(data), path="managed_local_runtime")
     except Exception as exc:
         raise QueueServiceError("managed-local runtime record is invalid") from exc
-    if (
-        not isinstance(payload, dict)
-        or payload.get("schema_version") not in (_SCHEMA_VERSION, 4, 5, 6)
-    ):
-        raise QueueServiceError(
-            "managed-local runtime record schema is unsupported; finish or cancel "
-            "the saved work in its pinned environment and prepare a fresh identity"
-        )
+    if not isinstance(payload, dict):
+        raise QueueServiceError("managed-local runtime record is invalid")
     if payload.get("run_uri") != run_uri:
         raise QueueServiceError("managed-local runtime record belongs to another run")
     digest = payload.pop("digest", None)
     if not isinstance(digest, str) or digest != _digest(payload):
         raise QueueServiceError("managed-local runtime record digest conflicts")
-    if payload["schema_version"] in (5, 6):
+    if "composition_manifest_ref" in payload:
         try:
             store._validate_composition_reference(run_uri, payload["composition_manifest_ref"])
             store.read_composition_manifest(run_uri)
         except Exception as exc:
             raise QueueServiceError("managed composition reference is missing or changed") from exc
-    if payload["schema_version"] in (4, 6):
+    if "project_contracts_digest" in payload:
         from loom.pipeline._project_contracts import prepared_contracts_digest
         actual = prepared_contracts_digest(store, run_uri)
         if actual is None or actual != payload["project_contracts_digest"]:
