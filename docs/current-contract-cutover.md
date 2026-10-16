@@ -1818,3 +1818,13 @@ Cheap admission passes: all 35 exact baseline cases collect, changed-file Ruff
 and diff checks pass, changed-source Pyright reports zero errors/warnings, and
 `uv lock --check` passes. No optional-extra or physical environment is needed
 by this selected population. Final execution follows on committed source.
+
+Final execution passes **35/35 cases**, with zero failures/errors/skips or
+deselections, on clean unchanged `7138b1fa8cbb2109d1c925df13fb5ade284d2afa`.
+JUnit time is 4.053 seconds (18.448 wall seconds including isolated setup).
+`completed-bundle-command.json`, `completed-bundle-collection.log`,
+`completed-bundle-static.log`, `completed-bundle-validation.log`,
+`completed-bundle-results.xml` and `completed-bundle-metadata.json` in the same
+receipt directory retain the exact selection, checks and before/after source
+identity. No production, test, dependency or configuration edits follow this
+passing tree; only this receipt follows. Independent actual-PR review is next.
