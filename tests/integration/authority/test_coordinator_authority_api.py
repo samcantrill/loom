@@ -722,6 +722,13 @@ def test_coordinator_observer_routes_preserve_identity_and_output_commit(tmp_pat
 def test_annotation_routes_refuse_retired_import_fields_without_effects(tmp_path, operation):
     repository, authority = _authority(tmp_path)
     repository.admit_run(RUN_URI)
+    authority.bind_coordinator_admission(
+        RUN_URI,
+        CoordinatorAdmissionRequest(
+            operation_id="admit-annotations", coordinator_id="coordinator-1",
+            run_uri=RUN_URI, intent_digest="annotation-intent",
+        ),
+    )
     before = authority.open_run(RUN_URI).to_dict()
     body = (
         {"principal": "caller", "mutation_id": "old-first-write", "operation": "patch_run_annotations",
