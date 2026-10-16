@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Mapping, Sequence, cast
 
@@ -30,6 +31,22 @@ from .errors import (
     UnsupportedArtifactURIError,
 )
 from .local_runs import LocalRunStore
+
+
+@dataclass(frozen=True)
+class ArtifactInspection:
+    """Request-owned declared inventory; member payloads have not been verified.
+
+    ``primary`` and member paths are relative to ``root``. Member declarations
+    contain ``path``, ``size_bytes`` and a SHA-256 ``digest`` (None for a local
+    artifact without a native checksum). Consumers must securely open selected
+    members and verify their bytes before exposing a completed download.
+    """
+
+    root: Path
+    primary: str
+    members: tuple[Mapping[str, PlainData], ...]
+    receipt: Mapping[str, PlainData] | None = None
 
 
 class LocalArtifactStore:
@@ -306,6 +323,34 @@ class LocalArtifactStore:
         path = self._reference_path(ref)
         verify_ref(ref, path)
         return path
+
+    def inspect(self, ref: ArtifactRef) -> ArtifactInspection:
+        """Inspect committed metadata without hashing artifact payloads.
+
+        Shared publication identity, inventory checksum, member grammar and
+        operator budgets are checked. Unlike ``local_path``/``validate``, this
+        does not audit the publication's payload closure. Missing or corrupt
+        members are detected on selected access or explicit full validation.
+        """
+        from .shared_artifacts import binding, inspect_receipt
+
+        path = self._reference_path(ref)
+        shared = binding(ref.metadata)
+        if shared is None:
+            digest = None if ref.checksum is None else ref.checksum.removeprefix("sha256:")
+            return ArtifactInspection(
+                path.parent, path.name,
+                ({"path": path.name, "size_bytes": path.stat().st_size, "digest": digest},),
+            )
+        root = path
+        for _ in Path(str(shared["primary"])).parts:
+            root = root.parent
+        receipt = inspect_receipt(root, shared)
+        members = cast(list[Mapping[str, PlainData]], receipt["members"])
+        primary = next(row for row in members if row["path"] == shared["primary"])
+        if ref.checksum is not None and ref.checksum != f"sha256:{primary['digest']}":
+            raise ArtifactChecksumMismatchError("artifact checksum differs from publication member")
+        return ArtifactInspection(root, str(shared["primary"]), tuple(members), receipt)
 
     def _is_supported_uri(self, uri: str | Path) -> bool:
         scheme = get_uri_scheme(uri)

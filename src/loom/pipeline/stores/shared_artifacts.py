@@ -182,12 +182,18 @@ def inventory(tree: Path, limits: Mapping[str, int]) -> list[dict[str, PlainData
     return sorted(members, key=lambda item: str(item["path"]))
 
 
-def read_receipt(
+def inspect_receipt(
     tree: Path,
     reference: Mapping[str, PlainData],
     *,
     limits: Mapping[str, int] | None = None,
 ) -> dict[str, PlainData]:
+    """Verify the committed inventory document without reading member payloads.
+
+    This is metadata inspection, not a claim that every published byte remains
+    intact. Consumers must verify selected bytes when downloading them; native
+    load/reuse/resume continues to use :func:`read_receipt` for full verification.
+    """
     selected = budgets(reference["budgets"]) if limits is None else budgets(limits)
     path = contained(tree, RECEIPT)
     data = receipt_bytes(path, selected["max_manifest_bytes"])
@@ -204,12 +210,43 @@ def read_receipt(
         or reference["primary"] not in receipt["outputs"].values()
     ):
         raise ArtifactStoreError("shared publication receipt identity conflicts")
-    observed = inventory(tree, selected)
-    if receipt["members"] != observed:
-        raise ArtifactStoreError("shared publication closure integrity conflicts")
-    paths = {str(item["path"]) for item in observed}
+    members = receipt["members"]
+    if not isinstance(members, list) or len(members) > selected["max_members"]:
+        raise ArtifactStoreError("shared publication exceeds member budget")
+    paths: set[str] = set()
+    total = 0
+    for member in members:
+        if not isinstance(member, dict) or set(member) != {"path", "size_bytes", "digest"}:
+            raise ArtifactStoreError("shared publication member declaration is invalid")
+        name = relative(member["path"])
+        size, digest = member["size_bytes"], member["digest"]
+        if (
+            name in paths or name == RECEIPT
+            or type(size) is not int or size < 0
+            or not isinstance(digest, str) or len(digest) != 64
+            or any(c not in "0123456789abcdef" for c in digest)
+        ):
+            raise ArtifactStoreError("shared publication member declaration is invalid")
+        paths.add(name)
+        total += size
+    if total > selected["max_payload_bytes"]:
+        raise ArtifactStoreError("shared publication exceeds payload budget")
     if any(primary not in paths for primary in receipt["outputs"].values()):
         raise ArtifactStoreError("shared publication primary member is missing")
+    return receipt
+
+
+def read_receipt(
+    tree: Path,
+    reference: Mapping[str, PlainData],
+    *,
+    limits: Mapping[str, int] | None = None,
+) -> dict[str, PlainData]:
+    """Verify the inventory and every retained member for native consumption."""
+    receipt = inspect_receipt(tree, reference, limits=limits)
+    selected = budgets(reference["budgets"]) if limits is None else budgets(limits)
+    if receipt["members"] != inventory(tree, selected):
+        raise ArtifactStoreError("shared publication closure integrity conflicts")
     return receipt
 
 
