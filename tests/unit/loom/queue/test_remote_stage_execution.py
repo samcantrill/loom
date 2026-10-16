@@ -253,6 +253,100 @@ def test_remote_workspace_rejects_parent_directory_identity(tmp_path: Path) -> N
         _ResidentAssignmentWorkspace(tmp_path, "..")
 
 
+def _workspace_bytes(root: Path):
+    return {
+        path.relative_to(root).as_posix(): (
+            path.stat().st_mode, path.stat().st_mtime_ns,
+            path.read_bytes() if path.is_file() else None,
+        )
+        for path in (root, *root.rglob("*"))
+    }
+
+
+def test_resident_workspace_refuses_retired_layout_without_initializing(tmp_path):
+    root = tmp_path / "assignments" / "retained"
+    root.mkdir(parents=True, mode=0o750)
+    # The real pre-#247 producer used remote.sqlite, including after #246 added
+    # supervisor_launch_json. Current code must not initialize a parallel store.
+    with sqlite3.connect(root / "remote.sqlite") as conn:
+        conn.executescript("""
+            CREATE TABLE request (
+                singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+                value_json TEXT NOT NULL, state TEXT NOT NULL, fence TEXT,
+                process_execution_id TEXT, process_id INTEGER,
+                supervisor_launch_json TEXT, result_json TEXT);
+            CREATE TABLE transfers (
+                transfer_id TEXT PRIMARY KEY, logical_name TEXT NOT NULL,
+                digest TEXT NOT NULL, size_bytes INTEGER NOT NULL,
+                direction TEXT NOT NULL, received_bytes INTEGER NOT NULL DEFAULT 0,
+                finalized INTEGER NOT NULL DEFAULT 0, descriptor_json TEXT);
+            CREATE TABLE events (
+                sequence INTEGER PRIMARY KEY, event_id TEXT UNIQUE NOT NULL,
+                payload_json TEXT NOT NULL, acknowledged INTEGER NOT NULL DEFAULT 0);
+        """)
+    before = _workspace_bytes(root)
+    for read in (
+        lambda: _ResidentAssignmentWorkspace(tmp_path, "retained"),
+        lambda: _ResidentAssignmentWorkspace.read_request(root),
+        lambda: _ResidentAssignmentWorkspace.read_supervisor_launch_json(tmp_path, "retained"),
+    ):
+        with pytest.raises(QueueServiceError, match="workspace layout is unsupported"):
+            read()
+        assert _workspace_bytes(root) == before
+
+
+@pytest.mark.parametrize("journal_mode", ["delete", "wal"])
+def test_resident_workspace_refuses_incomplete_schema_without_repair(tmp_path, journal_mode):
+    root = tmp_path / "assignments" / "incomplete"
+    root.mkdir(parents=True, mode=0o750)
+    # Before this cutover executescript committed each CREATE separately. An
+    # interruption after the request table left this incomplete native store.
+    conn = sqlite3.connect(root / "resident.sqlite")
+    try:
+        conn.execute(f"PRAGMA journal_mode={journal_mode}")
+        conn.execute("PRAGMA wal_autocheckpoint=0")
+        conn.execute("""CREATE TABLE request (
+            singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+            value_json TEXT NOT NULL, state TEXT NOT NULL, fence TEXT,
+            process_execution_id TEXT, process_id INTEGER,
+            supervisor_launch_json TEXT, result_json TEXT)""")
+        conn.commit()
+        before = _workspace_bytes(root)
+        for read in (
+            lambda: _ResidentAssignmentWorkspace(tmp_path, "incomplete"),
+            lambda: _ResidentAssignmentWorkspace.read_request(root),
+            lambda: _ResidentAssignmentWorkspace.read_supervisor_launch_json(tmp_path, "incomplete"),
+        ):
+            with pytest.raises(QueueServiceError, match="workspace schema is unsupported"):
+                read()
+            assert _workspace_bytes(root) == before
+        assert [row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        )] == ["request"]
+    finally:
+        conn.close()
+
+
+def test_resident_workspace_current_reopen_preserves_retained_work(tmp_path):
+    profile = _profile(tmp_path)
+    request = _request(profile)
+    workspace = _ResidentAssignmentWorkspace(tmp_path, request.assignment_id)
+    workspace.persist_request(request, profile)
+    workspace.stage_input("input-1", b"input")
+    workspace.accept()
+    workspace.grant("retained-fence")
+    before = _workspace_bytes(workspace.root)
+    reopened = _ResidentAssignmentWorkspace(tmp_path, request.assignment_id)
+    assert reopened.state() == "GRANTED"
+    assert reopened.request() == request
+    assert reopened.input_path("source").read_bytes() == b"input"
+    assert _ResidentAssignmentWorkspace.read_request(workspace.root) == request
+    assert _ResidentAssignmentWorkspace.read_supervisor_launch_json(
+        tmp_path, request.assignment_id
+    ) is None
+    assert _workspace_bytes(workspace.root) == before
+
+
 def test_delivered_poll_atomically_retains_an_unresolved_assignment(
     tmp_path: Path,
 ) -> None:

@@ -1839,3 +1839,55 @@ historical ownership and the 35 raw passing cases plus static checks. The manage
 verified the clean reviewed head, base/target develop and mergeability. No new
 execution or source correction is required; this addition is receipt-only.
 PR #429 publishes verified merge and matching-tree synchronization metadata.
+
+## Current resident workspace storage
+
+Base: `83b77facef760449a06785f7f56e6f44777c2e59`; branch
+`fix/current-resident-workspace` in the existing isolated cutover worktree.
+The remaining workspace census found that `_ResidentAssignmentWorkspace`
+initialized missing tables on every open and created `resident.sqlite` beside
+the actual pre-#247 `remote.sqlite` layout. The pre-#247 producer is visible at
+`82b311fe^` in `_RemoteAssignmentWorkspace`; #246 added its saved supervisor
+launch column. Current initialization at this base also committed individual
+CREATE statements, so interruption could leave only the request table.
+
+Require the current three tables and their exact column sets before reopening
+or read-only request/launch inspection. Reuse `inspect_sqlite_database` so
+refusal preserves main bytes, committed WAL, sidecars and permissions. Refuse
+the retired database path without interpreting its contents or creating a
+parallel store. Fresh initialization creates all tables in one transaction;
+opening an existing incomplete database does not repair it. No new schema
+marker, file, state, conversion path or current request/result encoding is added.
+Current retained requests, fences, inputs, supervisor launches, output/event
+replay and containment remain with their existing owners.
+
+Selection follows changed storage admission and its real consumers: four new
+retired/incomplete/current-reopen cases; exact existing workspace launch,
+input/event replay, no-start, shared/local scope and saved-launch tests; native
+managed success/failure/release and concurrent execution; outbound interrupted
+input recovery plus prepare/publication restart boundaries. Initial collection
+of the adjacent files found 127 cases; narrow execution to the affected node
+union in `build/current-contract-cutover/resident-workspace-selectors.txt`.
+Unchanged wire, output-format and unrelated process-termination matrices retain
+their earlier #419/#426 evidence. Cheap collection, changed-file Ruff,
+changed-source Pyright, lock and diff checks precede committed-tree execution.
+Expand only for a reached failure or uncovered storage consumer. No scientific,
+report-size/scaling, full Fleet/Slurm or installed-image campaign is justified by
+this boundary change; paired dependency/physical adoption remains open.
+
+Independent actual-PR review, merge and synchronization remain required.
+
+Cheap admission passes: the narrowed selection collects all 29 cases in the
+isolated baseline environment; changed-file Ruff, lock and diff checks pass.
+Changed-source Pyright reports zero errors/warnings. Collection and static logs
+are `resident-workspace-final-collection.log` and `resident-workspace-static.log`
+under the same receipt directory. Committed-tree execution follows.
+
+Final selected execution passes 29/29 cases on clean unchanged
+`128253b87f821b3ab47b6910b30c0b084eee6941`, with zero failures, errors,
+skips or deselections. JUnit time is 62.508 seconds; wall time including isolated
+setup is 78.046 seconds. Exact argv, raw output, XML and before/after Git facts
+are `resident-workspace-command.json`, `resident-workspace-validation.log`,
+`resident-workspace-results.xml` and `resident-workspace-validation.json` under
+`build/current-contract-cutover/`. Only this receipt follows the tested source;
+no runtime, dependency, configuration or fixture delta invalidates that evidence.
