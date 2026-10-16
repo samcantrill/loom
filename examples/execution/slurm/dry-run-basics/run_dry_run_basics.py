@@ -35,7 +35,9 @@ def main():
     plan = plan_pipeline(
         spec,
         run_uri=uri,
-        run_store=store,
+        stage_state=store,
+        artifact_index=store,
+        plans=store,
         artifact_store=LocalArtifactStore(output_root / "artifacts"),
     )
     print("graph_plan:")

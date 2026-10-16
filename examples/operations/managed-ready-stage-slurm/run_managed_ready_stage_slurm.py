@@ -379,7 +379,9 @@ def _prepare_run(
     plan = plan_pipeline(
         pipeline,
         run_uri=run_uri,
-        run_store=store,
+        stage_state=store,
+        artifact_index=store,
+        plans=store,
         artifact_store=LocalArtifactStore(store.local_artifact_root(run_uri)),
         persist=True,
     )

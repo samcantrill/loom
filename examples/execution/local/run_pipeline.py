@@ -53,7 +53,9 @@ def main() -> None:
         return plan_pipeline(
             spec,
             run_uri=admission.run_uri,
-            run_store=store,
+            stage_state=store,
+            artifact_index=store,
+            plans=store,
             artifact_store=artifacts,
             fingerprint_context=saved.fingerprint_context,
         )

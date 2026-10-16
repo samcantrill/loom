@@ -434,7 +434,9 @@ def test_bind_stage_inputs_uses_pending_outputs_without_status_side_effects(
     plan = plan_pipeline(
         spec,
         run_uri=run_uri,
-        run_store=store,
+        stage_state=store,
+        artifact_index=store,
+        plans=store,
         artifact_store=LocalArtifactStore(store.local_artifact_root(run_uri)),
         persist=True,
     )

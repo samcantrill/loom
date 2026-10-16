@@ -46,7 +46,9 @@ def _planned_stage(
     plan = plan_pipeline(
         spec,
         run_uri=run_uri,
-        run_store=store,
+        stage_state=store,
+        artifact_index=store,
+        plans=store,
         artifact_store=LocalArtifactStore(tmp_path / "runs" / "run1" / "artifacts"),
         persist=True,
     )
@@ -111,7 +113,9 @@ def test_prepare_stage_attempt_rejects_non_run_stage_plan(tmp_path: Path) -> Non
     plan = plan_pipeline(
         spec,
         run_uri=run_uri,
-        run_store=store,
+        stage_state=store,
+        artifact_index=store,
+        plans=store,
         artifact_store=LocalArtifactStore(tmp_path / "runs" / "run1" / "artifacts"),
         selectors=PlanSelectors(skip_stages=("build",)),
     )

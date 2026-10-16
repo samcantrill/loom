@@ -19,10 +19,10 @@ from loom.pipeline.stores.errors import (
     StoreError,
 )
 from loom.pipeline.stores.indexes import format_artifact_key
-from loom.pipeline.stores.run_store import LegacyRunStore
+from loom.pipeline.stores.run_store import RunArtifactIndexStore, StageStateStore
 from loom.serialization import PlainData
 
-from .errors import ResumeStateError
+from .errors import PlanningValidationError, ResumeStateError
 from .models import (
     PlanAction,
     PlanReason,
@@ -46,13 +46,18 @@ def check_stage_resume(
     stage: StageSpec,
     *,
     run_uri: str,
-    run_store: LegacyRunStore,
-    artifact_store: ArtifactStore,
+    stage_state: StageStateStore | None,
+    artifact_index: RunArtifactIndexStore | None,
+    artifact_store: ArtifactStore | None,
     current_fingerprint: StageFingerprintRecord | None,
     resume: ResumeOptions,
     eligible_to_run: bool,
 ) -> DirectResumeResult:
-    """Check whether a single stage has reusable prior state."""
+    """Check retained stage facts and artifact integrity through their owners.
+
+    Disabled resume performs no store reads. Enabled resume requires all three
+    stores; a missing dependency is invalid configuration, not absent prior state.
+    """
 
     if not resume.enabled:
         return _result(
@@ -72,7 +77,11 @@ def check_stage_resume(
             ],
         )
 
-    status = _read_prior(run_store.read_stage_status, run_uri, stage.name)
+    if stage_state is None or artifact_index is None or artifact_store is None:
+        raise PlanningValidationError(
+            "resume requires stage_state, artifact_index and artifact_store"
+        )
+    status = _read_prior(stage_state.read_stage_status, run_uri, stage.name)
     if status is None:
         return _result(
             stage.name,
@@ -113,7 +122,7 @@ def check_stage_resume(
             reasons=[_reason(code, stage.name, f"prior status is {status_value}")],
         )
 
-    prior_inputs = _read_prior(run_store.read_stage_inputs, run_uri, stage.name)
+    prior_inputs = _read_prior(stage_state.read_stage_inputs, run_uri, stage.name)
     if prior_inputs is None:
         return _stale_result(
             stage.name,
@@ -132,7 +141,7 @@ def check_stage_resume(
         )
 
     prior_fingerprint_data = _read_prior(
-        run_store.read_stage_fingerprint, run_uri, stage.name
+        stage_state.read_stage_fingerprint, run_uri, stage.name
     )
     if prior_fingerprint_data is None:
         return _stale_result(
@@ -152,7 +161,7 @@ def check_stage_resume(
         )
     prior_fingerprint = _parse_prior_fingerprint(stage.name, prior_fingerprint_data)
 
-    prior_outputs = _read_prior(run_store.read_stage_outputs, run_uri, stage.name)
+    prior_outputs = _read_prior(stage_state.read_stage_outputs, run_uri, stage.name)
     if prior_outputs is None:
         return _stale_result(
             stage.name,
@@ -233,7 +242,7 @@ def check_stage_resume(
             output_reason,
         )
 
-    _validate_artifact_index(run_store, run_uri, stage.name, prior_outputs)
+    _validate_artifact_index(artifact_index, run_uri, stage.name, prior_outputs)
 
     reasons = [
         _reason(
@@ -416,13 +425,13 @@ def _output_spec_reason(
 
 
 def _validate_artifact_index(
-    run_store: LegacyRunStore,
+    artifact_index: RunArtifactIndexStore,
     run_uri: str,
     stage_name: str,
     outputs: dict[str, ArtifactRef],
 ) -> None:
     try:
-        index = run_store.read_artifact_index(run_uri)
+        index = artifact_index.read_artifact_index(run_uri)
     except CorruptStoreDocumentError as exc:
         raise ResumeStateError(
             f"corrupt artifact index for run {run_uri!r}: {exc}"

@@ -64,7 +64,8 @@ def test_direct_resume_requires_positive_prior_state(tmp_path: Path) -> None:
     result = check_stage_resume(
         stage,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
         artifact_store=artifact_store,
         current_fingerprint=current,
         resume=ResumeOptions(),
@@ -95,7 +96,8 @@ def test_direct_resume_reuses_valid_succeeded_outputs(tmp_path: Path) -> None:
     result = check_stage_resume(
         stage,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
         artifact_store=artifact_store,
         current_fingerprint=current,
         resume=ResumeOptions(),
@@ -172,7 +174,8 @@ def test_direct_resume_flags_legacy_v1_fingerprints_as_policy_changed(
     result = check_stage_resume(
         stage,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
         artifact_store=artifact_store,
         current_fingerprint=current,
         resume=ResumeOptions(),
@@ -213,7 +216,8 @@ def test_direct_resume_marks_running_as_stale(tmp_path: Path) -> None:
     result = check_stage_resume(
         stage,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
         artifact_store=artifact_store,
         current_fingerprint=current,
         resume=ResumeOptions(),
@@ -253,7 +257,8 @@ def test_direct_resume_marks_submitted_as_non_reusable(tmp_path: Path) -> None:
     result = check_stage_resume(
         stage,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
         artifact_store=artifact_store,
         current_fingerprint=current,
         resume=ResumeOptions(),
@@ -294,7 +299,8 @@ def test_direct_resume_marks_failed_as_stale(tmp_path: Path) -> None:
     result = check_stage_resume(
         stage,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
         artifact_store=artifact_store,
         current_fingerprint=current,
         resume=ResumeOptions(),
@@ -325,7 +331,8 @@ def test_direct_resume_does_not_reuse_missing_artifact(tmp_path: Path) -> None:
     result = check_stage_resume(
         stage,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
         artifact_store=artifact_store,
         current_fingerprint=current,
         resume=ResumeOptions(),
@@ -357,7 +364,8 @@ def test_direct_resume_marks_missing_outputs_as_stale(tmp_path: Path) -> None:
     result = check_stage_resume(
         stage,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
         artifact_store=artifact_store,
         current_fingerprint=current,
         resume=ResumeOptions(),
@@ -401,7 +409,8 @@ def test_direct_resume_refuses_corrupt_outputs_json(tmp_path: Path) -> None:
         check_stage_resume(
             stage,
             run_uri=run_uri,
-            run_store=run_store,
+            stage_state=run_store,
+            artifact_index=run_store,
             artifact_store=artifact_store,
             current_fingerprint=current,
             resume=ResumeOptions(),
@@ -441,7 +450,8 @@ def test_direct_resume_rejects_corrupt_prior_fingerprint(tmp_path: Path) -> None
         check_stage_resume(
             stage,
             run_uri=run_uri,
-            run_store=run_store,
+            stage_state=run_store,
+            artifact_index=run_store,
             artifact_store=artifact_store,
             current_fingerprint=current,
             resume=ResumeOptions(),
@@ -475,7 +485,8 @@ def test_direct_resume_checks_artifact_checksum(tmp_path: Path) -> None:
     result = check_stage_resume(
         stage,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
         artifact_store=artifact_store,
         current_fingerprint=current,
         resume=ResumeOptions(),
@@ -514,7 +525,8 @@ def test_direct_resume_flags_artifact_index_conflict(tmp_path: Path) -> None:
         check_stage_resume(
             stage,
             run_uri=run_uri,
-            run_store=run_store,
+            stage_state=run_store,
+            artifact_index=run_store,
             artifact_store=artifact_store,
             current_fingerprint=current,
             resume=ResumeOptions(),
@@ -535,7 +547,8 @@ def test_direct_resume_raises_on_corrupt_prior_state(tmp_path: Path) -> None:
         check_stage_resume(
             _stage(),
             run_uri=run_uri,
-            run_store=run_store,
+            stage_state=run_store,
+            artifact_index=run_store,
             artifact_store=artifact_store,
             current_fingerprint=build_stage_fingerprint(_stage(), bound_inputs={}),
             resume=ResumeOptions(),
