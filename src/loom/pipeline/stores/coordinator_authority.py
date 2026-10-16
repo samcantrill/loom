@@ -459,13 +459,11 @@ class AuthenticatedCoordinatorAuthority:
         return None if value is None else RunAnnotations.from_dict(_mapping(value, "annotations"))
 
     def mutate_run_annotations(self, run_uri: str, principal: str, mutation_id: str,
-                               operation: str, change: Mapping[str, object],
-                               legacy_context: SubmissionContext, legacy_notes: tuple[str, ...] = ()) -> RunAnnotations | RunNote:
+                               operation: str, change: Mapping[str, object]) -> RunAnnotations | RunNote:
         try:
             response = self._call(f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/annotations/mutate", run_uri,
                 body={"principal": principal, "mutation_id": mutation_id, "operation": operation,
-                      "change": dict(cast(Mapping[str, PlainData], change)), "legacy_context": legacy_context.to_dict(),
-                      "legacy_notes": list(legacy_notes)})
+                      "change": dict(cast(Mapping[str, PlainData], change))})
         except AuthenticatedCoordinatorAuthorityError as exc:
             if exc.category == AuthorityProtocolErrorCategory.VALIDATION:
                 raise AnnotationValidationError(str(exc)) from exc
@@ -475,10 +473,9 @@ class AuthenticatedCoordinatorAuthority:
             raise AnnotationConflictError(str(value["conflict"]), cast(int | None, value.get("current_revision")))
         return RunAnnotations.from_dict(value) if operation == "patch_run_annotations" else RunNote.from_dict(value)
 
-    def list_run_notes(self, run_uri: str, limit: int = 50, cursor: str | None = None,
-                       legacy_notes: tuple[str, ...] = ()) -> RunNotePage:
+    def list_run_notes(self, run_uri: str, limit: int = 50, cursor: str | None = None) -> RunNotePage:
         response = self._call(f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/annotations/notes", run_uri,
-            body={"limit": limit, "cursor": cursor, "legacy_notes": list(legacy_notes)})
+            body={"limit": limit, "cursor": cursor})
         value = _mapping(_body_required(response, "result"), "result")
         if "unrepresentable_note_id" in value:
             raise _UnrepresentableRunNoteError(cast(str, value["unrepresentable_note_id"]))

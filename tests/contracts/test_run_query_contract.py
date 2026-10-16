@@ -401,3 +401,34 @@ def test_native_provenance_is_distinct_from_annotations_and_never_opens_payloads
     assert record.sources["metadata"]["commit"] == "caller-commit"
     unavailable = acquire_run(root, uri)
     assert unavailable.warnings[0]["code"] == "authority_unavailable"
+
+
+def test_query_does_not_project_runtime_labels_or_notes(tmp_path):
+    from loom.pipeline.execution import create_authority_backed_serial_run_store
+    from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+    from loom.runs._query_acquire import acquire_run
+    from loom.runs.query import Truth, evaluate
+
+    root = tmp_path / "runs"
+    authority = SQLitePerRunAuthorityStore()
+    store = create_authority_backed_serial_run_store(root, authority_store=authority)
+    uri = (root / "one").as_uri()
+    store.create_run(uri)
+    store.write_runtime_metadata(uri, {"tags": {"old": "label"}, "notes": ["old observation"]})
+    path = root / "one" / "runtime.json"
+    before = path.read_bytes()
+    snapshot = authority.open_run(uri).to_dict()
+    record = acquire_run(root, uri, authority, include_notes=True)
+    query = RunQuery(where=Compare(Field("tags", ("old",)), "eq", "label")).checked()
+    assert evaluate(query.where, record) is Truth.UNKNOWN
+    assert record.sources["notes"] == []
+    assert authority.read_run_annotations(uri) is None
+    assert path.read_bytes() == before
+    authority.mutate_run_annotations(uri, "caller", "labels", "patch_run_annotations",
+        {"expected_revision": 0, "set_tags": {"current": "yes"}})
+    note = authority.mutate_run_annotations(uri, "caller", "note", "append_run_note", {"text": "current observation"})
+    record = acquire_run(root, uri, authority, include_notes=True)
+    assert record.sources["tags"] == {"current": "yes"}
+    assert record.sources["notes"] == [note.to_dict()]
+    assert path.read_bytes() == before
+    assert authority.open_run(uri).to_dict() == snapshot

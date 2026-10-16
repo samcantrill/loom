@@ -615,17 +615,15 @@ class AuthorityRepository:
             return read_annotations(conn, run_uri)
 
     def mutate_run_annotations(self, run_uri: str, principal: str, mutation_id: str,
-                               operation: str, change: Mapping[str, object],
-                               legacy_context: SubmissionContext, legacy_notes: tuple[str, ...] = ()) -> RunAnnotations | RunNote:
+                               operation: str, change: Mapping[str, object]) -> RunAnnotations | RunNote:
         with self.transaction() as conn:
             _current_run_revision(conn, run_uri)
-            return mutate_annotations(conn, run_uri, principal, mutation_id, operation, change, legacy_context, legacy_notes)
+            return mutate_annotations(conn, run_uri, principal, mutation_id, operation, change)
 
-    def list_run_notes(self, run_uri: str, limit: int = 50, cursor: str | None = None,
-                       legacy_notes: tuple[str, ...] = ()) -> RunNotePage:
+    def list_run_notes(self, run_uri: str, limit: int = 50, cursor: str | None = None) -> RunNotePage:
         with self._read_connection() as conn:
             _current_run_revision(conn, run_uri)
-            return read_notes(conn, run_uri, limit, cursor, legacy_notes)
+            return read_notes(conn, run_uri, limit, cursor)
 
     def transition_run(
         self,

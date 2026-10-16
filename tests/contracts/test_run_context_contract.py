@@ -274,3 +274,17 @@ def test_authority_initialization_is_atomic_once_and_separate_from_lifecycle(
         )
         assert store.read_run_annotations(uri) == first
         assert store.open_run(uri).to_dict() == before
+
+
+@pytest.mark.parametrize("fields", [
+    {"source": "legacy_runtime", "author": None, "created_at": None},
+    {"author": None},
+    {"created_at": None},
+])
+def test_retired_note_records_are_refused(fields):
+    from loom.runs import RunNote
+
+    note = RunNote("file:///run", "note", "observation", "caller", "2026-10-16T00:00:00+00:00")
+    assert RunNote.from_dict(note.to_dict()) == note
+    with pytest.raises(ValueError):
+        RunNote.from_dict({**note.to_dict(), **fields})

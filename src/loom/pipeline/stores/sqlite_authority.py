@@ -516,19 +516,17 @@ class SQLitePerRunAuthorityStore:
             return read_annotations(conn, run_uri)
 
     def mutate_run_annotations(self, run_uri: str, principal: str, mutation_id: str,
-                               operation: str, change: Mapping[str, object],
-                               legacy_context: SubmissionContext, legacy_notes: tuple[str, ...] = ()) -> RunAnnotations | RunNote:
+                               operation: str, change: Mapping[str, object]) -> RunAnnotations | RunNote:
         self._bind_run_uri(run_uri)
         with self._transaction(run_uri) as conn:
-            return mutate_annotations(conn, run_uri, principal, mutation_id, operation, change, legacy_context, legacy_notes)
+            return mutate_annotations(conn, run_uri, principal, mutation_id, operation, change)
 
-    def list_run_notes(self, run_uri: str, limit: int = 50, cursor: str | None = None,
-                       legacy_notes: tuple[str, ...] = ()) -> RunNotePage:
+    def list_run_notes(self, run_uri: str, limit: int = 50, cursor: str | None = None) -> RunNotePage:
         self._bind_run_uri(run_uri)
         with self._read_connection_for_run(run_uri) as conn:
             _raise_for_schema(conn)
             _require_run_status(conn)
-            return read_notes(conn, run_uri, limit, cursor, legacy_notes)
+            return read_notes(conn, run_uri, limit, cursor)
 
     def transition_run(
         self,

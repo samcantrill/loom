@@ -2,7 +2,6 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
-import sqlite3
 from typing import Any
 
 import pytest
@@ -65,7 +64,6 @@ def test_atomic_receipts_cas_restart_cross_run_scope_and_independent_notes(autho
                 key,
                 "patch_run_annotations",
                 {"expected_revision": 1, "set_tags": {key: "v"}},
-                SubmissionContext(),
             )
         except AnnotationConflictError as exc:
             return exc
@@ -87,7 +85,6 @@ def test_atomic_receipts_cas_restart_cross_run_scope_and_independent_notes(autho
         "rebase",
         "patch_run_annotations",
         {"expected_revision": 2, "set_tags": {losing_key: "v"}},
-        SubmissionContext(),
     )
     assert rebased.tags == {"keep": "yes", "first": "v", "second": "v"}
     store = factory(uri)  # Reopen durable owners before replaying an old revision.
@@ -98,7 +95,6 @@ def test_atomic_receipts_cas_restart_cross_run_scope_and_independent_notes(autho
             winning_key,
             "patch_run_annotations",
             {"expected_revision": 1, "set_tags": {winning_key: "v"}},
-            SubmissionContext(),
         )
         == winner
     )
@@ -117,7 +113,7 @@ def test_atomic_receipts_cas_restart_cross_run_scope_and_independent_notes(autho
     ]:
         with pytest.raises(AnnotationConflictError):
             store.mutate_run_annotations(
-                uri, "alice", winning_key, operation, change, SubmissionContext()
+                uri, "alice", winning_key, operation, change
             )
     # Another run and another principal have independent ID scopes.
     other_store = factory(other)
@@ -128,7 +124,6 @@ def test_atomic_receipts_cas_restart_cross_run_scope_and_independent_notes(autho
             winning_key,
             "append_run_note",
             {"text": "other"},
-            SubmissionContext(),
         ).text
         == "other"
     )
@@ -141,7 +136,6 @@ def test_atomic_receipts_cas_restart_cross_run_scope_and_independent_notes(autho
                     winning_key if name == "bob" else "note",
                     "append_run_note",
                     {"text": name},
-                    SubmissionContext(),
                 ),
                 ["alice", "bob"],
             )
@@ -157,7 +151,6 @@ def test_atomic_receipts_cas_restart_cross_run_scope_and_independent_notes(autho
             "note",
             "append_run_note",
             {"text": "alice"},
-            SubmissionContext(),
         )
         == notes[0]
     )
@@ -170,92 +163,56 @@ def test_atomic_receipts_cas_restart_cross_run_scope_and_independent_notes(autho
     assert store.open_run(uri).to_dict() == before
 
 
-def test_legacy_first_write_and_rollback_preserve_runtime_evidence(authority):
-    factory, (uri, _), backend = authority
+def test_first_write_starts_empty_and_conflict_rolls_back(authority):
+    factory, (uri, _), _ = authority
     store = factory(uri)
-    legacy = SubmissionContext(tags={"legacy": "yes"})
+    before = store.open_run(uri).to_dict()
     assert store.read_run_annotations(uri) is None
-    page = store.list_run_notes(uri, legacy_notes=("old note",))
-    assert page.notes[0].author is page.notes[0].created_at is None
-    assert page.notes[0].source == "legacy_runtime"
+    assert store.list_run_notes(uri).notes == ()
     assert store.read_run_annotations(uri) is None
-    with pytest.raises(AnnotationConflictError):
+    with pytest.raises(AnnotationConflictError) as error:
         store.mutate_run_annotations(
-            uri,
-            "alice",
-            "first",
-            "patch_run_annotations",
-            {"expected_revision": 1},
-            legacy,
-            ("old note",),
+            uri, "alice", "first", "patch_run_annotations", {"expected_revision": 1},
         )
+    assert error.value.current_revision == 0
     assert store.read_run_annotations(uri) is None
     value = store.mutate_run_annotations(
-        uri,
-        "alice",
-        "first",
-        "patch_run_annotations",
+        uri, "alice", "first", "patch_run_annotations",
         {"expected_revision": 0, "set_tags": {"new": "yes"}},
-        legacy,
-        ("old note",),
     )
-    assert value.revision == 1 and value.tags == {"legacy": "yes", "new": "yes"}
-    assert value.initializer_operation_id is None
-    assert factory(uri).list_run_notes(uri).notes == page.notes
+    assert value.revision == 1 and value.tags == {"new": "yes"}
+    assert value.description is None and value.metadata == {}
+    assert value.initializer_operation_id is value.initializer_coordinator_id is None
+    assert factory(uri).read_run_annotations(uri) == value
+    assert factory(uri).list_run_notes(uri).notes == ()
+    assert store.open_run(uri).to_dict() == before
 
 
-def test_legacy_note_sizes_preserve_mutations_and_bound_listing(authority):
-    from loom.pipeline.runtime.options import RunOptions
+def test_native_note_limits_preserve_receipts_and_lifecycle(authority):
     from loom.runs.context import RUN_CONTEXT_LIMITS
 
-    factory, (uri, _), backend = authority
+    factory, (uri, _), _ = authority
     store = factory(uri)
-    # RunOptions is the supported producer, with no native append text limit.
-    texts = tuple(RunOptions(notes=("x" * 16385, "\x00" * 131072)).notes)
-    first = store.list_run_notes(uri, 1, legacy_notes=texts)
-    assert first.notes[0].text == texts[0]
-    assert first.notes[0].author is first.notes[0].created_at is None
-    assert first.notes[0].source == "legacy_runtime"
-    assert first.next_cursor is not None
-    with pytest.raises(ValueError, match="legacy-000000000001.*unrepresentable"):
-        store.list_run_notes(uri, cursor=first.next_cursor, legacy_notes=texts)
-    patch = store.mutate_run_annotations(
-        uri, "alice", "patch", "patch_run_annotations",
-        {"expected_revision": 0, "set_tags": {"review": "yes"}},
-        SubmissionContext(), texts,
-    )
-    assert patch.tags == {"review": "yes"}
-    note = store.mutate_run_annotations(
-        uri, "alice", "note", "append_run_note", {"text": "native"},
-        SubmissionContext(), texts,
-    )
-    reopened = factory(uri)
-    assert reopened.list_run_notes(uri, 1).notes == first.notes
-    with pytest.raises(ValueError, match="legacy-000000000001.*unrepresentable"):
-        reopened.list_run_notes(uri, cursor=first.next_cursor)
-    # Durable owners retain the complete unrepresentable record, not a truncation.
-    if backend != "service":
-        import json
-        from loom.io.uris import uri_to_path
-
-        database = (
-            reopened.database_path if backend == "repository"
-            else uri_to_path(uri) / ".loom/authority.sqlite3"
-        )
-        with sqlite3.connect(database) as conn:
-            value = json.loads(conn.execute(
-                "SELECT note_json FROM run_annotation_notes WHERE run_uri=? AND note_id=?",
-                (uri, "legacy-000000000001"),
-            ).fetchone()[0])
-        assert value["text"] == texts[1]
-        assert value["author"] is value["created_at"] is None
-    assert reopened.mutate_run_annotations(
-        uri, "alice", "note", "append_run_note", {"text": "native"},
-        SubmissionContext(), texts,
-    ) == note
+    before = store.open_run(uri).to_dict()
     with pytest.raises(ValueError, match="note text"):
         store.mutate_run_annotations(
-            uri, "alice", "too-long", "append_run_note",
+            uri, "alice", "note", "append_run_note",
             {"text": "x" * (RUN_CONTEXT_LIMITS["text_bytes"] + 1)},
-            SubmissionContext(), texts,
         )
+    assert store.read_run_annotations(uri) is None
+    assert store.list_run_notes(uri).notes == ()
+    text = "é" * (RUN_CONTEXT_LIMITS["text_bytes"] // 2)
+    note = store.mutate_run_annotations(
+        uri, "alice", "note", "append_run_note", {"text": text},
+    )
+    reopened = factory(uri)
+    assert reopened.list_run_notes(uri).notes == (note,)
+    assert note.text == text and note.author == "alice" and note.source == "native"
+    assert note.created_at.endswith("+00:00")
+    assert reopened.mutate_run_annotations(
+        uri, "alice", "note", "append_run_note", {"text": text},
+    ) == note
+    annotations = reopened.read_run_annotations(uri)
+    assert annotations.revision == 0 and annotations.tags == {}
+    assert annotations.initializer_operation_id is None
+    assert reopened.open_run(uri).to_dict() == before

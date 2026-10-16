@@ -1238,3 +1238,75 @@ nine unaffected poll/delivery cases. Current explicit-service retirement and
 read-only absence remain supported; missing declarations cannot authorize
 guarded ownership or retirement. The delivery is merge eligible. Its PR closeout
 owns merge and synchronization facts; only this review receipt changes afterward.
+
+## Authority-only run annotations
+
+Implementation base: `61410ff216172809d74efd6b25250209bd848919`.
+The current authority owns mutable labels, description, metadata and attributed
+append-only notes. Remove runtime-file projection, first-write import, synthetic
+legacy note records, and their parameters from every authority adapter and the
+coordinator/query consumers. Authenticated authority requests reject obsolete
+import fields before effects. Current native note bytes and database schemas
+remain unchanged; old imported note records fail the current reader.
+
+A run without annotations remains explicitly unknown on read. An explicit first
+mutation starts empty at revision zero without inventing original submission
+identity. Fresh preparation still combines authored tags with request context;
+reused runs retain their existing annotation owner, and missing ownership stays
+unknown. Authored runtime configuration remains captured evidence, not an
+alternative mutable annotation store. CAS, run/principal-scoped replay, append
+attribution, bounded paging, authorization and lifecycle independence are kept.
+
+Coverage selection: run-context contracts and authority annotation tests cover
+initialization, limits, atomic conflicts, rollback, replay, durable reopen, note
+paging and retired note refusal. Exact query acquisition cases cover unknown
+labels, no runtime import, current native metadata and notes. Configuration-backed
+run-context integration covers fresh preparation, post-initialization restart,
+failed preparation, reuse with/without original ownership, and Unix/HTTPS against
+embedded/authenticated authority. Exact native query and MCP composed consumers
+cover annotation text/search and CLI/SDK transport. Add explicit authority-route
+refusal cases for old import bodies. Collect in the no-extra, config and MCP
+locked Python 3.12 environments before execution; run lock, changed-file Ruff,
+affected Pyright and diff checks. Expand only for a reached contract or failure.
+
+Reuse prior pipeline execution, agent recovery and rphys scientific/size/scaling
+evidence: no processing, publication, artifact, checksum, source/membership,
+containment, dependency, fixture or scientific code changes in this delivery.
+Paired rphys dependency adoption and final image/physical qualification remain
+open. Independent actual-final-diff review and merge/synchronization are required.
+
+Validation reconciles all **69 collected cases to passing receipts**, with no
+unresolved failure, error, skip or deselection. The three isolated environments
+ran against clean `29b00bd2043077643e6e646146245305937345d5`:
+
+| Scope | Receipt | Result |
+|---|---|---|
+| No-extra contracts, authority annotations, route refusal and exact query acquisition | `annotations-base.xml` | 44 passed; two new fixture failures, replaced below; 5.19 s |
+| Config preparation/context and native Unix/HTTPS query consumers | `annotations-config.xml` | 21 passed; 224.87 s |
+| MCP SDK composed preparation, context, mutation, replay and note listing | `annotations-mcp.xml` | Two passed; 36.83 s |
+| Corrected authenticated route refusal fixtures | `annotations-refusal.xml` | Two passed at `33ff980dea49f58769ab88be1b3b9341f375022c`; 2.29 s |
+
+Artifacts and logs are under `build/current-contract-cutover/`; the case-by-case
+reconciliation is `annotations-coverage.json`. The two initial failures occurred
+before the request under test: the new fixture omitted the required coordinator
+admission. It now establishes that admission through the existing owner before
+asserting that old import bodies fail without annotation, note or lifecycle
+effects. The refusal assertions were not weakened. Both tested commits have
+identical production source tree `9eff54d8ee8f69214e8668c3c26163e0dca7cf33`.
+Only this new fixture differs; dependencies, configuration, shared fixtures and
+all other tested behavior are unchanged. The other 67 passes remain applicable.
+Initial failures are retained and never counted as passes.
+
+Lock check, changed-file Ruff, affected config-extra Pyright (zero errors or
+warnings) and diff checks pass. The corrected test file also passes its own Ruff
+and Pyright checks. Only these evidence notes change after final validation.
+The required independent actual-final-diff review remains before merge.
+
+Independent actual-final-diff review of PR #423 at
+`30288df736d59e066cf8b4df439861fd6ab5d471` against the recorded base passed with
+no product blocker or required correction. The reviewer verified all 69 unique
+cases against their XML receipts, identical production source trees, current
+initialization/unknown ownership, strict obsolete-input refusal and preserved
+CAS/replay/authorization/attribution/lifecycle/query/preparation behavior. The PR
+is merge eligible; its closeout owns merge and synchronization facts. Only this
+review receipt changes afterward.
