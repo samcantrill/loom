@@ -123,6 +123,7 @@ def test_export_records_unavailable_authority_without_stale_projection(
     tmp_path: Path,
     empty_authority_root: bool,
 ) -> None:
+    from loom.artifacts import ArtifactRef
     from loom.pipeline.offline_evidence import collect_offline_evidence_manifest
     from loom.pipeline.status import (
         RunStatus,
@@ -162,6 +163,13 @@ def test_export_records_unavailable_authority_without_stale_projection(
             updated_at="2020-01-01T00:00:00Z",
         ),
     )
+    stale = ArtifactRef(
+        artifact_id="build/data",
+        uri=(root / "stale.json").as_uri(),
+        artifact_type="json",
+    )
+    store.write_stage_outputs(run_uri, "build", {"data": stale}, attempt=1)
+    store.write_artifact_index(run_uri, {"build.data": stale})
     before = {
         str(path): (path.read_bytes(), path.stat().st_mtime_ns)
         for path in root.rglob("*")
@@ -171,6 +179,8 @@ def test_export_records_unavailable_authority_without_stale_projection(
     assert manifest.run_status is None
     assert [stage.stage_name for stage in manifest.stages] == ["build"]
     assert manifest.stages[0].status is None
+    assert manifest.stages[0].outputs is None
+    assert manifest.artifact_index == {}
     assert not manifest.complete
     assert "offline_evidence.authority_unavailable" in {
         item.code for item in manifest.diagnostics

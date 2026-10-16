@@ -18,6 +18,7 @@ from loom.pipeline.status import RunStatusRecord, StageStatusRecord
 from loom.pipeline.stores.authority import PerRunAuthorityStore
 from loom.pipeline.stores.atomic import atomic_write_json
 from loom.pipeline.stores.local_runs import LocalRunStore
+from loom.pipeline.stores.indexes import format_artifact_key
 from loom.serialization import DeserializationError, PlainData, ensure_plain_data
 from loom.serialization.errors import PlainDataError
 from loom.state_sources import offline_evidence_source
@@ -561,7 +562,11 @@ def collect_offline_evidence_manifest(
         if snapshot is None
         else {stage.stage_name: stage for stage in snapshot.stages}
     )
-    stage_names = tuple(sorted(set(stage_names) | set(authoritative_stages)))
+    stage_names = tuple(dict.fromkeys((*stage_names, *authoritative_stages)))
+    stage_outputs = {
+        name: {fact.artifact_name: fact.artifact for fact in stage.artifact_facts}
+        for name, stage in authoritative_stages.items()
+    }
     statuses = {}
     for name in stage_names:
         stage = authoritative_stages.get(name)
@@ -585,12 +590,17 @@ def collect_offline_evidence_manifest(
             plan_payload=_stage_plan_payload(plan, stage_name),
             runtime=runtime,
             status_record=statuses[stage_name],
+            output_refs=stage_outputs.get(stage_name),
         )
         for stage_name in stage_names
     )
     for stage in stages:
         diagnostics.extend(stage.diagnostics)
-    artifact_index = _artifact_index(store, run_uri, diagnostics)
+    artifact_index = {
+        format_artifact_key(stage_name, name): ref.to_dict()
+        for stage_name, outputs in stage_outputs.items()
+        for name, ref in outputs.items()
+    }
     events = _events(store, run_uri, diagnostics)
     config = _config_evidence(store, run_uri, diagnostics)
     provenance = _provenance_evidence(store, run_uri, diagnostics)
@@ -756,11 +766,13 @@ def _stage_evidence(
     plan_payload: Mapping[str, PlainData],
     runtime: Mapping[str, PlainData] | None,
     status_record: StageStatusRecord | None,
+    output_refs: Mapping[str, ArtifactRef] | None,
 ) -> OfflineStageEvidence:
     diagnostics: list[OfflineEvidenceDiagnostic] = []
     attempt = None if status_record is None else status_record.attempt
-    inputs = _stage_mapping(store.read_stage_inputs, run_uri, stage_name, "inputs", diagnostics)
-    outputs = _stage_mapping(store.read_stage_outputs, run_uri, stage_name, "outputs", diagnostics)
+    inputs = _stage_mapping(
+        store.read_stage_inputs, run_uri, stage_name, "inputs", diagnostics
+    )
     fingerprint = _stage_mapping(
         store.read_stage_fingerprint, run_uri, stage_name, "fingerprint", diagnostics
     )
@@ -777,16 +789,17 @@ def _stage_evidence(
         )
     resources = _stage_resources(runtime, stage_name)
     artifacts = tuple(
-        _artifact_evidence(name, ArtifactRef.from_dict(ref), diagnostics)
-        for name, ref in (outputs or {}).items()
-        if isinstance(ref, Mapping)
+        _artifact_evidence(name, ref, diagnostics)
+        for name, ref in (output_refs or {}).items()
     )
     return OfflineStageEvidence(
         stage_name=stage_name,
         plan=plan_payload,
         status=None if status_record is None else status_record.to_dict(),
         inputs=inputs,
-        outputs=outputs,
+        outputs=None
+        if output_refs is None
+        else {name: ref.to_dict() for name, ref in output_refs.items()},
         fingerprint=fingerprint,
         failure=failure,
         resources=resources,
@@ -865,21 +878,6 @@ def _artifact_evidence(
         if diagnostic.severity is OfflineEvidenceSeverity.ERROR:
             diagnostics.append(diagnostic)
     return OfflineArtifactEvidence(name=name, ref=ref, payload=payload)
-
-
-def _artifact_index(
-    store: LocalRunStore,
-    run_uri: str,
-    diagnostics: list[OfflineEvidenceDiagnostic],
-) -> dict[str, Mapping[str, PlainData]]:
-    try:
-        return {
-            name: cast(dict[str, PlainData], ref.to_dict())
-            for name, ref in store.read_artifact_index(run_uri).items()
-        }
-    except Exception as exc:
-        diagnostics.append(_error("offline_evidence.artifact_index_unreadable", str(exc)))
-        return {}
 
 
 def _events(

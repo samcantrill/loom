@@ -1446,3 +1446,16 @@ import target has no admitted run. Select exact files/nodes after collection;
 no full pipeline, fleet, physical or distributed matrix is warranted. Expand for
 an actually reached changed consumer or a review finding. Query aliases, lineage,
 workspace and result census rows remain open.
+
+The first stable committed candidate `8e33eedee13684963fa1204ded826dd9cbdb3eb5`
+collected 30 exact cases; 29 passed and the new actual native capture failed:
+status was complete but each stage had zero artifacts because output/index reads
+still used retired local projections. The native run writes current inputs and
+fingerprints locally, but committed output facts belong to authority. Correct
+capture to derive output refs and the artifact index from the same admitted
+snapshot, retaining local input/fingerprint/config evidence and existing payload
+inspection. Also preserve execution-plan order rather than sorting stage names,
+so nonalphabetical dependency order passes the existing import contract. The
+real two-stage test deliberately uses that order and asserts both checked payloads,
+input evidence, index members and imported artifact count. No assertion was
+weakened. This bounded correction remains within current capture/import closure.

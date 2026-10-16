@@ -22,7 +22,9 @@ pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
 def test_native_terminal_capture_imports_without_live_resume(tmp_path: Path) -> None:
     config = tmp_path / "pipeline.json"
-    config.write_text(json.dumps(local_execution_config(value=7)))
+    config.write_text(
+        json.dumps(local_execution_config(value=7)).replace("build", "source")
+    )
     admission, local = run_native_fixture(config)
     assert admission.state.value == "SUCCEEDED"
     authority = SQLitePerRunAuthorityStore(admission.run_uri, read_only=True)
@@ -37,7 +39,7 @@ def test_native_terminal_capture_imports_without_live_resume(tmp_path: Path) -> 
     details = manifest.state_source["details"]
     assert isinstance(details, Mapping)
     assert details["authority_revision"] == snapshot.revision.to_dict()
-    assert [stage.stage_name for stage in manifest.stages] == ["build", "report"]
+    assert [stage.stage_name for stage in manifest.stages] == ["source", "report"]
     for stage in manifest.stages:
         assert stage.status is not None
         assert stage.status["status"] == "SUCCEEDED"
@@ -46,6 +48,9 @@ def test_native_terminal_capture_imports_without_live_resume(tmp_path: Path) -> 
         assert payload is not None
         assert payload.exists is True
         assert payload.checksum is not None
+    assert set(manifest.artifact_index) == {"source.data", "report.text"}
+    assert manifest.stages[1].inputs is not None
+    assert set(manifest.stages[1].inputs) == {"data"}
     path = local.local_generated_artifact_path(
         admission.run_uri,
         "offline-evidence/manifest.json",
@@ -59,6 +64,7 @@ def test_native_terminal_capture_imports_without_live_resume(tmp_path: Path) -> 
     result = import_offline_evidence(repository, retained)
     assert result.status is RunExchangeOperationStatus.SUCCEEDED, result.diagnostics
     imported = repository.open_run(admission.run_uri)
+    assert result.imported_entry_count == 4
     assert imported.status is RunStatus.SUCCEEDED
     assert [stage.status for stage in imported.stages] == [StageStatus.SUCCEEDED] * 2
     assert [stage.active_lease for stage in imported.stages] == [None, None]
