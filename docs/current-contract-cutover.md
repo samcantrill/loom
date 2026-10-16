@@ -1746,3 +1746,16 @@ changed-source Pyright (zero errors) and locked dependency checks pass. Exact
 selectors and raw discovery/check logs are under
 `build/current-contract-cutover/snapshot-timing-*`. Final execution follows on
 a committed stable tree, with separate short temporary roots for each environment.
+
+Final selected execution passed **85 distinct cases** on clean stable commit
+`53a34c824b4ad463c4cd4ecc913aec119fee63df`: 82 baseline cases and all three
+config cases, with zero failures/errors/skips. Baseline's one excluded native
+case passed in the explicit config environment. Raw XML/logs and before/after
+revision/status metadata are `snapshot-timing-{base,config}-53a34c82-*` under
+`build/current-contract-cutover`; `snapshot-timing-coverage.json` reconciles the
+union. Coverage includes actual prepared failure before start, current native
+successful execution through all projections, embedded/authenticated result
+reuse without invented timing, complete snapshot protocol/pickle round trips,
+old timing/reliability omission refusal, service/HTTP consumers and run inspection.
+Source, dependencies, configuration and fixtures stayed unchanged throughout
+both runs. Only this receipt follows them; independent actual-PR review is next.
