@@ -1274,3 +1274,30 @@ evidence: no processing, publication, artifact, checksum, source/membership,
 containment, dependency, fixture or scientific code changes in this delivery.
 Paired rphys dependency adoption and final image/physical qualification remain
 open. Independent actual-final-diff review and merge/synchronization are required.
+
+Validation reconciles all **69 collected cases to passing receipts**, with no
+unresolved failure, error, skip or deselection. The three isolated environments
+ran against clean `29b00bd2043077643e6e646146245305937345d5`:
+
+| Scope | Receipt | Result |
+|---|---|---|
+| No-extra contracts, authority annotations, route refusal and exact query acquisition | `annotations-base.xml` | 44 passed; two new fixture failures, replaced below; 5.19 s |
+| Config preparation/context and native Unix/HTTPS query consumers | `annotations-config.xml` | 21 passed; 224.87 s |
+| MCP SDK composed preparation, context, mutation, replay and note listing | `annotations-mcp.xml` | Two passed; 36.83 s |
+| Corrected authenticated route refusal fixtures | `annotations-refusal.xml` | Two passed at `33ff980dea49f58769ab88be1b3b9341f375022c`; 2.29 s |
+
+Artifacts and logs are under `build/current-contract-cutover/`; the case-by-case
+reconciliation is `annotations-coverage.json`. The two initial failures occurred
+before the request under test: the new fixture omitted the required coordinator
+admission. It now establishes that admission through the existing owner before
+asserting that old import bodies fail without annotation, note or lifecycle
+effects. The refusal assertions were not weakened. Both tested commits have
+identical production source tree `9eff54d8ee8f69214e8668c3c26163e0dca7cf33`.
+Only this new fixture differs; dependencies, configuration, shared fixtures and
+all other tested behavior are unchanged. The other 67 passes remain applicable.
+Initial failures are retained and never counted as passes.
+
+Lock check, changed-file Ruff, affected config-extra Pyright (zero errors or
+warnings) and diff checks pass. The corrected test file also passes its own Ruff
+and Pyright checks. Only these evidence notes change after final validation.
+The required independent actual-final-diff review remains before merge.
