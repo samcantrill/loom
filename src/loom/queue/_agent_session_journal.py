@@ -1212,7 +1212,7 @@ class _RemoteAgentJournal:
                     if json.loads(str(row[1])).get(field) == session_id:
                         ids.append(f"{kind}:{row[0]}")
                         if len(ids) > _MAX_RECEIVED_CONTROLS:
-                            return ids  # Caller uses compatibility polling if the envelope is full.
+                            return ids  # Caller uses bounded polling if the envelope is full.
         return sorted(set(ids))
 
 

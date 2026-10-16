@@ -5165,8 +5165,9 @@ def test_agent_client_rejects_an_old_protocol_without_compatibility(
 
 
 @pytest.mark.parametrize("ceiling", [1, 2])
-def test_outbound_service_rejects_old_admission_capability_before_offering(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ceiling: int
+@pytest.mark.parametrize("missing", ["concurrent-resident-assignments-v1", "agent-control-wait-v1"])
+def test_outbound_service_rejects_missing_current_capability_before_offering(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ceiling: int, missing: str
 ) -> None:
     profile = ResidentExecutionProfile(
         ResidentProfileDescriptor(
@@ -5194,11 +5195,13 @@ def test_outbound_service_rejects_old_admission_capability_before_offering(
         stop.set()
         return {
             "protocol_version": "13",
-            "capabilities": [
+            "capabilities": [capability for capability in (
                 "agent-sessions-v12",
                 REMOTE_EXECUTION_CAPABILITY,
                 REGULAR_FILE_RELAY_CAPABILITY,
-            ],
+                "concurrent-resident-assignments-v1",
+                "agent-control-wait-v1",
+            ) if capability != missing],
             "coordinator_id": "coordinator-1",
             "coordinator_epoch": "epoch-1",
             "role": role,
@@ -5206,7 +5209,7 @@ def test_outbound_service_rejects_old_admission_capability_before_offering(
 
     monkeypatch.setattr(client, "_call", old_coordinator)
     with pytest.raises(
-        QueueServiceError, match="upgrade required.*concurrent-resident"
+        QueueServiceError, match=f"upgrade required.*{missing}"
     ):
         client.handshake()
     stop.clear()

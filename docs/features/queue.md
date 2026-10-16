@@ -965,8 +965,8 @@ owners/processes and missed notifications; timeout expiry always performs a
 final state check. Shutdown wakes waiters. These intervals bound observation,
 not job duration, and never acknowledge controls or release resource claims.
 
-Outbound agents negotiate `agent-control-wait-v1` with the coordinator. When
-available, `POST /v1/agent/control_wait` takes `session_id`,
+Outbound agents require `agent-control-wait-v1` during the coordinator handshake,
+before registration or offers. `POST /v1/agent/control_wait` takes `session_id`,
 `received_operation_ids` and `wait_timeout_ms` (0..5000), returning nullable
 `control` and `assignment_control` values. Committed controls wake the wait;
 five seconds is the maximum quiet wait, not an intentional cancellation delay.
@@ -989,9 +989,11 @@ short controls/renewals and bulk IO. The HTTPS listener admits at most 32 active
 work waits and 32 control waits independently; those limits do not consume its
 short-request capacity. The existing 1..1024 assignment ceiling is unchanged.
 The receipt list accepts up to 1025 unique bounded identifiers within the existing
-64 KiB request envelope. An agent whose receipt inventory exceeds that envelope,
-or whose coordinator lacks the capability, uses compatibility control polling.
-Resource renewal and GPU freshness policies are unchanged.
+64 KiB request envelope. An agent whose current receipt inventory exceeds its
+count or byte limit uses bounded control polling without truncating receipts.
+Explicit synchronous polling remains supported. A coordinator lacking the
+capability is refused during handshake. Resource renewal and GPU freshness
+policies are unchanged.
 
 Recoverable admission and retained-assignment failures are paced independently
 with exponential backoff (initial ceiling 0.1 seconds, maximum ceiling five
