@@ -517,7 +517,7 @@ def test_retirement_preserves_job_from_lost_poll_reply(remote_owner, monkeypatch
     assert work.daemon.agent("agent-a").state == "ACTIVE"
 
 
-def test_retirement_reconciles_rejected_legacy_poll_without_replaying_work(
+def test_retirement_reconciles_rejected_pending_poll_without_replaying_work(
     tmp_path, monkeypatch
 ):
     from loom.queue import agent_session_transport as transport
@@ -545,8 +545,8 @@ def test_retirement_reconciles_rejected_legacy_poll_without_replaying_work(
                     registration.capabilities,
                 )
             )
-            # A supported pre-reservation rejection (no current offer) retained
-            # the exact intent; the old client's fence did not prove consumption.
+            # A pre-reservation rejection retains the exact current intent;
+            # only the coordinator can prove that no work was delivered.
             with pytest.raises(QueueError):
                 owner.wait_for_work(
                     session.session_id,
@@ -554,11 +554,10 @@ def test_retirement_reconciles_rejected_legacy_poll_without_replaying_work(
                     sequence=1,
                     wait_timeout_ms=_OUTBOUND_POLL_WAIT_MS,
                 )
-            owner._require_journal().fence_poll(session.session_id, 1)
         finally:
             owner.close()
         spec = read_agent_spec(tmp_path / "agent.json")
-        assert _poll_rows(spec.agent_root) == [(1, "FENCED", None)]
+        assert _poll_rows(spec.agent_root) == [(1, "PENDING", None)]
         operations = []
         original = transport._exchange_agent_request
 

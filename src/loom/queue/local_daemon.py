@@ -1296,7 +1296,6 @@ class DaemonStatus:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> "DaemonStatus":
-        data = {"local_resource_status": [], **data}
         _exact_fields(
             data,
             {
@@ -1417,7 +1416,6 @@ class AgentProjection:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> "AgentProjection":
-        data = {"resource_status": [], **data}
         _exact_fields(
             data,
             {

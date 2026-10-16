@@ -503,7 +503,7 @@ def wait_for_work(
         # Preserve the local intent so the same identity can be retried.
         raise
     except AgentPollFencedError:
-        journal.fence_poll(session_id, sequence, confirmed=True)
+        journal.fence_poll(session_id, sequence)
         raise
     # Other rejection and indeterminate responses leave the exact request
     # pending. Only native outcome evidence proves sequence consumption.
@@ -522,7 +522,7 @@ def _resume_pending_poll(
     The retained request digest validates the configured timeout as well as
     session/revision/sequence. An incompatible restart keeps work retained.
     A rejection is not consumption. Native outcome evidence settles the
-    exact request or rewinds an absent legacy request to its proven owner
+    exact request or proves the next request absent at its owner
     watermark; a predecessor delivery must already be retained unchanged.
     """
     journal = self._require_journal()
@@ -541,7 +541,7 @@ def _resume_pending_poll(
         except AgentPollActiveError:
             raise
         except AgentPollFencedError:
-            journal.fence_poll(session_id, sequence, confirmed=True)
+            journal.fence_poll(session_id, sequence)
             return
         except _IndeterminateAgentProtocolError:
             raise
@@ -559,7 +559,7 @@ def _resume_pending_poll(
             )
             return
         if recovery.get("state") == "fenced":
-            journal.fence_poll(session_id, sequence, confirmed=True)
+            journal.fence_poll(session_id, sequence)
             return
         if recovery.get("state") != "committed":
             raise QueueServiceError("retained poll recovery result is invalid")

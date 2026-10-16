@@ -1106,3 +1106,76 @@ no product blockers, localized corrections or workflow issues. The reviewer
 verified the current contract paths, exact 81-case collection/receipt coverage,
 patch hash, unchanged source/test trees, static checks, documentation examples
 and merge eligibility. Only this review receipt changes afterward.
+
+## Current agent offers and poll recovery
+
+Implementation base: `22e0f09f4ef07d39a0e0b7046f427308180f2f82`.
+
+| Boundary | Producers and consumers | Selected contract / deletion |
+| --- | --- | --- |
+| Agent offer | `AgentOffer.value`, authenticated offer dispatch, local journal reload, scheduling and inspection | Require current `resource_status` and `external_slurm_profiles`; delete missing-field synthesis, GPU-atom removal and inferred unavailable observations. Current writer bytes remain unchanged. |
+| Coordinator/agent projections | Native status/agent/list writers and control clients | Require the resource-status fields already emitted by current writers; remove historical missing-field defaults. |
+| Retained work-poll recovery | Coordinator `recover_poll`, agent replay and retirement | Explicit immediate-predecessor proof for an absent next request, including across restart; reject historical sequence gaps and remove inferred predecessor fallback. Preserve exact request/delivery checksums and retained ownership. |
+| Local poll settlement | Journal, control application, cooperative agent service | Coordinator-confirmed `fence_poll` has one behavior. Current drain/reload fences remain unresolved until their outcome is proved; they cannot advance to another poll. Retain committed-delivery recovery across that control race. |
+
+The omitted assignment ceiling of one is the current writer's canonical compact
+default and stays supported, alongside explicit current ceilings. Likewise,
+`FENCED` is produced by current control and retirement operations; deleting its
+recovery would break a live cancellation/reload race. These are current contract
+semantics, not historical adapters. Definite offer-renewal rejection and
+indeterminate-response replay remain supported for current expiry and restart.
+Workspace/result and other remaining inventory rows are not closed by this slice.
+
+Validation selects the agent-session owner (including offers, GPU observations,
+strict codecs, retained deliveries and control/recovery), current status/control
+consumers, exact outbound rejection/restart and cancellation/concurrency cases,
+and the affected retirement acceptance. Retired missing-field offers must fail
+before coordinator mutation; historical sequence-gap refusals preserve owner
+rows. Current delivery-racing-control fixtures use the real control producer.
+Collection, lock and changed-file static checks precede execution. Expand for a
+new affected consumer, changed wire ownership, missing current mode or failed
+recovery assertion. Dependencies, scientific algorithms, reference writer and
+scaling behavior are unchanged; those passing receipts remain applicable and
+are not rerun by this bounded agent change.
+
+### Agent offer/recovery validation evidence
+
+Final source tree: `5ec2babb968ccf492645a3c4c9a019d5b37bdccf`.
+`build/current-contract-cutover/agent-coverage.json` reconciles every collected
+case to its latest receipt: **104 distinct passes**, no unresolved failures,
+errors, skips or missing cases. Exact selectors, collection/execution commands,
+logs, tested revisions and XML receipts share the `agent-` prefix there.
+
+| Scope | Tested revision | Result |
+| --- | --- | --- |
+| No-extra agent-session owner and reached control/status consumers | `475e97e6752c79c90d22bdd111d5d156efc9f830` | 82 passed, 34.60 s |
+| Config-backed outbound concurrency, rejection/restart, exact replay, late-delivery drain and GPU admission | same `475e97e6` | 12 passed, one fixture assertion failed, 132.11 s; affected restart cases replaced below |
+| Lost-poll retirement, unresolved refusal, retained delivered work and rejected-next-poll retirement | same `475e97e6` | Nine passed, 97.94 s |
+| Corrected same-epoch replay and cross-epoch recovery | `1ea20b4da1637f5ffbe289c345fca1c195000197` | Two passed, 21.81 s |
+
+The failed fixture assumed every restart must use `recover_poll`. A current
+same-epoch request instead replays directly when its offer is usable again;
+the work completed with exactly one admission and release. The corrected test
+records and compares the exact first replayed request, retains the cross-epoch
+predecessor-proof assertion and preserves the single-admission/completion checks.
+Both modes pass freshly. This is the only post-validation source/test difference;
+runtime, dependencies, configuration and shared fixtures are unchanged, so all
+other passing cases remain applicable. The optional assignment ceiling still
+uses identical current writer bytes; `AgentOffer.value` is AST-identical to base.
+
+Lock check, changed-file Ruff, config-extra Pyright and diff checks pass. Affected
+test-file Pyright and Ruff also pass after the fixture correction. Final
+source/test/feature-guide patch SHA-256:
+`79968b5ede8041a06afbf6f3400192756a276229e5db59fc82d7a137ac76d404`.
+Only evidence notes change after these checks. No image/physical qualification,
+paired rphys adoption or repository-wide completion is claimed. Independent
+actual-final-diff review and merge remain this delivery's closeout gate.
+
+Independent actual-final-diff review of PR #421 at
+`71ada31e3ae4775a09801461d0076f1777695b4a` against the recorded base passed with
+no product blockers, localized corrections or workflow issues. The reviewer
+confirmed all 104 collected cases against their latest XML receipts, unchanged
+runtime trees and offer writer, the patch hash, current control-fence recovery
+and exact owner/checksum preservation. The delivery is merge eligible; its PR
+closeout owns merge and synchronization facts. Only this review receipt changes
+afterward.

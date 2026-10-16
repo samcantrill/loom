@@ -2965,7 +2965,7 @@ def _reconcile_retirement_poll(
             predecessor_delivery=outcome.get("predecessor_delivery"),
         )
     elif outcome.get("state") == "fenced":
-        journal.fence_poll(session_id, sequence, confirmed=True)
+        journal.fence_poll(session_id, sequence)
     elif outcome.get("state") == "committed":
         journal.complete_poll(
             session_id,

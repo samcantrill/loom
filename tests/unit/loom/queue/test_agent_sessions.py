@@ -1614,15 +1614,15 @@ def test_offer_assignment_ceiling_preserves_default_wire_and_decision(
     ceiling: int,
 ) -> None:
     original = _offer("session-1", "epoch-1")
-    historical = original.value()
-    assert "max_concurrent_assignments" not in historical
-    assert AgentOffer.from_value(historical).max_concurrent_assignments == 1
-    explicit = {**historical, "max_concurrent_assignments": ceiling}
+    current = original.value()
+    assert "max_concurrent_assignments" not in current
+    assert AgentOffer.from_value(current).max_concurrent_assignments == 1
+    explicit = {**current, "max_concurrent_assignments": ceiling}
     decoded = AgentOffer.from_value(explicit)
     assert decoded == replace(original, max_concurrent_assignments=ceiling)
     if ceiling == 1:
         assert json.dumps(decoded.value(), sort_keys=True) == json.dumps(
-            historical, sort_keys=True
+            current, sort_keys=True
         )
         assert decoded.decision_value() == original.decision_value()
     else:
@@ -1914,7 +1914,7 @@ def test_poll_sequence_rejects_stale_and_gap_and_keeps_one_replay_row(
 
 @pytest.mark.parametrize("predecessor", [0, 2])
 @pytest.mark.parametrize("restart", [False, True])
-def test_recovery_proves_rejected_poll_watermark(tmp_path, predecessor, restart):
+def test_recovery_proves_next_poll_absence_and_refuses_retired_gaps(tmp_path, predecessor, restart):
     config = _config(tmp_path)
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config)
@@ -1931,28 +1931,20 @@ def test_recovery_proves_rejected_poll_watermark(tmp_path, predecessor, restart)
                 session.session_id, session.availability_revision,
                 sequence=sequence, wait_timeout_ms=1,
             )
-        # A legacy client consumed several rejected, never reserved requests.
-        sequence = predecessor + 5
-        with pytest.raises(AgentPollSequenceGapError):
-            view.wait_for_work(
-                session.session_id, session.availability_revision,
-                sequence=sequence, wait_timeout_ms=1,
-            )
+        sequence = predecessor + 1
         if restart:
             daemon.stop()
             daemon = LocalDaemon(config)
             daemon.start()
             view = _view(daemon)
-            if predecessor == 0:
-                # An abandoned epoch with no surviving history cannot prove
-                # a legacy multi-sequence predecessor. Keep it unresolved.
-                with pytest.raises(QueueConflictError, match="history is unavailable"):
-                    view.recover_poll(
-                        session.session_id, session.availability_revision,
-                        sequence=sequence, wait_timeout_ms=1,
-                        coordinator_epoch=session.coordinator_epoch,
-                    )
-                return
+        before = _sqlite_snapshot(config.control_database)
+        with pytest.raises(QueueConflictError, match="history is unavailable|sequence has a gap"):
+            view.recover_poll(
+                session.session_id, session.availability_revision,
+                sequence=predecessor + 5, wait_timeout_ms=1,
+                coordinator_epoch=session.coordinator_epoch,
+            )
+        assert _sqlite_snapshot(config.control_database) == before
         assert view.recover_poll(
             session.session_id, session.availability_revision,
             sequence=sequence, wait_timeout_ms=1,
@@ -2116,7 +2108,7 @@ def test_delivery_requests_survive_next_poll_and_restart(tmp_path, forms):
 
 
 @pytest.mark.parametrize("shared", [False, True])
-def test_confirmed_recovery_retains_legacy_fenced_delivery(tmp_path, shared):
+def test_confirmed_recovery_retains_delivery_racing_current_control(tmp_path, shared):
     from loom.queue._shared_assignment import publish
     from tests.unit.loom.queue.test_remote_stage_execution import _assignment_reference_fixture
 
@@ -2131,7 +2123,17 @@ def test_confirmed_recovery_retains_legacy_fenced_delivery(tmp_path, shared):
         )
     try:
         _prepare_delivery_poll(journal, session, 1)
-        journal.fence_poll(session.session_id, 1)
+        journal.prepare_control(AgentControl(
+            operation_id="drain-delivery", kind=AgentControlKind.DRAIN,
+            agent_id=session.agent_id, expected_session_id=session.session_id,
+            expected_config_revision=session.config_revision,
+            pool="default", cancel_active=False, reason="maintenance",
+        ))
+        from loom.queue.agent_sessions import AgentPollActiveError
+
+        with pytest.raises(AgentPollActiveError, match="outcome is unresolved"):
+            _prepare_delivery_poll(journal, session, 2)
+        assert journal.pending_poll() == (session.session_id, session.availability_revision, 1)
         result = {"result": "assignment", "sequence": 1, "request": wire}
         with pytest.raises(QueueConflictError, match="was fenced"):
             journal.complete_poll(session.session_id, 1, result)
@@ -2153,23 +2155,25 @@ def test_rejected_poll_rewind_requires_original_predecessor_delivery(tmp_path):
     delivery: PlainData = {"assignment_id": assignment.assignment_id, "request_digest": _canonical_digest(assignment.to_dict())}
     try:
         _prepare_delivery_poll(journal, session, 1)
-        journal.fence_poll(session.session_id, 1)
-        _prepare_delivery_poll(journal, session, 2)
-        journal.fence_poll(session.session_id, 2)
-        with pytest.raises(QueueConflictError, match="delivery is not retained"):
-            journal.discard_absent_poll(
-                session.session_id, 2, predecessor_sequence=1, predecessor_delivery=delivery,
-            )
-        pending = journal.pending_poll()
-        assert pending is not None and pending[2] == 2
-    finally:
-        journal.close()
-    journal, session = _delivery_journal(tmp_path / "owned-agent")
-    try:
-        _prepare_delivery_poll(journal, session, 1)
         journal.complete_poll(session.session_id, 1, predecessor)
         _prepare_delivery_poll(journal, session, 2)
-        journal.fence_poll(session.session_id, 2)
+        pending = journal.pending_poll()
+        before = journal.delivery_request(session.session_id, assignment.assignment_id)
+        with pytest.raises(QueueConflictError, match="delivery is not retained"):
+            journal.discard_absent_poll(
+                session.session_id, 2, predecessor_sequence=1,
+                predecessor_delivery={**delivery, "request_digest": "0" * 64},
+            )
+        assert journal.pending_poll() == pending
+        assert journal.delivery_request(session.session_id, assignment.assignment_id) == before
+        for absent_or_gap in (None, 0):
+            with pytest.raises(QueueServiceError, match="predecessor is invalid"):
+                journal.discard_absent_poll(
+                    session.session_id, 2, predecessor_sequence=absent_or_gap,
+                    predecessor_delivery=delivery,
+                )
+            assert journal.pending_poll() == pending
+            assert journal.delivery_request(session.session_id, assignment.assignment_id) == before
         journal.discard_absent_poll(
             session.session_id, 2, predecessor_sequence=1, predecessor_delivery=delivery,
         )
@@ -2439,6 +2443,30 @@ def test_every_agent_operation_is_causally_outside_execution_owners(
         daemon.stop()
 
 
+def test_resource_projections_require_current_wire_fields(tmp_path: Path) -> None:
+    from loom.queue.local_daemon import AgentProjection, DaemonStatus
+
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        _register(daemon)
+        for projection, reader, field in (
+            (daemon.status(), DaemonStatus.from_dict, "local_resource_status"),
+            (daemon.agent("agent-a"), AgentProjection.from_dict, "resource_status"),
+        ):
+            current = projection.to_dict()
+            assert reader(current) == projection
+            retired = dict(current)
+            del retired[field]
+            with pytest.raises(QueueServiceError):
+                reader(retired)
+            assert projection.to_dict() == current
+    finally:
+        daemon.stop()
+
+
 def test_gpu_availability_update_is_atomic_replayable_and_inspectable(
     tmp_path: Path,
 ) -> None:
@@ -2541,17 +2569,19 @@ def test_gpu_availability_update_is_atomic_replayable_and_inspectable(
             "observation_stale"
         }
         assert not any(item.available for item in expired.resource_status)
-        legacy = initial.value()
-        legacy.pop("resource_status")
-        historical = AgentOffer.from_value(legacy)
-        assert historical.gpu_devices == devices
-        assert historical.gpu_atoms == ()
-        assert not any(
-            atom.owner_resource_kind == "gpu" for atom in historical.capacity_atoms
-        )
-        assert {item.reason_code for item in historical.resource_status} == {
-            "observation_unavailable"
-        }
+        from loom.queue.agent_session_transport import _dispatch
+
+        before = _sqlite_snapshot(config.control_database)
+        for omitted in ("resource_status", "external_slurm_profiles"):
+            retired = initial.value()
+            retired.pop(omitted)
+            with pytest.raises(QueueServiceError, match="agent offer is invalid"):
+                _dispatch(_view(daemon), "offer", {
+                    "offer": retired,
+                    "idempotency_key": "retired-offer",
+                    "expected_availability_revision": None,
+                })
+            assert _sqlite_snapshot(config.control_database) == before
     finally:
         daemon.stop()
 
@@ -2625,7 +2655,7 @@ def test_shared_reference_target_publication_poll_and_restart(tmp_path, monkeypa
             coordinator_epoch=session.coordinator_epoch,
         ) == {**delivered, "state": "committed"}
         assert view.recover_poll(
-            session.session_id, "availability-1", sequence=5, wait_timeout_ms=1,
+            session.session_id, "availability-1", sequence=2, wait_timeout_ms=1,
             coordinator_epoch=session.coordinator_epoch,
         ) == {
             "state": "absent", "predecessor_sequence": 1,
