@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     )
 
 from loom.artifacts import ArtifactRef
+from loom._sqlite_inspection import inspect_sqlite_database
 from loom.pipeline.stores.errors import ArtifactStoreError
 from loom.pipeline.stores.shared_artifacts import SHARED_PUBLICATION, binding as _artifact_shared_binding, file_identity, verify_ref
 from loom.io.uris import uri_to_path
@@ -1514,6 +1515,36 @@ class _RemoteExecutionReport:
         )
 
 
+def _require_current_workspace_path(root: Path) -> None:
+    retired = root / "remote.sqlite"
+    if retired.exists() or retired.is_symlink():
+        raise QueueServiceError("resident assignment workspace layout is unsupported")
+
+
+def _require_resident_workspace_schema(conn: sqlite3.Connection) -> None:
+    expected = {
+        "request": {
+            "singleton", "value_json", "state", "fence", "process_execution_id",
+            "process_id", "supervisor_launch_json", "result_json",
+        },
+        "transfers": {
+            "transfer_id", "logical_name", "digest", "size_bytes", "direction",
+            "received_bytes", "finalized", "descriptor_json",
+        },
+        "events": {"sequence", "event_id", "payload_json", "acknowledged"},
+    }
+    tables = {
+        str(row[0]) for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+        )
+    }
+    if tables != set(expected) or any(
+        {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")} != columns
+        for table, columns in expected.items()
+    ):
+        raise QueueServiceError("resident assignment workspace schema is unsupported")
+
+
 class _ResidentAssignmentWorkspace:
     """Agent-owned durable request, byte, start, result, and outbox gate."""
 
@@ -1521,41 +1552,63 @@ class _ResidentAssignmentWorkspace:
         _identifier(assignment_id, "assignment_id")
         root = Path(agent_root).resolve()
         self.root = root / "assignments" / assignment_id
+        _require_current_workspace_path(self.root)
+        self._db = self.root / "resident.sqlite"
+        if self._db.exists():
+            with inspect_sqlite_database(self._db) as conn:
+                _require_resident_workspace_schema(conn)
+            self.root.chmod(0o700)
+            self._db.chmod(0o600)
+            return
         self.root.mkdir(parents=True, exist_ok=True)
         self.root.chmod(0o700)
-        self._db = self.root / "resident.sqlite"
         with self._connect() as conn:
-            conn.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS request (
-                    singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
-                    value_json TEXT NOT NULL,
-                    state TEXT NOT NULL,
-                    fence TEXT,
-                    process_execution_id TEXT,
-                    process_id INTEGER,
-                    supervisor_launch_json TEXT,
-                    result_json TEXT
-                );
-                CREATE TABLE IF NOT EXISTS transfers (
-                    transfer_id TEXT PRIMARY KEY,
-                    logical_name TEXT NOT NULL,
-                    digest TEXT NOT NULL,
-                    size_bytes INTEGER NOT NULL,
-                    direction TEXT NOT NULL,
-                    received_bytes INTEGER NOT NULL DEFAULT 0,
-                    finalized INTEGER NOT NULL DEFAULT 0,
-                    descriptor_json TEXT
-                );
-                CREATE TABLE IF NOT EXISTS events (
-                    sequence INTEGER PRIMARY KEY,
-                    event_id TEXT UNIQUE NOT NULL,
-                    payload_json TEXT NOT NULL,
-                    acknowledged INTEGER NOT NULL DEFAULT 0
-                );
-                """
-            )
+            conn.execute("BEGIN IMMEDIATE")
+            if not conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchone():
+                self._initialize(conn)
+            _require_resident_workspace_schema(conn)
         self._db.chmod(0o600)
+
+    @staticmethod
+    def _initialize(conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            CREATE TABLE request (
+                singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+                value_json TEXT NOT NULL,
+                state TEXT NOT NULL,
+                fence TEXT,
+                process_execution_id TEXT,
+                process_id INTEGER,
+                supervisor_launch_json TEXT,
+                result_json TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE transfers (
+                transfer_id TEXT PRIMARY KEY,
+                logical_name TEXT NOT NULL,
+                digest TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                direction TEXT NOT NULL,
+                received_bytes INTEGER NOT NULL DEFAULT 0,
+                finalized INTEGER NOT NULL DEFAULT 0,
+                descriptor_json TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE events (
+                sequence INTEGER PRIMARY KEY,
+                event_id TEXT UNIQUE NOT NULL,
+                payload_json TEXT NOT NULL,
+                acknowledged INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._db)
@@ -1853,8 +1906,10 @@ class _ResidentAssignmentWorkspace:
     @staticmethod
     def read_request(workspace: Path) -> _ResidentAssignmentBundle:
         """Read retained request facts without creating or initializing a workspace."""
+        _require_current_workspace_path(Path(workspace))
         database = Path(workspace) / "resident.sqlite"
-        with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as conn:
+        with inspect_sqlite_database(database) as conn:
+            _require_resident_workspace_schema(conn)
             row = conn.execute("SELECT value_json FROM request WHERE singleton = 1").fetchone()
         if row is None:
             raise QueueServiceError("resident assignment request is unavailable")
@@ -1864,10 +1919,13 @@ class _ResidentAssignmentWorkspace:
     def read_supervisor_launch_json(agent_root: Path, assignment_id: str) -> str | None:
         """Observe a retained launch without creating or mutating its workspace."""
         _identifier(assignment_id, "assignment_id")
-        database = Path(agent_root).resolve() / "assignments" / assignment_id / "resident.sqlite"
+        workspace = Path(agent_root).resolve() / "assignments" / assignment_id
+        _require_current_workspace_path(workspace)
+        database = workspace / "resident.sqlite"
         if not database.is_file():
             return None
-        with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as conn:
+        with inspect_sqlite_database(database) as conn:
+            _require_resident_workspace_schema(conn)
             row = conn.execute(
                 "SELECT supervisor_launch_json FROM request WHERE singleton = 1"
             ).fetchone()
