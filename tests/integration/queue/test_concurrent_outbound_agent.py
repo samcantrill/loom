@@ -2016,7 +2016,7 @@ def test_unsupported_rejection_recovery_preserves_pending_sequence(monkeypatch):
 
 
 @pytest.mark.parametrize("restart_coordinator", [False, True])
-def test_restart_repairs_legacy_rejected_poll_gap_without_losing_queued_work(monkeypatch, restart_coordinator):
+def test_restart_recovers_rejected_next_poll_without_losing_queued_work(monkeypatch, restart_coordinator):
     from loom.queue.agent_sessions import AgentSessionService
     from loom.queue.errors import QueueConflictError
 
@@ -2033,8 +2033,7 @@ def test_restart_repairs_legacy_rejected_poll_gap_without_losing_queued_work(mon
     monkeypatch.setattr(transport, "_dispatch", dispatch)
     with _service(monkeypatch) as case:
         if restart_coordinator:
-            # The cross-epoch repair deliberately requires surviving owner
-            # history, as in the deployed coordinator's committed WAIT row.
+            # Retain a committed WAIT before the cross-epoch recovery.
             _eventually(lambda: _rows(
                 case.database,
                 "SELECT sequence FROM agent_poll_state WHERE result_json IS NOT NULL",
@@ -2053,35 +2052,41 @@ def test_restart_repairs_legacy_rejected_poll_gap_without_losing_queued_work(mon
             def expired(*args, **kwargs):
                 raise QueueConflictError("work poll requires a current offer")
 
-            # Produce the retained gap through the pinned old client's actual
-            # prepare/exchange/fence transitions, not a forged SQLite counter.
+            # A current client retains the rejected request and cannot move
+            # to the next sequence before the coordinator proves its outcome.
             monkeypatch.setattr(AgentSessionService, "_require_current_offer", expired)
-            for sequence in range(predecessor + 1, predecessor + 5):
-                value = {
-                    "session_id": session.session_id,
-                    "availability_revision": session.availability_revision,
-                    "sequence": sequence,
-                    "wait_timeout_ms": 100,
-                }
-                journal.prepare_poll(session.session_id, session.availability_revision, sequence, value)
-                with pytest.raises(QueueConflictError):
-                    owner._call("poll", value)
-                journal.fence_poll(session.session_id, sequence)
-            assert journal.next_poll_sequence(session.session_id) == predecessor + 5
+            sequence = predecessor + 1
+            value = {
+                "session_id": session.session_id,
+                "availability_revision": session.availability_revision,
+                "sequence": sequence,
+                "wait_timeout_ms": 100,
+            }
+            journal.prepare_poll(session.session_id, session.availability_revision, sequence, value)
+            with pytest.raises(QueueConflictError):
+                owner._call("poll", value)
+            from loom.queue.agent_sessions import AgentPollActiveError
+
+            with pytest.raises(AgentPollActiveError):
+                journal.prepare_poll(
+                    session.session_id, session.availability_revision,
+                    sequence + 1, {**value, "sequence": sequence + 1},
+                )
+            assert journal.next_poll_sequence(session.session_id) == predecessor + 2
             assert journal.has_unresolved_assignment_references()
         finally:
             owner.close()
             monkeypatch.setattr(AgentSessionService, "_require_current_offer", require_offer)
-        _submit(case, "queued-through-gap")
+        _submit(case, "queued-through-rejection")
         if restart_coordinator:
             case.daemon.stop()
             case.daemon.start()
         case.stop.clear()
         case.thread = Thread(target=case.serve)
         case.thread.start()
-        assert case.client.wait("queued-through-gap", timeout_seconds=30).state is LocalDaemonAdmissionState.SUCCEEDED
+        assert case.client.wait("queued-through-rejection", timeout_seconds=30).state is LocalDaemonAdmissionState.SUCCEEDED
         assert any(item.get("predecessor_sequence") == predecessor for item in recoveries)
-        assert len(_rows(case.database, "SELECT admission_id FROM managed_admissions WHERE queue_item_id = 'queued-through-gap'")) == 1
+        assert len(_rows(case.database, "SELECT admission_id FROM managed_admissions WHERE queue_item_id = 'queued-through-rejection'")) == 1
 
 
 def test_indeterminate_poll_replays_exact_bytes_before_due_offer_and_next_poll(

@@ -987,9 +987,6 @@ class AgentOffer:
 
     @classmethod
     def from_value(cls, value: object) -> "AgentOffer":
-        # An earlier native-only offer has exactly the same resource meaning.
-        if isinstance(value, Mapping) and "external_slurm_profiles" not in value:
-            value = {"external_slurm_profiles": [], **value}
         expected = {
             "external_slurm_profiles",
             "session_id",
@@ -1004,16 +1001,14 @@ class AgentOffer:
             "reflected_claim_ids",
             "resident_profiles",
             "gpu_devices",
+            "resource_status",
         }
         if not isinstance(value, Mapping) or set(value) not in (
             expected,
-            expected | {"resource_status"},
             expected | {"max_concurrent_assignments"},
-            expected | {"resource_status", "max_concurrent_assignments"},
         ):
             raise QueueServiceError("agent offer is invalid")
-        legacy = "resource_status" not in value
-        status_values = value.get("resource_status", ())
+        status_values = value["resource_status"]
         if not isinstance(status_values, (list, tuple)):
             raise QueueServiceError("agent offer resource status is invalid")
         statuses = tuple(
@@ -1097,26 +1092,9 @@ class AgentOffer:
             gpu_devices=tuple(
                 GpuDeviceDescriptor.from_dict(item) for item in gpu_devices
             ),
-            gpu_atoms=() if legacy else tuple(gpu_atoms),
-            capacity_atoms=tuple(
-                atom
-                for atom in capacity_atoms
-                if not legacy or atom.owner_resource_kind != "gpu"
-            ),
-            resource_status=(
-                tuple(
-                    ResourceAvailabilityStatus(
-                        "gpu",
-                        GpuDeviceDescriptor.from_dict(item).device_id,
-                        False,
-                        "observation_unavailable",
-                        None,
-                    )
-                    for item in gpu_devices
-                )
-                if legacy
-                else statuses
-            ),
+            gpu_atoms=tuple(gpu_atoms),
+            capacity_atoms=tuple(capacity_atoms),
+            resource_status=statuses,
         )
 
     @property
@@ -3042,16 +3020,15 @@ class AgentSessionService:
                 "WHERE principal_id = ? AND session_id = ?",
                 (rule.principal_id, session_id),
             ).fetchone()
-            current_epoch = coordinator_epoch == epoch
             if row is None:
-                if current_epoch:
-                    return {"state": "absent", "predecessor_sequence": 0}
                 if sequence != 1:
                     raise QueueConflictError("retained poll history is unavailable")
-                return {"state": "absent"}
-            if (current_epoch or coordinator_epoch == row["coordinator_epoch"]) and int(row["sequence"]) < sequence:
+                return {"state": "absent", "predecessor_sequence": 0}
+            if int(row["sequence"]) < sequence:
                 if bool(row["active"]):
                     raise AgentPollActiveError("work poll is already active")
+                if int(row["sequence"]) != sequence - 1:
+                    raise AgentPollSequenceGapError("retained poll sequence has a gap")
                 absent: dict[str, PlainData] = {
                     "state": "absent", "predecessor_sequence": int(row["sequence"]),
                 }
@@ -3064,9 +3041,6 @@ class AgentSessionService:
                             "request_digest": _digest(predecessor_request),
                         }
                 return absent
-            if int(row["sequence"]) == sequence - 1:
-                # The sole outstanding next request never reached this owner.
-                return {"state": "absent"}
             if int(row["sequence"]) != sequence or str(row["digest"]) != _digest(
                 request
             ):

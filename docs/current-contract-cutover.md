@@ -1106,3 +1106,34 @@ no product blockers, localized corrections or workflow issues. The reviewer
 verified the current contract paths, exact 81-case collection/receipt coverage,
 patch hash, unchanged source/test trees, static checks, documentation examples
 and merge eligibility. Only this review receipt changes afterward.
+
+## Current agent offers and poll recovery
+
+Implementation base: `22e0f09f4ef07d39a0e0b7046f427308180f2f82`.
+
+| Boundary | Producers and consumers | Selected contract / deletion |
+| --- | --- | --- |
+| Agent offer | `AgentOffer.value`, authenticated offer dispatch, local journal reload, scheduling and inspection | Require current `resource_status` and `external_slurm_profiles`; delete missing-field synthesis, GPU-atom removal and inferred unavailable observations. Current writer bytes remain unchanged. |
+| Coordinator/agent projections | Native status/agent/list writers and control clients | Require the resource-status fields already emitted by current writers; remove historical missing-field defaults. |
+| Retained work-poll recovery | Coordinator `recover_poll`, agent replay and retirement | Explicit immediate-predecessor proof for an absent next request, including across restart; reject historical sequence gaps and remove inferred predecessor fallback. Preserve exact request/delivery checksums and retained ownership. |
+| Local poll settlement | Journal, control application, cooperative agent service | Coordinator-confirmed `fence_poll` has one behavior. Current drain/reload fences remain unresolved until their outcome is proved; they cannot advance to another poll. Retain committed-delivery recovery across that control race. |
+
+The omitted assignment ceiling of one is the current writer's canonical compact
+default and stays supported, alongside explicit current ceilings. Likewise,
+`FENCED` is produced by current control and retirement operations; deleting its
+recovery would break a live cancellation/reload race. These are current contract
+semantics, not historical adapters. Definite offer-renewal rejection and
+indeterminate-response replay remain supported for current expiry and restart.
+Workspace/result and other remaining inventory rows are not closed by this slice.
+
+Validation selects the agent-session owner (including offers, GPU observations,
+strict codecs, retained deliveries and control/recovery), current status/control
+consumers, exact outbound rejection/restart and cancellation/concurrency cases,
+and the affected retirement acceptance. Retired missing-field offers must fail
+before coordinator mutation; historical sequence-gap refusals preserve owner
+rows. Current delivery-racing-control fixtures use the real control producer.
+Collection, lock and changed-file static checks precede execution. Expand for a
+new affected consumer, changed wire ownership, missing current mode or failed
+recovery assertion. Dependencies, scientific algorithms, reference writer and
+scaling behavior are unchanged; those passing receipts remain applicable and
+are not rerun by this bounded agent change.

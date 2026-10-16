@@ -139,7 +139,11 @@ claim may run concurrently on the remaining atoms.
 
 An offer binds agent/session/configuration, project and executor capabilities,
 inventory and availability revisions, pool, resource-contract versions, and
-coordinator-accepted receipt-time expiry. Coordinator restart requires session
+coordinator-accepted receipt-time expiry. Its wire representation requires the
+current resource-status and external-Slurm-profile fields, including empty lists
+when applicable; missing historical fields are rejected rather than synthesized.
+Coordinator and agent inspection projections likewise require their current
+resource-status fields. Coordinator restart requires session
 reconciliation and a freshly received current-epoch offer/work request before
 new delivery; a retained old offer cannot create a new assignment. Expiry
 removes only future schedulability. It
@@ -561,20 +565,20 @@ offer expiry and availability changes can reject before reservation. The agent
 keeps the exact request pending and uses authenticated native poll recovery after
 an unsuccessful replay. Only a committed receipt, a confirmed fence, or proof of
 absence settles it. An active or indeterminate request remains pending.
-Recovery also repairs legacy locally fenced sequence gaps against the same
-session's surviving coordinator watermark, including across a coordinator
-restart when that row belongs to the retained request's epoch. Missing history
-from an abandoned epoch remains unresolved. It never skips a predecessor
-delivery: its original wire request must already be retained unchanged by
-assignment ID.
+An absent-poll receipt explicitly identifies the immediately preceding sequence.
+Historical sequence gaps are rejected without repairing the retained state.
+The same next-request recovery works across a coordinator restart; missing
+history beyond the initial request remains unresolved. It never skips a
+predecessor delivery: its original wire request must already be retained
+unchanged by assignment ID.
 The coordinator supplies its request digest, not another nested copy of the
 assignment, preserving the existing transport body and nesting limits.
 Otherwise recovery fails closed without changing the poll or delivery owners.
-The existing local poll row records a confirmed fence or rewound watermark as
-`RECONCILED`; historical unconfirmed `FENCED` rows remain recovery-required.
-No poll-table schema change is required. A coordinator lacking current-epoch
-recovery support leaves the request retained rather than consuming another
-sequence.
+The existing local poll row records a confirmed fence or proven predecessor as
+`RECONCILED`. Current drain/reload operations can locally mark a poll `FENCED`
+while its reply is outstanding; this remains recovery-required and cannot
+authorize a later sequence. Recovery can still retain a delivery committed
+before that local control fence. No poll-table schema change is required.
 Availability-changing exchanges are ordered through reply application, including
 exact replay after a lost release response. Every offer reflects the complete
 provider claim set. A held worker or publication does not prevent an independent

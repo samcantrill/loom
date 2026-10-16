@@ -531,7 +531,7 @@ class _RemoteAgentJournal:
         return 1 if row is None else int(row["sequence"]) + 1
 
     def pending_poll(self) -> tuple[str, str, int] | None:
-        """Return an unresolved poll, including an active session's legacy fence."""
+        """Return an unresolved poll, including an active session's control fence."""
         with self._connection() as conn:
             row = conn.execute(
                 "SELECT session_id, availability_revision, sequence "
@@ -549,7 +549,7 @@ class _RemoteAgentJournal:
         )
 
     def recovery_poll(self, wait_timeout_ms: int) -> tuple[str, dict[str, PlainData]] | None:
-        """Read an unresolved request, including legacy unconfirmed fences."""
+        """Read an unresolved request, including a locally fenced control race."""
         with self._connection() as conn:
             row = conn.execute(
                 "SELECT p.* FROM agent_poll_state_local p "
@@ -571,11 +571,11 @@ class _RemoteAgentJournal:
 
     def discard_absent_poll(
         self, session_id: str, sequence: int, *,
-        predecessor_sequence: PlainData = None,
+        predecessor_sequence: PlainData,
         predecessor_delivery: PlainData = None,
     ) -> None:
-        predecessor = sequence - 1 if predecessor_sequence is None else predecessor_sequence
-        if isinstance(predecessor, bool) or not isinstance(predecessor, int) or not 0 <= predecessor < sequence:
+        predecessor = predecessor_sequence
+        if isinstance(predecessor, bool) or not isinstance(predecessor, int) or predecessor != sequence - 1 or predecessor < 0:
             raise QueueServiceError("poll recovery predecessor is invalid")
         with self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -605,8 +605,8 @@ class _RemoteAgentJournal:
                     (session_id, sequence),
                 )
             else:
-                # RECONCILED is an authority-confirmed watermark, unlike the
-                # old local FENCED state which did not prove consumption.
+                # The coordinator proves absence of exactly the next request;
+                # a local control fence alone cannot settle its sequence.
                 conn.execute(
                     "UPDATE agent_poll_state_local SET sequence = ?, state = 'RECONCILED' "
                     "WHERE session_id = ? AND sequence = ? AND state IN ('PENDING', 'FENCED') "
@@ -885,8 +885,8 @@ class _RemoteAgentJournal:
                         conn.commit()
                         return None
                     raise QueueConflictError("work poll was fenced and is not reusable")
-                if str(current["state"]) == "PENDING":
-                    raise AgentPollActiveError("work poll is already active")
+                if str(current["state"]) in {"PENDING", "FENCED"} and current["result_json"] is None:
+                    raise AgentPollActiveError("work poll outcome is unresolved")
                 conn.execute(
                     "UPDATE agent_poll_state_local SET availability_revision = ?, "
                     "sequence = ?, request_digest = ?, state = 'PENDING', "
@@ -1048,12 +1048,13 @@ class _RemoteAgentJournal:
             )
             conn.commit()
 
-    def fence_poll(self, session_id: str, sequence: int, *, confirmed: bool = False) -> None:
+    def fence_poll(self, session_id: str, sequence: int) -> None:
+        """Record the coordinator's confirmation that this poll was fenced."""
         with self._connection() as conn:
             conn.execute(
                 "UPDATE agent_poll_state_local SET state = ? "
                 "WHERE session_id = ? AND sequence = ?",
-                ("RECONCILED" if confirmed else "FENCED", session_id, sequence),
+                ("RECONCILED", session_id, sequence),
             )
             conn.commit()
 
