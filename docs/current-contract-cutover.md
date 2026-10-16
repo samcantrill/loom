@@ -1605,3 +1605,104 @@ inspection, produced/external ownership, start witnesses, digest transport and
 current replay/containment remain preserved. PR #426 is merge-eligible under
 its selected local gate. This final receipt changes only documentation; broader
 census and physical/paired adoption remain separate obligations.
+
+
+## Current run query and catalogue evidence
+
+Status: implementing on `fix/current-run-query-evidence`, base
+`2d91e456af7d6659f3cb7d66fb105fd5ce2ba173` (PR #426). This is the remaining
+query/catalogue delivery under the approved current-contract cutover.
+
+Producer/consumer trace: native composed-config persistence writes Weave's current
+`CompositionManifest.to_dict()` with `fingerprint_records` and the
+`artifact_safe_config` label. Both query acquisition and catalogue extraction
+instead search retired flat aliases. Native Git provenance writes `commit` and
+stage fingerprint records write `fingerprint`. ExecutionPlan has no whole-pipeline
+fingerprint member: all retained `pipeline_fingerprint` producers found in Loom
+are synthetic catalogue/CLI test fixtures. Rphys has no consumer of that query,
+summary or filter field (its private operation-pipeline hash is unrelated).
+Remove the unsupported summary/query/filter/CLI/comparison field together; keep
+current config and stage fingerprint comparison. Advance list/diff response versions and the disposable derived catalogue cache
+schema. Rebuild the cache from current sources without reading or converting old
+rows. No run/authority product is migrated.
+
+Current authority already retains run timing and confirmed attempt start timing.
+Use those facts, preserving unknown versus known-never-started query semantics.
+A stage finish requires its own successful current-attempt commit; an old reused
+commit or a revision/preparation timestamp cannot become an execution instant.
+Live catalogue artifacts come only from snapshot artifact facts, not uncommitted
+local index entries. Retained local inspection remains a separate projection.
+Authored run/runtime metadata remain their existing distinct metadata contracts;
+this change does not recreate mutable annotations already owned by #423.
+
+Affected boundaries: query acquisition and field validation, direct catalogue
+scan, derived SQLite persistence/filtering, comparison and CLI formatting/parser.
+Select their exact existing unit/contract/integration/CLI populations; add real
+native execution assertions for current composition fingerprints, confirmed
+start/finish and committed artifacts, plus old alias/CLI refusal and unchanged
+source bytes. Config-backed managed-query transport is a separate selected
+consumer. Cheap collection and static checks precede execution on a committed
+stable tree. Reuse all unaffected execution, Slurm, offline capture, scientific
+and physical receipts; this does not change their writers or dependency pins.
+Expand only for a concrete failure, reached changed consumer or uncovered
+accepted requirement. Independent final-diff review and merge/sync remain pending.
+
+Cheap admission checks pass: baseline collection selects 101 cases and deselects
+one config-backed native case, which the separate config selection includes
+alongside both Unix/HTTPS managed-query consumers (three cases). All changed
+Python files pass Ruff; changed source passes Pyright with zero errors. Changed
+ranges are formatted without rewriting unrelated pre-existing format debt.
+The 120-run catalogue fixture is retained in the selected population because the
+changed SQLite insertion/filter schema is its affected contract; no million-row
+or distributed/scientific workload is selected. Final execution receipts follow.
+
+
+First stable-tree execution at `9290edb2`: baseline 95 passed, six failed,
+one config case deselected; the separate config population ran all three and
+failed. Raw `run-query-{base,config}-9290edb2` logs/XML/metadata retain every
+outcome. Five baseline failures exposed old synthetic fixtures publishing only
+local artifact indexes while expecting authoritative outputs. The fixtures now
+use the existing authority allocation/commit API through the shared read-fixture
+owner; failed runs retain a genuine prior commit followed by a failed retry.
+Artifact identity/checksum/filter/comparison assertions remain. The sixth fixture
+still asserted the retired diff response version and now requires v2.
+
+The three new config assertions initially assumed a collection contained only
+one run and no control directories; actual native preparation produces its own
+run and known control directories alongside the target. Select the target URI
+explicitly and retain all timing, fingerprint, uncommitted-output and unchanged
+source assertions. Existing unrelated collection warnings are not hidden or
+changed by this delivery. These corrections are test-only: production source,
+dependencies and executable configuration remain exactly `9290edb2`. Recheck all
+consumers of the changed shared fixture and all three new config cases; retain
+unaffected passing baseline evidence. No failed assertion counts as a pass.
+
+
+Final local reconciliation: all **104 distinct selected cases pass**. At clean
+`da8edc987d49ef4f5fded5e700d0199adea48796`, all 17 affected baseline consumers and
+all three config cases passed (actual native execution plus Unix and HTTPS
+query transport). Together with unaffected passing `9290edb2` outcomes, there
+are no unresolved failures/errors/skips. The baseline's one deselected native
+case is explicitly included and passed in config. Raw XML, stable-tree metadata,
+source/correction diffs and per-case reconciliation are retained under
+`build/current-contract-cutover/run-query-*`; `run-query-coverage.json` owns the
+104-case union. The source tree stayed unchanged during both concurrent scopes.
+Final changed-file Ruff and diff checks pass; changed-source Pyright and locked
+dependency checks pass. No dependency, configuration, production code or fixture
+changes follow the final successful runs; only this receipt and removal of stale
+public documentation references follow them. Independent PR review is next.
+
+Independent final-diff review of PR #427 at
+`809baa4302cb36b2bd62b72adc1e5b717f5ab98b` passed with no product blocker,
+localized correction or workflow issue. The read-only Loom reviewer
+(`current_run_query_evidence_review`, gpt-6-astra/high,
+`fork_turns=none; file-backed`) verified current fingerprint extraction,
+pipeline-field retirement, authoritative timing/artifacts, retained metadata,
+cache regeneration and both response envelopes. The reviewer independently
+reconciled all 104 passing cases against raw receipts and checked affected
+fixture rechecks and static evidence; no extra execution was necessary.
+The manager verified the reviewed head, clean worktree, PR target `develop`,
+non-draft state and mergeability. This final addition changes only the receipt;
+merge and matching-tree synchronization are published in the existing PR.
+Physical Fleet/Slurm, scientific and downstream deployment qualification remain
+outside this delivery.

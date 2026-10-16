@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.support.authority_read_fixture import seed_catalogue_outputs
+
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -12,8 +14,6 @@ from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.status import (
     RunStatus,
     RunStatusRecord,
-    StageStatus,
-    StageStatusRecord,
 )
 from loom.pipeline.transition_policy import TransitionIntent
 from loom.pipeline.stores import path_to_run_uri
@@ -138,7 +138,6 @@ def test_run_catalog_list_filters_all_supported_kinds(tmp_path: Path) -> None:
         tag_value="other",
         checksum=format_digest("sha256", "2" * 64),
         config_fingerprint="config-other",
-        pipeline_fingerprint="pipeline-other",
         git_commit="def456",
         executor="remote",
         backend="remote",
@@ -150,7 +149,6 @@ def test_run_catalog_list_filters_all_supported_kinds(tmp_path: Path) -> None:
         [RunFilter(RunFilterKind.RUN_STATUS, "SUCCEEDED")],
         [RunFilter(RunFilterKind.TAG, "demo", key="project")],
         [RunFilter(RunFilterKind.CONFIG_FINGERPRINT, "config-demo")],
-        [RunFilter(RunFilterKind.PIPELINE_FINGERPRINT, "pipeline-demo")],
         [RunFilter(RunFilterKind.GIT_COMMIT, "abc123")],
         [RunFilter(RunFilterKind.STAGE_STATUS, "SUCCEEDED", key="build")],
         [RunFilter(RunFilterKind.ARTIFACT_IDENTITY, "build/out", key="build.out")],
@@ -236,7 +234,6 @@ def _create_catalog_run(
     tag_value: str,
     checksum: str | None = None,
     config_fingerprint: str = "config-demo",
-    pipeline_fingerprint: str = "pipeline-demo",
     git_commit: str = "abc123",
     executor: str = "local",
     backend: str = "local",
@@ -268,47 +265,41 @@ def _create_catalog_run(
             updated_at="2020-01-01T00:00:01Z",
         ),
     )
-    store.write_composition_manifest(run_uri, {"fingerprint": config_fingerprint})
-    store.write_plan(run_uri, {"pipeline_fingerprint": pipeline_fingerprint})
-    store.write_runtime_metadata(run_uri, {"executor": executor, "backend": backend})
-    store.write_provenance_document(run_uri, "git", {"commit": git_commit})
-    if status is RunStatus.SUCCEEDED:
-        store.write_stage_status(
-            run_uri,
-            "build",
-            StageStatusRecord(
-                run_uri=run_uri,
-                stage_name="build",
-                status=StageStatus.RUNNING,
-                attempt=1,
-                updated_at="2020-01-01T00:00:00Z",
-            ),
-        )
-    store.write_stage_status(
-        run_uri,
-        "build",
-        StageStatusRecord(
-            run_uri=run_uri,
-            stage_name="build",
-            status=StageStatus.SUCCEEDED
-            if status is RunStatus.SUCCEEDED
-            else StageStatus.FAILED,
-            attempt=1,
-            updated_at="2020-01-01T00:00:01Z",
-        ),
-    )
-    store.write_artifact_index(
+    store.write_composition_manifest(
         run_uri,
         {
-            "build.out": ArtifactRef(
-                artifact_id=artifact_id,
-                uri="file:///tmp/out.json",
-                artifact_type="json",
-                codec_key="json.v1",
-                checksum=checksum,
-                producer_stage="build",
-            )
+            "schema_version": 1,
+            "fingerprint_records": [
+                {
+                    "algorithm": "sha256",
+                    "label": "artifact_safe_config",
+                    "digest": config_fingerprint,
+                }
+            ],
         },
+    )
+    store.write_runtime_metadata(run_uri, {"executor": executor, "backend": backend})
+    store.write_provenance_document(run_uri, "git", {"commit": git_commit})
+    seed_catalogue_outputs(
+        store,
+        run_uri,
+        "build",
+        {
+            key.split(".", 1)[1]: value
+            for key, value in (
+                {
+                    "build.out": ArtifactRef(
+                        artifact_id=artifact_id,
+                        uri="file:///tmp/out.json",
+                        artifact_type="json",
+                        codec_key="json.v1",
+                        checksum=checksum,
+                        producer_stage="build",
+                    )
+                }
+            ).items()
+        },
+        failed=status is not RunStatus.SUCCEEDED,
     )
     return run_uri
 

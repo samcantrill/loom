@@ -99,7 +99,7 @@ def test_cli_runs_index_list_and_diff(tmp_path: Path) -> None:
         == 0
     )
     payload = json.loads(diff_stdout.getvalue())
-    assert payload["schema_version"] == "loom.cli.runs.diff.v1"
+    assert payload["schema_version"] == "loom.cli.runs.diff.v2"
     assert payload["result"]["sections"][0]["entries"][0]["status"] == "different"
     assert diff_stderr.getvalue() == ""
 
@@ -196,8 +196,19 @@ def _create_run(
             updated_at="2020-01-01T00:00:01Z",
         ),
     )
-    store.write_composition_manifest(run_uri, {"fingerprint": config_fingerprint})
-    store.write_plan(run_uri, {"pipeline_fingerprint": "pipeline-demo"})
+    store.write_composition_manifest(
+        run_uri,
+        {
+            "schema_version": 1,
+            "fingerprint_records": [
+                {
+                    "algorithm": "sha256",
+                    "label": "artifact_safe_config",
+                    "digest": config_fingerprint,
+                }
+            ],
+        },
+    )
     store.write_runtime_metadata(run_uri, {"executor": "local", "backend": "local"})
     if status is RunStatus.SUCCEEDED:
         store.write_stage_status(

@@ -78,7 +78,9 @@ def test_runs_list_json_contract(tmp_path: Path) -> None:
     )
 
     payload = json.loads(stdout.getvalue())
-    assert payload["schema_version"] == RUNS_LIST_SCHEMA_VERSION
+    assert (
+        payload["schema_version"] == RUNS_LIST_SCHEMA_VERSION == "loom.cli.runs.list.v2"
+    )
     assert payload["ok"] is True
     assert payload["warnings"] == []
     assert [summary["status"] for summary in payload["result"]["summaries"]] == [
@@ -119,7 +121,9 @@ def test_runs_diff_json_contract(tmp_path: Path) -> None:
     )
 
     payload = json.loads(stdout.getvalue())
-    assert payload["schema_version"] == RUNS_DIFF_SCHEMA_VERSION
+    assert (
+        payload["schema_version"] == RUNS_DIFF_SCHEMA_VERSION == "loom.cli.runs.diff.v2"
+    )
     assert payload["ok"] is True
     assert payload["warnings"] == []
     assert payload["result"]["left_run_uri"] == left_uri
@@ -239,8 +243,19 @@ def _create_run(
             updated_at="2020-01-01T00:00:01Z",
         ),
     )
-    store.write_composition_manifest(run_uri, {"fingerprint": "config-contract"})
-    store.write_plan(run_uri, {"pipeline_fingerprint": "pipeline-contract"})
+    store.write_composition_manifest(
+        run_uri,
+        {
+            "schema_version": 1,
+            "fingerprint_records": [
+                {
+                    "algorithm": "sha256",
+                    "label": "artifact_safe_config",
+                    "digest": "config-contract",
+                }
+            ],
+        },
+    )
     if status is RunStatus.SUCCEEDED:
         store.write_stage_status(
             run_uri,

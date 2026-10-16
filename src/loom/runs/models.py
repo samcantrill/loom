@@ -34,7 +34,6 @@ class RunFilterKind(StrEnum):
     RUN_STATUS = "run_status"
     TAG = "tag"
     CONFIG_FINGERPRINT = "config_fingerprint"
-    PIPELINE_FINGERPRINT = "pipeline_fingerprint"
     GIT_COMMIT = "git_commit"
     STAGE_STATUS = "stage_status"
     ARTIFACT_IDENTITY = "artifact_identity"
@@ -249,7 +248,6 @@ class RunSummary:
     metadata: Mapping[str, PlainData] = field(default_factory=dict)
     tags: Mapping[str, str] = field(default_factory=dict)
     config_fingerprint: str | None = None
-    pipeline_fingerprint: str | None = None
     git_commit: str | None = None
     executor: str | None = None
     backend: str | None = None
@@ -269,7 +267,6 @@ class RunSummary:
             "started_at",
             "finished_at",
             "config_fingerprint",
-            "pipeline_fingerprint",
             "git_commit",
             "executor",
             "backend",
@@ -317,7 +314,6 @@ class RunSummary:
             "metadata": thaw_plain_data(self.metadata, path="metadata"),
             "tags": dict(self.tags),
             "config_fingerprint": self.config_fingerprint,
-            "pipeline_fingerprint": self.pipeline_fingerprint,
             "git_commit": self.git_commit,
             "executor": self.executor,
             "backend": self.backend,

@@ -36,8 +36,8 @@ if TYPE_CHECKING:
 
 
 RUNS_INDEX_SCHEMA_VERSION = "loom.cli.runs.index.v1"
-RUNS_LIST_SCHEMA_VERSION = "loom.cli.runs.list.v1"
-RUNS_DIFF_SCHEMA_VERSION = "loom.cli.runs.diff.v1"
+RUNS_LIST_SCHEMA_VERSION = "loom.cli.runs.list.v2"
+RUNS_DIFF_SCHEMA_VERSION = "loom.cli.runs.diff.v2"
 RUNS_EXPORT_SCHEMA_VERSION = "loom.cli.runs.export.v1"
 RUNS_INSPECT_SCHEMA_VERSION = "loom.cli.runs.inspect.v1"
 RUNS_IMPORT_SCHEMA_VERSION = "loom.cli.runs.import.v1"
@@ -147,12 +147,6 @@ def register_subparser(
     )
     list_parser.add_argument(
         "--config-fingerprint",
-        action="append",
-        default=None,
-        metavar="VALUE",
-    )
-    list_parser.add_argument(
-        "--pipeline-fingerprint",
         action="append",
         default=None,
         metavar="VALUE",
@@ -666,10 +660,6 @@ def filters_from_namespace(namespace: argparse.Namespace) -> tuple["RunFilter", 
     filters.extend(
         RunFilter(RunFilterKind.CONFIG_FINGERPRINT, value)
         for value in _string_values(namespace, "config_fingerprint")
-    )
-    filters.extend(
-        RunFilter(RunFilterKind.PIPELINE_FINGERPRINT, value)
-        for value in _string_values(namespace, "pipeline_fingerprint")
     )
     filters.extend(
         RunFilter(RunFilterKind.GIT_COMMIT, value)

@@ -39,7 +39,6 @@ _COMMON = {
     "principal_id",
     "coordinator_id",
     "config_fingerprint",
-    "pipeline_fingerprint",
     "git_repository",
     "git_commit",
     "git_dirty",

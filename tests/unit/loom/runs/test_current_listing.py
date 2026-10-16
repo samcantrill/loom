@@ -135,7 +135,6 @@ def _record(
             status=status,
             tags=tags or {"project": "demo"},
             config_fingerprint="config-fp",
-            pipeline_fingerprint="pipeline-fp",
             git_commit="abc123",
             executor="local",
             backend="local",

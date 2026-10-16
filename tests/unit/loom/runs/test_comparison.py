@@ -18,7 +18,6 @@ def test_compare_summaries_builds_stable_sections_and_scalar_statuses() -> None:
             run_uri="file:///runs/a",
             status="SUCCEEDED",
             config_fingerprint="config-a",
-            pipeline_fingerprint="pipeline",
             git_commit="abc123",
             executor="local",
             backend="local",
@@ -27,7 +26,6 @@ def test_compare_summaries_builds_stable_sections_and_scalar_statuses() -> None:
             run_uri="file:///runs/b",
             status="FAILED",
             config_fingerprint="config-b",
-            pipeline_fingerprint="pipeline",
             git_commit=None,
             executor="local",
             backend="slurm",
@@ -45,7 +43,6 @@ def test_compare_summaries_builds_stable_sections_and_scalar_statuses() -> None:
     entries = {entry.key: entry for section in comparison for entry in section.entries}
     assert entries["run.status"].status == ComparisonStatus.DIFFERENT
     assert entries["fingerprints.config"].status == ComparisonStatus.DIFFERENT
-    assert entries["fingerprints.pipeline"].status == ComparisonStatus.SAME
     assert entries["execution.executor"].status == ComparisonStatus.SAME
     assert entries["execution.backend"].status == ComparisonStatus.DIFFERENT
     assert entries["provenance.git.commit"].status == ComparisonStatus.UNKNOWN

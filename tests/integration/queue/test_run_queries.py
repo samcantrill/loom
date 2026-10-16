@@ -195,6 +195,19 @@ def test_native_query_routes_context_text_scope_and_cli(
             assert chronological.items[0]["identity"] == uri
             fields: Any = client.query_fields()
             assert "git_commit" in fields["native_fields"]
+            assert "pipeline_fingerprint" not in fields["native_fields"]
+            timing = client.search_runs(
+                RunQuery(
+                    where=Compare(Field("native", ("run_uri",)), "eq", uri),
+                    select=(
+                        Field("native", ("started_at",)),
+                        Field("native", ("finished_at",)),
+                    ),
+                )
+            )
+            assert len(timing.items) == 1
+            assert timing.items[0]["native"]["started_at"]
+            assert timing.items[0]["native"]["finished_at"]
             with pytest.raises(CoordinatorClientError) as unsupported:
                 client._native_call(
                     "search_runs",

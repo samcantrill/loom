@@ -1,5 +1,14 @@
 # Native run discovery
 
+Native configuration identity uses the retained composition manifest's
+`artifact_safe_config` fingerprint record. Git identity uses its current `commit`
+member; old flat aliases do not supply missing facts. Whole-pipeline fingerprint
+fields are unsupported because native execution does not produce that identity.
+Run times come from authority, with unknown start evidence distinct from a known
+run that has never started. Stage start requires a confirmed execution witness;
+stage finish requires its own successful current-attempt commit. Preparation,
+revision and reused-output timestamps do not stand in for execution times.
+
 Tag vocabulary pages report distinct observations within each page, not a global
 registry or snapshot. Keys or values can repeat across pages. Each page acquires
 at most 500 detailed run records, including when no requested values occur.

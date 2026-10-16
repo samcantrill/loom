@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.support.authority_read_fixture import seed_catalogue_outputs
+
 import io
 import json
 from pathlib import Path
@@ -14,8 +16,6 @@ from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.status import (
     RunStatus,
     RunStatusRecord,
-    StageStatus,
-    StageStatusRecord,
 )
 from loom.pipeline.stores import path_to_run_uri
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
@@ -233,46 +233,40 @@ def _create_run(
             updated_at="2020-01-01T00:00:01Z",
         ),
     )
-    store.write_composition_manifest(run_uri, {"fingerprint": config_fingerprint})
-    store.write_plan(run_uri, {"pipeline_fingerprint": "pipeline-demo"})
-    store.write_runtime_metadata(run_uri, {"executor": "local", "backend": "local"})
-    if status is RunStatus.SUCCEEDED:
-        store.write_stage_status(
-            run_uri,
-            "build",
-            StageStatusRecord(
-                run_uri=run_uri,
-                stage_name="build",
-                status=StageStatus.RUNNING,
-                attempt=1,
-                updated_at="2020-01-01T00:00:00Z",
-            ),
-        )
-    store.write_stage_status(
-        run_uri,
-        "build",
-        StageStatusRecord(
-            run_uri=run_uri,
-            stage_name="build",
-            status=StageStatus.SUCCEEDED
-            if status is RunStatus.SUCCEEDED
-            else StageStatus.FAILED,
-            attempt=1,
-            updated_at="2020-01-01T00:00:01Z",
-        ),
-    )
-    store.write_artifact_index(
+    store.write_composition_manifest(
         run_uri,
         {
-            "build.out": ArtifactRef(
-                artifact_id="build/out",
-                uri="file:///tmp/out.json",
-                artifact_type="json",
-                codec_key="json.v1",
-                checksum=checksum or format_digest("sha256", "a" * 64),
-                producer_stage="build",
-            )
+            "schema_version": 1,
+            "fingerprint_records": [
+                {
+                    "algorithm": "sha256",
+                    "label": "artifact_safe_config",
+                    "digest": config_fingerprint,
+                }
+            ],
         },
+    )
+    store.write_runtime_metadata(run_uri, {"executor": "local", "backend": "local"})
+    seed_catalogue_outputs(
+        store,
+        run_uri,
+        "build",
+        {
+            key.split(".", 1)[1]: value
+            for key, value in (
+                {
+                    "build.out": ArtifactRef(
+                        artifact_id="build/out",
+                        uri="file:///tmp/out.json",
+                        artifact_type="json",
+                        codec_key="json.v1",
+                        checksum=checksum or format_digest("sha256", "a" * 64),
+                        producer_stage="build",
+                    )
+                }
+            ).items()
+        },
+        failed=status is not RunStatus.SUCCEEDED,
     )
     return run_uri
 

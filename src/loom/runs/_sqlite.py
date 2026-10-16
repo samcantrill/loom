@@ -27,13 +27,12 @@ from .models import (
 
 CATALOG_SIDECAR_DIR = ".loom_catalog"
 CATALOG_DB_FILENAME = "catalog.sqlite"
-CATALOG_SCHEMA_VERSION = 1
+CATALOG_SCHEMA_VERSION = 2
 _BUSY_TIMEOUT_MS = 5000
 _RUN_LEVEL_FILTERS = frozenset(
     {
         RunFilterKind.RUN_STATUS,
         RunFilterKind.CONFIG_FINGERPRINT,
-        RunFilterKind.PIPELINE_FINGERPRINT,
         RunFilterKind.GIT_COMMIT,
         RunFilterKind.EXECUTOR,
         RunFilterKind.BACKEND,
@@ -280,7 +279,6 @@ def _create_schema(connection: Any) -> None:
             metadata_json TEXT NOT NULL,
             tags_json TEXT NOT NULL,
             config_fingerprint TEXT,
-            pipeline_fingerprint TEXT,
             git_commit TEXT,
             executor TEXT,
             backend TEXT,
@@ -417,7 +415,6 @@ def _insert_record(
             metadata_json,
             tags_json,
             config_fingerprint,
-            pipeline_fingerprint,
             git_commit,
             executor,
             backend,
@@ -426,7 +423,7 @@ def _insert_record(
             freshness_revision,
             indexed_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             summary.run_uri,
@@ -441,7 +438,6 @@ def _insert_record(
             _json(summary_data["metadata"]),
             _json(summary_data["tags"]),
             summary.config_fingerprint,
-            summary.pipeline_fingerprint,
             summary.git_commit,
             summary.executor,
             summary.backend,
@@ -569,7 +565,6 @@ def _filter_facts(summary: RunSummary) -> Iterable[tuple[str, str | None, str]]:
         yield (RunFilterKind.TAG.value, key, value)
     for kind, value in (
         (RunFilterKind.CONFIG_FINGERPRINT, summary.config_fingerprint),
-        (RunFilterKind.PIPELINE_FINGERPRINT, summary.pipeline_fingerprint),
         (RunFilterKind.GIT_COMMIT, summary.git_commit),
         (RunFilterKind.EXECUTOR, summary.executor),
         (RunFilterKind.BACKEND, summary.backend),
@@ -650,9 +645,6 @@ def _run_summary_from_data(data: Mapping[str, PlainData]) -> RunSummary:
             tags=_str_mapping(data.get("tags"), "tags"),
             config_fingerprint=_optional_str(
                 data.get("config_fingerprint"), "config_fingerprint"
-            ),
-            pipeline_fingerprint=_optional_str(
-                data.get("pipeline_fingerprint"), "pipeline_fingerprint"
             ),
             git_commit=_optional_str(data.get("git_commit"), "git_commit"),
             executor=_optional_str(data.get("executor"), "executor"),

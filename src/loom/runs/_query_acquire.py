@@ -10,7 +10,12 @@ from loom.pipeline.stores.errors import StoreError
 from loom.timestamps import utc_timestamp
 
 from .query import QueryRecord, RunQuery, UNAVAILABLE
-from ._extract import _first_string
+from ._extract import (
+    _composition_fingerprint,
+    _stage_finished_at,
+    _stage_started_at,
+    _string_or_none,
+)
 
 
 def needs_notes(query: RunQuery) -> bool:
@@ -40,25 +45,12 @@ def acquire_run(
         native["created_at"] = document.get("created_at", UNAVAILABLE)
         runtime = store.read_runtime_metadata(run_uri) or {}
         composition = store.read_composition_manifest(run_uri) or {}
-        plan = store.read_plan(run_uri) or {}
         git = store.read_provenance_document(run_uri, "git") or {}
         native.update(
-            config_fingerprint=_first_string(
-                composition,
-                "config_fingerprint",
-                "fingerprint",
-                "artifact_fingerprint",
-                "content_fingerprint",
-            )
-            or UNAVAILABLE,
-            pipeline_fingerprint=_first_string(
-                plan, "pipeline_fingerprint", "fingerprint", "plan_fingerprint"
-            )
-            or UNAVAILABLE,
+            config_fingerprint=_composition_fingerprint(composition) or UNAVAILABLE,
             git_repository=git.get("remote_url")
             or git.get("repository_root", UNAVAILABLE),
-            git_commit=_first_string(git, "commit", "sha", "head_commit", "revision")
-            or UNAVAILABLE,
+            git_commit=_string_or_none(git.get("commit")) or UNAVAILABLE,
             git_dirty=git.get("is_dirty", UNAVAILABLE),
             executor=runtime.get("executor", UNAVAILABLE),
             backend=runtime.get("backend", UNAVAILABLE),
@@ -72,24 +64,16 @@ def acquire_run(
             return record
         snapshot = authority.open_run(run_uri)
         native["status"] = snapshot.status.value
-        # Authority snapshots retain lifecycle status but do not retain exact
-        # run start/finish instants. Revision and preparation times are different facts.
-        native["started_at"] = native["finished_at"] = UNAVAILABLE
+        native["started_at"] = (
+            snapshot.started_at if snapshot.started_at_known else UNAVAILABLE
+        )
+        native["finished_at"] = snapshot.finished_at or UNAVAILABLE
         record.observation.update(
             state_source="authoritative", revision=snapshot.revision.to_dict()
         )
         stages = []
         for stage in snapshot.stages:
             latest = stage.attempts[-1] if stage.attempts else None
-            commit = stage.latest_commit
-            own_terminal_commit = (
-                commit is not None
-                and latest is not None
-                and stage.status.value == "SUCCEEDED"
-                and commit.run_uri == run_uri
-                and commit.stage_name == stage.stage_name
-                and commit.attempt_id == latest.attempt_id
-            )
             stages.append(
                 QueryRecord(
                     {
@@ -98,10 +82,9 @@ def acquire_run(
                             "status": stage.status.value,
                             "attempt": latest.attempt if latest else UNAVAILABLE,
                             "created_at": latest.created_at if latest else UNAVAILABLE,
-                            "started_at": UNAVAILABLE,
-                            "finished_at": commit.committed_at
-                            if own_terminal_commit and commit is not None
-                            else UNAVAILABLE,
+                            "started_at": _stage_started_at(stage) or UNAVAILABLE,
+                            "finished_at": _stage_finished_at(stage, run_uri)
+                            or UNAVAILABLE,
                         }
                     }
                 )

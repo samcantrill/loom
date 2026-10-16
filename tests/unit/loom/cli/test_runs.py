@@ -44,6 +44,20 @@ from loom.runs import (
 pytestmark = pytest.mark.unit
 
 
+def test_retired_pipeline_filter_refuses_before_catalogue_access(tmp_path):
+    collection = tmp_path / "absent"
+    stderr = io.StringIO()
+    assert (
+        main(
+            ["runs", "list", str(collection), "--pipeline-fingerprint", "old"],
+            stderr=stderr,
+        )
+        == 2
+    )
+    assert "unrecognized arguments" in stderr.getvalue()
+    assert not collection.exists()
+
+
 def test_runs_index_json_preserves_warning_details(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -110,7 +124,6 @@ def test_runs_list_builds_filters_and_formats_text(
                     run_uri="file:///tmp/runs/a",
                     status="SUCCEEDED",
                     config_fingerprint="config-a",
-                    pipeline_fingerprint="pipeline-a",
                     git_commit="abc123",
                 )
             ]
@@ -132,8 +145,6 @@ def test_runs_list_builds_filters_and_formats_text(
                 "project=demo",
                 "--config-fingerprint",
                 "config-a",
-                "--pipeline-fingerprint",
-                "pipeline-a",
                 "--commit",
                 "abc123",
                 "--stage-status",
@@ -159,7 +170,6 @@ def test_runs_list_builds_filters_and_formats_text(
         (RunFilterKind.RUN_STATUS, None, "SUCCEEDED"),
         (RunFilterKind.TAG, "project", "demo"),
         (RunFilterKind.CONFIG_FINGERPRINT, None, "config-a"),
-        (RunFilterKind.PIPELINE_FINGERPRINT, None, "pipeline-a"),
         (RunFilterKind.GIT_COMMIT, None, "abc123"),
         (RunFilterKind.STAGE_STATUS, "build", "SUCCEEDED"),
         (RunFilterKind.ARTIFACT_IDENTITY, "build.out", "build/out"),
