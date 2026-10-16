@@ -177,7 +177,9 @@ def _persist_rejected_slurm_run(run_root: Path, profile: SlurmReadyStageProfile)
     plan = plan_pipeline(
         pipeline,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
+        plans=run_store,
         artifact_store=LocalArtifactStore(run_store.local_artifact_root(run_uri)),
         persist=True,
     )
@@ -454,7 +456,9 @@ def _exercise_mixed_route_run(
     plan = plan_pipeline(
         pipeline,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
+        plans=run_store,
         artifact_store=LocalArtifactStore(run_store.local_artifact_root(run_uri)),
         persist=True,
     )
@@ -1626,7 +1630,9 @@ def test_unavailable_slurm_root_does_not_starve_independent_managed_root(
     plan = plan_pipeline(
         pipeline,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
+        plans=run_store,
         artifact_store=LocalArtifactStore(run_store.local_artifact_root(run_uri)),
         persist=True,
     )
@@ -1736,7 +1742,9 @@ def test_parallel_slurm_stages_honor_the_profile_outstanding_limit(
     plan = plan_pipeline(
         pipeline,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
+        plans=run_store,
         artifact_store=LocalArtifactStore(run_store.local_artifact_root(run_uri)),
         persist=True,
     )

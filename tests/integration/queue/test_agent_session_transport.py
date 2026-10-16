@@ -2007,7 +2007,9 @@ def _prepare_remote_producer_run(
     plan = plan_pipeline(
         spec,
         run_uri=run_uri,
-        run_store=store,
+        stage_state=store,
+        artifact_index=store,
+        plans=store,
         artifact_store=LocalArtifactStore(store.local_artifact_root(run_uri)),
         persist=True,
     )
@@ -2074,7 +2076,9 @@ def _prepare_mixed_local_remote_sleep_run(
     plan = plan_pipeline(
         spec,
         run_uri=run_uri,
-        run_store=store,
+        stage_state=store,
+        artifact_index=store,
+        plans=store,
         artifact_store=LocalArtifactStore(store.local_artifact_root(run_uri)),
         persist=True,
     )
@@ -2141,7 +2145,9 @@ def _prepare_remote_sleep_run(
     plan = plan_pipeline(
         spec,
         run_uri=run_uri,
-        run_store=store,
+        stage_state=store,
+        artifact_index=store,
+        plans=store,
         artifact_store=LocalArtifactStore(store.local_artifact_root(run_uri)),
         persist=True,
     )
@@ -2759,7 +2765,9 @@ def _prepare_gpu_environment_run(
     plan = plan_pipeline(
         spec,
         run_uri=run_uri,
-        run_store=store,
+        stage_state=store,
+        artifact_index=store,
+        plans=store,
         artifact_store=LocalArtifactStore(store.local_artifact_root(run_uri)),
         persist=True,
     )
@@ -5574,7 +5582,9 @@ def test_loopback_remote_agent_declines_then_executes_and_commits_real_stages(
     plan = plan_pipeline(
         spec,
         run_uri=run_uri,
-        run_store=store,
+        stage_state=store,
+        artifact_index=store,
+        plans=store,
         artifact_store=LocalArtifactStore(store.local_artifact_root(run_uri)),
         persist=True,
     )

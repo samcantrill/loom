@@ -2221,7 +2221,9 @@ def test_reuse_only_plan_completes_from_planned_without_new_attempt(
     plan = plan_pipeline(
         pipeline,
         run_uri=run_uri,
-        run_store=store,
+        stage_state=store,
+        artifact_index=store,
+        plans=store,
         artifact_store=artifacts,
         persist=True,
     )

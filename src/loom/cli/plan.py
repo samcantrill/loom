@@ -31,7 +31,11 @@ if TYPE_CHECKING:
     from loom.pipeline.specs import PipelineSpec
     from loom.pipeline.stores.artifact_store import ArtifactStore
     from loom.pipeline.stores import AuthorityConfig
-    from loom.pipeline.stores.run_store import LegacyRunStore
+    from loom.pipeline.stores.run_store import (
+        RunArtifactIndexStore,
+        RunPlanStore,
+        StageStateStore,
+    )
     from loom.pipeline.validation import PipelineValidationResult
     from loom.pipeline.resources import ResourceValidatorRegistry
     from loom.pipeline.runtime import ExecutorDescriptorRegistry
@@ -39,20 +43,6 @@ if TYPE_CHECKING:
 
 PLAN_RESULT_SCHEMA_VERSION = "loom.cli.plan.v2"
 _HYPOTHETICAL_PLAN_RUN_URI = "file:///__loom_plan_hypothetical__"
-
-
-class _UnavailableRunStore:
-    """Run-store sentinel for fresh read-only planning."""
-
-    def __getattr__(self, name: str) -> object:
-        raise AssertionError(f"fresh planning must not inspect run state via {name}")
-
-
-class _UnavailableArtifactStore:
-    """Artifact-store sentinel for fresh read-only planning."""
-
-    def __getattr__(self, name: str) -> object:
-        raise AssertionError(f"fresh planning must not inspect artifacts via {name}")
 
 
 def register_subparser(
@@ -264,15 +254,20 @@ def build_plan_result(
         and runtime_options.to_resume_options().enabled
         and run_uri is not None
     )
-    run_store, artifact_store, planner_run_uri = _stores_for_plan(
-        store,
-        run_uri,
-        resume_enabled=resume_enabled,
-    )
+    if resume_enabled:
+        from loom.pipeline.stores import LocalArtifactStore
+
+        assert store is not None and run_uri is not None
+        artifact_store = LocalArtifactStore(store.local_artifact_root(run_uri))
+    else:
+        store = None
+        artifact_store = None
     plan = _plan_pipeline(
         pipeline_result.spec,
-        run_uri=planner_run_uri,
-        run_store=run_store,
+        run_uri=run_uri or _HYPOTHETICAL_PLAN_RUN_URI,
+        plans=store,
+        stage_state=store,
+        artifact_index=store,
         artifact_store=artifact_store,
         selectors=selectors,
         resume_enabled=resume_enabled,
@@ -415,48 +410,20 @@ def _resolve_run_uri_for_plan(
     return resolved
 
 
-def _stores_for_plan(
-    store: Any | None,
-    run_uri: str | None,
-    *,
-    resume_enabled: bool,
-) -> tuple["LegacyRunStore", "ArtifactStore", str]:
-    if run_uri is None:
-        return (
-            cast("LegacyRunStore", _UnavailableRunStore()),
-            cast("ArtifactStore", _UnavailableArtifactStore()),
-            _HYPOTHETICAL_PLAN_RUN_URI,
-        )
-    if not resume_enabled:
-        return (
-            cast("LegacyRunStore", _UnavailableRunStore()),
-            cast("ArtifactStore", _UnavailableArtifactStore()),
-            run_uri,
-        )
-
-    from loom.pipeline.stores import LocalArtifactStore
-
-    if store is None:
-        raise AssertionError("resolved plan run URI requires a run store")
-    return (
-        cast("LegacyRunStore", store),
-        LocalArtifactStore(store.local_artifact_root(run_uri)),
-        run_uri,
-    )
-
-
 def _plan_pipeline(
     spec: "PipelineSpec",
     *,
     run_uri: str,
-    run_store: "LegacyRunStore",
-    artifact_store: "ArtifactStore",
+    plans: "RunPlanStore | None",
+    stage_state: "StageStateStore | None",
+    artifact_index: "RunArtifactIndexStore | None",
+    artifact_store: "ArtifactStore | None",
     selectors: "PlanSelectors",
     resume_enabled: bool,
 ) -> "ExecutionPlan":
     from loom.pipeline.planning import ExecutionPlan, ResumeOptions, plan_pipeline
 
-    saved_plan = run_store.read_plan(run_uri) if resume_enabled else None
+    saved_plan = plans.read_plan(run_uri) if plans is not None else None
     context = (
         None
         if saved_plan is None
@@ -465,7 +432,9 @@ def _plan_pipeline(
     return plan_pipeline(
         spec,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=stage_state,
+        artifact_index=artifact_index,
+        plans=plans,
         artifact_store=artifact_store,
         selectors=selectors,
         resume=ResumeOptions(enabled=resume_enabled),

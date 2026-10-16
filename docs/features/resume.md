@@ -33,6 +33,31 @@ producer and downstream branch with superseding commits while an independent
 branch remains reusable. Ordinary authored config changes after an authority
 output commit fail closed rather than overwriting that commit.
 
+Python planning uses explicit state owners. `stage_state` supplies retained
+stage status, inputs, outputs and fingerprints; `artifact_index` supplies the
+run's output index; `artifact_store` validates payloads. `plans` is required only
+when persisting the resulting plan. A concrete backend may provide several of
+these interfaces, but the planner does not require an aggregate run store:
+
+```python
+plan = plan_pipeline(
+    spec,
+    run_uri=run_uri,
+    stage_state=store,
+    artifact_index=store,
+    artifact_store=artifacts,
+    plans=store,
+    persist=True,
+)
+```
+
+For a fresh dry plan, pass `resume=ResumeOptions(enabled=False)` and omit all
+stores. That path neither reads retained state nor creates a run. Enabled
+resume requires all three read/validation owners; a missing owner is an invalid
+request, not evidence that no prior result exists. The former `run_store`
+argument is removed, without an alias. The public `check_stage_resume` helper
+likewise takes `stage_state`, `artifact_index` and `artifact_store` explicitly.
+
 ## Quick Start
 
 Run the local reuse and checksum-repair walkthrough:
@@ -53,8 +78,14 @@ state remain project or future-runtime concerns.
 Use this architecture:
 
 ```text
-RunStore:
-  persisted run state, stage status, inputs, outputs, fingerprints, artifact index
+StageStateStore:
+  persisted stage status, inputs, outputs and fingerprints
+
+RunArtifactIndexStore:
+  indexed output references
+
+RunPlanStore:
+  optional plan persistence
 
 ArtifactStore:
   artifact existence and checksum verification when supported

@@ -320,7 +320,9 @@ def test_managed_local_assignment_commits_accessible_output_then_releases(
     plan = plan_pipeline(
         spec,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
+        plans=run_store,
         artifact_store=LocalArtifactStore(run_store.local_artifact_root(run_uri)),
         persist=True,
     )
@@ -704,7 +706,9 @@ def test_managed_local_failure_terminalizes_before_capacity_release(
     plan = plan_pipeline(
         spec,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
+        plans=run_store,
         artifact_store=LocalArtifactStore(run_store.local_artifact_root(run_uri)),
         persist=True,
     )
@@ -955,7 +959,9 @@ def test_definitive_decline_replays_after_unbind_response_is_lost(
     plan = plan_pipeline(
         spec,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
+        plans=run_store,
         artifact_store=LocalArtifactStore(run_store.local_artifact_root(run_uri)),
         persist=True,
     )
@@ -1180,7 +1186,9 @@ def test_managed_independent_same_run_workers_overlap_without_run_lock(
     plan = plan_pipeline(
         spec,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
+        plans=run_store,
         artifact_store=LocalArtifactStore(run_store.local_artifact_root(run_uri)),
         persist=True,
     )

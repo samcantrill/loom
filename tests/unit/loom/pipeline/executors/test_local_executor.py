@@ -49,7 +49,9 @@ def _request(
     plan = plan_pipeline(
         PipelineSpec(stages=(stage,)),
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
+        plans=run_store,
         artifact_store=artifact_store,
         persist=True,
     )

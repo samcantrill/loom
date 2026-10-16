@@ -339,7 +339,9 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
     plan = plan_pipeline(
         spec,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
+        plans=run_store,
         artifact_store=LocalArtifactStore(run_store.local_artifact_root(run_uri)),
         persist=True,
     )
@@ -1280,7 +1282,9 @@ def test_connected_active_cancellation_withholds_output_commit(
     plan = plan_pipeline(
         spec,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
+        plans=run_store,
         artifact_store=LocalArtifactStore(run_store.local_artifact_root(run_uri)),
         persist=True,
     )
@@ -2858,7 +2862,9 @@ def test_run_result_owner_projects_complete_failures_or_fails_closed(
     plan = plan_pipeline(
         PipelineSpec.from_config(pipeline),
         run_uri=run_uri,
-        run_store=store,
+        stage_state=store,
+        artifact_index=store,
+        plans=store,
         artifact_store=LocalArtifactStore(store.local_artifact_root(run_uri)),
         persist=True,
     )
@@ -3252,7 +3258,9 @@ def test_stage_cancellation_contains_running_sibling_and_closes_downstream(
     plan = plan_pipeline(
         pipeline,
         run_uri=run_uri,
-        run_store=store,
+        stage_state=store,
+        artifact_index=store,
+        plans=store,
         artifact_store=LocalArtifactStore(store.local_artifact_root(run_uri)),
         persist=True,
     )
@@ -3537,7 +3545,9 @@ def _persist_single_stage_run(
     plan = plan_pipeline(
         spec,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
+        plans=run_store,
         artifact_store=LocalArtifactStore(run_store.local_artifact_root(run_uri)),
         selectors=PlanSelectors(skip_stages=("build",)) if skip else None,
         persist=True,
@@ -3608,7 +3618,9 @@ def _persist_sleep_run(
     plan = plan_pipeline(
         spec,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
+        plans=run_store,
         artifact_store=LocalArtifactStore(run_store.local_artifact_root(run_uri)),
         persist=True,
     )

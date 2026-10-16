@@ -91,7 +91,9 @@ def _prepared_run(
     plan = plan_pipeline(
         spec,
         run_uri=run_uri,
-        run_store=store,
+        stage_state=store,
+        artifact_index=store,
+        plans=store,
         artifact_store=LocalArtifactStore(store.local_artifact_root(run_uri)),
         persist=persist_plan,
     )
@@ -226,7 +228,7 @@ def test_public_admission_rejects_reserved_metadata_before_writes(tmp_path, key)
         store.create_run(uri, metadata={key: {}})
     assert not store.run_uri_exists(uri)
     spec = _spec()
-    plan = plan_pipeline(spec, run_uri=uri, run_store=store,
+    plan = plan_pipeline(spec, run_uri=uri, stage_state=store, artifact_index=store, plans=store,
         artifact_store=LocalArtifactStore(store.local_artifact_root(uri)), persist=False)
     with pytest.raises(ValueError, match="reserved"):
         prepare_stage_attempt(run_store=store, run_uri=uri, stage=spec.get_stage("build"),

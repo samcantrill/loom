@@ -571,3 +571,88 @@ runtime source, tests, fixtures, configuration and dependencies are unchanged.
 [Loom #413](https://github.com/samcantrill/loom/pull/413) owns remote merge and
 matching-tree synchronization metadata. The remaining cutover inventory and
 paired downstream adoption remain open.
+
+## Current planning service dependencies
+
+Base `9e2d667e994174880282cf5b799a9fb0f2687af9`, branch
+`refactor/current-planning-services`. This delivery moves planning, resume and
+CLI planning off `LegacyRunStore`, with all reached current callers. The full
+aggregate removal remains open until lifecycle, stage-attempt preparation,
+reliability and status consumers have also moved. Then delete the aggregate and
+`RuntimeServices.from_legacy`, preserving the public explicit runtime-service
+executor-factory contract. No replacement aggregate or compatibility adapter is
+introduced by this planning API.
+
+Planning consumes plan, stage-state, artifact-index and artifact-store owners;
+dry planning has no store access and no fake unavailable-store objects. Resume
+requires explicit stage-state/index/artifact owners; persistence separately
+requires the plan owner. Required missing dependencies fail before planning
+reads or writes. Fingerprint, artifact checksum/type, reuse, invalidation and
+plan-document semantics are unchanged. Concrete local storage can implement
+several protocols without becoming managed lifecycle authority.
+
+Next runtime work retains the observed transitive dependencies: reliability
+needs an explicit authoritative run status; lifecycle preserves transition
+intent and event order; stage-attempt preparation preserves authority attempts,
+protected report metadata and current standalone preparation. Current planning
+also still admits old fingerprint versions; that distinct durable-format row
+must be removed with its producers/readers and cannot be closed by this API
+change. These remaining paths are not claimed complete.
+
+Downstream census identifies the routine-native-context fixture in rphys
+`test_routine_observations.py`; update it with paired dependency adoption, not
+against the currently pinned earlier Loom API. No production rphys callsite of
+the changed planning function was found. Examples, tests, the managed
+preparation caller and active planning documentation move together here.
+
+Validation will collect focused planning/resume, reached lifecycle/stage-attempt/
+authority-adapter and CLI plan cases first, then execute them in locked Python
+3.12 environments. Select real current managed preparation/execution, resume,
+retry/cancellation and CLI consumers;
+retain all existing scientific, persistence and physical obligations for paired
+adoption. Add exact checks for distinct narrow owners, non-mutating dry planning
+and missing required dependencies. Run
+affected Ruff, Pyright and diff checks. Expand for reached consumers or failures;
+no unrelated scientific/DDP/STMap/scaling workload is required by this API-only
+delivery. Independent actual-diff review remains required before merge.
+
+Selected scope is recorded in
+`build/current-contract-cutover/planning-core-selectors.txt` (12 paths, 91
+collected cases) and `planning-config-selectors.txt` (seven collected cases).
+Core covers planner/resume refusal and integrity, distinct owner injection,
+read-only CLI planning, reached stage-attempt/worker/lifecycle/local-executor
+fixtures, authority adapters, stage-worker contract and plan persistence.
+The config selection covers actual prepared retry before/after restart,
+reuse-only completion, sibling cancellation, one successful contained output
+commit/release, lineage inspection and CLI validate/plan/JSON. The clean managed
+assignment variant is sufficient for its changed planner construction; unrelated
+child-failure/containment variants retain their unchanged scientific/runtime
+owners and are not repeated. No result is claimed until its receipt passes.
+
+Initial full Pyright found a shadowed plan-owner variable and fixture typing
+issues before execution. Corrected those without changing assertions; the plan
+write-failure fixture now implements only the actual plan protocol and plans
+with resume disabled. Full Pyright then passed with zero errors/warnings.
+
+Validation completed with 98 distinct passing cases and no failures, errors,
+skips or deselections:
+
+| Scope | Receipt | Result |
+| --- | --- | --- |
+| Core planning/resume and reached consumers | `build/current-contract-cutover/planning-core.xml` / `.log` | 91 passed, 5.54 s |
+| Config-enabled native retry/restart/reuse/cancel/commit, lineage and CLI | `build/current-contract-cutover/planning-config.xml` / `.log` | 7 passed, 43.85 s |
+| Changed-test collection | `planning-changed-collection.log` in the same directory | 419 cases collected; this is collection evidence, not 419 passes |
+| Static checks | `planning-types-final.log`, `planning-ruff-final.log` | Full Pyright 0 errors/warnings; affected Ruff and diff checks passed |
+
+Both test selections ran on one stable source/test/example/feature-doc patch
+from the base above, SHA-256
+`8fd065788f54168c584a9290867300167e07298a99989e180505b5e573c4a670`.
+Final patch SHA-256 is
+`0ac1602ca79f9a961bd955e4a2e4428c7b9a16f90657567861ac0d17e313e594`:
+the only subsequent source change clarifies the planner docstring that its
+plan owner performs persistence; the planner itself issues no lifecycle
+mutation. Executable behavior, tests, fixtures, dependencies and configuration
+are unchanged, so all 98 passes and static checks remain applicable. These
+evidence notes are excluded from both patch hashes. No required selected gap
+remains. Independent actual-diff review and PR merge/synchronization are next;
+the remaining aggregate consumers and downstream paired adoption remain open.

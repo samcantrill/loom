@@ -1,37 +1,19 @@
 """Unit tests for planning errors."""
 
 import pytest
+from collections.abc import Mapping
 
 from loom.pipeline import PipelineSpec
-from loom.pipeline.planning import PlanPersistenceError, plan_pipeline
+from loom.pipeline.planning import PlanPersistenceError, ResumeOptions, plan_pipeline
 from loom.pipeline.stores import RunStoreError
+from loom.serialization import PlainData
 
 
-class _FailingRunStore:
-    def read_stage_status(self, run_uri: str, stage_name: str) -> None:
-        return None
-
-    def read_stage_inputs(self, run_uri: str, stage_name: str) -> None:
-        return None
-
-    def read_stage_fingerprint(self, run_uri: str, stage_name: str) -> None:
-        return None
-
-    def read_stage_outputs(self, run_uri: str, stage_name: str) -> None:
-        return None
-
-    def read_artifact_index(self, run_uri: str) -> dict[str, object]:
-        return {}
-
-    def write_plan(self, run_uri: str, plan: object) -> None:
+class _FailingPlanStore:
+    def write_plan(self, run_uri: str, plan: Mapping[str, PlainData]) -> None:
         raise RunStoreError("cannot write")
 
-    def read_plan(self, run_uri: str) -> object:
-        return None
-
-
-class _ArtifactStore:
-    def validate(self, ref: object, *, expected_type: str | None = None) -> None:
+    def read_plan(self, run_uri: str) -> dict[str, PlainData] | None:
         return None
 
 
@@ -51,7 +33,7 @@ def test_plan_persistence_errors_wrap_store_failures() -> None:
         plan_pipeline(
             spec,
             run_uri="run1",
-            run_store=_FailingRunStore(),  # type: ignore[arg-type]
-            artifact_store=_ArtifactStore(),  # type: ignore[arg-type]
+            plans=_FailingPlanStore(),
+            resume=ResumeOptions(enabled=False),
             persist=True,
         )
