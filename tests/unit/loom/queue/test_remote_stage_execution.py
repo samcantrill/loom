@@ -15,6 +15,7 @@ import pytest
 import loom.queue._remote_stage_execution as remote_stage_execution
 import loom.queue.agent_sessions as agent_sessions
 from loom.artifacts import ArtifactRef
+from loom.fingerprints import hash_mapping
 from loom.pipeline.execution.models import (
     EXECUTION_FAILURE_SCHEMA_VERSION,
     ExecutionFailure,
@@ -379,6 +380,28 @@ def test_remote_request_rejects_the_old_wire_schema(tmp_path: Path) -> None:
 
     with pytest.raises(QueueServiceError, match="schema is unsupported"):
         _ResidentAssignmentBundle.from_dict(encoded)
+
+
+@pytest.mark.parametrize("retired_shape", ["version", "target_alias"])
+def test_retired_fingerprint_is_refused_before_assignment_retention(
+    tmp_path: Path, retired_shape: str
+) -> None:
+    profile = _profile(tmp_path)
+    encoded = cast(Any, _request(profile).to_dict())
+    fingerprint = encoded["fingerprint"]
+    if retired_shape == "version":
+        fingerprint["schema_version"] = fingerprint["payload"]["schema_version"] = 1
+        fingerprint["fingerprint"] = hash_mapping(fingerprint["payload"])
+    else:
+        fingerprint["payload"]["target_path"] = fingerprint["payload"].pop("factory_target")
+    workspace = _ResidentAssignmentWorkspace(tmp_path, encoded["assignment_id"])
+    before = {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+
+    with pytest.raises(QueueServiceError, match="resident stage fingerprint is invalid"):
+        workspace.persist_request(_ResidentAssignmentBundle.from_dict(encoded), profile)
+
+    assert not workspace.has_request()
+    assert {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
 
 
 def test_launch_is_unreachable_until_inputs_and_grant_are_durable(

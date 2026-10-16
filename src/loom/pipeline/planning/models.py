@@ -9,6 +9,7 @@ from enum import StrEnum
 from typing import cast
 
 from loom import __version__ as _LOOM_VERSION
+from loom._validation import require_schema_version
 from loom.artifacts import ArtifactRef, ArtifactValidationError
 from loom.errors import FingerprintError
 from loom.fingerprints import hash_mapping, validate_digest
@@ -413,8 +414,11 @@ class StageFingerprintPayload:
     extra: Mapping[str, PlainData]
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self, "schema_version", positive_int(self.schema_version, "schema_version")
+        require_schema_version(
+            self.schema_version,
+            field="StageFingerprintPayload.schema_version",
+            current=STAGE_FINGERPRINT_SCHEMA_VERSION,
+            error_type=PlanSerializationError,
         )
         object.__setattr__(
             self, "policy_name", require_str(self.policy_name, "policy_name")
@@ -517,42 +521,19 @@ class StageFingerprintPayload:
             "git",
             "dependencies",
             "extra",
-            "target_path",
         }
         reject_unknown(mapping, allowed, "StageFingerprintPayload")
-        required = {
-            "schema_version",
-            "policy_name",
-            "policy_version",
-            "stage_name",
-            "stage_config",
-            "declared_inputs",
-            "bound_inputs",
-            "declared_outputs",
-            "python_version",
-            "loom_version",
-            "git",
-            "dependencies",
-            "extra",
-        }
-        require_fields(mapping, required, "StageFingerprintPayload")
-        factory_target = mapping.get("factory_target")
-        if factory_target is None:
-            factory_target = mapping.get("target_path")
-        if factory_target is None:
-            raise PlanSerializationError(
-                "StageFingerprintPayload must include factory_target or target_path"
-            )
+        require_fields(mapping, allowed, "StageFingerprintPayload")
         return cls(
             schema_version=positive_int(mapping["schema_version"], "schema_version"),
             policy_name=require_str(mapping["policy_name"], "policy_name"),
             policy_version=positive_int(mapping["policy_version"], "policy_version"),
             stage_name=require_str(mapping["stage_name"], "stage_name"),
-            factory_target=require_str(factory_target, "factory_target"),
-            factory_init=plain_mapping(mapping.get("factory_init", {}), "factory_init"),
+            factory_target=require_str(mapping["factory_target"], "factory_target"),
+            factory_init=plain_mapping(mapping["factory_init"], "factory_init"),
             stage_config=plain_mapping(mapping["stage_config"], "stage_config"),
             fingerprint_fields=plain_mapping(
-                mapping.get("fingerprint_fields", {}), "fingerprint_fields"
+                mapping["fingerprint_fields"], "fingerprint_fields"
             ),
             declared_inputs=str_mapping(mapping["declared_inputs"], "declared_inputs"),
             bound_inputs=nested_plain_mapping(mapping["bound_inputs"], "bound_inputs"),
@@ -602,8 +583,11 @@ class StageFingerprintRecord:
         )
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self, "schema_version", positive_int(self.schema_version, "schema_version")
+        require_schema_version(
+            self.schema_version,
+            field="StageFingerprintRecord.schema_version",
+            current=STAGE_FINGERPRINT_SCHEMA_VERSION,
+            error_type=PlanSerializationError,
         )
         object.__setattr__(self, "algorithm", require_str(self.algorithm, "algorithm"))
         object.__setattr__(
@@ -621,10 +605,6 @@ class StageFingerprintRecord:
         object.__setattr__(
             self, "inputs_summary", plain_mapping(self.inputs_summary, "inputs_summary")
         )
-        if self.schema_version != self.payload.schema_version:
-            raise PlanSerializationError(
-                "StageFingerprintRecord.schema_version does not match its payload"
-            )
         if self.policy_name != self.payload.policy_name:
             raise PlanSerializationError(
                 "StageFingerprintRecord.policy_name does not match its payload"

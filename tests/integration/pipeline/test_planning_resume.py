@@ -1,9 +1,11 @@
 """Integration tests for planning against local stores."""
 
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
+from loom.fingerprints import hash_mapping
 from loom.pipeline import PipelineSpec, StageStatus, StageStatusRecord
 from loom.pipeline.planning import (
     PlanAction,
@@ -174,3 +176,32 @@ def test_corrupt_store_json_raises_resume_state_error(tmp_path: Path) -> None:
             plans=run_store,
             artifact_store=artifact_store,
         )
+
+
+@pytest.mark.parametrize("retired_shape", ["version", "target_alias", "missing_factory_init"])
+def test_retired_fingerprint_cannot_authorize_or_persist_plan(
+    tmp_path: Path, retired_shape: str
+) -> None:
+    run_store, artifact_store, run_uri = _stores(tmp_path)
+    _seed_reusable_build(run_store, artifact_store, run_uri)
+    fingerprint = cast(Any, run_store.read_stage_fingerprint(run_uri, "build"))
+    payload = fingerprint["payload"]
+    if retired_shape == "version":
+        fingerprint["schema_version"] = payload["schema_version"] = 1
+        fingerprint["fingerprint"] = hash_mapping(payload)
+    elif retired_shape == "target_alias":
+        payload["target_path"] = payload.pop("factory_target")
+    else:
+        del payload["factory_init"]
+    run_store.write_stage_fingerprint(run_uri, "build", fingerprint, attempt=1)
+    before = {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+
+    with pytest.raises(ResumeStateError, match="malformed prior fingerprint"):
+        plan_pipeline(
+            _spec(), run_uri=run_uri, stage_state=run_store,
+            artifact_index=run_store, plans=run_store,
+            artifact_store=artifact_store, persist=True,
+        )
+
+    assert run_store.read_plan(run_uri) is None
+    assert {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before

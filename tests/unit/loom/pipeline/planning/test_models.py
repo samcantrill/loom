@@ -1,5 +1,6 @@
 """Unit tests for planning model serialization."""
 
+from dataclasses import replace
 from typing import Any, cast
 
 import pytest
@@ -13,6 +14,7 @@ from loom.pipeline.planning import (
     PlanReason,
     PlanReasonCode,
     PlanSerializationError,
+    PlanningValidationError,
     PlanSelectors,
     ResumeCheck,
     ResumeOptions,
@@ -213,3 +215,31 @@ def test_fingerprint_record_is_derived_verified_and_serialized_independently() -
         match="policy_name does not match its payload",
     ):
         StageFingerprintRecord.from_dict(mismatched_policy)
+
+
+@pytest.mark.parametrize("version", [1, 3, True, "2"])
+def test_fingerprint_requires_current_schema_at_construction_and_decode(version: Any) -> None:
+    record = _fingerprint()
+    with pytest.raises(PlanSerializationError, match="schema_version"):
+        replace(record, schema_version=version)
+    with pytest.raises(PlanSerializationError, match="schema_version"):
+        replace(record.payload, schema_version=version)
+    with pytest.raises(PlanningValidationError, match="schema_version"):
+        StageFingerprintRecord.from_dict({**record.to_dict(), "schema_version": version})
+    with pytest.raises(PlanningValidationError, match="schema_version"):
+        StageFingerprintPayload.from_dict({**record.payload.to_dict(), "schema_version": version})
+
+
+@pytest.mark.parametrize("field", ["factory_target", "factory_init", "fingerprint_fields"])
+def test_fingerprint_requires_all_current_factory_fields(field: str) -> None:
+    payload = _fingerprint().payload.to_dict()
+    del payload[field]
+    with pytest.raises(PlanSerializationError, match=field):
+        StageFingerprintPayload.from_dict(payload)
+
+
+def test_fingerprint_rejects_retired_target_alias() -> None:
+    payload = _fingerprint().payload.to_dict()
+    payload["target_path"] = payload.pop("factory_target")
+    with pytest.raises(PlanSerializationError, match="unknown.*target_path"):
+        StageFingerprintPayload.from_dict(payload)

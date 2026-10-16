@@ -1118,9 +1118,7 @@ class _ResidentAssignmentBundle:
                 field_value, (str, bytes)
             ):
                 raise QueueServiceError("resident assignment bundle is invalid")
-        if (value["schema_version"] == 5) != (assignment_scope(cast(Mapping[str, PlainData], value["fingerprint"])) is not None):
-            raise QueueServiceError("shared assignment schema capability conflicts")
-        return cls(
+        request = cls(
             assignment_id=cast(str, value["assignment_id"]),
             stage_work_id=cast(str, value["stage_work_id"]),
             stage_name=cast(str, value["stage_name"]),
@@ -1143,6 +1141,9 @@ class _ResidentAssignmentBundle:
             ),
             schema_version=cast(int, value["schema_version"]),
         )
+        if request.schema_version != value["schema_version"]:
+            raise QueueServiceError("shared assignment schema capability conflicts")
+        return request
 
     @classmethod
     def from_remote_dict(cls, value: object) -> "_ResidentAssignmentBundle":
