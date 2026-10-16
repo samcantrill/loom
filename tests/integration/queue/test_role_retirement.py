@@ -113,6 +113,8 @@ def test_pending_work_prevents_retirement_without_fencing_acceptance(tmp_path):
 def test_agent_clean_retirement_before_revoke_and_native_guard(
     tmp_path, monkeypatch, mode
 ):
+    from loom.queue._agent_process_supervisor import _profile_from_value
+
     with fleet(tmp_path) as (daemon, operator):
         path = tmp_path / "agent.json"
         workload = tmp_path / "old-workload"
@@ -198,6 +200,10 @@ def test_agent_clean_retirement_before_revoke_and_native_guard(
                 assert retirement_receipt(root) is None
                 assert operator.agent("worker").state == "ACTIVE"
             finally:
+                monkeypatch.setattr(
+                    "loom.queue._agent_process_supervisor._profile_from_value",
+                    _profile_from_value,
+                )
                 _stop_fixture_supervisor(root)
             return
         if mode == "lost-response":
