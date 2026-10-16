@@ -1344,7 +1344,7 @@ refusal test exposed that the prior ordering created `owner.lock` before rejecti
 unsupported Slurm storage; this bounded correction preserves the same owner proof
 and current recovery, rather than weakening the unchanged-storage assertion.
 
-Validation reconciliation: **34 distinct cases passed**, zero unresolved failures,
+Pre-review reconciliation: **34 distinct cases passed**, zero unresolved failures,
 errors or required skips. Python 3.12, isolated locked no-extra/dev environment.
 
 - Clean `507818ce` collected 24 cases and executed 23 passes plus one failure.
@@ -1399,3 +1399,20 @@ The 15 affected startup cases plus these two new cases collect and rerun; the
 19 store/agent passes remain applicable because their owners/fixtures/dependencies
 are unchanged and they do not invoke this reordered proof. Final reconciliation
 and targeted review confirmation follow; merge remains pending until they pass.
+
+Final correction validation: clean `08aebb8f` collected and passed all 17 selected
+cases in 32.63 seconds, including both new daemon hot-journal cases. Current
+storage recovers and starts with its original owner identity and no uncommitted
+rows; retired storage retains every file byte and mtime, including its journal,
+and creates no owner lock. Selected Ruff/Pyright and range formatting for
+`local_daemon_execution.py:638-673` passed. Exact candidate is committed before
+testing; the only subsequent changes are this evidence prose.
+
+Final coverage is **36 distinct passing cases**: 19 unaffected passes from
+`507818ce` plus 17 passes from `08aebb8f`, with no unresolved failures/errors/skips.
+The existing coverage map now selects those final receipts; the new raw receipt
+is `build/current-contract-cutover/slurm-storage-owner-proof-08aebb8f.xml`.
+The additional source diff only reorders the existing shared owner proof; changed
+startup/recovery consumers were rerun. Original failing receipts are retained.
+The independent reviewer is asked only to confirm the identified correction and
+its affected evidence against the actual final head.
