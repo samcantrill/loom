@@ -385,9 +385,8 @@ requirements. Accepted preparation retains that selected authority and those
 profile bindings across recovery.
 
 The selected worker installation must qualify the Loom preparation module and
-the finite input binding, advertised as `preparation-input-v2`. Old workers can
-continue compatible ordinary jobs; they cannot receive a preparation child whose
-capability or profile they lack. The coordinator advertises
+the current input binding, advertised as `preparation-input-v2`. A worker cannot
+receive a preparation child whose capability or profile it lacks. The coordinator advertises
 `agent-preparation-v1` and safe source/profile aliases only when the capability
 is installed and enabled. This describes support, not a capacity reservation.
 
@@ -424,7 +423,7 @@ preparation does not prevent other work from running. Published target stages
 retain their normal software requirements and authored placement; they do not
 inherit the child's preparation-only constraints.
 
-Coordinator roots use schema 19. Child input and report schemas are version 2;
+Coordinator roots use schema 19. Child input and report schemas are version 10;
 input receipts and the public preparation-operation projection remain version 1.
 Worker control roots use schema 12, with preparation-capable installations
 advertising `preparation-input-v2`. Only complete current schemas reopen; older
@@ -539,9 +538,10 @@ Changed bindings require fresh preparation; old work cannot silently relocate.
 This identity describes installation and binding configuration, not a checksum of
 mutable dataset contents. Installed project code owns data semantics and integrity.
 
-Local child input and reports use version 3 with an explicit `local_scope`.
-Portable version-2 producers and reports remain supported. Unknown versions fail
-before publication. Native action fingerprints retain locality in the reserved
+Child input uses version 10 with `scope: {kind: local, binding: ...}`.
+The report uses version 10 and retains its explicit `local_scope`. Generic
+preparation uses `scope: {kind: unscoped}` in the same current child format.
+Retired and unknown versions fail before publication. Native action fingerprints retain locality in the reserved
 `loom.local_preparation` fingerprint field; authored configuration cannot provide
 that field. Remote assignment export explicitly refuses unresolved local scope,
 even when a particular action contains no path-looking value.
@@ -552,105 +552,131 @@ permissions. See the runnable [local file example](../../examples/execution/loca
 
 ## Installed Final Project Inspection
 
-A protected local preparation profile can require one installed callable after
-recipe expansion, ordinary overrides, effective option merging and native
+A protected local or shared preparation profile can require one installed
+callable after recipe expansion, overrides, effective option merging and native
 preflight. The callable runs in the selected worker installation. The coordinator
 receives plain data and never imports the project's processor.
-
-Add this field to the existing protected preparation profile (alongside its
-resident profile, roots, source modes and child runtime options):
 
 ```yaml
 configuration_policy: local
 project_processor:
-  schema_version: 1
+  schema_version: 3
   callable: installed_project.preparation:inspect
   evidence_namespace: example
-  recovery_stage: fit
+  target_prefix: example-
 ```
 
-`recovery_stage` selects one existing action's `config.recovery`; use `null` when
-the integration adds only top-level `scientific_evidence`. Captured YAML and
-processor results cannot choose the callable or widen those destinations. The
-selection participates in protected policy identity and is retained with the
-accepted invocation. It requires the local agent's protected installation and
-binding identity.
+The protected declaration participates in policy identity and is retained with
+the accepted invocation. Captured YAML and processor results cannot select the
+callable. Processor requests and results accept version 3 only. There is no
+`recovery_stage` setting or configuration-injection interface.
 
-The callable accepts one plain mapping with exactly these fields:
+For `operation: prepare`, the request carries the complete captured `composition`,
+`effective_run_options`, `invocation`, operation/input/profile identity, protected
+local or shared scope, and `project_preparation` binding. An available
+`artifact_directory` identifies the worker's artifact workspace. Composition
+contains `resolved`, `redacted`, `manifest`, `recipe_manifest` and `provenance`.
+Invocation preserves ordered overlays/overrides and sparse explicit run options.
+The project binding selects a named target URI, or a protected run-store root for
+reconciliation. It never refers to the child's assignment-local URI.
 
-- `schema_version: 1`, `composition`, `effective_run_options`, `invocation`;
-- `operation_id`, `input_manifest_digest`, `preparation_profile`,
-  `profile_descriptor`, `local_scope`, `project_preparation`.
-
-`composition` contains `resolved`, `redacted`, `manifest`, `recipe_manifest` and
-`provenance`. `effective_run_options` contains the final native options, while
-`invocation` preserves the selected overlays, typed override strings and sparse
-explicit run options. `profile_descriptor` is the actual worker installation
-evidence. `project_preparation` contains the protected `processor` declaration
-and `target_run_uri`. That URI is derived by Loom from its protected run root
-and the accepted exact target; it is never the child or assignment workspace.
-
-Return a plain mapping with exactly `schema_version: 1`, `composition`,
-`evidence` and `reconciliation_key`. For example, after project-specific checks:
+The installed processor returns per-action contracts without changing any part
+of the captured composition. Illustrative project-owned checks are:
 
 ```python
-from copy import deepcopy
-
-
 def inspect(request):
-    checked = deepcopy(request["composition"])
-    evidence, resume_fingerprint = inspect_final_science(
-        checked["resolved"], request["effective_run_options"]
+    if type(request.get("schema_version")) is not int or request["schema_version"] != 3:
+        raise ValueError("Unsupported processor contract")
+    if request["operation"] != "prepare":
+        return verify_project_candidate_or_result(request)
+    composition = request["composition"]
+    evidence, desired_key, contracts = inspect_final_science(
+        composition["resolved"], request["effective_run_options"]
     )
-    recovery = {
-        "run_uri": request["project_preparation"]["target_run_uri"],
-        "resume_fingerprint": resume_fingerprint,
-        "environment_fingerprint": request["profile_descriptor"]["environment_fingerprint"],
-    }
-    for view in ("resolved", "redacted"):
-        checked[view]["scientific_evidence"] = (
-            evidence if view == "resolved" else redact_project_evidence(evidence)
-        )
-        fit = next(s for s in checked[view]["pipeline"]["stages"] if s["name"] == "fit")
-        fit["config"]["recovery"] = dict(recovery)
-    fit["config"]["recovery"]["run_uri"] = "<redacted>"
     return {
-        "schema_version": 1,
-        "composition": checked,
+        "schema_version": 3,
+        "composition": composition,
         "evidence": {"namespace": "example", "payload": evidence},
-        "reconciliation_key": None,
+        "reconciliation_key": desired_key,
+        "stage_contracts": contracts,
     }
 ```
 
-`inspect_final_science` and `redact_project_evidence` are project-owned operations.
-Evidence must be a mapping; the resolved `scientific_evidence` must equal its
-payload. The recovery mapping has exactly the three fields shown. Native
-validation checks the target URI and installation fingerprint and requires a
-nonempty project resume fingerprint. The redacted recovery URI must be
-`<redacted>`; the project owns masking sensitive fields in its evidence. Original
-redactions and all source/override provenance remain intact. Native checks parse
-the augmented resolved graph, preserving diagnostic-only redactions.
+`inspect_final_science` and `verify_project_candidate_or_result` stand for
+project-owned operations. Evidence is a mapping; the desired key is null for
+named requests that decline reconciliation, or
+`{namespace: example, version: 1, digest: <64 lowercase hex characters>}`.
+Reconciled requests require a complete key. `stage_contracts` covers exactly the
+captured node IDs, each with `semantic_key` and `payload`. The section on
+[per-node contracts](#installed-per-node-contracts-processor-version-3) defines
+these fields, retention and the worker's native execution binding.
 
-For later reconciliation, an integration can return
-`{"namespace": "example", "version": 1, "digest": "<64 lowercase hex characters>"}`.
-The digest denotes the complete desired-state fingerprint, not a resume or
-evidence-envelope fingerprint. This capability retains the key in the native
-report; it does not itself enable target reconciliation or rename exact requests.
+Child and coordinator both verify that the returned composition is unchanged.
+Factory targets, graph edges, action parameters, outputs, placement, redactions,
+provenance and options retain their captured meaning. Native execution supplies
+the original run/node identity, attempt, installation and available state root
+through `context.metadata["loom.execution_binding"]`. Applications use those
+bindings for their own recovery policy, without injecting `config.recovery`.
 
-The child and coordinator compare the requested and checked compositions outside
-the two declared destinations. Action parameters, graph edges, factory targets,
-outputs, placement, provenance and options cannot change. The published immutable
-snapshot includes the additions, and normal assignment supplies `config.recovery`
-to the selected consumer. Publication also checks the exact target against the
-protected current run root.
+A processor exception or invalid result produces a required failed preflight
+check and retained report, with no target publication. The portable diagnostic
+retains the exception class and a fixed message; private worker stderr retains
+the traceback. Target, installation, invocation, report ownership and checksum
+checks remain required at publication and reuse.
 
-A processor exception or invalid result yields a required failed native preflight
-check and retained report, with no target publication. The diagnostic retains the
-exception class and a fixed message, excluding unchecked exception text. Child
-inputs/reports use version 4 and private worker context version 3 for this
-capability. Unsupported versions, stale processor/installation/invocation evidence,
-redirected recovery and unrelated mutations fail before publication. Existing
-portable version 2 and local version 3 reports without an integration still work.
+### Current child and worker context
+
+The child input is version 10. Scope and purpose select supported modes:
+
+```python
+child = {
+    "schema_version": 10,
+    "operation_id": operation_id,
+    "preparation_profile": profile_id,
+    "config_path": "pipeline.yaml",
+    "input_receipt": receipt.to_dict(),
+    "profile_descriptor": descriptor.to_dict(),
+    "scope": {"kind": "local", "binding": local_scope},
+    "purpose": {"kind": "project", "binding": project_preparation},
+    "overlays": [], "overrides": [], "run_options": {},
+}
+```
+
+Scope is `unscoped` with no binding, or `local`/`shared` with its protected
+binding. Shared scope requires a shared capture and excludes local pinning.
+Purpose is `generic` with no binding, `project` with its binding and an optional
+whole-target `candidate`, or `verify_result` with its binding and action `request`.
+Action verification excludes a whole-target candidate. Nonempty `generations`
+is optional and preserves fresh-stage target identity. Null placeholders and
+unknown fields are rejected.
+
+The managed worker context is independently version 6:
+
+```python
+context = {
+    "schema_version": 6,
+    "profile_descriptor": descriptor.to_dict(),
+    "scope": {"kind": "local", "binding": local_scope},
+    "input": {"kind": "staged", "directory": staged_directory},
+    "purpose": {"kind": "project", "binding": project_preparation},
+}
+```
+
+Shared input instead carries `{kind: shared, roots: ...}` with the qualified
+worker-visible paths. Project purpose adds `candidate_project_report` only when
+materialized. Verification purpose carries `artifacts` and `project_reports`
+bindings; the action request remains in the child input and is not copied again.
+The reader checks scope, purpose, input mode and installation against that child
+before composition or verification. Generic unscoped, local/shared, named and
+reconciled preparation all use these same current versions.
+
+Native composition reports use schema 10 and `loom.preparation_report.v1` with
+their checksum-bound composition companion. The public loader refuses retired
+schemas before companion loading; the writer refuses them before publication.
+Action-verification reports remain their distinct current schema 9 and the small
+verification responses remain schema 1. These are separate contracts, not
+alternative schemas for the composition report. Regenerate obsolete preparations;
+there is no converter or dual reader.
 
 ## Shared Configuration And Workload Inputs
 
@@ -767,9 +793,10 @@ workflow above. Advertise `shared-execution-v1` in both the outbound agent
 registration and protected agent policy. Installation qualification checks that
 the selected interpreter/image supports that capability. Scheduling retains
 per-stage root requirements; equal software with missing roots or capability
-cannot receive the stage. Preparation child/report version 6 and resident
-assignment version 5 explicitly identify this scope. Older formats remain valid
-for their original scopes, and unsupported versions are rejected.
+cannot receive the stage. Current child input version 10 identifies shared scope
+explicitly; report version 10 retains its shared binding. The resident assignment
+family currently identifies shared scope with version 5. Its pending wire-family
+consolidation is tracked separately in the cutover notes.
 
 Configuration capture happens once; the shared route has no staged input archive
 or per-agent configuration copy. Profiles without a `publication` binding retain
@@ -877,12 +904,12 @@ qualification must establish the selected filesystem's rename/fsync guarantees.
 ### Installed per-node contracts (processor version 3)
 
 A protected `project_processor` version 3 has exactly `schema_version`,
-`callable`, `evidence_namespace`, and `target_prefix`. It omits the legacy
-`recovery_stage`. Versions 1 and 2 retain their existing evidence and recovery
-injection behavior. Version 3 receives `operation: prepare` with the captured
+`callable`, `evidence_namespace`, and `target_prefix`. No older processor
+version is accepted. It receives `operation: prepare` with the captured
 composition, effective options, invocation, input manifest, installation descriptor,
-project binding and local/shared scope. Native preparation input/report envelope
-version 7 carries this capability; earlier envelope versions remain readable.
+project binding and local/shared scope. Native preparation input and composition
+reports use version 10; the worker context uses version 6. Their readers admit
+only those respective current formats.
 
 The processor returns exactly `schema_version: 3`, `composition`, `evidence`,
 `reconciliation_key`, and `stage_contracts`. The composition must remain equal to

@@ -17,6 +17,7 @@ import traceback
 from pathlib import Path
 from typing import Any, cast
 
+from loom._preparation_report import PREPARATION_REPORT_SCHEMA_VERSION
 from loom.artifacts import ArtifactRef
 from loom.diagnostics.models import (
     PreflightCheckStatus,
@@ -64,6 +65,8 @@ from loom.queue.preparation import (
     _project_binding,
     _require_local_binding,
     PREPARATION_INPUT_CONTEXT_ENV,
+    PREPARATION_CONTEXT_SCHEMA_VERSION,
+    _decode_scope,
     PREPARATION_STAGE_TARGET,
     PreparationChildInput,
     PrepareRunRequest,
@@ -106,20 +109,27 @@ class PreparationStage:
         binding = PreparationChildInput.from_dict(context.stage_config)
         private = _worker_context()
         profile = ResidentProfileDescriptor.from_dict(private["profile_descriptor"])
-        if shared_scope(private.get("shared_scope")) != binding.shared_scope:
+        local, shared = _decode_scope(private["scope"])
+        purpose = _plain_mapping(private["purpose"])
+        access = _plain_mapping(private["input"])
+        expected_purpose = "verify_result" if binding.action_verification is not None else "project" if binding.project_preparation is not None else "generic"
+        expected_input = "shared" if isinstance(binding.input_receipt, SharedInputReceipt) else "staged"
+        if purpose["kind"] != expected_purpose or access["kind"] != expected_input:
+            raise QueueConflictError("preparation input or purpose binding conflicts")
+        if shared_scope(shared) != binding.shared_scope:
             raise QueueConflictError("preparation shared policy identity conflicts")
-        if _local_scope(private.get("local_scope")) != binding.local_scope:
+        if _local_scope(local) != binding.local_scope:
             raise QueueConflictError("preparation local policy identity conflicts")
-        if _project_binding(private.get("project_preparation")) != binding.project_preparation:
+        if _project_binding(purpose.get("binding")) != binding.project_preparation:
             raise QueueConflictError("preparation project processor identity conflicts")
         if profile.to_dict() != dict(binding.profile_descriptor):
             raise QueueConflictError("preparation installation_mismatch")
         if binding.action_verification is not None:
             return {"report": context.save_artifact(
-                "report", _run_action_verification(binding, private.get("action_artifacts"), private.get("action_project_reports")), artifact_type="json", codec_key="json.v1"
+                "report", _run_action_verification(binding, purpose.get("artifacts"), purpose.get("project_reports")), artifact_type="json", codec_key="json.v1"
             )}
         if isinstance(binding.input_receipt, SharedInputReceipt):
-            roots = cast(Mapping[str, str], private["shared_roots"])
+            roots = cast(Mapping[str, str], access["roots"])
             captured = resolve_shared_input(
                 binding.input_receipt,
                 shared_roots={alias: Path(path) for alias, path in roots.items()},
@@ -127,7 +137,7 @@ class PreparationStage:
         else:
             # The native workspace verifies extraction before acceptance and
             # again while binding this child to its retained supervisor launch.
-            captured = Path(cast(str, private["staged_directory"]))
+            captured = Path(cast(str, access["directory"]))
         config_path = captured / binding.config_path
         # The capture manifest is authoritative. A different readable file in the
         # directory must not become an implicit configuration input.
@@ -191,7 +201,7 @@ class PreparationStage:
 
         verification = None
         if binding.candidate is not None and preparation_checks_allow_publication(preflight):
-            verification = _verify_project_candidate(binding, composition, effective_options, project_result, artifact_directory=context.local_output_path("report").parent if binding.shared_scope is not None else None, project_report=private.get("candidate_project_report"))
+            verification = _verify_project_candidate(binding, composition, effective_options, project_result, artifact_directory=context.local_output_path("report").parent if binding.shared_scope is not None else None, project_report=purpose.get("candidate_project_report"))
 
         requirements: dict[str, PlainData] = {}
         if preflight.status != PreflightStatus.FAIL:
@@ -203,10 +213,10 @@ class PreparationStage:
                 name: requirement.to_dict() for name in pipeline.stage_names
             }
         report: dict[str, PlainData] = {
-            "schema_version": binding.to_dict()["schema_version"],
+            "schema_version": PREPARATION_REPORT_SCHEMA_VERSION,
             **({"generations": dict(binding.generations)} if binding.generations is not None else {}),
-            **({"candidate": dict(binding.candidate) if binding.candidate is not None else None,
-                "verification": verification} if "candidate" in binding.to_dict() else {}),
+            **({"candidate": dict(binding.candidate),
+                "verification": verification} if binding.candidate is not None else {}),
             **({"project_preparation": dict(binding.project_preparation),
                 "requested_composition": requested_composition,
                 "project_result": project_result} if binding.project_preparation is not None else {}),
@@ -224,7 +234,7 @@ class PreparationStage:
             if effective_options is None
             else effective_options.to_dict(),
         }
-        if _is_v3(binding):
+        if binding.project_preparation is not None:
             report["project_contracts"] = _report_contracts(report) if project_result is not None else None
         from loom._preparation_report import save_composition_evidence
 
@@ -305,10 +315,6 @@ def _decode_action_verification_report(value: object, binding: PreparationChildI
     return report
 
 
-def _is_v3(binding: PreparationChildInput) -> bool:
-    return binding.project_preparation is not None and _plain_mapping(binding.project_preparation["processor"])["schema_version"] == 3
-
-
 def _report_contracts(report: Mapping[str, PlainData]) -> dict[str, PlainData]:
     from loom.pipeline._project_contracts import capture_digest, declaration, envelope
 
@@ -338,7 +344,7 @@ def _inspect_project(
             processor = getattr(processor, part)
         request: dict[str, PlainData] = {
             "schema_version": selected["schema_version"],
-            **({"operation": "prepare"} if selected["schema_version"] in (2, 3) else {}),
+            "operation": "prepare",
             "composition": deepcopy(composition),
             **({"artifact_directory": str(artifact_directory)} if artifact_directory is not None else {}),
             "effective_run_options": options.to_dict(),
@@ -351,7 +357,7 @@ def _inspect_project(
             "project_preparation": dict(binding.project_preparation),
         }
         result = _plain_mapping(cast(Any, processor)(request))
-        if set(result) != ({"schema_version", "composition", "evidence", "reconciliation_key"} | ({"stage_contracts"} if selected["schema_version"] == 3 else set())):
+        if set(result) != {"schema_version", "composition", "evidence", "reconciliation_key", "stage_contracts"}:
             raise QueueConflictError("project preparation result fields are invalid")
         checked = _plain_mapping(result.pop("composition"))
         _validate_project_result(composition, checked, result, binding)
@@ -429,27 +435,13 @@ def _verify_project_candidate(binding: PreparationChildInput, composition: Mappi
     return expected
 
 
-def _recovery_config(snapshot: dict[str, PlainData], name: str) -> dict[str, PlainData]:
-    pipeline = snapshot.get("pipeline")
-    if not isinstance(pipeline, dict):
-        raise QueueConflictError("project recovery requires an existing pipeline")
-    stages = pipeline.get("stages")
-    if not isinstance(stages, list):
-        raise QueueConflictError("project recovery requires an existing stage declaration")
-    matches = [stage for stage in stages if isinstance(stage, dict) and stage.get("name") == name]
-    if len(matches) != 1 or not isinstance(matches[0].get("config"), dict):
-        raise QueueConflictError("project recovery requires an existing stage config")
-    # Return the original dictionary: comparison strips only these finite fields.
-    return cast(dict[str, PlainData], matches[0]["config"])
-
-
 def _validate_project_result(
     original: dict[str, PlainData], checked: dict[str, PlainData],
     result: dict[str, PlainData], binding: PreparationChildInput,
 ) -> None:
     assert binding.project_preparation is not None
     selected = _plain_mapping(binding.project_preparation["processor"])
-    if (set(result) != ({"schema_version", "evidence", "reconciliation_key"} | ({"stage_contracts"} if selected["schema_version"] == 3 else set()))
+    if (set(result) != {"schema_version", "evidence", "reconciliation_key", "stage_contracts"}
         or type(result["schema_version"]) is not int or result["schema_version"] != selected["schema_version"]):
         raise QueueConflictError("unsupported project preparation result capability")
     evidence = _plain_mapping(result["evidence"])
@@ -468,50 +460,16 @@ def _validate_project_result(
             raise QueueConflictError("project preparation reconciliation key is invalid")
     if binding.project_preparation["target_run_uri"] is None and key is None:
         raise QueueConflictError("reconciled preparation requires a complete key")
-    if selected["schema_version"] == 3:
-        from loom.pipeline._project_contracts import node_result
+    from loom.pipeline._project_contracts import node_result
 
-        if stable_json_bytes(original) != stable_json_bytes(checked):
-            raise QueueConflictError("project preparation changed the captured composition")
-        pipeline = _pipeline_from_resolved(cast(Mapping[str, object], original["resolved"]))
-        contracts = _plain_mapping(result["stage_contracts"])
-        if set(contracts) != set(pipeline.stage_names):
-            raise QueueConflictError("project contracts must cover exactly the captured nodes")
-        for item in contracts.values():
-            node_result(item)
-        return
-    before, after = deepcopy(original), deepcopy(checked)
-    for view in ("resolved", "redacted"):
-        requested = cast(dict[str, PlainData], before.get(view))
-        augmented = cast(dict[str, PlainData], after.get(view))
-        if not isinstance(requested, dict) or not isinstance(augmented, dict):
-            raise QueueConflictError("project preparation snapshot is invalid")
-        if "scientific_evidence" not in augmented:
-            raise QueueConflictError("project preparation evidence is missing from snapshot")
-        if view == "resolved" and augmented["scientific_evidence"] != evidence["payload"]:
-            raise QueueConflictError("project preparation snapshot evidence conflicts")
-        requested.pop("scientific_evidence", None)
-        augmented.pop("scientific_evidence")
-        stage = selected["recovery_stage"]
-        if stage is not None:
-            old_config = _recovery_config(requested, cast(str, stage))
-            new_config = _recovery_config(augmented, cast(str, stage))
-            recovery = _plain_mapping(new_config.get("recovery"))
-            if set(recovery) != {"run_uri", "resume_fingerprint", "environment_fingerprint"}:
-                raise QueueConflictError("project recovery fields are invalid")
-            if view == "resolved":
-                if (recovery["run_uri"] != _checked_project_uri(binding, result)
-                    or recovery["environment_fingerprint"] != binding.profile_descriptor["environment_fingerprint"]
-                    or not isinstance(recovery["resume_fingerprint"], str)
-                    or not recovery["resume_fingerprint"]):
-                    raise QueueConflictError("project recovery target or installation conflicts")
-            elif recovery["run_uri"] != "<redacted>":
-                raise QueueConflictError("project recovery locator must be redacted")
-            old_config.pop("recovery", None)
-            new_config.pop("recovery")
-    if stable_json_bytes(before) != stable_json_bytes(after):
-        raise QueueConflictError("project preparation changed requested data outside derived destinations")
-    _pipeline_from_resolved(cast(Mapping[str, object], checked["resolved"]))
+    if stable_json_bytes(original) != stable_json_bytes(checked):
+        raise QueueConflictError("project preparation changed the captured composition")
+    pipeline = _pipeline_from_resolved(cast(Mapping[str, object], original["resolved"]))
+    contracts = _plain_mapping(result["stage_contracts"])
+    if set(contracts) != set(pipeline.stage_names):
+        raise QueueConflictError("project contracts must cover exactly the captured nodes")
+    for item in contracts.values():
+        node_result(item)
 
 
 def _bind_local_snapshot(
@@ -575,38 +533,42 @@ def _worker_context() -> Mapping[str, PlainData]:
         raise QueueServiceError("preparation requires its managed worker input binding")
     try:
         value = json.loads(encoded)
-        version = value.get("schema_version") if isinstance(value, dict) else None
-        action_context = version == 5
-        if action_context:
-            if not isinstance(value.get("action_artifacts"), dict):
-                raise ValueError
-            for artifact in value["action_artifacts"].values():
-                ArtifactRef.from_dict(artifact)
-            version = 4 if "shared_scope" in value else 3
-        if (
-            not isinstance(value, dict)
-            or (set(value) - {"local_scope", "project_preparation", "shared_scope", "candidate_project_report"} - ({"action_artifacts", "action_project_reports"} if action_context else set())) not in (
-                {"schema_version", "profile_descriptor", "shared_roots"},
-                {"schema_version", "profile_descriptor", "staged_directory"},
-            )
+        if (not isinstance(value, dict)
+            or set(value) != {"schema_version", "profile_descriptor", "input", "scope", "purpose"}
             or type(value["schema_version"]) is not int
-            or version not in (1, 2, 3, 4)
-            or (version in (2, 3)) != ("local_scope" in value)
-            or (version != 4 and (version == 3) != ("project_preparation" in value))
-            or (version == 4) != ("shared_scope" in value)
-            or not isinstance(value.get("shared_roots", {}), dict)
-            or any(
-                not isinstance(alias, str)
-                or not isinstance(path, str)
-                or not Path(path).is_absolute()
-                for alias, path in value.get("shared_roots", {}).items()
-            )
-            or (
-                "staged_directory" in value
-                and (not isinstance(value["staged_directory"], str)
-                     or not Path(value["staged_directory"]).is_absolute())
-            )
-        ):
+            or value["schema_version"] != PREPARATION_CONTEXT_SCHEMA_VERSION):
+            raise ValueError
+        _decode_scope(value["scope"])
+        access = value["input"]
+        if not isinstance(access, dict):
+            raise ValueError
+        if access.get("kind") == "staged" and set(access) == {"kind", "directory"}:
+            if not isinstance(access["directory"], str) or not Path(access["directory"]).is_absolute():
+                raise ValueError
+        elif access.get("kind") == "shared" and set(access) == {"kind", "roots"}:
+            if not isinstance(access["roots"], dict) or any(
+                not isinstance(alias, str) or not isinstance(path, str) or not Path(path).is_absolute()
+                for alias, path in access["roots"].items()
+            ):
+                raise ValueError
+        else:
+            raise ValueError
+        purpose = value["purpose"]
+        if not isinstance(purpose, dict):
+            raise ValueError
+        kind, fields = purpose.get("kind"), set(purpose)
+        if kind == "generic" and fields == {"kind"}:
+            pass
+        elif kind == "project" and fields in ({"kind", "binding"}, {"kind", "binding", "candidate_project_report"}):
+            if "candidate_project_report" in purpose:
+                ArtifactRef.from_dict(purpose["candidate_project_report"])
+        elif kind == "verify_result" and fields == {"kind", "binding", "artifacts", "project_reports"}:
+            for name in ("artifacts", "project_reports"):
+                if not isinstance(purpose[name], dict):
+                    raise ValueError
+                for artifact in purpose[name].values():
+                    ArtifactRef.from_dict(artifact)
+        else:
             raise ValueError
         return cast(Mapping[str, PlainData], value)
     except (ValueError, TypeError) as exc:
@@ -691,12 +653,12 @@ def _decode_preparation_report(
     if (
         set(report) != (_REPORT_FIELDS | ({"shared_scope"} if expected.shared_scope is not None else set()) | ({"local_scope"} if expected.local_scope is not None else set())
                         | ({"project_preparation", "requested_composition", "project_result"} if expected.project_preparation is not None else set())
-                        | ({"candidate", "verification"} if "candidate" in expected.to_dict() else set())
-                        | ({"project_contracts"} if _is_v3(expected) else set())
+                        | ({"candidate", "verification"} if expected.candidate is not None else set())
+                        | ({"project_contracts"} if expected.project_preparation is not None else set())
                         | ({"generations"} if expected.generations is not None else set()))
         or report["report_format"] != "loom.preparation_report.v1"
         or type(report["schema_version"]) is not int
-        or report["schema_version"] != expected.to_dict()["schema_version"]
+        or report["schema_version"] != PREPARATION_REPORT_SCHEMA_VERSION
     ):
         raise QueueServiceError("preparation report fields or capability are unsupported")
     if expected.generations is not None:
@@ -705,17 +667,15 @@ def _decode_preparation_report(
         graph = _pipeline_from_resolved(cast(Mapping[str, object], _plain_mapping(report["composition"])["resolved"]))
         if set(expected.generations) - set(graph.stage_names):
             raise QueueConflictError("fresh_stages contains an unknown captured node")
-    if "candidate" in expected.to_dict():
+    if expected.candidate is not None:
         from loom.fingerprints import hash_mapping
         from loom.serialization import thaw_plain_data
 
         candidate = thaw_plain_data(expected.candidate)
         if report["candidate"] != candidate:
             raise QueueConflictError("preparation candidate binding conflicts")
-        if candidate is not None and report["verification"] != {"schema_version": 1, "candidate_digest": hash_mapping(candidate), "verdict": "verified"}:
+        if report["verification"] != {"schema_version": 1, "candidate_digest": hash_mapping(candidate), "verdict": "verified"}:
             raise QueueConflictError("installed candidate verification failed")
-        if candidate is None and report["verification"] is not None:
-            raise QueueConflictError("unexpected candidate verification")
     if _project_binding(report.get("project_preparation")) != expected.project_preparation:
         raise QueueConflictError("preparation report project processor identity conflicts")
     if shared_scope(report.get("shared_scope")) != expected.shared_scope:
@@ -759,7 +719,7 @@ def _decode_preparation_report(
         expected.project_preparation,
         None if report.get("project_result") is None else _plain_mapping(report["project_result"]),
     )
-    if _is_v3(expected):
+    if expected.project_preparation is not None:
         if report["project_contracts"] != (_report_contracts(report) if received.project_result is not None else None):
             raise QueueConflictError("native project contract binding conflicts")
     preflight = PreflightResult.from_dict(report["preflight"])
@@ -1042,7 +1002,7 @@ class CoordinatorPreparation:
         composed, requirements, preflight = decode_preparation_report(
             value, expected=binding
         )
-        if _is_v3(binding):
+        if binding.project_preparation is not None:
             selected = _plain_mapping(cast(Mapping[str, PlainData], binding.project_preparation)["processor"])
             composed = replace(cast(_ReceivedComposition, composed), project_contracts_entry={
                 "kind": "project_contracts", "data": {"schema_version": 1,

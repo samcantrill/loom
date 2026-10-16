@@ -6,20 +6,23 @@ import os
 
 
 def inspect_shared(request):
+    assert request["schema_version"] == 3 and request["operation"] == "prepare"
     assert request["shared_scope"]["capability"] == "shared-execution-v1"
     assert "local_scope" not in request
     composition = deepcopy(request["composition"])
     evidence = {"prepared_pid": os.getpid(), "scope": "shared"}
-    for view in ("resolved", "redacted"):
-        composition[view]["scientific_evidence"] = evidence
-    return {"schema_version": 1, "composition": composition,
+    contracts = {stage["name"]: {"semantic_key": None, "payload": evidence}
+                 for stage in composition["resolved"]["pipeline"]["stages"]}
+    return {"schema_version": 3, "composition": composition,
             "evidence": {"namespace": "shared-example", "payload": evidence},
-            "reconciliation_key": None}
+            "reconciliation_key": None, "stage_contracts": contracts}
 
 
 class SharedInputConsumer:
     def run(self, context, inputs):
         assert not inputs
+        evidence = context.metadata["loom.project_contract"]["payload"]
+        assert evidence["scope"] == "shared" and evidence["prepared_pid"] != os.getpid()
         data = Path(context.stage_config["input"]).read_bytes()
         assert hashlib.sha256(data).hexdigest() == context.stage_config["expected"]
         print("shared-input", hashlib.sha256(data).hexdigest(), "pid", os.getpid())

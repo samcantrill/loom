@@ -52,6 +52,7 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, s
         return {"data": {"host_path": str(path), "container_path": "/loom/data", "access": "ro",
                          "challenge": {"path": "challenge", "sha256": challenge}},
                 "control": {"host_path": str(control if path == first else Path("/proc/self/root") / control.relative_to("/")), "container_path": None, "access": "rw",
+                    "publication": {"max_members": 1024, "max_payload_bytes": 16 * 1024 * 1024, "max_manifest_bytes": 1024 * 1024},
                     "challenge": {"path": "challenge", "sha256": hashlib.sha256(b"control-challenge").hexdigest()}}}
     location = {"kind": "loom.shared-location", "schema_version": 1, "root_id": "data", "path": "selected.bin"}
     agent_path = tmp_path / "agent.json"
@@ -91,8 +92,8 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, s
         authored["assignment_payload_root_id"] = "control"
     profile = authored["preparation"]["profiles"]["existing-project"]
     profile.update(configuration_policy="shared", shared_locations=[location], project_processor={
-        "schema_version": 1, "callable": "tests.support.shared_execution_stages:inspect_shared",
-        "evidence_namespace": "shared-example", "recovery_stage": None,
+        "schema_version": 3, "callable": "tests.support.shared_execution_stages:inspect_shared",
+        "evidence_namespace": "shared-example", "target_prefix": "shared-",
     })
     authored["remote_profiles"] = [executor.descriptor.to_dict(), missing_roots.descriptor.to_dict()]
     authored["agent_policy"]["agents"] = [{"credential_id": "agent", "principal_id": "worker-b", "agent_id": "worker-b",
@@ -284,7 +285,7 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, s
             report = cast(dict[str, Any], LocalArtifactStore(store.local_artifact_root(child.run_uri)).load(child_result.outputs["report"]))
             assert receipt["digest"] == hashlib.sha256(payload).hexdigest()
             assert receipt["execution_pid"] != report["project_result"]["evidence"]["payload"]["prepared_pid"]
-            assert report["schema_version"] == 6
+            assert report["schema_version"] == 10
             assert "local_scope" not in report
             workspaces = tuple((config.agent_root / "assignments").glob("*"))
             assert workspaces

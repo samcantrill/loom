@@ -2009,19 +2009,23 @@ class _ResidentAssignmentWorkspace:
         from .preparation import SharedInputReceipt, _require_local_binding
 
         _require_local_binding(preparation.local_scope, launch_profile)
-        local_context: dict[str, PlainData] = (
-            {} if preparation.local_scope is None else {"local_scope": dict(preparation.local_scope)}
-        )
-        if preparation.shared_scope is not None:
-            local_context["shared_scope"] = dict(preparation.shared_scope)
+        from .preparation import PREPARATION_CONTEXT_SCHEMA_VERSION, _scope_data
+
+        purpose: dict[str, PlainData] = {"kind": "generic"}
         if preparation.project_preparation is not None:
-            local_context["project_preparation"] = dict(preparation.project_preparation)
+            purpose = {"kind": "project", "binding": dict(preparation.project_preparation)}
+        context: dict[str, PlainData] = {
+            "schema_version": PREPARATION_CONTEXT_SCHEMA_VERSION,
+            "profile_descriptor": dict(launch_profile.descriptor),
+            "scope": _scope_data(preparation.local_scope, preparation.shared_scope),
+            "purpose": purpose,
+        }
         candidate_report = next((item for item in request.inputs if item.logical_name == "candidate_project_report"), None)
         if candidate_report is not None:
             from ._shared_publication import resolve_input
             from .shared_execution import execution_roots
             path = resolve_input(candidate_report, execution_roots(launch_profile.shared_roots, container=launch_profile.container is not None))
-            local_context["candidate_project_report"] = candidate_report.local_ref(path).to_dict()
+            purpose["candidate_project_report"] = candidate_report.local_ref(path).to_dict()
         if preparation.action_verification is not None:
             from ._shared_publication import resolve_input
             from .shared_execution import execution_roots
@@ -2037,17 +2041,14 @@ class _ResidentAssignmentWorkspace:
                     path = resolve_input(item, execution_roots(launch_profile.shared_roots, container=launch_profile.container is not None))
                 destination = reports if prefix == _ACTION_PROJECT_INPUT_PREFIX else artifacts
                 destination[item.logical_name.removeprefix(prefix)] = item.local_ref(path).to_dict()
-            local_context["action_artifacts"] = artifacts
-            local_context["action_project_reports"] = reports
+            purpose["kind"] = "verify_result"
+            purpose["artifacts"] = artifacts
+            purpose["project_reports"] = reports
         if not isinstance(preparation.input_receipt, SharedInputReceipt):
             directory = self._prepare_staged_input()
             assert directory is not None
-            return {
-                "schema_version": 5 if preparation.action_verification is not None else 4 if preparation.shared_scope is not None else 3 if preparation.project_preparation is not None else 1 if preparation.local_scope is None else 2,
-                **local_context,
-                "profile_descriptor": dict(launch_profile.descriptor),
-                "staged_directory": str(directory),
-            }
+            context["input"] = {"kind": "staged", "directory": str(directory)}
+            return context
         alias = preparation.input_receipt.root
         path = launch_profile.preparation_shared_roots.get(alias)
         if preparation.shared_scope is not None and launch_profile.container is not None:
@@ -2060,12 +2061,8 @@ class _ResidentAssignmentWorkspace:
                 raise QueueServiceError("shared snapshot container binding is unavailable")
             assert source is not None
             path = Path(str(matches[0]["container_path"])) / source.relative_to(Path(str(matches[0]["host_path"])))
-        return {
-            "schema_version": 5 if preparation.action_verification is not None else 4 if preparation.shared_scope is not None else 3 if preparation.project_preparation is not None else 1 if preparation.local_scope is None else 2,
-                **local_context,
-            "profile_descriptor": dict(launch_profile.descriptor),
-            "shared_roots": {} if path is None else {alias: str(path)},
-        }
+        context["input"] = {"kind": "shared", "roots": {} if path is None else {alias: str(path)}}
+        return context
 
     def _prepare_staged_input(self) -> Path | None:
         from .preparation import StagedInputReceipt, resolve_staged_input

@@ -40,7 +40,7 @@ def _composition() -> dict[str, Any]:
 def _write(tmp_path: Path, *, requested=None):
     composition = _composition()
     logical = {
-        "schema_version": 7,
+        "schema_version": 10,
         "composition": composition,
         "requested_composition": deepcopy(composition)
         if requested is None
@@ -66,7 +66,7 @@ def test_actual_serializer_shares_complete_equal_views_and_hydrates_all_facts(tm
     logical, store, ref, companion = _write(tmp_path)
     physical = cast(Any, store.load(ref))
     assert physical["report_format"] == "loom.preparation_report.v1"
-    assert physical["schema_version"] == 7
+    assert physical["schema_version"] == 10
     assert set(physical["composition"]) == {
         "resolved",
         "redacted",
@@ -197,6 +197,22 @@ def test_relocated_retained_closure_reads_without_original_source(tmp_path):
         **logical,
         "report_format": "loom.preparation_report.v1",
     }
+
+
+@pytest.mark.parametrize("version", [7, True, 11])
+def test_unsupported_report_schema_refuses_before_companion_publication(tmp_path, version):
+    logical, store, _ref, companion = _write(tmp_path)
+    before = companion.read_bytes()
+    logical["schema_version"] = version
+    with pytest.raises(QueueConflictError, match="schema is unsupported"):
+        save_composition_evidence(logical, companion)
+    assert companion.read_bytes() == before
+    # A matching primary checksum does not authorize a retired report schema.
+    physical = {**logical, "report_format": "loom.preparation_report.v1"}
+    retired = store.save(physical, stage_name="prepare", name="retired",
+                         artifact_type="json", codec_key="json.v1")
+    with pytest.raises(QueueConflictError, match="schema is unsupported"):
+        load_preparation_report(retired, store.local_path(retired))
 
 
 @pytest.mark.parametrize("failure", ["write", "fsync", "rename"])

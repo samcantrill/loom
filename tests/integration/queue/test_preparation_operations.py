@@ -15,7 +15,7 @@ from threading import Event
 from concurrent.futures import ThreadPoolExecutor
 import io
 from time import monotonic, sleep
-from typing import Any, cast
+from typing import Any
 
 import pytest
 
@@ -2338,7 +2338,7 @@ def test_native_local_file_graph_is_bound_from_preparation_to_execution(
             report_ref = ArtifactRef.from_dict(dict(_result(operation)["report_ref"]))
             report = load_report(LocalRunStore(service.daemon.run_store_root).local_artifact_root(child.run_uri), report_ref)
             assert isinstance(report, dict)
-            assert report["schema_version"] == 3
+            assert report["schema_version"] == 10
             decode_preparation_report(report, expected=binding)
             stale = deepcopy(report)
             stale["local_scope"]["agent_id"] = "other-agent"
@@ -2438,7 +2438,7 @@ def test_preparation_preserves_redacted_output_declarations(
     ("shared", "73", "installation"), ("shared", "73", "capability"),
     ("shared", "73", "no_key"),
 ])
-def test_installed_project_checks_final_invocation_and_publishes_recovery(
+def test_installed_project_checks_final_invocation_and_binds_execution(
     tmp_path: Path, mode: str, value: str, fault: str | None,
 ) -> None:
     from copy import deepcopy
@@ -2454,7 +2454,7 @@ from copy import deepcopy
 from loom.pipeline.context import StageContext
 
 def inspect(request):
-    assert request['schema_version'] == 1
+    assert request['schema_version'] == 3 and request['operation'] == 'prepare'
     composition = deepcopy(request['composition'])
     config = composition['resolved']['pipeline']['stages'][0]['config']
     value = config['value']
@@ -2463,33 +2463,32 @@ def inspect(request):
     assert request['effective_run_options']['tags']['final'] == 'explicit'
     assert request['invocation']['overrides'][-1].endswith(str(value))
     evidence = {'checked_value': value, 'installed': __file__}
-    binding = request['project_preparation']
-    recovery = {'run_uri': binding['target_run_uri'],
-                'resume_fingerprint': 'checked-resume',
-                'environment_fingerprint': request['profile_descriptor']['environment_fingerprint']}
-    for view in ('resolved', 'redacted'):
-        composition[view]['scientific_evidence'] = evidence if view == 'resolved' else {'checked_value': value, 'installed': '<redacted>'}
-        composition[view]['pipeline']['stages'][0]['config']['recovery'] = dict(recovery)
-    composition['redacted']['pipeline']['stages'][0]['config']['recovery']['run_uri'] = '<redacted>'
     fault = config.get('fault')
     if fault == 'mutation':
         config['value'] += 1
     elif fault == 'target':
-        config['recovery']['run_uri'] += '-other'
+        config['recovery'] = {'run_uri': request['project_preparation']['target_run_uri'] + '-other'}
     elif fault == 'root':
-        config['recovery']['run_uri'] = 'file:///another-root/target-1'
+        config['recovery'] = {'run_uri': 'file:///another-root/target-1'}
     elif fault == 'installation':
-        config['recovery']['environment_fingerprint'] = 'another-installation'
-    return {'schema_version': 99 if fault == 'capability' else 1,
+        config['recovery'] = {'environment_fingerprint': 'another-installation'}
+    return {'schema_version': 99 if fault == 'capability' else 3,
             'composition': composition,
             'evidence': {'namespace': 'example', 'payload': evidence},
+            'stage_contracts': {'produce': {'semantic_key': None, 'payload': evidence}},
             'reconciliation_key': None if fault == 'no_key' else {'namespace': 'example', 'version': 1, 'digest': 'a' * 64}}
 
 class Consumer:
     def run(self, context: StageContext, inputs):
-        assert context.stage_config['recovery']['run_uri'].startswith('file:///')
-        assert context.stage_config['recovery']['run_uri'] != context.run_uri
-        return {'data': context.save_artifact('data', dict(context.stage_config), artifact_type='json', codec_key='json.v1')}
+        evidence = context.metadata['loom.project_contract']['payload']
+        assert evidence['checked_value'] == context.stage_config['value']
+        binding = context.metadata['loom.execution_binding']
+        assert binding['origin_node_id'] == context.stage_name
+        assert binding['run_state_root'] is not None
+        assert context.run_uri.startswith('loom-agent:')
+        assert 'recovery' not in context.stage_config
+        payload = {'value': evidence['checked_value'], 'binding': dict(binding)}
+        return {'data': context.save_artifact('data', payload, artifact_type='json', codec_key='json.v1')}
 ''')
     agent_path = tmp_path / "agent.json"
     agent = json.loads(agent_path.read_text())
@@ -2498,8 +2497,8 @@ class Consumer:
     coordinator_path = tmp_path / "coordinator.json"
     coordinator = json.loads(coordinator_path.read_text())
     coordinator["preparation"]["profiles"]["existing-project"]["project_processor"] = {
-        "schema_version": 1, "callable": "installed_inspector:inspect",
-        "evidence_namespace": "example", "recovery_stage": "produce",
+        "schema_version": 3, "callable": "installed_inspector:inspect",
+        "evidence_namespace": "example", "target_prefix": "example-",
     }
     coordinator_path.write_text(json.dumps(coordinator))
     service = load_coordinator_service_config(coordinator_path)
@@ -2528,7 +2527,7 @@ class Consumer:
         store = LocalRunStore(service.daemon.run_store_root)
         report = load_report(store.local_artifact_root(child.run_uri), ArtifactRef.from_dict(dict(result["report_ref"])))
         assert isinstance(report, dict), operation.to_dict()
-        assert report["schema_version"] == 4
+        assert report["schema_version"] == 10
         if value == "false" or fault not in (None, "no_key"):
             assert operation.state == "failed", operation.to_dict()
             assert report["project_result"] is None
@@ -2553,7 +2552,7 @@ class Consumer:
             assert report["project_result"]["reconciliation_key"]["digest"] == "a" * 64
         assert report["requested_composition"]["resolved"]["pipeline"]["stages"][0]["config"]["value"] == 73
         for changed in ("schema_version", "project_preparation", "composition", "invocation",
-                        "recovery_target", "recovery_environment", "options", "project_check", "result_version"):
+                        "target", "environment", "options", "project_check", "result_version"):
             stale = deepcopy(report)
             if changed == "schema_version":
                 stale[changed] = 99
@@ -2563,9 +2562,10 @@ class Consumer:
                 stale[changed]["resolved"]["pipeline"]["stages"][0]["config"]["value"] = 1
             elif changed == "invocation":
                 stale[changed]["overrides"] = []
-            elif changed in {"recovery_target", "recovery_environment"}:
-                recovery = stale["composition"]["resolved"]["pipeline"]["stages"][0]["config"]["recovery"]
-                recovery["run_uri" if changed == "recovery_target" else "environment_fingerprint"] = "another-binding"
+            elif changed == "target":
+                stale["project_preparation"]["target_run_uri"] += "-other"
+            elif changed == "environment":
+                stale["profile_descriptor"]["environment_fingerprint"] = "another-installation"
             elif changed == "options":
                 stale["effective_run_options"]["tags"]["final"] = "changed"
             elif changed == "project_check":
@@ -2578,9 +2578,11 @@ class Consumer:
             prepare_managed_run(service, composed, "another-target", execution_requirements=requirements)
         uri = result["prepared_run"]["run_uri"]
         intent = load_managed_local_intent(service.daemon, uri)
-        assert cast(dict[str, Any], intent.pipeline.get_stage("produce").stage_config["recovery"])["run_uri"] == uri
+        assert "recovery" not in intent.pipeline.get_stage("produce").stage_config
         resolved = json.loads(store.read_config_snapshot(uri, "resolved") or "{}")
-        assert resolved["scientific_evidence"]["checked_value"] == 73
+        assert "scientific_evidence" not in resolved
+        assert report["composition"] == report["requested_composition"]
+        assert report["project_contracts"]["produce"]["payload"]["checked_value"] == 73
         with CoordinatorClient.from_unix_socket(service.daemon.endpoint) as client:
             client.submit(LocalDaemonAdmissionRequest("execute-checked", uri))
             assert client.wait("execute-checked", timeout_seconds=25).state.value == "SUCCEEDED"
@@ -2588,7 +2590,10 @@ class Consumer:
         delivered = LocalArtifactStore(store.local_artifact_root(uri)).load(worker.outputs["data"])
         assert isinstance(delivered, dict)
         assert delivered["value"] == 73
-        assert delivered["recovery"]["run_uri"] == uri
+        assert delivered["binding"]["origin_run_id"] == request.run_name
+        assert delivered["binding"]["origin_node_id"] == "produce"
+        assert Path(delivered["binding"]["run_state_root"]).as_uri() == uri
+        assert delivered["binding"]["environment_fingerprint"] == report["profile_descriptor"]["environment_fingerprint"]
     finally:
         server.stop()
         daemon.stop()

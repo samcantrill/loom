@@ -43,6 +43,8 @@ PREPARATION_STAGE_TARGET = "loom.preparation.PreparationStage"
 PREPARATION_INPUT_CAPABILITY = "preparation-input-v2"
 PREPARATION_STAGED_INPUT_CAPABILITY = "preparation-staged-input-v1"
 PREPARATION_INPUT_CONTEXT_ENV = "LOOM_PREPARATION_INPUT_CONTEXT"
+PREPARATION_CHILD_INPUT_SCHEMA_VERSION = 10
+PREPARATION_CONTEXT_SCHEMA_VERSION = 6
 
 
 def _relative(value: object, field: str, *, dot: bool = False) -> str:
@@ -394,19 +396,16 @@ def _project_processor(value: object) -> dict[str, PlainData] | None:
     if value is None:
         return None
     if (not isinstance(value, Mapping)
-        or set(value) != ({"schema_version", "callable", "evidence_namespace"} | ({"recovery_stage"} if value.get("schema_version") != 3 else set()) | ({"target_prefix"} if value.get("schema_version") in (2, 3) else set()))
-        or type(value["schema_version"]) is not int or value["schema_version"] not in (1, 2, 3)):
+        or set(value) != {"schema_version", "callable", "evidence_namespace", "target_prefix"}
+        or type(value["schema_version"]) is not int or value["schema_version"] != 3):
         raise QueueServiceError("unsupported project preparation capability")
-    if value["schema_version"] in (2, 3):
-        validate_queue_id(value["target_prefix"], "project target prefix")
+    validate_queue_id(value["target_prefix"], "project target prefix")
     reference = value["callable"]
     if (not isinstance(reference, str) or ":" not in reference
         or any(not part.isidentifier() for part in reference.replace(":", ".").split("."))
         or reference.count(":") != 1):
         raise QueueServiceError("project preparation callable is invalid")
     validate_queue_id(value["evidence_namespace"], "project evidence namespace")
-    if value.get("recovery_stage") is not None:
-        validate_queue_id(value["recovery_stage"], "project recovery stage")
     return cast(dict[str, PlainData], dict(value))
 
 
@@ -436,7 +435,7 @@ def _project_binding(value: object) -> dict[str, PlainData] | None:
     uri = value["target_run_uri"]
     if "run_store_root_uri" in value:
         root = value["run_store_root_uri"]
-        if processor["schema_version"] not in (2, 3) or uri is not None or not isinstance(root, str) or path_to_run_uri(run_uri_to_path(root)) != root:
+        if uri is not None or not isinstance(root, str) or path_to_run_uri(run_uri_to_path(root)) != root:
             raise QueueServiceError("project reconciliation binding is invalid")
         return {"processor": processor, "target_run_uri": None, "run_store_root_uri": root}
     if not isinstance(uri, str) or path_to_run_uri(run_uri_to_path(uri)) != uri:
@@ -460,6 +459,28 @@ def project_target_from_key(
     return _project_target_uri(run_uri_to_path(cast(str, binding["run_store_root_uri"])),
                                cast(str, processor["target_prefix"]) + digest)
 
+
+
+def _scope_data(
+    local: Mapping[str, PlainData] | None, shared: Mapping[str, PlainData] | None,
+) -> dict[str, PlainData]:
+    if shared is not None:
+        return {"kind": "shared", "binding": thaw_plain_data(shared)}
+    if local is not None:
+        return {"kind": "local", "binding": thaw_plain_data(local)}
+    return {"kind": "unscoped"}
+
+
+def _decode_scope(value: object) -> tuple[object, object]:
+    """Decode the current variant; the existing scope owners validate its binding."""
+    if not isinstance(value, Mapping):
+        raise QueueServiceError("preparation scope is invalid")
+    kind = value.get("kind")
+    if kind == "unscoped" and set(value) == {"kind"}:
+        return None, None
+    if kind in ("local", "shared") and set(value) == {"kind", "binding"} and isinstance(value["binding"], Mapping):
+        return (value["binding"], None) if kind == "local" else (None, value["binding"])
+    raise QueueServiceError("preparation scope fields are invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -530,76 +551,71 @@ class PreparationChildInput:
         )
 
     def to_dict(self) -> dict[str, PlainData]:
+        purpose: dict[str, PlainData] = {"kind": "generic"}
+        if self.project_preparation is not None:
+            purpose = {"kind": "project", "binding": thaw_plain_data(self.project_preparation)}
+            if self.candidate is not None:
+                purpose["candidate"] = thaw_plain_data(self.candidate)
+            if self.action_verification is not None:
+                purpose["kind"] = "verify_result"
+                purpose["request"] = thaw_plain_data(self.action_verification)
         return {
-            "schema_version": 9 if self.action_verification is not None else 8 if self.generations is not None else 7 if self.project_preparation is not None and cast(Mapping[str, PlainData], self.project_preparation["processor"])["schema_version"] == 3 else 6 if self.shared_scope is not None else 5 if self.candidate is not None or (self.project_preparation is not None and self.project_preparation["target_run_uri"] is None) else 4 if self.project_preparation is not None else 2 if self.local_scope is None else 3,
-            **({"action_verification": thaw_plain_data(self.action_verification)} if self.action_verification is not None else {}),
-            **({"generations": dict(self.generations)} if self.generations is not None else {}),
-            **({"shared_scope": dict(self.shared_scope)} if self.shared_scope is not None else {}),
-            **({"candidate": thaw_plain_data(self.candidate)} if self.candidate is not None or (self.project_preparation is not None and self.project_preparation["target_run_uri"] is None) else {}),
-            **({"project_preparation": dict(self.project_preparation)} if self.project_preparation is not None else {}),
-            **({"local_scope": dict(self.local_scope)} if self.local_scope is not None else {}),
+            "schema_version": PREPARATION_CHILD_INPUT_SCHEMA_VERSION,
             "operation_id": self.operation_id,
             "preparation_profile": self.preparation_profile,
             "config_path": self.config_path,
             "input_receipt": self.input_receipt.to_dict(),
             "profile_descriptor": dict(self.profile_descriptor),
+            "scope": _scope_data(self.local_scope, self.shared_scope),
+            "purpose": purpose,
+            **({"generations": dict(self.generations)} if self.generations is not None else {}),
             **_invocation_data(self),
         }
 
     @classmethod
     def from_dict(cls, value: object) -> "PreparationChildInput":
-        if isinstance(value, Mapping) and value.get("schema_version") in (6, 7, 8, 9):
-            result = cls(
-                cast(str, value.get("operation_id")), cast(str, value.get("preparation_profile")),
-                cast(str, value.get("config_path")), input_receipt_from_dict(cast(Mapping[str, object], value.get("input_receipt"))),
-                cast(Mapping[str, PlainData], value.get("profile_descriptor")),
-                cast(tuple[str, ...], value.get("overlays")), cast(tuple[str, ...], value.get("overrides")),
-                cast(Mapping[str, PlainData], value.get("run_options")),
-                local_scope=cast(Mapping[str, PlainData] | None, value.get("local_scope")),
-                project_preparation=cast(Mapping[str, PlainData] | None, value.get("project_preparation")),
-                candidate=cast(Mapping[str, PlainData] | None, value.get("candidate")),
-                shared_scope=cast(Mapping[str, PlainData] | None, value.get("shared_scope")),
-                generations=cast(Mapping[str, str] | None, value.get("generations")),
-                action_verification=cast(Mapping[str, PlainData] | None, value.get("action_verification")),
-            )
-            if result.to_dict() != thaw_plain_data(value):
-                raise QueueServiceError("shared preparation child fields are invalid")
-            return result
-        if (
-            not isinstance(value, Mapping)
-            or set(value)
-            != ({
-                "schema_version",
-                "operation_id",
-                "preparation_profile",
-                "config_path",
-                "input_receipt",
-                "profile_descriptor",
-                "overlays",
-                "overrides",
-                "run_options",
-            } | ({"local_scope"} if value.get("schema_version") in (3, 4, 5) else set())
-                | ({"project_preparation"} if value.get("schema_version") in (4, 5) else set()) | ({"candidate"} if value.get("schema_version") == 5 else set()))
+        required = {
+            "schema_version", "operation_id", "preparation_profile", "config_path",
+            "input_receipt", "profile_descriptor", "scope", "purpose",
+            "overlays", "overrides", "run_options",
+        }
+        if (not isinstance(value, Mapping)
             or type(value.get("schema_version")) is not int
-            or value.get("schema_version") not in (2, 3, 4, 5)
-            or (value.get("schema_version") in (3, 4, 5) and value.get("local_scope") is None)
-            or (value.get("schema_version") in (4, 5) and value.get("project_preparation") is None)
-            or not isinstance(value.get("input_receipt"), Mapping)
+            or value["schema_version"] != PREPARATION_CHILD_INPUT_SCHEMA_VERSION
+            or not required <= set(value) or set(value) - required - {"generations"}
+            or not isinstance(value["input_receipt"], Mapping)):
+            raise QueueServiceError("preparation child input fields or schema are unsupported")
+        local, shared = _decode_scope(value["scope"])
+        purpose = value["purpose"]
+        if not isinstance(purpose, Mapping):
+            raise QueueServiceError("preparation purpose is invalid")
+        kind = purpose.get("kind")
+        fields = set(purpose)
+        if not (
+            (kind == "generic" and fields == {"kind"})
+            or (kind == "project" and fields in ({"kind", "binding"}, {"kind", "binding", "candidate"}))
+            or (kind == "verify_result" and fields == {"kind", "binding", "request"})
         ):
-            raise QueueServiceError("preparation child input is invalid")
-        return cls(
-            cast(str, value["operation_id"]),
-            cast(str, value["preparation_profile"]),
-            cast(str, value["config_path"]),
-            input_receipt_from_dict(value["input_receipt"]),
-            cast(Mapping[str, PlainData], value["profile_descriptor"]),
-            cast(tuple[str, ...], value["overlays"]),
-            cast(tuple[str, ...], value["overrides"]),
-            cast(Mapping[str, PlainData], value["run_options"]),
-            _local_scope(value.get("local_scope")),
-            _project_binding(value.get("project_preparation")),
-            cast(Mapping[str, PlainData] | None, value.get("candidate")),
+            raise QueueServiceError("preparation purpose fields are invalid")
+        result = cls(
+            operation_id=cast(str, value["operation_id"]),
+            preparation_profile=cast(str, value["preparation_profile"]),
+            config_path=cast(str, value["config_path"]),
+            input_receipt=input_receipt_from_dict(value["input_receipt"]),
+            profile_descriptor=cast(Mapping[str, PlainData], value["profile_descriptor"]),
+            overlays=cast(tuple[str, ...], value["overlays"]),
+            overrides=cast(tuple[str, ...], value["overrides"]),
+            run_options=cast(Mapping[str, PlainData], value["run_options"]),
+            local_scope=cast(Mapping[str, PlainData] | None, local),
+            shared_scope=cast(Mapping[str, PlainData] | None, shared),
+            project_preparation=cast(Mapping[str, PlainData] | None, purpose.get("binding")),
+            candidate=cast(Mapping[str, PlainData] | None, purpose.get("candidate")),
+            generations=cast(Mapping[str, str] | None, value.get("generations")),
+            action_verification=cast(Mapping[str, PlainData] | None, purpose.get("request")),
         )
+        if result.to_dict() != thaw_plain_data(value):
+            raise QueueServiceError("preparation child input is not current canonical data")
+        return result
 
 
 def _capture_selected_source(

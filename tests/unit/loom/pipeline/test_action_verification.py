@@ -190,6 +190,7 @@ def _materialized_report(root, operation):
     ).with_suffix(".composition.json")
     primary = save_composition_evidence(
         {
+            "schema_version": 10,
             "operation_id": operation,
             "composition": {
                 "resolved": {},
@@ -212,6 +213,30 @@ def _materialized_report(root, operation):
         materialized, uri=f"loom-shared://reports/{operation}/report.json"
     )
     return original, materialized, companion
+
+
+def test_current_child_carries_action_request_once_and_rejects_retired_input():
+    from loom.queue.errors import QueueServiceError
+    from loom.serialization import thaw_plain_data
+
+    binding = _binding()
+    encoded = binding.to_dict()
+    assert encoded["schema_version"] == 10
+    assert encoded["purpose"] == {
+        "kind": "verify_result", "binding": thaw_plain_data(binding.project_preparation),
+        "request": thaw_plain_data(binding.action_verification),
+    }
+    assert "action_verification" not in encoded
+    assert PreparationChildInput.from_dict(encoded) == binding
+    assert binding.local_scope is not None
+    retired = {**encoded, "schema_version": 9,
+               "local_scope": dict(binding.local_scope),
+               "project_preparation": thaw_plain_data(binding.project_preparation),
+               "action_verification": thaw_plain_data(binding.action_verification)}
+    retired.pop("scope")
+    retired.pop("purpose")
+    with pytest.raises(QueueServiceError, match="unsupported"):
+        PreparationChildInput.from_dict(retired)
 
 
 @pytest.mark.parametrize(

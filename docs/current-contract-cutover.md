@@ -824,3 +824,47 @@ still accepts arbitrary positive versions despite its current version 1; that
 remaining document-admission row is part of the full inventory, not closed by
 the fingerprint cutover. Preparation wire families, lineage and downstream
 dependency/image qualification likewise remain open.
+
+## Current preparation input and processor contracts
+
+Base `74076641e326e2de010f33d2e96b239694f99799` (PR #417), branch
+`refactor/current-preparation-contracts`. This delivery closes child input,
+private worker context, composition report admission and installed processor
+policy/request/result. Resident assignment and worker-result consolidation remain
+separate open wire-family rows; their current launch/publication consumers are
+exercised here because they transport the changed preparation contracts.
+
+| Boundary | Producer and consumer | Current disposition |
+| --- | --- | --- |
+| Child input | `queue/preparation.py`, native assignment decoding and `PreparationStage` | Schema 10 only; explicit scope/purpose, optional generations and candidate |
+| Private context | Retained workspace `preparation_context`, `PreparationStage` | Schema 6 only; explicit input/scope/purpose; original artifact/report bindings |
+| Composition report | `PreparationStage`, `_preparation_report`, coordinator decoder, native project-contract readers | Schema 10 only; same checksum-bound companion format; reject obsolete schemas before companion reads/writes |
+| Installed processor | Protected policy, worker invocation/result, reconciliation admission | Processor 3 only; immutable captured composition and exact per-node contract coverage |
+| Verification responses | Existing candidate/action verifiers | Independent response schema 1 and action-report schema 9 remain current |
+
+No dependency, lock, scientific algorithm, input-capture receipt or public run
+request contract changes. Retired composition mutation, `recovery_stage` policy
+and v1/v2 processors are removed. Existing tests move their effective-invocation,
+privacy, target/installation binding, reuse and retry assertions to current
+node contracts and `loom.execution_binding`. Shared execution now publishes its
+original report through the current shared-artifact owner so the remote worker
+can verify the original contract. Negative cases refuse retired requests before
+composition and obsolete reports before companion publication.
+
+Validation selection: isolated locked Python 3.12 baseline covers child/capture,
+staged inputs, report persistence/relocation, action verification, protected
+processor policy, resident wire/workspace and Slurm framing. Config-extra coverage
+executes the complete preparation-child, preparation-operation, reconciled-run,
+installed-node and shared-execution test files, plus shared publication with
+project context, current shared retry/recovery and actual Slurm report-pair
+handoff. The separate supervisor's shared-container preparation cases cover
+container path mapping. These are causal producer/consumer paths, not a Cartesian
+backend matrix. Cheap collection, changed-file Ruff and complete Pyright precede
+execution. Exact selectors and receipts use `build/current-contract-cutover/`
+with `preparation-` prefixes. Failures, errors or required skips remain gaps.
+
+Expand only for a newly reached consumer or failing contract. Previous authority,
+control/event and runtime-service receipts remain evidence for unchanged owners;
+this delivery does not claim full-suite or physical fleet/Slurm qualification.
+Paired rphys dependency/image adoption and scientific writer/scaling acceptance
+remain open at their existing downstream owners.
