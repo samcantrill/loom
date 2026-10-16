@@ -59,7 +59,7 @@ def _fixture(tmp_path, data=b"result"):
         "local",
         (artifact,),
         process_created=True,
-        schema_version=3,
+        schema_version=6,
         executor_metadata={"container_runtime": "apptainer"},
     )
     owner = SharedSlurmResult(storage, "assignment-1")

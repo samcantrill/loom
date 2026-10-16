@@ -642,8 +642,8 @@ def test_https_prepares_on_one_worker_then_executes_on_another(
     from loom.queue.agent_sessions import AgentSessionService
     original_declare = AgentSessionService.declare_outputs
     def declare_native_pair(owner, session_id, assignment_id, *, fence, authorization_id, authorization_revision, report):
-        if report.schema_version == 5:
-            downgraded = replace(report, schema_version=3, outputs=tuple(replace(item, preparation_report_transfer=None) for item in report.outputs))
+        if report.output_kind == "preparation_report":
+            downgraded = replace(report, output_kind="relay", outputs=tuple(replace(item, preparation_report_transfer=None) for item in report.outputs))
             with pytest.raises(QueueConflictError, match="native preparation transfer capability"):
                 original_declare(owner, session_id, assignment_id, fence=fence, authorization_id=authorization_id, authorization_revision=authorization_revision, report=downgraded)
         return original_declare(owner, session_id, assignment_id, fence=fence, authorization_id=authorization_id, authorization_revision=authorization_revision, report=report)

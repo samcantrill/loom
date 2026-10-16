@@ -633,7 +633,7 @@ def test_remote_candidate_expiry_uses_the_accepted_time_snapshot(
                     ("default",),
                     (
                         "python",
-                        "remote-stage-execution-v3",
+                        "remote-stage-execution-v4",
                         "regular-file-relay-v1",
                     ),
                 ),
@@ -662,7 +662,7 @@ def test_remote_candidate_expiry_uses_the_accepted_time_snapshot(
                 declared_pools=("default",),
                 declared_capabilities=(
                     "python",
-                    "remote-stage-execution-v3",
+                    "remote-stage-execution-v4",
                     "regular-file-relay-v1",
                 ),
                 retirement_verifier="01" * 32,

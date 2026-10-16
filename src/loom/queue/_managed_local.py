@@ -4366,7 +4366,7 @@ def _project_resident_result(
     if (
         report.status is StageStatus.SUCCEEDED
         and native_role(workspace.request().fingerprint)
-        and report.schema_version != 5
+        and report.output_kind != "preparation_report"
     ):
         raise ManagedLocalError("native preparation transfer capability is missing")
     artifact_store = LocalArtifactStore(

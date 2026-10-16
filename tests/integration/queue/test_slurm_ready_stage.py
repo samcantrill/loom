@@ -963,7 +963,7 @@ SharedSlurmResult(json.loads(sys.argv[2]), report.assignment_id, compute=True).p
             shutil.rmtree(tmp_path / "compute")
             retained = SharedSlurmResult(profile.result_storage, assignment_id)
             retained_report, output_bytes = retained.read(identity)
-            assert retained_report.schema_version == 3
+            assert retained_report.schema_version == 6
             assert output_bytes
             if slurm_output_size is not None:
                 assert sum(map(len, output_bytes.values())) == slurm_output_size
@@ -1071,7 +1071,7 @@ SharedSlurmResult(json.loads(sys.argv[2]), report.assignment_id, compute=True).p
             process_containment_owner=ProcessContainmentOwner.OUTER_BOUNDARY,
         )
         report = workspace.retain_result(worker_result)
-        assert report.schema_version == 3
+        assert report.schema_version == 6
         assert report.process_created is True
         assert report.resource_controls is not None
         assert {
@@ -1171,7 +1171,7 @@ SharedSlurmResult(json.loads(sys.argv[2]), report.assignment_id, compute=True).p
             completed = client.wait("mixed-route", timeout_seconds=10)
             if native_failure:
                 assert completed.state is LocalDaemonAdmissionState.FAILED
-                assert report.schema_version == 3
+                assert report.schema_version == 6
                 assert report.failure is not None
                 saved_failure = run_store.read_stage_failure(run_uri, "train")
                 assert saved_failure is not None
@@ -1913,7 +1913,8 @@ def test_actual_native_preparation_pair_crosses_slurm_ready_helpers_and_ack_repl
         outputs={"report": relocated},
     )
     report = workspace.retain_result(result)
-    assert report.schema_version == 5
+    assert report.schema_version == 6
+    assert report.output_kind == "preparation_report"
     assert (
         len(report.outputs) == 1
         and report.outputs[0].preparation_report_transfer is not None
@@ -1950,7 +1951,7 @@ def test_actual_native_preparation_pair_crosses_slurm_ready_helpers_and_ack_repl
             ),
         )
     downgraded = replace(
-        report, schema_version=3,
+        report, output_kind="relay",
         outputs=tuple(replace(item, preparation_report_transfer=None) for item in report.outputs),
     )
     with pytest.raises(QueueConflictError, match="native preparation transfer capability"):

@@ -851,7 +851,7 @@ scientific interpretation remain owned by the stage.
 
 The native `.loom-publication.json` receipt begins with the attempt's ownership
 identity and becomes the complete bounded closure receipt after execution. It
-is metadata, excluded from the payload-member count. Resident result schema 4
+is metadata, excluded from the payload-member count. Resident result schema 6 with `output_kind: shared`
 carries versioned `loom.shared_publication` bindings in native output metadata:
 logical root, immutable tree, publication identity, receipt digest, primary member
 and admitted budgets. The receipt stays on shared storage; even large manifests
@@ -1287,3 +1287,30 @@ The review correction for replayed rename durability and stable-machine recovery
 partitioning passed 49 affected recovery, remote-assignment and shared-publication
 tests, plus changed-file Ruff, Pyright and diff checks. Worker binding fields
 remain unchanged; consumers continue to resolve the supplied current path.
+
+
+### Current assignment and result wire contracts
+
+Resident assignment bundles accept schema 6 only. Shared execution scope remains
+in its existing fingerprint-bound `loom.shared_execution` field; the bundle does
+not repeat that binding or choose its schema by scope. The current
+`remote-stage-execution-v4` capability is required for remote execution.
+Maintained coordinator and agent capability declarations must agree.
+
+Resident and Slurm terminal reports also accept schema 6 only. `output_kind`
+selects the current publication mode:
+
+| Value | Meaning |
+| --- | --- |
+| `relay` | Ordinary bounded file relay, including terminal failures without outputs |
+| `shared` | Shared publication with checksum-bound ownership and closure receipts; failed/cancelled attempts keep this mode with no outputs |
+| `preparation_report` | Successful native preparation's single `report` output, with its verified primary/companion transfer header |
+
+All reports carry current full failure, resource-control, process-start and
+redacted route evidence. `process_created: null` still means unknown, not false.
+A failed native preparation without a transferred pair uses `relay`, or `shared`
+when its profile selects shared publication. Mode does not replace the output
+receipt, protected assignment or native-role checks. The current report is
+retained and replayed byte-for-byte; loading an older assignment or result is
+refused, with no conversion. Settle outstanding work using its pinned runtime
+before deploying this incompatible contract and preparing fresh assignments.

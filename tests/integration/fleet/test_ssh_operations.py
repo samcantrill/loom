@@ -334,7 +334,7 @@ def site(tmp_path, bundle, endpoint, request):
     write(tmp_path / "coordinator.json", coordinator)
     capabilities = [
         "python",
-        "remote-stage-execution-v3",
+        "remote-stage-execution-v4",
         "regular-file-relay-v1",
         "shared-execution-v1",
         "shared-assignment-reference-v1",

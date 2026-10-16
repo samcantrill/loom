@@ -1103,12 +1103,12 @@ class SQLiteSlurmStageAssignments:
         ) != set(record.delivery.declared_outputs):
             raise QueueConflictError("SLURM result output interface conflicts")
         from ._preparation_report_transfer import native_role
-        if report.schema_version == 5 and not native_role(record.delivery.fingerprint):
+        if report.output_kind == "preparation_report" and not native_role(record.delivery.fingerprint):
             raise QueueConflictError("SLURM preparation transfer targets another stage role")
         if (
             report.status is StageStatus.SUCCEEDED
             and native_role(record.delivery.fingerprint)
-            and report.schema_version != 5
+            and report.output_kind != "preparation_report"
         ):
             raise QueueConflictError("native preparation transfer capability is missing")
         encoded = _json(report.to_dict())
@@ -1592,7 +1592,7 @@ class SlurmBootstrapWorkspace:
             ),
             process_created=True,
             executor_metadata=result.executor_metadata,
-            schema_version=5 if any(item.preparation_report_transfer is not None for item in outputs) else 3,
+            output_kind="preparation_report" if any(item.preparation_report_transfer is not None for item in outputs) else "relay",
         )
         encoded = (_json(report.to_dict()) + "\n").encode()
         if self._retained_report_path.exists():

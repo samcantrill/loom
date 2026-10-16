@@ -4978,7 +4978,8 @@ def _failure_report(details: Mapping[str, PlainData]) -> _RemoteExecutionReport:
         failure_type=failure.failure_type,
         message=failure.message,
         failure=failure,
-        schema_version=2,
+        schema_version=6,
+        executor_metadata={},
     )
 
 
@@ -5027,13 +5028,13 @@ def test_report_failure_decoder_rejects_genuine_overflow(
 @pytest.mark.parametrize("number", ["NaN", "Infinity", "-Infinity", "1e999"])
 def test_report_failure_decoder_rejects_nonfinite_numbers(number: str) -> None:
     encoded = (
-        '{"report":{"schema_version":2,"failure":{"details":{"x":' + number + "}}}}"
+        '{"report":{"schema_version":6,"failure":{"details":{"x":' + number + "}}}}"
     ).encode()
     with pytest.raises(QueueServiceError, match="JSON.*(invalid|non-finite)"):
         _decode(encoded, failure_report=True)
 
 
-def test_failure_report_exception_cannot_widen_surrounding_or_legacy_fields() -> None:
+def test_failure_report_exception_cannot_widen_surrounding_or_retired_fields() -> None:
     value: dict[str, Any] = {"report": _failure_report({"threshold": 0.5}).to_dict()}
     for misplaced in (
         {"failure": value["report"]["failure"]},
@@ -5041,19 +5042,19 @@ def test_failure_report_exception_cannot_widen_surrounding_or_legacy_fields() ->
         {**value, "unknown": _nested_report_detail(9)},
         {**value, "": "invalid envelope key"},
         {"report": {**value["report"], "schema_version": 1}},
-        {"report": {**value["report"], "schema_version": 2.0}},
+        {"report": {**value["report"], "schema_version": 6.0}},
     ):
         with pytest.raises(QueueServiceError):
             _decode(json.dumps(misplaced).encode(), failure_report=True)
     with pytest.raises(QueueServiceError, match="JSON is invalid"):
         _decode(
-            b'{"report":{"schema_version":2,"failure":{"x":1,"x":2}}}',
+            b'{"report":{"schema_version":6,"failure":{"x":1,"x":2}}}',
             failure_report=True,
         )
 
 
-@pytest.mark.parametrize("schema_version", [3, 4])
-def test_report_metadata_preserves_plain_values(schema_version: int) -> None:
+@pytest.mark.parametrize("output_kind", ["relay", "shared"])
+def test_report_metadata_preserves_plain_values(output_kind) -> None:
     metadata = {
         "request": {"resolved_runtime": {"reliability": {
             "timeout": {"enabled": True, "duration_seconds": 3600.5},
@@ -5061,7 +5062,7 @@ def test_report_metadata_preserves_plain_values(schema_version: int) -> None:
         "observations": [None, True, 2, 0.25, "ready", {"ratio": 0.75}],
         "nested": _nested_report_detail(5),
     }
-    report = replace(_failure_report({}), schema_version=schema_version,
+    report = replace(_failure_report({}), output_kind=output_kind,
                      executor_metadata=metadata)
     encoded = json.dumps({"report": report.to_dict()}).encode()
     decoded = _decode(encoded, failure_report=True)
@@ -5074,7 +5075,7 @@ def test_report_metadata_preserves_plain_values(schema_version: int) -> None:
 
 @pytest.mark.parametrize("number", ["NaN", "Infinity", "-Infinity", "1e999"])
 def test_report_metadata_rejects_nonfinite_numbers(number: str) -> None:
-    report = replace(_failure_report({}), schema_version=4,
+    report = replace(_failure_report({}), output_kind="shared",
                      executor_metadata={"duration_seconds": "NUMBER"})
     encoded = json.dumps({"report": report.to_dict()}).replace('"NUMBER"', number)
     with pytest.raises(QueueServiceError, match="JSON.*invalid"):
@@ -5093,16 +5094,16 @@ def test_report_metadata_rejects_nonfinite_numbers(number: str) -> None:
     ],
 )
 def test_report_metadata_preserves_existing_transport_bounds(metadata, message):
-    report = replace(_failure_report({}), schema_version=4,
+    report = replace(_failure_report({}), output_kind="shared",
                      executor_metadata=metadata)
     with pytest.raises(QueueServiceError, match=message):
         _decode(json.dumps({"report": report.to_dict()}).encode(), failure_report=True)
 
 
-def test_report_metadata_plain_values_do_not_widen_legacy_or_envelope_fields():
-    report = replace(_failure_report({}), schema_version=4,
+def test_report_metadata_plain_values_do_not_widen_retired_or_envelope_fields():
+    report = replace(_failure_report({}), output_kind="shared",
                      executor_metadata={"duration_seconds": 3600.5}).to_dict()
-    for schema_version in (1, 2):
+    for schema_version in (1, 2, 3, 4, 5):
         with pytest.raises(QueueServiceError):
             _decode(json.dumps({"report": {**report, "schema_version": schema_version}}).encode(),
                     failure_report=True)
@@ -5180,7 +5181,7 @@ def test_agent_client_rejects_an_old_protocol_without_compatibility(
 
 
 @pytest.mark.parametrize("ceiling", [1, 2])
-@pytest.mark.parametrize("missing", ["concurrent-resident-assignments-v1", "agent-control-wait-v1"])
+@pytest.mark.parametrize("missing", ["concurrent-resident-assignments-v1", "agent-control-wait-v1", "remote-stage-execution-v4"])
 def test_outbound_service_rejects_missing_current_capability_before_offering(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ceiling: int, missing: str
 ) -> None:
@@ -5216,16 +5217,19 @@ def test_outbound_service_rejects_missing_current_capability_before_offering(
                 REGULAR_FILE_RELAY_CAPABILITY,
                 "concurrent-resident-assignments-v1",
                 "agent-control-wait-v1",
-            ) if capability != missing],
+            ) if capability != missing] + (["remote-stage-execution-v3"] if missing == REMOTE_EXECUTION_CAPABILITY else []),
             "coordinator_id": "coordinator-1",
             "coordinator_epoch": "epoch-1",
             "role": role,
         }
 
     monkeypatch.setattr(client, "_call", old_coordinator)
-    with pytest.raises(
-        QueueServiceError, match=f"upgrade required.*{missing}"
-    ):
+    refusal = (
+        "protocol is unsupported"
+        if missing == REMOTE_EXECUTION_CAPABILITY
+        else f"upgrade required.*{missing}"
+    )
+    with pytest.raises(QueueServiceError, match=refusal):
         client.handshake()
     stop.clear()
     calls.clear()
@@ -7670,7 +7674,7 @@ def test_loopback_report_routes_preserve_near_limit_failure_and_strict_envelopes
     )
     report = replace(
         _failure_report(_nested_report_detail(511)),
-        schema_version=3, executor_metadata={"duration_seconds": 3600.5},
+        executor_metadata={"duration_seconds": 3600.5},
     ).to_dict()
     envelope: dict[str, PlainData] = {
         "assignment_id": "assignment-1",
@@ -8199,7 +8203,7 @@ def test_slurm_relay_preserves_existing_failure_depth_and_outer_bounds():
 
     report = replace(
         _failure_report(_nested_report_detail(511)),
-        schema_version=3, executor_metadata={"duration_seconds": 3600.5},
+        executor_metadata={"duration_seconds": 3600.5},
     ).to_dict()
     request = {
         "session_id": "session",
@@ -8222,7 +8226,7 @@ def test_slurm_relay_preserves_existing_failure_depth_and_outer_bounds():
 def test_shared_result_schema_preserves_existing_failure_envelope_bounds():
     from dataclasses import replace
     report = replace(_failure_report({"metric": 0.5, "nested": _nested_report_detail(20)}),
-                     schema_version=4, executor_metadata={})
+                     output_kind="shared", executor_metadata={})
     value = {"report": report.to_dict()}
     decoded = _decode(json.dumps(value).encode(), failure_report=True)
     assert _RemoteExecutionReport.from_dict(decoded["report"]) == report

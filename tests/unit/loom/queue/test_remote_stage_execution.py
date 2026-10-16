@@ -374,9 +374,10 @@ def test_remote_regular_file_input_rejects_a_symlink(tmp_path: Path) -> None:
         )
 
 
-def test_remote_request_rejects_the_old_wire_schema(tmp_path: Path) -> None:
+@pytest.mark.parametrize("version", [1, 2, 3, 4, 5, True, 6.0, "6", 7])
+def test_remote_request_rejects_the_old_wire_schema(tmp_path: Path, version) -> None:
     encoded = _request(_profile(tmp_path)).to_dict()
-    encoded["schema_version"] = 2
+    encoded["schema_version"] = version
 
     with pytest.raises(QueueServiceError, match="schema is unsupported"):
         _ResidentAssignmentBundle.from_dict(encoded)
@@ -572,7 +573,8 @@ def test_input_replay_and_event_sequence_are_durable_and_exact(tmp_path: Path) -
     assert report.outputs[0].metadata == {"quality": "verified"}
     replayed = _RemoteExecutionReport.from_dict(report.to_dict())
     assert replayed.outputs[0].metadata == {"quality": "verified"}
-    assert replayed.schema_version == 3
+    assert replayed.schema_version == 6
+    assert replayed.output_kind == "relay"
     assert replayed.process_created is True
     assert replayed.executor_metadata is not None
     assert replayed.executor_metadata["request"] == {
@@ -655,7 +657,7 @@ def test_resident_no_start_failure_is_durable_without_process_identity(
     )
 
 
-def test_legacy_report_writer_shape_and_digest_do_not_acquire_current_fields() -> None:
+def test_retired_minimal_result_is_refused() -> None:
     legacy = {
         "schema_version": 1,
         "assignment_id": "assignment-1",
@@ -671,24 +673,8 @@ def test_legacy_report_writer_shape_and_digest_do_not_acquire_current_fields() -
         "exception_type": "builtins.RuntimeError",
         "exit_code": 1,
     }
-    encoded = json.dumps(legacy, sort_keys=True, separators=(",", ":"))
-    report = _RemoteExecutionReport.from_dict(json.loads(encoded))
-    replay = json.dumps(report.to_dict(), sort_keys=True, separators=(",", ":"))
-    assert replay == encoded
-    assert (
-        hashlib.sha256(replay.encode()).digest()
-        == hashlib.sha256(encoded.encode()).digest()
-    )
-    assert report.failure is None
-    assert report.resource_controls is None
-    assert report.process_created is None
-    with pytest.raises(QueueServiceError):
-        _RemoteExecutionReport.from_dict({**legacy, "resource_controls": None})
-    for invalid_version in (True, 1.0, "1"):
-        with pytest.raises(QueueServiceError, match="schema is unsupported"):
-            _RemoteExecutionReport.from_dict(
-                {**legacy, "schema_version": invalid_version}
-            )
+    with pytest.raises(QueueServiceError, match="schema is unsupported"):
+        _RemoteExecutionReport.from_dict(legacy)
 
 
 def test_current_remote_report_preserves_full_failure_and_owner_start_proof(
@@ -719,18 +705,19 @@ def test_current_remote_report_preserves_full_failure_and_owner_start_proof(
         exception_type=failure.exception_type,
         failure=failure,
         process_created=None,
-        schema_version=2,
+        schema_version=6,
+        executor_metadata={},
     )
     retained = report.to_dict()
-    assert "executor_metadata" not in retained
+    assert retained["executor_metadata"] == {}
     replayed = _RemoteExecutionReport.from_dict(retained)
     assert replayed.failure == failure
     assert json.dumps(replayed.to_dict(), sort_keys=True) == json.dumps(
         retained, sort_keys=True
     )
-    assert replayed.executor_metadata is None
+    assert replayed.executor_metadata == {}
     with pytest.raises(QueueServiceError, match="shape is invalid"):
-        _RemoteExecutionReport.from_dict({**retained, "executor_metadata": {}})
+        _RemoteExecutionReport.from_dict({key: value for key, value in retained.items() if key != "executor_metadata"})
     with pytest.raises(QueueConflictError, match="summary conflicts"):
         _RemoteExecutionReport(
             assignment_id="assignment-1",
@@ -744,8 +731,17 @@ def test_current_remote_report_preserves_full_failure_and_owner_start_proof(
             message=message,
             exception_type=failure.exception_type,
             failure=failure,
-            schema_version=2,
+            schema_version=6,
+            executor_metadata={},
         )
+    for obsolete in (1, 2, 3, 4, 5, True, 6.0, "6", 7):
+        with pytest.raises(QueueServiceError, match="schema is unsupported"):
+            _RemoteExecutionReport.from_dict({**retained, "schema_version": obsolete})
+    with pytest.raises(QueueServiceError, match="output kind is unsupported"):
+        _RemoteExecutionReport.from_dict({**retained, "output_kind": "old"})
+    shared_failure = replace(report, output_kind="shared")
+    assert _RemoteExecutionReport.from_dict(shared_failure.to_dict()) == shared_failure
+    assert shared_failure.outputs == ()
     profile = _profile(tmp_path)
     request = _request(profile)
     workspace = _ResidentAssignmentWorkspace(tmp_path, request.assignment_id)
@@ -1176,6 +1172,7 @@ def test_targeted_current_poll_delivers_only_the_exact_durable_request(
                 "local",
                 outputs=(output,),
                 exit_code=0,
+                executor_metadata={},
             ),
         )
         first_output = output_data[:TRANSFER_CHUNK_BYTES]
@@ -1382,7 +1379,7 @@ def test_local_container_launch_reopens_without_recursive_worker_materialization
         reopened.persist_request(request, changed)
 
 
-def test_shared_assignment_requires_versioned_scope_and_live_root_binding(tmp_path):
+def test_shared_assignment_preserves_bound_scope_and_live_root_binding(tmp_path):
     from loom.queue.shared_execution import SHARED_EXECUTION_SCOPE, qualifications, stage_scope
     from loom.queue.agent_session_transport import _decode
     root = tmp_path / "data"
@@ -1399,9 +1396,9 @@ def test_shared_assignment_requires_versioned_scope_and_live_root_binding(tmp_pa
                       stage_config=config, fingerprint_fields={SHARED_EXECUTION_SCOPE: scope})
     fingerprint = StageFingerprintRecord.create(algorithm="sha256", payload=payload, inputs_summary={"stage_name": "build"})
     request = replace(base, fingerprint=fingerprint.to_dict())
-    assert request.schema_version == 5
+    assert request.schema_version == 6
     assert _ResidentAssignmentBundle.from_remote_dict(request.to_dict()) == request
-    with pytest.raises(QueueServiceError, match="schema capability"):
+    with pytest.raises(QueueServiceError, match="schema is unsupported"):
         _ResidentAssignmentBundle.from_remote_dict({**request.to_dict(), "schema_version": 4})
     with pytest.raises(QueueServiceError, match="schema is unsupported"):
         _ResidentAssignmentBundle.from_remote_dict({**request.to_dict(), "schema_version": 99})
@@ -1579,7 +1576,8 @@ def test_shared_publication_replay_keeps_complete_closure_and_native_identity(tm
     original_digest = launch.spec_digest
     original_argv = launch.command_argv
     report = workspace.retain_outputs()
-    assert report.schema_version == 4
+    assert report.schema_version == 6
+    assert report.output_kind == "shared"
     assert _RemoteExecutionReport.from_dict(report.to_dict()) == report
     refs = publish(workspace.request(), report, profile.shared_roots, agent_id="agent-1", fence="fence-1")
     # Recovery decodes the retained launch before retaining outputs again.
@@ -1935,7 +1933,7 @@ def test_native_pair_wire_admission_rejects_role_versions_and_header_damage(
         resource_controls=(),
         process_created=True,
         executor_metadata={},
-        schema_version=5,
+        output_kind="preparation_report",
     ).to_dict()
     report = cast(Any, report)
     assert _RemoteExecutionReport.from_dict(report).outputs[0] == item
@@ -1945,7 +1943,7 @@ def test_native_pair_wire_admission_rejects_role_versions_and_header_damage(
     if damage == "old_result":
         damaged["schema_version"] = 3
     elif damage == "future_result":
-        damaged["schema_version"] = 6
+        damaged["schema_version"] = 7
     elif damage == "unmarked_result":
         descriptor.pop("preparation_report_transfer")
     elif damage == "null_header":

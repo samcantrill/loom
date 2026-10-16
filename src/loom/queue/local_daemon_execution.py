@@ -5364,8 +5364,6 @@ class LocalDaemonExecution:
         container_metadata: Mapping[str, PlainData] | None = None,
         scheduler_metadata: Mapping[str, PlainData] | None = None,
     ) -> None:
-        if report.schema_version == 1:
-            return
         metadata: dict[str, PlainData] = {
             **dict(report.executor_metadata or {}),
             "process_created": report.process_created,

@@ -243,7 +243,7 @@ def test_cancelled_published_result_waits_for_terminal_rejection_ack(
         "2026-09-13T00:00:00Z",
         "2026-09-13T00:00:01Z",
         "local",
-        schema_version=3,
+        schema_version=6,
         executor_metadata={},
         process_created=True,
     )
@@ -357,7 +357,7 @@ def test_interrupted_acknowledged_cleanup_replays_authority_before_retirement(
         "2026-09-13T00:00:00Z",
         "2026-09-13T00:00:01Z",
         "local",
-        schema_version=3,
+        schema_version=6,
         executor_metadata={},
         process_created=True,
     )

@@ -933,3 +933,106 @@ Only execution-note evidence changes after these receipts. Independent review of
 no product blockers, localized corrections or workflow issues. The reviewer
 verified the actual diff, patch hash, identical runtime source trees and complete
 304-case receipt reconciliation. Only this review receipt changes afterward.
+
+
+## Current assignment and result contracts
+
+Base `532b893da24f819fa65d00d7f228804d027523fe` (PR #418), branch
+`refactor/current-assignment-result-contracts`. This delivery closes the resident
+assignment and result rows left open by preparation. Both are schema 6 only;
+remote capability becomes `remote-stage-execution-v4` so an obsolete peer cannot
+qualify for current execution. Existing deployment examples and fleet fixtures
+advertise the current capability. Rphys pin/image adoption remains downstream.
+
+| Boundary | Current producer/consumer | Disposition |
+| --- | --- | --- |
+| Assignment | Resident delivery/workspace, agent poll, Slurm ready stage | Schema 6; scope validated at its existing fingerprint owner, no duplicate binding |
+| Terminal report | Resident retention and Slurm retention; local/remote publication and replay | Schema 6 with `output_kind` = relay/shared/preparation_report; full current evidence |
+| Wire budgets | Agent JSON and authenticated Slurm relay | Current assignment body budget and report failure/route subtrees; existing byte/depth/collection limits |
+| Remote compatibility | Handshake/candidate capability and maintained deployment declarations | Require v4 capability; obsolete assignments/results are refused |
+
+Shared publication failures retain their mode despite having no outputs. Native
+report-pair mode requires success, one named report and its original transfer
+header. Existing role, profile, fence, checksum, closure and replay checks remain
+with their owners. No dependency, lock, scientific algorithm, artifact receipt
+or preparation report/companion changes. The independent StageWorkerResult
+schema 1 and ExecutionFailure schema 1 remain current.
+
+Validation selects full resident-wire/workspace, Slurm framing/result transport
+and agent-Slurm unit owners; exact failure-codec/budget/capability and loopback
+report routes; current remote restart/result replay; Slurm success, native
+failure, guarded recovery, terminal crash reconciliation and output-ack replay;
+current local/HTTPS preparation and report-pair refusal, shared execution,
+prepared retry and cancellation. Capability consumer checks cover candidate
+selection and fresh fleet setup. These paths exercise changed wire admission and
+publication; no full backend matrix is required. Cheap collection, changed Ruff
+and complete config-extra Pyright precede execution. Exact selections and
+receipts live under `build/current-contract-cutover/assignment-*`.
+
+Unchanged authority, planner, event and processor/composition contracts retain
+prior passing receipts because their implementations, dependency/configuration
+inputs and fixtures are unchanged. This does not reuse prior wire-path passes
+as proof of the new representation. Expand for reached consumers, failure or
+missing acceptance; required skips remain gaps. Physical fleet/Slurm and paired
+rphys scientific/size/scaling qualification remain open at their original owners.
+
+### Assignment/result validation evidence
+
+| Scope | Tested revision and receipt prefix | Result |
+| --- | --- | --- |
+| Resident wire/workspace, failure budgets, current capability and transport consumers | `91a2fb4157bd086a7659ac1c9d231937ccc79ed7`; `assignment-core` | 149 passed, 2 new refusal-message expectations failed in 22.42 s |
+| Current remote restart and Slurm success/failure/recovery/ack replay | `9ac31e03c4f94affbe514e15584105030ae0ddba`; `assignment-runtime` | 15 passed in 137.83 s |
+| Local/HTTPS preparation, shared execution, native Slurm pair and fresh fleet setup | Same revision; `assignment-config` | 21 passed, 1 retired-version negative fixture failed in 773.09 s |
+| Current capability refusal before registration | Same revision; `assignment-affected` | 2 passed in 2.92 s |
+| Actual native Slurm pair, missing transfer mode and acknowledgement replay | `deabb4e20f5e6cc3ef76cb90ede1cca034826764`; `assignment-config-affected` | 1 passed in 3.97 s |
+
+Receipts and exact selectors are under `build/current-contract-cutover/` with
+these prefixes. `assignment-coverage.json` reconciles the final 151 baseline,
+15 runtime and 22 config-extra cases: **188 distinct required cases pass**, with
+no missing cases, failures, errors or required skips. Initial failed receipts
+remain diagnostic evidence. The first baseline collection excluded two fleet
+cases because they require the config extra; both were moved into the config
+selection before execution and passed there.
+
+Both corrections are test-only. The capability test now distinguishes the
+existing protocol-refusal category from optional-capability refusal, advertises
+the retired v3 capability explicitly, and still proves no registration or work
+offering. The Slurm negative fixture uses a current report with relay mode and
+no transfer header; its unchanged assertion requires refusal before native
+publication. The completed test retains checksums, complete companion transfer,
+missing-byte refusal and lost-acknowledgement replay. No assertion or timeout
+was weakened and no runtime compatibility was restored.
+
+All tested revisions have identical runtime source tree
+`82dae2a084577ad43c25fe5a8a7bebff86491424`, with unchanged dependencies, lock,
+configuration and maintained examples. The two capability cases are the only
+changed fixture branch between the first two revisions. The final change is
+confined to the failed Slurm pair's negative fixture. The other 149 baseline,
+15 runtime and 21 config passing cases therefore retain equivalent runtime,
+setup and consumer behavior; their results are reused rather than repeated.
+
+Cheap collection passed in each required environment. Complete config-extra
+Pyright and changed-file Ruff passed on the implementation tree; each later
+changed test file passed its affected type/Ruff checks (`assignment-affected-*`
+and `assignment-slurm-*`). Seven feature-guide Python examples parse and
+base-to-head diff checks pass. Source/test/example/feature-doc patch SHA-256:
+`cf7d465563c3fe6fccf326befd31da208d25f112b76d95400852e24e66004bf3`.
+Subsequent edits record evidence only.
+
+This does not close the separate managed-run intent boundary:
+`queue/local_daemon_runtime.py` still selects schemas 3–6 by composition and
+project-contract presence. That family and strict `ExecutionPlan` admission
+remain inventory obligations, along with agent/fleet, offline evidence and rphys
+scientific/product cleanup. The native-pair test uses real preparation output
+through Slurm storage/transport helpers; it does not claim physical Slurm
+preparation scheduling or deployed fleet compatibility.
+
+
+Independent actual-diff review of PR #419 at
+`2ddc8a6b366e8f7c22081997b0c89b4814cb21c4` against the recorded base passed with
+no product blockers, localized corrections or workflow issues. The reviewer
+verified all 188 cases, source-tree equivalence, static/collection receipts and
+merge eligibility. The final maintained-document census also replaces one stale
+`report-v3` label in the container guide with the current terminal-report owner;
+no runtime, test, dependency or fixture changes follow validation. The final
+patch hash above includes both affected feature guides.

@@ -29,5 +29,5 @@ registration:
   pools: [default]
   capabilities:
     - python
-    - remote-stage-execution-v3
+    - remote-stage-execution-v4
     - regular-file-relay-v1

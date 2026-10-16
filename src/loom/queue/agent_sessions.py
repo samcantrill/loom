@@ -3860,7 +3860,7 @@ class AgentSessionService:
             ):
                 raise QueueConflictError("remote result does not match its request")
             from ._preparation_report_transfer import native_role
-            if report.schema_version == 5 and not native_role(request.fingerprint):
+            if report.output_kind == "preparation_report" and not native_role(request.fingerprint):
                 raise QueueConflictError("preparation transfer targets another stage role")
             shared_outputs = None
             from ._shared_publication import selected, publish
@@ -3868,11 +3868,11 @@ class AgentSessionService:
                 report.status is StageStatus.SUCCEEDED
                 and native_role(request.fingerprint)
                 and selected(request) is None
-                and report.schema_version != 5
+                and report.output_kind != "preparation_report"
             ):
                 raise QueueConflictError("native preparation transfer capability is missing")
             if selected(request) is not None and report.status is StageStatus.SUCCEEDED:
-                if report.schema_version != 4:
+                if report.output_kind != "shared":
                     raise QueueConflictError("shared publication report capability is missing")
                 roots = self._daemon.config.coordinator_shared_roots
                 if not roots:
