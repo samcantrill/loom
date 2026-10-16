@@ -933,7 +933,7 @@ project_contracts` and `data` containing exactly `schema_version: 1`, `namespace
 and the native `report_ref`. Opaque payloads remain in the retained original report,
 never in safe prepared-run metadata or application configuration. Existing
 preparation retention pins preserve that report. The native runtime record binds
-the typed reference digest (runtime record version 4 for these runs), so a missing
+the typed reference digest (current runtime record schema 7), so a missing
 or replaced prepared reference fails admission instead of opting out. Workers reload and check the
 reference and original declaration before assignment. A worker receives only its
 node under `StageWorkerRequest.metadata["loom.project_contract"]`; the context
@@ -1314,3 +1314,21 @@ receipt, protected assignment or native-role checks. The current report is
 retained and replayed byte-for-byte; loading an older assignment or result is
 refused, with no conversion. Settle outstanding work using its pinned runtime
 before deploying this incompatible contract and preparing fresh assignments.
+
+
+### Current retained execution intent
+
+Managed execution retains one schema-7 intent record. The record always binds
+its plan, resolved pipeline, runtime options, placements, selected installation
+requirements and concurrency. `composition_manifest_ref` appears when retained
+composition authorship is available; `project_contracts_digest` appears for
+protected project contracts. These independent current bindings do not select
+different schema versions and are not emitted as null placeholders. Their
+original checksum, owner and replay checks still apply.
+
+Execution plans accept their existing schema 1 only. Their current bytes and
+stage-selection, reuse and fingerprint semantics are unchanged. Older managed
+intent records require fresh preparation; they are never rewritten on load or
+made current by a replay comparison. Current replay compares against today's
+retained protected bindings, without an old-format opt-out from composition
+verification.

@@ -771,36 +771,48 @@ def test_separate_embedded_authority_replay_never_recreates_lost_database(tmp_pa
     assert not database.exists()
 
 
-@pytest.mark.parametrize("legacy", [False, True])
 def test_configuration_reference_replay_preserves_all_files_and_authorship(
-    tmp_path: Path, legacy: bool,
+    tmp_path: Path,
 ) -> None:
     from loom.queue.local_daemon_runtime import load_managed_local_runtime_record
 
     coordinator = _coordinator_config(tmp_path)
     pipeline = _pipeline_config(tmp_path)
     composed = compose_config(pipeline)
-    writer = LocalRunStore.write_run_user_metadata
-
-    def inline_writer(store: LocalRunStore, run_uri: str, metadata: object) -> None:
-        writer(store, run_uri, metadata)  # type: ignore[arg-type]
-        path = store.local_run_dir(run_uri) / "run.json"
-        document = json.loads(path.read_text())
-        document["metadata"] = metadata
-        path.write_text(json.dumps(document))
-
-    with patch.object(LocalRunStore, "write_run_user_metadata", inline_writer if legacy else writer):
-        receipt = prepare_managed_local_run(coordinator, pipeline, "configuration")
+    receipt = prepare_managed_local_run(coordinator, pipeline, "configuration")
     store = LocalRunStore(tmp_path / "runs")
     root = store.local_run_dir(receipt.run_uri)
     raw = json.loads((root / "run.json").read_text())["metadata"]["config_provenance"]
-    assert ("metadata" in raw) is legacy
-    assert ("metadata_ref" in raw) is not legacy
-    assert load_managed_local_runtime_record(store, receipt.run_uri)["schema_version"] == (3 if legacy else 5)
+    assert "metadata" not in raw
+    assert "metadata_ref" in raw
+    record = load_managed_local_runtime_record(store, receipt.run_uri)
+    assert record["schema_version"] == 7
+    assert record["composition_manifest_ref"] == raw["metadata_ref"]
     before = _run_files(root)
     assert prepare_managed_local_run(coordinator, pipeline, "configuration") == receipt
     assert store.read_composition_manifest(receipt.run_uri) == composed.manifest.to_dict()
     assert store.read_run_user_metadata(receipt.run_uri)["config_provenance"] == composed.provenance.to_dict()
+    assert _run_files(root) == before
+
+
+@pytest.mark.parametrize("version", [3, 4, 5, 6, True, 7.0, "7", 8])
+def test_retired_runtime_intent_refuses_without_repair(tmp_path: Path, version) -> None:
+    from loom.queue.local_daemon_runtime import load_managed_local_runtime_record
+
+    coordinator = _coordinator_config(tmp_path)
+    pipeline = _pipeline_config(tmp_path)
+    receipt = prepare_managed_local_run(coordinator, pipeline, "retired-intent")
+    store = LocalRunStore(tmp_path / "runs")
+    root = store.local_run_dir(receipt.run_uri)
+    path = root / "config/managed_local_runtime.json"
+    record = json.loads(path.read_text())
+    record["schema_version"] = version
+    path.write_text(json.dumps(record))
+    before = _run_files(root)
+    with pytest.raises(QueueServiceError, match="runtime record schema is unsupported"):
+        load_managed_local_runtime_record(store, receipt.run_uri)
+    with pytest.raises(QueueConflictError, match="partial, corrupt, or changed"):
+        prepare_managed_local_run(coordinator, pipeline, "retired-intent")
     assert _run_files(root) == before
 
 

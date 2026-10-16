@@ -1036,3 +1036,73 @@ merge eligibility. The final maintained-document census also replaces one stale
 `report-v3` label in the container guide with the current terminal-report owner;
 no runtime, test, dependency or fixture changes follow validation. The final
 patch hash above includes both affected feature guides.
+
+
+## Current execution intent and plan admission
+
+Base `7aa7af4fcf27df3196f51110e1a9bda67b94afb5` (PR #419), branch
+`refactor/current-execution-intent`. Managed runtime intent moves from mode-based
+schemas 3–6 to schema 7 with optional current composition/project bindings.
+ExecutionPlan keeps its schema 1 bytes and now refuses other versions at
+construction and decoding. The native writer, loader and replay comparison move
+together; old-schema composition opt-out is removed. Retired intent fails before
+binding inspection, admission or mutation. Current placement, installation,
+options, concurrency, plan/pipeline digests and protected reference checks remain.
+
+The obsolete inline-authorship success variant is removed from managed replay
+coverage; the current reference variant retains logical metadata, exact replay
+and byte/mtime preservation assertions. General logical user metadata and
+inline/reference composition persistence have a separate owner in `local_runs`;
+that remaining representation inventory is not declared closed by this delivery.
+
+Validation covers strict plan admission and current planner/resume behavior,
+fresh managed preparation, exact nonmutating replay, obsolete intent refusal,
+protected composition/project binding changes, current generic runs without a
+project processor, and representative resident/remote/Slurm execution and
+candidate reuse. Collection/static checks precede execution; exact selectors and
+receipts use `build/current-contract-cutover/intent-*`. Prior wire/authority
+receipts remain valid where their inputs are unchanged, but fresh current intent
+consumers are required. No blanket reference/fleet/physical rerun is authorized
+by this bounded shape change alone; widen only for affected contracts or gaps.
+
+
+### Execution intent validation evidence
+
+All checks use the unchanged implementation revision
+`947134ad01bcffbdc1e79d219c56c67a0bdd4e0f`, source tree
+`f6eebeec31ba3a803d0ac4d3c79c743d65ea3210`.
+
+| Scope | Receipt prefix | Result |
+| --- | --- | --- |
+| Current plans, planner/resume and programmatic runtime intent | `intent-core` | 37 passed in 1.11 s |
+| Complete managed-preparation unit owner, obsolete intent, composed local/HTTPS preparation, protected candidate reuse/refusal and mixed Slurm execution | `intent-config` | 44 passed in 204.17 s |
+
+Exact selections, collection logs, execution logs and JUnit XML are retained
+under `build/current-contract-cutover/`. `intent-coverage.json` matches all
+**81 distinct required cases** to passing receipts: no failures, errors, skips,
+missing cases or post-validation source/test corrections. Obsolete intent tests
+exercise direct loading and public preparation replay, preserving every retained
+file's bytes, modification time and change time. The current authored path keeps
+its reference/digest and complete logical metadata; generic programmatic intent
+uses the same version without either optional protected binding.
+
+Complete config-extra Pyright and changed-file Ruff pass (`intent-types.log`,
+`intent-ruff.log`). Seven feature-guide Python examples parse; base-to-head diff
+checks pass. Source/test/feature-doc patch SHA-256:
+`982f82476b8e09f265e8a8f5db82074af7660a25065454ada142717cbdd9eebc`.
+Only this evidence note changes after validation.
+
+Earlier assignment/result validation remains evidence for the unchanged schema-6
+codecs, capability-v4 handshake, failure bounds, publication framing and replay
+owners; dependencies, fixtures and those owner modules did not change. Fresh
+checks above cover the changed plan/intent producer and its downstream consumers.
+Authority/event, scientific algorithms and deployment contracts likewise did not
+change. No full-suite, scientific writer/scaling, image or physical qualification
+is claimed by this bounded delivery.
+
+Independent actual-diff review of PR #420 at
+`bf2be978cad0d70991981472983f6739cf5cc704` against the recorded base passed with
+no product blockers, localized corrections or workflow issues. The reviewer
+verified the current contract paths, exact 81-case collection/receipt coverage,
+patch hash, unchanged source/test trees, static checks, documentation examples
+and merge eligibility. Only this review receipt changes afterward.

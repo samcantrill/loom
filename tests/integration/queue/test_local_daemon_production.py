@@ -797,6 +797,9 @@ def test_exact_runtime_record_keeps_attributes_settings_and_run_concurrency(
     )
     record = load_managed_local_runtime_record(store, run_uri)
 
+    assert record["schema_version"] == 7
+    assert "composition_manifest_ref" not in record
+    assert "project_contracts_digest" not in record
     assert record["max_parallel_stages"] == 2
     runtime = cast(Mapping[str, object], record["runtime_options"])
     stage = cast(Mapping[str, object], runtime["stage_options"])["build"]
