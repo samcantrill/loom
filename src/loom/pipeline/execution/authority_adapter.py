@@ -907,17 +907,12 @@ class AuthorityBackedSerialRunStore:
             finished_at=snapshot.finished_at,
         )
 
-    def write_run_status(self, run_uri: str, status: RunStatusRecord) -> None:
-        self.write_run_status_with_intent(
-            run_uri, status, intent=TransitionIntent.NORMAL
-        )
-
-    def write_run_status_with_intent(
+    def write_run_status(
         self,
         run_uri: str,
         status: RunStatusRecord,
         *,
-        intent: TransitionIntent,
+        intent: TransitionIntent = TransitionIntent.NORMAL,
     ) -> None:
         snapshot = self.authority_store.snapshot(run_uri)
         current = snapshot.status

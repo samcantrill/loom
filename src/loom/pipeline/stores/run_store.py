@@ -19,6 +19,7 @@ from loom.pipeline.reliability import (
 )
 from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.pipeline.status import RunStatusRecord, StageStatusRecord
+from loom.pipeline.transition_policy import TransitionIntent
 from loom.pipeline.stores.inspection import RunStateInspection
 from loom.serialization import PlainData
 from loom.timestamps import parse_timestamp
@@ -189,7 +190,12 @@ class RunFreshnessStore(Protocol):
 class RunStatusStore(Protocol):
     def read_run_status(self, run_uri: str) -> RunStatusRecord | None: ...
 
-    def write_run_status(self, run_uri: str, status: RunStatusRecord) -> None: ...
+    def write_run_status(
+        self, run_uri: str, status: RunStatusRecord, *,
+        intent: TransitionIntent = TransitionIntent.NORMAL,
+    ) -> None:
+        """Write through this owner; local projections reject authority-only intent."""
+        ...
 
 
 @runtime_checkable
@@ -548,35 +554,3 @@ class LocalRunStorePaths(Protocol):
     def local_event_sink_failures_path(self, run_uri: str) -> Path: ...
 
     def local_event_observer_links_path(self, run_uri: str) -> Path: ...
-
-
-@runtime_checkable
-class LegacyRunStore(
-    RunLifecycleStore,
-    RunDocumentStore,
-    RunFreshnessStore,
-    RunStatusStore,
-    RunPlanStore,
-    RunPreparedRunStore,
-    RunArtifactIndexStore,
-    RunConfigStore,
-    RunProvenanceStore,
-    RunEventStore,
-    RunEventSinkFailureStore,
-    RunEventObserverLinkStore,
-    RunLockStore,
-    RunInspectionStore,
-    RunRuntimeMetadataStore,
-    RunSubmittedOperationStore,
-    StageStateStore,
-    StageLogStore,
-    StageWorkspaceStore,
-    Protocol,
-):
-    """Transitional path-shaped runtime store aggregate.
-
-    V9-post reclaims the root public ``RunStore`` export for authority-backed
-    lifecycle semantics. Existing runtime modules still use this legacy
-    aggregate until the later caller-migration phases split lifecycle authority
-    from local artifact/materialization access.
-    """

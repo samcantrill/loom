@@ -8,6 +8,7 @@ from typing import Any, cast
 
 from loom.artifacts import ArtifactRef, ArtifactValidationError
 from loom.fingerprints import hash_mapping, validate_digest
+from loom.pipeline.stores.run_store import RunPreparedRunStore, RunConfigStore, LocalRunStorePaths
 from loom.serialization import PlainData, ensure_plain_data
 
 CONTRACT = "loom.project_contract"
@@ -184,17 +185,23 @@ def report_entry(value: object) -> dict[str, PlainData]:
     return data
 
 
-def load_contract_report(store: Any, run_uri: str) -> dict[str, PlainData] | None:
+def load_contract_report(
+    prepared_runs: RunPreparedRunStore, run_uri: str, *,
+    config: RunConfigStore, local_paths: LocalRunStorePaths,
+) -> dict[str, PlainData] | None:
     from loom.pipeline.stores import LocalArtifactStore
 
-    prepared = store.read_prepared_run(run_uri)
-    if prepared is None or CONTRACTS not in prepared["metadata"]:
+    prepared = prepared_runs.read_prepared_run(run_uri)
+    if prepared is None:
         return None
-    data = report_entry(prepared["metadata"][CONTRACTS])
+    prepared_metadata = _plain_mapping_view(prepared["metadata"])
+    if CONTRACTS not in prepared_metadata:
+        return None
+    data = report_entry(prepared_metadata[CONTRACTS])
     ref = ArtifactRef.from_dict(data["report_ref"])
     from loom.preparation import load_preparation_report
 
-    artifact_store = LocalArtifactStore(store.local_artifact_root(run_uri))
+    artifact_store = LocalArtifactStore(local_paths.local_artifact_root(run_uri))
     report = load_preparation_report(ref, artifact_store.local_path(ref))
     project = _plain_mapping_view(report["project_preparation"])
     processor = _plain_mapping_view(project["processor"])
@@ -204,9 +211,8 @@ def load_contract_report(store: Any, run_uri: str) -> dict[str, PlainData] | Non
     ):
         raise ValueError("retained report installation namespace conflicts")
     composition = _plain_mapping_view(report["composition"])
-    if composition["resolved"] != json.loads(
-        store.read_config_snapshot(run_uri, "resolved")
-    ):
+    resolved = config.read_config_snapshot(run_uri, "resolved")
+    if resolved is None or composition["resolved"] != json.loads(resolved):
         raise ValueError("retained report captured declaration conflicts")
     contracts = _plain_mapping_view(report["project_contracts"])
     for value in contracts.values():
@@ -218,14 +224,19 @@ def load_contract_report(store: Any, run_uri: str) -> dict[str, PlainData] | Non
 
 
 def worker_contract_metadata(
-    store: Any, run_uri: str, stage: Any
+    prepared_runs: RunPreparedRunStore, run_uri: str, stage: Any, *,
+    config: RunConfigStore, local_paths: LocalRunStorePaths,
 ) -> dict[str, PlainData]:
-    report = load_contract_report(store, run_uri)
+    report = load_contract_report(prepared_runs, run_uri,
+    config=config,
+    local_paths=local_paths)
     if report is None:
         return {}
     metadata = _worker_contract_metadata(report, stage)
-    prepared = store.read_prepared_run(run_uri)
-    entry = report_entry(prepared["metadata"][CONTRACTS])
+    prepared = prepared_runs.read_prepared_run(run_uri)
+    if prepared is None:
+        raise ValueError("retained prepared run is missing")
+    entry = report_entry(_plain_mapping_view(prepared["metadata"])[CONTRACTS])
     from loom.pipeline.stores.shared_artifacts import binding
 
     reference = ArtifactRef.from_dict(entry["report_ref"])
@@ -320,8 +331,13 @@ def validate_worker_metadata(
                 raise ValueError("execution binding state root is invalid")
 
 
-def validate_admitted_worker(store: Any, request: Any, stage: Any) -> None:
-    expected = worker_contract_metadata(store, request.run_uri, stage)
+def validate_admitted_worker(
+    prepared_runs: RunPreparedRunStore, request: Any, stage: Any, *,
+    config: RunConfigStore, local_paths: LocalRunStorePaths,
+) -> None:
+    expected = worker_contract_metadata(prepared_runs, request.run_uri, stage,
+    config=config,
+    local_paths=local_paths)
     actual = {
         key: request.metadata[key]
         for key in (CONTRACT, CAPTURE, REPORT)
@@ -335,11 +351,14 @@ def validate_admitted_worker(store: Any, request: Any, stage: Any) -> None:
         )
 
 
-def prepared_contracts_digest(store: Any, run_uri: str) -> str | None:
+def prepared_contracts_digest(prepared_runs: RunPreparedRunStore, run_uri: str) -> str | None:
     """Bind required attachment existence and its report ref into native intent."""
-    record = store.read_prepared_run(run_uri)
-    if record is None or CONTRACTS not in record["metadata"]:
+    record = prepared_runs.read_prepared_run(run_uri)
+    if record is None:
         return None
-    entry = record["metadata"][CONTRACTS]
+    metadata = _plain_mapping_view(record["metadata"])
+    if CONTRACTS not in metadata:
+        return None
+    entry = metadata[CONTRACTS]
     report_entry(entry)
     return hash_mapping(entry)

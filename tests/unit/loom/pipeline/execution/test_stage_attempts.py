@@ -16,7 +16,7 @@ from loom.pipeline.planning import (
 )
 from loom.pipeline.reliability import StageAttemptTransactionState
 from loom.pipeline.runtime import ResolvedStageRuntimeOptions
-from loom.pipeline.status import StageStatus
+from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
 
 
@@ -62,7 +62,13 @@ def test_prepare_stage_attempt_writes_durable_request_without_running_stage(
     stage = spec.get_stage("build")
 
     request = prepare_stage_attempt(
-        run_store=store,
+        stage_state=store,
+        stage_workspaces=store,
+        local_paths=store,
+        reliability=store,
+        prepared_runs=store,
+        config=store,
+        run_status=RunStatus.RUNNING,
         run_uri=run_uri,
         stage=stage,
         stage_plan=stage_plan,
@@ -122,8 +128,73 @@ def test_prepare_stage_attempt_rejects_non_run_stage_plan(tmp_path: Path) -> Non
 
     with pytest.raises(PlanExecutionError, match="requires a RUN stage plan"):
         prepare_stage_attempt(
-            run_store=store,
+            stage_state=store,
+            stage_workspaces=store,
+            local_paths=store,
+            reliability=store,
+            prepared_runs=store,
+            config=store,
+            run_status=RunStatus.RUNNING,
             run_uri=run_uri,
             stage=spec.get_stage("build"),
             stage_plan=plan.ordered_stage_plans[0],
         )
+
+
+def test_prepare_stage_attempt_uses_explicit_owners_and_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, run_uri, spec, stage_plan = _planned_stage(tmp_path)
+    prepared_runs = LocalRunStore(tmp_path / "runs")
+    workspaces = LocalRunStore(tmp_path / "runs")
+    reliability = LocalRunStore(tmp_path / "runs")
+
+    def wrong_owner(*args, **kwargs):
+        raise AssertionError("stage-state owner used for an unrelated service")
+
+    monkeypatch.setattr(store, "read_prepared_run", wrong_owner)
+    monkeypatch.setattr(store, "prepare_stage_workspace", wrong_owner)
+    monkeypatch.setattr(store, "list_stage_attempt_transactions", wrong_owner)
+    monkeypatch.setattr(reliability, "read_run_status", wrong_owner)
+    request = prepare_stage_attempt(
+        stage_state=store,
+        stage_workspaces=workspaces,
+        local_paths=store,
+        reliability=reliability,
+        prepared_runs=prepared_runs,
+        config=store,
+        run_status=RunStatus.PLANNED,
+        run_uri=run_uri,
+        stage=spec.get_stage("build"),
+        stage_plan=stage_plan,
+    )
+
+    assert store.read_stage_worker_request(run_uri, "build", attempt=1) == request.to_dict()
+    transactions = reliability.list_stage_attempt_transactions(run_uri, stage_name="build")
+    assert len(transactions) == 1
+    assert transactions[0].status.run_status is RunStatus.PLANNED
+    assert transactions[0].state is StageAttemptTransactionState.PREPARED
+    assert workspaces.local_stage_workspace_dir(run_uri, "build").is_dir()
+
+
+def test_prepare_stage_attempt_refuses_missing_reliability_before_writes(tmp_path: Path) -> None:
+    from loom.pipeline.execution.errors import PipelineExecutionError
+    from loom.pipeline.stores import RunReliabilityStore
+
+    store, run_uri, spec, stage_plan = _planned_stage(tmp_path)
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    with pytest.raises(PipelineExecutionError, match="requires reliability"):
+        prepare_stage_attempt(
+            stage_state=store,
+            stage_workspaces=store,
+            local_paths=store,
+            reliability=cast(RunReliabilityStore, object()),
+            prepared_runs=store,
+            config=store,
+            run_status=RunStatus.RUNNING,
+            run_uri=run_uri,
+            stage=spec.get_stage("build"),
+            stage_plan=stage_plan,
+        )
+    assert {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
+    assert not store.local_stage_workspace_dir(run_uri, "build").exists()

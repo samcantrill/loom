@@ -660,3 +660,76 @@ corrections and merge eligibility confirmed. Only this receipt follows the
 reviewed head. [Loom #414](https://github.com/samcantrill/loom/pull/414) owns
 remote merge and matching-tree synchronization metadata. The remaining
 aggregate consumers and downstream paired adoption remain open.
+
+## Current execution service dependencies
+
+Base `d29da7150a1123d091a1873a8b0f4e430c38d94d`, branch
+`refactor/current-execution-services`. Lifecycle, reliability, attempt preparation
+and CLI status now name their existing owners; the aggregate `LegacyRunStore`
+and `RuntimeServices.from_legacy` are removed. Explicit `RuntimeServices`
+construction remains the executor-factory contract. No replacement aggregate,
+forwarding constructor or compatibility keyword is introduced.
+
+Reliability receives authoritative run status explicitly and refuses missing
+persistence capabilities. Lifecycle preserves failure/timeout ordering,
+transaction chains, output/index/provenance commit and terminal event order.
+Status writing has one explicit transition-intent API: authority applies its
+existing guards, while local evidence refuses non-normal intent before effects.
+Managed local and Slurm preparation pass the admitted snapshot status and exact
+attempt/input bindings; standalone preparation retains local allocation.
+Protected report helpers use prepared-run/config/path owners with existing
+native companion, checksum, namespace, declaration and attachment verification.
+Current no-project preparation still requires no project metadata.
+
+Reached consumers include native preparation/candidate capture, action-result
+resolution, installed project execution/reuse, guarded recovery and catalog
+resume. The rphys routine fixture moves with paired dependency adoption. No
+wire format, dependency, numerical operation or scientific fixture changed.
+Historical fingerprint admission, input-lineage compatibility, event sink
+capability discovery and remaining preparation wire consolidation retain their
+separate inventory owners; this delivery does not claim those rows closed.
+
+Validation selects lifecycle, timeout, attempt/worker, authority-adapter,
+store/import contracts and local-store checks, plus exact managed local/Slurm,
+protected installed project, retry/restart/recovery/cancellation and current
+catalog consumers. New assertions distinguish owners, refuse missing services
+before writes, preserve finalization-time timeout status, and prove commit/failure
+order. Collection/static checks precede execution in locked Python 3.12 baseline
+and config environments. Expand only for reached failures or uncovered current
+contracts. Existing planning/event/persistence evidence is reusable where source,
+dependencies, configuration and fixtures are unchanged; no physical/scientific
+qualification is inferred from this runtime selection. Final results and the
+independent actual-diff review are reconciled below.
+
+Validation reconciliation:
+
+| Scope | Tested revision and receipt | Result |
+| --- | --- | --- |
+| Baseline execution/store/API/CLI selection, 12 files | `9c8a49a857395d2aa006fa0acfbf4a07d2cc7bef`; `build/current-contract-cutover/execution-core-selectors.txt`, `execution-core.log` and `execution-core.xml` | 143 passed; two new causal-order assertions failed and were corrected below |
+| Config-backed installed project, guarded recovery, cancellation, retry, managed local/Slurm handoff and catalog selection | Same stable source revision; `execution-config-selectors.txt`, `execution-config.log` and `execution-config.xml` in that directory | 22 passed in 238.09 seconds; no skips |
+| Two commit-order cases | `a543844af047cf1e7e6c7e34c42af7c12764371f`; `execution-commit-recheck.log` and `execution-commit-recheck.xml` | 2 passed |
+| Collection and static checks | `execution-core-collection.log`, `execution-api-collection.log`, `execution-config-collection.log`, `execution-types.log`, `execution-ruff.log`; corrected test rechecked in `execution-types-recheck.log` and `execution-ruff-recheck.log` | 145 baseline and 22 config cases collected; full Pyright and affected-file Ruff passed, including the corrected test |
+
+The first run's two failures were test assumptions about transaction listing
+order: opaque transaction IDs do not encode causality. The correction verifies
+the exact two states, root/parent links and the existing `read_transaction_chain`
+result. It preserves success/publication-failure, durable output/index/provenance,
+terminal status and event assertions. No production correction was needed.
+
+The 143 unaffected baseline passes and 22 integration passes remain applicable:
+the only subsequent executable diff is those two assertions in
+`tests/unit/loom/pipeline/execution/test_lifecycle.py`. Runtime source, dependency
+selection, configuration, fixtures and setup are identical. The final union is
+**167 distinct passing cases**, with no unresolved selected failures, errors or
+skips. Reconciliation uses `(classname, name)` from the three JUnit receipts;
+the initial failed outcomes are retained, not counted as passes.
+
+The source/test/feature-doc/glossary patch from the base to `a543844a` has SHA-256
+`e904b88287bbe857c5ad8fe1f91826f44991bf7a5e6956dd4f7f3eb09f03abf5`.
+Subsequent execution-note edits do not change that patch. Complete base-to-head
+`git diff --check` passes. Independent review of PR #416 at
+`66baa9b572128c7d95b36727fe23ef1e517f2cf8` against the recorded base passed with no
+qualified findings or required corrections. The reviewer verified the actual
+diff, patch hash, receipts and scope. Only this review receipt changes afterward.
+Downstream paired pins and physical qualification remain open at their existing
+inventory owners.

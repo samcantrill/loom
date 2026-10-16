@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import cast
 
 from loom.pipeline.stores import AuthorityConfig, LocalRunStorePaths
 from loom.pipeline.stores.authority import PerRunAuthorityStore
 from loom.pipeline.stores.coordination import WorkspaceCoordinationStore
 from loom.pipeline.stores.run_store import (
-    LegacyRunStore,
     RunArtifactIndexStore,
     RunConfigStore,
     RunDocumentStore,
@@ -118,48 +116,6 @@ class RuntimeServices:
             if value is not None and (not isinstance(value, str) or not value):
                 raise TypeError(f"RuntimeServices.{name} must be a non-empty string")
 
-    @classmethod
-    def from_legacy(cls, run_store: LegacyRunStore) -> "RuntimeServices":
-        """Unpack the transitional aggregate at the sole compatibility boundary."""
-
-        if not isinstance(run_store, LegacyRunStore):
-            raise TypeError("run_store must satisfy LegacyRunStore")
-        if not isinstance(run_store, LocalRunStorePaths):
-            raise TypeError("run_store must satisfy LocalRunStorePaths")
-        raw_config = getattr(run_store, "authority_config", None)
-        config = raw_config() if callable(raw_config) else raw_config
-        return cls(
-            lifecycle=run_store,
-            documents=run_store,
-            freshness=run_store,
-            run_status=run_store,
-            plans=run_store,
-            prepared_runs=run_store,
-            artifact_index=run_store,
-            config=run_store,
-            provenance=run_store,
-            events=run_store,
-            event_sink_failures=run_store,
-            event_observer_links=run_store,
-            locks=run_store,
-            inspection=run_store,
-            runtime_metadata=run_store,
-            submitted_operations=run_store,
-            reliability=cast(RunReliabilityStore, run_store),
-            stage_state=run_store,
-            stage_logs=run_store,
-            stage_workspaces=run_store,
-            worker_results=run_store,
-            local_paths=run_store,
-            authority_config=cast(AuthorityConfig | None, config),
-            authority_store=cast(
-                PerRunAuthorityStore | None,
-                getattr(run_store, "authority_store", None),
-            ),
-            coordination_store=getattr(run_store, "workspace_coordination_store", None),
-            workspace_id=cast(str | None, getattr(run_store, "workspace_id", None)),
-            owner_id=cast(str | None, getattr(run_store, "owner_id", None)),
-        )
 
 
 __all__ = ["RuntimeServices"]

@@ -111,7 +111,7 @@ class ActionResultResolution:
         revision: Any,
     ) -> Any:
         run_uri, node = admission.run_uri, stage_plan.stage_name
-        report = load_contract_report(self.execution.run_store, run_uri)
+        report = load_contract_report(self.execution.run_store, run_uri, config=self.execution.run_store, local_paths=self.execution.run_store)
         if report is None:
             return None
         descriptor = plain_mapping(report["profile_descriptor"])

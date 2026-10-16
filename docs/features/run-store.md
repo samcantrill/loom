@@ -107,26 +107,41 @@ private; status files, artifact indexes, events, and catalogs remain payload,
 audit, or projection surfaces unless a backend contract records them as
 authoritative facts.
 
-V9-post starts the public naming transition. The root
-`loom.pipeline.stores.RunStore` export now means the authority-backed run
+The root `loom.pipeline.stores.RunStore` export is the authority-backed run
 lifecycle surface produced by `create_run_store(...)`, with scoped
 `StageStore` handles for stage lifecycle, attempts, leases, submitted
 operations, fenced output commits, snapshots, recovery, and cleanup facts. An
 explicit checksum-repair rerun appends a successor output commit naming the
 current predecessor; snapshots project only the successor facts while authority
 history retains both immutable commits. Ordinary changed-config reruns do not
-receive replacement authority. The
-older path-shaped aggregate in `loom.pipeline.stores.run_store` is named
-`LegacyRunStore` while runtime callers are migrated in later phases. Local run
-files remain useful for materialization and projections, but they must not
-satisfy the public authority `RunStore` contract.
+receive replacement authority. Runtime consumers take existing narrow owners
+for stage state, plans, prepared runs, configuration, artifact indexes, events,
+reliability, workspaces and local paths. The former path-shaped aggregate and
+its compatibility constructor are removed. `RuntimeServices` remains the
+explicit executor-factory service bundle. Local run files remain useful for
+materialization and projections, but do not satisfy the authority `RunStore`
+contract.
+
+`prepare_stage_attempt` receives these owners explicitly and takes `run_status`
+from the caller's admitted lifecycle context. Managed callers preserve the
+authority-issued attempt and input bindings; standalone callers can allocate
+from their stage-state owner. Protected project metadata still loads through
+the checked report, prepared-run, captured-configuration and artifact-path
+owners before request persistence.
+
+`RunStatusStore.write_run_status(..., intent=TransitionIntent.NORMAL)` is the
+single status-write contract. Authority-backed writes apply the intent through
+guarded transitions. `LocalRunStore` writes ordinary evidence projections and
+rejects recovery/resume intent without changing files. Reliability helpers take
+an explicit run status and required `RunReliabilityStore`; a missing persistence
+capability is an error, never a reason to omit a required transaction.
 
 The output-commit history is available through the backend-neutral
 `list_output_commits` read as commit/fact composites in revision order. Current
 authority stores retain commit and artifact facts across reopen. Unsupported
 layouts are refused without table replacement or conversion.
 
-V9-post also splits local file/materialization access behind
+Local file/materialization access is available through
 `RunArtifactStore` and `StageArtifactStore`. These surfaces expose paths,
 config snapshots, provenance documents, logs, worker handoff files, generated
 files, workspaces, and artifact payload roots only. They intentionally do not

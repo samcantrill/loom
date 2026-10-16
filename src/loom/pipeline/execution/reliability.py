@@ -21,7 +21,6 @@ from loom.pipeline.reliability import (
 )
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import (
-    LegacyRunStore,
     ReliabilityPolicyFact,
     ReliabilityPolicyScope,
     RunReliabilityStore,
@@ -53,17 +52,18 @@ _TRANSACTION_STATE_ORDER = {
 
 
 def build_reliability_status_detail(
-    run_store: LegacyRunStore | RunReliabilityStore,
     *,
     run_uri: str,
+    run_status: RunStatus,
     stage_name: str,
     stage_status: StageStatus,
     attempt: int,
     created_at: str,
 ) -> ReliabilityStatusDetail:
+    """Build evidence from the caller's admitted status without discovering another owner."""
     return ReliabilityStatusDetail(
         run_uri=run_uri,
-        run_status=_current_run_status(run_store, run_uri),
+        run_status=run_status,
         stage_id=stage_name,
         stage_status=stage_status,
         attempt=attempt,
@@ -97,7 +97,7 @@ def failure_with_reliability_classification(
 
 
 def record_resolved_reliability_policy_fact(
-    run_store: LegacyRunStore | RunReliabilityStore,
+    reliability: RunReliabilityStore,
     *,
     run_uri: str,
     stage_name: str,
@@ -107,8 +107,8 @@ def record_resolved_reliability_policy_fact(
 ) -> ReliabilityPolicyFact | None:
     """Persist the selected reliability policy for one stage attempt."""
 
-    if not isinstance(run_store, RunReliabilityStore):
-        return None
+    if not isinstance(reliability, RunReliabilityStore):
+        raise TypeError("reliability must satisfy RunReliabilityStore")
     policy = getattr(resolved_runtime, "reliability", None)
     if not isinstance(policy, ReliabilityPolicy):
         return None
@@ -120,22 +120,23 @@ def record_resolved_reliability_policy_fact(
         recorded_at=recorded_at,
         policy=policy,
     )
-    run_store.write_reliability_policy_fact(run_uri, fact)
+    reliability.write_reliability_policy_fact(run_uri, fact)
     return fact
 
 
 def record_stage_reliability_transition(
-    run_store: LegacyRunStore | RunReliabilityStore,
+    reliability: RunReliabilityStore,
     *,
     run_uri: str,
+    run_status: RunStatus,
     stage_name: str,
     attempt: int,
     state: StageAttemptTransactionState,
     stage_status: StageStatus,
     recorded_at: str,
-) -> StageAttemptTransaction | None:
+) -> StageAttemptTransaction:
     detail = build_reliability_status_detail(
-        run_store,
+        run_status=run_status,
         run_uri=run_uri,
         stage_name=stage_name,
         stage_status=stage_status,
@@ -143,7 +144,7 @@ def record_stage_reliability_transition(
         created_at=recorded_at,
     )
     return record_reliability_transaction(
-        run_store,
+        reliability,
         run_uri=run_uri,
         status=detail,
         state=state,
@@ -151,16 +152,16 @@ def record_stage_reliability_transition(
 
 
 def record_reliability_transaction(
-    run_store: LegacyRunStore | RunReliabilityStore,
+    reliability: RunReliabilityStore,
     *,
     run_uri: str,
     status: ReliabilityStatusDetail,
     state: StageAttemptTransactionState,
-) -> StageAttemptTransaction | None:
-    if not isinstance(run_store, RunReliabilityStore):
-        return None
+) -> StageAttemptTransaction:
+    if not isinstance(reliability, RunReliabilityStore):
+        raise TypeError("reliability must satisfy RunReliabilityStore")
     parent_id = _latest_transaction_id(
-        run_store,
+        reliability,
         run_uri=run_uri,
         stage_name=status.stage_id,
         attempt=status.attempt,
@@ -180,26 +181,29 @@ def record_reliability_transaction(
         state=state,
         causal_parent_id=parent_id,
     )
-    run_store.write_reliability_status_detail(run_uri, status)
-    run_store.write_stage_attempt_transaction(run_uri, transaction)
+    reliability.write_reliability_status_detail(run_uri, status)
+    reliability.write_stage_attempt_transaction(run_uri, transaction)
     return transaction
 
 
 def record_timeout_outcome_from_metadata(
-    run_store: LegacyRunStore,
+    reliability: RunReliabilityStore,
     *,
     run_uri: str,
+    run_status: RunStatus,
     stage_name: str,
     attempt: int,
     stage_status: StageStatus,
     recorded_at: str,
     executor_metadata: object,
 ) -> TimeoutOutcomeRecord | None:
+    if not isinstance(reliability, RunReliabilityStore):
+        raise TypeError("reliability must satisfy RunReliabilityStore")
     metadata = _timeout_metadata(executor_metadata)
-    if metadata is None or not isinstance(run_store, RunReliabilityStore):
+    if metadata is None:
         return None
     transaction_id = _latest_transaction_id(
-        run_store,
+        reliability,
         run_uri=run_uri,
         stage_name=stage_name,
         attempt=attempt,
@@ -207,7 +211,7 @@ def record_timeout_outcome_from_metadata(
     if transaction_id is None:
         return None
     status = build_reliability_status_detail(
-        run_store,
+        run_status=run_status,
         run_uri=run_uri,
         stage_name=stage_name,
         stage_status=stage_status,
@@ -231,27 +235,28 @@ def record_timeout_outcome_from_metadata(
         support_level=_timeout_support_level(metadata),
         status=status,
     )
-    run_store.write_timeout_outcome(run_uri, outcome)
+    reliability.write_timeout_outcome(run_uri, outcome)
     return outcome
 
 
 def record_retry_decision_for_stage_result(
-    run_store: LegacyRunStore | RunReliabilityStore,
+    reliability: RunReliabilityStore,
     *,
     run_uri: str,
+    run_status: RunStatus,
     stage_name: str,
     attempt: int,
     stage_status: StageStatus,
     recorded_at: str,
     policy: RetryPolicy | None,
     failure: ExecutionFailure | None,
-) -> RetryDecisionRecord | None:
+) -> RetryDecisionRecord:
     """Evaluate and persist the retry decision for a completed stage attempt."""
 
-    if not isinstance(run_store, RunReliabilityStore):
-        return None
+    if not isinstance(reliability, RunReliabilityStore):
+        raise TypeError("reliability must satisfy RunReliabilityStore")
     status = build_reliability_status_detail(
-        run_store,
+        run_status=run_status,
         run_uri=run_uri,
         stage_name=stage_name,
         stage_status=stage_status,
@@ -264,14 +269,14 @@ def record_retry_decision_for_stage_result(
         else _failure_retry_classification(failure, status=status)
     )
     transaction_id = _latest_transaction_id(
-        run_store,
+        reliability,
         run_uri=run_uri,
         stage_name=stage_name,
         attempt=attempt,
     )
     policy_max_attempts = 1 if policy is None else policy.max_attempts
     reason, should_retry = _retry_decision(
-        run_store,
+        reliability,
         run_uri=run_uri,
         stage_name=stage_name,
         attempt=attempt,
@@ -298,25 +303,12 @@ def record_retry_decision_for_stage_result(
         status=status,
         failure=classification,
     )
-    run_store.write_retry_decision(run_uri, decision)
+    reliability.write_retry_decision(run_uri, decision)
     return decision
 
 
-def _current_run_status(
-    run_store: LegacyRunStore | RunReliabilityStore, run_uri: str
-) -> RunStatus:
-    # Authority-backed reliability stores intentionally expose only reliability
-    # facts.  Their close caller already established the run is live, so the
-    # default remains RUNNING without routing retry truth through a local store.
-    reader = getattr(run_store, "read_run_status", None)
-    record = None if reader is None else reader(run_uri)
-    if record is None:
-        return RunStatus.RUNNING
-    return record.status
-
-
 def _latest_transaction_id(
-    run_store: RunReliabilityStore,
+    reliability: RunReliabilityStore,
     *,
     run_uri: str,
     stage_name: str,
@@ -324,7 +316,7 @@ def _latest_transaction_id(
 ) -> str | None:
     transactions = [
         transaction
-        for transaction in run_store.list_stage_attempt_transactions(
+        for transaction in reliability.list_stage_attempt_transactions(
             run_uri,
             stage_name=stage_name,
         )
@@ -340,7 +332,7 @@ def _latest_transaction_id(
 
 
 def _stage_attempt_transactions(
-    run_store: RunReliabilityStore,
+    reliability: RunReliabilityStore,
     *,
     run_uri: str,
     stage_name: str,
@@ -348,7 +340,7 @@ def _stage_attempt_transactions(
 ) -> tuple[StageAttemptTransaction, ...]:
     return tuple(
         transaction
-        for transaction in run_store.list_stage_attempt_transactions(
+        for transaction in reliability.list_stage_attempt_transactions(
             run_uri,
             stage_name=stage_name,
         )
@@ -357,7 +349,7 @@ def _stage_attempt_transactions(
 
 
 def _retry_decision(
-    run_store: RunReliabilityStore,
+    reliability: RunReliabilityStore,
     *,
     run_uri: str,
     stage_name: str,
@@ -378,7 +370,7 @@ def _retry_decision(
     if transaction_id is None:
         return "retry.transaction_missing", False
     if not _transaction_chain_is_retry_safe(
-        run_store,
+        reliability,
         run_uri=run_uri,
         stage_name=stage_name,
         attempt=attempt,
@@ -389,17 +381,17 @@ def _retry_decision(
 
 
 def _transaction_chain_is_retry_safe(
-    run_store: RunReliabilityStore,
+    reliability: RunReliabilityStore,
     *,
     run_uri: str,
     stage_name: str,
     attempt: int,
     transaction_id: str,
 ) -> bool:
-    chain = run_store.read_transaction_chain(run_uri, transaction_id)
+    chain = reliability.read_transaction_chain(run_uri, transaction_id)
     if not chain:
         chain = _stage_attempt_transactions(
-            run_store,
+            reliability,
             run_uri=run_uri,
             stage_name=stage_name,
             attempt=attempt,

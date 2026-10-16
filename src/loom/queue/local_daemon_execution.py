@@ -2559,6 +2559,7 @@ class LocalDaemonExecution:
         recorded_at: str,
     ) -> RetryDecisionRecord:
         store: RunReliabilityStore = _AuthorityReliabilityStore(authority)
+        run_status = authority.snapshot(request.run_uri).status
         intent = load_managed_local_intent(
             self.config,
             request.run_uri,
@@ -2596,7 +2597,7 @@ class LocalDaemonExecution:
         if not transactions:
             record_stage_reliability_transition(
                 store,
-                run_uri=request.run_uri,
+                run_status=run_status, run_uri=request.run_uri,
                 stage_name=stage_name,
                 attempt=attempt,
                 state=terminal_state,
@@ -2632,7 +2633,7 @@ class LocalDaemonExecution:
         )
         decision = record_retry_decision_for_stage_result(
             store,
-            run_uri=request.run_uri,
+            run_status=run_status, run_uri=request.run_uri,
             stage_name=stage_name,
             attempt=attempt,
             stage_status=status,
@@ -2642,8 +2643,6 @@ class LocalDaemonExecution:
             ),
             failure=failure,
         )
-        if decision is None:
-            raise QueueServiceError("recovery retry decision was not persisted")
         return decision
 
     def _recovery_binding(
@@ -3045,13 +3044,19 @@ class LocalDaemonExecution:
                 StageWorkerRequest.from_dict(raw_worker_request)
                 if raw_worker_request is not None
                 else prepare_stage_attempt(
-                    run_store=self.run_store,
+                    stage_state=self.run_store,
+                    stage_workspaces=self.run_store,
+                    local_paths=self.run_store,
+                    reliability=self.run_store,
+                    prepared_runs=self.run_store,
+                    config=self.run_store,
+                    run_status=snapshot.status,
                     run_uri=record.run_uri,
                     stage=stage,
                     stage_plan=stage_plan,
                     produced_outputs=_produced_outputs(snapshot),
                     input_bindings=next(a.input_bindings for s in snapshot.stages for a in s.attempts if a.attempt_id == record.attempt_id),
-                authority_attempt=next(a for s in snapshot.stages for a in s.attempts if a.attempt_id == record.attempt_id),
+                    authority_attempt=next(a for s in snapshot.stages for a in s.attempts if a.attempt_id == record.attempt_id),
                     fingerprint_context=intent.plan.fingerprint_context,
                     resolved_runtime=_worker_runtime(intent, record.stage_name),
                     metadata={
@@ -3077,7 +3082,7 @@ class LocalDaemonExecution:
             from loom.pipeline.stores.input_lineage import validate_worker_inputs
             validate_worker_inputs(worker_request, next(a.input_bindings for s in snapshot.stages for a in s.attempts if a.attempt_id == record.attempt_id))
             from loom.pipeline._project_contracts import validate_admitted_worker
-            validate_admitted_worker(self.run_store, worker_request, stage)
+            validate_admitted_worker(self.run_store, worker_request, stage, config=self.run_store, local_paths=self.run_store)
             _require_retained_resource_handoff_match(
                 worker_request.resolved_runtime,
                 _worker_runtime(intent, record.stage_name),
@@ -4860,7 +4865,13 @@ class LocalDaemonExecution:
             StageWorkerRequest.from_dict(raw_worker_request)
             if raw_worker_request is not None
             else prepare_stage_attempt(
-                run_store=self.run_store,
+                stage_state=self.run_store,
+                stage_workspaces=self.run_store,
+                local_paths=self.run_store,
+                reliability=self.run_store,
+                prepared_runs=self.run_store,
+                config=self.run_store,
+                run_status=snapshot.status,
                 run_uri=record.run_uri,
                 stage=stage,
                 stage_plan=stage_plan,
@@ -4893,7 +4904,7 @@ class LocalDaemonExecution:
         from loom.pipeline.stores.input_lineage import validate_worker_inputs
         validate_worker_inputs(worker_request, next(a.input_bindings for s in snapshot.stages for a in s.attempts if a.attempt_id == record.attempt_id))
         from loom.pipeline._project_contracts import validate_admitted_worker
-        validate_admitted_worker(self.run_store, worker_request, stage)
+        validate_admitted_worker(self.run_store, worker_request, stage, config=self.run_store, local_paths=self.run_store)
         _require_retained_resource_handoff_match(
             worker_request.resolved_runtime, runtime
         )

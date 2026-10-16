@@ -18,7 +18,7 @@ from loom.pipeline.execution.models import StageWorkerRequest
 from loom.pipeline.execution.errors import RunRequestError
 from loom.pipeline.planning import plan_pipeline
 from loom.pipeline.runtime import ResolvedStageRuntimeOptions
-from loom.pipeline.status import StageStatus
+from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
 from loom.serialization import json_dumps_pretty
 import loom.pipeline.execution.stage_worker as stage_worker
@@ -110,7 +110,13 @@ def _prepared_run(
         ),
     )
     prepare_stage_attempt(
-        run_store=store,
+        stage_state=store,
+        stage_workspaces=store,
+        local_paths=store,
+        reliability=store,
+        prepared_runs=store,
+        config=store,
+        run_status=RunStatus.RUNNING,
         run_uri=run_uri,
         stage=spec.get_stage("build"),
         stage_plan=plan.ordered_stage_plans[0],
@@ -231,5 +237,13 @@ def test_public_admission_rejects_reserved_metadata_before_writes(tmp_path, key)
     plan = plan_pipeline(spec, run_uri=uri, stage_state=store, artifact_index=store, plans=store,
         artifact_store=LocalArtifactStore(store.local_artifact_root(uri)), persist=False)
     with pytest.raises(ValueError, match="reserved"):
-        prepare_stage_attempt(run_store=store, run_uri=uri, stage=spec.get_stage("build"),
+        prepare_stage_attempt(stage_state=store,
+        stage_workspaces=store,
+        local_paths=store,
+        reliability=store,
+        prepared_runs=store,
+        config=store,
+        run_status=RunStatus.RUNNING,
+        run_uri=uri,
+        stage=spec.get_stage("build"),
             stage_plan=plan.ordered_stage_plans[0], metadata={key: {}})
