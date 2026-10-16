@@ -183,9 +183,13 @@ def test_workload_upgrade_native_promotion_history_versioned_selection_and_repla
             return result
 
         monkeypatch.setattr(workload_upgrades, "bind_intent", lose_candidate_storage)
-    result = upgrades.upgrade(
-        inventory, operation_id="workload-window", apply=True, **options
-    )
+    if not promote_source:
+        from tests.integration.fleet.test_runtime_upgrade import held_progress_cli
+        result = held_progress_cli(inventory, "workload-window", options, monkeypatch)
+    else:
+        result = upgrades.upgrade(
+            inventory, operation_id="workload-window", apply=True, **options
+        )
     if promote_source:
         assert result["outcome"] == "blocked", result
         assert not lost

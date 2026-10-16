@@ -48,6 +48,60 @@ def finish(inventory, identity, **kwargs):
     return result
 
 
+
+def held_progress_cli(inventory, identity, options, monkeypatch):
+    """Observe the real CLI/native call while a selected SSH boundary is held."""
+    import io
+    import threading
+    from loom.cli.main import main
+
+    held, release, heartbeat = threading.Event(), threading.Event(), threading.Event()
+    host_call = upgrades.sshops.ssh
+    records = []
+    class Stream(io.StringIO):
+        def write(self, value):
+            record = json.loads(value)
+            records.append(record)
+            if record["event"] == "heartbeat" and held.is_set():
+                heartbeat.set()
+            return super().write(value)
+    def hold(host, request):
+        if not held.is_set() and request["action"] == "inspect":
+            held.set()
+            assert release.wait(20)
+        return host_call(host, request)
+    output, error = io.StringIO(), Stream()
+    args = ["fleet", "upgrade", "--fleet", str(inventory.path), "--apply",
+            "--operation-id", identity, "--progress", "json", "--format", "json"]
+    for key, value in options.items():
+        args.extend(["--" + key.replace("_", "-"), str(value)])
+    codes = []
+    with monkeypatch.context() as patch:
+        patch.setattr(upgrades.sshops, "ssh", hold)
+        worker = threading.Thread(target=lambda: codes.append(main(args, stdout=output, stderr=error)))
+        worker.start()
+        try:
+            assert held.wait(30)
+            assert heartbeat.wait(7)
+            assert not codes
+            assert output.getvalue() == ""
+            observed = records[-1]
+            assert observed["phase"] == "preparing"
+            assert observed["elapsed_seconds"] >= 4.9
+            assert observed["preparation_seconds"] >= 4.9
+            assert observed["admission_closed_seconds"] is None
+            assert any(row["event"] == "phase" for row in records)
+        finally:
+            release.set()
+            worker.join(240)
+        assert not worker.is_alive()
+    result = json.loads(output.getvalue())
+    assert codes == [0 if result["outcome"] == "complete" else 2 if result["outcome"] == "waiting" else 1]
+    assert records[-1]["event"] == "result"
+    assert str(inventory.path) not in error.getvalue()
+    return result
+
+
 def test_runtime_upgrade_abort_interruption_resume_and_native_checks(
     site,  # noqa: F811
     tmp_path,
@@ -89,9 +143,7 @@ def test_runtime_upgrade_abort_interruption_resume_and_native_checks(
         raise upgrades._Waiting("interrupted before gate closure")
 
     monkeypatch.setattr(upgrades._Upgrade, "probes", before_closure)
-    interrupted = upgrades.upgrade(
-        inventory, operation_id="before-window", apply=True, **options
-    )
+    interrupted = held_progress_cli(inventory, "before-window", options, monkeypatch)
     assert interrupted["outcome"] == "waiting"
     assert (
         upgrades.upgrade(inventory, operation_id="before-window", action="abort")[
@@ -111,9 +163,13 @@ def test_runtime_upgrade_abort_interruption_resume_and_native_checks(
         return result
 
     monkeypatch.setattr(upgrades._Upgrade, "native", interrupt)
+    observations = []
     result = upgrades.upgrade(
-        inventory, operation_id="abort-window", apply=True, **options
+        inventory, operation_id="abort-window", apply=True, progress=observations.append, **options
     )
+    assert observations[-1]["phase"] == "closing_admission"
+    assert observations[-1]["reason_code"] == "host_unavailable"
+    assert observations[-1]["admission_closed_seconds"] is None
     assert result["outcome"] == "waiting", result
     result = upgrades.upgrade(inventory, operation_id="abort-window", action="abort")
     assert result["outcome"] == "aborted", result

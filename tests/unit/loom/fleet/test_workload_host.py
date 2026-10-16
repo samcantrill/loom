@@ -290,3 +290,89 @@ def test_live_stop_refuses_unsettled_or_changed_native_service(
     monkeypatch.setattr(_services, "systemctl", systemctl)
     with pytest.raises(QueueConflictError, match="settlement|ownership changed"):
         host.recover_service(selection)
+
+
+@pytest.fixture
+def publication(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from loom.fleet import _host
+    from loom.coordinator import CoordinatorClientError
+
+    config = tmp_path / "coordinator.json"
+    before, after = {"profiles": "before"}, {"profiles": "after"}
+    _host.atomic(config, before)
+    request = {
+        "name": "coordinator", "root": str(tmp_path / "root"),
+        "config": str(config), "release": {"descriptor_sha256": "same-release"},
+        "admin": str(tmp_path), "request_id": "retained-publication", "declaration": after,
+    }
+    binding = {**request, "action": "start", "expected_root_id": "original-coordinator"}
+    _host.atomic(tmp_path / "service.json", binding)
+    directory = tmp_path / "publication"
+    directory.mkdir()
+    state = SimpleNamespace(owner="original-coordinator", bindings=[], reloads=[], lost=False, statuses=0)
+    monkeypatch.setattr(host, "owner", lambda _: {"owner": state.owner})
+    monkeypatch.setattr(host, "payload", lambda _: _host.read(config))
+
+    class Client:
+        def status(self):
+            state.statuses += 1
+            return SimpleNamespace(scheduling_epoch="original-epoch")
+
+        def reload_scheduling(self, value):
+            state.reloads.append(value.to_dict())
+            assert _host.read(config) == after
+            if state.lost:
+                state.lost = False
+                raise CoordinatorClientError("unavailable", boundary="transport",
+                                             operation="operator_scheduling_reload", mutation_outcome="unknown")
+            return {"state": "applied"}
+
+    def client(value):
+        state.bindings.append(copy.deepcopy(value))
+        assert value["coordinator_id"] == "original-coordinator"
+        return None, Client()
+
+    monkeypatch.setattr(_host, "coordinator_client", client)
+    return request, binding, directory, state
+
+
+def test_publication_binds_existing_service_and_replays_lost_reload_without_rewriting_intents(publication):
+    from loom.coordinator import CoordinatorClientError
+    from loom.fleet._host import read
+
+    request, binding, directory, state = publication
+    original = copy.deepcopy(request)
+    state.lost = True
+    with pytest.raises(CoordinatorClientError):
+        host.publish(request, directory)
+    retained = (directory / "reload.json").read_bytes()
+    assert read(Path(request["config"])) == request["declaration"]
+    result = host.publish(request, directory)
+    assert result["reload"] == {"state": "applied"}
+    assert state.statuses == 1  # Replay uses the exact retained epoch/request.
+    assert len(state.reloads) == 2 and state.reloads[0] == state.reloads[1]
+    assert state.reloads[0]["operation_id"] == request["request_id"]
+    assert (directory / "reload.json").read_bytes() == retained
+    assert request == original and "coordinator_id" not in request
+    assert read(Path(request["admin"]) / "service.json") == binding
+    assert len(state.bindings) == 3
+
+
+@pytest.mark.parametrize("changed", ["root", "config", "release", "owner"])
+def test_publication_refuses_changed_service_or_native_owner_before_writes(publication, changed):
+    from loom.fleet._host import atomic, read
+
+    request, binding, directory, state = publication
+    original = Path(request["config"]).read_bytes()
+    if changed == "owner":
+        state.owner = "replacement-coordinator"
+    else:
+        binding[changed] = "different-binding"
+        atomic(Path(request["admin"]) / "service.json", binding)
+    with pytest.raises(QueueConflictError, match="binding differs|identity changed"):
+        host.publish(request, directory)
+    assert Path(request["config"]).read_bytes() == original
+    assert not (directory / "reload.json").exists()
+    assert not state.bindings and not state.reloads
+    assert read(Path(request["admin"]) / "service.json") == binding

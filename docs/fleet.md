@@ -650,3 +650,79 @@ has `schema_version: 1`, `disposable: true`, `kind: "workload-upgrade"`, and fie
 relative to the selection file; the report must be new. The owner records native
 old-run observation, unchanged historical evidence, checks and settlement,
 service identities throughout promotion, old-client refusal, and exact replay.
+
+### Live upgrade diagnostics
+
+Add `--progress json` to `fleet upgrade --apply`, or to `fleet operation resume`,
+`abort`, `retry-check`, or `retry-control` for a retained runtime/workload upgrade.
+The default `--progress none` is quiet. Preview/plan and non-upgrade operations
+refuse JSON progress before mutation; status and other commands do not accept
+this flag. Activation is explicit in both text and JSON final-output modes.
+
+```sh
+loom fleet upgrade --fleet lab --runtime-release /PRIVATE/release/runtime.json \
+  --apply --operation-id maintenance-a --progress json --format json \
+  > result.json 2> progress.jsonl
+loom fleet operation resume maintenance-a --fleet lab --progress json --format json
+loom fleet operation retry-check maintenance-a --fleet lab \
+  --failed-check failed-check-a --operation-id replacement-check-a --progress json
+```
+
+Stdout and exit codes keep their existing meaning: one final JSON object with
+`--format json`; complete/aborted/preview exit 0, pending/running/waiting exit 2,
+and blocked outcomes exit 1. Early validation errors retain native error behavior.
+Progress is best-effort JSONL on stderr, with phase changes and at most one
+heartbeat every five seconds. A blocking native/SSH call keeps its phase while
+elapsed time advances. Fast phases may coalesce; this is not an audit history.
+Redirecting stderr is optional and Loom creates no progress artifact itself.
+
+Every diagnostic record has exactly these fields:
+
+| Field | Values |
+| --- | --- |
+| `schema_version` | `1` |
+| `event` | `phase`, `heartbeat`, `result` |
+| `kind` | `runtime-upgrade`, `workload-upgrade`, or `unknown` before binding |
+| `action` | `apply`, `resume`, `abort`, `retry-check`, `retry-control` |
+| `phase` | `preparing`, `closing_admission`, `settling`, `draining`, `replacing`, `checking`, `restoring`, `reopening_admission`, `recovering`, `finished` |
+| `state` | `running`, then native `complete`, `aborted`, `waiting`, `blocked`; `interrupted`/`error` when no native result returns |
+| `reason_code` | `none`, `settlement_pending`, `acknowledgement_pending`, `check_failed`, `host_unavailable`, `coordinator_unavailable`, `native_refusal`, `input_invalid`, `unknown` |
+| `elapsed_seconds` | Local monotonic seconds since invocation entry |
+| `phase_elapsed_seconds` | Seconds since the latest phase change |
+| `preparation_seconds` | Accumulated initial validation and pre-close candidate preparation seconds |
+| `admission_closed_seconds` | Observed closed interval seconds, or `null` without a matching live observation |
+
+Records are limited to 1 KiB including newline. Durations are finite and
+nonnegative. No IDs, host labels, paths, credentials, arguments, native replies,
+exception messages, or child output appear in this stream. Native protected
+status/results remain the source of detailed failure and recovery information.
+Waiting/blocked records retain the causal executing phase; successful terminal
+records may use `finished`.
+
+All clocks restart on each invocation, including resume. Preparation includes
+actual candidate rechecks, excludes post-close staging/promotion, and may overlap
+an already observed closed interval. These durations must not be added as
+disjoint portions of total time. Admission timing starts only at an existing
+live observation proving this operation owns the closed gate, never from a
+retained close request, lost reply, or historical mutation receipt. It ends at
+an existing live open observation or a successful open request first dispatched
+in this invocation. An old replayed open receipt cannot stop a new interval.
+Without an observed end, the interval continues to the invocation's final
+snapshot. Completed replay does not reconstruct prior timings; cross-invocation
+elapsed time and operator gaps remain unknown.
+
+Admission closure prevents new ordinary admissions while existing work may
+continue. This interval is **not service downtime**, stop-to-ready time, GPU
+availability, or scientific success. Progress changes no sampling, processing,
+checks, native requests, recovery eligibility, or operation ownership.
+
+Python callers can pass `upgrade(..., progress=callback)` to receive the same
+allowlisted snapshot dictionaries on an invocation-local reporting thread.
+Callbacks are diagnostic outputs, never policy inputs. A slow/broken sink can
+lose records, including the terminal record, but cannot delay native execution
+indefinitely or replace its result/exception. There is one latest snapshot and
+no event backlog. A healthy reporter stops on completion, error or interruption;
+a callback blocked indefinitely may leave a daemon thread until process exit.
+Interruption preserves native recovery; resume uses the same retained operation
+and fresh local clocks. No additional observation RPC or SSH child is started
+for a heartbeat.

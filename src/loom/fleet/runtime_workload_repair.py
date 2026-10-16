@@ -109,7 +109,9 @@ def continue_repair(operation, *, action="resume", failed_check=None,
         "target_intent_digest": digest(operation.intent),
     } or intent["release"] != operation.intent["release"]:
         raise QueueConflictError("workload repair parent/runtime intent conflicts")
-    child = workload_upgrades.WorkloadUpgrade(operation.inventory, directory, intent)
+    child = workload_upgrades.WorkloadUpgrade(
+        operation.inventory, directory, intent, operation.observation
+    )
     try:
         if action == "retry-check":
             result = upgrades._retry_check(child, failed_check, new_check)
