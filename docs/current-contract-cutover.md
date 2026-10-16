@@ -1310,3 +1310,116 @@ initialization/unknown ownership, strict obsolete-input refusal and preserved
 CAS/replay/authorization/attribution/lifecycle/query/preparation behavior. The PR
 is merge eligible; its closeout owns merge and synchronization facts. Only this
 review receipt changes afterward.
+
+
+## Current Slurm assignment storage
+
+Status: implemented, locally validated and independently reviewed in PR #424;
+its remote state owns merge/synchronization facts. Approved work is in rphys #911; Loom base
+`09b7e12a8a39de2f26aa959efe37f1635b5829b2`, branch
+`fix/current-slurm-assignment-storage`, existing isolated cutover worktree.
+
+Remove the confirmed `legacy_native_only` schema-3 allowance and its later
+reservation-time column guard. Existing stores require the complete current
+assignment and output tables, with read-only admission through the existing
+SQLite inspection owner before writes and revalidation in the write transaction.
+Explicit fresh initialization can populate the fresh coordinator's shared
+database before any Slurm-owned table exists; an existing partial/old Slurm store
+is never repaired. Current schema bytes and wire formats are unchanged.
+
+Scope covers this store and reached daemon admission, native preparation output,
+agent acknowledgement/restart and result/replay consumers. Selected no-extra
+Python 3.12 checks collect first: assignment-store unit tests; new daemon old-root
+refusal and current-owner reopen; agent Slurm journal tests; integration mixed
+route, outage replay and actual native preparation transfer/ack. Reuse unchanged
+wire-family and scientific receipts; no physical Slurm or deployed pin/image
+qualification is claimed. Expand only for a reached failure or changed contract.
+
+Implementation and validation receipts follow here; independent final-diff review
+and verified upstream merge remain required.
+
+The daemon now uses its existing complete owner-store admission before acquiring
+owner locks, and retains the later admission under ownership. The new startup
+refusal test exposed that the prior ordering created `owner.lock` before rejecting
+unsupported Slurm storage; this bounded correction preserves the same owner proof
+and current recovery, rather than weakening the unchanged-storage assertion.
+
+Pre-review reconciliation: **34 distinct cases passed**, zero unresolved failures,
+errors or required skips. Python 3.12, isolated locked no-extra/dev environment.
+
+- Clean `507818ce` collected 24 cases and executed 23 passes plus one failure.
+  The initial refusal assertion expected the inner error rather than the daemon's
+  public wrapper. Test-only `110defc7` asserted both wrapper and preserved cause;
+  its one-case recheck exposed the real owner-lock mutation. Both failed receipts
+  remain retained and are superseded only by the affected passing case below.
+- Clean `0e862af30d4b9d0b3b3acffd55095d76f5154800` collected and passed all 15 affected
+  startup cases: old Slurm refusal and current root reopen; daemon initialize/
+  restart, second-owner locking, missing owner stores, current-schema owner
+  substitution, construction failure, prepared scheduling-reload recovery and
+  once-per-operation owner admission; the three selected Slurm integration cases
+  for mixed native/agent submit, outage replay and actual preparation transfer/ack.
+- Reuse 19 passes from `507818ce`: the eleven assignment-store/framing cases and
+  eight agent Slurm journal cases. The exact subsequent diff changes only the new
+  refusal test's assertions and daemon `start` preflight. Those 19 cases neither
+  start a daemon nor consume the changed test. Store/agent/transport source,
+  dependencies, config and fixtures are unchanged; all reached startup consumers
+  were rechecked. Source tree at the final tested commit is
+  `942437a0c2fcb30aef2b70611a69c4da8ff2624d`, tests tree
+  `c729352cc55e91a9fff6b9deab8dabc5b5444dfb`. Subsequent changes are evidence prose.
+- Changed Python files pass Ruff; both changed source modules pass selected
+  Pyright with zero errors/warnings. The three initially changed Python files
+  are Ruff-formatted; the bounded new `local_daemon.py:1740-1768` block passes
+  range formatting without unrelated whole-module churn. Diff whitespace passes.
+  All execution used `uv run --python 3.12 --isolated --locked --group dev`.
+
+Raw JUnit receipts are `build/current-contract-cutover/slurm-storage-507818ce.xml`,
+`slurm-storage-recheck-110defc7.xml`, and `slurm-storage-startup-0e862af3.xml`.
+`slurm-storage-coverage.json` in the same directory maps all 34 cases to their final
+passing receipt. Collection output and static-check exit results were inspected
+in the manager tool transcript; no separate full-suite claim is made.
+
+The existing SQLite inspection helper privately copies WAL/hot-journal storage;
+this delivery reuses it unchanged. Fresh current shared coordinator databases
+remain valid initialization targets before any Slurm-owned table exists. Existing
+partial Slurm tables are refused. Wire formats, lifecycle transitions, transfer
+bytes, scientific payloads and dependency selection are unchanged. Existing
+wire/scientific evidence remains applicable; physical Slurm and installed-image
+qualification remain with the paired adoption owner. The next upstream census
+is offline capture/import/query and lineage; these rows remain open.
+
+Independent review of PR #424 at `cc5cdec06b67f20eb9a57f88c414a1586e59e6c8`
+confirmed the 34-case reconciliation but identified one product blocker: the
+shared owner proof opened other execution-store readers in writable mode before
+Slurm admission, so an old Slurm database's hot journal could recover in place
+before refusal. The store-only interruption tests did not cover this daemon join.
+The bounded correction moves the existing read-only Slurm admission first in that
+same proof and adds actual interrupted SQLite writes at daemon startup for both
+current and retired schemas. Other owner checks and the locked proof remain.
+The 15 affected startup cases plus these two new cases collect and rerun; the
+19 store/agent passes remain applicable because their owners/fixtures/dependencies
+are unchanged and they do not invoke this reordered proof. Final reconciliation
+and targeted review confirmation follow; merge remains pending until they pass.
+
+Final correction validation: clean `08aebb8f` collected and passed all 17 selected
+cases in 32.63 seconds, including both new daemon hot-journal cases. Current
+storage recovers and starts with its original owner identity and no uncommitted
+rows; retired storage retains every file byte and mtime, including its journal,
+and creates no owner lock. Selected Ruff/Pyright and range formatting for
+`local_daemon_execution.py:638-673` passed. Exact candidate is committed before
+testing; the only subsequent changes are this evidence prose.
+
+Final coverage is **36 distinct passing cases**: 19 unaffected passes from
+`507818ce` plus 17 passes from `08aebb8f`, with no unresolved failures/errors/skips.
+The existing coverage map now selects those final receipts; the new raw receipt
+is `build/current-contract-cutover/slurm-storage-owner-proof-08aebb8f.xml`.
+The additional source diff only reorders the existing shared owner proof; changed
+startup/recovery consumers were rerun. Original failing receipts are retained.
+The independent reviewer is asked only to confirm the identified correction and
+its affected evidence against the actual final head.
+
+Targeted independent confirmation passed at
+`2518a1d4480c957cebd1c98efa6faf43fc663fba`: the identified journal-ordering blocker
+is resolved, with no remaining required correction. The reviewer verified the
+actual reordered proof, both new daemon assertions, all 36 mapped passes and
+source/test equality to the tested candidate. No additional tests ran. Only this
+review receipt follows; PR #424 owns verified merge and synchronization facts.

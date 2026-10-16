@@ -14,6 +14,7 @@ from pathlib import Path
 import sqlite3
 from typing import Iterator, cast
 
+from loom._sqlite_inspection import inspect_sqlite_database
 from loom.artifacts import ArtifactRef
 from loom.io.uris import uri_to_path
 from loom.pipeline.execution.models import (
@@ -268,12 +269,29 @@ class SlurmStageDelivery:
         if not isinstance(worker_request, StageWorkerRequest):
             raise QueueServiceError("SLURM delivery requires a prepared worker request")
         if "attempt_input_bindings" in worker_request.metadata:
-            from loom.pipeline.stores.input_lineage import decode_bindings, validate_worker_inputs
-            validate_worker_inputs(worker_request, decode_bindings(worker_request.metadata["attempt_input_bindings"]))
+            from loom.pipeline.stores.input_lineage import (
+                decode_bindings,
+                validate_worker_inputs,
+            )
+
+            validate_worker_inputs(
+                worker_request,
+                decode_bindings(worker_request.metadata["attempt_input_bindings"]),
+            )
         from ._execution_binding import execution_binding
-        metadata: dict[str, PlainData] = {key: worker_request.metadata[key]
-            for key in ("loom.project_contract", "loom.project_contract_capture", "attempt_input_evidence") if key in worker_request.metadata}
-        metadata["loom.execution_binding"] = execution_binding(worker_request, environment_fingerprint)
+
+        metadata: dict[str, PlainData] = {
+            key: worker_request.metadata[key]
+            for key in (
+                "loom.project_contract",
+                "loom.project_contract_capture",
+                "attempt_input_evidence",
+            )
+            if key in worker_request.metadata
+        }
+        metadata["loom.execution_binding"] = execution_binding(
+            worker_request, environment_fingerprint
+        )
         if "stage_resources" in worker_request.metadata:
             metadata["stage_resources"] = worker_request.metadata["stage_resources"]
         if "resource_selection" in worker_request.metadata:
@@ -439,8 +457,7 @@ class SQLiteSlurmStageAssignments:
     def _open_existing(self) -> None:
         if not self.path.is_file():
             raise QueueServiceError("SLURM assignment store is missing")
-        with _connect(self.path, require_existing=True) as conn:
-            conn.row_factory = sqlite3.Row
+        with inspect_sqlite_database(self.path) as conn:
             _require_schema(conn)
 
     def reserve(
@@ -480,13 +497,6 @@ class SQLiteSlurmStageAssignments:
             separators=(",", ":"),
         )
         with self._transaction() as conn:
-            if "agent_sequence" not in {
-                str(row[1])
-                for row in conn.execute(f"PRAGMA table_info({_ASSIGNMENT_TABLE})")
-            }:
-                raise QueueServiceError(
-                    "agent-bound SLURM assignment schema requires a freshly initialized owner"
-                )
             existing = conn.execute(
                 f"SELECT * FROM {_ASSIGNMENT_TABLE} WHERE assignment_id = ?",
                 (assignment.assignment_id,),
@@ -1103,14 +1113,21 @@ class SQLiteSlurmStageAssignments:
         ) != set(record.delivery.declared_outputs):
             raise QueueConflictError("SLURM result output interface conflicts")
         from ._preparation_report_transfer import native_role
-        if report.output_kind == "preparation_report" and not native_role(record.delivery.fingerprint):
-            raise QueueConflictError("SLURM preparation transfer targets another stage role")
+
+        if report.output_kind == "preparation_report" and not native_role(
+            record.delivery.fingerprint
+        ):
+            raise QueueConflictError(
+                "SLURM preparation transfer targets another stage role"
+            )
         if (
             report.status is StageStatus.SUCCEEDED
             and native_role(record.delivery.fingerprint)
             and report.output_kind != "preparation_report"
         ):
-            raise QueueConflictError("native preparation transfer capability is missing")
+            raise QueueConflictError(
+                "native preparation transfer capability is missing"
+            )
         encoded = _json(report.to_dict())
         with self._transaction() as conn:
             row = self._row(conn, assignment_id)
@@ -1180,10 +1197,13 @@ class SQLiteSlurmStageAssignments:
             part = (
                 self.transfer_root / assignment_id / "staging" / f"{transfer_id}.part"
             )
+
             def publish_pair():
                 if descriptor.preparation_report_transfer is not None:
                     from ._preparation_report_transfer import publish
+
                     publish(descriptor, target)
+
             received = int(row["received_bytes"])
             if bool(row["finalized"]):
                 existing = _read_regular_file_range(target, offset, len(data))
@@ -1263,6 +1283,7 @@ class SQLiteSlurmStageAssignments:
                 raise QueueConflictError("SLURM committed output bytes are unavailable")
             if item.preparation_report_transfer is not None:
                 from ._preparation_report_transfer import publish
+
                 outputs[item.logical_name] = publish(item, path)
                 continue
             outputs[item.logical_name] = ArtifactRef(
@@ -1314,20 +1335,21 @@ class SQLiteSlurmStageAssignments:
 
     @contextmanager
     def _transaction(self) -> Iterator[sqlite3.Connection]:
-        if not self.path.is_file():
-            if not self._allow_initialize:
-                raise QueueServiceError("SLURM assignment store is missing")
+        if self.path.is_file():
+            with inspect_sqlite_database(self.path) as conn:
+                initialize = _requires_initialization(conn, self._allow_initialize)
+                if not initialize:
+                    _require_schema(conn)
+        elif not self._allow_initialize:
+            raise QueueServiceError("SLURM assignment store is missing")
+        else:
             self.path.parent.mkdir(parents=True, exist_ok=True)
         with _connect(self.path, require_existing=not self._allow_initialize) as conn:
             conn.row_factory = sqlite3.Row
             conn.execute("BEGIN IMMEDIATE")
-            if self._allow_initialize:
-                existing = conn.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-                    (_ASSIGNMENT_TABLE,),
-                ).fetchone()
+            if _requires_initialization(conn, self._allow_initialize):
                 conn.execute(
-                    f"CREATE TABLE IF NOT EXISTS {_ASSIGNMENT_TABLE} ("
+                    f"CREATE TABLE {_ASSIGNMENT_TABLE} ("
                     "assignment_id TEXT PRIMARY KEY, operation_id TEXT NOT NULL UNIQUE, "
                     "run_uri TEXT NOT NULL, stage_work_id TEXT NOT NULL, "
                     "profile_id TEXT NOT NULL, state TEXT NOT NULL, "
@@ -1341,13 +1363,13 @@ class SQLiteSlurmStageAssignments:
                     "agent_sequence INTEGER NOT NULL DEFAULT 0, agent_evidence_json TEXT, agent_evidence_accepted_at TEXT)"
                 )
                 conn.execute(
-                    f"CREATE TABLE IF NOT EXISTS {_OUTPUT_TABLE} ("
+                    f"CREATE TABLE {_OUTPUT_TABLE} ("
                     "assignment_id TEXT NOT NULL, transfer_id TEXT NOT NULL, "
                     "descriptor_json TEXT NOT NULL, received_bytes INTEGER NOT NULL, "
                     "finalized INTEGER NOT NULL, "
                     "PRIMARY KEY (assignment_id, transfer_id))"
                 )
-                _require_schema(conn, allow_unversioned=existing is None)
+                _require_schema(conn, allow_unversioned=True)
                 conn.execute("PRAGMA user_version = 3")
             else:
                 _require_schema(conn)
@@ -1525,13 +1547,20 @@ class SlurmBootstrapWorkspace:
                 source.relative_to(self.root)
                 data = _read_regular_file_bytes(source)
                 from ._preparation_report_transfer import frame, native_role
+
                 transfer = None
                 if native_role(delivery.fingerprint):
                     if logical_name != "report":
-                        raise QueueConflictError("SLURM preparation output role conflicts")
+                        raise QueueConflictError(
+                            "SLURM preparation output role conflicts"
+                        )
                     data, transfer = frame(ref, source)
                 digest = hashlib.sha256(data).hexdigest()
-                if transfer is None and ref.checksum is not None and ref.checksum != f"sha256:{digest}":
+                if (
+                    transfer is None
+                    and ref.checksum is not None
+                    and ref.checksum != f"sha256:{digest}"
+                ):
                     raise QueueConflictError("SLURM output checksum conflicts")
                 transfer_id = (
                     "output-"
@@ -1592,7 +1621,9 @@ class SlurmBootstrapWorkspace:
             ),
             process_created=True,
             executor_metadata=result.executor_metadata,
-            output_kind="preparation_report" if any(item.preparation_report_transfer is not None for item in outputs) else "relay",
+            output_kind="preparation_report"
+            if any(item.preparation_report_transfer is not None for item in outputs)
+            else "relay",
         )
         encoded = (_json(report.to_dict()) + "\n").encode()
         if self._retained_report_path.exists():
@@ -1647,6 +1678,23 @@ def _connect(path: Path, *, require_existing: bool = False) -> sqlite3.Connectio
     return sqlite3.connect(target, uri=require_existing)
 
 
+def _requires_initialization(conn: sqlite3.Connection, allowed: bool) -> bool:
+    # Fresh coordinator setup creates its shared database before this owner.
+    # Any retained assignment/output table must pass full current admission.
+    if not allowed:
+        return False
+    tables = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?)",
+        (_ASSIGNMENT_TABLE, _OUTPUT_TABLE),
+    ).fetchall()
+    if tables:
+        return False
+    version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+    if version not in {0, 3}:
+        raise QueueServiceError("SLURM assignment store schema is unsupported")
+    return True
+
+
 def _require_schema(
     conn: sqlite3.Connection, *, allow_unversioned: bool = False
 ) -> None:
@@ -1684,21 +1732,9 @@ def _require_schema(
         str(row[1]) for row in conn.execute(f"PRAGMA table_info({_OUTPUT_TABLE})")
     }
     version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-    legacy_native_only = (
-        columns
-        == expected
-        - {
-            "start_consumed",
-            "agent_sequence",
-            "agent_evidence_json",
-            "agent_evidence_accepted_at",
-        }
-        and conn.execute(f"SELECT 1 FROM {_ASSIGNMENT_TABLE} LIMIT 1").fetchone()
-        is None
-    )
     if (
         (version != 3 and not (allow_unversioned and version == 0))
-        or (columns != expected and not legacy_native_only)
+        or columns != expected
         or output_columns
         != {
             "assignment_id",

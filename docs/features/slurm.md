@@ -303,6 +303,14 @@ or a generic external-scheduler plugin. Those capabilities are not implied by
 `ResourcePlanner`, `SchedulingPolicy`, the ready-stage route.
 
 
+Existing coordinator assignment stores require the complete current schema,
+including agent acknowledgement evidence, even when they contain no assignments.
+Older column layouts and incomplete tables are refused before repair or mutation.
+Initialize fresh current owner storage after settling work through its original
+installation; there is no schema conversion. Current interrupted SQLite writes
+still recover normally, and inspection leaves original database/journal bytes
+unchanged.
+
 ## Operator lifecycle
 
 Detach and reconnect through the native client without changing admission

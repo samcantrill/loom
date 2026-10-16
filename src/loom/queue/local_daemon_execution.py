@@ -644,6 +644,13 @@ def _require_local_daemon_owner_stores(
     """Check the same owners without discarding a failed proof's cause."""
 
     try:
+        # Other shared-store readers can recover SQLite journals in place.
+        # Admit Slurm storage read-only before any of those writable opens.
+        SQLiteSlurmStageAssignments(
+            config.execution_database,
+            config.slurm_transfer_root,
+            _allow_initialize=False,
+        )._open_existing()
         capacity = _coordinator_capacity(config)
         SQLiteStageWorkStore(
             config.execution_database, _allow_initialize=False
@@ -653,11 +660,6 @@ def _require_local_daemon_owner_stores(
         )._open_existing()
         SlurmSubmissionProjection(
             config.execution_database, _allow_initialize=False
-        )._open_existing()
-        SQLiteSlurmStageAssignments(
-            config.execution_database,
-            config.slurm_transfer_root,
-            _allow_initialize=False,
         )._open_existing()
         with _connect_existing_sqlite(config.execution_database) as conn:
             _verify_owner_store_binding(
