@@ -363,8 +363,12 @@ def test_managed_local_assignment_commits_accessible_output_then_releases(
         prior_attempt_id = prior.attempt.attempt_id
         revision = authority.snapshot(run_uri).revision
         worker_request = replace(
-            worker_request, attempt=2,
-            metadata={"managed_output_predecessor": initial.commit.commit_id},
+            worker_request,
+            attempt=2,
+            metadata={
+                **worker_request.metadata,
+                "managed_output_predecessor": initial.commit.commit_id,
+            },
         )
     prepared = authority.ensure_prepared_attempt(
         run_uri,

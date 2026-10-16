@@ -1556,3 +1556,20 @@ succeeded, changed-source Pyright reports zero errors, and changed-file Ruff
 passes. Run each selected scope on a committed clean tree; no physical Slurm or
 fleet claim follows from these local transport fixtures. Expand only for a
 reached consumer failure or a concrete missing accepted assertion.
+
+
+Initial stable-tree execution at `9358e1b69784cfcad71bf8ec85022522485ec09b`:
+baseline 237 passed, 3 failed, 2 optional cases deselected; config 19 passed,
+1 failed, no skips. Raw `input-evidence-{base,config}-9358e1b6` logs, XML and
+run JSON record exact commands and unchanged source status. The three baseline
+failures were fixture contract gaps: authenticated inspection cannot allocate
+through its restricted client, so the real repository owner now allocates before
+inspection through the client; the two replacement fixtures previously replaced
+all worker metadata and now preserve the original zero-input binding/digest when
+adding the predecessor. No production correction or assertion weakening was
+needed. The config failure exceeded AF_UNIX path length under a long worktree
+`--basetemp`; rerun its exact Unix-socket case with a short dedicated temporary
+root. Existing 256 passes remain applicable: production, dependencies, configs
+and unrelated fixtures are unchanged. The two changed fixture functions are
+selected again; cheap collection found 22 baseline recheck cases. The delta is
+retained in `input-evidence-fixture-correction.patch`.

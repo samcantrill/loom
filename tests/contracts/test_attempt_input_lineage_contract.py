@@ -171,14 +171,26 @@ def test_explicit_unknown_inspection_and_empty_input_evidence_remain_distinct(
     from loom.pipeline.stores import AuthorityStoreError
     from loom.pipeline.stores.read_models import AuthorityModelError
 
-    uri, authority, _, _ = _consumer(tmp_path, backend)
+    uri, authority, database, _ = _consumer(tmp_path, backend)
     known = prepare(authority, uri)
-    unknown = authority.allocate_stage_attempt(
+    allocation_owner = authority
+    if backend == "authenticated":
+        from loom.authority._repository import AuthorityRepository
+
+        allocation_owner = AuthorityRepository(
+            database.parent, database_name=database.name
+        )
+    allocation_owner.allocate_stage_attempt(
         uri,
         "unrecorded",
         owner_id="direct-reader",
         lease_ttl_seconds=30,
-    ).attempt
+    )
+    unknown = next(
+        stage.attempts[0]
+        for stage in authority.open_run(uri).stages
+        if stage.stage_name == "unrecorded"
+    )
     assert known.attempt.input_bindings == ()
     assert unknown.input_bindings is None
     assert StageAttempt.from_dict(unknown.to_dict()) == unknown
@@ -200,7 +212,6 @@ def test_explicit_unknown_inspection_and_empty_input_evidence_remain_distinct(
 
 
 def test_retired_input_kind_is_refused():
-
     binding = AttemptInputBinding(
         "data",
         None,
