@@ -8,7 +8,7 @@ import sys
 import pytest
 
 from loom.queue import LocalDaemon, LocalDaemonConfig
-from loom.queue.errors import QueueError
+from loom.queue.errors import QueueError, QueueServiceError
 from loom.queue.local_daemon import _open_root
 from loom.queue._agent_session_journal import _RemoteAgentJournal
 
@@ -184,6 +184,10 @@ def test_coordinator_refuses_retired_empty_slurm_store_before_owner_start(
             conn.execute(f"ALTER TABLE slurm_stage_assignments DROP COLUMN {column}")
     conn.close()
     before = files(tmp_path)
-    with pytest.raises(QueueError, match="schema is unsupported"):
+    with pytest.raises(
+        QueueError, match="retained daemon owner state is unavailable"
+    ) as error:
         LocalDaemon(config).start()
+    assert isinstance(error.value.__cause__, QueueServiceError)
+    assert str(error.value.__cause__) == "SLURM assignment store schema is unsupported"
     assert files(tmp_path) == before
