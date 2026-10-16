@@ -1228,3 +1228,13 @@ after cleanup correction. #421's `agent-retirement.xml` at `475e97e6` remains
 valid for the nine unchanged bound pending-poll/delivery retirement cases:
 the bound retirement implementation, poll codecs and recovery, shared fixtures
 and dependency lock are unchanged. No scientific or physical rerun is warranted.
+
+Independent actual-final-diff review of PR #422 at
+`38cee2d99a76b868a1397c04099b24d5edb895a0` against the recorded base passed
+with no findings requiring correction. The reviewer verified the 20 collected
+IDs against passing XML receipts, the source/test/feature-guide patch hash,
+identical tested runtime trees, the cleanup-only correction and reuse of the
+nine unaffected poll/delivery cases. Current explicit-service retirement and
+read-only absence remain supported; missing declarations cannot authorize
+guarded ownership or retirement. The delivery is merge eligible. Its PR closeout
+owns merge and synchronization facts; only this review receipt changes afterward.
