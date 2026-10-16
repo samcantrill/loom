@@ -1206,3 +1206,25 @@ and optional-guard branches, with unchanged bound retirement, poll recovery,
 dependencies, fixtures and scientific behavior. Collect and run cheap static
 checks first; expand for reached consumers or a failure. Independent review
 checks the actual final diff before merge.
+
+Validation: `build/current-contract-cutover/declaration-coverage.json` reconciles
+all **20 collected cases to passing receipts**, with no unresolved failure,
+error or skip. `declaration-tests.xml` records 19 passes at
+`3009e2a7ff1ad91d1ff07afa5886c3a971da3cb9` and one fixture-cleanup failure
+(36.87 s total). The refusal and unchanged-file assertions had passed; cleanup
+then hit the same monkeypatch that prohibited workload probing during the call.
+The correction restores the decoder only in cleanup, after those assertions,
+and shuts down the fixture's own supervisor. Its exact recheck passes at
+`038a56cb33ac9f7eeb0569984a206cd7ae2ba28b` (`declaration-refusal.xml`, 7.99 s).
+The failed invocation's supervisor was also closed through its native fixture
+helper. No unrelated runtime owner was changed.
+
+Both tested commits have source tree `46bc9325cb85419f374c5b73f0c58da60964daa1`;
+their only difference is the test's post-assertion cleanup. The other 19 passes
+remain applicable with unchanged source, dependencies, configuration and
+fixtures. Collection/execution logs are `declaration-*.log`; lock, changed-file
+Ruff, affected Pyright and diff checks pass, including affected test Pyright
+after cleanup correction. #421's `agent-retirement.xml` at `475e97e6` remains
+valid for the nine unchanged bound pending-poll/delivery retirement cases:
+the bound retirement implementation, poll codecs and recovery, shared fixtures
+and dependency lock are unchanged. No scientific or physical rerun is warranted.
