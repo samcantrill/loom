@@ -1423,3 +1423,26 @@ is resolved, with no remaining required correction. The reviewer verified the
 actual reordered proof, both new daemon assertions, all 36 mapped passes and
 source/test equality to the tested candidate. No additional tests ran. Only this
 review receipt follows; PR #424 owns verified merge and synchronization facts.
+
+
+## Current offline capture authority
+
+Status: implementation in progress on `fix/current-offline-evidence-authority`,
+base `7ecee51a57bab3366807a033833d0494e033dfcd` (Slurm PR #424). The bounded change
+removes the local-only lifecycle reader in `collect_offline_evidence_manifest`:
+all current captures require the explicit or retained current authority snapshot.
+Unavailable authority stays incomplete, including when `.loom` is absent; local
+run/stage status files cannot supply lifecycle facts. Current configuration,
+provenance and artifact capture, revision/timing labels, the current wire codec,
+and explicitly historical-only non-executable imports remain supported.
+
+Affected coverage: offline capture/codec contracts, current authoritative timing,
+offline import adapter/authority/API refusal and successful historical inspection,
+and the managed preparation consumer that verifies read-only evidence capture.
+Add a complete native terminal capture/import check if the existing consumer does
+not establish that path. Refusal covers absent and empty authority roots with
+stale local success projections; original bytes/mtimes remain unchanged and the
+import target has no admitted run. Select exact files/nodes after collection;
+no full pipeline, fleet, physical or distributed matrix is warranted. Expand for
+an actually reached changed consumer or a review finding. Query aliases, lineage,
+workspace and result census rows remain open.

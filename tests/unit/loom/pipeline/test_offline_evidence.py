@@ -59,7 +59,7 @@ def test_offline_evidence_manifest_marks_incomplete_local_state(
 
     assert not manifest.complete
     assert {diagnostic.code for diagnostic in manifest.diagnostics} >= {
-        "offline_evidence.run_status_missing",
+        "offline_evidence.authority_unavailable",
         "offline_evidence.plan_missing",
         "offline_evidence.runtime_missing",
     }
@@ -83,67 +83,150 @@ def test_explicit_export_is_revision_labelled_immutable_history(tmp_path: Path) 
     authority = SQLitePerRunAuthorityStore()
     local = LocalRunStore(tmp_path / "runs")
     run_uri = path_to_run_uri(tmp_path / "runs" / "export")
-    store = create_authority_backed_serial_run_store(local.root, authority_store=authority)
+    store = create_authority_backed_serial_run_store(
+        local.root, authority_store=authority
+    )
     store.create_run(run_uri)
-    authority.transition_run(run_uri, from_status=RunStatus.CREATED, to_status=RunStatus.RUNNING)
+    authority.transition_run(
+        run_uri, from_status=RunStatus.CREATED, to_status=RunStatus.RUNNING
+    )
     revision = authority.snapshot(run_uri).revision
     manifest = write_offline_evidence_manifest(
-        local, run_uri, authority_store=authority, generated_at="2026-10-01T00:00:00Z",
+        local,
+        run_uri,
+        authority_store=authority,
+        generated_at="2026-10-01T00:00:00Z",
     )
-    path = local.local_generated_artifact_path(run_uri, "offline-evidence/manifest.json")
+    path = local.local_generated_artifact_path(
+        run_uri, "offline-evidence/manifest.json"
+    )
     before = (path.read_bytes(), path.stat().st_mtime_ns)
     assert manifest.run_status is not None
     assert manifest.run_status["status"] == "RUNNING"
     assert manifest.state_source["authoritative"] is False
     assert manifest.state_source["details"] == {
-        "historical": True, "observed_at": "2026-10-01T00:00:00Z",
+        "historical": True,
+        "observed_at": "2026-10-01T00:00:00Z",
         "authority_revision": revision.to_dict(),
         "run_timing": {"started_at_known": True},
     }
-    authority.transition_run(run_uri, from_status=RunStatus.RUNNING, to_status=RunStatus.SUCCEEDED)
+    authority.transition_run(
+        run_uri, from_status=RunStatus.RUNNING, to_status=RunStatus.SUCCEEDED
+    )
     assert (path.read_bytes(), path.stat().st_mtime_ns) == before
     assert read_offline_evidence_manifest(path) == manifest
     assert not list(local.local_run_dir(run_uri).rglob("status.json"))
 
 
-def test_export_records_unavailable_authority_without_stale_projection(tmp_path: Path) -> None:
+@pytest.mark.parametrize("empty_authority_root", [False, True])
+def test_export_records_unavailable_authority_without_stale_projection(
+    tmp_path: Path,
+    empty_authority_root: bool,
+) -> None:
     from loom.pipeline.offline_evidence import collect_offline_evidence_manifest
-    from loom.pipeline.status import RunStatus, RunStatusRecord
+    from loom.pipeline.status import (
+        RunStatus,
+        RunStatusRecord,
+        StageStatus,
+        StageStatusRecord,
+    )
+    from loom.authority._repository import (
+        AuthorityRepositoryError,
+        initialize_authority_repository,
+    )
+    from loom.runs import import_offline_evidence, RunExchangeOperationStatus
 
     store = LocalRunStore(tmp_path / "runs")
     run_uri = path_to_run_uri(tmp_path / "runs" / "unavailable")
     store.create_run(run_uri)
-    store.write_run_status(run_uri, RunStatusRecord(
-        run_uri=run_uri, status=RunStatus.SUCCEEDED,
-        created_at="2020-01-01T00:00:00Z", updated_at="2020-01-01T00:00:00Z",
-    ))
+    store.write_run_status(
+        run_uri,
+        RunStatusRecord(
+            run_uri=run_uri,
+            status=RunStatus.SUCCEEDED,
+            created_at="2020-01-01T00:00:00Z",
+            updated_at="2020-01-01T00:00:00Z",
+        ),
+    )
     root = store.local_run_dir(run_uri)
-    (root / ".loom").mkdir()
-    before = {str(path): (path.read_bytes(), path.stat().st_mtime_ns) for path in root.rglob("*") if path.is_file()}
+    if empty_authority_root:
+        (root / ".loom").mkdir()
+    store.write_stage_status(
+        run_uri,
+        "build",
+        StageStatusRecord(
+            run_uri=run_uri,
+            stage_name="build",
+            status=StageStatus.SUCCEEDED,
+            attempt=1,
+            updated_at="2020-01-01T00:00:00Z",
+        ),
+    )
+    before = {
+        str(path): (path.read_bytes(), path.stat().st_mtime_ns)
+        for path in root.rglob("*")
+        if path.is_file()
+    }
     manifest = collect_offline_evidence_manifest(store, run_uri)
     assert manifest.run_status is None
+    assert [stage.stage_name for stage in manifest.stages] == ["build"]
+    assert manifest.stages[0].status is None
     assert not manifest.complete
-    assert "offline_evidence.authority_unavailable" in {item.code for item in manifest.diagnostics}
-    assert {str(path): (path.read_bytes(), path.stat().st_mtime_ns) for path in root.rglob("*") if path.is_file()} == before
+    assert "offline_evidence.authority_unavailable" in {
+        item.code for item in manifest.diagnostics
+    }
+    assert {
+        str(path): (path.read_bytes(), path.stat().st_mtime_ns)
+        for path in root.rglob("*")
+        if path.is_file()
+    } == before
+    repository = initialize_authority_repository(
+        tmp_path / "authority",
+        service_generation="generation-1",
+    )
+    result = import_offline_evidence(repository, manifest)
+    assert result.status is RunExchangeOperationStatus.FAILED
+    assert result.target_run_uri is None
+    assert {item.code for item in result.diagnostics} >= {
+        "offline_import.incomplete_manifest",
+        "offline_import.run_status_missing",
+        "offline_import.stage_status_missing",
+    }
+    with pytest.raises(AuthorityRepositoryError, match="unknown run"):
+        repository.open_run(run_uri)
 
 
-def test_export_resolves_retained_composition_and_rejects_corruption(tmp_path: Path) -> None:
+def test_export_resolves_retained_composition_and_rejects_corruption(
+    tmp_path: Path,
+) -> None:
     import json
     from loom.pipeline.offline_evidence import collect_offline_evidence_manifest
 
     store = LocalRunStore(tmp_path / "runs")
     uri = path_to_run_uri(tmp_path / "runs" / "referenced")
     store.create_run(uri)
-    manifest: dict[str, PlainData] = {"metadata": {"final_value_authorship": [{"source_path": "gone.yaml", "path": ["input"]}]}}
+    manifest: dict[str, PlainData] = {
+        "metadata": {
+            "final_value_authorship": [{"source_path": "gone.yaml", "path": ["input"]}]
+        }
+    }
     store.write_composition_manifest(uri, manifest)
-    store.write_run_user_metadata(uri, {"config_provenance": {"metadata": manifest["metadata"]}})
+    store.write_run_user_metadata(
+        uri, {"config_provenance": {"metadata": manifest["metadata"]}}
+    )
     exported = collect_offline_evidence_manifest(store, uri)
-    detached = OfflineEvidenceManifest.from_dict(json.loads(json.dumps(exported.to_dict())))
+    detached = OfflineEvidenceManifest.from_dict(
+        json.loads(json.dumps(exported.to_dict()))
+    )
     target = store.local_run_dir(uri) / "config/composition_manifest.json"
     target.unlink()
     assert detached.config["composition_manifest"] == manifest
     broken = collect_offline_evidence_manifest(store, uri)
     assert not broken.complete
-    diagnostic = next(d for d in broken.diagnostics if d.code == "offline_evidence.composition_manifest_unreadable")
+    diagnostic = next(
+        d
+        for d in broken.diagnostics
+        if d.code == "offline_evidence.composition_manifest_unreadable"
+    )
     assert diagnostic.severity.value == "error"
     assert broken.config["composition_manifest"] is None

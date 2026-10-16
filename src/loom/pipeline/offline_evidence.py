@@ -499,63 +499,84 @@ def collect_offline_evidence_manifest(
     generated_at: str | None = None,
     authority_store: PerRunAuthorityStore | None = None,
 ) -> OfflineEvidenceManifest:
-    """Capture historical evidence, preferring a single authority snapshot.
+    """Capture historical evidence from a single current authority snapshot.
 
     Explicit authority or retained native state supplies lifecycle facts and a
-    revision/time label. Unavailable authority yields incomplete evidence;
-    legacy local-only bundles retain their historical projection reader.
+    revision/time label. Unavailable authority yields incomplete evidence. Local
+    status projections cannot supply lifecycle facts or make an export complete.
     """
 
     diagnostics: list[OfflineEvidenceDiagnostic] = []
     generated = generated_at or utc_timestamp()
     snapshot = None
     source = offline_evidence_source()
-    authority_selected = authority_store is not None or (store.local_run_dir(run_uri) / ".loom").exists()
-    if authority_selected:
-        try:
-            from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
-            from loom.pipeline.stores import AuthoritativeReadOptions, read_authoritative_run
+    try:
+        from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+        from loom.pipeline.stores import (
+            AuthoritativeReadOptions,
+            read_authoritative_run,
+        )
 
-            authority = authority_store or SQLitePerRunAuthorityStore(run_uri, read_only=True)
-            snapshot = read_authoritative_run(
-                authority, run_uri,
-                options=AuthoritativeReadOptions(include_materialized_refs=False, strict=True),
-            )
-            source["details"] = {
-                "historical": True, "observed_at": generated,
-                "authority_revision": snapshot.revision.to_dict(),
-                "run_timing": {"started_at_known": snapshot.started_at_known},
-            }
-        except Exception as exc:
-            diagnostics.append(_error("offline_evidence.authority_unavailable", str(exc)))
-            source["details"] = {"historical": True, "observed_at": generated, "unavailable_reason": str(exc)}
+        authority = authority_store or SQLitePerRunAuthorityStore(
+            run_uri, read_only=True
+        )
+        snapshot = read_authoritative_run(
+            authority,
+            run_uri,
+            options=AuthoritativeReadOptions(
+                include_materialized_refs=False, strict=True
+            ),
+        )
+        source["details"] = {
+            "historical": True,
+            "observed_at": generated,
+            "authority_revision": snapshot.revision.to_dict(),
+            "run_timing": {"started_at_known": snapshot.started_at_known},
+        }
+    except Exception as exc:
+        diagnostics.append(_error("offline_evidence.authority_unavailable", str(exc)))
+        source["details"] = {
+            "historical": True,
+            "observed_at": generated,
+            "unavailable_reason": str(exc),
+        }
     if snapshot is not None:
         observed = snapshot.revision.created_at or generated
         run_status = RunStatusRecord(
-            run_uri=run_uri, status=snapshot.status, created_at=observed, updated_at=observed,
-            started_at=snapshot.started_at, finished_at=snapshot.finished_at,
+            run_uri=run_uri,
+            status=snapshot.status,
+            created_at=observed,
+            updated_at=observed,
+            started_at=snapshot.started_at,
+            finished_at=snapshot.finished_at,
         ).to_dict()
     else:
-        run_status = None if authority_selected else _read_run_status(store, run_uri, diagnostics)
+        run_status = None
     plan_payload = _read_plan(store, run_uri, diagnostics)
     runtime = _read_runtime(store, run_uri, diagnostics)
     plan = _execution_plan(plan_payload, diagnostics)
     stage_names = _stage_names(store, run_uri, plan, diagnostics)
-    authoritative_stages = {} if snapshot is None else {stage.stage_name: stage for stage in snapshot.stages}
+    authoritative_stages = (
+        {}
+        if snapshot is None
+        else {stage.stage_name: stage for stage in snapshot.stages}
+    )
     stage_names = tuple(sorted(set(stage_names) | set(authoritative_stages)))
     statuses = {}
     for name in stage_names:
         stage = authoritative_stages.get(name)
         if stage is not None:
             statuses[name] = StageStatusRecord(
-                run_uri=run_uri, stage_name=name, status=stage.status,
+                run_uri=run_uri,
+                stage_name=name,
+                status=stage.status,
                 attempt=stage.attempts[-1].attempt if stage.attempts else 1,
                 updated_at=stage.revision.created_at or generated,
                 message=None if stage.reason is None else stage.reason.message,
                 metadata={} if stage.reason is None else stage.reason.detail,
             )
         else:
-            statuses[name] = None if authority_selected else _stage_status(store, run_uri, name, diagnostics)
+            statuses[name] = None
     stages = tuple(
         _stage_evidence(
             store,
@@ -645,27 +666,6 @@ def read_offline_evidence_manifest(path: str | Path) -> OfflineEvidenceManifest:
         raise OfflineEvidenceError(
             f"offline evidence manifest is invalid: {path_obj}"
         ) from exc
-
-
-def _read_run_status(
-    store: LocalRunStore,
-    run_uri: str,
-    diagnostics: list[OfflineEvidenceDiagnostic],
-) -> dict[str, PlainData] | None:
-    try:
-        status = store.read_run_status(run_uri)
-    except Exception as exc:
-        diagnostics.append(_error("offline_evidence.run_status_unreadable", str(exc)))
-        return None
-    if status is None:
-        diagnostics.append(
-            _error(
-                "offline_evidence.run_status_missing",
-                "run status is missing from local evidence",
-            )
-        )
-        return None
-    return status.to_dict()
 
 
 def _read_plan(
@@ -771,7 +771,7 @@ def _stage_evidence(
         diagnostics.append(
             _error(
                 "offline_evidence.stage_status_missing",
-                "stage status is missing from local evidence",
+                "stage status is unavailable from current authority",
                 stage=stage_name,
             )
         )
@@ -794,25 +794,6 @@ def _stage_evidence(
         logs=_stage_logs(store, run_uri, stage_name, attempt),
         diagnostics=tuple(diagnostics),
     )
-
-
-def _stage_status(
-    store: LocalRunStore,
-    run_uri: str,
-    stage_name: str,
-    diagnostics: list[OfflineEvidenceDiagnostic],
-) -> StageStatusRecord | None:
-    try:
-        return store.read_stage_status(run_uri, stage_name)
-    except Exception as exc:
-        diagnostics.append(
-            _error(
-                "offline_evidence.stage_status_unreadable",
-                str(exc),
-                stage=stage_name,
-            )
-        )
-        return None
 
 
 def _stage_mapping(
