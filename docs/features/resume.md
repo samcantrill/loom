@@ -33,6 +33,13 @@ producer and downstream branch with superseding commits while an independent
 branch remains reusable. Ordinary authored config changes after an authority
 output commit fail closed rather than overwriting that commit.
 
+Persisted stage fingerprints require the current schema 2 and complete current
+factory fields. Unsupported or malformed fingerprints raise `ResumeStateError`
+before a new plan is persisted; they cannot authorize reuse. No old-format reader
+or converter is available. A changed algorithm or policy within the current
+format still produces `FINGERPRINT_POLICY_CHANGED` and invalidates reuse. Missing
+prior evidence retains its existing distinct no-reuse behavior.
+
 Python planning uses explicit state owners. `stage_state` supplies retained
 stage status, inputs, outputs and fingerprints; `artifact_index` supplies the
 run's output index; `artifact_store` validates payloads. `plans` is required only

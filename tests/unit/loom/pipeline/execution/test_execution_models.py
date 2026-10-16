@@ -5,6 +5,7 @@ import inspect
 import json
 from typing import Any, cast
 import pytest
+from loom.fingerprints import hash_mapping
 from loom.pipeline import PipelineSpec
 from loom.pipeline.execution import (
     ExecutionFailure,
@@ -400,3 +401,13 @@ def test_public_worker_failure_keeps_typed_outcome_without_exception_text() -> N
     assert (
         "private value" in cast(dict[str, Any], result.to_dict()["failure"])["message"]
     )
+
+
+
+def test_worker_request_rejects_retired_fingerprint() -> None:
+    data = cast(Any, _worker_request().to_dict())
+    fingerprint = data["fingerprint"]
+    fingerprint["schema_version"] = fingerprint["payload"]["schema_version"] = 1
+    fingerprint["fingerprint"] = hash_mapping(fingerprint["payload"])
+    with pytest.raises(RunRequestError, match="fingerprint must be StageFingerprintRecord"):
+        StageWorkerRequest.from_dict(data)

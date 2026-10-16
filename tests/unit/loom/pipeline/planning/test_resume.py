@@ -19,7 +19,7 @@ from loom.pipeline.planning import (
     PlanReasonCode,
     ResumeOptions,
     ResumeStateError,
-    StageFingerprintPayload,
+    StageFingerprintRecord,
     build_stage_fingerprint,
 )
 from loom.pipeline.planning.resume import check_stage_resume
@@ -108,67 +108,22 @@ def test_direct_resume_reuses_valid_succeeded_outputs(tmp_path: Path) -> None:
     assert result.check.outputs == {"data": output}
 
 
-def test_direct_resume_flags_legacy_v1_fingerprints_as_policy_changed(
-    tmp_path: Path,
-) -> None:
+def test_direct_resume_flags_changed_policy_in_current_format(tmp_path: Path) -> None:
     run_store, artifact_store, run_uri = _stores(tmp_path)
     stage = _stage()
     current = build_stage_fingerprint(stage, bound_inputs={})
+    prior = StageFingerprintRecord.create(
+        payload=replace(current.payload, policy_version=1),
+        algorithm=current.algorithm,
+        inputs_summary=current.inputs_summary,
+    )
     output = artifact_store.save(
-        {"x": 1},
-        stage_name="build",
-        name="data",
-        artifact_type="json",
-        codec_key="json.v1",
+        {"x": 1}, stage_name="build", name="data", artifact_type="json", codec_key="json.v1"
     )
     run_store.write_stage_status(run_uri, "build", _status(run_uri))
     run_store.write_stage_inputs(run_uri, "build", {}, attempt=1)
     run_store.write_stage_outputs(run_uri, "build", {"data": output}, attempt=1)
-    legacy_fingerprint = {
-        "schema_version": 1,
-        "algorithm": "sha256",
-        "policy_name": "loom.stage.v1",
-        "policy_version": 1,
-        "fingerprint": "",
-        "payload": {
-            "schema_version": 1,
-            "policy_name": "loom.stage.v1",
-            "policy_version": 1,
-            "stage_name": "build",
-            "target_path": "project.Build",
-            "stage_config": {},
-            "declared_inputs": {},
-            "bound_inputs": {},
-            "declared_outputs": {
-                "data": {
-                    "artifact_type": "json",
-                    "codec_key": "json.v1",
-                    "schema_version": None,
-                    "metadata": {},
-                }
-            },
-            "python_version": "3.12.0",
-            "loom_version": "0.1.0",
-            "git": {},
-            "dependencies": {},
-            "extra": {},
-        },
-        "inputs_summary": {
-            "stage_name": "build",
-            "factory_target": "project.Build",
-            "input_names": [],
-            "output_names": ["data"],
-        },
-    }
-    legacy_fingerprint["fingerprint"] = hash_mapping(
-        StageFingerprintPayload.from_dict(legacy_fingerprint["payload"]).to_hash_input()
-    )
-    run_store.write_stage_fingerprint(
-        run_uri,
-        "build",
-        legacy_fingerprint,
-        attempt=1,
-    )
+    run_store.write_stage_fingerprint(run_uri, "build", prior.to_dict(), attempt=1)
     run_store.write_artifact_index(run_uri, {"build.data": output})
 
     result = check_stage_resume(
@@ -182,9 +137,38 @@ def test_direct_resume_flags_legacy_v1_fingerprints_as_policy_changed(
         eligible_to_run=True,
     )
 
+    assert prior.schema_version == current.schema_version == 2
     assert result.base_action == PlanAction.STALE
     assert result.final_action == PlanAction.RUN
     assert result.check.reasons[0].code == PlanReasonCode.FINGERPRINT_POLICY_CHANGED
+
+
+def test_direct_resume_rejects_retired_fingerprint_without_changes(tmp_path: Path) -> None:
+    run_store, artifact_store, run_uri = _stores(tmp_path)
+    stage = _stage()
+    current = build_stage_fingerprint(stage, bound_inputs={})
+    retired = current.to_dict()
+    payload = current.payload.to_dict()
+    payload["schema_version"] = 1
+    retired.update(schema_version=1, payload=payload, fingerprint=hash_mapping(payload))
+    run_store.write_stage_status(run_uri, "build", _status(run_uri))
+    run_store.write_stage_inputs(run_uri, "build", {}, attempt=1)
+    run_store.write_stage_fingerprint(run_uri, "build", retired, attempt=1)
+    before = {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+
+    with pytest.raises(ResumeStateError, match="schema_version must be 2"):
+        check_stage_resume(
+            stage,
+            run_uri=run_uri,
+            stage_state=run_store,
+            artifact_index=run_store,
+            artifact_store=artifact_store,
+            current_fingerprint=current,
+            resume=ResumeOptions(),
+            eligible_to_run=True,
+        )
+
+    assert {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
 
 
 def test_direct_resume_marks_running_as_stale(tmp_path: Path) -> None:

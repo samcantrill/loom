@@ -1205,7 +1205,14 @@ These values must be plain-data compatible.
 
 ### 14.1 Persisted Shape
 
-Recommended `fingerprint.json` shape:
+`StageFingerprintRecord` and its payload require schema 2, with an integer version
+and the exact current field set. Readers reject retired versions, the former
+`target_path` payload spelling, and missing `factory_target`, `factory_init` or
+`fingerprint_fields`; they do not fill in historical defaults. Current empty
+mappings remain valid and are written explicitly. This admission change leaves
+current writer bytes and hash inputs unchanged.
+
+Current `fingerprint.json` shape:
 
 ```json
 {
@@ -1913,36 +1920,23 @@ The mapping is serialized deterministically before hashing.
 ### 24.4 Stage Fingerprint Payload
 
 ```python
-payload = {
-    "kind": "loom.stage_fingerprint_input",
-    "schema_version": 1,
-    "policy": "loom.stage.v1",
-    "stage": {
-        "name": "evaluate",
-        "target": "project.stages.Evaluate",
-    },
-    "config": {
-        "metrics": ["accuracy", "loss"],
-    },
-    "inputs": {
-        "predictions": {
-            "artifact_id": "predict/predictions",
-            "fingerprint": "sha256:111...",
-            "checksum": "sha256:222...",
-        }
-    },
-    "outputs": {
-        "metrics": {
-            "artifact_type": "metrics",
-            "codec_key": "json.v1",
-        }
-    },
-    "runtime": {},
-    "extra": {},
-}
+from loom.pipeline import OutputSpec, StageFactorySpec, StageSpec
+from loom.pipeline.planning import build_stage_fingerprint
 
-fingerprint = hash_mapping(payload)
+stage = StageSpec(
+    name="evaluate",
+    factory=StageFactorySpec(target_path="project.stages.Evaluate", init={}),
+    stage_config={"metrics": ["accuracy", "loss"]},
+    outputs={"metrics": OutputSpec(artifact_type="metrics", codec_key="json.v1")},
+)
+record = build_stage_fingerprint(stage, bound_inputs={})
+payload = record.payload.to_dict()
+assert record.schema_version == payload["schema_version"] == 2
 ```
+
+The factory's `target_path` is its current Python configuration API. Its persisted
+fingerprint field is `factory_target`; the payload does not accept the former
+`target_path` alias.
 
 ### 24.5 Validating Artifact Checksum
 

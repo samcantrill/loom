@@ -374,8 +374,7 @@ def _fingerprint_policy_reason(
     current: StageFingerprintRecord,
 ) -> PlanReason | None:
     if (
-        prior.schema_version != current.schema_version
-        or prior.algorithm != current.algorithm
+        prior.algorithm != current.algorithm
         or prior.policy_name != current.policy_name
         or prior.policy_version != current.policy_version
     ):

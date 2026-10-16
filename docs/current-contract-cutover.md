@@ -733,3 +733,35 @@ qualified findings or required corrections. The reviewer verified the actual
 diff, patch hash, receipts and scope. Only this review receipt changes afterward.
 Downstream paired pins and physical qualification remain open at their existing
 inventory owners.
+
+
+## Current stage fingerprint admission
+
+Base `6d6496f1d15c42de29a25fb7f8443ab8f522383f` (execution service removal,
+PR #416), branch `refactor/current-stage-fingerprints`. The fingerprint payload
+and record now accept only their existing schema 2, using the shared exact-version
+validator. Payload decoding requires the current writer's complete field set;
+`target_path` projection and synthesized empty factory fields are removed. Current
+empty mappings, policy revision, hash inputs, digest verification and immutable
+payload behavior remain unchanged. There is no new format or migration path.
+
+The reached owners are deterministic fingerprint production, persisted plan and
+resume decoding, worker requests, and resident/Slurm assignment admission. Retired
+persisted evidence fails with the existing `ResumeStateError` before plan writes;
+retired assignment fingerprints fail before durable retention. Current policy
+changes still invalidate reuse, covered with a current-format policy fixture
+instead of decoding schema 1. The redundant cross-schema comparison disappears
+because admitted record and payload versions are each exactly 2.
+
+Validation selects planning model/fingerprint/planner/resume policies, persisted
+plans and materialization read models, worker model/contracts, resident request
+round-trip and refusal, plus one current managed local and one mixed local/Slurm
+execution. New assertions cover retired versions, alias/missing factory fields,
+byte-unchanged refusal at persistence boundaries and current policy invalidation.
+Collection, changed-file Ruff and full Pyright precede selected locked Python
+3.12 baseline/config execution. Expand only for a reached failure or newly exposed
+consumer. Writer bytes, dependencies, scientific code, source fixtures and wire
+families are unchanged; full scientific/scaling/physical qualification stays at
+the paired adoption gate. Previous execution/recovery results remain applicable
+to unchanged current fingerprints; focused fresh checks exercise the tightened
+admission boundary. Results and independent review remain pending.
