@@ -564,5 +564,10 @@ are unchanged; only that new test and these evidence notes followed them.
 Full Pyright passed before the added test; focused Pyright of that final file
 also passed, both with zero errors/warnings. Affected Ruff and diff checks pass.
 No remaining selected coverage gaps. No physical or rphys dependency/image
-qualification is claimed. Independent actual-diff review and delivery remain
-pending.
+qualification is claimed. Independent actual-diff review passed at
+`0d684eda15a84a0122dc20603991631254f04872`, with no findings and merge
+eligibility confirmed. Only this review receipt follows that reviewed head;
+runtime source, tests, fixtures, configuration and dependencies are unchanged.
+[Loom #413](https://github.com/samcantrill/loom/pull/413) owns remote merge and
+matching-tree synchronization metadata. The remaining cutover inventory and
+paired downstream adoption remain open.
