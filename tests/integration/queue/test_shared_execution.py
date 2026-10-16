@@ -48,12 +48,17 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, s
     control = tmp_path / "control-payloads"
     control.mkdir()
     (control / "challenge").write_bytes(b"control-challenge")
+    reports = tmp_path / "published-reports"
+    reports.mkdir()
+    (reports / "challenge").write_bytes(b"report-challenge")
     def roots(path):
         return {"data": {"host_path": str(path), "container_path": "/loom/data", "access": "ro",
                          "challenge": {"path": "challenge", "sha256": challenge}},
                 "control": {"host_path": str(control if path == first else Path("/proc/self/root") / control.relative_to("/")), "container_path": None, "access": "rw",
+                    "challenge": {"path": "challenge", "sha256": hashlib.sha256(b"control-challenge").hexdigest()}},
+                "reports": {"host_path": str(reports if path == first else Path("/proc/self/root") / reports.relative_to("/")), "container_path": None, "access": "rw",
                     "publication": {"max_members": 1024, "max_payload_bytes": 16 * 1024 * 1024, "max_manifest_bytes": 1024 * 1024},
-                    "challenge": {"path": "challenge", "sha256": hashlib.sha256(b"control-challenge").hexdigest()}}}
+                    "challenge": {"path": "challenge", "sha256": hashlib.sha256(b"report-challenge").hexdigest()}}}
     location = {"kind": "loom.shared-location", "schema_version": 1, "root_id": "data", "path": "selected.bin"}
     agent_path = tmp_path / "agent.json"
     authored_agent = json.loads(agent_path.read_text())
@@ -295,7 +300,7 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, s
             assert [item.logical_name for item in request.inputs] == ["loom_project_report"]
             report_input = request.inputs[0]
             report_binding = publication_binding(report_input.metadata)
-            assert report_binding is not None and report_binding["root_id"] == "control"
+            assert report_binding is not None and report_binding["root_id"] == "reports"
             assert "sha256:" + report_input.digest == child_result.outputs["report"].checksum
             assert not cast(Any, request.fingerprint)["payload"]["declared_inputs"]
             with sqlite3.connect(service.daemon.control_database) as conn:
