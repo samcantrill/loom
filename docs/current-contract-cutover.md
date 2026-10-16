@@ -868,3 +868,64 @@ control/event and runtime-service receipts remain evidence for unchanged owners;
 this delivery does not claim full-suite or physical fleet/Slurm qualification.
 Paired rphys dependency/image adoption and scientific writer/scaling acceptance
 remain open at their existing downstream owners.
+
+### Preparation validation evidence
+
+| Scope | Tested revision and receipt prefix | Result |
+| --- | --- | --- |
+| Initial baseline selection | `1059a6513b0d669bf577cc1ec7beb82c3c6aeab3`; `preparation-core` | 190 passed, 6 failed; retained as diagnostic evidence |
+| Complete selected config-extra paths | Same revision; `preparation-config` | 102 passed, 6 failed in 1168.67 s |
+| Corrected report/action/recovery cases | `ac6082f9672b890a38fc5c903da423fe96c09072`; `preparation-affected` | 9 passed in 0.97 s |
+| First shared-execution assertion recheck | Same revision; `preparation-affected-config` | 6 failed; exposed the fixture's transport/publication-root conflation |
+| Shared execution with separate report publication | `5980ed5d56ffe250f39e3efb4bfa0962b2f177b4`; `preparation-shared` | 6 passed, 2 readiness-probe timeouts in 129.22 s |
+| Exact readiness-failed cases, unchanged tree/settings | Same revision; `preparation-shared-readiness-recheck` | 2 passed in 28.28 s |
+
+Each receipt prefix has a `.log` and JUnit `.xml` under the recorded build
+directory. Final collection contains **196 baseline and 108 config cases**.
+`preparation-coverage.json` reconciles their node IDs against the latest relevant
+receipts: **304 distinct required cases pass, with zero gaps, errors or skips**.
+Removed historical-success variants are excluded from the final population,
+never counted as passes. All failed receipts remain available.
+
+The baseline corrections supply the current schema to the companion-write fault
+fixture and action-child assertion. Shared-container completion still verifies
+original launch identity, resource-control evidence, publication and replay when
+the source input disappears. Its retired schema-less success variant is removed.
+Journal recovery keeps current unresolved-reference restart/replay assertions;
+the former automatic-column-repair fixture now requires refusal with byte-for-byte
+unchanged retained files. No runtime fallback was restored.
+
+Shared execution now checks the original `loom_project_report` as its sole
+transport input, its checksum and shared publication root; the application still
+has no declared artifact inputs and the byte-relay trap remains. Report publication
+has a separate root from assignment transport. The original assertion that
+transport-control roots do not enter action fingerprints is preserved, together
+with cancellation, unresolved delivery, restart and completed-result replay.
+The final two failures occurred during five-second package-import readiness
+probes before those assertions, while host load was elevated. Their exact rerun
+passed without changing the timeout, source, lock, configuration or fixtures.
+
+Evidence reuse is source- and consumer-based. All three tested revisions have
+the identical `src` tree `d3dedc35d0776f354df6b378e1551f77f65bf9cc` and unchanged
+dependency, lock and runtime configuration files. The 100 config cases outside
+`test_shared_execution.py` have identical fixtures and setup to the initial run;
+all eight shared cases have fresh final-fixture coverage. Of the baseline's
+initial passes, 189 retain final node IDs. The shared-publication helper only
+loses its unused retired-launch argument/branch; all surviving consumers used
+the unchanged current branch. Fresh affected cases cover its current container
+and publication behavior. The final union also includes seven newly passing
+current cases; the two publication replay rechecks overlap existing passes.
+
+Initial and final collections pass. Complete config-extra Pyright and changed-file
+Ruff pass (`preparation-final-types.log`, `preparation-final-ruff.log`); the final
+one-file fixture correction additionally passes its targeted type/Ruff checks
+(`preparation-shared-types.log`, `preparation-shared-ruff.log`). The initial full
+type check also found an existing shared-artifact test concatenating a plain-data
+digest without narrowing; its explicit string assertion preserves the checksum
+oracle and its selected case passes. Seven documentation Python examples parse,
+six local links resolve, and `git diff --check` passes.
+
+The source/test/feature-doc patch from the base to `5980ed5d` has SHA-256
+`be45483e4c46f2cb671538840b66834e4e09a718de6b700f1ff6f5f54f27b0de`.
+Only execution-note evidence changes after these receipts. Independent final-diff
+review and remote merge remain the delivery gates.
