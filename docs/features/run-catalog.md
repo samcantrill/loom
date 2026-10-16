@@ -503,6 +503,15 @@ record historical-only resume readiness blockers
 
 Import should not execute project code.
 
+Completed-run metadata must contain every member emitted by the current bundle
+writer, including explicit empty evidence lists and the nullable
+`lineage_evidence` member. Missing members are not interpreted as empty or
+unknown evidence. Unsupported or malformed metadata, including invalid
+reliability-policy facts, refuses before creating a run or refreshing the target
+catalog; re-export the source run with the current writer. The current writer's
+format is unchanged. Source policy facts remain historical bundle evidence and
+are not installed as reliability policy for the target run.
+
 For Stage 15 summaries, import preserves the manifest extension in import
 provenance and keeps imported artifact refs metadata-only unless payloads were
 explicitly included and copied. Unsupported remote materialization is recorded as

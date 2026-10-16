@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import tarfile
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -18,6 +19,7 @@ from loom.artifacts import (
     ExternalArtifactDeclaration,
 )
 from loom.io.uris import path_to_file_uri
+from loom.pipeline.reliability import ReliabilityPolicy, RetryPolicy
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import (
     ArtifactFactRecord,
@@ -26,6 +28,8 @@ from loom.pipeline.stores import (
     LocalRunStore,
     MaterializedRef,
     MaterializedRefKind,
+    ReliabilityPolicyFact,
+    ReliabilityPolicyScope,
     StageLifecycleSnapshot,
     run_uri_to_path,
 )
@@ -108,6 +112,97 @@ def test_import_rejects_target_identity_collision_without_overwrite(
     assert first.target_run_uri is not None
     assert run_uri_to_path(first.target_run_uri).exists()
     assert LocalRunStore(target_collection).read_run_status(first.target_run_uri) is not None
+
+
+@pytest.mark.parametrize(
+    "missing_member",
+    [
+        "lineage_evidence",
+        "stages",
+        "submitted_operations",
+        "artifact_facts",
+        "cleanup_candidates",
+        "materialized_refs",
+        "reliability_policy_facts",
+        "warnings",
+    ],
+)
+def test_import_refuses_omitted_evidence_before_mutation(
+    tmp_path: Path, missing_member: str
+) -> None:
+    exported = export_completed_run_bundle(_metadata(), tmp_path / "current.tar")
+    assert exported.manifest is not None
+    manifest = exported.manifest.to_dict()
+    completed = cast(dict[str, Any], manifest["extensions"])["completed_run"]
+    del completed[missing_member]
+    bundle = tmp_path / "incomplete.tar"
+    _write_manifest_only_bundle(bundle, manifest)
+    before = bundle.read_bytes()
+    target = tmp_path / "target-runs"
+    target.mkdir()
+    sentinel = target / "retained.txt"
+    sentinel.write_bytes(b"retained collection evidence")
+
+    result = import_run_bundle(bundle, target)
+
+    assert result.status is RunExchangeOperationStatus.FAILED
+    assert result.target_run_uri is None
+    assert [item.code for item in result.diagnostics] == [
+        "run_bundle_import.completed_run_invalid"
+    ]
+    assert list(target.rglob("*")) == [sentinel]
+    assert sentinel.read_bytes() == b"retained collection evidence"
+    assert bundle.read_bytes() == before
+
+
+def test_current_bundle_decodes_reliability_evidence_and_refuses_corruption(
+    tmp_path: Path,
+) -> None:
+    from loom.runs.imports import _completed_metadata_from_dict
+
+    metadata = replace(
+        _metadata(),
+        reliability_policy_facts=(
+            ReliabilityPolicyFact(
+                run_uri="file:///runs/source/run-1",
+                scope=ReliabilityPolicyScope.RUN,
+                recorded_at="2020-01-01T00:00:00Z",
+                policy=ReliabilityPolicy(retry=RetryPolicy(enabled=True, max_attempts=2)),
+            ),
+        ),
+    )
+    current_bundle = tmp_path / "current.tar"
+    exported = export_completed_run_bundle(metadata, current_bundle)
+    assert exported.manifest is not None
+    record = build_portable_run_import_record(current_bundle)
+    decoded = _completed_metadata_from_dict(
+        thaw_plain_data(record.manifest.extensions["completed_run"])
+    )
+    assert decoded.to_dict() == metadata.to_dict()
+    current_import = import_run_bundle(current_bundle, tmp_path / "current")
+    assert current_import.status is RunExchangeOperationStatus.SUCCEEDED
+    assert current_import.target_run_uri is not None
+    assert current_import.readiness.mode is RunImportResumeMode.HISTORICAL_ONLY
+    assert LocalRunStore(tmp_path / "current").list_reliability_policy_facts(
+        current_import.target_run_uri
+    ) == ()
+
+    manifest = exported.manifest.to_dict()
+    completed = cast(dict[str, Any], manifest["extensions"])["completed_run"]
+    completed["reliability_policy_facts"][0]["policy"]["retry"]["max_attempts"] = 0
+    corrupt_bundle = tmp_path / "corrupt.tar"
+    _write_manifest_only_bundle(corrupt_bundle, manifest)
+    before = corrupt_bundle.read_bytes()
+    target = tmp_path / "refused"
+
+    result = import_run_bundle(corrupt_bundle, target)
+
+    assert result.status is RunExchangeOperationStatus.FAILED
+    assert [item.code for item in result.diagnostics] == [
+        "run_bundle_import.completed_run_invalid"
+    ]
+    assert not target.exists()
+    assert corrupt_bundle.read_bytes() == before
 
 
 def test_import_rejects_checksum_mismatch_before_creating_target(
@@ -255,6 +350,16 @@ def _external_artifact_ref() -> ArtifactRef:
             ),
         },
     )
+
+
+def _write_manifest_only_bundle(
+    bundle_path: Path, manifest_payload: Mapping[str, object]
+) -> None:
+    manifest_bytes = stable_json_bytes(manifest_payload)
+    with tarfile.open(bundle_path, "w") as archive:
+        info = tarfile.TarInfo(RUN_BUNDLE_MANIFEST_MEMBER)
+        info.size = len(manifest_bytes)
+        archive.addfile(info, io.BytesIO(manifest_bytes))
 
 
 def _write_corrupt_payload_bundle(

@@ -529,50 +529,74 @@ def _completed_metadata_from_dict(data: object) -> "CompletedRunBundleMetadata":
         CompletedRunBundleMetadata,
         MaterializedRef,
         ReadModelWarning,
+        ReliabilityPolicyFact,
         StageLifecycleSnapshot,
     )
     from loom.pipeline.submitted import SubmittedOperationRecord
 
     if not isinstance(data, Mapping):
         raise CatalogValidationError("completed_run must be a mapping")
+    if set(data) != {
+        "lineage_evidence",
+        "run_uri",
+        "status",
+        "schema_version",
+        "revision",
+        "stages",
+        "submitted_operations",
+        "artifact_facts",
+        "cleanup_candidates",
+        "materialized_refs",
+        "reliability_policy_facts",
+        "warnings",
+    }:
+        raise CatalogValidationError(
+            "completed_run requires the current evidence members; re-export the source run"
+        )
     return CompletedRunBundleMetadata(
-        lineage_evidence=_historical_lineage(data.get("lineage_evidence")),
+        lineage_evidence=_historical_lineage(data["lineage_evidence"]),
         run_uri=_required_str(data, "run_uri"),
         status=RunStatus(_required_str(data, "status")),
         schema_version=_required_int(data, "schema_version"),
         revision=BackendRevision.from_dict(data["revision"]),
         stages=tuple(
             StageLifecycleSnapshot.from_dict(item)
-            for item in _sequence(data.get("stages", ()), "stages")
+            for item in _sequence(data["stages"], "stages")
         ),
         submitted_operations=tuple(
             SubmittedOperationRecord.from_dict(item)
             for item in _sequence(
-                data.get("submitted_operations", ()),
+                data["submitted_operations"],
                 "submitted_operations",
             )
         ),
         artifact_facts=tuple(
             ArtifactFactRecord.from_dict(item)
-            for item in _sequence(data.get("artifact_facts", ()), "artifact_facts")
+            for item in _sequence(data["artifact_facts"], "artifact_facts")
         ),
         cleanup_candidates=tuple(
             CleanupCandidate.from_dict(item)
             for item in _sequence(
-                data.get("cleanup_candidates", ()),
+                data["cleanup_candidates"],
                 "cleanup_candidates",
             )
         ),
         materialized_refs=tuple(
             MaterializedRef.from_dict(item)
             for item in _sequence(
-                data.get("materialized_refs", ()),
+                data["materialized_refs"],
                 "materialized_refs",
+            )
+        ),
+        reliability_policy_facts=tuple(
+            ReliabilityPolicyFact.from_dict(item)
+            for item in _sequence(
+                data["reliability_policy_facts"], "reliability_policy_facts"
             )
         ),
         warnings=tuple(
             ReadModelWarning.from_dict(item)
-            for item in _sequence(data.get("warnings", ()), "warnings")
+            for item in _sequence(data["warnings"], "warnings")
         ),
     )
 

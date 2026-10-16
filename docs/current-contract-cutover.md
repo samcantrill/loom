@@ -1772,3 +1772,49 @@ state and supplied raw reconciliation. No additional execution or correction was
 needed. This addition is receipt-only; the existing PR publishes verified merge
 and matching-tree synchronization. Other inventory and downstream qualification
 owners remain open.
+
+## Current completed-bundle evidence
+
+Base: merged #428, `456b4fef5d3738aa9756fa552c349ba367a7e854`;
+branch `fix/current-completed-bundle-evidence` in the existing isolated cutover
+worktree. The actual `CompletedRunBundleMetadata.to_dict` writer emits all twelve
+members, including empty evidence lists and explicit nullable lineage. Its import
+reader previously defaulted omitted members and ignored the top-level reliability
+facts. Require that exact current member set and decode reliability facts through
+their existing model. No writer bytes, durable version, backend schema, policy
+semantics or execution authority changes. Backend schema numbers remain distinct
+from the bundle envelope version; the current explicit metadata constructor and
+its schema-1 fixture remain supported.
+
+Current empty evidence and explicit unknown lineage stay valid. Historical-only
+imports keep their existing source lineage and artifact projection; source
+reliability facts are validated bundle evidence, never installed as target policy
+or execution authority. No new persisted copy or migration path is introduced.
+Missing-member fixtures derive from an actual current export and reproduce the
+old omission/default allowance. Refusal precedes target run/catalog mutation and
+preserves the supplied bundle. A nonempty current reliability fact round-trips
+through export/admission; corruption refuses at the public importer. The real
+SQLite export/import fixture now carries stage policy facts and proves retained
+source history, copied payload bytes, target catalogue refresh and absent target
+execution authority. The explicit-null lineage case is labelled unknown rather
+than old and continues to succeed without stitching a fabricated lineage graph.
+
+Select exact bundle import/export unit, protocol and integration files; the two
+completed metadata producer unit nodes and SQLite producer integration node;
+the CLI bundle-exchange integration/e2e nodes and failed-import result node.
+These cover current metadata-only and payload bundles, checksum/path/collision
+refusal, original-source history and both CLI result paths. Collect before
+execution in the isolated locked baseline environment. Run changed-file Ruff,
+changed-source Pyright, lock and diff checks. Record raw commands and receipts
+under `build/current-contract-cutover/completed-bundle-*` against stable committed
+source. Expand only for an affected consumer or material failure. No new native
+training, Fleet/Slurm, report-size/scaling, scientific or package/image run is
+needed: execution, dependencies, configuration, scientific behavior and their
+fixtures are unchanged. Earlier owner evidence remains scoped to those unchanged
+contracts; downstream installed adoption remains open. Independent final-diff
+review, PR merge and matching-tree synchronization close this delivery only.
+
+Cheap admission passes: all 35 exact baseline cases collect, changed-file Ruff
+and diff checks pass, changed-source Pyright reports zero errors/warnings, and
+`uv lock --check` passes. No optional-extra or physical environment is needed
+by this selected population. Final execution follows on committed source.
