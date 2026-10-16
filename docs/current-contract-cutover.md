@@ -1691,3 +1691,18 @@ Final changed-file Ruff and diff checks pass; changed-source Pyright and locked
 dependency checks pass. No dependency, configuration, production code or fixture
 changes follow the final successful runs; only this receipt and removal of stale
 public documentation references follow them. Independent PR review is next.
+
+Independent final-diff review of PR #427 at
+`809baa4302cb36b2bd62b72adc1e5b717f5ab98b` passed with no product blocker,
+localized correction or workflow issue. The read-only Loom reviewer
+(`current_run_query_evidence_review`, gpt-6-astra/high,
+`fork_turns=none; file-backed`) verified current fingerprint extraction,
+pipeline-field retirement, authoritative timing/artifacts, retained metadata,
+cache regeneration and both response envelopes. The reviewer independently
+reconciled all 104 passing cases against raw receipts and checked affected
+fixture rechecks and static evidence; no extra execution was necessary.
+The manager verified the reviewed head, clean worktree, PR target `develop`,
+non-draft state and mergeability. This final addition changes only the receipt;
+merge and matching-tree synchronization are published in the existing PR.
+Physical Fleet/Slurm, scientific and downstream deployment qualification remain
+outside this delivery.
