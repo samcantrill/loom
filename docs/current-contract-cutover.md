@@ -760,8 +760,48 @@ execution. New assertions cover retired versions, alias/missing factory fields,
 byte-unchanged refusal at persistence boundaries and current policy invalidation.
 Collection, changed-file Ruff and full Pyright precede selected locked Python
 3.12 baseline/config execution. Expand only for a reached failure or newly exposed
-consumer. Writer bytes, dependencies, scientific code, source fixtures and wire
+consumer. Writer bytes, dependencies, scientific code and fixtures, and wire
 families are unchanged; full scientific/scaling/physical qualification stays at
 the paired adoption gate. Previous execution/recovery results remain applicable
 to unchanged current fingerprints; focused fresh checks exercise the tightened
-admission boundary. Results and independent review remain pending.
+admission boundary.
+
+The first selection exposed a reached ordering defect: resident assignment
+decoding inspected `factory_target` for shared scope before admitting the typed
+fingerprint. A retired target alias therefore raised raw `KeyError` instead of
+the intended `QueueServiceError`. The correction constructs and validates the
+request first, then compares its selected schema with the received schema.
+Current shared/non-shared wire disagreement is still rejected; no scope or
+fingerprint validation is skipped, and neither operation performs IO.
+
+| Scope | Stable tested revision and receipt | Result |
+| --- | --- | --- |
+| Planning/models/resume, persistence/read models, worker and assignment selection | `6407903e633c0d55e434cecb77f5b38fb584038d`; `build/current-contract-cutover/fingerprint-core-selectors.txt`, `fingerprint-core.log` and `.xml` | 117 passed; one new retired-alias refusal case exposed the defect above |
+| Managed local and mixed local/Slurm execution | Same revision; `fingerprint-config-selectors.txt`, `fingerprint-config.log` and `.xml` | 2 passed; both repeated after the correction because they traverse assignment decoding |
+| Affected assignment decoding and Slurm wire checks | `42dd565b5706dde0eb95bf69bedf12f1546f1e6c`; `fingerprint-affected-selectors.txt`, `fingerprint-affected.log` and `.xml` | 10 passed: current round-trip, retired refusal, shared scope disagreement, exact replay, local container, staged preparation, and Slurm framing |
+| Fresh current execution after correction | Same final source revision; `fingerprint-config-recheck.log` and `.xml` | 2 passed in 15.24 seconds |
+
+The final union is **125 distinct passing cases**: 113 unaffected original core
+cases, 10 affected rechecks/additions, and two fresh integration cases. There are
+no unresolved selected failures, errors or skips. Initial failures remain in the
+receipts. Only `_ResidentAssignmentBundle.from_dict` changes between the two
+tested revisions; the unaffected planning/model/store/worker owners, dependency
+selection, configuration and fixtures are identical. All reached assignment
+consumers in the original selection were rechecked, with additional scope cases.
+
+Collection admitted 118 core, two config and 10 affected cases. Changed-file Ruff
+passed; full Pyright's two test-edit diagnostics were corrected before execution,
+and that test plus the subsequently changed assignment source passed targeted
+Pyright and Ruff. Receipts are `fingerprint-*-collection.log`,
+`fingerprint-types.log`, `fingerprint-types-recheck.log`,
+`fingerprint-boundary-types.log`, `fingerprint-ruff.log` and
+`fingerprint-boundary-ruff.log`. The changed documentation Python example parses,
+and complete base-to-head `git diff --check` passes.
+
+Final source/test/feature-documentation patch SHA-256:
+`80c7cebc3e934032dd44fb0e2cfa4ef98610f65f673e744a39e664e25d955354`.
+Independent actual-PR review is pending. The adjacent `ExecutionPlan` envelope
+still accepts arbitrary positive versions despite its current version 1; that
+remaining document-admission row is part of the full inventory, not closed by
+the fingerprint cutover. Preparation wire families, lineage and downstream
+dependency/image qualification likewise remain open.
