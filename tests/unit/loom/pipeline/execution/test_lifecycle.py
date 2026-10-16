@@ -9,6 +9,7 @@ from loom.pipeline import PipelineSpec
 from loom.pipeline.execution.errors import PlanExecutionError
 from loom.pipeline.execution.lifecycle import (
     bind_stage_inputs,
+    commit_stage_execution_result,
     persist_stage_cancellation,
     persist_stage_failure,
     write_run_submitted,
@@ -21,6 +22,7 @@ from loom.pipeline.execution.lifecycle import (
 from loom.pipeline.execution.models import (
     EXECUTION_FAILURE_SCHEMA_VERSION,
     ExecutionFailure,
+    StageExecutionResult,
 )
 from loom.pipeline.execution.reliability import (
     record_retry_decision_for_stage_result,
@@ -35,6 +37,7 @@ from loom.pipeline.reliability import (
     TimeoutSupportLevel,
 )
 from loom.pipeline.status import RunStatus, StageStatus
+from loom.pipeline.transition_policy import TransitionIntent
 from loom.pipeline.stores import (
     LifecycleReason,
     LocalArtifactStore,
@@ -170,7 +173,7 @@ def test_write_stage_running_records_reliability_transaction(
 
     record = write_stage_running(
         store,
-        run_uri=run_uri,
+        reliability=store, run_status=RunStatus.RUNNING, run_uri=run_uri,
         stage_name="build",
         attempt=1,
         started_at="2020-01-01T00:00:02Z",
@@ -199,14 +202,14 @@ def test_retry_decision_denies_unsafe_transaction_chain(tmp_path: Path) -> None:
     )
     write_stage_running(
         store,
-        run_uri=run_uri,
+        reliability=store, run_status=RunStatus.RUNNING, run_uri=run_uri,
         stage_name="build",
         attempt=1,
         started_at="2020-01-01T00:00:02Z",
     )
     record_stage_reliability_transition(
         store,
-        run_uri=run_uri,
+        run_status=RunStatus.RUNNING, run_uri=run_uri,
         stage_name="build",
         attempt=1,
         state=StageAttemptTransactionState.STAGED,
@@ -215,7 +218,7 @@ def test_retry_decision_denies_unsafe_transaction_chain(tmp_path: Path) -> None:
     )
     failure = persist_stage_failure(
         store,
-        run_uri=run_uri,
+        reliability=store, events=store, run_status=RunStatus.RUNNING, run_uri=run_uri,
         stage_name="build",
         attempt=1,
         started_at="2020-01-01T00:00:02Z",
@@ -233,7 +236,7 @@ def test_retry_decision_denies_unsafe_transaction_chain(tmp_path: Path) -> None:
 
     decision = record_retry_decision_for_stage_result(
         store,
-        run_uri=run_uri,
+        run_status=RunStatus.RUNNING, run_uri=run_uri,
         stage_name="build",
         attempt=1,
         stage_status=StageStatus.FAILED,
@@ -278,7 +281,7 @@ def test_persist_stage_failure_classifies_and_records_failed_transaction(
 
     observed = persist_stage_failure(
         store,
-        run_uri=run_uri,
+        reliability=store, events=store, run_status=RunStatus.RUNNING, run_uri=run_uri,
         stage_name="build",
         attempt=1,
         started_at="2020-01-01T00:00:02Z",
@@ -319,7 +322,7 @@ def test_reliability_timeout_outcome_records_against_latest_transaction(
     )
     write_stage_running(
         store,
-        run_uri=run_uri,
+        reliability=store, run_status=RunStatus.RUNNING, run_uri=run_uri,
         stage_name="build",
         attempt=1,
         started_at="2020-01-01T00:00:02Z",
@@ -327,7 +330,7 @@ def test_reliability_timeout_outcome_records_against_latest_transaction(
 
     outcome = record_timeout_outcome_from_metadata(
         store,
-        run_uri=run_uri,
+        run_status=RunStatus.RUNNING, run_uri=run_uri,
         stage_name="build",
         attempt=1,
         stage_status=StageStatus.FAILED,
@@ -376,7 +379,7 @@ def test_persist_stage_cancellation_records_cancelled_transaction(
 
     persist_stage_cancellation(
         store,
-        run_uri=run_uri,
+        reliability=store, events=store, run_status=RunStatus.RUNNING, run_uri=run_uri,
         stage_name="build",
         attempt=1,
         started_at="2020-01-01T00:00:02Z",
@@ -434,7 +437,9 @@ def test_bind_stage_inputs_uses_pending_outputs_without_status_side_effects(
     plan = plan_pipeline(
         spec,
         run_uri=run_uri,
-        run_store=store,
+        stage_state=store,
+        artifact_index=store,
+        plans=store,
         artifact_store=LocalArtifactStore(store.local_artifact_root(run_uri)),
         persist=True,
     )
@@ -477,3 +482,163 @@ def test_write_stage_artifact_index_refs_preserves_merge_semantics(
         "build.data": existing,
         "report.text": _ref("report", "text"),
     }
+
+
+@pytest.mark.parametrize("intent", [TransitionIntent.RESUME, TransitionIntent.RECOVERY])
+def test_local_status_projection_refuses_authority_intent_without_mutation(
+    tmp_path: Path, intent: TransitionIntent,
+) -> None:
+    store = LocalRunStore(tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
+    store.create_run(run_uri)
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    with pytest.raises(ValueError, match="authority transition intent"):
+        write_run_status(
+            store,
+            run_uri=run_uri,
+            status=RunStatus.RUNNING,
+            created_at="2020-01-01T00:00:00Z",
+            updated_at="2020-01-01T00:00:01Z",
+            intent=intent,
+        )
+    assert {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
+
+
+@pytest.mark.parametrize("finalize", [False, True])
+def test_failed_commit_records_timeout_after_run_finalization(
+    tmp_path: Path, finalize: bool,
+) -> None:
+    from loom.pipeline.reliability import TimeoutPolicy
+    from loom.pipeline.executors._reliability import metadata_with_timeout, timeout_metadata
+
+    store = LocalRunStore(tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
+    store.create_run(run_uri)
+    started = "2020-01-01T00:00:01Z"
+    finished = "2020-01-01T00:00:02Z"
+    write_run_status(
+        store, run_uri=run_uri, status=RunStatus.RUNNING,
+        created_at=started, updated_at=started, started_at=started,
+    )
+    spec = _two_stage_spec()
+    artifacts = LocalArtifactStore(store.local_artifact_root(run_uri))
+    plan = plan_pipeline(
+        spec, run_uri=run_uri, stage_state=store,
+        artifact_index=store, artifact_store=artifacts,
+    )
+    failure = ExecutionFailure(
+        schema_version=EXECUTION_FAILURE_SCHEMA_VERSION, run_uri=run_uri,
+        stage_name="build", attempt=1, failed_at=finished, executor="local",
+        failure_type="executor_infrastructure", message="deadline exceeded",
+    )
+    metadata = metadata_with_timeout({}, timeout_metadata(
+        policy=TimeoutPolicy(enabled=True, duration_seconds=1),
+        support_level=TimeoutSupportLevel.ENFORCED, outcome=TimeoutOutcome.TIMED_OUT,
+        timed_out=True, message="deadline exceeded",
+    ))
+    result = StageExecutionResult(
+        stage_name="build", status=StageStatus.FAILED, outputs={}, failure=failure,
+        started_at=started, finished_at=finished, executor_name="local", attempt=1,
+        executor_metadata=metadata,
+    )
+    committed = commit_stage_execution_result(
+        store, run_status_store=store, artifact_index=store, reliability=store,
+        events=store, run_status=RunStatus.RUNNING, run_uri=run_uri,
+        stage=spec.get_stage("build"), stage_plan=plan.ordered_stage_plans[0],
+        attempt=1, inputs={}, fingerprint={}, artifact_store=artifacts,
+        created_at=started, run_started_at=started, execution_result=result,
+        executor_name="local", finalize_run_on_failure=finalize,
+        clock=lambda: finished,
+    )
+    assert committed.status is StageStatus.FAILED
+    expected = RunStatus.FAILED if finalize else RunStatus.RUNNING
+    status = store.read_run_status(run_uri)
+    assert status is not None and status.status is expected
+    outcomes = store.list_timeout_outcomes(run_uri, stage_name="build")
+    assert len(outcomes) == 1
+    assert outcomes[0].status.run_status is expected
+    transactions = store.list_stage_attempt_transactions(run_uri, stage_name="build")
+    assert [item.state for item in transactions] == [StageAttemptTransactionState.FAILED]
+    assert transactions[0].status.run_status is RunStatus.RUNNING
+    assert outcomes[0].transaction_id == transactions[0].transaction_id
+    assert [event.event_type for event in store.read_events(run_uri)] == ["stage.failed"]
+
+
+@pytest.mark.parametrize("index_failure", [False, True])
+def test_output_commit_uses_distinct_owners_and_preserves_commit_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, index_failure: bool,
+) -> None:
+    store = LocalRunStore(tmp_path / "runs")
+    index_owner = LocalRunStore(tmp_path / "runs")
+    events = LocalRunStore(tmp_path / "runs")
+    reliability = LocalRunStore(tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
+    store.create_run(run_uri)
+    artifacts = LocalArtifactStore(store.local_artifact_root(run_uri))
+    spec = _two_stage_spec()
+    plan = plan_pipeline(
+        spec, run_uri=run_uri, stage_state=store,
+        artifact_index=index_owner, artifact_store=artifacts,
+    )
+    ref = artifacts.save(
+        {"answer": 42}, stage_name="build", name="data",
+        artifact_type="json", codec_key="json.v1",
+    )
+    started, finished = "2020-01-01T00:00:01Z", "2020-01-01T00:00:02Z"
+    result = StageExecutionResult(
+        stage_name="build", status=StageStatus.SUCCEEDED, outputs={"data": ref},
+        failure=None, started_at=started, finished_at=finished,
+        executor_name="local", attempt=1,
+    )
+
+    def wrong_owner(*args, **kwargs):
+        raise AssertionError("stage-state owner used for an unrelated service")
+
+    monkeypatch.setattr(store, "read_artifact_index", wrong_owner)
+    monkeypatch.setattr(store, "append_event", wrong_owner)
+    monkeypatch.setattr(store, "list_stage_attempt_transactions", wrong_owner)
+    if index_failure:
+        def fail_index(*args, **kwargs):
+            assert store.read_stage_outputs(run_uri, "build") == {"data": ref}
+            assert store.read_stage_status(run_uri, "build") is None
+            assert events.read_events(run_uri) == ()
+            raise OSError("index publication failed")
+        monkeypatch.setattr(index_owner, "write_artifact_index", fail_index)
+
+    def commit():
+        return commit_stage_execution_result(
+            store, run_status_store=store, artifact_index=index_owner,
+            reliability=reliability, events=events, run_status=RunStatus.RUNNING,
+            run_uri=run_uri, stage=spec.get_stage("build"),
+            stage_plan=plan.ordered_stage_plans[0], attempt=1, inputs={},
+            fingerprint={}, artifact_store=artifacts, created_at=started,
+            run_started_at=started, execution_result=result, executor_name="local",
+            clock=lambda: finished,
+        )
+
+    if index_failure:
+        with pytest.raises(OSError, match="index publication failed"):
+            commit()
+        assert store.read_stage_status(run_uri, "build") is None
+        assert events.read_events(run_uri) == ()
+        assert index_owner.read_artifact_index(run_uri) == {}
+    else:
+        assert commit().outputs == {"data": ref}
+        assert index_owner.read_artifact_index(run_uri) == {"build.data": ref}
+        status = store.read_stage_status(run_uri, "build")
+        assert status is not None and status.status is StageStatus.SUCCEEDED
+        assert store.read_stage_provenance(run_uri, "build") is not None
+        assert [event.event_type for event in events.read_events(run_uri)] == ["stage.completed"]
+        assert artifacts.load(ref) == {"answer": 42}
+    transactions = reliability.list_stage_attempt_transactions(run_uri, stage_name="build")
+    assert len(transactions) == 2
+    by_state = {item.state: item for item in transactions}
+    terminal_state = (
+        StageAttemptTransactionState.COMMIT_FAILED if index_failure
+        else StageAttemptTransactionState.COMMITTED
+    )
+    assert set(by_state) == {StageAttemptTransactionState.STAGED, terminal_state}
+    staged, terminal = by_state[StageAttemptTransactionState.STAGED], by_state[terminal_state]
+    assert staged.causal_parent_id is None
+    assert terminal.causal_parent_id == staged.transaction_id
+    assert reliability.read_transaction_chain(run_uri, terminal.transaction_id) == (staged, terminal)

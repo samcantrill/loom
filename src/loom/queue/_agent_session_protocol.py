@@ -63,7 +63,7 @@ def _raise_if_application_suspended(
 
 
 def handshake(self: LocalDaemonAgentHttpClient, *, role: str = "agent") -> Generator[_Progress, Any, Mapping[str, PlainData]]:
-    if role not in {"agent", "client", "operator", "slurm_bootstrap"}:
+    if role not in {"agent", "slurm_bootstrap"}:
         raise QueueServiceError("authenticated application role is invalid")
     result = (yield from _steps(self._call, "handshake", {}, role=role))
     if role == "agent":
@@ -87,7 +87,10 @@ def handshake(self: LocalDaemonAgentHttpClient, *, role: str = "agent") -> Gener
             raise QueueServiceError(
                 "coordinator upgrade required: missing concurrent-resident-assignments-v1"
             )
-        self._control_wait_supported = CONTROL_WAIT_CAPABILITY in capabilities
+        if CONTROL_WAIT_CAPABILITY not in capabilities:
+            raise QueueServiceError(
+                f"coordinator upgrade required: missing {CONTROL_WAIT_CAPABILITY}"
+            )
     return result
 
 

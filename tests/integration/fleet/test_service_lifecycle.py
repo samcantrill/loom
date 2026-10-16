@@ -253,13 +253,13 @@ def test_runtime_binding_never_enables_linger(monkeypatch):
 
 @pytest.mark.optional_dependency
 @pytest.mark.parametrize("previous_schema", [5, 6])
-def test_quiesced_migration_preserves_native_identity_and_refuses_live_owner(
+def test_quiesced_replacement_preserves_native_identity_and_refuses_live_owner(
     tmp_path, previous_schema,
 ):
     from tests.unit.loom.queue.test_deployment import _agent_config
     from loom.queue.deployment import (
         load_outbound_agent_service_config,
-        service_backend_migration_guard,
+        service_replacement_guard,
     )
 
     service = load_outbound_agent_service_config(_agent_config(tmp_path))
@@ -268,8 +268,8 @@ def test_quiesced_migration_preserves_native_identity_and_refuses_live_owner(
     root_id = client.agent_root_id
     try:
         with pytest.raises(QueueServiceError, match="already locked"):
-            with service_backend_migration_guard(service, root_id):
-                pytest.fail("live role was allowed to migrate")
+            with service_replacement_guard(service, root_id):
+                pytest.fail("live role was allowed to replace")
     finally:
         client.shutdown_clean()
         client.close()
@@ -284,14 +284,24 @@ def test_quiesced_migration_preserves_native_identity_and_refuses_live_owner(
                 conn.execute(f"ALTER TABLE launches DROP COLUMN {column}")
             conn.execute("UPDATE metadata SET value = '5' WHERE key = 'schema_version'")
         before = dict(conn.execute("SELECT key, value FROM metadata"))
-    with service_backend_migration_guard(service, root_id):
+    if previous_schema == 5:
+        from loom.queue._agent_process_supervisor import AgentProcessSupervisorError
+
+        before_files = {path.name: path.read_bytes() for path in supervisor_root.iterdir()
+                        if path.is_file()}
+        with pytest.raises(AgentProcessSupervisorError, match="requires_reinitialization"):
+            with service_replacement_guard(service, root_id):
+                pytest.fail("retired supervisor was admitted for replacement")
+        assert {path.name: path.read_bytes() for path in supervisor_root.iterdir()
+                if path.is_file()} == before_files
+        return
+    with service_replacement_guard(service, root_id):
         from loom.queue.operations import inspect_native_service
 
         assert inspect_native_service(service.client.agent_root).owner == root_id
     with sqlite3.connect(supervisor_database) as conn:
         assert dict(conn.execute("SELECT key, value FROM metadata")) == before
-    # The guard admits the old clean cut without rewriting it. Normal owner
-    # opening performs the supported migration and preserves retained identity.
+    # Current replacement and reopen preserve retained identity without conversion.
     from loom.queue._agent_process_supervisor import AgentProcessSupervisor
 
     configuration = _service_configuration(supervisor_root)
@@ -302,15 +312,15 @@ def test_quiesced_migration_preserves_native_identity_and_refuses_live_owner(
     assert owner.continuity_epoch == before["continuity_epoch"]
     with sqlite3.connect(supervisor_database) as conn:
         after = dict(conn.execute("SELECT key, value FROM metadata"))
-        assert after == {**before, "schema_version": "6"}
+        assert after == before
     with pytest.raises(QueueConflictError, match="identity changed"):
-        with service_backend_migration_guard(service, "wrong-root"):
-            pytest.fail("migration rebound native identity")
+        with service_replacement_guard(service, "wrong-root"):
+            pytest.fail("replacement rebound native identity")
     assert service.client.agent_root is not None
     database = service.client.agent_root / "journal.sqlite"
     database.unlink()
     with pytest.raises(Exception, match="unavailable|missing"):
-        with service_backend_migration_guard(service, root_id):
+        with service_replacement_guard(service, root_id):
             pytest.fail("missing execution database was replaced")
     assert not database.exists()
 
@@ -321,7 +331,7 @@ def test_backend_binding_refuses_duplicate_tmux_owner(tmp_path):
     admin = tmp_path / "admin"
     admin.mkdir(mode=0o700)
     atomic(admin / "service.json", {"service_manager": "systemd-user"})
-    with pytest.raises(QueueConflictError, match="quiesced migration"):
+    with pytest.raises(QueueConflictError, match="fresh installation"):
         start({"admin": str(admin), "service_manager": "tmux"})
 
 
@@ -361,7 +371,7 @@ def test_foreground_notifies_only_after_native_endpoint_is_ready(tmp_path, monke
                 process.communicate(timeout=10)
 
 
-def test_systemd_plan_reports_retained_tmux_migration(tmp_path, monkeypatch):
+def test_systemd_plan_refuses_retained_tmux_backend_change(tmp_path, monkeypatch):
     import hashlib
     from loom.fleet.configuration import Inventory
     from loom.fleet import ssh_operations
@@ -406,7 +416,7 @@ def test_systemd_plan_reports_retained_tmux_migration(tmp_path, monkeypatch):
     preview = ssh_operations.plan(inventory)
     assert (
         preview["hosts"]["coordinator"]["conflict"]
-        == "service backend change requires explicit quiesced migration"
+        == "service backend change requires a fresh installation"
     )
     assert calls == ["inspect"]
 
@@ -602,3 +612,18 @@ def test_completed_setup_reports_retained_boot_capability(
     assert result["identities"] == {
         "coordinator": "coordinator-root", "worker": "worker-root"
     }
+
+
+@pytest.mark.parametrize("action", ["adopt-probe", "adopt-replace", "migrate-services"])
+def test_retired_host_actions_refuse_before_lock_or_receipts(tmp_path, monkeypatch, action):
+    import io
+    import json
+    from loom.fleet import _host
+
+    admin = tmp_path / "admin"
+    admin.mkdir(mode=0o700)
+    request = {"action": action, "admin": str(admin), "request_id": "retired"}
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(json.dumps(request).encode())))
+    with pytest.raises(QueueConflictError, match="unsupported fixed native host action"):
+        _host.main()
+    assert not tuple(admin.iterdir())

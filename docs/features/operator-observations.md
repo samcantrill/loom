@@ -66,10 +66,10 @@ Host-local read-only probes in `loom.queue.operations` provide independent facts
   host-local device proof from a connected session.
 - `probe_upgrade_compatibility(root, required_capabilities=...)`, exposed as
   `queue daemon-upgrade-probe --root ROOT`, reports current/candidate storage
-  versions, supported forward-only offline migration, protocol/capabilities and
+  versions, exact current-schema compatibility, protocol/capabilities and
   the requirement to preserve and separately qualify workload profile bindings.
-  It neither migrates storage nor claims workload compatibility from service
-  storage compatibility. Unsupported versions/capabilities have explicit reasons.
+  It reports no migration direction or offline conversion path. Workload
+  compatibility remains a separate qualification. Unsupported versions/capabilities have explicit reasons.
 
 `loom.queue.deployment.inspect_role_declaration(path, role=..., env_file=...)`
 and `queue daemon-check/agent-check --declaration-only` parse protected sources

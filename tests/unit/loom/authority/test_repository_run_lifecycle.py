@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 
 from loom.pipeline.status import RunStatus
@@ -18,6 +20,27 @@ from loom.authority._repository import (
 pytestmark = pytest.mark.unit
 
 RUN_URI = "file:///runs/unit-r1"
+
+
+def test_audit_events_require_retained_current_record_before_mutation(tmp_path) -> None:
+    repository = initialize_authority_repository(
+        tmp_path, service_generation="generation-1"
+    )
+    repository.admit_run(RUN_URI)
+    event = PipelineEvent(scope=EventScope.run(), event_type="run.created")
+    repository.append_audit_event(RUN_URI, event)
+    database = tmp_path / "authority.sqlite3"
+    # This is the column-only layout retained by historical audit writers.
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE audit_events SET event_json = NULL")
+    before = database.read_bytes()
+
+    with pytest.raises(AuthorityRepositoryError, match="requires current event_json"):
+        repository.list_audit_events(RUN_URI)
+    with pytest.raises(AuthorityRepositoryError, match="requires current event_json"):
+        repository.append_audit_event(RUN_URI, event)
+
+    assert database.read_bytes() == before
 
 
 def test_repository_schema_version_includes_coordinator_authority() -> None:

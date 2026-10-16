@@ -20,7 +20,7 @@ from loom.cli.options import OutputFormat, output_format_from_namespace
 if TYPE_CHECKING:
     from loom.diagnostics.inspection import RunStatusSummary
     from loom.pipeline.stores import AuthorityConfig
-    from loom.pipeline.stores.run_store import LegacyRunStore
+    from loom.pipeline.execution.authority_adapter import AuthorityBackedSerialRunStore
 
 
 STATUS_RESULT_SCHEMA_VERSION = "loom.cli.status.v3"
@@ -100,7 +100,7 @@ def _create_status_run_store(
     authority_config: "AuthorityConfig | None",
     run_uri: str,
     owner_id: str = "status",
-) -> "LegacyRunStore":
+) -> "AuthorityBackedSerialRunStore":
     from loom.pipeline.execution import create_authority_backed_serial_run_store
     from loom.diagnostics.backend import _default_authority_store
 

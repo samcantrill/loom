@@ -199,7 +199,7 @@ def plan(inventory: Inventory, *, hosts=None, issuer=None, env_file=None):
             )
             row["observation"] = observed
             if observed.get("service_manager") not in {None, inventory.service_manager}:
-                row["conflict"] = "service backend change requires explicit quiesced migration"
+                row["conflict"] = "service backend change requires a fresh installation"
             if observed["bound_root"] and not observed["root_exists"]:
                 row["conflict"] = (
                     "bound native root missing; explicit recovery required"
@@ -302,6 +302,8 @@ def operation_status(inventory, operation_id):
     if not (directory / "intent.json").exists():
         raise QueueConfigError("unknown administrative operation")
     intent = read(directory / "intent.json")
+    if intent.get("kind") not in {None, "runtime-upgrade", "workload-upgrade"}:
+        raise QueueConflictError("unsupported administrative operation kind")
     result = (
         read(directory / "result.json")
         if (directory / "result.json").exists()
@@ -548,10 +550,8 @@ def apply(
     directory = _directory(inventory, operation_id)
     if resume and not (directory / "intent.json").exists():
         raise QueueConfigError("unknown administrative operation; cannot resume")
-    if (directory / "intent.json").exists() and read(directory / "intent.json").get("kind") == "migrate-services":
-        if resume:
-            return migrate_services(inventory, operation_id=operation_id)
-        raise QueueConflictError("operation ID belongs to service migration; use migrate-services or operation resume")
+    if (directory / "intent.json").exists() and read(directory / "intent.json").get("kind") is not None:
+        raise QueueConflictError("operation is not a current setup intent")
     protected_directory(directory)
     with (directory / "writer.lock").open("a") as writer:
         try:
@@ -1012,63 +1012,3 @@ def _continue(operation):
             for row in intent["hosts"].values()
         ),
     }
-
-
-def migrate_services(inventory, *, operation_id, hosts=None, env_file=None):
-    """Explicitly migrate stopped, settled tmux roles using retained host intents.
-
-    Root/coordinator IDs come from native observations and remain pinned through
-    replay. This does not drain, cancel, kill, retire or reinitialize services.
-    Repeat this command with the same ID to resume its original selection.
-    """
-    _environment_files(inventory, env_file)
-    if inventory.service_manager != "systemd-user":
-        raise QueueConfigError("migration requires explicit systemd-user inventory")
-    directory = _directory(inventory, operation_id)
-    protected_directory(directory)
-    with (directory / "writer.lock").open("a+") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        path = directory / "intent.json"
-        if path.exists():
-            intent = read(path)
-            if intent.get("kind") != "migrate-services":
-                raise QueueConflictError("operation ID belongs to another operation")
-            if hosts is not None and {entry.name for entry in inventory.select(hosts)} != {
-                name for name, row in intent["hosts"].items() if not row["dependency"]
-            }:
-                raise QueueConflictError("migration host selection differs from retained intent")
-            if env_file is not None and any(
-                row["env_file"] != str(Path(env_file).resolve()) for row in intent["hosts"].values()
-            ):
-                raise QueueConflictError("migration environment differs from retained intent")
-        else:
-            rows, declarations = _selection(inventory, hosts, env_file)
-            release = verify_release(inventory.runtime_release)
-            observed = plan(inventory, hosts=hosts, env_file=env_file)
-            identities = {}
-            for name, row in observed["hosts"].items():
-                fact = row.get("observation", {}).get("native_owner")
-                if fact is None or fact.get("availability") != "available":
-                    raise QueueConflictError("migration requires every retained native root")
-                if row.get("unavailable") or row.get("conflict") not in {
-                    None, "service backend change requires explicit quiesced migration"
-                }:
-                    raise QueueConflictError("migration prerequisite or release conflict")
-                identities[name] = fact["owner"]
-            intent = {"schema_version": 1, "kind": "migrate-services",
-                      "operation_id": operation_id, "hosts": rows,
-                      "declarations": declarations, "release": release,
-                      "inputs": _inputs(inventory, rows, env_file), "identities": identities}
-            atomic(path, intent)
-        operation = _Operation(inventory, directory, intent)
-        operation.recheck()
-        try:
-            for name in intent["hosts"]:
-                values = {"expected_root_id": intent["identities"][name]}
-                if name != "coordinator":
-                    values["coordinator_id"] = intent["identities"]["coordinator"]
-                operation.call(name, "migrate-services", **values)
-            atomic(directory / "result.json", {"state": "complete", "identities": intent["identities"]})
-        except (SshUnavailable, QueueConflictError) as exc:
-            atomic(directory / "result.json", {"state": "blocked", "reason": str(exc)})
-        return operation_status(inventory, operation_id)

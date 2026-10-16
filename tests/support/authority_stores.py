@@ -981,19 +981,16 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
             None,
         )
         if existing is not None:
-            if not _event_matches_record(event, existing):
+            if not existing.matches_event(event):
                 raise ValueError(
                     f"event_id {event.event_id!r} conflicts with an existing event"
                 )
             return existing
-        record = PipelineEventRecord(
+        record = PipelineEventRecord.from_event(
+            event,
             run_uri=run_uri,
             sequence=len(state.events) + 1,
-            timestamp=self._now(),
-            scope=event.scope,
-            event_type=event.event_type,
-            payload=event.payload,
-            event_id=event.event_id,
+            occurred_at=self._now(),
         )
         state.events.append(record)
         state.revision = self._next_revision()
@@ -1361,16 +1358,6 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
     def _at_tick(tick: int) -> str:
         value = datetime(2020, 1, 1, tzinfo=UTC) + timedelta(seconds=tick)
         return value.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _event_matches_record(event: PipelineEvent, record: PipelineEventRecord) -> bool:
-    if (
-        record.scope != event.scope
-        or record.event_type != event.event_type
-        or record.payload != event.payload
-    ):
-        return False
-    return event.timestamp is None or record.timestamp == event.timestamp
 
 
 class InMemoryWorkspaceCoordinationStore(WorkspaceCoordinationStore):

@@ -473,7 +473,7 @@ def test_inventory_environment_compatibility_paths_and_protection(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "command", ["status", "plan", "setup", "migrate-services", "self-test", "upgrade"]
+    "command", ["status", "plan", "setup", "self-test", "upgrade"]
 )
 def test_environment_override_refuses_before_effects(tmp_path, monkeypatch, command):
     from loom.fleet import administration, ssh_operations, self_tests, upgrades
@@ -497,8 +497,6 @@ def test_environment_override_refuses_before_effects(tmp_path, monkeypatch, comm
             ssh_operations.plan(selected, **kwargs)
         elif command == "setup":
             ssh_operations.apply(selected, operation_id="blocked", **kwargs)
-        elif command == "migrate-services":
-            ssh_operations.migrate_services(selected, operation_id="blocked", **kwargs)
         elif command == "self-test":
             self_tests.self_test(selected, **kwargs)
         else:

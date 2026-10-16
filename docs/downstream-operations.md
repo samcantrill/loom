@@ -312,10 +312,17 @@ initializer constructs and validates a private sibling staging directory and
 performs one final directory rename; an existing target is never overwritten.
 Startup reopens only the complete bound role and rejects a different config.
 Unsupported role schemas, incompatible profile bindings and incomplete roots
-are rejected. Initialization never overwrites a populated root. The narrow
-[coordinator upgrade](#upgrade-a-retained-coordinator-root) preserves a valid
-schema-12 or schema-15 root when moving to schema 16; it does not reinterpret profiles or
-provide a migration for other historical root versions.
+are rejected. Initialization never overwrites a populated root. Only complete
+current coordinator schema 19 and agent schema 12 are accepted; there is no
+schema migration or repair path. See [current control roots](#current-control-roots).
+
+Current outbound agents require the `agent-control-wait-v1` capability during
+handshake, before registration or capacity offers. A coordinator lacking it is
+refused. Service progress uses bounded notification-driven control waits; when a
+current durable-receipt suppression inventory exceeds the request count or byte
+limit, bounded polling preserves the complete population without truncating or
+acknowledging receipts. Synchronous control polling remains an explicit current
+operation.
 
 For an embedded or outbound agent, the worker supervisor is a separate local
 service and remains the process owner
@@ -405,41 +412,20 @@ Inputs, reports and linked evidence remain pinned for operation replay, includin
 failed or cancelled operations. Monitor retained storage through the existing
 store tools; no automatic expiry or preparation-delete command is provided.
 
-## Upgrade A Retained Coordinator Root
+## Current Control Roots
 
-Coordinator control roots use schema 16; worker roots and journals remain at
-schema 12. Schema-13 preparation roots are incompatible with the current child
-input/report contracts and are rejected without mutation; settle their work with
-the original installation before service replacement. For a valid existing schema-12 or schema-15 coordinator, stop its foreground service
-and retain the same protected role configuration and deployment binding. Run the
-local administrative command on the coordinator host:
+Coordinator control roots require schema 19; agent roots require schema 12.
+Fresh initialization creates their complete current schemas, including delivery
+references. Startup and inspection never add columns or reconstruct older
+preparation layouts. Unsupported or incomplete roots are refused before owner
+locks, service startup or database mutation. Current SQLite transaction recovery
+and current-session restart/replay remain supported.
 
-```sh
-loom queue daemon-upgrade coordinator-service.yaml --env-file coordinator-service.env --format json
-loom queue daemon-serve coordinator-service.yaml --env-file coordinator-service.env
-```
-
-The upgrade takes the existing exclusive coordinator lock, checks ownership,
-private permissions, deployment binding and stable identity, and creates a
-protected pre-upgrade backup through SQLite's backup API. It will not overwrite
-an existing backup. One transaction adds preparation storage for schema 12, or migrates the exact
-preparation rows from schema 15, and changes the coordinator marker to 16. Stable coordinator IDs, admissions and other
-existing durable identities remain intact; worker databases are not changed.
-A running coordinator is rejected without mutation. Workers do not need a
-fresh root or an inferred shutdown for this coordinator-only migration.
-
-A crash before commit leaves the original schema; after commit the root reopens
-at 16.
-Repeating the command on a structurally valid current root reports its current
-identity/version without rewriting retained state. Unsupported versions and
-malformed partial schemas are rejected, rather than automatically repaired.
-
-Keep the backup as operational evidence. Old binaries cannot open schema 16,
-and no automatic downgrade is provided. Restoring an older backup after further
-work has been accepted can lose that work; recovery then needs a separately
-assessed procedure. Never replace a retained coordinator or worker root merely
-to get preparation to start.
-
+For an unsupported installation, settle its work with its original owner, verify
+containment and release, stop its services and preserve roots and receipts. Create
+fresh roots with the current runtime and regenerate client bindings. The current
+runtime has no upgrade, adoption or conversion command. Healthy current roots
+retain their identity across compatible runtime replacement.
 
 ### Durable run intent on existing services
 
@@ -492,11 +478,10 @@ projections retain all mandatory references within 64 KiB; only optional full
 preflight detail may be omitted in favor of its pinned report. Prospective
 mandatory overflow is refused before target publication/admission.
 
-Coordinator schema 16 retains these facts in the preparation owner and a native
-cancellation control table. Existing schema-14 roots are incompatible: settle
-work under its original version before replacement. Do not reset old roots or
-delete outputs. The explicit older schema-12 upgrade remains available only for
-its already-supported predecessor contract.
+Coordinator schema 19 retains these facts in the preparation owner and a native
+cancellation control table. Unsupported roots require fresh initialization under
+the [current control-root procedure](#current-control-roots), after work settles
+under its original owner. Preserve the old roots and outputs.
 
 The raw native CLI controls are `loom queue daemon-start-run --request PATH`
 (the JSON `RunRequest` includes both caller-chosen IDs) and
@@ -725,10 +710,9 @@ all authorized observers, including publication followers. Cancellation completi
 is a separate control receipt and waits for owned child settlement. Detach and
 observation timeout never request cancellation.
 
-Existing schema 15 coordinator roots require the offline
-`loom queue daemon-upgrade` migration to schema 16. It preserves exact operation,
-cancellation and admission rows while allowing many submission references to one
-target. It retains a protected schema 15 backup; worker roots remain unchanged.
+Current coordinator roots retain exact operation, cancellation and admission rows
+across restart. Historical layouts require fresh initialization; they are never
+converted during replay or service replacement.
 
 ### Retained configuration references
 

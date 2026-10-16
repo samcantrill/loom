@@ -100,7 +100,6 @@ from .agent_sessions import (
     AgentSession,
     AgentSessionState,
     AgentStalePollError,
-    SessionReplacementRequest,
     AgentTransferAuthorizationStaleError,
     ScopedAuthorizer,
     _managed_containment_evidence,
@@ -139,13 +138,9 @@ from ._coordinator_transport import https_connection
 from ._agent_progress import _Progress, _cooperative, _steps, _external, _delay, _Gate, _serialized, _owns_assignment
 from .local_daemon import (
     AdmissionNotFoundError,
-    CoordinatorSchedulingReload,
     LocalDaemon,
     LocalDaemonPrincipal,
     LocalDaemonRole,
-    RecoverUnknownAssignment,
-    TimeRecoveryReceipt,
-    TimeRecoveryRequest,
 )
 
 
@@ -836,7 +831,6 @@ class LocalDaemonAgentHttpClient:
         self._connection: http.client.HTTPSConnection | None = None
         self._closed = False
         self._service_progress = False
-        self._control_wait_supported = False
         self._service_control_due = True
         self._epoch_reconciliation_pending = False
         self._mutation_gate = _Gate()
@@ -1271,7 +1265,7 @@ class LocalDaemonAgentHttpClient:
         received = journal.next_received_control(session_id)
         if received is not None:
             raw = received.value()
-        elif self._service_progress and self._control_wait_supported:
+        elif self._service_progress:
             return None
         else:
             result = (yield from _steps(self._call, "control", {"session_id": session_id}))
@@ -1787,43 +1781,6 @@ class LocalDaemonAgentHttpClient:
                 ).encode(),
             )
         self._cancelled_assignments.add(workspace.assignment_id)
-
-    @_cooperative
-    def control_agent(self, control: AgentControl) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
-        """Issue the same typed operator command over authenticated HTTP."""
-        return (yield from _steps(self._call,
-            "agent_control", {"control": control.value()}, role="operator"
-        ))
-
-    @_cooperative
-    def reload_scheduling(
-        self, request: CoordinatorSchedulingReload
-    ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
-        return (yield from _steps(self._call,
-            "scheduling_reload", {"request": request.to_dict()}, role="operator"
-        ))
-
-    @_cooperative
-    def recover_unknown(
-        self, request: RecoverUnknownAssignment
-    ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
-        return (yield from _steps(self._call,
-            "recover_unknown", {"request": request.to_dict()}, role="operator"
-        ))
-
-    @_cooperative
-    def recover_time(self, request: TimeRecoveryRequest) -> Generator[_Progress, Any, TimeRecoveryReceipt]:
-        return TimeRecoveryReceipt.from_dict(
-            (yield from _steps(self._call, "recover_time", {"request": request.to_dict()}, role="operator"))
-        )
-
-    @_cooperative
-    def replace_agent_session(
-        self, request: SessionReplacementRequest
-    ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
-        return (yield from _steps(self._call,
-            "replace_agent_session", {"request": request.to_dict()}, role="operator"
-        ))
 
     @_cooperative
     def authorize_transfers(
@@ -2423,16 +2380,15 @@ class LocalDaemonAgentHttpClient:
         session = journal.active_session()
         if session is None:
             return
-        waiting = False
-        request: dict[str, PlainData] = {}
-        if self._control_wait_supported:
-            ids = journal.received_control_ids(session.session_id)
-            request = {"session_id": session.session_id, "received_operation_ids": freeze_plain_data(ids),
-                       "wait_timeout_ms": 5000}
-            # Keep the full supported assignment ceiling: oversize suppression
-            # inventories use compatibility polling, not truncated receipts.
-            waiting = (len(ids) <= _MAX_RECEIVED_CONTROLS
-                       and len(_canonical_json(request).encode()) <= _MAX_BODY_BYTES)
+        ids = journal.received_control_ids(session.session_id)
+        request: dict[str, PlainData] = {
+            "session_id": session.session_id,
+            "received_operation_ids": freeze_plain_data(ids),
+            "wait_timeout_ms": 5000,
+        }
+        # Preserve the full assignment ceiling without truncating durable receipts.
+        waiting = (len(ids) <= _MAX_RECEIVED_CONTROLS
+                   and len(_canonical_json(request).encode()) <= _MAX_BODY_BYTES)
         if waiting:
             response = yield from _steps(self._call, "control_wait", request)
         else:
@@ -2899,8 +2855,8 @@ class LocalDaemonAgentHttpClient:
     def call_application(
         self, role: str, operation: str, value: Mapping[str, PlainData]
     ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
-        """Call the authenticated application view selected by its certificate."""
-        if role not in {"client", "operator", "slurm_bootstrap"}:
+        """Call the protected Slurm bootstrap application with its certificate."""
+        if role != "slurm_bootstrap":
             raise QueueServiceError("authenticated application role is invalid")
         return (yield from _steps(self._call, operation, value, role=role))
 
@@ -3207,7 +3163,7 @@ class _Handler(BaseHTTPRequestHandler):
             or not length.isdecimal() or int(length) > _MAX_BODY_BYTES):
             raise QueueServiceError("agent protocol body is invalid")
         raw = self.rfile.read(int(length))
-        if role == "client":
+        if role in {"client", "operator"}:
             try:
                 return dict(decode_wire(raw))
             except (ValueError, TypeError, RecursionError) as exc:
@@ -3779,11 +3735,13 @@ def _dispatch_application(
     inspect_run: Callable[[str], Mapping[str, PlainData]] | None = None,
     daemon_control: bool = False,
 ) -> Mapping[str, PlainData]:
-    if role == "operator" and daemon_control:
+    if role in {"client", "operator"} and not daemon_control:
+        raise control_error("unsupported", operation, value, boundary="client_protocol")
+    if role == "operator":
         from ._coordinator_control import OPERATOR_OPERATIONS
         if operation not in OPERATOR_OPERATIONS:
             raise control_error("unauthorized", operation, value, boundary="authentication")
-    if role == "client" or (role == "operator" and daemon_control):
+    if role in {"client", "operator"}:
         result = dict(
             dispatch_control(
                 daemon,
@@ -3793,7 +3751,6 @@ def _dispatch_application(
                 transport="https",
                 wait_slice=5.0,
                 inspect_run=inspect_run,
-                legacy=not daemon_control,
             )
         )
         if operation == "handshake":
@@ -3914,52 +3871,6 @@ def _dispatch_application(
             return inspect_run(run_uri)
         except Exception:
             return {"schema_version": 1, "code": "unavailable"}
-    elif role == "operator":
-        view = daemon.operator_view(principal)
-        if operation == "status":
-            _exact(value, set())
-            return view.status().to_dict()
-        if operation == "reconcile":
-            _exact(value, set())
-            return {
-                "admissions": [
-                    admission.to_dict() for admission in view.reconcile_once()
-                ]
-            }
-        if operation == "agent_control":
-            _exact(value, {"control"})
-            control = value["control"]
-            if not isinstance(control, Mapping):
-                raise QueueServiceError("agent control request is invalid")
-            return view.control_agent(AgentControl.from_value(control))
-        if operation == "scheduling_reload":
-            _exact(value, {"request"})
-            request = value["request"]
-            if not isinstance(request, Mapping):
-                raise QueueServiceError("scheduling reload request is invalid")
-            return view.reload_scheduling(
-                CoordinatorSchedulingReload.from_dict(request)
-            )
-        if operation == "recover_unknown":
-            _exact(value, {"request"})
-            request = value["request"]
-            if not isinstance(request, Mapping):
-                raise QueueServiceError("recovery request is invalid")
-            return view.recover_unknown(RecoverUnknownAssignment.from_dict(request))
-        if operation == "recover_time":
-            _exact(value, {"request"})
-            request = value["request"]
-            if not isinstance(request, Mapping):
-                raise QueueServiceError("time recovery request is invalid")
-            return view.recover_time(TimeRecoveryRequest.from_dict(request)).to_dict()
-        if operation == "replace_agent_session":
-            _exact(value, {"request"})
-            request = value["request"]
-            if not isinstance(request, Mapping):
-                raise QueueServiceError("session replacement request is invalid")
-            return view.replace_agent_session(
-                SessionReplacementRequest.from_dict(request)
-            )
     elif role == LocalDaemonRole.SLURM_BOOTSTRAP.value:
         view = daemon.slurm_bootstrap_view(principal)
         if operation == "register":

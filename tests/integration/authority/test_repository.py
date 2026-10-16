@@ -88,7 +88,7 @@ def test_older_repository_schema_is_rejected(tmp_path) -> None:
     _write_metadata(tmp_path, schema_version=1)
 
     with pytest.raises(AuthorityRepositoryCompatibilityError) as exc_info:
-        AuthorityRepository(tmp_path, schema_version=2).read_identity()
+        AuthorityRepository(tmp_path).read_identity()
 
     assert (
         exc_info.value.failure.kind
@@ -123,6 +123,23 @@ def test_incomplete_metadata_is_rejected(tmp_path) -> None:
         AuthorityRepository(tmp_path).read_identity()
 
     assert exc_info.value.failure.kind is AuthorityRepositoryCompatibilityKind.MISSING
+
+
+@pytest.mark.parametrize("damage", ["metadata", "audit_events"])
+def test_initialize_refuses_incomplete_existing_database_without_repair(tmp_path, damage) -> None:
+    repository = initialize_authority_repository(tmp_path, service_generation="generation-1")
+    with sqlite3.connect(repository.database_path) as conn:
+        if damage == "metadata":
+            conn.execute("DELETE FROM repository_metadata WHERE key = 'schema_version'")
+        else:
+            conn.execute("DROP TABLE audit_events")
+    conn.close()
+    before = {path.name: path.read_bytes() for path in tmp_path.iterdir()}
+
+    with pytest.raises(AuthorityRepositoryCompatibilityError):
+        repository.initialize(service_generation="replacement")
+
+    assert {path.name: path.read_bytes() for path in tmp_path.iterdir()} == before
 
 
 def _write_metadata(tmp_path, *, schema_version: int) -> None:

@@ -177,7 +177,9 @@ def _persist_rejected_slurm_run(run_root: Path, profile: SlurmReadyStageProfile)
     plan = plan_pipeline(
         pipeline,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
+        plans=run_store,
         artifact_store=LocalArtifactStore(run_store.local_artifact_root(run_uri)),
         persist=True,
     )
@@ -226,7 +228,13 @@ def test_retained_slurm_worker_is_compared_before_submission_and_delivery(
     LocalDaemon.initialize(config)
     intent = load_managed_local_intent(config, run_uri)
     saved = prepare_stage_attempt(
-        run_store=store,
+        stage_state=store,
+        stage_workspaces=store,
+        local_paths=store,
+        reliability=store,
+        prepared_runs=store,
+        config=store,
+        run_status=RunStatus.RUNNING,
         run_uri=run_uri,
         stage=intent.pipeline.get_stage("train"),
         stage_plan=intent.plan.ordered_stage_plans[0],
@@ -454,7 +462,9 @@ def _exercise_mixed_route_run(
     plan = plan_pipeline(
         pipeline,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
+        plans=run_store,
         artifact_store=LocalArtifactStore(run_store.local_artifact_root(run_uri)),
         persist=True,
     )
@@ -1626,7 +1636,9 @@ def test_unavailable_slurm_root_does_not_starve_independent_managed_root(
     plan = plan_pipeline(
         pipeline,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
+        plans=run_store,
         artifact_store=LocalArtifactStore(run_store.local_artifact_root(run_uri)),
         persist=True,
     )
@@ -1736,7 +1748,9 @@ def test_parallel_slurm_stages_honor_the_profile_outstanding_limit(
     plan = plan_pipeline(
         pipeline,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
+        plans=run_store,
         artifact_store=LocalArtifactStore(run_store.local_artifact_root(run_uri)),
         persist=True,
     )

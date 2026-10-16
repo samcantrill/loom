@@ -60,27 +60,8 @@ from loom.scheduling import (
     ResourceClaim,
     ResourceClaimContractDescriptor,
 )
-from loom.queue import (
-    ConfiguredGpuDevice,
-    ExecutionRequirement,
-    GpuDeviceDescriptor,
-    LocalDaemon,
-    LocalDaemonAdmission,
-    LocalDaemonAdmissionRequest,
-    LocalDaemonAdmissionState,
-    LocalDaemonConfig,
-    LocalDaemonSchedulingComponents,
-    LocalDaemonPrincipal,
-    LocalDaemonRole,
-    LocalDaemonSocketClient,
-    LocalDaemonSocketServer,
-    ManagedRecoveryTarget,
-    QueueConflictError,
-    QueueServiceError,
-    RecoverUnknownAssignment,
-    ResidentWorkerLaunchProfile,
-    prepare_managed_local_runtime_record,
-)
+from loom.queue import ConfiguredGpuDevice, ExecutionRequirement, GpuDeviceDescriptor, LocalDaemon, LocalDaemonAdmission, LocalDaemonAdmissionRequest, LocalDaemonAdmissionState, LocalDaemonConfig, LocalDaemonSchedulingComponents, LocalDaemonPrincipal, LocalDaemonRole, LocalDaemonSocketServer, ManagedRecoveryTarget, QueueConflictError, QueueServiceError, RecoverUnknownAssignment, ResidentWorkerLaunchProfile, prepare_managed_local_runtime_record
+from loom.coordinator import CoordinatorClient, CoordinatorClientError
 from loom.queue._remote_stage_execution import (
     ResidentProfileDescriptor,
     _ResidentAssignmentWorkspace,
@@ -358,7 +339,9 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
     plan = plan_pipeline(
         spec,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
+        plans=run_store,
         artifact_store=LocalArtifactStore(run_store.local_artifact_root(run_uri)),
         persist=True,
     )
@@ -450,7 +433,13 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
 
         intent = load_managed_local_intent(config, run_uri)
         saved = prepare_stage_attempt(
-            run_store=run_store,
+            stage_state=run_store,
+            stage_workspaces=run_store,
+            local_paths=run_store,
+            reliability=run_store,
+            prepared_runs=run_store,
+            config=run_store,
+            run_status=RunStatus.RUNNING,
             run_uri=run_uri,
             stage=spec.get_stage("preprocess"),
             stage_plan=plan.ordered_stage_plans[0],
@@ -563,7 +552,7 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
         server.start()
         try:
             socket_view = (
-                LocalDaemonSocketClient(config.endpoint)
+                CoordinatorClient.from_unix_socket(config.endpoint)
                 .admission(submitted.admission_id)
                 .owners
             )
@@ -1299,7 +1288,9 @@ def test_connected_active_cancellation_withholds_output_commit(
     plan = plan_pipeline(
         spec,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
+        plans=run_store,
         artifact_store=LocalArtifactStore(run_store.local_artifact_root(run_uri)),
         persist=True,
     )
@@ -1333,7 +1324,7 @@ def test_connected_active_cancellation_withholds_output_commit(
     server = LocalDaemonSocketServer(daemon, config.endpoint)
     server.start()
     try:
-        client = LocalDaemonSocketClient(config.endpoint)
+        client = CoordinatorClient.from_unix_socket(config.endpoint)
         submitted = client.submit(LocalDaemonAdmissionRequest("cancel-active", run_uri))
         _wait_for_supervisor_launch_count(config, expected=1)
         active = client.admission(submitted.admission_id).admission
@@ -2743,7 +2734,7 @@ def test_daemon_projects_stage_failure_to_authority_run_and_admission(
         server = LocalDaemonSocketServer(daemon, config.endpoint)
         server.start()
         try:
-            socket_client = LocalDaemonSocketClient(config.endpoint)
+            socket_client = CoordinatorClient.from_unix_socket(config.endpoint)
             terminal = socket_client.wait(submitted.queue_item_id, timeout_seconds=10)
             assert terminal.state is LocalDaemonAdmissionState.FAILED
             detail = socket_client.admission(submitted.admission_id)
@@ -2877,7 +2868,9 @@ def test_run_result_owner_projects_complete_failures_or_fails_closed(
     plan = plan_pipeline(
         PipelineSpec.from_config(pipeline),
         run_uri=run_uri,
-        run_store=store,
+        stage_state=store,
+        artifact_index=store,
+        plans=store,
         artifact_store=LocalArtifactStore(store.local_artifact_root(run_uri)),
         persist=True,
     )
@@ -3142,6 +3135,9 @@ def test_socket_diagnostic_redacts_unexpected_exception_text(tmp_path: Path) -> 
             raise RuntimeError(secret)
 
     class _FailingDaemon:
+        def _require_view_role(self, _principal, _role):
+            pass
+
         def client_view(self, _principal: object) -> _FailingClient:
             return _FailingClient()
 
@@ -3149,12 +3145,12 @@ def test_socket_diagnostic_redacts_unexpected_exception_text(tmp_path: Path) -> 
     server = LocalDaemonSocketServer(cast(LocalDaemon, _FailingDaemon()), endpoint)
     server.start()
     try:
-        with pytest.raises(QueueServiceError) as raised:
-            LocalDaemonSocketClient(endpoint).status()
+        with pytest.raises(CoordinatorClientError) as raised:
+            CoordinatorClient.from_unix_socket(endpoint).status()
     finally:
         server.stop()
 
-    assert str(raised.value) == "local_daemon_internal_error"
+    assert raised.value.code == "internal_error"
     assert secret not in str(raised.value)
 
 
@@ -3268,7 +3264,9 @@ def test_stage_cancellation_contains_running_sibling_and_closes_downstream(
     plan = plan_pipeline(
         pipeline,
         run_uri=run_uri,
-        run_store=store,
+        stage_state=store,
+        artifact_index=store,
+        plans=store,
         artifact_store=LocalArtifactStore(store.local_artifact_root(run_uri)),
         persist=True,
     )
@@ -3553,7 +3551,9 @@ def _persist_single_stage_run(
     plan = plan_pipeline(
         spec,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
+        plans=run_store,
         artifact_store=LocalArtifactStore(run_store.local_artifact_root(run_uri)),
         selectors=PlanSelectors(skip_stages=("build",)) if skip else None,
         persist=True,
@@ -3624,7 +3624,9 @@ def _persist_sleep_run(
     plan = plan_pipeline(
         spec,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
+        plans=run_store,
         artifact_store=LocalArtifactStore(run_store.local_artifact_root(run_uri)),
         persist=True,
     )

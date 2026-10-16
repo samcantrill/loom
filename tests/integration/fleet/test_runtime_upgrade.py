@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import sqlite3
 import time
 from pathlib import Path
 from typing import Any, cast
@@ -505,11 +506,13 @@ def test_candidate_probe_refuses_before_native_mutation(tmp_path, case):
     from loom.fleet.releases import verify_release
     from loom.queue.errors import QueueConfigError, QueueConflictError
     from loom.queue.operations import inspect_native_service
-    from tests.unit.loom.queue.test_coordinator_upgrade import _predecessor
+    from tests.unit.loom.queue.test_current_storage import current_config
     from tests.integration.fleet.test_releases import bundle as release_bundle
 
-    # The native migration fixture represents the retained schema-12 producer.
-    config = _predecessor(tmp_path)
+    config = current_config(tmp_path)
+    if case == "older":
+        with sqlite3.connect(config.control_database) as conn:
+            conn.execute("PRAGMA user_version = 18")
     descriptor = release_bundle(tmp_path / "candidate")
     release = verify_release(descriptor)
     installed = tmp_path / "admin/releases" / release["descriptor_sha256"] / "bundle"
@@ -530,7 +533,7 @@ def test_candidate_probe_refuses_before_native_mutation(tmp_path, case):
         "expected_root_id": inspect_native_service(config.coordinator_root).owner,
     }
     expected = {
-        "older": "unsupported direct Fleet migration",
+        "older": "unsupported_storage_version",
         "capability": "unsupported_capability",
         "wheel": "changed",
     }[case]

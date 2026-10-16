@@ -35,6 +35,7 @@ import time
 from typing import TYPE_CHECKING, Any, Iterator, cast
 from uuid import uuid4
 
+from loom._sqlite_inspection import inspect_sqlite_database
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.timestamps import parse_timestamp, utc_timestamp
 from .operations import OperatorObservation
@@ -1534,6 +1535,10 @@ class AdmissionNotFoundError(QueueServiceError):
     """The requested managed admission does not exist."""
 
 
+class _RecoveryNotAccepted(QueueConflictError):
+    """The guarded recovery request was refused before changing its intent."""
+
+
 @dataclass(frozen=True, slots=True)
 class AdmissionWaitResult:
     kind: AdmissionWaitKind
@@ -1721,18 +1726,6 @@ class LocalDaemon:
         except Exception:
             raise
 
-    @classmethod
-    def upgrade_coordinator_root(cls, config: LocalDaemonConfig) -> tuple[str, int]:
-        """Upgrade a stopped, protected deployment's coordinator from 12 to the current version.
-
-        The native owner checks the role lock, deployment binding and database
-        structure, retains a private SQLite backup and commits the schema change
-        atomically. Worker roots and journals are opened read-only for identity
-        validation and retain their existing version and contents.
-        """
-        from ._coordinator_upgrade import upgrade_coordinator_root
-
-        return upgrade_coordinator_root(config)
 
     @classmethod
     def initialize_agent_root(cls, root: Path) -> None:
@@ -1752,6 +1745,9 @@ class LocalDaemon:
         if self.config.deployment_root is not None:
             _validate_deployment_binding(self.config)
         _validate_distinct_roots(self.config)
+        _open_root(self.config.coordinator_root, role="coordinator")
+        if self.config.agent_root is not None:
+            _open_root(self.config.agent_root, role="local-agent")
         coordinator_lock = _acquire_lock(self.config.coordinator_root)
         agent_lock = None
         if self.config.agent_root is not None:
@@ -1768,12 +1764,8 @@ class LocalDaemon:
             )
             from .retirement import require_unretired
             require_unretired(self.config.coordinator_root)
-            # Additive delivery migration retains all historical inline bytes.
             with self._connection() as conn:
                 conn.execute("BEGIN IMMEDIATE")
-                columns = {row[1] for row in conn.execute("PRAGMA table_info(agent_deliveries)")}
-                if "reference_json" not in columns:
-                    conn.execute("ALTER TABLE agent_deliveries ADD COLUMN reference_json TEXT")
                 retained = conn.execute("SELECT value FROM root_metadata WHERE key = 'assignment_payload_root_id'").fetchone()
                 selected = self.config.assignment_payload_root_id
                 if retained is not None and retained[0] != selected:
@@ -2714,7 +2706,6 @@ class LocalDaemon:
         )
 
 
-
     def _resume_pending_admission_retries(
         self, execution: LocalDaemonExecution
     ) -> None:
@@ -3109,7 +3100,7 @@ class LocalDaemon:
                         or str(prior["request_json"]) != encoded
                         or str(prior["request_digest"]) != digest
                     ):
-                        raise QueueConflictError("recovery operation conflicts")
+                        raise _RecoveryNotAccepted("recovery operation conflicts")
                     if str(prior["state"]) not in {"pending", "evidence_confirmed"}:
                         return freeze_plain_data(
                             json.loads(str(prior["result_json"])),
@@ -3117,7 +3108,10 @@ class LocalDaemon:
                         )
                     recorded_at = str(prior["recorded_at"])
                 else:
-                    execution.validate_recovery_admission(request)
+                    try:
+                        execution.validate_recovery_admission(request)
+                    except QueueConflictError as exc:
+                        raise _RecoveryNotAccepted(str(exc)) from exc
                     conn.execute("BEGIN IMMEDIATE")
                     raced = conn.execute(
                         "SELECT recovery_id FROM recovery_operations "
@@ -3125,7 +3119,7 @@ class LocalDaemon:
                         (request.recovery_id,),
                     ).fetchone()
                     if raced is not None:
-                        raise QueueConflictError("recovery operation conflicts")
+                        raise _RecoveryNotAccepted("recovery operation conflicts")
                     recorded_at = self._accepted_time(conn)
                     conn.execute(
                         "INSERT INTO recovery_operations("
@@ -4440,9 +4434,7 @@ def _initialize_root(path: Path, *, role: str) -> None:
     database.chmod(0o600)
 
 
-def _initialize_coordinator_schema(
-    conn: sqlite3.Connection, *, preparation: bool = True, action_results: bool = True
-) -> None:
+def _initialize_coordinator_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE TABLE daemon_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
     )
@@ -4510,38 +4502,25 @@ def _initialize_coordinator_schema(
     )
     from ._maintenance import initialize as initialize_maintenance
     initialize_maintenance(conn)
-    if preparation:
-        _initialize_preparation_schema(conn)
-    if action_results:
-        from ._action_results import initialize_action_results
+    _initialize_preparation_schema(conn)
+    from ._action_results import initialize_action_results
 
-        initialize_action_results(conn)
+    initialize_action_results(conn)
 
 
-def _initialize_preparation_schema(
-    conn: sqlite3.Connection, *, legacy: bool = False, context: bool = True
-) -> None:
+def _initialize_preparation_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE TABLE preparation_operations ("
         "operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
-        + (
-            "kind TEXT NOT NULL, queue_item_id TEXT UNIQUE, "
-            if legacy
-            else "kind TEXT NOT NULL, queue_item_id TEXT, "
-        )
-        + "intent_digest TEXT NOT NULL, request_json TEXT NOT NULL, "
-        + (
-            "selected_json TEXT NOT NULL, target_name TEXT NOT NULL UNIQUE, "
-            if legacy
-            else "selected_json TEXT NOT NULL, target_name TEXT, "
-        )
-        + "child_name TEXT NOT NULL UNIQUE, child_admission_id TEXT, "
+        "kind TEXT NOT NULL, queue_item_id TEXT, "
+        "intent_digest TEXT NOT NULL, request_json TEXT NOT NULL, "
+        "selected_json TEXT NOT NULL, target_name TEXT, "
+        "child_name TEXT NOT NULL UNIQUE, child_admission_id TEXT, "
         "dispatch_claimed INTEGER NOT NULL DEFAULT 0 CHECK(dispatch_claimed IN (0, 1)), "
         "state TEXT NOT NULL, result_code TEXT, result_json TEXT NOT NULL, "
-        "cancellation_requested INTEGER NOT NULL DEFAULT 0 CHECK(cancellation_requested IN (0, 1))"
-        + (", accepted_at TEXT" if context else "") + ")"
+        "cancellation_requested INTEGER NOT NULL DEFAULT 0 CHECK(cancellation_requested IN (0, 1)), "
+        "accepted_at TEXT)"
     )
-
     conn.execute(
         "CREATE TABLE preparation_cancellations ("
         "operation_id TEXT PRIMARY KEY, target_operation_id TEXT NOT NULL UNIQUE "
@@ -4550,10 +4529,7 @@ def _initialize_preparation_schema(
     )
 
 
-def _validate_coordinator_schema(
-    conn: sqlite3.Connection, *, preparation: bool, legacy_preparation: bool = False,
-    action_results: bool = True, context: bool = True,
-) -> None:
+def _validate_coordinator_schema(conn: sqlite3.Connection) -> None:
     """Validate durable table/identity constraints against the initialization owner."""
 
     def shape(database: sqlite3.Connection, table: str) -> tuple[object, ...]:
@@ -4578,12 +4554,7 @@ def _validate_coordinator_schema(
 
     try:
         with sqlite3.connect(":memory:") as expected:
-            _initialize_coordinator_schema(
-                expected, preparation=False,
-                action_results=action_results,
-            )
-            if preparation:
-                _initialize_preparation_schema(expected, legacy=legacy_preparation, context=context)
+            _initialize_coordinator_schema(expected)
             tables = tuple(
                 row[0]
                 for row in expected.execute(
@@ -4594,21 +4565,11 @@ def _validate_coordinator_schema(
                 raise QueueStorageError(
                     "coordinator control schema is incomplete or incompatible"
                 )
-        if (
-            not preparation
-            and conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name IN ('preparation_operations', 'preparation_cancellations')"
-            ).fetchone()
-            is not None
-        ):
-            raise QueueStorageError(
-                "coordinator predecessor contains partial preparation state"
-            )
     except sqlite3.Error as exc:
         raise QueueStorageError("coordinator control schema is invalid") from exc
 
 
-def _open_root(path: Path, *, role: str, schema_version: int | None = None) -> str:
+def _open_root(path: Path, *, role: str) -> str:
     _validate_private_directory(path)
     database = path / "control.sqlite"
     if not database.is_file():
@@ -4616,34 +4577,18 @@ def _open_root(path: Path, *, role: str, schema_version: int | None = None) -> s
     mode = stat.S_IMODE(database.stat().st_mode)
     if mode & 0o077:
         raise QueueStorageError(f"{role} root must be owner-permissioned")
-    with sqlite3.connect(database) as conn:
+    with inspect_sqlite_database(database) as conn:
         version = int(conn.execute("PRAGMA user_version").fetchone()[0])
         expected_version = (
-            schema_version
-            if schema_version is not None
-            else (
-                _COORDINATOR_SCHEMA_VERSION
-                if role == "coordinator"
-                else _AGENT_SCHEMA_VERSION
-            )
+            _COORDINATOR_SCHEMA_VERSION if role == "coordinator" else _AGENT_SCHEMA_VERSION
         )
         if version != expected_version:
-            if role == "coordinator" and version in (12, 15, 16, 17, 18):
-                raise QueueStorageError(
-                    f"coordinator schema {version} requires an offline upgrade with loom queue daemon-upgrade"
-                )
             raise QueueStorageError(
                 f"{role} daemon schema is unsupported; fresh roots are required"
             )
         validate_agent_session_schema(conn, coordinator=role == "coordinator")
         if role == "coordinator":
-            _validate_coordinator_schema(
-                conn,
-                preparation=version in (15, 16, 17, 18, _COORDINATOR_SCHEMA_VERSION),
-                legacy_preparation=version == 15,
-                action_results=version >= 17,
-                context=version >= 18,
-            )
+            _validate_coordinator_schema(conn)
         values = {
             str(row[0]): str(row[1])
             for row in conn.execute("SELECT key, value FROM root_metadata")

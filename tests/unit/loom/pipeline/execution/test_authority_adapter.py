@@ -298,7 +298,9 @@ def _prepare_authority_stage_job(
     plan = plan_pipeline(
         spec,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
+        plans=run_store,
         artifact_store=LocalArtifactStore(run_store.local_artifact_root(run_uri)),
         persist=True,
     )
@@ -309,7 +311,13 @@ def _prepare_authority_stage_job(
         ).to_dict(),
     )
     prepare_stage_attempt(
-        run_store=run_store,
+        stage_state=run_store,
+        stage_workspaces=run_store,
+        local_paths=run_store,
+        reliability=run_store,
+        prepared_runs=run_store,
+        config=run_store,
+        run_status=RunStatus.RUNNING,
         run_uri=run_uri,
         stage=spec.get_stage("build"),
         stage_plan=plan.ordered_stage_plans[0],
@@ -445,12 +453,20 @@ def test_authority_backed_worker_request_carries_attempt_fencing_metadata(
     plan = plan_pipeline(
         _pipeline(),
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
+        plans=run_store,
         artifact_store=LocalArtifactStore(run_store.local_artifact_root(run_uri)),
         persist=True,
     )
     request = prepare_stage_attempt(
-        run_store=run_store,
+        stage_state=run_store,
+        stage_workspaces=run_store,
+        local_paths=run_store,
+        reliability=run_store,
+        prepared_runs=run_store,
+        config=run_store,
+        run_status=RunStatus.RUNNING,
         run_uri=run_uri,
         stage=_pipeline().get_stage("build"),
         stage_plan=plan.ordered_stage_plans[0],
@@ -646,6 +662,28 @@ def test_http_authority_admission_forwards_idempotency_key(tmp_path: Path) -> No
     store.create_run(run_uri, metadata={"owner": "unit"}, idempotency_key="r1")
     with pytest.raises(AuthorityStoreError, match="already exists"):
         store.create_run(run_uri, metadata={"owner": "unit"}, idempotency_key="r2")
+
+
+def test_http_event_projection_preserves_producer_identity_and_occurrence(tmp_path: Path) -> None:
+    store = _http_authority_run_store(tmp_path)
+    run_uri = _run_uri(tmp_path)
+    store.create_run(run_uri)
+    event = PipelineEvent(
+        event_id="producer-event",
+        scope=EventScope.stage("build"),
+        event_type="stage.started",
+        timestamp="2020-01-01T00:00:00Z",
+        payload={"attempt": 1},
+    )
+
+    record = store.append_event(run_uri, event)
+
+    assert record.event_id == "producer-event"
+    assert record.occurred_at == "2020-01-01T00:00:00Z"
+    assert record.sequence == 1
+    assert record.primary_resource.identifiers["stage_name"] == "build"
+    assert record.payload == {"attempt": 1}
+    assert store.local_store.read_events(run_uri) == (record,)
 
 
 def test_http_authority_reports_a_confirmed_local_orphan(tmp_path: Path) -> None:

@@ -601,17 +601,11 @@ class AuthorityClientBackedPerRunAuthorityStore(PerRunAuthorityStore):
         # events local in Phase 11 while lifecycle mutations go through HTTP.
         sequence = self._event_sequences.get(run_uri, 0) + 1
         self._event_sequences[run_uri] = sequence
-        payload = cast(
-            Mapping[str, PlainData],
-            thaw_plain_data(event.payload, path="event.payload"),
-        )
-        return PipelineEventRecord(
+        return PipelineEventRecord.from_event(
+            event,
             run_uri=run_uri,
             sequence=sequence,
-            timestamp=event.timestamp or utc_timestamp(),
-            scope=event.scope,
-            event_type=event.event_type,
-            payload=payload,
+            occurred_at=event.timestamp or utc_timestamp(),
         )
 
     def append_event_sink_failure(
@@ -913,17 +907,12 @@ class AuthorityBackedSerialRunStore:
             finished_at=snapshot.finished_at,
         )
 
-    def write_run_status(self, run_uri: str, status: RunStatusRecord) -> None:
-        self.write_run_status_with_intent(
-            run_uri, status, intent=TransitionIntent.NORMAL
-        )
-
-    def write_run_status_with_intent(
+    def write_run_status(
         self,
         run_uri: str,
         status: RunStatusRecord,
         *,
-        intent: TransitionIntent,
+        intent: TransitionIntent = TransitionIntent.NORMAL,
     ) -> None:
         snapshot = self.authority_store.snapshot(run_uri)
         current = snapshot.status
@@ -1201,7 +1190,7 @@ class AuthorityBackedSerialRunStore:
             PipelineEvent(
                 scope=event.scope,
                 event_type=event.event_type,
-                timestamp=record.timestamp,
+                timestamp=record.occurred_at,
                 payload=cast(
                     Mapping[str, PlainData],
                     thaw_plain_data(event.payload, path="event.payload"),

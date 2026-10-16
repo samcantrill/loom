@@ -67,9 +67,8 @@ def _launch(
     )
 
 
-@pytest.mark.parametrize("legacy", [False, True])
 def test_saved_container_launch_and_receipt_decode_without_storage_access(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, legacy: bool,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     profile = replace(_profile(), container={
         "kind": "apptainer", "container": {"image": {"reference": "/original/image.sif"}},
@@ -79,7 +78,6 @@ def test_saved_container_launch_and_receipt_decode_without_storage_access(
     launch = ResidentWorkerLaunch(
         "owner", "epoch", "agent-A", "session-A", "assignment-A", "execution-A",
         "fence-A", "operation-A", "a" * 64, tmp_path, profile, {},
-        schema_version=None if legacy else 2,
     )
     saved = _launch_value(launch)
     digest = launch.spec_digest
@@ -758,46 +756,12 @@ def test_failed_launch_with_owned_child_cannot_leave_a_live_starting_receipt(
         assert child.settled()
 
 
-def test_legacy_launch_writer_shape_and_digest_are_preserved(tmp_path: Path) -> None:
-    profile = _profile()
-    legacy_profile = {
-        "project_root": str(profile.project_root),
-        "python_executable": str(profile.python_executable),
-        "descriptor": dict(profile.descriptor),
-        "environment": {},
-        "readiness_identity": None,
-    }
-    legacy = {
-        "supervisor_id": "supervisor-A",
-        "continuity_epoch": "epoch-A",
-        "agent_id": "agent-A",
-        "session_id": "session-A",
-        "assignment_id": "assignment-A",
-        "process_execution_id": "process-A",
-        "execution_fence": "fence-A",
-        "launch_operation_id": "launch-A",
-        "bundle_digest": "a" * 64,
-        "workspace_root": str(tmp_path.resolve()),
-        "profile": legacy_profile,
-        "environment": {"LANG": "C.UTF-8"},
-    }
-    old_digest_input = {
-        **legacy,
-        "profile_id": profile.profile_id,
-        "profile_fingerprint": profile.fingerprint,
-    }
-    old_digest = hashlib.sha256(
-        json.dumps(
-            old_digest_input, sort_keys=True, separators=(",", ":"), allow_nan=False
-        ).encode()
-    ).hexdigest()
-
-    decoded = _launch_from_value(json.loads(json.dumps(legacy)))
-    assert decoded.schema_version is None
-    assert decoded.resource_controls is None
-    assert _launch_value(decoded) == legacy
-    assert decoded.spec_digest == old_digest
-
+def test_current_launch_round_trip_binds_resource_controls(tmp_path: Path) -> None:
+    agent_root = tmp_path / "agent"
+    agent_root.mkdir()
+    supervisor = AgentProcessSupervisor.initialize(
+        agent_root, agent_id="agent-A", profiles=(_profile(),)
+    )
     controls = (
         {
             "resource": "gpu",
@@ -806,14 +770,11 @@ def test_legacy_launch_writer_shape_and_digest_are_preserved(tmp_path: Path) -> 
             "disposition": "requested",
         },
     )
-    current = replace(decoded, schema_version=2, resource_controls=controls)
+    current = replace(_launch(supervisor, tmp_path), resource_controls=controls)
     current_value = _launch_value(current)
     assert current_value["schema_version"] == 2
     assert _launch_from_value(current_value).spec_digest == current.spec_digest
-    assert current.spec_digest != old_digest
     assert replace(current, resource_controls=()).spec_digest != current.spec_digest
-    with pytest.raises(AgentProcessSupervisorError, match="legacy"):
-        replace(decoded, resource_controls=controls)
     with pytest.raises(AgentProcessSupervisorError, match="invalid fields"):
         _launch_from_value(
             {
@@ -821,6 +782,10 @@ def test_legacy_launch_writer_shape_and_digest_are_preserved(tmp_path: Path) -> 
                 "resource_controls": [{**controls[0], "binding": "private-gpu"}],
             }
         )
+    retired = {key: value for key, value in current_value.items()
+               if key not in {"schema_version", "resource_controls"}}
+    with pytest.raises(AgentProcessSupervisorError, match="launch request is invalid"):
+        _launch_from_value(retired)
 
 
 def test_launch_exact_replay_has_one_root_and_conflicting_identity_rejects(
@@ -892,25 +857,94 @@ def test_rejection_is_durable_and_blocks_all_assignment_launches(tmp_path: Path)
         assert conn.execute("SELECT COUNT(*) FROM launches").fetchone()[0] == 0
 
 
-def test_supervisor_v4_migrates_rejection_state(tmp_path: Path) -> None:
+@pytest.mark.parametrize("version", [2, 3, 4, 5])
+def test_retired_supervisor_journal_is_rejected_unchanged(tmp_path: Path, version: int) -> None:
     agent_root = tmp_path / "agent"
     agent_root.mkdir()
-    original = AgentProcessSupervisor.initialize(
+    AgentProcessSupervisor.initialize(
         agent_root, agent_id="agent-A", profiles=(_profile(),)
     )
-    with sqlite3.connect(agent_root / "supervisor/supervisor.sqlite") as conn:
-        conn.execute("DROP TABLE rejected_assignments")
+    root = agent_root / "supervisor"
+    with sqlite3.connect(root / "supervisor.sqlite") as conn:
         conn.execute("DROP INDEX pending_temporary_storage")
         conn.execute("ALTER TABLE launches DROP COLUMN temporary_storage_pending")
         conn.execute("ALTER TABLE launches DROP COLUMN temporary_storage_error")
         conn.execute("ALTER TABLE launches DROP COLUMN start_error")
-        conn.execute("UPDATE metadata SET value = '4' WHERE key = 'schema_version'")
-    migrated = AgentProcessSupervisor(
-        agent_root / "supervisor", agent_id="agent-A", profiles=(_profile(),)
+        if version < 5:
+            conn.execute("DROP TABLE rejected_assignments")
+        if version < 4:
+            conn.execute("DROP TABLE reboot_recoveries")
+        if version < 3:
+            conn.execute("ALTER TABLE launches DROP COLUMN successful_exit")
+        conn.execute("UPDATE metadata SET value = ? WHERE key = 'schema_version'", (str(version),))
+    before = {path.name: path.read_bytes() for path in root.iterdir()}
+    with pytest.raises(AgentProcessSupervisorError, match="requires_reinitialization"):
+        AgentProcessSupervisor(root, agent_id="agent-A", profiles=(_profile(),))
+    assert {path.name: path.read_bytes() for path in root.iterdir()} == before
+
+
+@pytest.mark.parametrize("version", [5, 6])
+def test_interrupted_write_recovers_only_current_supervisor(tmp_path: Path, version: int) -> None:
+    agent_root = tmp_path / "agent"
+    agent_root.mkdir()
+    owner = AgentProcessSupervisor.initialize(
+        agent_root, agent_id="agent-A", profiles=(_profile(),)
     )
-    assert migrated.supervisor_id == original.supervisor_id
-    assert migrated.continuity_epoch == original.continuity_epoch
-    assert migrated.reject_unstarted_assignment("assignment-A") is True
+    owner.reject_unstarted_assignment("retained")
+    root = agent_root / "supervisor"
+    database = root / "supervisor.sqlite"
+    if version == 5:
+        with sqlite3.connect(database) as conn:
+            conn.execute("DROP INDEX pending_temporary_storage")
+            for column in ("temporary_storage_pending", "temporary_storage_error", "start_error"):
+                conn.execute(f"ALTER TABLE launches DROP COLUMN {column}")
+            conn.execute("UPDATE metadata SET value = '5' WHERE key = 'schema_version'")
+    # Force a real rollback journal to disk, then exit before committing. This
+    # models interruption during an ordinary durable assignment rejection.
+    subprocess.run(
+        [sys.executable, "-c", """
+import os, sqlite3, sys
+conn = sqlite3.connect(sys.argv[1])
+conn.execute("PRAGMA cache_size = 1")
+conn.execute("BEGIN IMMEDIATE")
+conn.executemany("INSERT INTO rejected_assignments VALUES (?)",
+                 ((f"uncommitted-{i}-" + "x" * 500,) for i in range(2000)))
+os._exit(0)
+""", str(database)], check=True,
+    )
+    with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as conn:
+        with pytest.raises(sqlite3.OperationalError) as error:
+            conn.execute("SELECT key, value FROM metadata").fetchall()
+        assert error.value.sqlite_errorcode == sqlite3.SQLITE_READONLY_ROLLBACK
+    if version == 5:
+        before = {path.name: path.read_bytes() for path in root.iterdir()}
+        with pytest.raises(AgentProcessSupervisorError, match="requires_reinitialization"):
+            AgentProcessSupervisor(root, agent_id="agent-A", profiles=(_profile(),))
+        assert {path.name: path.read_bytes() for path in root.iterdir()} == before
+    else:
+        reopened = AgentProcessSupervisor(root, agent_id="agent-A", profiles=(_profile(),))
+        assert reopened.supervisor_id == owner.supervisor_id
+        assert reopened.continuity_epoch == owner.continuity_epoch
+        with sqlite3.connect(database) as conn:
+            assert conn.execute("SELECT assignment_id FROM rejected_assignments").fetchall() == [
+                ("retained",),
+            ]
+
+
+def test_service_start_refuses_retired_process_free_root_without_creating_lock(tmp_path: Path) -> None:
+    configuration = SupervisorLaunchConfiguration("agent-A", (_profile(),))
+    AgentProcessSupervisorService.initialize_process_free(tmp_path, configuration=configuration)
+    root = tmp_path / "supervisor"
+    with sqlite3.connect(root / "supervisor.sqlite") as conn:
+        conn.execute("DROP INDEX pending_temporary_storage")
+        for column in ("temporary_storage_pending", "temporary_storage_error", "start_error"):
+            conn.execute(f"ALTER TABLE launches DROP COLUMN {column}")
+        conn.execute("UPDATE metadata SET value = '5' WHERE key = 'schema_version'")
+    before = {path.name: path.read_bytes() for path in root.iterdir()}
+    assert "service.lock" not in before
+    with pytest.raises(AgentProcessSupervisorError, match="requires_reinitialization"):
+        AgentProcessSupervisorService.serve_initialized(tmp_path, configuration=configuration)
+    assert {path.name: path.read_bytes() for path in root.iterdir()} == before
 
 
 def test_launch_and_rejection_have_only_one_winner(tmp_path: Path) -> None:
@@ -1644,9 +1678,8 @@ def test_preparation_root_mapping_is_retained_in_launch_identity(tmp_path: Path)
     assert _profile_from_value(retained).preparation_shared_roots == {"projects": tmp_path / "first-mount"}
 
 
-@pytest.mark.parametrize("legacy", [False, True])
-def test_successful_exit_qualification_is_durable_and_legacy_is_unqualified(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, legacy: bool,
+def test_successful_exit_qualification_is_durable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     profile = _profile()
     (tmp_path / "agent").mkdir()
@@ -1673,21 +1706,12 @@ def test_successful_exit_qualification_is_durable_and_legacy_is_unqualified(
     assert contained.state is SupervisorLaunchState.CONTAINED
     assert contained.successful_exit
     assert supervisor.contain(launch) == contained
-    if legacy:
-        with sqlite3.connect(tmp_path / "agent" / "supervisor" / "supervisor.sqlite") as conn:
-            conn.execute("ALTER TABLE launches DROP COLUMN successful_exit")
-            conn.execute("DROP TABLE rejected_assignments")
-            conn.execute("DROP INDEX pending_temporary_storage")
-            conn.execute("ALTER TABLE launches DROP COLUMN temporary_storage_pending")
-            conn.execute("ALTER TABLE launches DROP COLUMN temporary_storage_error")
-            conn.execute("ALTER TABLE launches DROP COLUMN start_error")
-            conn.execute("UPDATE metadata SET value = '2' WHERE key = 'schema_version'")
     reopened = AgentProcessSupervisor(
         tmp_path / "agent" / "supervisor", agent_id="agent-A", profiles=(profile,)
     )
     retained = reopened.contain(launch)
     assert retained.state is SupervisorLaunchState.CONTAINED
-    assert retained.successful_exit is (not legacy)
+    assert retained.successful_exit
 
 
 @pytest.mark.parametrize("exit_code", [0, 1])
@@ -1808,7 +1832,7 @@ def test_changed_boot_preserves_exact_historical_launch_and_terminal_truth(
             reopened.recover_reboot("same-boot")
 
 
-@pytest.mark.parametrize("fault", ["host", "legacy", "root"])
+@pytest.mark.parametrize("fault", ["host", "root"])
 def test_reboot_requires_prelaunch_host_root_and_boot_evidence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1826,15 +1850,6 @@ def test_reboot_requires_prelaunch_host_root_and_boot_evidence(
     owner.bind_execution_host()
     if fault == "host":
         boot["host"] = "host-b"
-    elif fault == "legacy":
-        with owner._connect() as conn:
-            conn.execute("DELETE FROM metadata WHERE key = 'boot_evidence'")
-            conn.execute("DROP TABLE rejected_assignments")
-            conn.execute("DROP INDEX pending_temporary_storage")
-            conn.execute("ALTER TABLE launches DROP COLUMN temporary_storage_pending")
-            conn.execute("ALTER TABLE launches DROP COLUMN temporary_storage_error")
-            conn.execute("ALTER TABLE launches DROP COLUMN start_error")
-            conn.execute("UPDATE metadata SET value = '3' WHERE key = 'schema_version'")
     else:
         destination = tmp_path / "moved"
         root.rename(destination)

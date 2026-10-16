@@ -10,7 +10,10 @@ import pytest
 
 from loom.queue import LocalDaemonPrincipal, LocalDaemonRole
 from loom.queue.agent_sessions import AgentControl, AgentControlKind
-from loom.queue.agent_session_transport import _RemoteAgentJournal, _decode
+from loom.queue import agent_session_transport as transport
+from loom.queue.agent_session_transport import (
+    AgentTlsClientConfig, LocalDaemonAgentHttpClient, _RemoteAgentJournal, _decode,
+)
 from loom.queue.errors import QueueConflictError, QueueServiceError
 from tests.unit.loom.queue.test_agent_sessions import (
     _delivery_journal, _prepare_delivery_poll, _view,
@@ -184,3 +187,46 @@ def test_retained_drain_survives_restart_without_fencing_unanswered_poll(tmp_pat
         assert journal.next_unacknowledged_control() is None
     finally:
         journal.close()
+
+
+@pytest.mark.parametrize("limit", [None, "count", "bytes"])
+def test_current_client_preserves_receipts_when_wait_envelope_is_full(tmp_path, monkeypatch, limit):
+    journal, session = _delivery_journal(tmp_path / "agent")
+    control = control_for(session)
+    journal.retain_control(control)
+    ids = journal.received_control_ids(session.session_id)
+    client = LocalDaemonAgentHttpClient(AgentTlsClientConfig(
+        "https://localhost:9443", tmp_path / "ca.pem",
+        tmp_path / "agent.pem", tmp_path / "agent.key",
+    ))
+    client._journal = journal
+    exchanges = []
+
+    def exchange(operation, payload):
+        exchanges.append((operation, payload))
+        return {"control": None, "assignment_control": None}
+
+    monkeypatch.setattr(client, "_call", exchange)
+    # Reduce the admission bound around a real retained receipt to exercise
+    # the same current-population fallback without creating thousands of rows.
+    if limit == "count":
+        monkeypatch.setattr(transport, "_MAX_RECEIVED_CONTROLS", 0)
+    elif limit == "bytes":
+        monkeypatch.setattr(transport, "_MAX_BODY_BYTES", 1)
+    try:
+        assert list(client._receive_service_controls()) == []
+        if limit is None:
+            assert len(exchanges) == 1
+            operation, payload = exchanges[0]
+            assert operation == "control_wait"
+            assert list(payload["received_operation_ids"]) == ids
+        else:
+            assert exchanges == [
+                ("assignment_control", {"session_id": session.session_id}),
+                ("control", {"session_id": session.session_id}),
+            ]
+        assert journal.received_control_ids(session.session_id) == ids
+        assert journal.next_received_control(session.session_id) == control
+        assert journal.next_unacknowledged_control() is None
+    finally:
+        client.close()

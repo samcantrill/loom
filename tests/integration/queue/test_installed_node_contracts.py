@@ -90,7 +90,7 @@ def test_installed_text_report_reload_workers_and_completed_reuse(tmp_path, opt_
         entry = store.read_prepared_run(uri)["metadata"]["loom.project_contracts"]
         assert set(entry["data"]) == {"schema_version", "namespace", "report_ref"}
         assert entry["data"]["report_ref"] == first["report_ref"]
-        report = cast(Any, load_contract_report(store, uri))
+        report = cast(Any, load_contract_report(store, uri, config=store, local_paths=store))
         # Retained contracts cannot claim complete native evidence from a
         # primary alone, even though their checked payloads remain inline.
         from loom.preparation import load_preparation_report
@@ -103,7 +103,7 @@ def test_installed_text_report_reload_workers_and_completed_reuse(tmp_path, opt_
         companion_bytes = companion_path.read_bytes()
         companion_path.unlink()
         with pytest.raises(QueueConflictError):
-            load_contract_report(store, uri)
+            load_contract_report(store, uri, config=store, local_paths=store)
         companion_path.write_bytes(companion_bytes)
         assert load_preparation_report(report_ref, primary_path) == report
 
@@ -148,6 +148,8 @@ def test_installed_text_report_reload_workers_and_completed_reuse(tmp_path, opt_
                 store,
                 StageWorkerRequest.from_dict(missing),
                 intent.pipeline.get_stage("author"),
+                config=store,
+                local_paths=store,
             )
         prepared = store.read_prepared_run(uri)
         wrong_reference = deepcopy(prepared)
@@ -156,7 +158,7 @@ def test_installed_text_report_reload_workers_and_completed_reuse(tmp_path, opt_
         )
         store.write_prepared_run(uri, wrong_reference)
         with pytest.raises(ValueError, match="namespace"):
-            load_contract_report(store, uri)
+            load_contract_report(store, uri, config=store, local_paths=store)
         with pytest.raises(QueueServiceError, match="missing or changed"):
             load_managed_local_intent(service.daemon, uri)
         store.write_prepared_run(uri, prepared)

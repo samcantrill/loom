@@ -625,7 +625,7 @@ configure a real session, enroll credentials, or start experiments.
 | New `src/loom/coordinator.py` | Public native client facade | Python, CLI, and MCP share one behavior |
 | Existing socket/HTTP transports | Shared control mechanics, missing HTTP operations, deadlines/errors/guard | Consistent remote and local control |
 | Existing CLI client commands | Common `--endpoint` / `--connection` and optional guard | Preserve familiar commands with both transports |
-| `LocalDaemonSocketClient` | Thin compatibility adapter retaining old defaults, signatures, and errors | Existing consumers remain supported |
+| `CoordinatorClient` / `CoordinatorOperatorClient` | Current role-specific clients with shared native control codecs | Unix and HTTPS; obsolete socket adapter removed |
 | Worker HTTP client | Extract compatible connection mechanics; retain worker lifecycle | Submitting clients need no worker journal or supervisor |
 | Internal decoders/dispatch and socket busy retry | Remove duplicates after migration; use bounded saturation handling | Reduce divergence and preserve ordinary/worker progress |
 | Coordinator control state | Minimal durable preparation linkage/reconciliation | Recover accepted work after requester loss or restart |
@@ -642,6 +642,10 @@ scheduled in Stage 40. Administrative commands stay outside client migration
 unless they already belong to that client view.
 
 ### Retained-root upgrade and rollout
+
+Historical design record: the current-contract cutover removes the upgrade
+command described below. Current operations require complete schema 19/12 roots;
+see [downstream operations](../downstream-operations.md#current-control-roots).
 
 At the approved evidence revision, coordinator and worker roots both require
 schema 12. Phase 2 splits role-version checks: coordinator advances to 13 and

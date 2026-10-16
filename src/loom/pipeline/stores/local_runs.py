@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from loom.pipeline.transition_policy import TransitionIntent
+
 import hashlib
 import os
 import socket
@@ -38,10 +40,8 @@ from loom.pipeline.status import RunStatusRecord, StageStatusRecord
 from loom.serialization import (
     PlainData,
     ensure_plain_data,
-    freeze_plain_data,
     json_loads,
     stable_json_dumps,
-    thaw_plain_data,
 )
 from loom.serialization.errors import DeserializationError, PlainDataError
 from loom.timestamps import parse_timestamp, utc_timestamp
@@ -448,8 +448,13 @@ class LocalRunStore:
                 f"Malformed run status at {status_path}: {exc}"
             ) from exc
 
-    def write_run_status(self, run_uri: str, status: RunStatusRecord) -> None:
-        """Write explicit legacy evidence; native execution does not use this writer."""
+    def write_run_status(
+        self, run_uri: str, status: RunStatusRecord, *,
+        intent: TransitionIntent = TransitionIntent.NORMAL,
+    ) -> None:
+        """Write an ordinary evidence projection, never an authority transition."""
+        if intent is not TransitionIntent.NORMAL:
+            raise ValueError("local status evidence cannot apply authority transition intent")
         self._validate_run_uri_for_status(run_uri, status.run_uri)
         run_uri_text = validate_run_uri(run_uri, field="run_uri")
         payload = status.to_dict()
@@ -1102,26 +1107,21 @@ class LocalRunStore:
         with self._event_lock:
             existing = self.read_events(run_uri_text)
             matching = next(
-                (record for record in existing if record.event_id == event.event_id), None
+                (record for record in existing if record.event_id == event.event_id),
+                None,
             )
             if matching is not None:
-                if not _event_matches_record(event, matching):
+                if not matching.matches_event(event):
                     raise CorruptStoreDocumentError(
                         f"event_id {event.event_id!r} conflicts with an existing event"
                     )
                 return matching
             sequence = existing[-1].sequence + 1 if existing else 1
-            record = PipelineEventRecord(
+            record = PipelineEventRecord.from_event(
+                event,
                 run_uri=run_uri_text,
                 sequence=sequence,
-                timestamp=event.timestamp or utc_timestamp(),
-                scope=event.scope,
-                event_type=event.event_type,
-                payload=cast(
-                    Mapping[str, PlainData],
-                    thaw_plain_data(event.payload, path="event.payload"),
-                ),
-                event_id=event.event_id,
+                occurred_at=event.timestamp or utc_timestamp(),
             )
             try:
                 with path.open("a", encoding="utf-8") as handle:
@@ -2211,17 +2211,6 @@ def _reliability_id_key(value: str) -> str:
 
 def _run_uri_from_reliability_path(path: Path) -> str:
     return path_to_run_uri(path.parents[2])
-
-
-def _event_matches_record(event: PipelineEvent, record: PipelineEventRecord) -> bool:
-    if (
-        record.event_type != event.event_type
-        or record.scope != event.scope
-        or record.payload
-        != freeze_plain_data(event.payload, path="event.payload")
-    ):
-        return False
-    return event.timestamp is None or record.timestamp == event.timestamp
 
 
 __all__ = ["LocalRunStore"]

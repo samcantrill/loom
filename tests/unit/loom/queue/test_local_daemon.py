@@ -21,27 +21,8 @@ import pytest
 
 from loom.coordinator import CoordinatorClient, CoordinatorClientError
 import loom.queue.local_daemon_execution as local_daemon_execution
-from loom.queue import (
-    AdmissionNotFoundError,
-    AgentControl,
-    CoordinatorSchedulingReload,
-    LocalDaemon,
-    LocalDaemonAdmissionRequest,
-    LocalDaemonAdmissionState,
-    LocalDaemonConfig,
-    LocalDaemonSchedulingComponents,
-    LocalDaemonPrincipal,
-    LocalDaemonRole,
-    LocalDaemonSocketClient,
-    LocalDaemonSocketServer,
-    ManagedRecoveryTarget,
-    RecoverUnknownAssignment,
-    QueueConflictError,
-    QueueServiceError,
-    QueueStorageError,
-    ResidentWorkerLaunchProfile,
-    TimeRecoveryRequest,
-)
+from loom.queue import AdmissionNotFoundError, AgentControl, CoordinatorSchedulingReload, LocalDaemon, LocalDaemonAdmissionRequest, LocalDaemonAdmissionState, LocalDaemonConfig, LocalDaemonSchedulingComponents, LocalDaemonPrincipal, LocalDaemonRole, LocalDaemonSocketServer, ManagedRecoveryTarget, RecoverUnknownAssignment, QueueConflictError, QueueServiceError, QueueStorageError, ResidentWorkerLaunchProfile, TimeRecoveryRequest
+from loom.coordinator import CoordinatorOperatorClient
 from loom.queue._remote_stage_execution import ResidentProfileDescriptor
 from loom.queue._managed_local import (
     AssignmentState,
@@ -163,6 +144,8 @@ def test_operational_admission_reads_are_bounded_and_keyset_ordered(
         ).fetchone()[0]
     daemon._coordinator_lock = object()
     daemon._agent_lock = object()
+    # This isolated read fixture supplies the complete current connection identity.
+    daemon._epoch = "read-fixture-epoch"
     with daemon._connection() as conn:
         for sequence, admission_id in (
             (1, "admission-b"),
@@ -243,11 +226,12 @@ def test_operational_admission_reads_are_bounded_and_keyset_ordered(
     server = LocalDaemonSocketServer(daemon, config.endpoint)
     server.start()
     try:
-        socket_detail = LocalDaemonSocketClient(config.endpoint).admission(
+        socket_detail = CoordinatorClient.from_unix_socket(config.endpoint).admission(
             "admission-b"
         )
-        with pytest.raises(AdmissionNotFoundError):
-            LocalDaemonSocketClient(config.endpoint).admission("missing-admission")
+        with pytest.raises(CoordinatorClientError) as missing:
+            CoordinatorClient.from_unix_socket(config.endpoint).admission("missing-admission")
+        assert missing.value.code == "not_found"
     finally:
         server.stop()
     assert socket_detail.admission == direct_detail.admission
@@ -482,11 +466,11 @@ def test_socket_wait_saturation_reserves_status_control_and_shutdown_capacity(
     server.start()
     server_running = True
     try:
-        client = LocalDaemonSocketClient(config.endpoint)
+        client = CoordinatorClient.from_unix_socket(config.endpoint)
         started = time.monotonic()
         assert (
             client.wait_admission(
-                "saturated-admission", expected_revision=1, timeout=1.1
+                "saturated-admission", expected_revision=1, timeout_seconds=1.1
             ).kind.value
             == "TIMEOUT"
         )
@@ -499,13 +483,15 @@ def test_socket_wait_saturation_reserves_status_control_and_shutdown_capacity(
                     client.wait_admission,
                     "saturated-admission",
                     expected_revision=1,
-                    timeout=10,
+                    timeout_seconds=10,
                 )
                 for _ in range(7)
             ]
             assert entered.wait(timeout=2)
             assert client.status().coordinator_id == daemon.status().coordinator_id
-            control = client.control_agent(
+            control = CoordinatorOperatorClient.from_unix_socket(
+                config.endpoint, expected_coordinator_id=daemon.status().coordinator_id
+            ).control_agent(
                 AgentControl(
                     operation_id="saturation-drain",
                     kind=AgentControlKind.DRAIN,
@@ -711,9 +697,14 @@ def test_remote_candidate_expiry_uses_the_accepted_time_snapshot(
         daemon.stop()
 
 
+@pytest.mark.parametrize("failure_type", [QueueServiceError, QueueConflictError])
 def test_recovery_persists_exact_evidence_before_close_and_replays_it(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_type: type[QueueServiceError] | type[QueueConflictError],
 ) -> None:
+    from loom.queue._coordinator_control import CoordinatorClientError, dispatch_control
+
     config = _config(tmp_path)
     config = replace(
         config,
@@ -778,7 +769,7 @@ def test_recovery_persists_exact_evidence_before_close_and_replays_it(
             assert recorded_at
             self.close_calls += 1
             if self.close_calls == 1:
-                raise QueueServiceError("injected crash after evidence commit")
+                raise failure_type("injected failure after evidence commit")
             return {
                 "recovery_id": request.recovery_id,
                 "state": "closed",
@@ -796,12 +787,20 @@ def test_recovery_persists_exact_evidence_before_close_and_replays_it(
         assert (
             conn.execute("SELECT COUNT(*) FROM recovery_operations").fetchone()[0] == 0
         )
-    operator = daemon.operator_view(
-        LocalDaemonPrincipal(f"uid:{os.getuid()}", LocalDaemonRole.OPERATOR)
-    )
-
-    with pytest.raises(QueueServiceError, match="injected crash"):
-        operator.recover_unknown(request)
+    # This owner-level fixture has no service loop. Supply only the current
+    # dispatch identity; the actual recovery owner persists and advances intent.
+    monkeypatch.setattr(daemon, "_require_started", lambda: "coordinator-test")
+    with pytest.raises(CoordinatorClientError) as failed:
+        dispatch_control(
+            daemon,
+            LocalDaemonPrincipal(f"uid:{os.getuid()}", LocalDaemonRole.OPERATOR),
+            "operator_recover_unknown",
+            {"request": request.to_dict(), "expected_coordinator_id": "coordinator-test"},
+            transport="unix", wait_slice=0.5, inspect_run=None,
+        )
+    assert failed.value.code == ("conflict" if failure_type is QueueConflictError else "unavailable")
+    assert failed.value.mutation_outcome == "unknown"
+    assert failed.value.ids["recovery_id"] == request.recovery_id
     with sqlite3.connect(config.control_database) as conn:
         state, persisted = conn.execute(
             "SELECT state, evidence_json FROM recovery_operations "
@@ -817,12 +816,7 @@ def test_recovery_persists_exact_evidence_before_close_and_replays_it(
     replacement_operator = replacement.operator_view(
         LocalDaemonPrincipal(f"uid:{os.getuid()}", LocalDaemonRole.OPERATOR)
     )
-    server = LocalDaemonSocketServer(replacement, config.endpoint)
-    server.start()
-    try:
-        result = LocalDaemonSocketClient(config.endpoint).recover_unknown(request)
-    finally:
-        server.stop()
+    result = replacement_operator.recover_unknown(request)
 
     assert result["state"] == "closed"
     assert execution.resolve_calls == 1
@@ -2027,8 +2021,10 @@ def test_owner_socket_operator_scope_denial_happens_before_persistence(
     server = LocalDaemonSocketServer(daemon, config.endpoint)
     server.start()
     try:
-        with pytest.raises(QueueServiceError, match="local_daemon_request_rejected"):
-            LocalDaemonSocketClient(config.endpoint).control_agent(
+        with pytest.raises(CoordinatorClientError) as denied:
+            CoordinatorOperatorClient.from_unix_socket(
+                config.endpoint, expected_coordinator_id=daemon.status().coordinator_id
+            ).control_agent(
                 AgentControl(
                     operation_id="socket-denied-control",
                     kind=AgentControlKind.DRAIN,
@@ -2044,6 +2040,8 @@ def test_owner_socket_operator_scope_denial_happens_before_persistence(
             assert (
                 conn.execute("SELECT COUNT(*) FROM agent_controls").fetchone()[0] == 0
             )
+        assert denied.value.code == "unauthorized"
+        assert denied.value.mutation_outcome == "not_applied"
     finally:
         server.stop()
         daemon.stop()

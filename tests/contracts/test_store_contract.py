@@ -3,10 +3,11 @@
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+from loom.pipeline.transition_policy import TransitionIntent
 from loom.artifacts import ArtifactRef
 from loom.pipeline.event_sinks import EventObserverLinkRecord, EventSinkFailureRecord
 from loom.diagnostics.inspection import inspect_run_artifact, inspect_run_artifacts
-from loom.pipeline.events import EventScope, PipelineEvent, PipelineEventRecord
+from loom.pipeline.events import PipelineEvent, PipelineEventRecord
 from loom.pipeline.locks import RunLockRecord
 from loom.pipeline import RunStatusRecord, StageStatusRecord
 from loom.pipeline.reliability import (
@@ -18,7 +19,6 @@ from loom.pipeline.reliability import (
 from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.pipeline.stores import (
     ArtifactStore,
-    LegacyRunStore,
     LocalArtifactStore,
     LocalRunArtifactStore,
     LocalRunStore,
@@ -142,7 +142,10 @@ class DummyRunStore:
     def read_run_status(self, run_uri: str) -> RunStatusRecord | None:
         return None
 
-    def write_run_status(self, run_uri: str, status: RunStatusRecord) -> None:
+    def write_run_status(
+        self, run_uri: str, status: RunStatusRecord, *,
+        intent: TransitionIntent = TransitionIntent.NORMAL,
+    ) -> None:
         return None
 
     def read_plan(self, run_uri: str) -> dict[str, PlainData] | None:
@@ -294,13 +297,8 @@ class DummyRunStore:
         return None
 
     def append_event(self, run_uri: str, event: PipelineEvent) -> PipelineEventRecord:
-        return PipelineEventRecord(
-            run_uri=run_uri,
-            sequence=1,
-            timestamp="2020-01-01T00:00:00Z",
-            scope=EventScope.run(),
-            event_type=event.event_type,
-            payload=event.payload,
+        return PipelineEventRecord.from_event(
+            event, run_uri=run_uri, sequence=1, occurred_at="2020-01-01T00:00:00Z"
         )
 
     def read_events(self, run_uri: str) -> tuple[PipelineEventRecord, ...]:
@@ -588,7 +586,6 @@ def test_local_artifact_wrappers_match_materialization_protocols(
     assert isinstance(stage_artifacts, StageArtifactStore)
     assert isinstance(stage_artifacts, LocalStageArtifactStore)
     assert not isinstance(local_store, RunArtifactStore)
-    assert not isinstance(run_artifacts, LegacyRunStore)
     assert not isinstance(run_artifacts, RunStore)
     assert not isinstance(run_artifacts, RunStatusStore)
     assert not isinstance(stage_artifacts, StageStateStore)
@@ -622,7 +619,6 @@ def test_fake_run_store_matches_protocol() -> None:
     assert isinstance(DummyRunStore(), StageStateStore)
     assert isinstance(DummyRunStore(), StageLogStore)
     assert isinstance(DummyRunStore(), StageWorkspaceStore)
-    assert isinstance(DummyRunStore(), LegacyRunStore)
     assert not isinstance(DummyRunStore(), RunStore)
     assert DummyRunStore().read_composition_manifest("file:///tmp/run1") == {
         "schema_version": 1
@@ -657,7 +653,6 @@ def test_local_run_store_matches_expanded_protocols(tmp_path: Path) -> None:
     assert isinstance(store, RunFreshnessStore)
     assert isinstance(store, RunInspectionStore)
     assert isinstance(store, RunLockStore)
-    assert isinstance(store, LegacyRunStore)
     assert not isinstance(store, RunStore)
     assert store.resolve_run_uri(run_uri) == run_uri
 
@@ -701,4 +696,5 @@ def test_artifact_diagnostics_use_public_run_store_readers() -> None:
 
 def test_structural_protocol_rejects_incomplete_implementations() -> None:
     assert not isinstance(IncompleteArtifactStore(), ArtifactStore)
-    assert not isinstance(IncompleteRunStore(), LegacyRunStore)
+    assert not isinstance(IncompleteRunStore(), StageStateStore)
+    assert not isinstance(IncompleteRunStore(), RunReliabilityStore)

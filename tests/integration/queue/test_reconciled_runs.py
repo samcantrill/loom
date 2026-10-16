@@ -421,9 +421,8 @@ def test_cancellation_scope_with_second_contender(tmp_path, bound):
         daemon.stop()
 
 
-def test_schema_upgrade_preserves_accepted_exact_intent_and_cancel_receipt(tmp_path):
+def test_restart_preserves_accepted_exact_intent_and_cancel_receipt(tmp_path):
     import sqlite3
-    from loom.queue.local_daemon import _initialize_preparation_schema
 
     service = _service(tmp_path)
     LocalDaemon.initialize_deployment(service.daemon)
@@ -440,42 +439,18 @@ def test_schema_upgrade_preserves_accepted_exact_intent_and_cancel_receipt(tmp_p
         daemon.stop()
         daemon._preparations._reconcile_lock.release()
     with sqlite3.connect(service.daemon.control_database) as conn:
-        # Schema 15 predates accepted_at; retain every original column and do
-        # not fabricate a timestamp when upgrading its retained intent.
-        operations = [row[:-1] for row in conn.execute("SELECT * FROM preparation_operations")]
-        cancellations = conn.execute(
-            "SELECT * FROM preparation_cancellations"
-        ).fetchall()
-        conn.execute("DROP TABLE action_demands")
-        conn.execute("DROP TABLE action_claims")
-        conn.execute("DROP TABLE action_graph_cancellations")
-        conn.execute("DROP TABLE preparation_cancellations")
-        conn.execute("DROP TABLE preparation_operations")
-        _initialize_preparation_schema(conn, legacy=True, context=False)
-        conn.executemany(
-            "INSERT INTO preparation_operations VALUES ("
-            + ",".join("?" for _ in operations[0])
-            + ")",
-            operations,
-        )
-        conn.executemany(
-            "INSERT INTO preparation_cancellations VALUES (?, ?, ?, ?, ?)",
-            cancellations,
-        )
-        conn.execute("PRAGMA user_version = 15")
-    assert LocalDaemon.upgrade_coordinator_root(service.daemon)[1] == 19
-    with sqlite3.connect(service.daemon.control_database) as conn:
-        assert (
-            conn.execute("SELECT * FROM preparation_operations").fetchall()
-            == [row + (None,) for row in operations]
-        )
-        assert (
-            conn.execute("SELECT * FROM preparation_cancellations").fetchall()
-            == cancellations
-        )
+        operations = conn.execute("SELECT * FROM preparation_operations").fetchall()
+        cancellations = conn.execute("SELECT * FROM preparation_cancellations").fetchall()
     daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
+    daemon._preparations._reconcile_lock.acquire()
     daemon.start()
     try:
+        try:
+            with sqlite3.connect(service.daemon.control_database) as conn:
+                assert conn.execute("SELECT * FROM preparation_operations").fetchall() == operations
+                assert conn.execute("SELECT * FROM preparation_cancellations").fetchall() == cancellations
+        finally:
+            daemon._preparations._reconcile_lock.release()
         settled = daemon.wait_operation(cancellation.operation_id, timeout=20).operation
         assert settled.state == "applied"
         replay = daemon.start_run(request, principal_id="caller")

@@ -22,7 +22,7 @@ from loom.pipeline.event_sinks import (
     EventSinkRegistryError,
     EventSinkSubscription,
 )
-from loom.pipeline.events import EventReference, EventScope, PipelineEventRecord
+from loom.pipeline.events import EventReference, EventResourceRef, PipelineEventRecord
 from loom.serialization import PlainData
 
 
@@ -34,8 +34,9 @@ def _event_record() -> PipelineEventRecord:
     return PipelineEventRecord(
         run_uri=RUN_URI,
         sequence=1,
-        timestamp=OCCURRED_AT,
-        scope=EventScope.run(),
+        occurred_at=OCCURRED_AT,
+        primary_resource=EventResourceRef.run(RUN_URI),
+        event_id="event-run-started",
         event_type="run.started",
         payload={"source": "test"},
     )

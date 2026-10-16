@@ -1,11 +1,8 @@
 """Unit tests for schema-version helpers."""
 
-from collections.abc import Mapping
-
 import pytest
 
 from loom.serialization import (
-    DocumentMigration,
     SchemaVersionError,
     check_supported_schema,
     get_schema_version,
@@ -63,37 +60,17 @@ def test_validate_document_fields_rejects_unknown_fields() -> None:
         )
 
 
-def test_load_versioned_document_rejects_future_schema_version() -> None:
+@pytest.mark.parametrize("version", [1, 3, True, None, "2"])
+def test_load_versioned_document_rejects_noncurrent_version_without_changes(version) -> None:
+    document = {"schema_version": version, "value": 1}
+    before = dict(document)
     with pytest.raises(SchemaVersionError):
         load_versioned_document(
-            {"schema_version": 2, "value": 1},
-            current_version=1,
-            required={"value"},
-        )
-
-
-def test_load_versioned_document_rejects_missing_migration() -> None:
-    with pytest.raises(SchemaVersionError, match="missing migration"):
-        load_versioned_document(
-            {"schema_version": 1, "value": 1},
+            document,
             current_version=2,
             required={"value"},
         )
-
-
-def test_load_versioned_document_rejects_invalid_migration_output() -> None:
-    def migration(payload: Mapping[str, object]) -> Mapping[str, object]:
-        value = dict(payload)
-        value["schema_version"] = "bad"
-        return value
-
-    with pytest.raises(SchemaVersionError):
-        load_versioned_document(
-            {"schema_version": 1, "value": 1},
-            current_version=2,
-            required={"value"},
-            migrations={1: migration},
-        )
+    assert document == before
 
 
 def test_load_versioned_document_rejects_non_mapping_input() -> None:
@@ -101,19 +78,27 @@ def test_load_versioned_document_rejects_non_mapping_input() -> None:
         load_versioned_document("payload", current_version=1, required=set())
 
 
-def test_load_versioned_document_migrates_to_current_version() -> None:
-    def migration(payload: Mapping[str, object]) -> Mapping[str, object]:
-        value = dict(payload)
-        value["schema_version"] = 2
-        value["new_field"] = True
-        return value
-
-    migrations: dict[int, DocumentMigration] = {1: migration}
-
-    assert load_versioned_document(
-        {"schema_version": 1, "value": 1},
+def test_load_versioned_document_copies_current_version_with_custom_field() -> None:
+    document = {"format": 2, "value": 1, "label": "current"}
+    loaded = load_versioned_document(
+        document,
         current_version=2,
         required={"value"},
-        optional={"new_field"},
-        migrations=migrations,
-    ) == {"schema_version": 2, "value": 1, "new_field": True}
+        optional={"label"},
+        field="format",
+    )
+    assert loaded == document
+    assert loaded is not document
+
+
+@pytest.mark.parametrize(
+    ("document", "message"),
+    [
+        ({"schema_version": 2}, "missing required field"),
+        ({"schema_version": 2, "value": 1, "old_field": True}, "unknown field"),
+        ({"value": 1}, "missing schema version field"),
+    ],
+)
+def test_load_versioned_document_validates_current_fields(document, message) -> None:
+    with pytest.raises(SchemaVersionError, match=message):
+        load_versioned_document(document, current_version=2, required={"value"})

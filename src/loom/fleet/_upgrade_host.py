@@ -52,12 +52,6 @@ def inspect(request, *, native_owner=None):
         raise QueueConflictError(
             "candidate compatibility unavailable: " + str(compatibility.reason)
         )
-    if role(request) == "coordinator":
-        current = compatibility.value["current_storage_version"]
-        if current != compatibility.value["target_storage_version"] and current != 18:
-            raise QueueConflictError(
-                "unsupported direct Fleet migration; use the native intermediate upgrade"
-            )
     images = {}
     if role(request) == "agent":
         # The candidate native checker owns supervisor/profile compatibility.
@@ -129,11 +123,11 @@ def stop_owned(request, *, observe):
 
 
 def replace(request):
-    """Migrate offline, preserve old units, then bind the exact candidate runtime."""
+    """Preserve stopped current units, then bind the exact candidate runtime."""
     from loom.queue.deployment import (
         load_coordinator_service_config,
         load_outbound_agent_service_config,
-        service_backend_migration_guard,
+        service_replacement_guard,
     )
     from loom.fleet._services import unit_name, render, systemctl
     from loom.fleet._host import start, keep
@@ -155,15 +149,13 @@ def replace(request):
         raise QueueConflictError("service must stop before replacement")
     inspect(request)
     _settled(request)
-    if role(request) == "coordinator":
-        run_native(request, "daemon-upgrade")
     loader = (
         load_coordinator_service_config
         if role(request) == "coordinator"
         else load_outbound_agent_service_config
     )
     service = loader(config(request), env_file=environment(request))
-    with service_backend_migration_guard(service, request["expected_root_id"]):
+    with service_replacement_guard(service, request["expected_root_id"]):
         binding = admin / "service.json"
         archive = (
             admin

@@ -92,7 +92,12 @@ def test_planner_reuses_valid_upstream_and_binds_downstream_input(
     _seed_reusable_build(run_store, artifact_store, run_uri)
 
     plan = plan_pipeline(
-        _spec(), run_uri=run_uri, run_store=run_store, artifact_store=artifact_store
+        _spec(),
+        run_uri=run_uri,
+        stage_state=run_store,
+        artifact_index=run_store,
+        plans=run_store,
+        artifact_store=artifact_store,
     )
 
     build, report = plan.stage_plans
@@ -111,7 +116,9 @@ def test_from_stage_forces_reusable_selected_stage_and_reruns_downstream(
     plan = plan_pipeline(
         _spec(),
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
+        plans=run_store,
         artifact_store=artifact_store,
         selectors=PlanSelectors(from_stage="build"),
     )
@@ -137,7 +144,9 @@ def test_only_stage_blocks_when_upstream_provider_is_unavailable(
     plan = plan_pipeline(
         _spec(),
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
+        plans=run_store,
         artifact_store=artifact_store,
         selectors=PlanSelectors(only_stages=("report",)),
     )
@@ -158,5 +167,10 @@ def test_corrupt_store_json_raises_resume_state_error(tmp_path: Path) -> None:
 
     with pytest.raises(ResumeStateError):
         plan_pipeline(
-            _spec(), run_uri=run_uri, run_store=run_store, artifact_store=artifact_store
+            _spec(),
+            run_uri=run_uri,
+            stage_state=run_store,
+            artifact_index=run_store,
+            plans=run_store,
+            artifact_store=artifact_store,
         )

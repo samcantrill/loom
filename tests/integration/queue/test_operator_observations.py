@@ -165,7 +165,6 @@ def test_observation_matrix_preserves_roots_and_control_state(owner, monkeypatch
     assert set(daemon.config.coordinator_root.rglob("*")) == files
 
 
-
 @pytest.mark.parametrize("owner", [("drain", "resume")], indirect=True)
 @pytest.mark.parametrize("outcome", ["pending", "applying", "retained_work", "reload_rejected", "applied"])
 def test_resume_preserves_drain_until_agent_confirms_application(owner, outcome):
@@ -232,7 +231,9 @@ def test_offline_probe_identity_boot_and_compatibility(owner):
     )
     compatible = probe_upgrade_compatibility(root)
     assert compatible.value["compatible"] is True
-    assert compatible.value["migration_direction"] == "none"
+    assert compatible.value["current_storage_version"] == compatible.value["target_storage_version"]
+    assert "migration_direction" not in compatible.value
+    assert "offline_required" not in compatible.value
     assert (
         probe_upgrade_compatibility(root, required_capabilities=("future",)).reason
         == "unsupported_capability"
@@ -394,7 +395,6 @@ def test_role_declarations_are_protected_redacted_and_inert(
         deployment.inspect_role_declaration(source, role=role)
 
 
-
 def test_coordinator_declaration_rejects_incomplete_agent_server(tmp_path, monkeypatch):
     import yaml
     from loom.cli.main import main
@@ -542,5 +542,37 @@ def test_conditional_controls_preserve_independent_policy_and_exact_replay(owner
             with pytest.raises(CoordinatorClientError) as changed:
                 client.control_agent(restore, condition={"expected_control_id": later.operation_id})
             assert changed.value.code == "conflict"
+    finally:
+        server.stop()
+
+
+@pytest.mark.parametrize("marker, operation", [
+    (None, "agent_control"), (None, "operator_control"),
+    ("daemon-control-v1", "agent_control"), ("retired-control", "operator_control"),
+])
+def test_retired_socket_protocol_is_refused_before_operator_mutation(owner, tmp_path, marker, operation):
+    from loom.queue._coordinator_control import encode_wire
+    from loom.queue._coordinator_transport import read_unix_message
+
+    daemon, _agent, session, _operator = owner
+    endpoint = tmp_path / "current.sock"
+    server = LocalDaemonSocketServer(daemon, endpoint)
+    request = {"operation": operation, "control": drain(session).value()}
+    if marker is not None:
+        request["daemon_control"] = marker
+    server.start()
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(5)
+            connection.connect(str(endpoint))
+            connection.sendall(encode_wire(request) + b"\n")
+            response = read_unix_message(connection)
+        assert response["ok"] is False
+        detail = response["error_detail"]
+        assert isinstance(detail, Mapping)
+        assert detail["code"] == "unsupported"
+        with daemon._connection() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM agent_controls").fetchone()[0] == 0
+        assert daemon.agent(session.agent_id).session_id == session.session_id
     finally:
         server.stop()

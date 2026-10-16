@@ -10,11 +10,15 @@ from loom.pipeline.graph.bindings import ResolvedInputBinding, resolve_input_bin
 from loom.pipeline.specs import OutputSpec, PipelineSpec, StageSpec
 from loom.pipeline.stores.artifact_store import ArtifactStore
 from loom.pipeline.stores.errors import StoreError
-from loom.pipeline.stores.run_store import LegacyRunStore
+from loom.pipeline.stores.run_store import (
+    RunArtifactIndexStore,
+    RunPlanStore,
+    StageStateStore,
+)
 from loom.serialization import PlainData
 
 from .actions import decide_stage_action
-from .errors import PlanPersistenceError
+from .errors import PlanPersistenceError, PlanningValidationError
 from .fingerprints import build_stage_fingerprint
 from .models import (
     PLAN_SCHEMA_VERSION,
@@ -42,29 +46,46 @@ def plan_pipeline(
     spec: PipelineSpec,
     *,
     run_uri: str,
-    run_store: LegacyRunStore,
-    artifact_store: ArtifactStore,
+    stage_state: StageStateStore | None = None,
+    artifact_index: RunArtifactIndexStore | None = None,
+    artifact_store: ArtifactStore | None = None,
+    plans: RunPlanStore | None = None,
     selectors: PlanSelectors | None = None,
     resume: ResumeOptions | None = None,
     fingerprint_context: FingerprintContext | None = None,
     persist: bool = False,
 ) -> ExecutionPlan:
-    """Compute a deterministic execution plan for a pipeline spec."""
+    """Compute a deterministic execution plan from explicit state owners.
 
+    Resume requires stage state, the artifact index and artifact validation.
+    With resume disabled, planning needs none of those stores and performs no
+    state reads. Persistence additionally requires ``plans`` and delegates the
+    document write to that owner without issuing lifecycle mutations.
+    """
+
+    resume_options = resume or ResumeOptions()
+    if resume_options.enabled and (
+        stage_state is None or artifact_index is None or artifact_store is None
+    ):
+        raise PlanningValidationError(
+            "resume requires stage_state, artifact_index and artifact_store"
+        )
+    if persist and plans is None:
+        raise PlanPersistenceError("plan persistence requires plans")
     graph = build_stage_graph(spec)
     selection = normalize_selectors(selectors, spec=spec, graph=graph)
-    resume_options = resume or ResumeOptions()
     context = fingerprint_context or FingerprintContext()
     bindings = resolve_input_bindings(spec)
-    plans: dict[str, StagePlan] = {}
+    stage_plans: dict[str, StagePlan] = {}
 
     for stage_name in selection.stage_order:
         stage = spec.get_stage(stage_name)
-        plans[stage_name] = _plan_stage(
+        stage_plans[stage_name] = _plan_stage(
             spec=spec,
             stage=stage,
             run_uri=run_uri,
-            run_store=run_store,
+            stage_state=stage_state,
+            artifact_index=artifact_index,
             artifact_store=artifact_store,
             selection=selection,
             resume=resume_options,
@@ -76,10 +97,10 @@ def plan_pipeline(
                 _ordered(downstream_of(graph, stage_name), selection.stage_order)
             ),
             bindings=bindings[stage_name],
-            prior_plans=plans,
+            prior_plans=stage_plans,
         )
 
-    ordered_plans = tuple(plans[name] for name in selection.stage_order)
+    ordered_plans = tuple(stage_plans[name] for name in selection.stage_order)
     plan = ExecutionPlan(
         schema_version=PLAN_SCHEMA_VERSION,
         run_uri=run_uri,
@@ -93,7 +114,8 @@ def plan_pipeline(
         summary=summary_for(ordered_plans),
     )
     if persist:
-        _persist_plan(run_store, run_uri, plan)
+        assert plans is not None
+        _persist_plan(plans, run_uri, plan)
     return plan
 
 
@@ -102,8 +124,9 @@ def _plan_stage(
     spec: PipelineSpec,
     stage: StageSpec,
     run_uri: str,
-    run_store: LegacyRunStore,
-    artifact_store: ArtifactStore,
+    stage_state: StageStateStore | None,
+    artifact_index: RunArtifactIndexStore | None,
+    artifact_store: ArtifactStore | None,
     selection: Selection,
     resume: ResumeOptions,
     fingerprint_context: FingerprintContext,
@@ -170,7 +193,8 @@ def _plan_stage(
         direct = check_stage_resume(
             stage,
             run_uri=run_uri,
-            run_store=run_store,
+            stage_state=stage_state,
+            artifact_index=artifact_index,
             artifact_store=artifact_store,
             current_fingerprint=current_fingerprint,
             resume=resume,
@@ -270,12 +294,10 @@ def _output_spec_to_dict(output: OutputSpec) -> dict[str, PlainData]:
     }
 
 
-def _persist_plan(
-    run_store: LegacyRunStore, run_uri: str, plan: ExecutionPlan
-) -> None:
+def _persist_plan(plans: RunPlanStore, run_uri: str, plan: ExecutionPlan) -> None:
     try:
-        run_store.write_plan(run_uri, plan.to_dict())
-        persisted = run_store.read_plan(run_uri)
+        plans.write_plan(run_uri, plan.to_dict())
+        persisted = plans.read_plan(run_uri)
         if persisted is None:
             raise PlanPersistenceError("plan persistence returned no plan document")
         ExecutionPlan.from_dict(persisted)

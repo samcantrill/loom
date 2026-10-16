@@ -31,7 +31,9 @@ def test_plan_pipeline_persists_only_plan_document(tmp_path: Path) -> None:
     plan = plan_pipeline(
         spec,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
+        plans=run_store,
         artifact_store=artifact_store,
         persist=True,
     )
@@ -63,7 +65,9 @@ def test_plan_pipeline_explanation_is_derived_not_persisted(tmp_path: Path) -> N
     plan = plan_pipeline(
         spec,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
+        plans=run_store,
         artifact_store=artifact_store,
         persist=True,
     )

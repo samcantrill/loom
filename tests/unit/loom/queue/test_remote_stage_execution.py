@@ -404,11 +404,9 @@ def test_launch_is_unreachable_until_inputs_and_grant_are_durable(
 
 
 @pytest.mark.parametrize("status", [StageStatus.SUCCEEDED, StageStatus.FAILED])
-@pytest.mark.parametrize("legacy", [False, True])
 def test_workspace_joins_actual_launch_controls_without_rewriting_worker_bytes(
     tmp_path: Path,
     status: StageStatus,
-    legacy: bool,
 ) -> None:
     profile = _profile(tmp_path)
     request = _request(profile)
@@ -438,8 +436,8 @@ def test_workspace_joins_actual_launch_controls_without_rewriting_worker_bytes(
         workspace_root=workspace.root,
         profile=profile.launch_profile,
         environment={"CUDA_VISIBLE_DEVICES": "GPU-12345678-1234-1234-1234-123456789abc"},
-        schema_version=None if legacy else 2,
-        resource_controls=None if legacy else controls,
+        schema_version=2,
+        resource_controls=controls,
     )
     workspace.persist_supervisor_launch(json.dumps(_launch_value(launch)))
     workspace.mark_process_started("execution-1", 101)
@@ -484,15 +482,12 @@ def test_workspace_joins_actual_launch_controls_without_rewriting_worker_bytes(
     assert tuple(claim["actual_gpu_uuids"]) == ("GPU-12345678-1234-1234-1234-123456789abc",)
     assert claim["source"] == "native_supervisor_launch"
     assert report.process_created is True
-    if legacy:
-        assert report.resource_controls is None
-    else:
-        assert report.resource_controls == ({**controls[0], "disposition": "applied"},)
-        if report.failure is not None:
-            failure_controls = report.failure.executor_metadata["resource_controls"]
-            assert isinstance(failure_controls, (list, tuple))
-            assert isinstance(failure_controls[0], Mapping)
-            assert failure_controls[0]["disposition"] == "applied"
+    assert report.resource_controls == ({**controls[0], "disposition": "applied"},)
+    if report.failure is not None:
+        failure_controls = report.failure.executor_metadata["resource_controls"]
+        assert isinstance(failure_controls, (list, tuple))
+        assert isinstance(failure_controls[0], Mapping)
+        assert failure_controls[0]["disposition"] == "applied"
     saved = workspace.worker_result()
     assert saved is not None
     assert saved.executor_metadata["application_detail"] == "retained"

@@ -14,10 +14,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
+from loom._sqlite_inspection import inspect_sqlite_database
 from loom.artifacts import ArtifactRef
 from loom.pipeline.cleanup.records import CleanupReport, CleanupResult
 from loom.pipeline.event_sinks import EventObserverLinkRecord, EventSinkFailureRecord
-from loom.pipeline.events import EventScope, PipelineEvent, PipelineEventRecord
+from loom.pipeline.events import PipelineEvent, PipelineEventRecord
 from loom.pipeline.reliability import (
     ReliabilityStatusDetail,
     RetryDecisionRecord,
@@ -466,7 +467,6 @@ class SQLitePerRunAuthorityStore:
         with self._write_connection(
             database_path, initialize=not database_exists
         ) as conn:
-            _migrate_schema(conn)
             _raise_for_schema(conn)
             existing = conn.execute(
                 "SELECT metadata_json FROM run_state WHERE id = 1"
@@ -1292,6 +1292,7 @@ class SQLitePerRunAuthorityStore:
         """Read one durable cancellation receipt for the daemon status projection."""
         self._bind_run_uri(run_uri)
         with self._connect(_authority_database_path(run_uri, self._state_root)) as conn:
+            _raise_for_schema(conn)
             row = conn.execute(
                 "SELECT receipt_json FROM cancellation_epoch_receipts WHERE operation_id = ?",
                 (operation_id,),
@@ -2595,11 +2596,10 @@ class SQLitePerRunAuthorityStore:
         if not isinstance(event, PipelineEvent):
             raise AuthorityStoreError("event must be a PipelineEvent")
         with self._transaction(run_uri) as conn:
-            _ensure_audit_event_json_column(conn)
             for row in conn.execute("SELECT * FROM audit_events ORDER BY sequence"):
-                existing = _audit_event_from_row(row, run_uri=run_uri)
+                existing = _audit_event_from_row(row)
                 if existing.event_id == event.event_id:
-                    if not _event_matches_record(event, existing):
+                    if not existing.matches_event(event):
                         raise AuthorityStoreError(
                             f"event_id {event.event_id!r} conflicts with an existing event"
                         )
@@ -2611,14 +2611,8 @@ class SQLitePerRunAuthorityStore:
                 thaw_plain_data(event.payload, path="event.payload"),
             )
             sequence = _next_audit_event_sequence(conn)
-            record = PipelineEventRecord(
-                run_uri=run_uri,
-                sequence=sequence,
-                timestamp=timestamp,
-                scope=event.scope,
-                event_type=event.event_type,
-                payload=payload,
-                event_id=event.event_id,
+            record = PipelineEventRecord.from_event(
+                event, run_uri=run_uri, sequence=sequence, occurred_at=timestamp
             )
             conn.execute(
                 """
@@ -2648,7 +2642,7 @@ class SQLitePerRunAuthorityStore:
             _raise_for_schema(conn)
             _require_run_status(conn)
             return tuple(
-                _audit_event_from_row(row, run_uri=run_uri)
+                _audit_event_from_row(row)
                 for row in conn.execute("SELECT * FROM audit_events ORDER BY sequence")
             )
 
@@ -3138,17 +3132,7 @@ class SQLitePerRunAuthorityStore:
         if not database_path.exists():
             raise AuthoritySchemaError("SQLite authority database is missing")
         with self._connect(database_path) as conn:
-            version = _stored_schema_version(conn)
-            needs_migration = version is not None and version < AUTHORITY_SCHEMA_VERSION
-        if needs_migration and not self._read_only:
-            with self._write_connection(database_path, initialize=False) as conn:
-                _migrate_schema(conn)
-        with self._connect(database_path) as conn:
-            conn.execute("BEGIN")
-            try:
-                yield conn
-            finally:
-                conn.rollback()
+            yield conn
 
     @contextmanager
     def _transaction(self, run_uri: str) -> Iterator[sqlite3.Connection]:
@@ -3156,7 +3140,6 @@ class SQLitePerRunAuthorityStore:
         if not database_path.exists():
             raise AuthoritySchemaError("SQLite authority database is missing")
         with self._write_connection(database_path, initialize=False) as conn:
-            _migrate_schema(conn)
             _raise_for_schema(conn)
             _require_run_status(conn)
             yield conn
@@ -3167,7 +3150,7 @@ class SQLitePerRunAuthorityStore:
     ) -> Iterator[sqlite3.Connection]:
         if self._read_only:
             raise AuthorityStoreError("retained authority is read-only")
-        with self._connect(database_path, initialize=initialize) as conn:
+        with self._connect(database_path, initialize=initialize, write=True) as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
                 if initialize:
@@ -3181,7 +3164,7 @@ class SQLitePerRunAuthorityStore:
 
     @contextmanager
     def _connect(
-        self, database_path: Path, *, initialize: bool = False
+        self, database_path: Path, *, initialize: bool = False, write: bool = False
     ) -> Iterator[sqlite3.Connection]:
         if self._read_only:
             if initialize:
@@ -3199,14 +3182,17 @@ class SQLitePerRunAuthorityStore:
                 # private memory copy uses rollback mode; retained bytes stay intact.
                 conn.deserialize(payload[:18] + b"\x01\x01" + payload[20:])
                 conn.row_factory = sqlite3.Row
-                # Admit legacy state in this private copy; never change retained bytes.
-                if _stored_schema_version(conn) == 10:
-                    _migrate_schema(conn)
                 conn.execute("PRAGMA query_only = ON")
                 yield conn
             finally:
                 conn.close()
             return
+        if not initialize:
+            with inspect_sqlite_database(database_path, timeout=_SQLITE_TIMEOUT_SECONDS) as inspected:
+                if not write:
+                    yield inspected
+                    return
+                _raise_for_schema(inspected)
         conn = sqlite3.connect(
             database_path.resolve().as_uri() + ("?mode=rwc" if initialize else "?mode=rw"),
             uri=True,
@@ -3560,8 +3546,6 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
     for statement in schema_statements:
         conn.execute(statement)
     create_annotations_schema(conn)
-    _ensure_audit_event_json_column(conn)
-    _migrate_schema(conn)
     conn.execute(
         """
         INSERT INTO metadata(key, value)
@@ -3572,205 +3556,6 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
     )
 
 
-def _ensure_audit_event_json_column(conn: sqlite3.Connection) -> None:
-    columns = {
-        cast(str, row["name"])
-        for row in conn.execute("PRAGMA table_info(audit_events)")
-    }
-    if "event_json" not in columns:
-        conn.execute("ALTER TABLE audit_events ADD COLUMN event_json TEXT")
-
-
-def _migrate_schema(conn: sqlite3.Connection) -> None:
-    row = conn.execute(
-        "SELECT value FROM metadata WHERE key = 'schema_version'"
-    ).fetchone()
-    if row is None:
-        return
-    try:
-        version = int(cast(str, row["value"]))
-    except (TypeError, ValueError):
-        return
-    tables = {
-        cast(str, table["name"])
-        for table in conn.execute("SELECT name FROM sqlite_schema WHERE type = 'table'")
-    }
-    if version not in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}:
-        return
-    historical_columns = dict(_REQUIRED_SCHEMA_COLUMNS)
-    historical_columns["run_state"] -= {"started_at", "finished_at", "started_at_known"}
-    if version < 10:
-        historical_columns.pop("run_annotation_notes")
-        historical_columns.pop("run_annotation_mutations")
-    if version < 8:
-        historical_columns.pop("run_annotations")
-    if version < 7:
-        historical_columns.pop("action_result_bindings")
-        historical_columns.pop("action_producers")
-    if version < 3:
-        historical_columns.pop("prepared_attempt_receipts")
-    if version < 4:
-        historical_columns.pop("managed_attempt_bindings")
-    if version < 5:
-        historical_columns.pop("managed_attempt_unbind_receipts")
-    if version < 6:
-        historical_columns.pop("coordinator_admission_receipts")
-        historical_columns.pop("cancellation_epochs")
-        historical_columns.pop("cancellation_epoch_receipts")
-    if set(historical_columns) - tables:
-        raise AuthoritySchemaError(
-            f"SQLite authority v{version} schema is incomplete or invalid"
-        )
-    for table_name, expected_columns in historical_columns.items():
-        v1_columns = (
-            expected_columns - {"supersedes_commit_id"}
-            if version == 1 and table_name == "commits"
-            else expected_columns
-        )
-        actual_columns = {
-            cast(str, info["name"])
-            for info in conn.execute(f"PRAGMA table_info({table_name})")
-        }
-        if not v1_columns.issubset(actual_columns):
-            raise AuthoritySchemaError(
-                f"SQLite authority v{version} schema is incomplete or invalid"
-            )
-    if version == 1:
-        conn.execute("ALTER TABLE commits RENAME TO commits_v1")
-        conn.execute("""
-            CREATE TABLE commits (
-                commit_id TEXT PRIMARY KEY, stage_name TEXT NOT NULL,
-                attempt_id TEXT NOT NULL, committed_at TEXT NOT NULL,
-                revision_sequence INTEGER NOT NULL, output_names_json TEXT NOT NULL,
-                materialized_refs_json TEXT NOT NULL, supersedes_commit_id TEXT
-            )
-        """)
-        conn.execute("""
-            INSERT INTO commits (
-                commit_id, stage_name, attempt_id, committed_at, revision_sequence,
-                output_names_json, materialized_refs_json, supersedes_commit_id
-            ) SELECT commit_id, stage_name, attempt_id, committed_at, revision_sequence,
-                     output_names_json, materialized_refs_json, NULL FROM commits_v1
-        """)
-        conn.execute("DROP TABLE commits_v1")
-        version = 2
-
-    if "prepared_attempt_receipts" in tables:
-        columns = {
-            cast(str, row["name"])
-            for row in conn.execute("PRAGMA table_info(prepared_attempt_receipts)")
-        }
-        if not {"request_json", "receipt_json"}.issubset(columns):
-            row = conn.execute(
-                "SELECT COUNT(*) AS count FROM prepared_attempt_receipts"
-            ).fetchone()
-            if row is not None and cast(int, row["count"]) != 0:
-                raise AuthoritySchemaError(
-                    "legacy prepared attempts cannot be assigned synthetic evidence"
-                )
-            conn.execute("DROP TABLE prepared_attempt_receipts")
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS prepared_attempt_receipts (
-            operation_id TEXT PRIMARY KEY,
-            request_digest TEXT NOT NULL,
-            readiness_generation TEXT NOT NULL,
-            stage_name TEXT NOT NULL,
-            attempt_id TEXT NOT NULL,
-            request_json TEXT NOT NULL,
-            receipt_json TEXT NOT NULL,
-            revision_sequence INTEGER NOT NULL,
-            UNIQUE(stage_name, readiness_generation)
-        )
-    """)
-    if "managed_attempt_bindings" in tables:
-        managed_columns = {
-            cast(str, row["name"])
-            for row in conn.execute("PRAGMA table_info(managed_attempt_bindings)")
-        }
-        if "terminal_status" not in managed_columns:
-            conn.execute(
-                "ALTER TABLE managed_attempt_bindings ADD COLUMN terminal_status TEXT"
-            )
-        if "terminal_digest" not in managed_columns:
-            conn.execute(
-                "ALTER TABLE managed_attempt_bindings ADD COLUMN terminal_digest TEXT"
-            )
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS managed_attempt_bindings (
-            assignment_id TEXT PRIMARY KEY,
-            attempt_id TEXT NOT NULL UNIQUE,
-            state TEXT NOT NULL,
-            fence TEXT,
-            terminal_status TEXT,
-            terminal_digest TEXT
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS managed_attempt_unbind_receipts (
-            assignment_id TEXT PRIMARY KEY,
-            attempt_id TEXT NOT NULL
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS coordinator_admission_receipts (
-            operation_id TEXT PRIMARY KEY,
-            request_json TEXT NOT NULL,
-            receipt_json TEXT NOT NULL
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS cancellation_epochs (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
-            epoch TEXT NOT NULL
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS cancellation_epoch_receipts (
-            operation_id TEXT PRIMARY KEY,
-            request_json TEXT NOT NULL,
-            receipt_json TEXT NOT NULL
-        )
-    """)
-    conn.execute("""CREATE TABLE IF NOT EXISTS action_result_bindings (
-        stage_name TEXT PRIMARY KEY, binding_json TEXT NOT NULL,
-        revision_sequence INTEGER NOT NULL)""")
-    conn.execute("""CREATE TABLE IF NOT EXISTS action_producers (
-        claim_id TEXT PRIMARY KEY, stage_name TEXT NOT NULL, attempt_id TEXT NOT NULL UNIQUE,
-        active INTEGER NOT NULL CHECK(active IN (0, 1)))""")
-    create_annotations_schema(conn)
-    columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(attempts)")}
-    for name, kind in (("input_bindings_json", "TEXT"), ("start_confirmed", "INTEGER"), ("start_confirmed_at", "TEXT")):
-        if name not in columns:
-            conn.execute(f"ALTER TABLE attempts ADD COLUMN {name} {kind}")
-    columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(run_state)")}
-    for name, kind in (
-        ("started_at", "TEXT"),
-        ("finished_at", "TEXT"),
-        ("started_at_known", "INTEGER NOT NULL DEFAULT 0 CHECK(started_at_known IN (0, 1))"),
-    ):
-        if name not in columns:
-            conn.execute(f"ALTER TABLE run_state ADD COLUMN {name} {kind}")
-    conn.execute(
-        "UPDATE metadata SET value = ? WHERE key = 'schema_version'",
-        (str(AUTHORITY_SCHEMA_VERSION),),
-    )
-
-
-def _stored_schema_version(conn: sqlite3.Connection) -> int | None:
-    try:
-        row = conn.execute(
-            "SELECT value FROM metadata WHERE key = 'schema_version'"
-        ).fetchone()
-    except sqlite3.DatabaseError:
-        return None
-    if row is None:
-        return None
-    try:
-        return int(cast(str, row["value"]))
-    except (TypeError, ValueError):
-        return None
-
-
 def _next_audit_event_sequence(conn: sqlite3.Connection) -> int:
     row = conn.execute(
         "SELECT COALESCE(MAX(sequence), 0) + 1 FROM audit_events"
@@ -3778,20 +3563,11 @@ def _next_audit_event_sequence(conn: sqlite3.Connection) -> int:
     return cast(int, row[0])
 
 
-def _audit_event_from_row(row: sqlite3.Row, *, run_uri: str) -> PipelineEventRecord:
+def _audit_event_from_row(row: sqlite3.Row) -> PipelineEventRecord:
     event_json = row["event_json"]
-    if event_json is not None:
-        return PipelineEventRecord.from_dict(_json_loads(cast(str, event_json)))
-    return PipelineEventRecord(
-        run_uri=run_uri,
-        sequence=cast(int, row["sequence"]),
-        timestamp=cast(str, row["timestamp"]),
-        scope=EventScope.from_dict(_json_loads(cast(str, row["scope_json"]))),
-        event_type=cast(str, row["event_type"]),
-        payload=cast(
-            Mapping[str, PlainData], _json_loads(cast(str, row["payload_json"]))
-        ),
-    )
+    if event_json is None:
+        raise AuthorityStoreError("stored audit event requires current event_json")
+    return PipelineEventRecord.from_dict(_json_loads(cast(str, event_json)))
 
 
 def _check_schema_connection(conn: sqlite3.Connection) -> AuthoritySchemaCheck:
@@ -3842,34 +3618,6 @@ def _check_schema_connection(conn: sqlite3.Connection) -> AuthoritySchemaCheck:
                 current_version=AUTHORITY_SCHEMA_VERSION,
             ),
         )
-    if version < AUTHORITY_SCHEMA_VERSION:
-        try:
-            tables = {
-                cast(str, row["name"])
-                for row in conn.execute(
-                    "SELECT name FROM sqlite_schema WHERE type = 'table'"
-                )
-            }
-        except sqlite3.DatabaseError:
-            tables = set()
-        required_tables = set(_REQUIRED_SCHEMA_COLUMNS)
-        if version < 9:
-            required_tables.discard("run_annotation_notes")
-            required_tables.discard("run_annotation_mutations")
-        if version < 8:
-            required_tables.discard("run_annotations")
-        if version < 3:
-            required_tables.discard("prepared_attempt_receipts")
-        if version < 4:
-            required_tables.discard("managed_attempt_bindings")
-        if version < 5:
-            required_tables.discard("managed_attempt_unbind_receipts")
-        if required_tables - tables:
-            return AuthoritySchemaCheck(
-                current_version=AUTHORITY_SCHEMA_VERSION,
-                found_version=version,
-                failure=_invalid_schema_shape_failure(),
-            )
     if version < AUTHORITY_SCHEMA_VERSION:
         return AuthoritySchemaCheck(
             current_version=AUTHORITY_SCHEMA_VERSION,
@@ -4666,16 +4414,6 @@ def _admission_matches(
         for key, value in existing.items()
         if key != _ADMISSION_IDEMPOTENCY_METADATA_KEY
     } == dict(metadata)
-
-
-def _event_matches_record(event: PipelineEvent, record: PipelineEventRecord) -> bool:
-    if (
-        record.scope != event.scope
-        or record.event_type != event.event_type
-        or record.payload != event.payload
-    ):
-        return False
-    return event.timestamp is None or record.timestamp == event.timestamp
 
 
 def _validate_observer_fact_run_uri(actual: str, expected: str, label: str) -> None:

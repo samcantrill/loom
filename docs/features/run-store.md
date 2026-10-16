@@ -17,9 +17,8 @@ and never infers identity from the latest status file.
 `inspect_run_status` and backend inspection use the selected live authority.
 Without an explicitly configured service, a stopped run with a checkpointed
 run-local SQLite authority can be inspected read-only. This path reads retained
-bytes into a private memory database and validates the schema. The preceding
-SQLite schema (v10) can be normalized in that private copy; retained files are
-never migrated or repaired. It does not start a service or claim work. The source
+bytes into a private memory database and requires the current SQLite schema
+(v11). Retained files are never migrated or repaired. It does not start a service or claim work. The source
 includes `reference_source: retained_read_only`; the backend result includes the
 committed revision. Retained WAL/journal requiring recovery, unsupported schemas,
 and absent authority produce unavailable diagnostics rather than a pending state
@@ -46,11 +45,14 @@ and other revision updates do not alter either lifecycle timestamp. The executio
 status adapter projects these facts without substituting creation/revision times.
 
 New runs have `started_at_known=True`; a null start then means never started.
-Migrated databases and old serialized snapshots have `started_at_known=False`
-and null timing where historical facts are unavailable. Retrying such a run must
-not invent its original start. Existing SQLite v10 databases migrate to v11;
-service repository v11 databases migrate to v12. Established earlier writable
-migration routes remain supported.
+An unknown start remains `started_at_known=False` when admitted evidence lacks
+that fact; retrying must not invent its original start. The embedded authority
+and workspace coordination require schema 11; the service repository requires
+schema 12. Fresh initialization creates the complete current schema. Existing
+databases must already have the current schema, metadata and required columns.
+Reads, writes and service startup refuse older, newer or incomplete state without
+upgrading or repairing it. Preserve unsupported roots and initialize fresh state
+with the current runtime. Current SQLite transaction recovery remains supported.
 
 New authority-backed offline exports preserve the lifecycle timestamps in
 `run_status` and record `state_source.details.run_timing.started_at_known`.
@@ -105,28 +107,41 @@ private; status files, artifact indexes, events, and catalogs remain payload,
 audit, or projection surfaces unless a backend contract records them as
 authoritative facts.
 
-V9-post starts the public naming transition. The root
-`loom.pipeline.stores.RunStore` export now means the authority-backed run
+The root `loom.pipeline.stores.RunStore` export is the authority-backed run
 lifecycle surface produced by `create_run_store(...)`, with scoped
 `StageStore` handles for stage lifecycle, attempts, leases, submitted
 operations, fenced output commits, snapshots, recovery, and cleanup facts. An
 explicit checksum-repair rerun appends a successor output commit naming the
 current predecessor; snapshots project only the successor facts while authority
 history retains both immutable commits. Ordinary changed-config reruns do not
-receive replacement authority. The
-older path-shaped aggregate in `loom.pipeline.stores.run_store` is named
-`LegacyRunStore` while runtime callers are migrated in later phases. Local run
-files remain useful for materialization and projections, but they must not
-satisfy the public authority `RunStore` contract.
+receive replacement authority. Runtime consumers take existing narrow owners
+for stage state, plans, prepared runs, configuration, artifact indexes, events,
+reliability, workspaces and local paths. The former path-shaped aggregate and
+its compatibility constructor are removed. `RuntimeServices` remains the
+explicit executor-factory service bundle. Local run files remain useful for
+materialization and projections, but do not satisfy the authority `RunStore`
+contract.
+
+`prepare_stage_attempt` receives these owners explicitly and takes `run_status`
+from the caller's admitted lifecycle context. Managed callers preserve the
+authority-issued attempt and input bindings; standalone callers can allocate
+from their stage-state owner. Protected project metadata still loads through
+the checked report, prepared-run, captured-configuration and artifact-path
+owners before request persistence.
+
+`RunStatusStore.write_run_status(..., intent=TransitionIntent.NORMAL)` is the
+single status-write contract. Authority-backed writes apply the intent through
+guarded transitions. `LocalRunStore` writes ordinary evidence projections and
+rejects recovery/resume intent without changing files. Reliability helpers take
+an explicit run status and required `RunReliabilityStore`; a missing persistence
+capability is an error, never a reason to omit a required transaction.
 
 The output-commit history is available through the backend-neutral
-`list_output_commits` read as commit/fact composites in revision order. Local
-authority schema v1 migrates atomically to v2, and the authority-service
-repository migrates its known v3 output table to v4. Complete older stores keep
-their commit and artifact facts; invalid or unknown layouts fail without a
-partial table replacement.
+`list_output_commits` read as commit/fact composites in revision order. Current
+authority stores retain commit and artifact facts across reopen. Unsupported
+layouts are refused without table replacement or conversion.
 
-V9-post also splits local file/materialization access behind
+Local file/materialization access is available through
 `RunArtifactStore` and `StageArtifactStore`. These surfaces expose paths,
 config snapshots, provenance documents, logs, worker handoff files, generated
 files, workspaces, and artifact payload roots only. They intentionally do not
@@ -200,11 +215,10 @@ The coordinator authority also retains exact producer continuation permission
 for a shared claim. This permission is distinct from graph demand and physical
 assignment ownership. Revoking it does not prove process containment; normal
 fencing, terminal-winner behavior and release checks still apply. Only trusted
-coordinator mutations bind/release this permission. Per-run SQLite schema 7 and
-authority-service repository schema 8 migrate the result bindings and producer
-permissions together. Coordinator control schema 17 retains claims, demands and
-detachments and has the normal offline upgrade path from supported predecessor
-roots. See [action lifecycle](agent-preparation.md#verified-action-results-across-graphs).
+coordinator mutations bind/release this permission. Current per-run SQLite and
+authority-service schemas retain result bindings and producer permissions
+together. Coordinator control schema 19 retains claims, demands and detachments;
+only its complete current schema is admitted, without offline upgrades. See [action lifecycle](agent-preparation.md#verified-action-results-across-graphs).
 
 ## 2. Core Position
 
@@ -308,10 +322,9 @@ machine-readable unsupported-capability diagnostics. Capability declarations are
 correctness inputs for later explicit parallel, shared-filesystem, remote, or
 cross-run coordination requests.
 
-`loom.pipeline.stores.schema_policy` defines the v10 active-state schema policy:
+`loom.pipeline.stores.schema_policy` defines the v11 active-state schema policy:
 current schema is accepted, unsupported older and newer active-state schemas
-fail loudly, and automatic destructive migration is out of scope until a future
-roadmap phase explicitly designs it.
+fail loudly. No authority or coordination schema migration is supported.
 
 `loom.pipeline.stores.coordination` defines `WorkspaceCoordinationStore`, which
 owns only workspace/sweep identity, trial references, trial/resource leases,

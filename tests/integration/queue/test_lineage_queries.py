@@ -474,7 +474,9 @@ def test_declared_unexecuted_graph_and_entity_budget(tmp_path, monkeypatch):
     plan_pipeline(
         spec,
         run_uri=uri,
-        run_store=local,
+        stage_state=local,
+        artifact_index=local,
+        plans=local,
         artifact_store=LocalArtifactStore(root / "artifacts"),
         persist=True,
     )

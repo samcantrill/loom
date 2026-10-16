@@ -54,7 +54,7 @@ from loom.pipeline.runtime.placement import (
     StagePlacementPolicy,
     resolve_stage_placement,
 )
-from loom.pipeline.status import StageStatus
+from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.transition_policy import TransitionIntent
 from loom.pipeline.stores import (
     BackendRevision,
@@ -320,12 +320,20 @@ def test_managed_local_assignment_commits_accessible_output_then_releases(
     plan = plan_pipeline(
         spec,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
+        plans=run_store,
         artifact_store=LocalArtifactStore(run_store.local_artifact_root(run_uri)),
         persist=True,
     )
     worker_request = prepare_stage_attempt(
-        run_store=run_store,
+        stage_state=run_store,
+        stage_workspaces=run_store,
+        local_paths=run_store,
+        reliability=run_store,
+        prepared_runs=run_store,
+        config=run_store,
+        run_status=RunStatus.RUNNING,
         run_uri=run_uri,
         stage=spec.get_stage("build"),
         stage_plan=plan.ordered_stage_plans[0],
@@ -704,12 +712,20 @@ def test_managed_local_failure_terminalizes_before_capacity_release(
     plan = plan_pipeline(
         spec,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
+        plans=run_store,
         artifact_store=LocalArtifactStore(run_store.local_artifact_root(run_uri)),
         persist=True,
     )
     worker_request = prepare_stage_attempt(
-        run_store=run_store,
+        stage_state=run_store,
+        stage_workspaces=run_store,
+        local_paths=run_store,
+        reliability=run_store,
+        prepared_runs=run_store,
+        config=run_store,
+        run_status=RunStatus.RUNNING,
         run_uri=run_uri,
         stage=spec.get_stage("build"),
         stage_plan=plan.ordered_stage_plans[0],
@@ -955,12 +971,20 @@ def test_definitive_decline_replays_after_unbind_response_is_lost(
     plan = plan_pipeline(
         spec,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
+        plans=run_store,
         artifact_store=LocalArtifactStore(run_store.local_artifact_root(run_uri)),
         persist=True,
     )
     worker_request = prepare_stage_attempt(
-        run_store=run_store,
+        stage_state=run_store,
+        stage_workspaces=run_store,
+        local_paths=run_store,
+        reliability=run_store,
+        prepared_runs=run_store,
+        config=run_store,
+        run_status=RunStatus.RUNNING,
         run_uri=run_uri,
         stage=spec.get_stage("build"),
         stage_plan=plan.ordered_stage_plans[0],
@@ -1180,13 +1204,21 @@ def test_managed_independent_same_run_workers_overlap_without_run_lock(
     plan = plan_pipeline(
         spec,
         run_uri=run_uri,
-        run_store=run_store,
+        stage_state=run_store,
+        artifact_index=run_store,
+        plans=run_store,
         artifact_store=LocalArtifactStore(run_store.local_artifact_root(run_uri)),
         persist=True,
     )
     requests = {
         stage.name: prepare_stage_attempt(
-            run_store=run_store,
+            stage_state=run_store,
+            stage_workspaces=run_store,
+            local_paths=run_store,
+            reliability=run_store,
+            prepared_runs=run_store,
+            config=run_store,
+            run_status=RunStatus.RUNNING,
             run_uri=run_uri,
             stage=stage,
             stage_plan=next(

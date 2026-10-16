@@ -13,7 +13,7 @@ from loom.pipeline.execution.eventing import (
     emit_run_event,
     emit_stage_event,
 )
-from loom.pipeline.events import EventReference, EventScopeKind, PipelineEventRecord
+from loom.pipeline.events import EventReference, EventResourceRef, PipelineEventRecord
 from loom.pipeline.stores import LocalRunStore, path_to_run_uri
 
 
@@ -36,8 +36,8 @@ def test_emit_run_event_uses_explicit_timestamp_and_payload(tmp_path: Path) -> N
 
     assert isinstance(record, PipelineEventRecord)
     assert record.sequence == 1
-    assert record.timestamp == "2020-01-01T00:00:00Z"
-    assert record.scope.kind is EventScopeKind.RUN
+    assert record.occurred_at == "2020-01-01T00:00:00Z"
+    assert record.primary_resource == EventResourceRef.run(run_uri)
     assert record.event_type == "run.started"
     assert record.payload == {"stage_count": 2}
 
@@ -57,8 +57,8 @@ def test_emit_stage_event_records_stage_scope(tmp_path: Path) -> None:
     )
 
     assert isinstance(record, PipelineEventRecord)
-    assert record.scope.kind is EventScopeKind.STAGE
-    assert record.scope.stage_name == "build"
+    assert record.primary_resource == EventResourceRef.stage(run_uri, "build")
+    assert record.related_resources == (EventResourceRef.run(run_uri),)
     assert record.event_type == "stage.completed"
     assert record.payload == {"attempt": 1, "status": "SUCCEEDED"}
 

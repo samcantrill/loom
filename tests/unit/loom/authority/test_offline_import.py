@@ -101,8 +101,9 @@ def _assert_replay_events_match_manifest(
             == f"offline_import.replay.{manifest_event.event_type}"
         )
         assert replay_event.sequence == manifest_event.sequence + 1
-        assert replay_event.scope == manifest_event.scope
-        assert replay_event.timestamp == manifest_event.timestamp
+        assert replay_event.primary_resource == manifest_event.primary_resource
+        assert replay_event.related_resources == manifest_event.related_resources
+        assert replay_event.occurred_at == manifest_event.occurred_at
         payload = cast(Mapping[str, object], replay_event.payload)
         offline_event = cast(Mapping[str, object], payload["offline_event"])
         assert (

@@ -4,9 +4,9 @@ Implementation of the approved 2026-10-05 service-efficiency brief, reconciled
 with current native ownership on 2026-10-15. All generic behavior belongs to Loom;
 no project, training-progress or job-duration policy is introduced. Worktree:
 `../loom-worktrees/idle-service-efficiency`, branch
-`codex/idle-service-efficiency`, draft [PR #406](https://github.com/samcantrill/loom/pull/406).
+`codex/idle-service-efficiency`, qualified [PR #406](https://github.com/samcantrill/loom/pull/406).
 
-## Current integration and remaining gate
+## Current integration and qualification
 
 Candidate `e5924853a533c8dc465e6d9f6fca413e4f0d4c9d` includes current develop
 `c4cf4126c37ce68cb3df18142b854dc90f76a952`, including #400's complete report
@@ -91,14 +91,87 @@ uv run --python 3.12 --isolated --locked --group dev --extra config \
   python -m tools.service_benchmark --seconds 10 --history 4
 ```
 
-**Pending:** matched physical cancellation timings (request reply, terminal
-observation, final release) and all four current CPU/GPU/mixed/cancellation
-acceptance cases. The historical settlement increase below remains unresolved
-by synthetic CPU and deterministic correctness tests. Physical scheduling stays
-with rphys #864's owner; its frozen image and active operation are untouched.
-No physical operation was started here. PR #406 remains draft until its required
-qualification is reconciled. Consumer adoption follows the scientific-context
-and native deliveries; it must retain matching installed provenance.
+### Matched physical service and cancellation evidence
+
+The deployment owner completed native operation `idle-service-runtime-8a1b1f4a`:
+all six Quark/Shazza CPU, GPU and shared-storage checks passed. Sleipnir execution
+qualification remains explicitly deferred. The fixed-image comparison then
+qualified native `c4cf4126` before and `8a1b1f4a` after. Both used installed client
+and workload source `fc4de552c`, image
+`4a5bf5a6f975f3d2089dade8ee48df5d1270bd642980ae2210d26738f9b15dcf`, the same
+Shazza sleep workload and coordinator configuration with a 1.0-second interval.
+Request equality excludes only the three mutually agreeing unique probe IDs.
+
+| Observation | Before | After |
+| --- | ---: | ---: |
+| Cancellation reply, seconds | 0.131 | 0.256 |
+| Worker terminal first observed, seconds | 9.260 | 5.037 |
+| Final provider release first observed, seconds | 14.082 | 12.867 |
+| Coordinator CPU, percent of one core over 30 seconds | 44.57 | 19.00 |
+| Shazza agent CPU, same scope | 34.37 | 12.70 |
+| Shazza supervisor CPU, same scope | 5.73 | 4.83 |
+
+Both runs reached CANCELLED with positive provider release. This matched
+observation does not reproduce the historical settlement increase. It is one
+sample per revision, not a latency distribution or SLO: retained assignments
+increased from 103 to 117 and host load differed. CPU excludes child processes.
+Elapsed phases use coordinator monotonic time with 0.1-second observation
+sampling; worker UTC timestamps are separate evidence.
+
+The owner receipt is
+`/nas/home/can134/.local/share/rphys/cache-optimization/idle-service-physical/matched-qualification.json`,
+SHA-256 `f8664a0fba0ecf781086ee4f8a49d562a36545b02168073b8df976f04a779df7`.
+Adjacent `idle-matched-before-20261015T134421Z.jsonl` and
+`idle-matched-after-20261015T145157Z.jsonl` retain raw observations. Their hashes,
+fixed inputs, normalized request equality and cancellation/release observations
+were independently checked during integration. The
+[owner handoff](https://github.com/samcantrill/rphys/pull/864#issuecomment-6195159582)
+records the qualification and its limits.
+
+### Final-image acceptance and merge qualification
+
+All four required physical cases passed on clean rphys source `753534659`, stable
+fingerprint `ddca76fb03019cc149a803d68f773a332afc90003b5bd851e14fa819ccc537b4`,
+paired native `8a1b1f4a`, and image
+`d82aa192b30ad9b5c95e87833003bb0665666bb7dede78c921455e04ba0dc9fc`.
+Final workload promotion `cache-idle-753534659` completed all six Quark/Shazza
+CPU/GPU/storage checks before acceptance. Sleipnir execution remains explicitly
+deferred; its original policy was restored after each acceptance run.
+
+| Required case | Passing evidence | Pytest seconds |
+| --- | --- | ---: |
+| Four CPU jobs overlap; excess work waits for release | Initial four-case selection | 236.009 |
+| Cancellation contains only its assignment; peers complete | Initial four-case selection | 247.305 |
+| Four GPU jobs overlap on distinct enforced device claims | Affected two-case rerun | 268.989 |
+| Mixed CPU/GPU work waits at the GPU capacity boundary | Affected two-case rerun | 428.960 |
+
+The initial GPU/mixed cases failed locally before submission because the
+synthetic client included only `sleep.yaml`. Their failed report is retained.
+The native export API produced a separate protected client including the three
+existing `sleep.yaml`, `gpu.yaml` and `resource.yaml` recipes. Only that include
+list changed: connection, preparation profile, root/path, test source, services,
+image and dependencies remain identical. Strict source validation and every
+acceptance assertion remain intact. Reuse the unaffected CPU/cancellation passes;
+the two affected reruns passed with zero failures/errors/skips.
+
+Reports are `build/test-targeted/idle-service-physical-753534659/` and
+`build/test-targeted/idle-service-gpu-physical-753534659/` in
+`/nas/home/can134/work/rphys-worktrees/temporary-cache-deployment`. The aggregate
+receipt is `physical-qualification.json` beside the matched-timing receipt above,
+SHA-256 `c2aa7a276653073a5af8e373c47e24b09ff0ddce3fc616cd6db2b8b72ac75203`.
+Integration verified all ten supporting hashes and the exact source/image/lock/
+native-origin, Shazza and four-job properties for all four passing cases.
+The [final owner handoff](https://github.com/samcantrill/rphys/pull/864#issuecomment-6197995705)
+confirms overlap, waiting, containment and positive release. No failed or skipped
+case is counted as passed.
+
+Independent implementation review remains applicable: changes after qualified
+`8a1b1f4a` only record evidence in this brief. The native develop base remains
+`c4cf4126`. All accepted integration gates are discharged; merge with ancestry
+preserved, then verify final tree/executable/dependency equivalence. The consumer
+retains exact qualified `8a1b1f4a` as merged ancestry. A merge-only revision or
+documentation-only receipt does not require repinning or an identical-image
+rebuild. The deployment owner retains #864's separate closeout and fleet work.
 
 ## Historical October 8 rollout and receipts
 

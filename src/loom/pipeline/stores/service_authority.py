@@ -1477,21 +1477,16 @@ class _ServiceAuthorityCore:
                 None,
             )
             if existing is not None:
-                if not _event_matches_record(resolved_event, existing):
+                if not existing.matches_event(resolved_event):
                     raise ValueError(
                         f"event_id {resolved_event.event_id!r} conflicts with an existing event"
                     )
                 return existing.to_dict()
-            record = PipelineEventRecord(
+            record = PipelineEventRecord.from_event(
+                resolved_event,
                 run_uri=run_uri,
                 sequence=len(state.events) + 1,
-                timestamp=resolved_event.timestamp or self._now(),
-                scope=resolved_event.scope,
-                event_type=resolved_event.event_type,
-                payload=_plain_mapping_from_wire(
-                    resolved_event.payload, "PipelineEventRecord.payload"
-                ),
-                event_id=resolved_event.event_id,
+                occurred_at=resolved_event.timestamp or self._now(),
             )
             state.events.append(record)
             state.revision = self._next_revision()
@@ -1995,16 +1990,6 @@ def _pipeline_event_from_wire(value: object) -> PipelineEvent:
         timestamp=timestamp,
         event_id=cast(str | None, mapping.get("event_id")),
     )
-
-
-def _event_matches_record(event: PipelineEvent, record: PipelineEventRecord) -> bool:
-    if (
-        record.scope != event.scope
-        or record.event_type != event.event_type
-        or record.payload != event.payload
-    ):
-        return False
-    return event.timestamp is None or record.timestamp == event.timestamp
 
 
 def _plain_mapping_from_wire(value: object, path: str) -> dict[str, PlainData]:

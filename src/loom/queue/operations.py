@@ -6,7 +6,8 @@ ownership. These functions never initialize roots or qualify workload code.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 import json
 import os
@@ -14,6 +15,7 @@ from pathlib import Path
 import sqlite3
 from typing import TYPE_CHECKING, cast
 
+from loom._sqlite_inspection import inspect_sqlite_database
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.timestamps import utc_timestamp as utc_now
 
@@ -198,7 +200,8 @@ def _agent_observation(daemon: LocalDaemon, agent_id: str) -> OperatorObservatio
     )
 
 
-def _readonly_root(root: Path) -> sqlite3.Connection:
+@contextmanager
+def _readonly_root(root: Path) -> Iterator[sqlite3.Connection]:
     from .local_daemon import _validate_private_directory
 
     _validate_private_directory(root)
@@ -210,9 +213,8 @@ def _readonly_root(root: Path) -> sqlite3.Connection:
         or database.stat().st_mode & 0o077
     ):
         raise ValueError("root database is not protected")
-    conn = sqlite3.connect(f"{database.resolve().as_uri()}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
-    return conn
+    with inspect_sqlite_database(database) as conn:
+        yield conn
 
 
 def inspect_native_service(
@@ -293,10 +295,11 @@ def probe_upgrade_compatibility(
 ) -> OperatorObservation:
     """Read storage compatibility in the candidate runtime without migration.
 
-    Migration is forward-only and offline. Workload profile qualification is a
-    separate owner and is never inferred from compatible service storage.
+    Only the current storage contract is compatible. Workload profile
+    qualification is separate and is never inferred from storage compatibility.
     """
-    from .local_daemon import _COORDINATOR_SCHEMA_VERSION, _AGENT_SCHEMA_VERSION
+    from .local_daemon import _COORDINATOR_SCHEMA_VERSION, _AGENT_SCHEMA_VERSION, _validate_coordinator_schema
+    from .agent_sessions import validate_agent_session_schema
     from ._maintenance import MAINTENANCE_CAPABILITY
     from .errors import QueueError
 
@@ -314,9 +317,12 @@ def probe_upgrade_compatibility(
             if role == "coordinator"
             else _AGENT_SCHEMA_VERSION
         )
-        supported = current == target or (
-            role == "coordinator" and current in {12, 15, 16, 17, 18}
-        )
+        supported = current == target
+        if supported:
+            with _readonly_root(Path(root)) as conn:
+                validate_agent_session_schema(conn, coordinator=role == "coordinator")
+                if role == "coordinator":
+                    _validate_coordinator_schema(conn)
         missing = sorted(
             set(required_capabilities) - {OPERATOR_CAPABILITY, "daemon-control-v1", MAINTENANCE_CAPABILITY, CONDITIONAL_CONTROL_CAPABILITY, "quiescent-profile-promotion-v2", "quiescent-source-promotion-v1"}
         )
@@ -336,12 +342,6 @@ def probe_upgrade_compatibility(
             {
                 "current_storage_version": current,
                 "target_storage_version": target,
-                "migration_direction": "none"
-                if current == target
-                else "forward"
-                if supported
-                else "unsupported",
-                "offline_required": current != target,
                 "compatible": supported and not missing,
                 "protocol_version": "1",
                 "capabilities": ["daemon-control-v1", OPERATOR_CAPABILITY, MAINTENANCE_CAPABILITY, CONDITIONAL_CONTROL_CAPABILITY, "quiescent-profile-promotion-v2", "quiescent-source-promotion-v1"],

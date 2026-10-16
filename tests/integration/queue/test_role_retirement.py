@@ -11,15 +11,8 @@ import pytest
 from loom.coordinator import RunRequest
 from loom.preparation import CoordinatorPreparation
 from loom.serialization import thaw_plain_data
-from loom.queue import (
-    AgentControl,
-    LocalDaemon,
-    LocalDaemonAdmissionRequest,
-    LocalDaemonPrincipal,
-    LocalDaemonRole,
-    LocalDaemonSocketClient,
-    LocalDaemonSocketServer,
-)
+from loom.queue import AgentControl, LocalDaemon, LocalDaemonAdmissionRequest, LocalDaemonPrincipal, LocalDaemonRole, LocalDaemonSocketServer
+from loom.coordinator import CoordinatorClient, CoordinatorOperatorClient
 from loom.queue.agent_session_transport import (
     LocalDaemonAgentHttpClient,
     LocalDaemonAgentHttpServer,
@@ -74,7 +67,7 @@ def fleet(tmp_path):
     http.start()
     socket.start()
     try:
-        yield daemon, LocalDaemonSocketClient(service.daemon.endpoint)
+        yield daemon, CoordinatorOperatorClient.from_unix_socket(service.daemon.endpoint, expected_coordinator_id=daemon.status().coordinator_id)
     finally:
         socket.stop()
         http.stop()
@@ -83,7 +76,7 @@ def fleet(tmp_path):
 
 def test_coordinator_retirement_is_fenced_replayable_and_persistent(tmp_path):
     with fleet(tmp_path) as (daemon, client):
-        identity = client.status().coordinator_id
+        identity = client.observe_status().owner
         with pytest.raises(QueueError):
             client.retire("remove", "wrong-coordinator")
         assert retirement_receipt(daemon.config.coordinator_root) is None
@@ -92,7 +85,7 @@ def test_coordinator_retirement_is_fenced_replayable_and_persistent(tmp_path):
         with pytest.raises(QueueError):
             client.retire("different-operation", identity)
         with pytest.raises(QueueError):
-            client._client.start_run(RunRequest(_request(), "too-late"))
+            CoordinatorClient.from_unix_socket(daemon.config.endpoint).start_run(RunRequest(_request(), "too-late"))
         root = daemon.config.coordinator_root
         with pytest.raises(QueueError):
             with retired_role_guard(root, receipt):
@@ -107,11 +100,11 @@ def test_pending_work_prevents_retirement_without_fencing_acceptance(tmp_path):
     with fleet(tmp_path) as (daemon, client):
         daemon._lifetime.attach("startup", time.time() + 30)
         with pytest.raises(QueueError):
-            client.retire("remove", client.status().coordinator_id)
+            client.retire("remove", client.observe_status().owner)
         assert not daemon._lifetime.retiring
         assert retirement_receipt(daemon.config.coordinator_root) is None
         daemon._lifetime.release("startup")
-        client.retire("remove", client.status().coordinator_id)
+        client.retire("remove", client.observe_status().owner)
 
 
 @pytest.mark.parametrize(

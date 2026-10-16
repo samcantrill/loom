@@ -401,11 +401,11 @@ Public serialization helpers such as `to_dict()` must expose thawed `dict` and
 - recursive plain mapping/sequence validation helpers
 - required/optional field validation
 - schema-version extraction and support checks
-- versioned-document loader and migration dispatch
+- strict current-version document loader
 ```
 
-Migrations remain document-family-owned through explicit migration tables passed
-to the schema helper entrypoints. There is no global migration registry.
+Document families declare one current version. Readers reject other versions;
+serialization provides no conversion callbacks or migration registry.
 
 Config authoring dependencies are owned by `weave`; Loom core imports should not
 import composition modules at import time. Validation is split into:

@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import sqlite3
 import subprocess
 import sys
 import time
@@ -15,6 +16,7 @@ from unittest.mock import patch
 
 import loom.authority.supervisor as supervisor
 from loom.authority._repository import initialize_authority_repository
+from loom.authority._repository import AuthorityRepositoryCompatibilityError
 from loom.authority._service_locks import AuthorityServiceLocks
 from loom.authority.supervisor import (
     AUTHORITY_SUPERVISOR_WORKSPACE_DEFAULT_DIR,
@@ -127,6 +129,29 @@ def test_start_writes_supervisor_state_and_registry(
     assert record.reference.endpoint == "http://127.0.0.1:8766"
     assert record.service_health_state is AuthorityServiceHealthState.READY
     assert supervisor_state_path(tmp_path / "state").exists()
+
+
+@pytest.mark.parametrize("command", [start_authority_supervisor, restart_authority_supervisor])
+def test_start_and_restart_refuse_old_repository_before_effects(tmp_path, monkeypatch, command):
+    state = tmp_path / "state"
+    workspace = tmp_path / "workspace"
+    repository = initialize_authority_repository(state, service_generation="original")
+    with sqlite3.connect(repository.database_path) as conn:
+        for column in ("started_at", "finished_at", "started_at_known"):
+            conn.execute(f"ALTER TABLE authority_runs DROP COLUMN {column}")
+        conn.execute("UPDATE repository_metadata SET value='11' WHERE key='schema_version'")
+    conn.close()
+    before = {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+
+    def forbid(*args, **kwargs):
+        pytest.fail("retired repository reached process control")
+
+    monkeypatch.setattr(supervisor.subprocess, "Popen", forbid)
+    monkeypatch.setattr(supervisor.os, "kill", forbid)
+    with pytest.raises(AuthorityRepositoryCompatibilityError, match="older"):
+        command(state_dir=state, workspace_root=workspace, workspace_id="workspace-a")
+    assert not workspace.exists()
+    assert {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
 
 
 def test_start_rejects_second_live_authority_for_workspace(

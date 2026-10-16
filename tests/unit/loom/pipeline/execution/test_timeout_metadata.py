@@ -35,7 +35,13 @@ def test_frozen_executor_result_preserves_timeout_classification_and_record(
         started_at=timestamp,
     )
     write_stage_running(
-        store, run_uri=run_uri, stage_name="build", attempt=1, started_at=timestamp
+        store,
+        reliability=store,
+        run_status=RunStatus.RUNNING,
+        run_uri=run_uri,
+        stage_name="build",
+        attempt=1,
+        started_at=timestamp
     )
     metadata = metadata_with_timeout(
         {},
@@ -74,7 +80,7 @@ def test_frozen_executor_result_preserves_timeout_classification_and_record(
     classification = classify_execution_failure(
         failure,
         status=build_reliability_status_detail(
-            store,
+            run_status=RunStatus.RUNNING,
             run_uri=run_uri,
             stage_name="build",
             stage_status=StageStatus.FAILED,
@@ -85,7 +91,7 @@ def test_frozen_executor_result_preserves_timeout_classification_and_record(
     assert classification.reason_code == "reliability.timeout.timed_out"
     outcome = record_timeout_outcome_from_metadata(
         store,
-        run_uri=run_uri,
+        run_status=RunStatus.RUNNING, run_uri=run_uri,
         stage_name="build",
         attempt=1,
         stage_status=StageStatus.FAILED,

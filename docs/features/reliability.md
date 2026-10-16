@@ -315,6 +315,7 @@ it with the same recovery ID on every retry:
 
 ```bash
 loom queue daemon-recover-unknown \
+  --expected-coordinator-id COORDINATOR_ID \
   --endpoint COORDINATOR_SOCKET \
   --request recovery.json \
   --format json
@@ -325,6 +326,7 @@ the fence:
 
 ```bash
 loom queue daemon-replace-agent-session \
+  --expected-coordinator-id COORDINATOR_ID \
   --endpoint COORDINATOR_SOCKET \
   --operation-id replace-machine-b-2026-08-27 \
   --agent-id machine-b \
@@ -799,9 +801,20 @@ class PipelineEventRecord:
     causal_predecessor: EventResourceRef | EventReference | None = None
 ```
 
-Schema-version 2 records use `occurred_at` and resource references. Existing
-schema-version 1 records with `timestamp` and `scope` remain readable through
-compatibility projection; reading an old `events.jsonl` does not rewrite it.
+Only schema-version 2 records are supported. They use `occurred_at`,
+`primary_resource` and `related_resources`; the former `timestamp`/`scope`
+record aliases and schema-v1 conversion methods are removed. Retired event logs
+are refused without rewriting or appending to them. Database audit readers
+require the retained current event JSON and never reconstruct events from
+historical individual columns.
+
+`PipelineEvent` is the current append request. Its run/stage scope is resolved
+when the store assigns the run URI and sequence. `PipelineEventRecord.from_event`
+preserves its event ID and explicit timestamp, using the store clock only when
+the request omitted a timestamp. Stores use `matches_event` for exact replay
+checks. A directly constructed new record gets an opaque ID unless supplied;
+deserialization always requires the existing ID and leaves it unchanged.
+
 Event payloads must be plain-data mappings. Local stores allocate contiguous
 per-run sequence numbers and append one JSON object per line to
 `<run_dir>/events.jsonl`.

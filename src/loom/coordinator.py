@@ -30,6 +30,11 @@ from loom.queue.local_daemon import (
     LocalDaemonAdmissionDetail,
     OperationWaitResult,
     AdmissionWaitResult,
+    CoordinatorSchedulingReload,
+    RecoverUnknownAssignment,
+    SessionReplacementRequest,
+    TimeRecoveryRequest,
+    TimeRecoveryReceipt,
 )
 
 from loom.diagnostics.run_inspection import (
@@ -529,6 +534,38 @@ class CoordinatorOperatorClient(NativeCoordinatorClient):
             payload["condition"] = dict(condition)
         payload["intent_digest"] = control_intent_digest(value if condition is None else {"control": value, "condition": dict(condition)})
         return self._native_call("operator_control", payload, expected_coordinator_id)
+
+    def retire(self, operation_id: str, expected_coordinator_id: str | None = None) -> Mapping[str, PlainData]:
+        """Permanently fence the expected idle coordinator; retain its receipt."""
+        return self._native_call("operator_retire", {"operation_id": operation_id}, expected_coordinator_id)
+
+    def agent_retirement_ready(self, agent_id: str, session_id: str) -> bool:
+        """Observe exact coordinator references; local release still needs proof."""
+        return self._native_call("operator_agent_retirement_ready", {"agent_id": agent_id, "session_id": session_id})
+
+    def reload_scheduling(self, request: CoordinatorSchedulingReload, *, expected_coordinator_id: str | None = None) -> Mapping[str, PlainData]:
+        """Apply/replay the protected scheduling request at its expected epoch."""
+        return self._native_call("operator_scheduling_reload", {"request": request.to_dict()}, expected_coordinator_id)
+
+    def recover_unknown(self, request: RecoverUnknownAssignment, *, expected_coordinator_id: str | None = None) -> Mapping[str, PlainData]:
+        """Advance the exact retained recovery intent with containment evidence."""
+        return self._native_call("operator_recover_unknown", {"request": request.to_dict()}, expected_coordinator_id)
+
+    def recover_time(self, request: TimeRecoveryRequest, *, expected_coordinator_id: str | None = None) -> TimeRecoveryReceipt:
+        """Apply/replay recovery of the exact degraded coordinator time revision."""
+        return self._native_call("operator_recover_time", {"request": request.to_dict()}, expected_coordinator_id)
+
+    def replace_agent_session(self, request: SessionReplacementRequest, *, expected_coordinator_id: str | None = None) -> Mapping[str, PlainData]:
+        """Fence a classified old session before permitting successor registration."""
+        return self._native_call("operator_replace_agent_session", {"request": request.to_dict()}, expected_coordinator_id)
+
+    def reconcile_once(self, *, expected_coordinator_id: str | None = None) -> tuple[LocalDaemonAdmission, ...]:
+        """Advance one coordinator reconciliation cycle under operator authority.
+
+        A lost response leaves the outcome unknown; this call does not retry a
+        mutation automatically or imply stage completion from admission alone.
+        """
+        return self._native_call("operator_reconcile", {}, expected_coordinator_id)
 
     def observe_control(self, operation_id: str) -> Mapping[str, PlainData]:
         """Resolve the original operation after a lost mutation response."""
