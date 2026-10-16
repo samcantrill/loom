@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -9,30 +10,22 @@ from loom.diagnostics import (
     RunInspectionAxisName,
     RunInspectionResult,
     RunInspectionTruncation,
-    decode_run_inspection_response,
 )
-from loom.queue import (
-    LocalDaemonSocketClient,
-    LocalDaemonSocketServer,
-    QueueItem,
-    RunIntent,
-    LaunchContract,
-    QueueStorageError,
-    SQLiteQueueRepository,
-)
-
-
-class _SocketViews:
-    def client_view(self, principal: object) -> object:
-        return object()
-
-    def operator_view(self, principal: object) -> object:
-        return object()
+from loom.queue import LocalDaemonPrincipal, LocalDaemonRole, LocalDaemon, LocalDaemonConfig, LocalDaemonAdmissionRequest, LocalDaemonSocketServer, QueueItem, RunIntent, LaunchContract, QueueStorageError, SQLiteQueueRepository
+from loom.coordinator import CoordinatorClient
 
 
 def test_direct_and_unix_sources_share_the_exact_v1_model(tmp_path: Path) -> None:
+    from tests.integration.queue.test_local_daemon_production import _persist_single_stage_run
+
+    run_root = tmp_path / "runs"
+    _, run_uri, _ = _persist_single_stage_run(run_root)
+    config = LocalDaemonConfig(tmp_path / "coordinator", None, run_root, None, cpu_capacity=0)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
     direct = RunInspectionResult(
-        run_uri="file:///runs/contract",
+        run_uri=run_uri,
         as_of="2026-08-30T00:00:00Z",
         summary="RUNNING",
         queue_item_id="queue-contract",
@@ -57,17 +50,20 @@ def test_direct_and_unix_sources_share_the_exact_v1_model(tmp_path: Path) -> Non
     )
     endpoint = tmp_path / "inspection.sock"
     server = LocalDaemonSocketServer(
-        _SocketViews(),  # type: ignore[arg-type]
+        daemon,
         endpoint,
         inspect_run=lambda run_uri: direct.to_dict(),
     )
-    server.start()
     try:
-        unix = decode_run_inspection_response(
-            LocalDaemonSocketClient(endpoint).inspect_run(direct.run_uri)
+        admission = daemon.client_view(LocalDaemonPrincipal("contract-client", LocalDaemonRole.CLIENT)).submit(
+            LocalDaemonAdmissionRequest("queue-contract", run_uri)
         )
+        direct = replace(direct, admission_id=admission.admission_id)
+        server.start()
+        unix = CoordinatorClient.from_unix_socket(endpoint).inspect_run(direct.run_uri)
     finally:
         server.stop()
+        daemon.stop()
 
     from loom.diagnostics.run_explanation import explain_run
     assert explain_run(unix).to_dict() == explain_run(direct).to_dict()

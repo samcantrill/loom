@@ -167,7 +167,7 @@ class ControlTransport:
         self._lock = Lock()
         self._closed = False
 
-    def _exchange(self, exchange: _Exchange, *, legacy: bool) -> Mapping[str, object]:
+    def _exchange(self, exchange: _Exchange) -> Mapping[str, object]:
         raise NotImplementedError
 
     def call(
@@ -176,7 +176,6 @@ class ControlTransport:
         payload: Mapping[str, PlainData],
         deadline: float,
         *,
-        legacy: bool = False,
         waiting: bool = False,
     ) -> Mapping[str, object]:
         # Admission belongs to the same budget; a stalled exchange retains its
@@ -205,7 +204,7 @@ class ControlTransport:
         def execute() -> None:
             try:
                 remaining(exchange.deadline)
-                exchange.result = self._exchange(exchange, legacy=legacy)
+                exchange.result = self._exchange(exchange)
             except BaseException as exc:
                 exchange.error = exc
             finally:
@@ -261,13 +260,12 @@ class UnixControlTransport(ControlTransport):
         super().__init__()
         self.endpoint = Path(endpoint)
 
-    def _exchange(self, exchange: _Exchange, *, legacy: bool) -> Mapping[str, object]:
+    def _exchange(self, exchange: _Exchange) -> Mapping[str, object]:
         envelope: dict[str, PlainData] = {
             "operation": exchange.operation,
             **exchange.payload,
         }
-        if not legacy:
-            envelope["daemon_control"] = CONTROL_CAPABILITY
+        envelope["daemon_control"] = CONTROL_CAPABILITY
         raw = encode_wire(envelope)
         if len(raw) > MAX_RESPONSE_BYTES:
             raise exchange.failure("invalid_request", boundary="client_protocol")
@@ -326,7 +324,7 @@ class HttpsControlTransport(ControlTransport):
             )
         )
 
-    def _exchange(self, exchange: _Exchange, *, legacy: bool) -> Mapping[str, object]:
+    def _exchange(self, exchange: _Exchange) -> Mapping[str, object]:
         call_deadline = exchange.deadline
         connection = self._connection(remaining(call_deadline))
         raw = encode_wire(exchange.payload)

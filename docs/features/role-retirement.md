@@ -38,14 +38,14 @@ loom queue daemon-retire --endpoint /LOCAL/daemon.sock \
   --operation-id REMOVE_ID --expected-coordinator-id COORDINATOR_ID --format json
 ```
 
-The same operation is `LocalDaemonSocketClient.retire`. It requires the existing
+The same operation is `CoordinatorOperatorClient.retire`. It requires the existing
 local-owner `scheduling_reload` authorization. Under the application cycle lock,
 it checks all accepted-work owners, startup attachments and remote sessions,
 then permanently fences new acceptance and registration. This is not a status
 snapshot followed by a later unguarded shutdown. Embedded local agents are not
 supported by this operator removal surface.
 
-`LocalDaemonSocketClient.agent_retirement_ready(agent_id, session_id)` requires
+`CoordinatorOperatorClient.agent_retirement_ready(agent_id, session_id)` requires
 the existing scoped drain authorization and observes coordinator-side references
 only. It never substitutes for worker-side retirement/shutdown proof.
 

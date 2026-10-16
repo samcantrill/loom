@@ -12,8 +12,7 @@ import time
 
 import pytest
 
-from loom.coordinator import CoordinatorClient, CoordinatorClientError
-from loom.queue import LocalDaemonSocketClient
+from loom.coordinator import CoordinatorClient, CoordinatorClientError, CoordinatorOperatorClient
 from loom.queue import _coordinator_transport as control_io
 from loom.queue._coordinator_control import (
     CONTROL_CAPABILITY,
@@ -30,7 +29,7 @@ _DESCRIPTION: dict[str, PlainData] = {
     "transport": "unix",
     "coordinator_id": "coordinator-a",
     "coordinator_epoch": "epoch-a",
-    "capabilities": [CONTROL_CAPABILITY],
+    "capabilities": [CONTROL_CAPABILITY, "operator-observations-v1"],
     "source_modes": [],
     "preparation_profiles": [],
     "source_roots": [],
@@ -67,7 +66,7 @@ def _peer(
                         connection, deadline=time.monotonic() + 3
                     )
                     requests.append(value)
-                    if handshake and value.get("operation") == "handshake":
+                    if handshake and value.get("operation") in {"handshake", "operator_handshake"}:
                         connection.sendall(
                             encode_wire({"ok": True, "result": _DESCRIPTION}) + b"\n"
                         )
@@ -217,23 +216,6 @@ def test_trickle_does_not_restart_cumulative_deadline(
             assert [row["operation"] for row in requests] == ["handshake"]
 
 
-def test_legacy_inspection_needs_no_new_handshake_or_metadata(tmp_path: Path) -> None:
-    endpoint = tmp_path / "old.sock"
-    with _peer(
-        endpoint,
-        lambda connection, _: connection.sendall(
-            b'{"ok":true,"result":{"old":true}}\n'
-        ),
-        handshake=False,
-    ) as requests:
-        assert LocalDaemonSocketClient(endpoint).inspect_run(
-            "file:///unmanaged/run"
-        ) == {"old": True}
-        assert requests == [
-            {"operation": "inspect_run", "run_uri": "file:///unmanaged/run"}
-        ]
-
-
 def test_connection_config_uses_relative_protected_files_and_optional_guard(
     tmp_path: Path,
 ) -> None:
@@ -265,7 +247,7 @@ def test_connection_config_uses_relative_protected_files_and_optional_guard(
         load_coordinator_connection_file(path)
 
 
-def test_native_and_legacy_page_defaults_share_decoding(tmp_path: Path) -> None:
+def test_native_page_defaults_and_explicit_limit_share_decoding(tmp_path: Path) -> None:
     endpoint = tmp_path / "service.sock"
     result: dict[str, PlainData] = {"admissions": [], "next_cursor": None}
     with _peer(
@@ -277,7 +259,7 @@ def test_native_and_legacy_page_defaults_share_decoding(tmp_path: Path) -> None:
         assert (
             CoordinatorClient.from_unix_socket(endpoint).admissions().admissions == ()
         )
-        assert LocalDaemonSocketClient(endpoint).admissions().admissions == ()
+        assert CoordinatorClient.from_unix_socket(endpoint).admissions(limit=100).admissions == ()
         assert [
             row["limit"] for row in requests if row["operation"] == "admissions"
         ] == [20, 100]
@@ -350,3 +332,66 @@ def test_run_observation_deadline_bounds_reads_and_detaches_with_reference(tmp_p
         assert observed.connection.coordinator_id == "coordinator-a"
         assert (observed.operation is None) is (delay_at == "operation")
         assert not any(row["operation"] in {"cancel", "cancel_run_operation"} for row in requests)
+
+
+@pytest.mark.parametrize("operation", [
+    "operator_retire", "operator_scheduling_reload", "operator_recover_unknown",
+    "operator_recover_time", "operator_replace_agent_session", "operator_reconcile",
+])
+def test_operator_administration_is_guarded_and_retains_unknown_outcomes(tmp_path, operation):
+    from loom.queue import (
+        CoordinatorSchedulingReload, ManagedRecoveryTarget, RecoverUnknownAssignment,
+        SessionReplacementRequest, TimeRecoveryRequest,
+    )
+
+    def invoke(client):
+        if operation == "operator_retire":
+            return client.retire("retire-1")
+        if operation == "operator_scheduling_reload":
+            return client.reload_scheduling(CoordinatorSchedulingReload("reload-1", "epoch-1", "reload"))
+        if operation == "operator_recover_time":
+            return client.recover_time(TimeRecoveryRequest("time-1", 1, "epoch-1", "clock recovered"))
+        if operation == "operator_replace_agent_session":
+            return client.replace_agent_session(SessionReplacementRequest("replace-1", "agent-a", "contained"))
+        if operation == "operator_reconcile":
+            return client.reconcile_once()
+        return client.recover_unknown(RecoverUnknownAssignment(
+            recovery_id="recovery-1", run_uri="file:///runs/run", stage_name="train",
+            attempt=1, stage_work_id="work-1", assignment_id="assignment-1",
+            process_execution_id="process-1", execution_fence="fence-1",
+            target=ManagedRecoveryTarget("agent-a", "session-a"),
+            expected_state_version=1, requested_outcome="failed", consider_retry=True,
+            reason="verified containment",
+        ))
+
+    endpoint = tmp_path / "operator.sock"
+    # A lost reply follows dispatch. No operation is automatically repeated.
+    with _peer(endpoint, lambda connection, request: None) as requests:
+        with CoordinatorOperatorClient.from_unix_socket(endpoint) as unbound:
+            with pytest.raises(CoordinatorClientError) as missing:
+                invoke(unbound)
+        assert missing.value.code == "invalid_request"
+        assert missing.value.mutation_outcome == "not_applied"
+        assert requests == []
+        with CoordinatorOperatorClient.from_unix_socket(endpoint, expected_coordinator_id="coordinator-a") as bound:
+            with pytest.raises(CoordinatorClientError) as lost:
+                invoke(bound)
+        assert lost.value.mutation_outcome == "unknown"
+        assert lost.value.operation == operation
+        assert lost.value.ids["expected_coordinator_id"] == "coordinator-a"
+        assert [request["operation"] for request in requests] == ["operator_handshake", operation]
+        assert all(request["daemon_control"] == CONTROL_CAPABILITY for request in requests)
+
+
+def test_operator_recovery_and_readiness_decode_current_typed_results(tmp_path):
+    from loom.queue import TimeRecoveryRequest, TimeRecoveryReceipt
+
+    receipt = TimeRecoveryReceipt("time-1", "digest-1", "2026-10-16T00:00:00Z", "old-epoch", "new-epoch", 2)
+    responses = {"operator_recover_time": receipt.to_dict(), "operator_agent_retirement_ready": {"ready": True}}
+    endpoint = tmp_path / "operator.sock"
+    with _peer(endpoint, lambda connection, request: connection.sendall(
+        encode_wire({"ok": True, "result": responses[str(request["operation"])]}) + b"\n"
+    )):
+        with CoordinatorOperatorClient.from_unix_socket(endpoint, expected_coordinator_id="coordinator-a") as client:
+            assert client.recover_time(TimeRecoveryRequest("time-1", 1, "old-epoch", "recovered")) == receipt
+            assert client.agent_retirement_ready("agent-a", "session-a") is True

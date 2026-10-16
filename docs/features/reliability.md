@@ -315,6 +315,7 @@ it with the same recovery ID on every retry:
 
 ```bash
 loom queue daemon-recover-unknown \
+  --expected-coordinator-id COORDINATOR_ID \
   --endpoint COORDINATOR_SOCKET \
   --request recovery.json \
   --format json
@@ -325,6 +326,7 @@ the fence:
 
 ```bash
 loom queue daemon-replace-agent-session \
+  --expected-coordinator-id COORDINATOR_ID \
   --endpoint COORDINATOR_SOCKET \
   --operation-id replace-machine-b-2026-08-27 \
   --agent-id machine-b \

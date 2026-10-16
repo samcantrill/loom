@@ -14,7 +14,8 @@ from time import monotonic, sleep
 
 import pytest
 
-from loom.queue import DaemonStatus, LocalDaemonSocketClient
+from loom.queue import DaemonStatus
+from loom.coordinator import CoordinatorClient
 from loom.queue._remote_stage_execution import (
     REGULAR_FILE_RELAY_CAPABILITY,
     REMOTE_EXECUTION_CAPABILITY,
@@ -61,6 +62,8 @@ def test_daemon_service_reloads_exact_source_and_restarts_active_revision(
             str(endpoint),
             "--operation-id",
             "e2e-source-reload-1",
+            "--expected-coordinator-id",
+            before.coordinator_id,
             "--expected-scheduling-epoch",
             before.scheduling_epoch,
             "--format",
@@ -71,7 +74,7 @@ def test_daemon_service_reloads_exact_source_and_restarts_active_revision(
         assert result["state"] == "applied"
         assert result["configuration_revision"] == 2
         assert result["scheduling_epoch"] != before.scheduling_epoch
-        after = LocalDaemonSocketClient(endpoint).status()
+        after = CoordinatorClient.from_unix_socket(endpoint).status()
         assert after.scheduling_epoch == result["scheduling_epoch"]
     finally:
         _stop_service(first)
@@ -114,7 +117,7 @@ def test_outbound_agent_service_reloads_exact_source_and_restarts_active_revisio
     agent: subprocess.Popen[str] | None = None
     restarted_agent: subprocess.Popen[str] | None = None
     try:
-        _wait_for_status(coordinator, endpoint)
+        coordinator_status = _wait_for_status(coordinator, endpoint)
         agent = _start_agent_service(agent_source)
         session_id, config_revision = _wait_for_agent_offer(
             agent, control_database, cpu_capacity=1
@@ -134,6 +137,8 @@ def test_outbound_agent_service_reloads_exact_source_and_restarts_active_revisio
             str(endpoint),
             "--operation-id",
             "e2e-agent-source-reload-1",
+            "--expected-coordinator-id",
+            coordinator_status.coordinator_id,
             "--agent-id",
             "agent-a",
             "--session-id",
@@ -159,6 +164,8 @@ def test_outbound_agent_service_reloads_exact_source_and_restarts_active_revisio
             str(endpoint),
             "--operation-id",
             "e2e-agent-source-resume-1",
+            "--expected-coordinator-id",
+            coordinator_status.coordinator_id,
             "--agent-id",
             "agent-a",
             "--session-id",
@@ -395,7 +402,7 @@ def _wait_for_status(
                 f"stdout:\n{stdout}\nstderr:\n{stderr}"
             )
         try:
-            return LocalDaemonSocketClient(endpoint).status()
+            return CoordinatorClient.from_unix_socket(endpoint).status()
         except Exception as exc:  # startup spans process, socket, and schema owners
             last_error = exc
             sleep(0.05)

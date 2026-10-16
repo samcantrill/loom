@@ -336,21 +336,35 @@ loom queue daemon-cancel --connection /path/to/client.yaml example-001 --format 
 
 Substitute `--endpoint /run/loom/coordinator.sock` on the coordinator host.
 Guard a reconnect with `--expected-coordinator-id ID_FROM_RECEIPT`. CLI page
-defaults remain 100 and legacy CLI wait durations renew bounded observations
-where needed. Administration, recovery and role initialization retain their
-separately authorized interfaces; see [CLI details](cli.md).
+defaults remain 100; Python client pages default to 20. Terminal waits renew
+bounded observations. A single `wait_admission` or `wait_operation` observation
+accepts `timeout_seconds` from 0 to 25; timeout does not cancel work.
 
-`LocalDaemonSocketClient` remains available at its established import path. Its
-constructor, page default of 100, timeout keywords, `AdmissionNotFoundError`,
-other legacy queue errors and terminal `TimeoutError` are preserved. Its
-old-server subset does not require the new capability handshake. The original
-Unix inspection adapter preserves its broader local entrypoint; the new facade
-uses the managed-admission restriction on both transports. Query-only inspection
-retains its distinct read-only credential policy.
+Use `CoordinatorClient` for ordinary control and `CoordinatorOperatorClient` for
+administration. Both transports require the current control handshake and managed
+admission for run inspection. Query-only inspection retains its distinct
+read-only credential policy. The old socket adapter and its alternate request,
+error and timeout signatures have been removed.
 
-The facade and compatibility adapter share lower-level control behavior and
-codecs. `loom.coordinator` combines these values with diagnostics above queue;
-queue/runtime modules do not import the facade or an MCP SDK. The native facade is the supported run control API; old whole-run queue execution APIs are removed.
+The operator client owns `control_agent`, `retire`, `agent_retirement_ready`,
+`reload_scheduling`, `recover_unknown`, `recover_time`, `replace_agent_session`
+and `reconcile_once`. Mutations require an expected coordinator ID from the
+connection binding or explicit argument. Existing typed requests, scope checks,
+operation replay and recovery/containment proofs remain authoritative. Read
+operator status with `observe_status`; ordinary client `status` is a different
+role. Use `--connection` or `--endpoint` for the corresponding administration CLI
+commands; see [CLI details](cli.md).
+
+`CoordinatorClientError` preserves classified failures and mutation outcomes:
+`not_applied`, `applied` or `unknown`. Lost responses after dispatch are unknown;
+clients do not automatically repeat a mutation. Resolve or replay the exact
+operation using its existing owner contract. A recovery conflict refused before
+intent admission is `not_applied`; a later conflict can follow durable intent or
+containment evidence and remains `unknown`. Other administrative errors after
+dispatch likewise do not imply refusal without authoritative evidence.
+`loom.coordinator` combines queue
+control values with diagnostics above queue; queue/runtime modules do not import
+the facade or an MCP SDK.
 
 For explicitly authorized configuration, agent, ownership and settlement facts,
 see [native operator observations](operator-observations.md).

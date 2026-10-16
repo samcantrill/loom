@@ -71,10 +71,11 @@ def test_coordinator_import_and_unix_factory_do_not_start_services_or_load_mcp()
         threading.Thread.start = unexpected
         subprocess.Popen = unexpected
         from loom.coordinator import CoordinatorClient, CoordinatorClientError, RunRequest, RunObservation
-        from loom.queue import LocalDaemonSocketClient, QueueServiceError
+        from loom.queue import QueueServiceError
         with CoordinatorClient.from_unix_socket('/nonexistent/loom.sock'):
             pass
-        LocalDaemonSocketClient('/nonexistent/legacy.sock')
+        import loom.queue
+        assert not hasattr(loom.queue, 'LocalDaemonSocketClient')
         assert issubclass(CoordinatorClientError, QueueServiceError)
         for forbidden in ('mcp', 'torch', 'numpy', 'pandas', 'tests.support'):
             assert not any(name == forbidden or name.startswith(forbidden + '.')

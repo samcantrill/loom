@@ -391,3 +391,107 @@ configuration, storage fixture or scientific behavior changed. #410's current
 storage/Fleet results remain applicable within their recorded scope; physical
 qualification and downstream paired adoption remain pending. The delivery PR
 owns exact commit, merge and matching-tree synchronization metadata.
+
+
+### Current coordinator application and operator API
+
+Base `9ca511b16258b82882bbc9f03b49f36663340138` (Loom #411). This delivery
+removes the compatibility socket adapter, legacy control switches, old HTTP
+client/operator entrypoints and unrestricted local inspection. Public callers
+use `CoordinatorClient` and `CoordinatorOperatorClient`. Existing retirement,
+scheduling, time/assignment recovery, session replacement and reconciliation
+owners are exposed through guarded current operator requests before the old
+wire dispatch is removed. Current Unix/HTTPS, query, agent and Slurm roles remain.
+
+Reached consumers: CLI, Fleet enrollment/credential binding, native preparation,
+Discord reporting, owned inspection, scope/retirement, waits/cancellation and
+remote guarded recovery. Current terminal wait renewal, bounded observations,
+pre-dispatch capacity refusal, exact operation replay and unknown post-dispatch
+outcomes remain. An unstarted fake-service recovery test now exercises its
+existing durable operation owner directly; fresh real remote recovery covers
+the wire boundary. The inspection model contract now uses a real prepared run
+and admission instead of an unrestricted fake socket owner.
+
+Selection: cheap static/import and collection checks first; native client and
+operator unit/contracts, affected CLI and daemon checks, role retirement and
+operator observations; exact Unix/HTTPS authentication, deadline/lost-reply,
+wait saturation, remote guarded recovery, current query and Slurm consumers;
+real owned inspection; reached preparation restart/reload and cancellation;
+Fleet enrollment/credential binding and service reload; Discord consumers.
+Exact selectors and receipts are retained under
+`build/current-contract-cutover/coordinator-api-*`. Initial collection before
+new refusal tests: 159 cases collected. Initial Pyright found an accidental
+extra type argument in an existing `cast`; corrected before execution. Neither
+collection nor the failed static run is counted as behavior evidence.
+
+Earlier persistence and agent-wait receipts remain applicable to unchanged
+schema/recovery and wait-capability owners. New transport/role consumers require
+fresh checks here. No scientific producer, dataset codec, dependency pin or
+image changed; paired rphys adoption, scientific size/scaling/archive closure
+and affected physical deployment qualification remain pending. Remaining
+historical agent-row and preparation/event/runtime-store inventory is not closed
+by this application API removal. Final results and independent review follow.
+
+Bounded correction scope: the current inspection fixture now uses the generated
+admission ID; the previously failed supervisor-start case passed unchanged.
+Full static inspection also found the reboot-recovery test's remaining old
+operator client and a supervisor-launch fixture still constructing removed
+schema-less records. Port the real reboot consumer and retain both current
+success/failure launch-control assertions, removing only the retired-format
+success variants. This adds three reboot cases and two current launch cases.
+
+Administrative error review found that a guarded recovery can commit intent and
+containment evidence before a later conflict. Only the recovery owner's explicit
+pre-admission refusal may claim `not_applied`; other post-dispatch administrative
+conflicts retain `unknown`. The existing durable recovery test now covers both
+storage and conflict failures after evidence commit through native dispatch,
+preserving exact evidence, restart and replay assertions. Fresh checks include
+that owner, current operator unit contracts, real remote guarded recovery,
+reboot/containment, refused socket requests and redacted failures. Collection of
+this bounded selection passed: 44 cases. Passing unaffected results are retained;
+final coverage reconciliation follows after execution.
+
+Final selected coverage: **299 distinct current cases passed**, with no remaining
+failures, errors, skips or missing cases. Current collection is retained in
+`coordinator-api-final-nodes.json`; the exact selection is in
+`coordinator-api-final-selectors.txt`. `coordinator-api-coverage.json` reconciles
+each current node against its latest applicable JUnit result rather than adding
+overlapping runs. All receipts remain under `build/current-contract-cutover/`.
+
+| Receipt suffix | Recorded execution | Current cases supplied |
+| --- | --- | ---: |
+| `imports` | 66 passed in the isolated base environment | 66 |
+| `core` | 166 passed, four failed; retained failures superseded below | 104 |
+| `core-recheck` | 27 passed, one inspection-fixture failure | 27 |
+| `integration` | 57 passed in 419.79 s | 55 |
+| `inspection-final` | Three passed after using the actual returned admission ID | 3 |
+| `correction` | 44 passed in 36.21 s, including both post-commit failure kinds | 44 |
+
+The first core/import source-test patch at base `9ca511b1` was
+`21af62053fd699b8b6848582bb9f7b1b88bc3eb4dc159d3abc1fefdb7fa06c57`.
+The core recheck and 57-case integration tree used patch
+`da52f53172f5e7e8b27f1932cd0aef08fa9ae1a8c26b14c89329fd9c027b6193`:
+the delta restores the required agent-retirement CLI identity flag and completes
+the read/inspection fixtures. The three-case inspection receipt adds only its
+generated admission-ID fixture correction to that source/test state.
+Final source/test diff SHA-256 is
+`c4aed5839ed159843069aab5de3f301180adbac3ea3a371f877c383ce99109c4`.
+
+Reuse rationale: final production differences from the integration tree are the
+recovery owner's explicit pre-admission conflict type and administrative
+post-dispatch error classification. Fresh checks cover those changes, real
+remote recovery and reboot containment. CLI identity was already covered by the
+full affected CLI unit file and retirement recheck. Other corrections change
+test fixtures/type narrowing, the missed reboot client and obsolete launch
+success variants; the fresh selection covers those consumers. No dependency,
+configuration, shared fixture, science, format or transport success-path changes
+invalidate the retained import, control, inspection, preparation, reload, query,
+Slurm and Fleet results. The unmodified supervisor-start case passed on recheck;
+its original failure remains in the receipt, not relabelled as a pass.
+
+Final full Pyright: zero errors/warnings. Changed-file Ruff and diff checks pass.
+Static inspection's missed reboot consumer and schema-less launch fixture are
+corrected, with their actual current behavior executed. Documentation now states
+current complete schemas and no startup request backfill; historical delivery
+notes no longer promise those removed behaviors. Independent final-diff review
+and the delivery PR own merge eligibility and synchronization metadata.

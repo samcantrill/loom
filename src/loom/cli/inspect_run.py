@@ -117,11 +117,9 @@ def build_inspect_run_result(
                 RunInspectionHttpClient(config.client).inspect_run(run_uri)
             )
         assert endpoint is not None
-        from loom.queue import LocalDaemonSocketClient
+        from loom.coordinator import CoordinatorClient
 
-        return decode_run_inspection_response(
-            LocalDaemonSocketClient(Path(endpoint)).inspect_run(run_uri)
-        )
+        return CoordinatorClient.from_unix_socket(Path(endpoint)).inspect_run(run_uri)
     except Exception as exc:
         raise CliError(
             "run inspection failed",

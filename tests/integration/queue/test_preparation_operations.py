@@ -33,14 +33,8 @@ from loom.pipeline.cleanup import (
     assess_local_target_safety,
 )
 from loom.preparation import CoordinatorPreparation
-from loom.queue import (
-    CoordinatorSchedulingReload,
-    LocalDaemon,
-    LocalDaemonAdmissionRequest,
-    LocalDaemonOperation,
-    LocalDaemonSocketClient,
-    LocalDaemonSocketServer,
-)
+from loom.queue import CoordinatorSchedulingReload, LocalDaemon, LocalDaemonAdmissionRequest, LocalDaemonOperation, LocalDaemonSocketServer
+from loom.coordinator import CoordinatorOperatorClient
 from loom.queue.deployment import load_coordinator_service_config
 from loom.queue.preparation import PreparationSource, PrepareRunRequest
 from loom.queue._remote_stage_execution import ResidentProfileDescriptor
@@ -1528,7 +1522,7 @@ def test_restart_reuses_capture_and_replays_a_claimed_complete_target(
         config_data = json.loads(config_path.read_text())
         config_data.pop("preparation")
         config_path.write_text(json.dumps(config_data))
-        reloaded = LocalDaemonSocketClient(service.daemon.endpoint).reload_scheduling(
+        reloaded = CoordinatorOperatorClient.from_unix_socket(service.daemon.endpoint, expected_coordinator_id=daemon.status().coordinator_id).reload_scheduling(
             CoordinatorSchedulingReload(
                 "disable-preparation",
                 daemon.status().scheduling_epoch,
@@ -1832,7 +1826,7 @@ def test_preparation_rejects_other_operation_ids_and_public_child_submission(
     server = LocalDaemonSocketServer(daemon, service.daemon.endpoint)
     server.start()
     try:
-        occupied = LocalDaemonSocketClient(service.daemon.endpoint).reload_scheduling(
+        occupied = CoordinatorOperatorClient.from_unix_socket(service.daemon.endpoint, expected_coordinator_id=daemon.status().coordinator_id).reload_scheduling(
             CoordinatorSchedulingReload(
                 "occupied-id",
                 daemon.status().scheduling_epoch,

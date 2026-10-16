@@ -689,9 +689,10 @@ blocks new capacity. Restore the same bytes/mapping and replay, or use native
 explicit cancellation and pre-grant settlement. Restart after verified workspace
 persistence uses that bundle; it does not reread the NAS payload to join a retained
 execution. Coordinator replay preserves the original reference and issuer epoch.
-Additive nullable reference columns are installed under existing owner locks;
-historical inline polls, deliveries and workspaces retain their original bytes
-and digests. Nonshared remote delivery remains inline.
+The complete current coordinator and agent schemas include the nullable
+reference columns. Existing roots must already satisfy those schemas; startup
+does not add columns or upgrade older state. Nonshared remote delivery remains
+inline, with its original request bytes and digest retained.
 
 The agent retains each complete original wire request (inline bundle or shared
 reference) by session and assignment ID in the existing reference journal,
@@ -701,14 +702,12 @@ sequenced replay row, so advancing the poll does not erase an earlier delivery
 even before a workspace exists. Neither journal schema nor coordinator schema
 changes.
 
-On startup, unresolved legacy delivery rows without a request are backfilled
-only from a matching surviving inline poll receipt. Existing shared references
-remain unchanged. When that receipt is gone, the exact authenticated workspace
-can still resume retained work; it is never converted into an original wire
-record. Missing both sources leaves the delivery recovery-required and prevents
-fresh offers or polls. Resolved delivery rows are left alone. Startup still
-settles retained work and reconciles an uncertain poll with its exact original
-session, sequence, availability revision and timeout before admitting new work.
+Startup does not reconstruct missing original requests from historical rows.
+Current delivery and workspace recovery retain their exact authenticated
+evidence; a workspace is not converted into an original wire record. Missing
+required evidence prevents fresh work. Startup settles retained work and
+reconciles an uncertain poll with its exact original session, sequence,
+availability revision and timeout before admitting new work.
 
 Payload files belong to retained delivery/poll/workspace history. Terminal or
 staging cleanup does not delete them. There is no automatic payload collector;

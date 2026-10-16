@@ -434,13 +434,15 @@ def start(request):
 
 
 def coordinator_client(request):
-    from loom.queue import LocalDaemonSocketClient
+    from loom.coordinator import CoordinatorOperatorClient
     from loom.queue.deployment import load_coordinator_service_config
 
     service = load_coordinator_service_config(
         config(request), env_file=environment(request)
     )
-    return service, LocalDaemonSocketClient(service.daemon.endpoint)
+    return service, CoordinatorOperatorClient.from_unix_socket(
+        service.daemon.endpoint, expected_coordinator_id=request.get("coordinator_id")
+    )
 
 
 def coordinator_observation(request, service):
@@ -530,7 +532,7 @@ def enroll(request, directory):
             "after": after,
             "reload": CoordinatorSchedulingReload(
                 request["request_id"],
-                client.status().scheduling_epoch,
+                cast(str, observation.value["scheduling_epoch"]),
                 "Fleet agent enrollment",
             ).to_dict(),
         }
@@ -640,7 +642,7 @@ def bind_principal(request, directory):
             "after": after,
             "reload": CoordinatorSchedulingReload(
                 request["request_id"],
-                client.status().scheduling_epoch,
+                cast(str, observed.value["scheduling_epoch"]),
                 "Fleet authored principal credential binding",
             ).to_dict(),
         }

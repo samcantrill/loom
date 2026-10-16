@@ -1,4 +1,4 @@
-"""Shared native client behavior behind the integration and socket adapters."""
+"""Shared native coordinator request, guard and observation behavior."""
 
 from __future__ import annotations
 
@@ -25,9 +25,8 @@ from ._coordinator_control import (
 )
 from . import _coordinator_transport as transport_io
 from ._coordinator_transport import ControlTransport
-from .errors import QueueError, QueueServiceError
+from .errors import QueueError
 from .local_daemon import (
-    AdmissionNotFoundError,
     AdmissionPage,
     AdmissionWaitKind,
     AdmissionWaitResult,
@@ -54,10 +53,8 @@ class NativeCoordinatorClient:
         transport: ControlTransport,
         *,
         expected_coordinator_id: str | None = None,
-        legacy: bool = False,
     ) -> None:
         self._transport = transport
-        self._legacy = legacy
         self._last_connection: CoordinatorConnectionDescription | None = None
         try:
             self._expected_coordinator_id = optional_id(expected_coordinator_id)
@@ -109,59 +106,18 @@ class NativeCoordinatorClient:
                     operation,
                     payload,
                     deadline,
-                    legacy=self._legacy,
                     waiting=waiting,
                 )
-                if not self._legacy:
-                    try:
-                        return decode_envelope(response, operation, payload)
-                    except (ValueError, TypeError, KeyError, RecursionError) as exc:
-                        raise control_error(
-                            "invalid_response", operation, payload, dispatched=True
-                        ) from exc
-                if response.get("ok") is not True:
-                    diagnostic = response.get("error")
-                    if diagnostic == "local_daemon_admission_not_found":
-                        raise AdmissionNotFoundError(diagnostic)
-                    raise QueueServiceError(
-                        diagnostic
-                        if isinstance(diagnostic, str)
-                        else "local_daemon_request_failed"
-                    )
-                value = response.get("result")
-                if not isinstance(value, Mapping):
-                    raise QueueServiceError("local daemon returned an invalid result")
-                return value
-            except CoordinatorClientError as exc:
-                if self._legacy:
-                    if exc.code == "not_found":
-                        raise AdmissionNotFoundError(
-                            "local_daemon_admission_not_found"
-                        ) from exc
-                    if exc.code == "deadline_exceeded":
-                        raise
-                    raise QueueServiceError(
-                        "local daemon endpoint is unavailable"
+                try:
+                    return decode_envelope(response, operation, payload)
+                except (ValueError, TypeError, KeyError, RecursionError) as exc:
+                    raise control_error(
+                        "invalid_response", operation, payload, dispatched=True
                     ) from exc
+            except CoordinatorClientError as exc:
                 if (
                     operation in MUTATION_OPERATIONS
                     or exc.code != "capacity_exhausted"
-                ):
-                    raise
-                left = deadline - time.monotonic()
-                if left <= 0:
-                    raise
-                time.sleep(min(delay, left))
-                delay = min(0.1, delay * 2)
-            except QueueServiceError as exc:
-                if (
-                    not self._legacy
-                    or operation in MUTATION_OPERATIONS
-                    or str(exc)
-                    not in {
-                        "local_daemon_wait_capacity_exhausted",
-                        "local_daemon_worker_capacity_exhausted",
-                    }
                 ):
                     raise
                 left = deadline - time.monotonic()
@@ -188,13 +144,11 @@ class NativeCoordinatorClient:
         if guard is not None:
             envelope["expected_coordinator_id"] = guard
         try:
-            validate_request(operation, envelope, legacy=self._legacy)
+            validate_request(operation, envelope)
         except (ValueError, TypeError, QueueError) as exc:
-            if self._legacy:
-                raise QueueServiceError("local daemon request is invalid") from exc
             raise control_error("invalid_request", operation, envelope) from exc
         waiting = waiting or operation in WAIT_OPERATIONS
-        if not self._legacy and operation not in {"handshake", "operator_handshake"} and negotiate:
+        if operation not in {"handshake", "operator_handshake"} and negotiate:
             try:
                 # Separate connections renegotiate within this request's budget.
                 description = self._native_call(
@@ -272,10 +226,6 @@ class NativeCoordinatorClient:
         except CoordinatorClientError:
             raise
         except (QueueError, ValueError, TypeError, KeyError, RecursionError) as exc:
-            if self._legacy:
-                raise QueueServiceError(
-                    "local daemon returned an invalid result"
-                ) from exc
             raise control_error(
                 "invalid_response", operation, envelope, dispatched=True
             ) from exc
@@ -291,8 +241,6 @@ class NativeCoordinatorClient:
         sources, truncation and replacement decoding. No host paths are returned.
         Older peers without ``bounded-run-logs-v1`` are explicitly unsupported.
         """
-        if self._legacy:
-            raise control_error("unsupported_capability", "read_run_logs", {})
         return self._native_call("read_run_logs", {
             "operation_id": operation_id, "stage": stage, "stream": stream, "tail": tail,
         }, expected_coordinator_id)
@@ -482,30 +430,23 @@ class NativeCoordinatorClient:
         self,
         operation: str,
         payload: Mapping[str, PlainData],
-        timeout: float | None,
+        timeout: float,
         expected: str | None,
         *,
-        legacy: bool = False,
         terminal_deadline: float | None = None,
     ) -> Any:
         try:
-            duration = observation_timeout(timeout, legacy=legacy)
+            duration = observation_timeout(timeout)
         except ValueError as exc:
-            if self._legacy:
-                raise QueueServiceError("local daemon wait timeout is invalid") from exc
             raise control_error("invalid_request", operation, payload) from exc
         started = time.monotonic()
-        observation_end = None if duration is None else started + duration
+        observation_end = started + duration
         budget_end = started + transport_io.REQUEST_BUDGET_SECONDS
         if terminal_deadline is not None:
             budget_end = min(budget_end, terminal_deadline)
         negotiate = True
         while True:
-            left = (
-                MAX_OBSERVATION_SECONDS
-                if observation_end is None
-                else max(0.0, observation_end - time.monotonic())
-            )
+            left = max(0.0, observation_end - time.monotonic())
             value = self._native_call(
                 operation,
                 {**payload, "timeout": min(MAX_OBSERVATION_SECONDS, left)},
@@ -515,15 +456,8 @@ class NativeCoordinatorClient:
                 waiting=True,
             )
             negotiate = False
-            if value.kind.value != "TIMEOUT" or (
-                observation_end is not None and time.monotonic() >= observation_end
-            ):
+            if value.kind.value != "TIMEOUT" or time.monotonic() >= observation_end:
                 return value
-            if legacy and budget_end - time.monotonic() < 5.0:
-                budget_end = time.monotonic() + transport_io.REQUEST_BUDGET_SECONDS
-                if terminal_deadline is not None:
-                    budget_end = min(budget_end, terminal_deadline)
-                negotiate = True
 
     def wait_operation(
         self,

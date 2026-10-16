@@ -99,6 +99,7 @@ The central discover-then-control flow is:
 loom queue daemon-agents --endpoint DAEMON_SOCKET --limit 10
 loom queue daemon-agent --endpoint DAEMON_SOCKET machine-B
 loom queue daemon-agent-drain \
+  --expected-coordinator-id COORDINATOR_ID \
   --endpoint DAEMON_SOCKET --operation-id maintenance-1 \
   --agent-id machine-B --session-id SESSION --config-revision CONFIG_REVISION \
   --pool default --reason maintenance

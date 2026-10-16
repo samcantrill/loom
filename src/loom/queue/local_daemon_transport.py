@@ -15,40 +15,18 @@ from typing import cast
 
 from loom.serialization import PlainData
 
-from ._coordinator_client import NativeCoordinatorClient
 from ._coordinator_control import (
-    CONTROL_CAPABILITY, CONTROL_OPERATIONS, WAIT_OPERATIONS, CoordinatorClientError,
-    control_error, dispatch_control, encode_wire, OPERATOR_OPERATIONS,
+    CONTROL_CAPABILITY, WAIT_OPERATIONS, CoordinatorClientError,
+    control_error, dispatch_control, encode_wire, error_envelope, OPERATOR_OPERATIONS,
 )
-from ._coordinator_transport import UnixControlTransport, read_unix_message
+from ._coordinator_transport import read_unix_message
 from .errors import (
-    QueueConflictError,
-    QueueError,
     QueueServiceError,
-    QueueStorageError,
-    QueueValidationError,
 )
 from .local_daemon import (
-    AdmissionNotFoundError,
-    AgentControl,
-    AgentPage,
-    AgentProjection,
-    CoordinatorSchedulingReload,
     LocalDaemon,
-    LocalDaemonAdmission,
-    LocalDaemonAdmissionDetail,
-    AdmissionPage,
-    AdmissionWaitResult,
-    DaemonStatus,
-    LocalDaemonAdmissionRequest,
     LocalDaemonPrincipal,
     LocalDaemonRole,
-    LocalDaemonOperation,
-    OperationWaitResult,
-    RecoverUnknownAssignment,
-    SessionReplacementRequest,
-    TimeRecoveryReceipt,
-    TimeRecoveryRequest,
 )
 
 
@@ -151,9 +129,9 @@ class LocalDaemonSocketServer:
                     self._worker_slots.release()
                     raise QueueServiceError("local daemon socket server is stopping")
                 workers.submit(self._handle, connection)
-            except Exception as exc:
+            except Exception:
                 try:
-                    _write_error(connection, _safe_error_code(exc))
+                    _write_error(connection, "local_daemon_internal_error")
                 finally:
                     connection.close()
 
@@ -170,101 +148,26 @@ class LocalDaemonSocketServer:
             daemon_control = payload.pop("daemon_control", None)
             if uid != os.getuid():
                 raise control_error("unauthorized", operation, payload, boundary="authentication")
-            if daemon_control not in (None, CONTROL_CAPABILITY):
-                raise QueueValidationError("local daemon client protocol is invalid")
+            if daemon_control != CONTROL_CAPABILITY:
+                raise control_error("unsupported", operation, payload, boundary="client_protocol")
             if operation in WAIT_OPERATIONS:
                 if not self._long_poll_slots.acquire(blocking=False):
                     raise _WaitCapacityError("local daemon wait capacity is exhausted")
                 long_poll_acquired = True
-            operator = self._daemon.operator_view(
-                LocalDaemonPrincipal(f"uid:{uid}", LocalDaemonRole.OPERATOR)
-            )
-            result: PlainData
-            if operation in CONTROL_OPERATIONS or daemon_control == CONTROL_CAPABILITY:
-                result = dict(dispatch_control(
-                    self._daemon, LocalDaemonPrincipal(f"uid:{uid}", LocalDaemonRole.OPERATOR if operation in OPERATOR_OPERATIONS else LocalDaemonRole.CLIENT),
-                    operation, payload, transport="unix", wait_slice=_SERVER_WAIT_SECONDS,
-                    inspect_run=self._inspect_run, legacy=daemon_control is None,
-                ))
-            elif operation == "agent_control":
-                control = payload.get("control")
-                if not isinstance(control, Mapping):
-                    raise QueueServiceError("agent control must be a mapping")
-                result = dict(operator.control_agent(AgentControl.from_value(control)))
-            elif operation == "retire":
-                if set(payload) != {"operation_id", "expected_coordinator_id"}:
-                    raise QueueServiceError("retirement request fields are invalid")
-                if not all(isinstance(v, str) for v in payload.values()):
-                    raise QueueServiceError("retirement request identities are invalid")
-                result = dict(
-                    operator.retire(
-                        cast(str, payload["operation_id"]),
-                        cast(str, payload["expected_coordinator_id"]),
-                    )
-                )
-            elif operation == "agent_retirement_ready":
-                if set(payload) != {"agent_id", "session_id"}:
-                    raise QueueServiceError(
-                        "agent retirement request fields are invalid"
-                    )
-                if not all(isinstance(v, str) for v in payload.values()):
-                    raise QueueServiceError("agent retirement identities are invalid")
-                result = {
-                    "ready": operator.agent_retirement_ready(
-                        cast(str, payload["agent_id"]), cast(str, payload["session_id"])
-                    )
-                }
-            elif operation == "scheduling_reload":
-                request = payload.get("request")
-                if not isinstance(request, Mapping):
-                    raise QueueServiceError(
-                        "scheduling reload request must be a mapping"
-                    )
-                result = dict(
-                    operator.reload_scheduling(
-                        CoordinatorSchedulingReload.from_dict(request)
-                    )
-                )
-            elif operation == "recover_unknown":
-                request = payload.get("request")
-                if not isinstance(request, Mapping):
-                    raise QueueServiceError("recovery request must be a mapping")
-                result = dict(
-                    operator.recover_unknown(
-                        RecoverUnknownAssignment.from_dict(request)
-                    )
-                )
-            elif operation == "recover_time":
-                request = payload.get("request")
-                if not isinstance(request, Mapping):
-                    raise QueueServiceError("time recovery request must be a mapping")
-                result = operator.recover_time(
-                    TimeRecoveryRequest.from_dict(request)
-                ).to_dict()
-            elif operation == "replace_agent_session":
-                request = payload.get("request")
-                if not isinstance(request, Mapping):
-                    raise QueueServiceError(
-                        "session replacement request must be a mapping"
-                    )
-                result = dict(
-                    operator.replace_agent_session(
-                        SessionReplacementRequest.from_dict(request)
-                    )
-                )
-            else:
-                raise QueueServiceError("local daemon operation is unsupported")
+            result = dict(dispatch_control(
+                self._daemon,
+                LocalDaemonPrincipal(f"uid:{uid}", LocalDaemonRole.OPERATOR if operation in OPERATOR_OPERATIONS else LocalDaemonRole.CLIENT),
+                operation, payload, transport="unix", wait_slice=_SERVER_WAIT_SECONDS,
+                inspect_run=self._inspect_run,
+            ))
             response: PlainData = {"ok": True, "result": result}
-        except Exception as exc:  # Public responses retain stable safe legacy codes.
-            diagnostic = _safe_error_code(exc)
-            response = {"ok": False, "error": diagnostic, "message": diagnostic}
-            if daemon_control == CONTROL_CAPABILITY:
-                if isinstance(exc, CoordinatorClientError):
-                    detail = exc
-                else:
-                    code = "capacity_exhausted" if isinstance(exc, _WaitCapacityError) else "invalid_request"
-                    detail = control_error(code, operation, payload, boundary="coordinator")
-                response["error_detail"] = detail.to_dict()
+        except Exception as exc:
+            if isinstance(exc, CoordinatorClientError):
+                detail = exc
+            else:
+                code = "capacity_exhausted" if isinstance(exc, _WaitCapacityError) else "invalid_request"
+                detail = control_error(code, operation, payload, boundary="coordinator")
+            response = error_envelope(detail)
         try:
             connection.settimeout(30.0)
             _write_message(connection, cast(Mapping[str, PlainData], response))
@@ -273,159 +176,6 @@ class LocalDaemonSocketServer:
             self._worker_slots.release()
             if long_poll_acquired:
                 self._long_poll_slots.release()
-
-
-class LocalDaemonSocketClient:
-    """Compatibility adapter for established socket signatures and error classes."""
-
-    def __init__(self, endpoint: str | Path, *, expected_coordinator_id: str | None = None) -> None:
-        self.endpoint = Path(endpoint)
-        self._client = NativeCoordinatorClient(
-            UnixControlTransport(endpoint), expected_coordinator_id=expected_coordinator_id, legacy=True,
-        )
-
-    def submit(self, request: LocalDaemonAdmissionRequest) -> LocalDaemonAdmission:
-        return self._client.submit(request)
-
-    def status(self) -> DaemonStatus:
-        return self._client.status()
-
-    def admissions(self, *, limit: int = 100, cursor: str | None = None) -> AdmissionPage:
-        return self._client.admissions(limit=limit, cursor=cursor)
-
-    def admission(self, admission_id: str) -> LocalDaemonAdmissionDetail:
-        return self._client.admission(admission_id)
-
-    def admission_for_queue_item(self, queue_item_id: str) -> LocalDaemonAdmission:
-        return self._client.admission_for_queue_item(queue_item_id)
-
-    def agents(self, *, limit: int = 100, cursor: str | None = None) -> AgentPage:
-        return self._client.agents(limit=limit, cursor=cursor)
-
-    def agent(self, agent_id: str) -> AgentProjection:
-        return self._client.agent(agent_id)
-
-    def operation(self, operation_id: str) -> LocalDaemonOperation:
-        return self._client.operation(operation_id)
-
-    def wait_operation(self, operation_id: str, *, timeout_seconds: float | None = None) -> OperationWaitResult:
-        return cast(OperationWaitResult, self._client._wait_native(
-            "wait_operation", {"operation_id": operation_id}, timeout_seconds, None, legacy=True,
-        ))
-
-    def wait_admission(self, admission_id: str, *, expected_revision: int, timeout: float | None = None) -> AdmissionWaitResult:
-        return cast(AdmissionWaitResult, self._client._wait_native(
-            "wait_admission", {"admission_id": admission_id, "expected_revision": expected_revision},
-            timeout, None, legacy=True,
-        ))
-
-    def wait(self, queue_item_id: str, *, timeout_seconds: float | None = None) -> LocalDaemonAdmission:
-        return self._client.wait(queue_item_id, timeout_seconds=timeout_seconds)
-
-    def cancel(self, queue_item_id: str) -> LocalDaemonAdmission:
-        return self._client.cancel(queue_item_id)
-
-    def inspect_run(self, run_uri: str) -> Mapping[str, object]:
-        """Retain the established unrestricted injected inspection entrypoint."""
-        return cast(Mapping[str, object], self._client._native_call("inspect_run", {"run_uri": run_uri}))
-
-    def control_agent(self, control: AgentControl) -> Mapping[str, PlainData]:
-        return cast(
-            Mapping[str, PlainData],
-            self._call({"operation": "agent_control", "control": control.value()}),
-        )
-
-    def retire(
-        self, operation_id: str, expected_coordinator_id: str
-    ) -> Mapping[str, PlainData]:
-        """Fence an idle coordinator permanently; does not stop or delete it."""
-        return cast(
-            Mapping[str, PlainData],
-            self._call(
-                {
-                    "operation": "retire",
-                    "operation_id": operation_id,
-                    "expected_coordinator_id": expected_coordinator_id,
-                }
-            ),
-        )
-
-    def agent_retirement_ready(self, agent_id: str, session_id: str) -> bool:
-        """Return only coordinator reference readiness, not local shutdown proof."""
-        result = self._call(
-            {
-                "operation": "agent_retirement_ready",
-                "agent_id": agent_id,
-                "session_id": session_id,
-            }
-        )
-        if not isinstance(result.get("ready"), bool):
-            raise QueueServiceError("agent retirement readiness response is invalid")
-        return cast(bool, result["ready"])
-
-    def reload_scheduling(
-        self, request: CoordinatorSchedulingReload
-    ) -> Mapping[str, PlainData]:
-        return cast(
-            Mapping[str, PlainData],
-            self._call(
-                {"operation": "scheduling_reload", "request": request.to_dict()}
-            ),
-        )
-
-    def recover_unknown(
-        self, request: RecoverUnknownAssignment
-    ) -> Mapping[str, PlainData]:
-        return cast(
-            Mapping[str, PlainData],
-            self._call({"operation": "recover_unknown", "request": request.to_dict()}),
-        )
-
-    def recover_time(self, request: TimeRecoveryRequest) -> TimeRecoveryReceipt:
-        return TimeRecoveryReceipt.from_dict(
-            self._call({"operation": "recover_time", "request": request.to_dict()})
-        )
-
-    def replace_agent_session(
-        self, request: SessionReplacementRequest
-    ) -> Mapping[str, PlainData]:
-        return cast(
-            Mapping[str, PlainData],
-            self._call(
-                {"operation": "replace_agent_session", "request": request.to_dict()}
-            ),
-        )
-
-    def _call(self, request: Mapping[str, PlainData]) -> Mapping[str, object]:
-        # Operator operations retain their separate owner and legacy wire shape.
-        operation = cast(str, request["operation"])
-        payload = dict(request)
-        payload.pop("operation")
-        if self._client._expected_coordinator_id is not None:
-            payload["expected_coordinator_id"] = self._client._expected_coordinator_id
-        return self._client._exchange(operation, payload, time.monotonic() + 30.0, waiting=False)
-
-
-def _safe_error_code(exc: Exception) -> str:
-    if isinstance(exc, CoordinatorClientError):
-        return {
-            "not_found": "local_daemon_admission_not_found",
-            "conflict": "local_daemon_conflict",
-            "invalid_request": "local_daemon_invalid_request",
-        }.get(exc.code, "local_daemon_request_rejected")
-    if isinstance(exc, AdmissionNotFoundError):
-        return "local_daemon_admission_not_found"
-    if isinstance(exc, QueueConflictError):
-        return "local_daemon_conflict"
-    if isinstance(exc, QueueValidationError):
-        return "local_daemon_invalid_request"
-    if isinstance(exc, _WaitCapacityError):
-        return "local_daemon_wait_capacity_exhausted"
-    if isinstance(exc, QueueServiceError):
-        return "local_daemon_request_rejected"
-    if isinstance(exc, (QueueStorageError, QueueError)):
-        return "local_daemon_storage_unavailable"
-    return "local_daemon_internal_error"
 
 
 def _peer_uid(connection: socket.socket) -> int:
@@ -497,4 +247,4 @@ def _unlink_exact_socket(
         endpoint.unlink()
 
 
-__all__ = ["LocalDaemonSocketClient", "LocalDaemonSocketServer"]
+__all__ = ["LocalDaemonSocketServer"]

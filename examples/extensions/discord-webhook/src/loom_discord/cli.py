@@ -11,10 +11,10 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TextIO
 
+from loom.coordinator import CoordinatorClient
 from loom.queue import (
     DaemonStatus,
     LocalDaemonAdmissionDetail,
-    LocalDaemonSocketClient,
 )
 
 from .coordinator import DiscordCoordinatorReporter
@@ -33,8 +33,8 @@ def main(
     argv: Sequence[str] | None = None,
     *,
     client_factory: Callable[
-        [str | Path], LocalDaemonSocketClient
-    ] = LocalDaemonSocketClient,
+        [str | Path], CoordinatorClient
+    ] = CoordinatorClient.from_unix_socket,
     reporter_factory: Callable[[str, float], DiscordCoordinatorReporter] | None = None,
     sleep: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
@@ -74,7 +74,7 @@ def main(
 
 
 def _report_once(
-    client: LocalDaemonSocketClient,
+    client: CoordinatorClient,
     reporter: DiscordCoordinatorReporter,
     *,
     force: bool,
@@ -98,7 +98,7 @@ def _report_once(
 
 
 def _collect_admission_details(
-    client: LocalDaemonSocketClient,
+    client: CoordinatorClient,
 ) -> tuple[LocalDaemonAdmissionDetail, ...]:
     """Traverse the bounded coordinator list and read each owner detail."""
 

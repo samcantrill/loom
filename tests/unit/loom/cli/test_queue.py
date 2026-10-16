@@ -497,7 +497,8 @@ def test_queue_agent_reload_waits_for_rejected_receipt_and_exits_nonzero(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from loom.cli import queue as queue_cli
-    from loom.queue import AgentControl, LocalDaemonSocketClient
+    from loom.queue import AgentControl
+    from loom.coordinator import CoordinatorOperatorClient
 
     responses: Iterator[Mapping[str, object]] = iter(
         (
@@ -516,12 +517,12 @@ def test_queue_agent_reload_waits_for_rejected_receipt_and_exits_nonzero(
     seen: list[AgentControl] = []
 
     def control_agent(
-        _client: LocalDaemonSocketClient, control: AgentControl
+        _client: CoordinatorOperatorClient, control: AgentControl
     ) -> Mapping[str, object]:
         seen.append(control)
         return next(responses)
 
-    monkeypatch.setattr(LocalDaemonSocketClient, "control_agent", control_agent)
+    monkeypatch.setattr(CoordinatorOperatorClient, "control_agent", control_agent)
     monkeypatch.setattr(queue_cli, "_AGENT_RELOAD_RECEIPT_POLL_SECONDS", 0.0)
     stdout = io.StringIO()
 
@@ -556,10 +557,10 @@ def test_queue_agent_reload_timeout_while_applying_exits_nonzero(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from loom.cli import queue as queue_cli
-    from loom.queue import LocalDaemonSocketClient
+    from loom.coordinator import CoordinatorOperatorClient
 
     monkeypatch.setattr(
-        LocalDaemonSocketClient,
+        CoordinatorOperatorClient,
         "control_agent",
         lambda *_args, **_kwargs: {
             "operation_id": "reload-agent-applying",
@@ -594,12 +595,13 @@ def test_queue_agent_reload_timeout_while_applying_exits_nonzero(
 def test_queue_scheduling_reload_rejection_exits_nonzero(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from loom.queue import CoordinatorSchedulingReload, LocalDaemonSocketClient
+    from loom.queue import CoordinatorSchedulingReload
+    from loom.coordinator import CoordinatorOperatorClient
 
     seen: list[CoordinatorSchedulingReload] = []
 
     def reload_scheduling(
-        _client: LocalDaemonSocketClient,
+        _client: CoordinatorOperatorClient,
         request: CoordinatorSchedulingReload,
     ) -> Mapping[str, object]:
         seen.append(request)
@@ -610,7 +612,7 @@ def test_queue_scheduling_reload_rejection_exits_nonzero(
             "scheduling_epoch": request.expected_scheduling_epoch,
         }
 
-    monkeypatch.setattr(LocalDaemonSocketClient, "reload_scheduling", reload_scheduling)
+    monkeypatch.setattr(CoordinatorOperatorClient, "reload_scheduling", reload_scheduling)
     stdout = io.StringIO()
 
     exit_code = main(
@@ -638,10 +640,10 @@ def test_queue_scheduling_reload_rejection_exits_nonzero(
 def test_queue_scheduling_reload_applying_exits_nonzero(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from loom.queue import LocalDaemonSocketClient
+    from loom.coordinator import CoordinatorOperatorClient
 
     monkeypatch.setattr(
-        LocalDaemonSocketClient,
+        CoordinatorOperatorClient,
         "reload_scheduling",
         lambda *_args, **_kwargs: {
             "operation_id": "reload-scheduling-applying",
