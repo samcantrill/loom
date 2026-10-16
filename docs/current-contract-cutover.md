@@ -1170,3 +1170,12 @@ source/test/feature-guide patch SHA-256:
 Only evidence notes change after these checks. No image/physical qualification,
 paired rphys adoption or repository-wide completion is claimed. Independent
 actual-final-diff review and merge remain this delivery's closeout gate.
+
+Independent actual-final-diff review of PR #421 at
+`71ada31e3ae4775a09801461d0076f1777695b4a` against the recorded base passed with
+no product blockers, localized corrections or workflow issues. The reviewer
+confirmed all 104 collected cases against their latest XML receipts, unchanged
+runtime trees and offer writer, the patch hash, current control-fence recovery
+and exact owner/checksum preservation. The delivery is merge eligible; its PR
+closeout owns merge and synchronization facts. Only this review receipt changes
+afterward.
