@@ -1314,8 +1314,8 @@ review receipt changes afterward.
 
 ## Current Slurm assignment storage
 
-Status: implemented and locally validated; independent review and delivery
-pending. Approved remaining work is tracked in rphys #911; Loom base
+Status: implemented, locally validated and independently reviewed in PR #424;
+its remote state owns merge/synchronization facts. Approved work is in rphys #911; Loom base
 `09b7e12a8a39de2f26aa959efe37f1635b5829b2`, branch
 `fix/current-slurm-assignment-storage`, existing isolated cutover worktree.
 
@@ -1416,3 +1416,10 @@ The additional source diff only reorders the existing shared owner proof; change
 startup/recovery consumers were rerun. Original failing receipts are retained.
 The independent reviewer is asked only to confirm the identified correction and
 its affected evidence against the actual final head.
+
+Targeted independent confirmation passed at
+`2518a1d4480c957cebd1c98efa6faf43fc663fba`: the identified journal-ordering blocker
+is resolved, with no remaining required correction. The reviewer verified the
+actual reordered proof, both new daemon assertions, all 36 mapped passes and
+source/test equality to the tested candidate. No additional tests ran. Only this
+review receipt follows; PR #424 owns verified merge and synchronization facts.
