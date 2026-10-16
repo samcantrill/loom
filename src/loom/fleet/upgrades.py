@@ -18,6 +18,7 @@ from loom.deployment import load_deployment
 from loom.fleet.configuration import protected_directory, _environment_files
 from loom.fleet._host import atomic, read, digest
 from loom.fleet import ssh_operations as sshops
+from loom.fleet._upgrade_progress import Observation, ProgressSink, phase, reason
 from loom.fleet.releases import verify_release
 from loom.fleet.self_tests import self_test
 from loom.fleet.probes import probe_configuration
@@ -35,7 +36,23 @@ REQUIRED_CAPABILITIES = (
 
 
 class _Waiting(Exception):
-    pass
+    def __init__(self, message, code="acknowledgement_pending"):
+        super().__init__(message)
+        self.code = code
+
+
+def _reason_code(exc):
+    if isinstance(exc, _Waiting):
+        return exc.code
+    if isinstance(exc, sshops.SshUnavailable):
+        return "host_unavailable"
+    if isinstance(exc, CoordinatorClientError):
+        return "coordinator_unavailable" if exc.mutation_outcome == "unknown" or exc.code in {"unavailable", "deadline_exceeded"} else "native_refusal"
+    if isinstance(exc, QueueConfigError):
+        return "input_invalid"
+    if isinstance(exc, QueueConflictError):
+        return "native_refusal"
+    return "unknown"
 
 
 def _maintenance_binding(intent):
@@ -251,7 +268,8 @@ def preview(
 
 
 class _Upgrade(sshops._Operation):
-    def __init__(self, inventory, directory, intent):
+    def __init__(self, inventory, directory, intent, observation=None):
+        self.observation = observation
         super().__init__(
             replace(inventory, runtime_release=Path(intent["target_path"])),
             directory,
@@ -264,10 +282,18 @@ class _Upgrade(sshops._Operation):
     def recheck(self, pending_inputs=None):
         super().recheck(pending_inputs)
 
+    def observe_gate(self):
+        gate = cast(dict[str, Any], thaw_plain_data(self.operator.observe_maintenance()))
+        binding = _maintenance_binding(self.intent)
+        if self.observation is not None:
+            if gate["state"] == "open":
+                self.observation.gate(False)
+            elif gate["maintenance_id"] == binding["operation_id"] and gate["intent_digest"] == binding["target_intent_digest"]:
+                self.observation.gate(True)
+        return gate
+
     def gate(self):
-        gate = cast(
-            dict[str, Any], thaw_plain_data(self.operator.observe_maintenance())
-        )
+        gate = self.observe_gate()
         binding = _maintenance_binding(self.intent)
         if (
             gate["state"] != "closed"
@@ -298,6 +324,9 @@ class _Upgrade(sshops._Operation):
 
     def maintenance(self, key, action, check=None):
         path = self.receipts / key / "intent.json"
+        fresh = not (self.receipts / key / "dispatch.json").exists()
+        if action in {"close", "open"}:
+            phase(self, "closing_admission" if action == "close" else "reopening_admission")
         binding = _maintenance_binding(self.intent)
         request = (
             read(path)
@@ -307,13 +336,13 @@ class _Upgrade(sshops._Operation):
                 "maintenance_id": binding["operation_id"],
                 "maintenance_intent_digest": binding["target_intent_digest"],
                 "action": action,
-                "expected_revision": self.operator.observe_maintenance()["revision"],
+                "expected_revision": self.observe_gate()["revision"],
                 "check": check,
             }
         )
         if request["action"] != action or request["check"] != check:
             raise QueueConflictError("maintenance continuation intent changed")
-        return self.native(
+        result = self.native(
             key,
             request,
             lambda value: self.operator.maintenance(
@@ -323,6 +352,9 @@ class _Upgrade(sshops._Operation):
                 ],
             ),
         )
+        if action == "open" and fresh and self.observation is not None:
+            self.observation.gate(False)
+        return result
 
     def policy(self, name, key, kind, predecessor):
         path = self.receipts / key / "intent.json"
@@ -402,11 +434,13 @@ class _Upgrade(sshops._Operation):
                 atomic(path, observed)
 
     def settled(self):
+        phase(self, "settling")
         gate = self.gate()
         if not gate.get("settled"):
             raise _Waiting(
                 "native settlement: "
-                + ", ".join(gate.get("wait_reasons", ["unavailable"]))
+                + ", ".join(gate.get("wait_reasons", ["unavailable"])),
+                "settlement_pending"
             )
 
     def verify_policy(self, name, expected):
@@ -605,6 +639,7 @@ def _prepare_attempt(operation, name, check, identity, previous=None):
 
 
 def _run_checks(operation):
+    phase(operation, "checking")
     attempts = _attempts(operation)
     deferred = _deferred_checks(operation).get("agents", ())
     for name, declaration in operation.intent.get("target_declarations", operation.intent["declarations"]).items():
@@ -646,6 +681,7 @@ def _run_checks(operation):
             atomic(operation.directory / (identity + "-result.json"), result)
             if result["outcome"] != "passed":
                 if result["outcome"] in {"failed", "unsupported"}:
+                    reason(operation, "check_failed" if result["outcome"] == "failed" else "native_refusal")
                     raise QueueConflictError(
                         "check "
                         + identity
@@ -658,6 +694,7 @@ def _run_checks(operation):
 
 
 def _restore(operation, *, abort=False):
+    phase(operation, "restoring")
     for name, original in operation.intent.get("restore_agents", operation.intent["agents"]).items():
         keys = [name + "-drain", name + "-checks-capacity"]
         predecessor = (original.get("control") or {}).get("operation_id")
@@ -713,6 +750,7 @@ def _continue(operation):
     operation.recheck()
     irreversible = operation.directory / "irreversible.json"
     if not irreversible.exists():
+        phase(operation, "preparing")
         _capable(operation.operator)
         for name, row in operation.intent["hosts"].items():
             sshops.ssh(
@@ -727,6 +765,7 @@ def _continue(operation):
         operation.probes()
         operation.maintenance("close", "close")
         operation.settled()
+        phase(operation, "draining")
         for name, agent in operation.intent["agents"].items():
             predecessor = (agent.get("control") or {}).get("operation_id")
             accepted = operation.policy(name, name + "-drain", "drain", predecessor)
@@ -735,11 +774,12 @@ def _continue(operation):
         for name in operation.intent["hosts"]:
             fact = operation.host_observe(name, "upgrade-settlement")
             if fact["availability"] != "available" or not fact["value"].get("settled"):
-                raise _Waiting("host native settlement: " + name + ": " + str(fact))
+                raise _Waiting("host native settlement: " + name + ": " + str(fact), "settlement_pending")
         atomic(
             irreversible,
             {"step": "stop-replace", "intent_digest": digest(operation.intent)},
         )
+    phase(operation, "replacing")
     # Host receipts retain exact stop/replace/start requests across coordinator downtime.
     for name in [*operation.intent["agents"], "coordinator"]:
         row = operation.intent["hosts"][name]
@@ -812,8 +852,59 @@ def upgrade(
     new_control=None,
     defer_agents=None,
     defer_reason=None,
+    progress: ProgressSink | None = None,
+):
+    """Preview/apply or continue an immutable upgrade without cancelling work.
+
+    ``progress`` optionally receives bounded diagnostic snapshots on a daemon
+    reporting thread. Durations are local monotonic seconds for this invocation;
+    observed admission closure is partial and is not service downtime. Callback
+    failures/backpressure lose diagnostics without changing native execution.
+    Preview and actions other than apply/resume/abort/retry-check/retry-control
+    do not support progress. See docs/fleet.md for the diagnostic stream contract.
+    """
+    options = locals().copy()
+    del options["progress"]
+    if progress is not None and ((not apply and operation_id is None) or
+                                 (not apply and action not in {"resume", "abort", "retry-check", "retry-control"})):
+        raise QueueConfigError("progress requires an applied or retained upgrade")
+    observation = Observation(progress, "apply" if apply else action)
+    try:
+        result = _upgrade(**options, observation=observation)
+    except BaseException as exc:
+        code = _reason_code(exc)
+        observation.finish("interrupted" if isinstance(exc, (KeyboardInterrupt, SystemExit)) else "error", code)
+        raise
+    observation.finish(result.get("outcome", "complete"))
+    return result
+
+
+def _upgrade(
+    inventory,
+    *,
+    operation_id=None,
+    runtime_release=None,
+    workload_profile=None,
+    image=None,
+    workload_inventory=None,
+    deployment=None,
+    connection=None,
+    config="fleet-check.yaml",
+    env_file=None,
+    apply=False,
+    timeout_seconds=120,
+    action="resume",
+    failed_check=None,
+    new_check=None,
+    failed_control=None,
+    new_control=None,
+    defer_agents=None,
+    defer_reason=None,
+    observation,
 ):
     """Preview/apply or continue one immutable service upgrade; never cancel work."""
+    if apply:
+        observation.kind = "workload-upgrade" if workload_profile is not None else "runtime-upgrade"
     _environment_files(inventory, env_file)
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise QueueConfigError("timeout must be positive and finite")
@@ -888,6 +979,7 @@ def upgrade(
         intent = read(path)
         if intent.get("kind") not in {"runtime-upgrade", "workload-upgrade"}:
             raise QueueConflictError("operation belongs to another kind")
+        observation.kind = intent["kind"]
         if runtime_release is not None and Path(runtime_release).resolve() != Path(
             intent["target_path"]
         ):
@@ -908,9 +1000,11 @@ def upgrade(
                 raise QueueConflictError("upgrade check or environment intent changed")
         if intent["kind"] == "workload-upgrade":
             from .workload_upgrades import WorkloadUpgrade
-            operation = WorkloadUpgrade(inventory, directory, intent)
+            operation = WorkloadUpgrade(inventory, directory, intent, observation)
         else:
-            operation = _Upgrade(inventory, directory, intent)
+            operation = _Upgrade(inventory, directory, intent, observation)
+        observation.end_preparation()
+        phase(operation, "recovering")
         try:
             if defer_agents is not None:
                 _bind_deferred_checks(operation, defer_agents, defer_reason)
@@ -946,8 +1040,10 @@ def upgrade(
             else:
                 result = _continue(operation)
         except (_Waiting, sshops.SshUnavailable) as exc:
+            observation.reason = _reason_code(exc)
             result = {"state": "waiting", "reason": str(exc)}
         except CoordinatorClientError as exc:
+            observation.reason = _reason_code(exc)
             result = {
                 "state": "waiting"
                 if exc.mutation_outcome == "unknown"
@@ -957,6 +1053,8 @@ def upgrade(
                 "native_error": exc.to_dict(),
             }
         except (QueueConfigError, QueueConflictError, OSError) as exc:
+            if observation.reason == "none":
+                observation.reason = _reason_code(exc)
             result = {"state": "blocked", "reason": str(exc)}
         finally:
             operation.close()

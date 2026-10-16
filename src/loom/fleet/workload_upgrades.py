@@ -461,6 +461,7 @@ def continue_upgrade(operation):
                 receipt = operation.receipts / (name + "-native-publication")
                 sshops.protected_directory(receipt)
                 operation.accept_update(name, response, receipt)
+    maintenance.phase(operation, "preparing")
     operation.recheck()
     source = maintenance._capable(operation.operator)
     if CAPABILITY not in source["value"].get("capabilities", ()):
@@ -480,6 +481,7 @@ def continue_upgrade(operation):
             # the old workload during promotion. Keep their results untouched.
             for identity in list(operation.gate()["checks"]):
                 operation.maintenance("revoke-before-promotion-" + identity, "revoke", identity)
+        maintenance.phase(operation, "draining")
         for name, agent in intent["agents"].items():
             accepted = operation.policy(
                 name,
@@ -492,10 +494,11 @@ def continue_upgrade(operation):
         for name in intent["agents"]:
             fact = operation.host_observe(name, "upgrade-settlement")
             if fact["availability"] != "available" or not fact["value"].get("settled"):
-                raise maintenance._Waiting("host native settlement: " + name)
+                raise maintenance._Waiting("host native settlement: " + name, "settlement_pending")
         atomic(
             irreversible, {"step": "profile-promotion", "intent_digest": digest(intent)}
         )
+    maintenance.phase(operation, "replacing")
     for name in intent["agents"]:
         staged = operation.call(
             name,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 
@@ -82,6 +83,7 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     upgrade.add_argument("--defer-checks-for", dest="defer_agents", action="append")
     upgrade.add_argument("--qualification-reason", dest="defer_reason")
     upgrade.add_argument("--format", dest="output_format", choices=("text", "json"), default="text")
+    upgrade.add_argument("--progress", choices=("none", "json"), default="none")
     upgrade.set_defaults(handler=handle)
     operation = commands.add_parser(
         "operation", help="inspect or continue retained setup"
@@ -91,6 +93,8 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
         item = operations.add_parser(action)
         item.add_argument("operation_id")
         item.add_argument("--fleet", required=True)
+        if action in {"resume", "abort", "retry-check", "retry-control"}:
+            item.add_argument("--progress", choices=("none", "json"), default="none")
         if action == "defer-checks":
             item.add_argument("--agent-id", dest="defer_agents", action="append", required=True)
             item.add_argument("--reason", dest="defer_reason", required=True)
@@ -185,6 +189,15 @@ def handle(namespace: argparse.Namespace) -> int:
     from loom.fleet.administration import observe
 
     command = namespace.fleet_command
+    progress = None
+    if getattr(namespace, "progress", "none") == "json":
+        if command == "upgrade" and not namespace.apply:
+            raise ValueError("progress requires --apply")
+        stream = sys.stderr
+        def emit_progress(snapshot):
+            stream.write(json.dumps(snapshot, allow_nan=False, separators=(",", ":")) + "\n")
+            stream.flush()
+        progress = emit_progress
     if command == "build-release":
         from loom.fleet.release_build import build_release
 
@@ -225,7 +238,7 @@ def handle(namespace: argparse.Namespace) -> int:
                 from loom.fleet.upgrades import preview
                 result = preview(inventory, runtime_release=namespace.runtime_release, workload_profile=namespace.workload_profile, image=namespace.image, workload_inventory=namespace.workload_inventory, deployment=namespace.deployment, connection=namespace.connection, config=namespace.config, env_file=namespace.env_file)
             else:
-                result = upgrade(inventory, operation_id=namespace.operation_id, runtime_release=namespace.runtime_release, workload_profile=namespace.workload_profile, image=namespace.image, workload_inventory=namespace.workload_inventory, deployment=namespace.deployment, connection=namespace.connection, config=namespace.config, env_file=namespace.env_file, timeout_seconds=namespace.timeout, apply=True, defer_agents=namespace.defer_agents, defer_reason=namespace.defer_reason)
+                result = upgrade(inventory, operation_id=namespace.operation_id, runtime_release=namespace.runtime_release, workload_profile=namespace.workload_profile, image=namespace.image, workload_inventory=namespace.workload_inventory, deployment=namespace.deployment, connection=namespace.connection, config=namespace.config, env_file=namespace.env_file, timeout_seconds=namespace.timeout, apply=True, defer_agents=namespace.defer_agents, defer_reason=namespace.defer_reason, progress=progress)
         elif command in {"apply", "operation"}:
             from loom.fleet.ssh_operations import apply, operation_status
 
@@ -233,11 +246,13 @@ def handle(namespace: argparse.Namespace) -> int:
                 from loom.fleet._host import read
                 from loom.fleet.ssh_operations import _directory
                 intent = read(_directory(inventory, namespace.operation_id) / "intent.json")
+                if progress is not None and intent.get("kind") not in {"runtime-upgrade", "workload-upgrade"}:
+                    raise ValueError("progress requires a maintenance upgrade")
                 if namespace.operation_command == "status":
                     result = operation_status(inventory, namespace.operation_id)
                 elif intent.get("kind") in {"runtime-upgrade", "workload-upgrade"}:
                     from loom.fleet.upgrades import upgrade
-                    result = upgrade(inventory, operation_id=namespace.operation_id, action=namespace.operation_command, failed_check=getattr(namespace, "failed_check", None), new_check=getattr(namespace, "new_check", None), failed_control=getattr(namespace, "failed_control", None), new_control=getattr(namespace, "new_control", None), workload_profile=getattr(namespace, "workload_profile", None), image=getattr(namespace, "image", None), workload_inventory=getattr(namespace, "workload_inventory", None), defer_agents=getattr(namespace, "defer_agents", None), defer_reason=getattr(namespace, "defer_reason", None))
+                    result = upgrade(inventory, operation_id=namespace.operation_id, action=namespace.operation_command, failed_check=getattr(namespace, "failed_check", None), new_check=getattr(namespace, "new_check", None), failed_control=getattr(namespace, "failed_control", None), new_control=getattr(namespace, "new_control", None), workload_profile=getattr(namespace, "workload_profile", None), image=getattr(namespace, "image", None), workload_inventory=getattr(namespace, "workload_inventory", None), defer_agents=getattr(namespace, "defer_agents", None), defer_reason=getattr(namespace, "defer_reason", None), progress=progress)
                 elif namespace.operation_command == "resume":
                     result = apply(inventory, operation_id=namespace.operation_id, resume=True)
                 else:
