@@ -1511,7 +1511,8 @@ facts; the broader cutover remains open.
 
 ## Current executable input evidence
 
-Status: implementation in progress on `fix/current-input-evidence`, base
+Status: implemented and locally validated; independent review and delivery pending.
+Branch `fix/current-input-evidence`, base
 `c935de44808976203360b528ed4dcfb7ec2c9e1d` (offline capture PR #425).
 The lineage census finds one live managed preparation producer: orchestration
 captures produced/external bindings before persisting its preparation intent.
@@ -1573,3 +1574,24 @@ root. Existing 256 passes remain applicable: production, dependencies, configs
 and unrelated fixtures are unchanged. The two changed fixture functions are
 selected again; cheap collection found 22 baseline recheck cases. The delta is
 retained in `input-evidence-fixture-correction.patch`.
+
+
+Final selected coverage: **260 distinct passing cases**, no unresolved failures,
+errors or required skips. On clean `5472172b5fbfe1bb80b65f4efbc0c62f998b7a35`,
+the 22 baseline rechecks passed in 12.22 s test time (26.29 s command wall);
+the exact Unix-socket query passed in 14.18 s (28.44 s command wall). Their
+`input-evidence-{base,config}-5472172b` XML/log/run JSON preserve source identity,
+commands and clean end state. `input-evidence-coverage.json` maps every current
+case to its final passing receipt. The two baseline optional deselections ran
+and passed in the config scope. The changed delta contains only the two fixture
+functions and this owner document: production source, dependencies, config and
+other fixtures are byte-equivalent to the first passing receipts. Thus all
+unaffected passes remain applicable. Original failures remain recorded, with
+replacement receipts rather than relabelled outcomes.
+
+Changed-file Ruff and `uv lock --check` pass (`input-evidence-static.log`), as do
+changed-source Pyright (zero errors; `input-evidence-pyright.log`), formatting of
+changed ranges and diff checks. Existing format debt outside changed ranges is
+untouched. Final changes after this tested head are documentation only. No
+physical deployment or unrelated query/local-run/workspace census is closed by
+this delivery. Independent actual-diff review and PR merge remain the next gates.
