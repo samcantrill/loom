@@ -1706,3 +1706,69 @@ non-draft state and mergeability. This final addition changes only the receipt;
 merge and matching-tree synchronization are published in the existing PR.
 Physical Fleet/Slurm, scientific and downstream deployment qualification remain
 outside this delivery.
+
+## Current authority snapshots and execution timing
+
+Status: implementing on `fix/current-authority-snapshot-timing`, base
+`8fd68b843d5d67e4077d0a7dbebfce18a9cff8c8` (merged PR #427).
+Both current authority backends emit complete run/stage snapshot dictionaries.
+The snapshot readers still accept missing timing and reliability members as
+unknown/empty, including explicit old-wire success fixtures. Require the members
+the current writers emit while preserving explicit null/empty values and the
+writer's conditional current result-binding member. Constructor defaults and
+distinct backend schema versions remain current contracts; no stored schema or
+current serialized shape changes. Transport and pickle consumers must read the
+current complete representation; no old payload conversion is introduced.
+
+The execution adapter independently derives stage start from attempt creation
+and terminal finish from the revision timestamp, unlike #427's query/catalogue
+projection. Move the actual witness interpretation to the existing
+`StageLifecycleSnapshot` owner and use it from execution status, catalogue and
+query. A start requires the latest attempt's confirmation. A finish requires its
+own successful run/stage/attempt commit; reused results and failures without a
+retained finish witness stay unknown. Preserve revision/attempt creation facts
+under their existing fields, recovery, commits and result binding.
+
+Select exact snapshot/model/protocol, local service/HTTP adapter, inspection,
+actual result-reuse, query/catalogue and native execution consumers. Extend real
+current preparation/failure and native/reused-result fixtures rather than forge
+internal snapshot states. Cheap collection precedes stable committed-tree
+execution; baseline and config-backed native/query cases use their separate
+locked environments. Preserve raw receipts and recheck only affected failures.
+No authority mutation, dependency, scientific, Fleet/Slurm deployment or million-
+row behavior changes; those passing scopes remain with their existing owners.
+Independent final-diff review and merge/synchronization remain required.
+
+Cheap admission passed: exact baseline collection selects 82 cases and excludes
+one config-backed native case; the explicit config selection includes that case
+and both Unix/HTTPS native query consumers (three cases). Changed-file Ruff,
+changed-source Pyright (zero errors) and locked dependency checks pass. Exact
+selectors and raw discovery/check logs are under
+`build/current-contract-cutover/snapshot-timing-*`. Final execution follows on
+a committed stable tree, with separate short temporary roots for each environment.
+
+Final selected execution passed **85 distinct cases** on clean stable commit
+`53a34c824b4ad463c4cd4ecc913aec119fee63df`: 82 baseline cases and all three
+config cases, with zero failures/errors/skips. Baseline's one excluded native
+case passed in the explicit config environment. Raw XML/logs and before/after
+revision/status metadata are `snapshot-timing-{base,config}-53a34c82-*` under
+`build/current-contract-cutover`; `snapshot-timing-coverage.json` reconciles the
+union. Coverage includes actual prepared failure before start, current native
+successful execution through all projections, embedded/authenticated result
+reuse without invented timing, complete snapshot protocol/pickle round trips,
+old timing/reliability omission refusal, service/HTTP consumers and run inspection.
+Source, dependencies, configuration and fixtures stayed unchanged throughout
+both runs. Only this receipt follows them; independent actual-PR review is next.
+
+Independent final-diff review of PR #428 at
+`43702774189a62281d4127ce2136c30d88f7fdad` passed with no product blocker or
+localized correction. The read-only Loom reviewer
+(`current_authority_snapshot_review`, gpt-6-astra/high,
+`fork_turns=none; file-backed`) verified current snapshot requirements, explicit
+unknown/empty evidence, conditional result binding, shared witness interpretation,
+unchanged producer bytes/recovery and all 85 raw passing cases plus static checks.
+The manager verified the exact head, clean checkout, target `develop`, non-draft
+state and supplied raw reconciliation. No additional execution or correction was
+needed. This addition is receipt-only; the existing PR publishes verified merge
+and matching-tree synchronization. Other inventory and downstream qualification
+owners remain open.

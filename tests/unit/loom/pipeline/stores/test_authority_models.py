@@ -344,7 +344,7 @@ def test_authority_read_models_serialize_attempts_leases_commits_and_warnings() 
     assert OutputCommit.from_dict(output.to_dict()) == output
 
 
-def test_authority_read_models_default_missing_reliability_fields() -> None:
+def test_authority_read_models_refuse_missing_reliability_fields() -> None:
     revision = BackendRevision(sequence=1, token="rev-1")
     stage = StageLifecycleSnapshot(
         stage_name="build",
@@ -365,14 +365,11 @@ def test_authority_read_models_default_missing_reliability_fields() -> None:
         schema_version=AUTHORITY_SCHEMA_VERSION,
         revision=revision,
     ).to_dict()
-    snapshot["stages"] = [stage]
+    with pytest.raises(AuthorityModelError, match="reliability_policy_facts"):
+        StageLifecycleSnapshot.from_dict(stage)
     snapshot.pop("reliability_policy_facts")
-
-    parsed = AuthoritativeRunSnapshot.from_dict(snapshot)
-
-    assert parsed.reliability_policy_facts == ()
-    assert parsed.stages[0].reliability_status_details == ()
-    assert parsed.stages[0].retry_decisions == ()
+    with pytest.raises(AuthorityModelError, match="reliability_policy_facts"):
+        AuthoritativeRunSnapshot.from_dict(snapshot)
 
 
 def test_cleanup_report_and_result_facts_round_trip_with_snapshot() -> None:

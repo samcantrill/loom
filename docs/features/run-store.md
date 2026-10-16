@@ -44,6 +44,20 @@ that finish. Cancellation before execution has a finish and no start.
 and other revision updates do not alter either lifecycle timestamp. The execution
 status adapter projects these facts without substituting creation/revision times.
 
+Stage execution timing uses the latest attempt's confirmed start and its own
+successful output commit. Query, catalogue and execution status use the same
+`StageLifecycleSnapshot.execution_timing(run_uri)` interpretation. Preparation
+is not execution; a reused producer commit is not a new consumer execution
+finish. Failed, cancelled or otherwise terminal stages without a retained finish
+witness expose an unknown finish rather than their last revision timestamp.
+
+Current run and stage snapshot wire payloads contain every member emitted by
+their writers, including explicit null timing and empty reliability collections.
+Missing members are rejected instead of converted into unknown timing or known
+empty evidence. The current result-binding member remains conditional on a
+binding being present. Object-construction defaults do not admit incomplete
+wire payloads, and the current serialized shape is unchanged.
+
 New runs have `started_at_known=True`; a null start then means never started.
 An unknown start remains `started_at_known=False` when admitted evidence lacks
 that fact; retrying must not invent its original start. The embedded authority

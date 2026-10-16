@@ -1330,14 +1330,15 @@ class AuthorityBackedSerialRunStore:
     ) -> StageStatusRecord:
         attempt = stage.attempts[-1].attempt if stage.attempts else 1
         updated_at = stage.revision.created_at or utc_timestamp()
+        started_at, finished_at = stage.execution_timing(run_uri)
         return StageStatusRecord(
             run_uri=run_uri,
             stage_name=stage.stage_name,
             status=stage.status,
             attempt=attempt,
             updated_at=updated_at,
-            started_at=_stage_started_at(stage),
-            finished_at=_stage_finished_at(stage, updated_at),
+            started_at=started_at,
+            finished_at=finished_at,
             message=None if stage.reason is None else stage.reason.message,
             owner=_stage_owner(stage),
             metadata=_reason_detail(stage.reason),
@@ -2000,25 +2001,6 @@ def _reason(
 
 def _reason_detail(reason: LifecycleReason | None) -> dict[str, PlainData]:
     return {} if reason is None else dict(reason.detail)
-
-
-def _stage_started_at(stage: StageLifecycleSnapshot) -> str | None:
-    if not stage.attempts:
-        return None
-    return stage.attempts[-1].created_at
-
-
-def _stage_finished_at(stage: StageLifecycleSnapshot, updated_at: str) -> str | None:
-    if stage.status is StageStatus.SUCCEEDED and stage.latest_commit is not None:
-        return stage.latest_commit.committed_at
-    if stage.status in {
-        StageStatus.FAILED,
-        StageStatus.BLOCKED,
-        StageStatus.SKIPPED,
-        StageStatus.CANCELLED,
-    }:
-        return updated_at
-    return None
 
 
 def _stage_owner(stage: StageLifecycleSnapshot) -> Mapping[str, PlainData]:

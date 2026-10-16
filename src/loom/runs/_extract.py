@@ -19,7 +19,6 @@ from loom.pipeline.stores import (
     RunNotFoundError,
     UnsafeStorePathError,
 )
-from loom.pipeline.stores.read_models import StageLifecycleSnapshot
 from loom.serialization import PlainData, thaw_plain_data
 
 from .models import (
@@ -323,25 +322,6 @@ def _composition_fingerprint(composition: Mapping[str, PlainData]) -> str | None
         if isinstance(record, Mapping) and record.get("label") == "artifact_safe_config"
     ]
     return _string_or_none(matches[0]) if len(matches) == 1 else None
-
-
-def _stage_started_at(stage: StageLifecycleSnapshot) -> str | None:
-    return stage.attempts[-1].start_confirmed_at if stage.attempts else None
-
-
-def _stage_finished_at(stage: StageLifecycleSnapshot, run_uri: str) -> str | None:
-    latest = stage.attempts[-1] if stage.attempts else None
-    commit = stage.latest_commit
-    if (
-        commit is not None
-        and latest is not None
-        and stage.status.value == "SUCCEEDED"
-        and commit.run_uri == run_uri
-        and commit.stage_name == stage.stage_name
-        and commit.attempt_id == latest.attempt_id
-    ):
-        return commit.committed_at
-    return None
 
 
 def _string_or_none(value: object) -> str | None:

@@ -12,8 +12,6 @@ from loom.timestamps import utc_timestamp
 from .query import QueryRecord, RunQuery, UNAVAILABLE
 from ._extract import (
     _composition_fingerprint,
-    _stage_finished_at,
-    _stage_started_at,
     _string_or_none,
 )
 
@@ -74,6 +72,7 @@ def acquire_run(
         stages = []
         for stage in snapshot.stages:
             latest = stage.attempts[-1] if stage.attempts else None
+            started_at, finished_at = stage.execution_timing(run_uri)
             stages.append(
                 QueryRecord(
                     {
@@ -82,9 +81,8 @@ def acquire_run(
                             "status": stage.status.value,
                             "attempt": latest.attempt if latest else UNAVAILABLE,
                             "created_at": latest.created_at if latest else UNAVAILABLE,
-                            "started_at": _stage_started_at(stage) or UNAVAILABLE,
-                            "finished_at": _stage_finished_at(stage, run_uri)
-                            or UNAVAILABLE,
+                            "started_at": started_at or UNAVAILABLE,
+                            "finished_at": finished_at or UNAVAILABLE,
                         }
                     }
                 )
