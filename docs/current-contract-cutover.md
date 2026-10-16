@@ -738,7 +738,9 @@ inventory owners.
 ## Current stage fingerprint admission
 
 Base `6d6496f1d15c42de29a25fb7f8443ab8f522383f` (execution service removal,
-PR #416), branch `refactor/current-stage-fingerprints`. The fingerprint payload
+PR #416), branch `refactor/current-stage-fingerprints`. Before review, the branch
+also merged current `develop` at `52ae966b251132840a604024f809224c2b7eea61`
+(artifact inspection, PR #415); this is the review base. The fingerprint payload
 and record now accept only their existing schema 2, using the shared exact-version
 validator. Payload decoding requires the current writer's complete field set;
 `target_path` projection and synthesized empty factory fields are removed. Current
@@ -781,13 +783,26 @@ fingerprint validation is skipped, and neither operation performs IO.
 | Affected assignment decoding and Slurm wire checks | `42dd565b5706dde0eb95bf69bedf12f1546f1e6c`; `fingerprint-affected-selectors.txt`, `fingerprint-affected.log` and `.xml` | 10 passed: current round-trip, retired refusal, shared scope disagreement, exact replay, local container, staged preparation, and Slurm framing |
 | Fresh current execution after correction | Same final source revision; `fingerprint-config-recheck.log` and `.xml` | 2 passed in 15.24 seconds |
 
-The final union is **125 distinct passing cases**: 113 unaffected original core
+The pre-synchronization union is **125 distinct passing cases**: 113 unaffected original core
 cases, 10 affected rechecks/additions, and two fresh integration cases. There are
 no unresolved selected failures, errors or skips. Initial failures remain in the
 receipts. Only `_ResidentAssignmentBundle.from_dict` changes between the two
 tested revisions; the unaffected planning/model/store/worker owners, dependency
 selection, configuration and fixtures are identical. All reached assignment
 consumers in the original selection were rechecked, with additional scope cases.
+
+The develop synchronization changes local artifact inspection and extracts shared
+receipt metadata validation while retaining full closure verification for native
+loads. At stable combined tree `93c422c283e87dcfaf37d6950f95c286298fa906`, the 32
+cases in `fingerprint-sync-selectors.txt` pass (`fingerprint-sync.log`/`.xml`),
+covering the full shared-artifact unit file and current shared assignment/replay.
+Both managed local/mixed local-Slurm cases also pass freshly in
+`fingerprint-sync-config.log`/`.xml` (15.78 seconds). Collection of the 32 cases
+passes in `fingerprint-sync-collection.log`. This expands the final reconciled
+union to **155 distinct passing cases**, with no required gaps. The upstream
+change does not touch fingerprint/planning/worker semantics, dependencies or
+their fixtures; affected shared publication and execution consumers were
+rechecked on the combined tree. Other existing passes remain applicable.
 
 Collection admitted 118 core, two config and 10 affected cases. Changed-file Ruff
 passed; full Pyright's two test-edit diagnostics were corrected before execution,
