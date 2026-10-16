@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.support.authority_read_fixture import seed_catalogue_outputs
+
 from pathlib import Path
 
 from loom.artifacts import ArtifactRef
@@ -10,8 +12,6 @@ from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.status import (
     RunStatus,
     RunStatusRecord,
-    StageStatus,
-    StageStatusRecord,
 )
 from loom.pipeline.stores import path_to_run_uri
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
@@ -194,31 +194,6 @@ def _create_run(
     )
     store.write_runtime_metadata(run_uri, {"executor": "local", "backend": "local"})
     store.write_provenance_document(run_uri, "git", {"commit": git_commit})
-    if status is RunStatus.SUCCEEDED:
-        store.write_stage_status(
-            run_uri,
-            stage_name,
-            StageStatusRecord(
-                run_uri=run_uri,
-                stage_name=stage_name,
-                status=StageStatus.RUNNING,
-                attempt=1,
-                updated_at="2020-01-01T00:00:00Z",
-            ),
-        )
-    store.write_stage_status(
-        run_uri,
-        stage_name,
-        StageStatusRecord(
-            run_uri=run_uri,
-            stage_name=stage_name,
-            status=StageStatus.SUCCEEDED
-            if status is RunStatus.SUCCEEDED
-            else StageStatus.FAILED,
-            attempt=1,
-            updated_at="2020-01-01T00:00:01Z",
-        ),
-    )
     store.write_submitted_operation(
         run_uri,
         SubmittedOperationRecord(
@@ -232,18 +207,26 @@ def _create_run(
             manifest_relative_path="submitted/sub-1/manifest.json",
         ),
     )
-    store.write_artifact_index(
+    seed_catalogue_outputs(
+        store,
         run_uri,
+        stage_name,
         {
-            artifact_logical_name: ArtifactRef(
-                artifact_id=artifact_logical_name.replace(".", "/"),
-                uri="file:///tmp/out.json",
-                artifact_type="json",
-                codec_key="json.v1",
-                checksum=checksum,
-                producer_stage=stage_name,
-            )
+            key.split(".", 1)[1]: value
+            for key, value in (
+                {
+                    artifact_logical_name: ArtifactRef(
+                        artifact_id=artifact_logical_name.replace(".", "/"),
+                        uri="file:///tmp/out.json",
+                        artifact_type="json",
+                        codec_key="json.v1",
+                        checksum=checksum,
+                        producer_stage=stage_name,
+                    )
+                }
+            ).items()
         },
+        failed=status is not RunStatus.SUCCEEDED,
     )
     return run_uri
 

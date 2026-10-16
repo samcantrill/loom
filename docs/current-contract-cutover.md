@@ -1655,3 +1655,24 @@ ranges are formatted without rewriting unrelated pre-existing format debt.
 The 120-run catalogue fixture is retained in the selected population because the
 changed SQLite insertion/filter schema is its affected contract; no million-row
 or distributed/scientific workload is selected. Final execution receipts follow.
+
+
+First stable-tree execution at `9290edb2`: baseline 95 passed, six failed,
+one config case deselected; the separate config population ran all three and
+failed. Raw `run-query-{base,config}-9290edb2` logs/XML/metadata retain every
+outcome. Five baseline failures exposed old synthetic fixtures publishing only
+local artifact indexes while expecting authoritative outputs. The fixtures now
+use the existing authority allocation/commit API through the shared read-fixture
+owner; failed runs retain a genuine prior commit followed by a failed retry.
+Artifact identity/checksum/filter/comparison assertions remain. The sixth fixture
+still asserted the retired diff response version and now requires v2.
+
+The three new config assertions initially assumed a collection contained only
+one run and no control directories; actual native preparation produces its own
+run and known control directories alongside the target. Select the target URI
+explicitly and retain all timing, fingerprint, uncommitted-output and unchanged
+source assertions. Existing unrelated collection warnings are not hidden or
+changed by this delivery. These corrections are test-only: production source,
+dependencies and executable configuration remain exactly `9290edb2`. Recheck all
+consumers of the changed shared fixture and all three new config cases; retain
+unaffected passing baseline evidence. No failed assertion counts as a pass.

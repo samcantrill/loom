@@ -198,10 +198,11 @@ def test_native_query_routes_context_text_scope_and_cli(
             assert "pipeline_fingerprint" not in fields["native_fields"]
             timing = client.search_runs(
                 RunQuery(
+                    where=Compare(Field("native", ("run_uri",)), "eq", uri),
                     select=(
                         Field("native", ("started_at",)),
                         Field("native", ("finished_at",)),
-                    )
+                    ),
                 )
             )
             assert len(timing.items) == 1

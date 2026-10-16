@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.support.authority_read_fixture import seed_catalogue_outputs
+
 from pathlib import Path
 from typing import cast
 
@@ -13,8 +15,6 @@ from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.status import (
     RunStatus,
     RunStatusRecord,
-    StageStatus,
-    StageStatusRecord,
 )
 from loom.pipeline.stores import path_to_run_uri
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
@@ -84,32 +84,14 @@ def test_run_catalog_scan_current_extracts_metadata_summary(tmp_path: Path) -> N
         {"executor": "local", "backend": "local", "tags": {"runtime": "yes"}},
     )
     store.write_provenance_document(run_uri, "git", {"commit": "abc123"})
-    store.write_artifact_index(run_uri, {"build.out": artifact})
-    store.write_stage_status(
+    seed_catalogue_outputs(
+        store,
         run_uri,
         "build",
-        StageStatusRecord(
-            run_uri=run_uri,
-            stage_name="build",
-            status=StageStatus.RUNNING,
-            attempt=1,
-            updated_at="2020-01-01T00:00:02Z",
-            started_at="2020-01-01T00:00:02Z",
-        ),
-    )
-    store.write_stage_status(
-        run_uri,
-        "build",
-        StageStatusRecord(
-            run_uri=run_uri,
-            stage_name="build",
-            status=StageStatus.SUCCEEDED,
-            attempt=1,
-            updated_at="2020-01-01T00:00:03Z",
-            started_at="2020-01-01T00:00:02Z",
-            finished_at="2020-01-01T00:00:03Z",
-            metadata={"node": "local"},
-        ),
+        {
+            key.split(".", 1)[1]: value
+            for key, value in ({"build.out": artifact}).items()
+        },
     )
     store.write_stage_fingerprint(
         run_uri,
@@ -227,8 +209,8 @@ def test_native_run_projects_current_fingerprints_timing_and_only_committed_arti
     }
 
     scan = RunCatalog.open(local.root).scan_current()
-    assert scan.warnings == ()
-    summary = scan.summaries[0]
+    assert not any(warning.run_uri == admission.run_uri for warning in scan.warnings)
+    summary = next(row for row in scan.summaries if row.run_uri == admission.run_uri)
     assert summary.config_fingerprint == identities[0]
     assert "pipeline_fingerprint" not in summary.to_dict()
     assert snapshot.started_at and summary.started_at == snapshot.started_at

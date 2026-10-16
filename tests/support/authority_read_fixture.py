@@ -66,3 +66,38 @@ def seed_completed_authority_run(store, run_uri):
     authority.transition_run(
         run_uri, from_status=RunStatus.RUNNING, to_status=RunStatus.SUCCEEDED
     )
+
+
+def seed_catalogue_outputs(store, run_uri, stage_name, outputs, *, failed=False):
+    """Publish synthetic committed facts; a failed run may retain a prior commit."""
+    from loom.pipeline.transition_policy import TransitionIntent
+    from loom.pipeline.stores.read_models import LifecycleReason
+
+    authority = store.authority_store
+    allocation = authority.allocate_stage_attempt(
+        run_uri, stage_name, owner_id="catalogue-fixture", lease_ttl_seconds=30
+    )
+    authority.record_output_commit(
+        run_uri,
+        stage_name,
+        attempt_id=allocation.attempt.attempt_id,
+        fencing_token=allocation.lease.fencing_token,
+        outputs=outputs,
+    )
+    if failed:
+        authority.transition_stage(
+            run_uri,
+            stage_name,
+            from_status=StageStatus.SUCCEEDED,
+            to_status=StageStatus.STALE,
+            intent=TransitionIntent.RESUME,
+        )
+        retry = authority.allocate_stage_attempt(
+            run_uri, stage_name, owner_id="catalogue-retry", lease_ttl_seconds=30
+        )
+        authority.fail_lease(
+            retry.lease.lease_id,
+            owner_id=retry.lease.owner_id,
+            fencing_token=retry.lease.fencing_token,
+            reason=LifecycleReason(code="fixture_retry_failed"),
+        )

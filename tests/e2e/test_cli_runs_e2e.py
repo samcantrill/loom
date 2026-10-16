@@ -99,7 +99,7 @@ def test_cli_runs_index_list_and_diff(tmp_path: Path) -> None:
         == 0
     )
     payload = json.loads(diff_stdout.getvalue())
-    assert payload["schema_version"] == "loom.cli.runs.diff.v1"
+    assert payload["schema_version"] == "loom.cli.runs.diff.v2"
     assert payload["result"]["sections"][0]["entries"][0]["status"] == "different"
     assert diff_stderr.getvalue() == ""
 
