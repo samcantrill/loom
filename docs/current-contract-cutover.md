@@ -1427,8 +1427,8 @@ review receipt follows; PR #424 owns verified merge and synchronization facts.
 
 ## Current offline capture authority
 
-Status: implemented and locally validated; independent review and manager delivery
-remain. Branch `fix/current-offline-evidence-authority`,
+Status: implemented, locally validated and independently reviewed; manager delivery
+remains. Branch `fix/current-offline-evidence-authority`,
 base `7ecee51a57bab3366807a033833d0494e033dfcd` (Slurm PR #424). The bounded change
 removes the local-only lifecycle reader in `collect_offline_evidence_manifest`:
 all current captures require the explicit or retained current authority snapshot.
@@ -1498,3 +1498,12 @@ original files and modification times remain unchanged. Native output payloads,
 timing/revision, plan order, import artifact count and non-resumable historical
 policy are covered. Broader query/lineage/workspace rows, paired downstream pins
 and physical deployment remain outside this delivery.
+
+Independent actual-diff review passed for PR #425 at exact head
+`f876c13239f6728fef44f0338b17b39585f6d64c`, base
+`7ecee51a57bab3366807a033833d0494e033dfcd`: no product blocker, localized
+correction or workflow issue. The reviewer independently reconciled all 30 latest
+passes, verified the source delta and unchanged 19-case reuse boundary, and
+confirmed GitHub merge eligibility. Only this prose receipt follows reviewed
+source; no runtime evidence is invalidated. PR #425 owns merge/synchronization
+facts; the broader cutover remains open.
