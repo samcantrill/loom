@@ -146,7 +146,8 @@ def test_broken_stderr_preserves_native_result_and_requests(cli, monkeypatch):
     assert json.loads(out.getvalue()) == {"outcome": "complete"}
 
 
-def test_full_stderr_pipe_does_not_block_successful_process_exit(tmp_path):
+@pytest.mark.parametrize("blocked", [False, True], ids=["healthy-pipe", "full-pipe"])
+def test_descriptor_progress_preserves_successful_process_exit(tmp_path, blocked):
     script = textwrap.dedent('''
         import json
         import os
@@ -159,19 +160,21 @@ def test_full_stderr_pipe_does_not_block_successful_process_exit(tmp_path):
         from loom.fleet._host import atomic
 
         root = Path(sys.argv[1])
+        blocked = sys.argv[2] == "True"
         inventory = SimpleNamespace(path=root / "fleet.json")
         configuration.load_inventory = lambda path: inventory
         (root / "operations/window").mkdir(parents=True)
         atomic(root / "operations/window/intent.json", {"kind": "runtime-upgrade"})
 
         # Model an operator whose progress reader has stopped draining stderr.
-        os.set_blocking(2, False)
-        try:
-            while True:
-                os.write(2, b"x" * 4096)
-        except BlockingIOError:
-            pass
-        os.set_blocking(2, True)
+        if blocked:
+            os.set_blocking(2, False)
+            try:
+                while True:
+                    os.write(2, b"x" * 4096)
+            except BlockingIOError:
+                pass
+            os.set_blocking(2, True)
 
         entered, finished = threading.Event(), threading.Event()
         original = upgrades.upgrade
@@ -183,7 +186,10 @@ def test_full_stderr_pipe_does_not_block_successful_process_exit(tmp_path):
             return original(*args, progress=sink, **options)
         def native(**options):
             assert entered.wait(2), "reporter did not attempt progress"
-            assert not finished.wait(0.1), "stderr pipe unexpectedly drained"
+            if blocked:
+                assert not finished.wait(0.1), "stderr pipe unexpectedly drained"
+            else:
+                assert finished.wait(2), "healthy progress was not delivered"
             return {"outcome": "complete"}
         upgrades.upgrade = observed
         upgrades._upgrade = native
@@ -193,7 +199,7 @@ def test_full_stderr_pipe_does_not_block_successful_process_exit(tmp_path):
         ]))
     ''')
     process = subprocess.Popen(
-        [sys.executable, "-c", script, str(tmp_path)],
+        [sys.executable, "-c", script, str(tmp_path), str(blocked)],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
     timed_out = False
@@ -208,6 +214,12 @@ def test_full_stderr_pipe_does_not_block_successful_process_exit(tmp_path):
     assert not timed_out, "successful native operation could not exit with a full stderr pipe"
     assert process.returncode == 0, errors[-1000:]
     assert json.loads(output) == {"outcome": "complete"}
+    if not blocked:
+        records = [json.loads(line) for line in errors.splitlines()]
+        assert records[0]["event"] == "phase"
+        assert records[-1]["event"] == "result"
+        assert records[-1]["state"] == "complete"
+        assert all(len(line.encode("utf-8")) + 1 <= 1024 for line in errors.splitlines())
 
 
 @pytest.mark.parametrize("exception,code", [
