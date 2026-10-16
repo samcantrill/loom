@@ -13,6 +13,7 @@ from loom.queue.errors import QueueConflictError
 from loom.refs import ResourceRef
 from loom.serialization import PlainData, ensure_plain_data, stable_json_bytes
 
+PREPARATION_REPORT_SCHEMA_VERSION = 10
 REPORT_FORMAT = "loom.preparation_report.v1"
 _COMPOSITION_SCHEMA = "loom.preparation_composition.v1"
 _LOGICAL_FIELDS = {"resolved", "redacted", "recipe_manifest", "manifest", "provenance"}
@@ -30,11 +31,20 @@ def _equal(left: PlainData, right: PlainData) -> bool:
     return stable_json_bytes(left) == stable_json_bytes(right)
 
 
+def _require_current_report(report: dict[str, PlainData]) -> None:
+    if (type(report.get("schema_version")) is not int
+        or report["schema_version"] != PREPARATION_REPORT_SCHEMA_VERSION):
+        raise QueueConflictError(
+            "preparation report schema is unsupported; regenerate preparation"
+        )
+
+
 def save_composition_evidence(
     report: dict[str, PlainData], companion_path: Path
 ) -> dict[str, PlainData]:
     """Write the complete companion before exposing its primary report reference."""
     primary = _mapping(ensure_plain_data(report, path="preparation report"))
+    _require_current_report(primary)
     primary["report_format"] = REPORT_FORMAT
     compositions: dict[str, PlainData] = {}
     logical: list[dict[str, PlainData]] = []
@@ -123,6 +133,7 @@ def load_report(
             "preparation primary report identity or checksum conflicts"
         )
     report = _mapping(ensure_plain_data(json.loads(content), path="preparation report"))
+    _require_current_report(report)
     if report.get("report_format") != REPORT_FORMAT:
         raise QueueConflictError(
             "preparation report format is unsupported; regenerate preparation"

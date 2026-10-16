@@ -44,7 +44,7 @@ def _request(*, mode: str = "shared") -> PrepareRunRequest:
     )
 
 
-def test_fresh_run_intent_preserves_legacy_wire_and_rejects_duplicates():
+def test_fresh_run_intent_preserves_optional_wire_and_rejects_duplicates():
     from loom.queue.run import RunRequest
 
     original = RunRequest(_request(), "queue")
@@ -70,11 +70,11 @@ def test_fresh_generation_roundtrip_and_target_identity(tmp_path):
         descriptor.to_dict(), generations={"author": "opaque-generation"},
     )
     encoded = binding.to_dict()
-    assert encoded["schema_version"] == 8
+    assert encoded["schema_version"] == 10
     assert PreparationChildInput.from_dict(encoded) == binding
-    legacy = replace(binding, generations=None)
-    assert legacy.to_dict()["schema_version"] == 2
-    assert "generations" not in legacy.to_dict()
+    ordinary = replace(binding, generations=None)
+    assert ordinary.to_dict()["schema_version"] == 10
+    assert "generations" not in ordinary.to_dict()
     project = {"processor": {"target_prefix": "text-"},
                "target_run_uri": None, "run_store_root_uri": tmp_path.as_uri()}
     key = {"version": 1, "namespace": "text-project", "digest": "a" * 64}
@@ -586,12 +586,12 @@ def test_local_policy_is_protected_and_child_input_is_versioned(tmp_path: Path) 
     receipt = SharedInputReceipt("sha256:" + "a" * 64, "projects", "capture")
     binding = PreparationChildInput("operation", "example-cpu", "pipeline.yaml", receipt,
                                     descriptor.to_dict(), local_scope=scope)
-    assert binding.to_dict()["schema_version"] == 3
+    assert binding.to_dict()["schema_version"] == 10
     assert PreparationChildInput.from_dict(binding.to_dict()) == binding
     portable = replace(binding, local_scope=None)
-    assert portable.to_dict()["schema_version"] == 2
+    assert portable.to_dict()["schema_version"] == 10
     assert PreparationChildInput.from_dict(portable.to_dict()) == portable
-    with pytest.raises(QueueServiceError, match="invalid"):
+    with pytest.raises(QueueServiceError, match="unsupported"):
         PreparationChildInput.from_dict({**binding.to_dict(), "schema_version": 4})
     with pytest.raises(QueueServiceError):
         PrepareRunRequest.from_dict({**_request().to_dict(), "configuration_policy": "local"})
@@ -648,7 +648,7 @@ def test_shared_scope_is_explicit_and_preserves_portable_policy(tmp_path):
     data = {"source_roots": {"project": {"path": str(tmp_path), "shared_snapshot_root": str(tmp_path / "snapshots")}},
         "profiles": {"shared": {"resident_profile_id": "shared", "allowed_source_roots": ["project"],
             "source_modes": ["shared"], "runtime_options": {"executor": "local"}, "configuration_policy": "shared",
-            "project_processor": {"schema_version": 1, "callable": "installed:inspect", "evidence_namespace": "project", "recovery_stage": None}}}}
+            "project_processor": {"schema_version": 3, "callable": "installed:inspect", "evidence_namespace": "project", "target_prefix": "project-"}}}}
     policy = load_preparation_policy(data, base=tmp_path, descriptors=(descriptor,))
     assert policy is not None
     profile = policy.profiles["shared"]
@@ -681,10 +681,68 @@ def test_v3_registration_exact_fields_and_finite_node_results():
         "evidence_namespace": "text-project", "target_prefix": "text-"}
     assert inputs._project_processor(registration) == registration
     for changed in ({**registration, "recovery_stage": "author"},
-                    {**registration, "schema_version": 99}):
+                    *({**registration, "schema_version": version} for version in (1, 2, True, 99))):
         with pytest.raises(QueueServiceError):
             inputs._project_processor(changed)
     assert node_result({"semantic_key": None, "payload": None}) == {"semantic_key": None, "payload": None}
     for value in (float("nan"), float("inf"), object()):
         with pytest.raises((ValueError, SerializationError)):
             node_result({"semantic_key": None, "payload": {"value": value}})
+
+
+@pytest.mark.parametrize("retired_boundary", ["child", "worker_context"])
+def test_retired_preparation_refuses_before_composition(tmp_path, monkeypatch, retired_boundary):
+    import json
+    from types import SimpleNamespace
+    from typing import Any, cast
+    from loom import preparation
+    from loom.queue.preparation import PreparationChildInput, PREPARATION_INPUT_CONTEXT_ENV
+
+    descriptor = ResidentProfileDescriptor("local", "v1", "project", "env", "executor")
+    binding = PreparationChildInput(
+        "operation", "profile", "pipeline.yaml",
+        SharedInputReceipt("sha256:" + "a" * 64, "projects", "capture"),
+        descriptor.to_dict(),
+    )
+    child = binding.to_dict()
+    private = {
+        "schema_version": 6, "profile_descriptor": descriptor.to_dict(),
+        "scope": {"kind": "unscoped"}, "purpose": {"kind": "generic"},
+        "input": {"kind": "shared", "roots": {"projects": str(tmp_path)}},
+    }
+    if retired_boundary == "child":
+        # The retired generic producer wrote schema 2 with no scope/purpose tags.
+        child.pop("scope")
+        child.pop("purpose")
+        child["schema_version"] = 2
+    else:
+        # Its companion process context used schema 1 and flattened input roots.
+        private = {"schema_version": 1, "profile_descriptor": descriptor.to_dict(),
+                   "shared_roots": {"projects": str(tmp_path)}}
+    monkeypatch.setenv(PREPARATION_INPUT_CONTEXT_ENV, json.dumps(private))
+    monkeypatch.setattr(preparation, "_compose_worker_config", lambda *a, **k: pytest.fail("composed retired input"))
+    with pytest.raises(QueueServiceError, match="unsupported|context is invalid"):
+        preparation.PreparationStage().run(cast(Any, SimpleNamespace(stage_config=child)), {})
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_current_child_requires_explicit_scope_and_purpose():
+    from loom.queue.preparation import PreparationChildInput
+
+    binding = PreparationChildInput(
+        "operation", "profile", "pipeline.yaml",
+        SharedInputReceipt("sha256:" + "a" * 64, "projects", "capture"),
+        ResidentProfileDescriptor("local", "v1", "project", "env", "executor").to_dict(),
+    )
+    encoded = binding.to_dict()
+    assert encoded["scope"] == {"kind": "unscoped"}
+    assert encoded["purpose"] == {"kind": "generic"}
+    for field, value in (
+        ("schema_version", True), ("schema_version", 11),
+        ("scope", {"kind": "local"}),
+        ("purpose", {"kind": "project", "binding": None}),
+        ("purpose", {"kind": "generic", "candidate": {}}),
+        ("generations", None),
+    ):
+        with pytest.raises(QueueServiceError):
+            PreparationChildInput.from_dict({**encoded, field: value})

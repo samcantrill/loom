@@ -133,7 +133,9 @@ def test_local_inspection_retains_selected_checksum_without_reading_bytes(tmp_pa
     inspected = store.inspect(ref)
     assert inspected.root / inspected.primary == Path(ref.uri.removeprefix("file://"))
     assert inspected.members[0]["size_bytes"] == 7
-    assert "sha256:" + inspected.members[0]["digest"] == ref.checksum
+    digest = inspected.members[0]["digest"]
+    assert isinstance(digest, str)
+    assert "sha256:" + digest == ref.checksum
 
 
 def test_publication_payload_budget_is_checked_before_reading_file_bytes(tmp_path, monkeypatch):

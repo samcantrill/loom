@@ -169,7 +169,7 @@ def test_installed_text_report_reload_workers_and_completed_reuse(tmp_path, opt_
             .pipeline.get_stage("prepare")
             .stage_config
         )
-        assert binding.to_dict()["schema_version"] == 7
+        assert binding.to_dict()["schema_version"] == 10
         for fault in ("missing", "extra", "composition", "binding", "version"):
             changed = deepcopy(report)
             if fault == "missing":

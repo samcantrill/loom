@@ -34,15 +34,18 @@ pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 _PROCESSOR = r"""
 from copy import deepcopy
 from loom.fingerprints import hash_mapping
-from loom.queue.preparation import project_target_from_key
 from loom.pipeline.stores import LocalArtifactStore
 from loom.artifacts import ArtifactRef
 
 def inspect(request):
-    assert request['schema_version'] == 2
+    assert request['schema_version'] == 3
     if request['operation'] == 'verify_candidate':
         candidate = request['candidate']
-        assert candidate['configuration']['scientific_evidence'] == request['project_result']['evidence']['payload']
+        desired = request['project_result']['stage_contracts']
+        assert set(candidate['project_contracts']) == set(desired)
+        for name, attachment in candidate['project_contracts'].items():
+            assert attachment['namespace'] == 'example'
+            assert {key: attachment[key] for key in ('semantic_key', 'payload')} == desired[name]
         assert candidate['native_intent']['pipeline_digest']
         assert candidate['authority']['run_uri'] == candidate['run_uri']
         if candidate['authority']['status'] == 'SUCCEEDED':
@@ -57,15 +60,13 @@ def inspect(request):
     composition = deepcopy(request['composition'])
     key = {'namespace': 'example', 'version': 1, 'digest': 'a' * 64}
     evidence = {'value': composition['resolved']['pipeline']['stages'][0]['config']['value']}
-    uri = project_target_from_key(request['project_preparation'], key)
-    for view in ('resolved', 'redacted'):
-        composition[view]['scientific_evidence'] = evidence
-        composition[view]['pipeline']['stages'][0]['config']['recovery'] = {
-            'run_uri': uri if view == 'resolved' else '<redacted>',
-            'resume_fingerprint': 'resume',
-            'environment_fingerprint': request['profile_descriptor']['environment_fingerprint']}
-    return {'schema_version': 2, 'composition': composition,
-            'evidence': {'namespace': 'example', 'payload': evidence}, 'reconciliation_key': key}
+    contracts = {stage['name']: {
+        'semantic_key': {'version': 1, 'digest': hash_mapping(stage['config']).split(':', 1)[1]},
+        'payload': stage['config'],
+    } for stage in composition['resolved']['pipeline']['stages']}
+    return {'schema_version': 3, 'composition': composition,
+            'evidence': {'namespace': 'example', 'payload': evidence},
+            'reconciliation_key': key, 'stage_contracts': contracts}
 """
 
 
@@ -82,10 +83,9 @@ def _reconciled_service(tmp_path: Path):
     path = tmp_path / "coordinator.json"
     config = json.loads(path.read_text())
     config["preparation"]["profiles"]["existing-project"]["project_processor"] = {
-        "schema_version": 2,
+        "schema_version": 3,
         "callable": "reconcile_project:inspect",
         "evidence_namespace": "example",
-        "recovery_stage": "produce",
         "target_prefix": "science-",
     }
     path.write_text(json.dumps(config))
@@ -236,7 +236,7 @@ def test_concurrent_reconciled_publication_and_verified_reuse(tmp_path):
                 child.run_uri
             ), ArtifactRef.from_dict(dict(_result(verified)["verification_report_ref"])))
         assert isinstance(report, dict)
-        assert report["schema_version"] == 5 and report["candidate"] is not None
+        assert report["schema_version"] == 10 and report["candidate"] is not None
         for field in ("candidate", "verification", "profile_descriptor", "invocation"):
             changed = deepcopy(report)
             if field == "candidate":
@@ -831,8 +831,8 @@ def test_before_binding_cancel_reaps_installed_child_and_contender_continues(tmp
     module = tmp_path / "installed-project" / "reconcile_project.py"
     module.write_text(
         module.read_text().replace(
-            "    assert request['schema_version'] == 2",
-            f"""    assert request['schema_version'] == 2
+            "    assert request['schema_version'] == 3",
+            f"""    assert request['schema_version'] == 3
     if request['operation_id'] == 'cancel-unbound':
         import os, time
         from pathlib import Path

@@ -409,8 +409,8 @@ class CoordinatorPreparations:
                 selected["generations"] = {name: uuid4().hex for name in fresh_stages}
             if run_mode == "reconcile":
                 processor = _mapping(selected["profile"]).get("project_processor")
-                if not isinstance(processor, Mapping) or processor.get("schema_version") not in (2, 3):
-                    raise QueueServiceError("reconciliation requires installed project capability v2")
+                if not isinstance(processor, Mapping) or processor.get("schema_version") != 3:
+                    raise QueueServiceError("reconciliation requires installed project capability v3")
                 selected["reconciliation"] = {"retry_policy": retry_policy, "publication_owner": None,
                     "candidate": None, "failed_revision": None, "verification_generation": 0}
             selected["run_store_root"] = str(self.daemon.config.run_store_root)
