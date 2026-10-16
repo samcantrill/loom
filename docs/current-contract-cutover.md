@@ -1511,8 +1511,8 @@ facts; the broader cutover remains open.
 
 ## Current executable input evidence
 
-Status: implemented and locally validated; independent review and delivery pending.
-Branch `fix/current-input-evidence`, base
+Status: implemented, locally validated and independently reviewed in PR #426;
+manager merge/synchronization pending. Branch `fix/current-input-evidence`, base
 `c935de44808976203360b528ed4dcfb7ec2c9e1d` (offline capture PR #425).
 The lineage census finds one live managed preparation producer: orchestration
 captures produced/external bindings before persisting its preparation intent.
@@ -1595,3 +1595,13 @@ changed ranges and diff checks. Existing format debt outside changed ranges is
 untouched. Final changes after this tested head are documentation only. No
 physical deployment or unrelated query/local-run/workspace census is closed by
 this delivery. Independent actual-diff review and PR merge remain the next gates.
+
+
+Independent review passed on `52bc501b15a90f4d7ace3e9f3826758217be7ac4` against
+`c935de44808976203360b528ed4dcfb7ec2c9e1d`: no blocking or required correction.
+The reviewer verified all 260 current outcomes against raw XML, the four
+replacement receipts and source equivalence. Required current fields, unknown
+inspection, produced/external ownership, start witnesses, digest transport and
+current replay/containment remain preserved. PR #426 is merge-eligible under
+its selected local gate. This final receipt changes only documentation; broader
+census and physical/paired adoption remain separate obligations.
