@@ -1310,3 +1310,30 @@ initialization/unknown ownership, strict obsolete-input refusal and preserved
 CAS/replay/authorization/attribution/lifecycle/query/preparation behavior. The PR
 is merge eligible; its closeout owns merge and synchronization facts. Only this
 review receipt changes afterward.
+
+
+## Current Slurm assignment storage
+
+Status: implementation and selected validation in progress. Approved remaining
+work is tracked in rphys #911; Loom base
+`09b7e12a8a39de2f26aa959efe37f1635b5829b2`, branch
+`fix/current-slurm-assignment-storage`, existing isolated cutover worktree.
+
+Remove the confirmed `legacy_native_only` schema-3 allowance and its later
+reservation-time column guard. Existing stores require the complete current
+assignment and output tables, with read-only admission through the existing
+SQLite inspection owner before writes and revalidation in the write transaction.
+Explicit fresh initialization can populate the fresh coordinator's shared
+database before any Slurm-owned table exists; an existing partial/old Slurm store
+is never repaired. Current schema bytes and wire formats are unchanged.
+
+Scope covers this store and reached daemon admission, native preparation output,
+agent acknowledgement/restart and result/replay consumers. Selected no-extra
+Python 3.12 checks collect first: assignment-store unit tests; new daemon old-root
+refusal and current-owner reopen; agent Slurm journal tests; integration mixed
+route, outage replay and actual native preparation transfer/ack. Reuse unchanged
+wire-family and scientific receipts; no physical Slurm or deployed pin/image
+qualification is claimed. Expand only for a reached failure or changed contract.
+
+Implementation and validation receipts follow here; independent final-diff review
+and verified upstream merge remain required.
