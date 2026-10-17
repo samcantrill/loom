@@ -420,3 +420,24 @@ class TokenizeStage:
                 "tokens", text.split(), artifact_type="json", codec_key="json.v1"
             )
         }
+
+
+class MeasurementProducerStage:
+    """A tiny successful output with valid floating-point artifact metadata."""
+
+    def run(self, context, inputs):
+        return {"data": context.save_artifact(
+            "data", {"value": 41}, artifact_type="json", codec_key="json.v1",
+            metadata={"measurement": 0.1803790032863617},
+        )}
+
+
+class MeasurementConsumerStage:
+    """Prove that publication/recovery preserves the numeric metadata."""
+
+    def run(self, context, inputs):
+        assert inputs["data"].metadata["measurement"] == 0.1803790032863617
+        assert context.load_input("data") == {"value": 41}
+        return {"data": context.save_artifact(
+            "data", {"observed": True}, artifact_type="json", codec_key="json.v1",
+        )}

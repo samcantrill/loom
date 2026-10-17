@@ -237,6 +237,22 @@ def inspect_coordinator_result_recovery(
         results = {item["assignment_id"]: item for item in agent_results}
         if len(results) != len(agent_results):
             raise ValueError("duplicate assignment proof")
+        from loom._sqlite_inspection import inspect_sqlite_database
+        with inspect_sqlite_database(root / "execution.sqlite") as execution:
+            identities = list(execution.execute(
+                "SELECT role, stable_id FROM local_daemon_owner_identity"
+            ))
+            if [tuple(row) for row in identities] != [("coordinator", expected_root_id)]:
+                raise ValueError("coordinator execution identity changed")
+            if execution.execute(
+                "SELECT 1 FROM slurm_stage_assignments WHERE state != 'released' LIMIT 1"
+            ).fetchone():
+                raise ValueError("Slurm recovery is not supported")
+            for row in execution.execute(
+                "SELECT assignment_id FROM coordinator_assignments WHERE state != 'released'"
+            ):
+                if row[0] not in results:
+                    raise ValueError("physical assignment lacks matching agent proof")
         with _readonly_root(root) as conn:
             if _retained_coordinator_mutations(conn):
                 raise ValueError("coordinator mutation remains active")

@@ -754,3 +754,134 @@ def test_runtime_recovery_mode_preserves_empty_cohort_and_native_checks(
     with CoordinatorOperatorClient.from_connection_file(setup["operator_connection"]) as operator:
         assert operator.observe_maintenance()["state"] == "open"
         assert not operator.observe_agent("worker").value["drained"]
+
+
+def broken_metadata_release(inventory, tmp_path):
+    """Build a disposable source runtime reproducing the pre-fix wire defect."""
+    import base64
+    import csv
+    import hashlib
+    import io
+    import zipfile
+    from tests.integration.fleet.test_ssh_operations import sha
+    from loom.fleet.configuration import load_inventory
+
+    root = tmp_path / "broken-runtime"
+    shutil.copytree(inventory.runtime_release.parent, root)
+    wheel = next((root / "wheels").glob("loom-*.whl"))
+    before = sha(wheel)
+    with zipfile.ZipFile(wheel) as archive:
+        files = {name: archive.read(name) for name in archive.namelist()}
+    codec = "loom/queue/_agent_session_codec.py"
+    old = b'_bounded_json(output["metadata"], depth=4, plain_scalars=True)'
+    assert files[codec].count(old) == 1
+    files[codec] = files[codec].replace(old, old.replace(b"True", b"False"))
+    record = next(name for name in files if name.endswith(".dist-info/RECORD"))
+    stream = io.StringIO()
+    writer = csv.writer(stream)
+    for name, content in sorted(files.items()):
+        if name != record:
+            writer.writerow((name, "sha256=" + base64.urlsafe_b64encode(
+                hashlib.sha256(content).digest()).decode().rstrip("="), len(content)))
+    writer.writerow((record, "", ""))
+    files[record] = stream.getvalue().encode()
+    with zipfile.ZipFile(wheel, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, content in files.items():
+            archive.writestr(name, content)
+    descriptor = root / inventory.runtime_release.name
+    value = read(descriptor)
+    for entry in (value["requirements"], value["wheelhouse"]):
+        path = root / entry.get("manifest", entry["path"])
+        path.write_text(path.read_text().replace(before, sha(wheel)))
+        entry["sha256"] = sha(path)
+    value["release_id"] = "broken-output-metadata"
+    write(descriptor, value)
+    authored = read(inventory.path)
+    authored["runtime_release"] = str(descriptor)
+    write(inventory.path, authored)
+    return load_inventory(inventory.path)
+
+
+def test_runtime_recovery_publishes_original_result_and_finishes_downstream(
+    site, tmp_path, monkeypatch,  # noqa: F811
+):
+    from loom.coordinator import RunRequest
+    from loom.deployment import load_deployment
+    from loom.queue.preparation import PrepareRunRequest
+
+    inventory, base, selection = site
+    target = target_bundle(inventory, tmp_path)
+    inventory = bind_environments(broken_metadata_release(inventory, tmp_path))
+    authored = read(inventory.hosts[0].config)
+    for principal in authored["agent_policy"]["principals"]:
+        if principal["role"] == "operator":
+            principal["actions"].append("resume")
+    write(inventory.hosts[0].config, authored)
+    setup = apply(inventory, operation_id="setup-retained", issuer=base / "issuer", check_selection=selection)
+    assert setup["outcome"] == "complete", setup
+    source = tmp_path / "projects/pipeline.yaml"
+    pipeline = json.loads(source.read_text())
+    producer = pipeline["pipeline"]["stages"][0]
+    producer["factory"] = {"_target_": "tests.support.pipeline_execution_stages.MeasurementProducerStage"}
+    consumer = json.loads(json.dumps(producer))
+    consumer.update(
+        name="consume",
+        factory={"_target_": "tests.support.pipeline_execution_stages.MeasurementConsumerStage"},
+        inputs={"data": "produce.data"},
+    )
+    pipeline["pipeline"]["stages"].append(consumer)
+    write(source, pipeline)
+    deployment = load_deployment(setup["deployment"])
+    request = RunRequest(PrepareRunRequest(
+        "retained-measurement", "retained-measurement", deployment.source,
+        selection["config"], deployment.preparation_profile,
+    ), "retained-measurement")
+    with CoordinatorClient.from_connection_file(deployment.connection) as client:
+        client.start_run(request)
+        deadline = time.monotonic() + 60
+        while True:
+            with sqlite3.connect(base / "worker/journal.sqlite") as conn:
+                retained = conn.execute(
+                    "SELECT assignment_id, grant_fence, result_json FROM assignments WHERE state = 'result_durable'"
+                ).fetchall()
+            if retained:
+                break
+            assert time.monotonic() < deadline, client.observe_run("retained-measurement", wait=False)
+            time.sleep(0.1)
+        assert len(retained) == 1
+        assignment, fence, result_json = retained[0]
+        worker_result = base / "worker/assignments" / assignment / "worker-result.json"
+        original_bytes = worker_result.read_bytes()
+        source.write_text(json.dumps({"pipeline": {"name": "checks", "stages": [
+            {**producer, "factory": {"_target_": "tests.support.pipeline_execution_stages.JsonProducerStage"}}
+        ]}, "runtime": {"executor": "local"}}))
+        # Lose an applied replacement reply; resuming must reuse the same owner.
+        call = upgrades.sshops.ssh
+        dropped = []
+
+        def lose_reply(host, request):
+            reply = call(host, request)
+            if request["action"] == "upgrade-replace" and request["name"] == "worker" and not dropped:
+                dropped.append(request["request_id"])
+                raise upgrades.sshops.SshUnavailable("lost applied replacement reply")
+            return reply
+
+        monkeypatch.setattr(upgrades.sshops, "ssh", lose_reply)
+        result = finish(
+            inventory, "recover-retained", apply=True, runtime_release=target,
+            recover_retained_results=True, deployment=Path(setup["deployment"]),
+            connection=Path(setup["operator_connection"]), config=selection["config"],
+        )
+        assert result["outcome"] == "complete", result
+        assert len(dropped) == 1
+        observation = client.observe_run("retained-measurement", wait=False)
+        assert observation.admission.state.value == "SUCCEEDED", observation
+        assert worker_result.read_bytes() == original_bytes
+        with sqlite3.connect(base / "worker/journal.sqlite") as conn:
+            assert conn.execute(
+                "SELECT grant_fence, result_json, state FROM assignments WHERE assignment_id = ?", (assignment,)
+            ).fetchone() == (fence, result_json, "released")
+        with sqlite3.connect(base / "worker/supervisor/supervisor.sqlite") as conn:
+            assert conn.execute(
+                "SELECT COUNT(*) FROM launches WHERE json_extract(launch_json, '$.assignment_id') = ?", (assignment,)
+            ).fetchone() == (1,)
