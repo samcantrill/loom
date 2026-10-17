@@ -5112,6 +5112,58 @@ def test_report_metadata_plain_values_do_not_widen_retired_or_envelope_fields():
                 failure_report=True)
 
 
+
+def _successful_output_report(metadata):
+    from loom.queue._remote_stage_execution import _RemoteOutputArtifact
+    output = _RemoteOutputArtifact(
+        transfer_id="output-1", logical_name="selected", digest="a" * 64,
+        size_bytes=1, artifact_id="fit/selected", artifact_type="checkpoint",
+        codec_key=None, artifact_schema_version=1, fingerprint=None,
+        producer_stage="build", created_at="2020-01-01T00:00:01Z", metadata=metadata,
+    )
+    return replace(_failure_report({}), status=StageStatus.SUCCEEDED,
+                   failure=None, failure_type=None, message=None, outputs=(output,))
+
+
+@pytest.mark.parametrize("output_kind", ["relay", "shared"])
+def test_report_output_metadata_round_trip(output_kind):
+    metadata = {"metric_value": 0.1803790032863617,
+                "observations": [None, True, 2, 0.25, "ready", {"ratio": 0.75}]}
+    report = replace(_successful_output_report(metadata), output_kind=output_kind)
+    encoded = json.dumps({"report": report.to_dict()}).encode()
+    decoded = _decode(encoded, failure_report=True)
+    replayed = _RemoteExecutionReport.from_dict(decoded["report"])
+    assert replayed.outputs[0].to_dict()["metadata"] == metadata
+    assert json.dumps({"report": replayed.to_dict()}).encode() == encoded
+    with pytest.raises(QueueServiceError):
+        _decode(encoded)
+
+
+@pytest.mark.parametrize("number", ["NaN", "Infinity", "-Infinity", "1e999"])
+def test_report_output_metadata_rejects_nonfinite(number):
+    report = _successful_output_report({"metric_value": "NUMBER"}).to_dict()
+    raw = json.dumps({"report": report}).replace('"NUMBER"', number).encode()
+    with pytest.raises(QueueServiceError, match="JSON.*invalid"):
+        _decode(raw, failure_report=True)
+
+
+@pytest.mark.parametrize("metadata, message", [
+    (_nested_report_detail(5), "too deeply nested"),
+    ({"values": [0.5] * 65}, "collection is too large"),
+    ({"": 0.5}, "object key is invalid"),
+])
+def test_report_output_metadata_preserves_wire_bounds(metadata, message):
+    report = _successful_output_report(metadata).to_dict()
+    with pytest.raises(QueueServiceError, match=message):
+        _decode(json.dumps({"report": report}).encode(), failure_report=True)
+
+
+def test_report_output_metadata_does_not_widen_control_fields():
+    report = _successful_output_report({"metric_value": 0.25}).to_dict()
+    report["outputs"][0]["size_bytes"] = 1.5
+    with pytest.raises(QueueServiceError):
+        _decode(json.dumps({"report": report}).encode(), failure_report=True)
+
 def test_protocol_codec_rejects_duplicate_nonfinite_deep_and_oversized_json() -> None:
     with pytest.raises(QueueServiceError, match="JSON is invalid"):
         _decode(b'{"value":1,"value":2}')
