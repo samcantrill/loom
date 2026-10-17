@@ -1387,7 +1387,7 @@ class LocalDaemonAgentHttpClient:
                 config_revision = session.config_revision
                 inventory_revision = session.inventory_revision
             if control.kind.value == "resume":
-                if self._restart_with_retained_work or self._has_retained_agent_work():
+                if self._has_retained_agent_work():
                     return self._unchanged_control_effect(
                         control, session, "retained_work"
                     )
@@ -1412,6 +1412,11 @@ class LocalDaemonAgentHttpClient:
                     self._supervisor, _ = self._open_supervisor(self._config)
                 self._retained_profiles.clear()
                 self._reset_runtime_providers()
+                # A drained service cannot clear its startup recovery latch by
+                # offering work. Current durable settlement above permits resume;
+                # the historical startup observation must not keep it drained.
+                self._restart_with_retained_work = False
+                self._service_recovery_admission = False
                 self._drained = False
             availability_revision = _agent_revision(
                 "availability",

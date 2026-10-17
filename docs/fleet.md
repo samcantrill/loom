@@ -441,6 +441,28 @@ before restoring the previous drain policy and reopening. Accepted later DAG
 stages continue before drain. Timeout detaches; it never cancels or force-kills.
 Partial/rolling upgrades and post-replacement rollback are unsupported.
 
+When a communication-runtime defect prevents publication of an already
+successful worker result, `--recover-retained-results` explicitly selects a
+bounded alternative sequence for a runtime upgrade. It closes admission and
+acknowledges conditional drains first. Each resident agent must prove its
+retained deliveries have durable successful results, matching session/fence and
+supervisor launch identity, positive containment and successful exit, unchanged
+worker-result bytes, and completed temporary-storage cleanup. Pending polls,
+controls, diagnostic probes, live or pre-result workers, and Slurm roots refuse.
+The coordinator matches every outstanding remote assignment/reference against
+that cohort; preparation, cancellation and startup mutations also refuse.
+
+The operation retains that exact cohort before any stop. Native stop and locked
+replacement recheck it; a later new or changed result cannot join the operation.
+This is recovery eligibility, **not settlement**: claims and journals remain
+intact for ordinary startup replay. Both communication runtimes are replaced
+without changing workload source, profiles, images or native roots. Agents stay
+drained until their retained results settle, then resume to finish already
+admitted downstream stages. Global settlement and the usual native checks are
+still required before policy restoration and admission reopening. Resume the
+same operation after interruption. Ordinary upgrades retain their strict
+settled-work sequence.
+
 The stopped-role guard accepts only the current v6 supervisor journal. It
 verifies identity, host, containment and clean-shutdown evidence without
 rewriting the journal. Older journals are rejected before contacting their

@@ -75,6 +75,12 @@ def inspect(request, *, native_owner=None):
 
 
 def _settled(request):
+    if request.get("recovery_results") is not None:
+        from loom.queue.service_upgrade import require_result_recovery
+        return require_result_recovery(
+            native_root(request), expected_root_id=request["expected_root_id"],
+            role=role(request), agent_results=request["recovery_results"],
+        ).to_dict()
     observation = inspect_service_settlement(
         native_root(request), expected_root_id=request["expected_root_id"]
     )
@@ -155,7 +161,10 @@ def replace(request):
         else load_outbound_agent_service_config
     )
     service = loader(config(request), env_file=environment(request))
-    with service_replacement_guard(service, request["expected_root_id"]):
+    with service_replacement_guard(
+        service, request["expected_root_id"],
+        recovery_results=request.get("recovery_results"),
+    ):
         binding = admin / "service.json"
         archive = (
             admin
@@ -206,6 +215,18 @@ def execute(request):
     action = request["action"]
     if action == "upgrade-probe":
         return inspect(request)
+    if action == "upgrade-result-recovery":
+        from loom.queue.service_upgrade import (
+            inspect_agent_result_recovery, inspect_coordinator_result_recovery,
+        )
+        if role(request) == "agent":
+            return inspect_agent_result_recovery(
+                native_root(request), expected_root_id=request["expected_root_id"],
+            ).to_dict()
+        return inspect_coordinator_result_recovery(
+            native_root(request), expected_root_id=request["expected_root_id"],
+            agent_results=request["recovery_results"],
+        ).to_dict()
     if action == "upgrade-settlement":
         return inspect_service_settlement(
             native_root(request),
