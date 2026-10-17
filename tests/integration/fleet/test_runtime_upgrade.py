@@ -720,3 +720,37 @@ def test_abort_reopens_while_admitted_pipeline_remains_active(
                 "admitted-work", timeout_seconds=30
             ).admission
             assert completed is not None and completed.state.value == "SUCCEEDED"
+
+
+def test_runtime_recovery_mode_preserves_empty_cohort_and_native_checks(
+    site, tmp_path,  # noqa: F811
+):
+    inventory, base, selection = site
+    inventory = bind_environments(inventory)
+    authored = read(inventory.hosts[0].config)
+    for principal in authored["agent_policy"]["principals"]:
+        if principal["role"] == "operator":
+            principal["actions"].append("resume")
+    write(inventory.hosts[0].config, authored)
+    setup = apply(
+        inventory, operation_id="setup-recovery", issuer=base / "issuer",
+        check_selection=selection,
+    )
+    assert setup["outcome"] == "complete", setup
+    target = target_bundle(inventory, tmp_path)
+    options = {
+        "runtime_release": target, "recover_retained_results": True,
+        "deployment": Path(setup["deployment"]),
+        "connection": Path(setup["operator_connection"]),
+        "config": selection["config"],
+    }
+    preview = upgrades.preview(inventory, **options)
+    assert preview["recover_retained_results"] is True
+    result = finish(inventory, "recover-empty", apply=True, **options)
+    assert result["outcome"] == "complete", result
+    directory = upgrades.sshops._directory(inventory, "recover-empty")
+    assert read(directory / "retained-results.json") == {"results": []}
+    assert read(directory / "intent.json")["recover_retained_results"] is True
+    with CoordinatorOperatorClient.from_connection_file(setup["operator_connection"]) as operator:
+        assert operator.observe_maintenance()["state"] == "open"
+        assert not operator.observe_agent("worker").value["drained"]

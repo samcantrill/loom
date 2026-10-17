@@ -126,6 +126,7 @@ def preview(
     inventory,
     *,
     runtime_release=None,
+    recover_retained_results=False,
     workload_profile=None,
     image=None,
     workload_inventory=None,
@@ -140,6 +141,8 @@ def preview(
     preview never presents an uninstalled candidate as qualified.
     """
     _environment_files(inventory, env_file)
+    if recover_retained_results and (runtime_release is None or workload_profile is not None):
+        raise QueueConfigError("retained-result recovery requires a runtime target")
     if workload_profile is not None or image is not None or workload_inventory is not None:
         if runtime_release is not None:
             raise QueueConfigError("service and workload targets are mutually exclusive")
@@ -250,7 +253,15 @@ def preview(
         "declarations": declarations,
         "checks": selected,
         "candidate": "isolated installation and native probe required before gate closure",
-        "sequence": [
+        "recover_retained_results": recover_retained_results,
+        "sequence": ([
+            "prepare candidate", "close admission", "conditional drain",
+            "prove durable contained results", "stop and replace communication runtimes",
+            "replay retained results while drained", "resume agents",
+            "wait admitted DAGs", "authorize exact checks",
+            "wait checks and release", "conditional policy restoration",
+            "revoke checks and reopen",
+        ] if recover_retained_results else [
             "prepare candidate",
             "close admission",
             "wait admitted work and native settlement",
@@ -261,7 +272,7 @@ def preview(
             "wait checks and release",
             "conditional policy restoration",
             "revoke checks and reopen",
-        ],
+        ]),
         "irreversible": "first service stop/replacement intent",
         "required_capabilities": list(REQUIRED_CAPABILITIES),
     }
@@ -749,6 +760,8 @@ def _continue(operation):
         return read(operation.directory / "complete.json")
     operation.recheck()
     irreversible = operation.directory / "irreversible.json"
+    recovery = operation.intent.get("recover_retained_results", False)
+    recovery_path = operation.directory / "retained-results.json"
     if not irreversible.exists():
         phase(operation, "preparing")
         _capable(operation.operator)
@@ -764,22 +777,38 @@ def _continue(operation):
             )
         operation.probes()
         operation.maintenance("close", "close")
-        operation.settled()
+        if not recovery:
+            operation.settled()
         phase(operation, "draining")
         for name, agent in operation.intent["agents"].items():
             predecessor = (agent.get("control") or {}).get("operation_id")
             accepted = operation.policy(name, name + "-drain", "drain", predecessor)
             operation.verify_policy(name, accepted)
-        operation.settled()
-        for name in operation.intent["hosts"]:
-            fact = operation.host_observe(name, "upgrade-settlement")
-            if fact["availability"] != "available" or not fact["value"].get("settled"):
-                raise _Waiting("host native settlement: " + name + ": " + str(fact), "settlement_pending")
+        if recovery:
+            results = []
+            for name in operation.intent["agents"]:
+                fact = operation.host_observe(name, "upgrade-result-recovery")
+                if fact["availability"] != "available" or not fact["value"].get("recoverable"):
+                    raise _Waiting("host result recovery: " + name + ": " + str(fact), "settlement_pending")
+                results.extend(fact["value"]["results"])
+            fact = operation.host_observe(
+                "coordinator", "upgrade-result-recovery", recovery_results=results,
+            )
+            if fact["availability"] != "available" or not fact["value"].get("recoverable"):
+                raise _Waiting("coordinator result recovery: " + str(fact), "settlement_pending")
+            atomic(recovery_path, {"results": results})
+        else:
+            operation.settled()
+            for name in operation.intent["hosts"]:
+                fact = operation.host_observe(name, "upgrade-settlement")
+                if fact["availability"] != "available" or not fact["value"].get("settled"):
+                    raise _Waiting("host native settlement: " + name + ": " + str(fact), "settlement_pending")
         atomic(
             irreversible,
             {"step": "stop-replace", "intent_digest": digest(operation.intent)},
         )
     phase(operation, "replacing")
+    recovery_options = {"recovery_results": read(recovery_path)["results"]} if recovery else {}
     # Host receipts retain exact stop/replace/start requests across coordinator downtime.
     for name in [*operation.intent["agents"], "coordinator"]:
         row = operation.intent["hosts"][name]
@@ -790,6 +819,7 @@ def _continue(operation):
             descriptor_name=Path(operation.intent["target_path"]).name,
             required_capabilities=list(REQUIRED_CAPABILITIES),
             images=read(operation.directory / (name + "-candidate.json"))["images"],
+            **recovery_options,
         )
     for name, row in operation.intent["hosts"].items():
         operation.call(
@@ -801,6 +831,7 @@ def _continue(operation):
             descriptor_name=Path(operation.intent["target_path"]).name,
             required_capabilities=list(REQUIRED_CAPABILITIES),
             images=read(operation.directory / (name + "-candidate.json"))["images"],
+            **recovery_options,
         )
     _capable(operation.operator)
     if not (operation.receipts / "open" / "intent.json").exists():
@@ -809,11 +840,17 @@ def _continue(operation):
     restoring = operation.directory / "restoring.json"
     if not restoring.exists():
         for name in operation.intent["agents"]:
+            if recovery and not (operation.receipts / (name + "-checks-capacity") / "intent.json").exists():
+                fact = operation.host_observe(name, "upgrade-settlement", include_pending_poll=False)
+                if fact["availability"] != "available" or not fact["value"].get("settled"):
+                    raise _Waiting("retained result replay: " + name, "settlement_pending")
             predecessor = operation.intent["operation_id"] + "-" + name + "-drain"
             accepted = operation.policy(
                 name, name + "-checks-capacity", "resume", predecessor
             )
             operation.verify_policy(name, accepted)
+        if recovery:
+            operation.settled()
         _run_checks(operation)
         atomic(restoring, {"intent_digest": digest(operation.intent)})
     _restore(operation)
@@ -836,6 +873,7 @@ def upgrade(
     *,
     operation_id=None,
     runtime_release=None,
+    recover_retained_results=False,
     workload_profile=None,
     image=None,
     workload_inventory=None,
@@ -884,6 +922,7 @@ def _upgrade(
     *,
     operation_id=None,
     runtime_release=None,
+    recover_retained_results=False,
     workload_profile=None,
     image=None,
     workload_inventory=None,
@@ -922,6 +961,7 @@ def _upgrade(
         return preview(
             inventory,
             runtime_release=runtime_release,
+            recover_retained_results=recover_retained_results,
             workload_profile=workload_profile, image=image, workload_inventory=workload_inventory,
             deployment=deployment,
             connection=connection,
@@ -944,6 +984,7 @@ def _upgrade(
             plan = preview(
                 inventory,
                 runtime_release=runtime_release,
+                recover_retained_results=recover_retained_results,
                 workload_profile=workload_profile, image=image, workload_inventory=workload_inventory,
                 deployment=deployment,
                 connection=connection,
@@ -961,6 +1002,7 @@ def _upgrade(
             intent = {
                 "schema_version": 1,
                 "kind": "runtime-upgrade",
+                "recover_retained_results": recover_retained_results,
                 "operation_id": operation_id,
                 "target_path": str(target),
                 "release": plan["release"],
@@ -991,6 +1033,8 @@ def _upgrade(
         ):
             raise QueueConflictError("workload inventory intent changed")
         if apply:
+            if bool(intent.get("recover_retained_results")) != recover_retained_results:
+                raise QueueConflictError("retained-result recovery intent changed")
             selected = _checks(inventory, deployment, connection, config)
             if (
                 selected != intent.get("original_check_selection", intent["check_selection"])

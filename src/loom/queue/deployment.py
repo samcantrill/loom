@@ -2597,12 +2597,15 @@ def inspect_role_declaration(
 
 
 @contextmanager
-def service_replacement_guard(service, expected_root_id: str):
+def service_replacement_guard(service, expected_root_id: str, *, recovery_results=None):
     """Hold a stopped, settled native role during current runtime replacement.
 
     The caller has already drained admission/work and stopped the communication
     service. Pending poll outcomes and missing native evidence refuse; no work is
     cancelled, no root initialized and no identity replaced by this guard.
+    Explicit ``recovery_results`` instead rechecks the Fleet-owned cohort of
+    durable successful contained results. Journals remain retained for ordinary
+    startup replay; this does not assert logical settlement.
     """
     from .errors import QueueConflictError
     from ._agent_session_journal import _RemoteAgentJournal
@@ -2623,7 +2626,13 @@ def service_replacement_guard(service, expected_root_id: str):
             if journal.root_id != expected_root_id:
                 raise QueueConflictError("replacement native root identity changed")
             execution, slurm = _retained_agent_owners(spec)
-            if (_has_retained_agent_work(journal, execution, slurm)
+            if recovery_results is not None:
+                from .service_upgrade import require_result_recovery
+                require_result_recovery(
+                    spec.agent_root, expected_root_id=expected_root_id,
+                    role="agent", agent_results=recovery_results,
+                )
+            elif (_has_retained_agent_work(journal, execution, slurm)
                     or journal.recovery_poll(_OUTBOUND_POLL_WAIT_MS) is not None):
                 raise QueueConflictError("replacement requires settled agent work and poll outcomes")
             with retained_supervisor_guard(spec.agent_root, agent_id=journal.root_id):
@@ -2642,7 +2651,14 @@ def service_replacement_guard(service, expected_root_id: str):
             if actual != expected_root_id:
                 raise QueueConflictError("replacement native root identity changed")
             local_daemon_owner_work_is_retained(config, coordinator_id=actual, agent_id=None)
-            with sqlite3.connect(config.control_database) as conn:
-                if _retained_coordinator_operations(conn):
-                    raise QueueConflictError("replacement requires settled coordinator work")
+            if recovery_results is not None:
+                from .service_upgrade import require_result_recovery
+                require_result_recovery(
+                    config.coordinator_root, expected_root_id=expected_root_id,
+                    role="coordinator", agent_results=recovery_results,
+                )
+            else:
+                with sqlite3.connect(config.control_database) as conn:
+                    if _retained_coordinator_operations(conn):
+                        raise QueueConflictError("replacement requires settled coordinator work")
             yield

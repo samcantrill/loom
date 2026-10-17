@@ -1954,7 +1954,8 @@ def _service_configuration(root: Path) -> SupervisorLaunchConfiguration:
 def retained_supervisor_guard(agent_root: Path, *, agent_id: str):
     """Stop/hold an existing settled supervisor without loading workload profiles.
 
-    The caller holds the agent owner lock and has proved its journals settled.
+    The caller holds the agent owner lock and has proved its journals settled
+    or qualified solely for durable-result replay through the replacement owner.
     This path never initializes or starts a service and never dispatches launch
     or force-stop. A missing endpoint requires a durable clean cut (or an empty
     process-free root), not an inference from PID absence.

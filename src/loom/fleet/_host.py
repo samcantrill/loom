@@ -711,7 +711,7 @@ def main():
     request = json.loads(sys.stdin.buffer.read(128 * 1024 * 1024 + 1))
     if request["action"] not in {
         "receipt", "prepare", "issue", "receive", "initialize", "start", "enroll", "bind",
-        "observe", "resources", "upgrade-probe", "upgrade-settlement", "upgrade-stop",
+        "observe", "resources", "upgrade-probe", "upgrade-settlement", "upgrade-result-recovery", "upgrade-stop",
         "upgrade-replace", "workload-probe", "workload-coordinator-probe", "workload-recover",
         "workload-stage", "workload-publish",
     }:
@@ -729,7 +729,7 @@ def main():
                 if publication.exists()
                 else None
             )
-        if request["action"] in {"observe", "resources", "upgrade-probe", "upgrade-settlement", "workload-probe", "workload-coordinator-probe", "workload-recover"}:
+        if request["action"] in {"observe", "resources", "upgrade-probe", "upgrade-settlement", "upgrade-result-recovery", "workload-probe", "workload-coordinator-probe", "workload-recover"}:
             if (
                 request.get("expected_declaration") is not None
                 and digest(payload(request)) != request["expected_declaration"]

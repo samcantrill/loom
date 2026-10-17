@@ -197,12 +197,20 @@ def retained_lifetime(root: Path, requested: str | None) -> str:
 
 def _retained_coordinator_operations(conn) -> bool:
     """One predicate for active and offline coordinator service ownership."""
+    return _retained_coordinator_mutations(conn) or any(
+        conn.execute(query).fetchone() is not None for query in (
+            "SELECT 1 FROM managed_admissions WHERE state NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED') LIMIT 1",
+            "SELECT 1 FROM remote_assignments WHERE state NOT IN ('RELEASED', 'FAILED', 'CANCELLED') LIMIT 1",
+        )
+    )
+
+
+def _retained_coordinator_mutations(conn) -> bool:
+    """Mutations whose owners cannot be replaced by completed-result replay."""
     queries = (
-        "SELECT 1 FROM managed_admissions WHERE state NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED') LIMIT 1",
         "SELECT 1 FROM preparation_operations WHERE state NOT IN ('applied', 'failed', 'cancelled', 'conflict') LIMIT 1",
         "SELECT 1 FROM preparation_cancellations WHERE state NOT IN ('applied', 'failed', 'cancelled', 'conflict') LIMIT 1",
         "SELECT 1 FROM daemon_metadata WHERE key LIKE 'admission-retry:%' AND json_extract(value, '$.state') = 'pending' LIMIT 1",
-        "SELECT 1 FROM remote_assignments WHERE state NOT IN ('RELEASED', 'FAILED', 'CANCELLED') LIMIT 1",
     )
     return any(conn.execute(query).fetchone() is not None for query in queries) or any(
         float(json.loads(row[0])) > time.time()
