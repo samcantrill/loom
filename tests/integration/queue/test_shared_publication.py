@@ -305,6 +305,7 @@ def test_two_agents_publish_and_consume_complete_large_shared_closure(
             assert receipt["size"] > 64 * 1024 * 1024
             assert receipt["producer_pid"] != receipt["consumer_pid"]
             reference = producer_result.outputs["manifest"]
+            assert reference.metadata["measurement"] == 0.1803790032863617
             assert SHARED_PUBLICATION in reference.metadata
             primary = artifacts.local_path(reference)
             assert (

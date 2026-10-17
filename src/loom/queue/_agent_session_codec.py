@@ -264,6 +264,16 @@ def _decode(raw: bytes, *, failure_report: bool = False, control_wait: bool = Fa
             # Route metadata is plain data; keep its original envelope depth.
             _bounded_json(report["executor_metadata"], depth=2, plain_scalars=True)
             envelope_report["executor_metadata"] = None
+        outputs = report.get("outputs")
+        if isinstance(outputs, list):
+            envelope_outputs = []
+            for output in outputs:
+                if isinstance(output, Mapping) and "metadata" in output:
+                    # Artifact metadata is plain data at its original wire depth.
+                    _bounded_json(output["metadata"], depth=4, plain_scalars=True)
+                    output = {**output, "metadata": None}
+                envelope_outputs.append(output)
+            envelope_report["outputs"] = envelope_outputs
         _bounded_json({**value, "report": envelope_report}, depth=0)
     else:
         _bounded_json(value, depth=0)

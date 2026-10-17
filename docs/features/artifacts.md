@@ -37,6 +37,12 @@ artifact has a URI, type label, optional codec, checksum, producer, and metadata
 It should not know what a checkpoint, metrics file, video, report, model, or
 dataset-specific object means.
 
+Remote result publication preserves finite floating-point values in artifact
+metadata, including nested plain-data values. Metadata keeps the existing agent
+protocol byte, depth, collection and key limits; non-finite values are rejected.
+This does not permit floating-point values in protocol control fields such as
+transfer sizes or authorization revisions.
+
 ### 1.1 Alignment With `loom.md`
 
 This document specializes the artifact portion of the generic runtime described

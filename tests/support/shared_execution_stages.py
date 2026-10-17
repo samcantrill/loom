@@ -49,7 +49,7 @@ class SharedClosureProducer:
         return {"manifest": context.save_artifact("manifest", {
             "payload": "values.bin", "ids": "sample_ids.json", "catalog": "checkpoints/catalog.json",
             "size": size, "digest": digest.hexdigest(), "producer_pid": os.getpid(),
-        }, artifact_type="json", codec_key="json.v1")}
+        }, artifact_type="json", codec_key="json.v1", metadata={"measurement": 0.1803790032863617})}
 
 
 class SharedClosureConsumer:
@@ -58,6 +58,7 @@ class SharedClosureConsumer:
         from loom.io.uris import uri_to_path
         import json
         manifest = context.load_input("manifest")
+        assert context.input_artifact("manifest").metadata["measurement"] == 0.1803790032863617
         root = uri_to_path(context.input_artifact("manifest").uri).parent
         digest = hashlib.sha256()
         size = 0
