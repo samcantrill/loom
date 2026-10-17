@@ -502,6 +502,23 @@ remains. Another active successor, different target/owner or unsettled prior
 attempt refuses. Only the latest explicitly selected settled pass satisfies a
 slot, and all slots must pass before the gate reopens.
 
+If a runtime upgrade has replaced its services but cannot select a check
+preparation profile, correct that selection explicitly before any check has been
+prepared:
+
+```sh
+loom fleet operation repair-check-selection upgrade-018 --fleet lab \
+  --deployment /shared/current-infrastructure-checks.json
+```
+
+The new deployment must equal the original parsed selection except for its
+preparation profile, which must match every upgraded agent's declared resident
+profile. The operation retains the original intent and native maintenance gate,
+binds the candidate bytes in one immutable repair receipt, and resumes ordinary
+checks and policy restoration. It refuses changed source/connection/timing,
+conflicting repair replay, an unowned or unsettled gate, and already-prepared
+checks. It does not promote workload source/images or waive qualification.
+
 If the installed runtime has changed its preparation-report contract, an older
 workload image may be unable to pass those checks. Keep admission closed and
 build a compatible immutable image separately. After a confirmed native check

@@ -885,3 +885,71 @@ def test_runtime_recovery_publishes_original_result_and_finishes_downstream(
             assert conn.execute(
                 "SELECT COUNT(*) FROM launches WHERE json_extract(launch_json, '$.assignment_id') = ?", (assignment,)
             ).fetchone() == (1,)
+
+
+def test_runtime_upgrade_repairs_stale_check_profile_without_changing_intent(
+    site, tmp_path,  # noqa: F811
+):
+    from copy import deepcopy
+    from dataclasses import replace
+    from loom.deployment import load_deployment, export_connection_deployment
+
+    inventory, base, selection = site
+    inventory = bind_environments(inventory)
+    authored = read(inventory.hosts[0].config)
+    for principal in authored["agent_policy"]["principals"]:
+        if principal["role"] == "operator":
+            principal["actions"].append("resume")
+    profiles = authored["preparation"]["profiles"]
+    profiles["other-project"] = deepcopy(profiles["existing-project"])
+    write(inventory.hosts[0].config, authored)
+    setup = apply(inventory, operation_id="setup-profile-repair", issuer=base / "issuer",
+                  check_selection=selection)
+    assert setup["outcome"] == "complete", setup
+    current = load_deployment(setup["deployment"])
+    stale = tmp_path / "stale-checks.json"
+    export_connection_deployment(replace(current, preparation_profile="old-project"), stale)
+    identity = "repair-profile"
+    result = upgrades.upgrade(
+        inventory, operation_id=identity, apply=True,
+        runtime_release=target_bundle(inventory, tmp_path), deployment=stale,
+        connection=Path(setup["operator_connection"]), config=selection["config"],
+    )
+    deadline = time.monotonic() + 240
+    while result["outcome"] == "waiting" and time.monotonic() < deadline:
+        time.sleep(.25)
+        result = upgrades.upgrade(inventory, operation_id=identity)
+    assert result["outcome"] == "blocked" and "ambiguous" in result["reason"], result
+    directory = upgrades.sshops._directory(inventory, identity)
+    original_intent = (directory / "intent.json").read_bytes()
+    stale_bytes = stale.read_bytes()
+    assert not (directory / "checks.json").exists()
+    with CoordinatorOperatorClient.from_connection_file(setup["operator_connection"]) as operator:
+        gate = operator.observe_maintenance()
+        assert gate["state"] == "closed"
+    for name, candidate in (
+        ("source", replace(current, source=replace(current.source, path="different"))),
+        ("profile", replace(current, preparation_profile="missing")),
+    ):
+        path = tmp_path / (name + ".json")
+        export_connection_deployment(candidate, path)
+        refused = upgrades.upgrade(inventory, operation_id=identity,
+                                   action="repair-check-selection", deployment=path)
+        assert refused["outcome"] == "blocked", refused
+        assert not (directory / "check-selection-repair.json").exists()
+    result = finish(inventory, identity, action="repair-check-selection",
+                    deployment=Path(setup["deployment"]))
+    assert (directory / "intent.json").read_bytes() == original_intent
+    assert stale.read_bytes() == stale_bytes
+    assert result["deployment"] == setup["deployment"]
+    checks = read(directory / "checks.json")
+    assert checks and all(rows[-1]["target_intent_digest"] == gate["intent_digest"]
+                          for rows in checks.values())
+    assert upgrades.upgrade(inventory, operation_id=identity,
+                            action="repair-check-selection", deployment=Path(setup["deployment"]))["outcome"] == "complete"
+    refused = upgrades.upgrade(inventory, operation_id=identity,
+                               action="repair-check-selection", deployment=stale)
+    assert refused["outcome"] == "blocked" and "repair changed" in refused["reason"]
+    with CoordinatorOperatorClient.from_connection_file(setup["operator_connection"]) as operator:
+        assert operator.observe_maintenance()["state"] == "open"
+        assert not operator.observe_agent("worker").value["drained"]

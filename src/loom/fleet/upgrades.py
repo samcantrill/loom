@@ -292,6 +292,7 @@ class _Upgrade(sshops._Operation):
 
     def recheck(self, pending_inputs=None):
         super().recheck(pending_inputs)
+        _check_selection(self)
 
     def observe_gate(self):
         gate = cast(dict[str, Any], thaw_plain_data(self.operator.observe_maintenance()))
@@ -540,6 +541,75 @@ def _qualification_result(operation) -> dict[str, Any]:
     }
 
 
+def _check_selection(operation):
+    """Read the original selection or its explicitly bound profile-only repair."""
+    path = operation.directory / "check-selection-repair.json"
+    if not path.exists():
+        return operation.intent["check_selection"]
+    receipt = read(path)
+    if receipt["intent_digest"] != digest(operation.intent):
+        raise QueueConflictError("check selection repair belongs to another upgrade")
+    if sshops._file_hash(Path(receipt["deployment"])) != receipt["deployment_sha256"]:
+        raise QueueConflictError("repaired check deployment changed")
+    return {**operation.intent["check_selection"], "deployment": receipt["deployment"]}
+
+
+def _repair_check_selection(operation, deployment):
+    """Bind a profile-only correction before any runtime check is prepared.
+
+    The original input hashes, maintenance identity and service target remain
+    immutable. Ordinary resume still owns checks, policy restoration and opening.
+    """
+    if deployment is None:
+        raise QueueConfigError("repair-check-selection requires --deployment")
+    candidate_path = Path(deployment).resolve()
+    receipt = {
+        "intent_digest": digest(operation.intent),
+        "deployment": str(candidate_path),
+        "deployment_sha256": sshops._file_hash(candidate_path),
+    }
+    path = operation.directory / "check-selection-repair.json"
+    if path.exists():
+        if read(path) != receipt:
+            raise QueueConflictError("retained check selection repair changed")
+        _check_selection(operation)
+        return _continue(operation)
+    if (
+        operation.intent["kind"] != "runtime-upgrade"
+        or not (operation.directory / "irreversible.json").exists()
+        or any((operation.directory / item).exists() for item in (
+            "checks.json", "restoring.json", "complete.json", "aborted.json",
+            "workload-repair/intent.json",
+        ))
+        or any(not (operation.receipts / (name + "-upgrade-replace") / "receipt.json").exists()
+               for name in operation.intent["hosts"])
+    ):
+        raise QueueConflictError("check selection repair requires replaced runtime before checks")
+    operation.recheck()
+    operation.settled()  # Also checks the live native gate owner and digest.
+    original = load_deployment(operation.intent["check_selection"]["deployment"])
+    candidate = load_deployment(candidate_path)
+    if replace(candidate, path=original.path, preparation_profile=original.preparation_profile) != original:
+        raise QueueConfigError("check selection repair may change only the preparation profile")
+    policies = operation.intent["declarations"]["coordinator"]["preparation"]["profiles"]
+    chosen = policies.get(candidate.preparation_profile)
+    for name in operation.intent["agents"]:
+        resident = operation.intent["declarations"][name]["resident_profiles"][0]["descriptor"]["profile_id"]
+        if chosen is None or chosen["resident_profile_id"] != resident:
+            raise QueueConfigError("repaired preparation profile does not match " + name)
+        if (operation.directory / (name + "-check-selection.json")).exists():
+            raise QueueConflictError("check preparation already started")
+        for check in ("cpu", "storage", "gpu"):
+            identity = "check-" + hashlib.sha256((operation.intent["operation_id"] + name + ":" + check).encode()).hexdigest()[:24]
+            if (operation.inventory.path.parent / "checks" / identity / "intent.json").exists():
+                raise QueueConflictError("check preparation already started")
+    # Bind the bytes just admitted, refusing concurrent edits before publication.
+    if sshops._file_hash(candidate_path) != receipt["deployment_sha256"]:
+        raise QueueConflictError("repaired check deployment changed")
+    atomic(path, receipt)
+    return _continue(operation)
+
+
 def _prepare_attempt(operation, name, check, identity, previous=None):
     path = operation.inventory.path.parent / "checks" / identity / "intent.json"
     binding = _maintenance_binding(operation.intent)
@@ -548,7 +618,7 @@ def _prepare_attempt(operation, name, check, identity, previous=None):
         if intent.get("maintenance_binding") != binding:
             raise QueueConflictError("check belongs to another maintenance intent")
     else:
-        selection = operation.intent["check_selection"]
+        selection = _check_selection(operation)
         deployment = load_deployment(selection["deployment"])
         declarations = operation.intent.get("target_declarations", operation.intent["declarations"])
         profile_id = declarations[name]["resident_profiles"][0][
@@ -859,7 +929,7 @@ def _continue(operation):
         "release": operation.intent["release"],
         "checks": _attempts(operation),
         **_qualification_result(operation),
-        "deployment": operation.intent["check_selection"]["deployment"],
+        "deployment": _check_selection(operation)["deployment"],
         "operator_connection": operation.intent["check_selection"][
             "operator_connection"
         ],
@@ -1068,6 +1138,8 @@ def _upgrade(
                         _restore(operation, abort=True)
                     atomic(directory / "aborted.json", {"state": "aborted"})
                     result = {"state": "aborted"}
+            elif action == "repair-check-selection":
+                result = _repair_check_selection(operation, deployment)
             elif action == "repair-workload":
                 from .runtime_workload_repair import repair_workload
                 result = repair_workload(operation, workload_profile=workload_profile,

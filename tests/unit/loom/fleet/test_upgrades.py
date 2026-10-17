@@ -147,3 +147,14 @@ def test_deferred_qualification_does_not_silently_leave_repair_checks_required(t
     with pytest.raises(QueueConfigError, match="bound workload repair"):
         upgrades._bind_deferred_checks(operation, ["worker"], "Operator defers checks")
     assert not (tmp_path / "deferred-checks.json").exists()
+
+
+def test_check_selection_repair_cli_retains_parent_and_explicit_deployment():
+    from loom.cli.main import build_parser
+
+    selected = build_parser().parse_args([
+        "fleet", "operation", "repair-check-selection", "runtime-window",
+        "--fleet", "lab", "--deployment", "/shared/current-checks.json",
+    ])
+    assert selected.operation_id == "runtime-window"
+    assert selected.deployment == Path("/shared/current-checks.json")
