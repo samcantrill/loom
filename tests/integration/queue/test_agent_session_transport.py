@@ -5149,13 +5149,29 @@ def test_report_output_metadata_rejects_nonfinite(number):
 
 @pytest.mark.parametrize("metadata, message", [
     (_nested_report_detail(5), "too deeply nested"),
-    ({"values": [0.5] * 65}, "collection is too large"),
+    ({"values": [0.5] * 65_536}, "maximum 65536 bytes"),
     ({"": 0.5}, "object key is invalid"),
 ])
 def test_report_output_metadata_preserves_wire_bounds(metadata, message):
     report = _successful_output_report(metadata).to_dict()
     with pytest.raises(QueueServiceError, match=message):
         _decode(json.dumps({"report": report}).encode(), failure_report=True)
+
+
+@pytest.mark.parametrize("output_kind", ["relay", "shared"])
+def test_report_output_inventory_metadata_uses_message_byte_budget(output_kind):
+    metadata = {"field_keys": [f"field_{index}" for index in range(84)],
+                "counts": {f"field_{index}": index for index in range(84)}}
+    report = replace(_successful_output_report(metadata), output_kind=output_kind)
+    raw = json.dumps({"report": report.to_dict()}).encode()
+    decoded = _decode(raw, failure_report=True)
+    replayed = _RemoteExecutionReport.from_dict(decoded["report"])
+    assert replayed.outputs[0].to_dict()["metadata"] == metadata
+    with pytest.raises(QueueServiceError, match="too large"):
+        _decode(raw)
+    envelope = {"report": report.to_dict(), "control_values": list(range(65))}
+    with pytest.raises(QueueServiceError, match="collection is too large"):
+        _decode(json.dumps(envelope).encode(), failure_report=True)
 
 
 def test_report_output_metadata_does_not_widen_control_fields():
