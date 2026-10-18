@@ -503,8 +503,9 @@ attempt refuses. Only the latest explicitly selected settled pass satisfies a
 slot, and all slots must pass before the gate reopens.
 
 If a runtime upgrade has replaced its services but cannot select a check
-preparation profile, correct that selection explicitly before any check has been
-prepared:
+preparation profile, or its selected project preparation rejects a generic
+probe, correct that selection explicitly before checks or after all prepared
+checks have confirmed terminal failures and their native effects have settled:
 
 ```sh
 loom fleet operation repair-check-selection upgrade-018 --fleet lab \
@@ -516,8 +517,11 @@ preparation profile, which must match every upgraded agent's declared resident
 profile. The operation retains the original intent and native maintenance gate,
 binds the candidate bytes in one immutable repair receipt, and resumes ordinary
 checks and policy restoration. It refuses changed source/connection/timing,
-conflicting repair replay, an unowned or unsettled gate, and already-prepared
-checks. It does not promote workload source/images or waive qualification.
+conflicting repair replay, an unowned or unsettled gate, and active or successful
+prepared checks. Failed check intents, results and deployment selections remain
+unchanged; repaired successors use a separate retained selection. After repairing
+a failed check, explicitly use `retry-check` as above to authorize its successor.
+The repair does not promote workload source/images or waive qualification.
 
 If the installed runtime has changed its preparation-report contract, an older
 workload image may be unable to pass those checks. Keep admission closed and
