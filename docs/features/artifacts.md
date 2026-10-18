@@ -38,8 +38,11 @@ It should not know what a checkpoint, metrics file, video, report, model, or
 dataset-specific object means.
 
 Remote result publication preserves finite floating-point values in artifact
-metadata, including nested plain-data values. Metadata keeps the existing agent
-protocol byte, depth, collection and key limits; non-finite values are rejected.
+metadata, including nested plain-data values. Artifact metadata collections
+(such as output field inventories) are bounded by the full 65,536-byte agent
+message limit, rather than the 64-entry control collection limit. Existing depth
+and key limits remain; non-finite values are rejected. Executor metadata and
+protocol control collections retain their existing limits.
 This does not permit floating-point values in protocol control fields such as
 transfer sizes or authorization revisions.
 

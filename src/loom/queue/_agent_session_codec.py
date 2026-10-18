@@ -269,8 +269,10 @@ def _decode(raw: bytes, *, failure_report: bool = False, control_wait: bool = Fa
             envelope_outputs = []
             for output in outputs:
                 if isinstance(output, Mapping) and "metadata" in output:
-                    # Artifact metadata is plain data at its original wire depth.
-                    _bounded_json(output["metadata"], depth=4, plain_scalars=True)
+                    # Artifact inventories may contain more entries than control fields.
+                    # The full message byte bound limits their collection size.
+                    _bounded_json(output["metadata"], depth=4, plain_scalars=True,
+                                  max_collection=_MAX_BODY_BYTES)
                     output = {**output, "metadata": None}
                 envelope_outputs.append(output)
             envelope_report["outputs"] = envelope_outputs

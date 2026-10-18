@@ -773,9 +773,9 @@ def broken_metadata_release(inventory, tmp_path):
     with zipfile.ZipFile(wheel) as archive:
         files = {name: archive.read(name) for name in archive.namelist()}
     codec = "loom/queue/_agent_session_codec.py"
-    old = b'_bounded_json(output["metadata"], depth=4, plain_scalars=True)'
+    old = b'max_collection=_MAX_BODY_BYTES)'
     assert files[codec].count(old) == 1
-    files[codec] = files[codec].replace(old, old.replace(b"True", b"False"))
+    files[codec] = files[codec].replace(old, b"max_collection=_MAX_JSON_COLLECTION)")
     record = next(name for name in files if name.endswith(".dist-info/RECORD"))
     stream = io.StringIO()
     writer = csv.writer(stream)

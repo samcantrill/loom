@@ -428,7 +428,8 @@ class MeasurementProducerStage:
     def run(self, context, inputs):
         return {"data": context.save_artifact(
             "data", {"value": 41}, artifact_type="json", codec_key="json.v1",
-            metadata={"measurement": 0.1803790032863617},
+            metadata={"measurement": 0.1803790032863617,
+                      "field_keys": [f"field_{i}" for i in range(84)]},
         )}
 
 
@@ -437,6 +438,7 @@ class MeasurementConsumerStage:
 
     def run(self, context, inputs):
         assert inputs["data"].metadata["measurement"] == 0.1803790032863617
+        assert tuple(inputs["data"].metadata["field_keys"]) == tuple(f"field_{i}" for i in range(84))
         assert context.load_input("data") == {"value": 41}
         return {"data": context.save_artifact(
             "data", {"observed": True}, artifact_type="json", codec_key="json.v1",
