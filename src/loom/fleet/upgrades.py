@@ -555,7 +555,7 @@ def _check_selection(operation):
 
 
 def _repair_check_selection(operation, deployment):
-    """Bind a profile-only correction before any runtime check is prepared.
+    """Bind a profile-only correction before checks or after settled failures.
 
     The original input hashes, maintenance identity and service target remain
     immutable. Ordinary resume still owns checks, policy restoration and opening.
@@ -578,15 +578,26 @@ def _repair_check_selection(operation, deployment):
         operation.intent["kind"] != "runtime-upgrade"
         or not (operation.directory / "irreversible.json").exists()
         or any((operation.directory / item).exists() for item in (
-            "checks.json", "restoring.json", "complete.json", "aborted.json",
+            "restoring.json", "complete.json", "aborted.json",
             "workload-repair/intent.json",
         ))
         or any(not (operation.receipts / (name + "-upgrade-replace") / "receipt.json").exists()
                for name in operation.intent["hosts"])
     ):
-        raise QueueConflictError("check selection repair requires replaced runtime before checks")
+        raise QueueConflictError("check selection repair requires replaced runtime before restoration")
     operation.recheck()
     operation.settled()  # Also checks the live native gate owner and digest.
+    attempts = _attempts(operation)
+    failed_ids = set()
+    for rows in attempts.values():
+        failed = rows[-1]["operation_id"]
+        _require_failed_check(operation, failed)
+        failed_ids.update(row["operation_id"] for row in rows)
+    if attempts:
+        for name in operation.intent["hosts"]:
+            fact = operation.host_observe(name, "upgrade-settlement", include_pending_poll=False)
+            if fact["availability"] != "available" or not fact["value"].get("settled"):
+                raise _Waiting("prior check native effects remain before profile repair")
     original = load_deployment(operation.intent["check_selection"]["deployment"])
     candidate = load_deployment(candidate_path)
     if replace(candidate, path=original.path, preparation_profile=original.preparation_profile) != original:
@@ -597,11 +608,11 @@ def _repair_check_selection(operation, deployment):
         resident = operation.intent["declarations"][name]["resident_profiles"][0]["descriptor"]["profile_id"]
         if chosen is None or chosen["resident_profile_id"] != resident:
             raise QueueConfigError("repaired preparation profile does not match " + name)
-        if (operation.directory / (name + "-check-selection.json")).exists():
+        if not attempts and (operation.directory / (name + "-check-selection.json")).exists():
             raise QueueConflictError("check preparation already started")
         for check in ("cpu", "storage", "gpu"):
             identity = "check-" + hashlib.sha256((operation.intent["operation_id"] + name + ":" + check).encode()).hexdigest()[:24]
-            if (operation.inventory.path.parent / "checks" / identity / "intent.json").exists():
+            if identity not in failed_ids and (operation.inventory.path.parent / "checks" / identity / "intent.json").exists():
                 raise QueueConflictError("check preparation already started")
     # Bind the bytes just admitted, refusing concurrent edits before publication.
     if sshops._file_hash(candidate_path) != receipt["deployment_sha256"]:
@@ -643,7 +654,9 @@ def _prepare_attempt(operation, name, check, identity, previous=None):
             raise QueueConfigError("check preparation profile is ambiguous for " + name)
         from loom.deployment import export_connection_deployment
 
-        selected_path = operation.directory / (name + "-check-selection.json")
+        # A repaired selection must not rewrite the deployment bound by failed checks.
+        suffix = "-repaired-check-selection.json" if (operation.directory / "check-selection-repair.json").exists() else "-check-selection.json"
+        selected_path = operation.directory / (name + suffix)
         if selected_path.exists():
             retained_selection = load_deployment(selected_path)
             if (
@@ -1260,6 +1273,20 @@ def _retry_control(operation, failed, successor):
     return _continue(operation)
 
 
+def _require_failed_check(operation, failed):
+    result = self_test(
+        operation.inventory,
+        operation_id=failed,
+        timeout_seconds=operation.intent["timeout_seconds"],
+    )
+    if result["outcome"] != "failed" or not any(
+        row.get("code") == "native_check_failed" for row in result["checks"].values()
+    ):
+        raise QueueConflictError(
+            "replacement requires confirmed native terminal failure"
+        )
+
+
 def _retry_check(operation, failed, successor):
     if not failed or not successor:
         raise QueueConfigError("retry-check requires --failed-check and --operation-id")
@@ -1285,17 +1312,7 @@ def _retry_check(operation, failed, successor):
         return _continue(operation)
     if rows[-1]["operation_id"] != failed:
         raise QueueConflictError("another successor already selects this slot")
-    result = self_test(
-        operation.inventory,
-        operation_id=failed,
-        timeout_seconds=operation.intent["timeout_seconds"],
-    )
-    if result["outcome"] != "failed" or not any(
-        row.get("code") == "native_check_failed" for row in result["checks"].values()
-    ):
-        raise QueueConflictError(
-            "replacement requires confirmed native terminal failure"
-        )
+    _require_failed_check(operation, failed)
     operation.settled()
     for name in operation.intent["hosts"]:
         fact = operation.host_observe(

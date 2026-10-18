@@ -953,3 +953,63 @@ def test_runtime_upgrade_repairs_stale_check_profile_without_changing_intent(
     with CoordinatorOperatorClient.from_connection_file(setup["operator_connection"]) as operator:
         assert operator.observe_maintenance()["state"] == "open"
         assert not operator.observe_agent("worker").value["drained"]
+
+
+def test_runtime_upgrade_repairs_profile_after_settled_failed_check(site, tmp_path):  # noqa: F811
+    from copy import deepcopy
+    from dataclasses import replace
+    from loom.deployment import load_deployment, export_connection_deployment
+
+    inventory, base, selection = site
+    inventory = bind_environments(inventory)
+    authored = read(inventory.hosts[0].config)
+    for principal in authored['agent_policy']['principals']:
+        if principal['role'] == 'operator':
+            principal['actions'].append('resume')
+    profiles = authored['preparation']['profiles']
+    profiles['infrastructure'] = deepcopy(profiles['existing-project'])
+    write(inventory.hosts[0].config, authored)
+    setup = apply(inventory, operation_id='setup-failed-profile', issuer=base/'issuer', check_selection=selection)
+    assert setup['outcome'] == 'complete', setup
+    source = tmp_path/'projects/pipeline.yaml'
+    original_source = source.read_bytes()
+    source.write_text('pipeline: [invalid')
+    identity = 'repair-failed-profile'
+    result = upgrades.upgrade(inventory, operation_id=identity, apply=True,
+        runtime_release=target_bundle(inventory, tmp_path), deployment=Path(setup['deployment']),
+        connection=Path(setup['operator_connection']), config=selection['config'])
+    deadline = time.monotonic()+240
+    while result['outcome']=='waiting' and time.monotonic()<deadline:
+        time.sleep(.25)
+        result=upgrades.upgrade(inventory, operation_id=identity)
+    assert result['outcome']=='blocked' and 'retry-check' in result['reason'], result
+    directory=upgrades.sshops._directory(inventory, identity)
+    intent=(directory/'intent.json').read_bytes()
+    failed=read(directory/'checks.json')['worker:cpu'][-1]['operation_id']
+    failed_intent=inventory.path.parent/'checks'/failed/'intent.json'
+    failed_bytes=failed_intent.read_bytes()
+    selected=directory/'worker-check-selection.json'
+    selected_bytes=selected.read_bytes()
+    source.write_bytes(original_source)
+    deployment=load_deployment(setup['deployment'])
+    candidate=tmp_path/'infrastructure-checks.json'
+    export_connection_deployment(replace(deployment, preparation_profile='infrastructure'), candidate)
+    result=upgrades.upgrade(inventory, operation_id=identity, action='repair-check-selection', deployment=candidate)
+    assert result['outcome']=='blocked' and 'retry-check' in result['reason'], result
+    assert (directory/'check-selection-repair.json').exists()
+    assert failed_intent.read_bytes()==failed_bytes
+    assert selected.read_bytes()==selected_bytes
+    assert (directory/'intent.json').read_bytes()==intent
+    # Repair alone does not turn the failed check into a pass or authorize a new one.
+    assert len(read(directory/'checks.json')['worker:cpu'])==1
+    result=finish(inventory, identity, action='retry-check', failed_check=failed, new_check='correct-profile-check')
+    assert result['outcome']=='complete', result
+    rows=read(directory/'checks.json')['worker:cpu']
+    assert [row['operation_id'] for row in rows]==[failed,'correct-profile-check']
+    assert rows[0]['authorization']['request']['preparation']['preparation_profile']=='existing-project'
+    assert rows[1]['authorization']['request']['preparation']['preparation_profile']=='infrastructure'
+    assert failed_intent.read_bytes()==failed_bytes
+    assert selected.read_bytes()==selected_bytes
+    assert load_deployment(directory/'worker-repaired-check-selection.json').preparation_profile=='infrastructure'
+    with CoordinatorOperatorClient.from_connection_file(setup['operator_connection']) as operator:
+        assert operator.observe_maintenance()['state']=='open'
