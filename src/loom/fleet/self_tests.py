@@ -17,6 +17,7 @@ from loom.coordinator import (
     CoordinatorClient,
     CoordinatorClientError,
     CoordinatorOperatorClient,
+    RunObservation,
     RunRequest,
 )
 from loom.deployment import load_deployment
@@ -199,6 +200,45 @@ def _dispatch_check(
     return None
 
 
+def _pending_observation(observed: RunObservation) -> tuple[str, dict[str, Any]]:
+    """Explain already-observed native facts without another owner query."""
+    from loom.diagnostics.run_explanation import explain_run
+    from loom.diagnostics.run_inspection import RunInspectionAxisName
+
+    explanation = explain_run(observed.inspection, observation=observed)
+    current = [
+        fact for fact in explanation.facts
+        if fact.availability == "available" and fact.freshness == "current"
+    ]
+    families = {
+        family for family, fact in explanation.reasons
+        if fact in current or family == "preparation_incomplete"
+    }
+    if "publication_pending" in families:
+        code = "publication_pending"
+    elif "cleanup_pending" in families:
+        code = "settlement_pending"
+    elif any(
+        fact.name in {RunInspectionAxisName.ASSIGNMENT, RunInspectionAxisName.TRANSFER_RESULT}
+        and fact.state.lower() == "running" for fact in current
+    ):
+        code = "check_running"
+    elif "waiting_for_resources" in families:
+        code = "waiting_for_capacity"
+    elif "preparation_incomplete" in families:
+        code = "preparation_pending"
+    else:
+        code = "check_pending_unknown"
+    return code, {
+        "summary": explanation.summary,
+        "facts": [fact.to_dict() for fact in explanation.facts],
+        "reasons": [
+            {"family": family, "evidence": fact.to_dict()}
+            for family, fact in explanation.reasons
+        ],
+    }
+
+
 @timed("check_observation")
 def _observe_check(
     client: CoordinatorClient,
@@ -226,12 +266,13 @@ def _observe_check(
         observed.operation is not None
         and observed.operation.state in {"failed", "cancelled", "conflict"}
         or observed.admission is not None
-        and observed.admission.state.value in {"FAILED", "CANCELLED"}
+        and observed.admission.state.value in {"FAILED", "CANCELLED", "BLOCKED"}
     ):
         return {"outcome": "failed", "code": "native_check_failed", **facts}
     if observed.admission is None or observed.admission.state.value != "SUCCEEDED":
-        return _waiting("waiting_for_capacity", **facts)
-    detail = client.admission(observed.admission.admission_id)
+        code, explanation = _pending_observation(observed)
+        return _waiting(code, explanation=explanation, **facts)
+    detail = observed.detail or client.admission(observed.admission.admission_id)
     assignments = (
         cast(dict[str, Any], thaw_plain_data(detail.owners))
         .get("assignment", {})

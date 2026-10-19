@@ -613,6 +613,15 @@ contents for the exact publication; current assignment/agent and release evidenc
 is reobserved. A new publication or attempt requires fresh verification, including
 the complete 65 MiB storage payload.
 
+Pending check results reuse native run explanations and retain their owner facts.
+`waiting_for_capacity` requires current scheduling evidence; preparation, running
+assignments, durable results awaiting publication, and cleanup have distinct codes.
+Missing or stale evidence yields `check_pending_unknown`, never a capacity claim.
+These are observed states, not measured execution or publication durations. A native
+`BLOCKED` admission is a failed check requiring explicit repair/retry, not an endless
+capacity wait. Successful observations reuse their existing admission detail instead
+of making the same owner query twice.
+
 Best-effort action diagnostics append to `timings.jsonl` in the native fleet
 operation directory. Records identify an invocation, action, host when known,
 UTC start, monotonic duration and outcome. They expose qualification, startup,
