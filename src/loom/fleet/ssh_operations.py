@@ -32,12 +32,19 @@ from loom.queue.deployment import (
 from loom.queue.errors import QueueConfigError, QueueConflictError
 from loom.coordinator import CoordinatorClientError
 from loom.fleet._host import atomic, read, digest
+from loom.fleet._timing import ingest, timed
 
 
 class SshUnavailable(Exception):
     """No authoritative host result was received; dispatch may have happened."""
 
 
+class SshStarting(SshUnavailable):
+    """The exact host launch is retained and its readiness remains pending."""
+    fleet_pending = True
+
+
+@timed("host_rpc")
 def ssh(host, request):
     """Send a bounded structured request using the user's existing SSH policy."""
     if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", host) is None:
@@ -70,7 +77,10 @@ def ssh(host, request):
         if len(result.stdout) > 16 * 1024 * 1024:
             raise ValueError
         reply = json.loads(result.stdout)
+        ingest(reply.get("timings", []), host=request.get("name", host))
         if reply["ok"] is not True:
+            if reply.get("code") == "ServiceStarting":
+                raise SshStarting(reply["reason"])
             raise QueueConflictError(reply.get("reason", "host operation refused"))
         return reply["result"]
     except (KeyError, ValueError, TypeError) as exc:
@@ -669,6 +679,8 @@ def _apply_locked(
     atomic(directory / "result.json", {"state": "running"})
     try:
         result = _continue(operation)
+    except SshStarting as exc:
+        result = {"state": "waiting", "reason": str(exc)}
     except SshUnavailable:
         result = {
             "state": "waiting",

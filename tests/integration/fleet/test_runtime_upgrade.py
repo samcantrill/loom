@@ -48,6 +48,32 @@ def finish(inventory, identity, **kwargs):
     return result
 
 
+def retry_other_failed_checks(inventory, operation_id, *, keep):
+    """A malformed recipe now fails every dispatched slot, not only the first."""
+    from tests.integration.fleet.test_self_tests import finish as finish_check
+
+    root = inventory.path.parent
+    attempts = read(root / "operations" / operation_id / "checks.json")
+    for slot, history in attempts.items():
+        failed = history[-1]["operation_id"]
+        if failed == keep:
+            continue
+        result = read(root / "checks" / failed / "result.json")
+        if result["outcome"] != "failed":
+            continue
+        successor = failed + "-explicit-retry"
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            upgrades.upgrade(inventory, operation_id=operation_id, action="retry-check",
+                             failed_check=failed, new_check=successor)
+            current = read(root / "operations" / operation_id / "checks.json")
+            if current[slot][-1]["operation_id"] == successor:
+                break
+            time.sleep(0.05)
+        assert current[slot][-1]["operation_id"] == successor
+        assert finish_check(inventory, successor)["outcome"] == "passed"
+
+
 
 def held_progress_cli(inventory, identity, options, monkeypatch):
     """Observe the real CLI/native call while a selected SSH boundary is held."""
@@ -253,6 +279,7 @@ def test_runtime_upgrade_abort_interruption_resume_and_native_checks(
     original_source.write_bytes(source_bytes)
     repeated_failure = upgrades.upgrade(inventory, operation_id="upgrade-window")
     assert repeated_failure["outcome"] == "blocked"
+    retry_other_failed_checks(inventory, "upgrade-window", keep=failed)
     submit = CoordinatorClient.start_run
     submitted = []
 
@@ -293,7 +320,9 @@ def test_runtime_upgrade_abort_interruption_resume_and_native_checks(
             failed_check=failed,
             new_check="replacement-check",
         )
-    assert replacement["outcome"] == "waiting", replacement
+    # Dispatch and observation are separate passes. The lost submission reply
+    # can already be reconciled by observation in this same continuation.
+    assert replacement["outcome"] in {"waiting", "complete"}, replacement
     assert (
         read(inventory.path.parent / "operations/upgrade-window/checks.json")[
             "worker:cpu"
@@ -309,6 +338,15 @@ def test_runtime_upgrade_abort_interruption_resume_and_native_checks(
     )
     assert duplicate["outcome"] == "blocked" and "successor" in duplicate["reason"]
     result = finish(inventory, "upgrade-window")
+    replayed_retry = upgrades.upgrade(
+        inventory,
+        operation_id="upgrade-window",
+        action="retry-check",
+        failed_check=failed,
+        new_check="replacement-check",
+    )
+    assert replayed_retry["outcome"] == "complete"
+    assert replayed_retry["checks"] == result["checks"]
     assert checked_irreversible
     assert len(migrations) == 1 and submitted == ["replacement-check"]
     assert (

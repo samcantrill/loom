@@ -23,8 +23,10 @@ from loom.fleet._host import (
 from loom.queue.errors import QueueConflictError
 from loom.queue.operations import probe_upgrade_compatibility
 from loom.queue.service_upgrade import inspect_service_settlement
+from loom.fleet._timing import measure, timed
 
 
+@timed("candidate_qualification")
 def inspect(request, *, native_owner=None):
     """Recheck candidate storage, profile/image bytes and native root identity."""
     from loom.fleet.releases import verify_release
@@ -60,7 +62,7 @@ def inspect(request, *, native_owner=None):
             container = profile.get("container")
             if container is not None:
                 image = Path(container["container"]["image"]["reference"])
-                with image.open("rb") as stream:
+                with measure("image_hash"), image.open("rb") as stream:
                     images[str(image)] = hashlib.file_digest(
                         stream, "sha256"
                     ).hexdigest()
@@ -142,14 +144,14 @@ def replace(request):
     previous = read(admin / "active.json")
     if previous not in (request["source_release"], request["release"]):
         raise QueueConflictError("another runtime owns the service binding")
-    if (
-        previous == request["release"]
-        and owner(request)["value"]["ownership"] == "live"
-    ):
+    if previous == request["release"]:
+        if read(admin / "service.json") != request:
+            raise QueueConflictError("service binding changed during replacement")
+        started = start(request)
         return {
             "outcome": "unchanged",
-            "native_owner": owner(request),
             "release": previous,
+            **started,
         }
     if owner(request)["value"]["ownership"] == "live":
         raise QueueConflictError("service must stop before replacement")

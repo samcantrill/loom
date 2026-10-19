@@ -551,7 +551,9 @@ def test_native_cpu_storage_and_dropped_response_exact_continuation(fleet, monke
         result["checks"][k]["assignment"]["value"]["assignment_id"]
         for k in ("cpu", "storage")
     ]
+    verified_downloads = len(downloaded)
     resumed = finish(inventory, result["operation_id"])
+    assert len(downloaded) == verified_downloads
     assert [
         resumed["checks"][k]["assignment"]["value"]["assignment_id"]
         for k in ("cpu", "storage")

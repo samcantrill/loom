@@ -231,6 +231,9 @@ def test_workload_upgrade_native_promotion_history_versioned_selection_and_repla
     retained_failure = failed_path.read_bytes()
     original_source.write_bytes(original_bytes)
     assert upgrades.upgrade(inventory, operation_id="workload-window")["outcome"] == "blocked"
+    if not defer_checks:
+        from tests.integration.fleet.test_runtime_upgrade import retry_other_failed_checks
+        retry_other_failed_checks(inventory, "workload-window", keep=failed)
     if defer_checks:
         result = upgrades.upgrade(inventory, operation_id="workload-window", action="defer-checks",
                                   defer_agents=["worker"], defer_reason="Operator defers worker checks")

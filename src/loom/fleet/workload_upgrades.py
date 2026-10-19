@@ -299,6 +299,8 @@ class WorkloadUpgrade(maintenance._Upgrade):
         )
 
     def probes(self):
+        # Retain preparation once after intent binding, before closing admission.
+        # Staging/promotion still revalidates mutable inputs at activation.
         for name, row in self.intent["hosts"].items():
             observed = sshops.ssh(
                 row["host"],
@@ -315,13 +317,6 @@ class WorkloadUpgrade(maintenance._Upgrade):
                 name == "coordinator" or name in self.intent["candidates"]
             ) and SOURCE_PROMOTION_CAPABILITY not in native["value"].get("capabilities", ()):
                 raise QueueConflictError("running source inventory promotion capability unavailable")
-            if name == "coordinator" and self.intent.get("coordinator_target") is not None:
-                target = self.host_observe(
-                    name, "workload-coordinator-probe",
-                    declaration=self.intent["target_declarations"][name],
-                )
-                if target != self.intent["coordinator_target"]:
-                    raise QueueConflictError("coordinator workload target qualification changed")
             if name in self.intent["candidates"]:
                 if native["value"]["ownership"] != "live" or CAPABILITY not in native[
                     "value"
@@ -329,19 +324,29 @@ class WorkloadUpgrade(maintenance._Upgrade):
                     raise QueueConflictError(
                         "running workload source promotion capability unavailable"
                     )
+            prepared = self.directory / (name + "-candidate.json")
+            if prepared.exists():
+                if read(prepared).get("intent_digest") != digest(self.intent):
+                    raise QueueConflictError("workload qualification intent changed")
+                continue
+            if name == "coordinator" and self.intent.get("coordinator_target") is not None:
+                target = self.host_observe(
+                    name, "workload-coordinator-probe",
+                    declaration=self.intent["target_declarations"][name],
+                )
+                if target != self.intent["coordinator_target"]:
+                    raise QueueConflictError("coordinator workload target qualification changed")
+            elif name in self.intent["candidates"]:
                 candidate = self.host_observe(
-                    name,
-                    "workload-probe",
+                    name, "workload-probe",
                     workload_profile=self.intent["workload_profile"],
-                    image=self.intent["image"],
-                    image_sha256=self.intent["image_sha256"],
+                    image=self.intent["image"], image_sha256=self.intent["image_sha256"],
                     **({"candidate_declaration": self.intent["target_declarations"][name]}
                        if self.intent.get("workload_inventory") is not None else {}),
                 )
                 if candidate["target"] != self.intent["candidates"][name]["target"]:
-                    raise QueueConflictError(
-                        "immutable workload target qualification changed"
-                    )
+                    raise QueueConflictError("immutable workload target qualification changed")
+            atomic(prepared, {"intent_digest": digest(self.intent)})
 
     def recover_host(self, name):
         """Authorize a communication stop only while our promotion is current."""

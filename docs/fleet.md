@@ -306,6 +306,18 @@ require their explicit lifecycle paths. The completed setup result reports
 This describes configured boot-start wiring; it is not evidence of physical
 boot or reboot qualification.
 
+Service startup retains one launch attempt under the host operation. Its first
+observation waits up to twenty seconds; a process still starting returns
+`waiting` with `service_starting`, without publishing a completed host receipt.
+Continuing the same operation observes that launch rather than starting another.
+The three-minute readiness deadline is retained against the Linux boot and
+monotonic clock, so restarting the operator does not extend it. Tmux binds the
+session marker and process start identity; systemd binds the unit invocation and
+native process identity. A failed launch, changed owner/boot or expired readiness
+deadline blocks with an explicit reason. Inspect the protected service log and
+native ownership before recovery; continuation never silently replaces a failed
+launch. Systemd's configured service restart policy remains its own responsibility.
+
 Setup requires an immutable offline service bundle and an explicit native
 `loom.deployment` selection for the synthetic probe source/profile. For a fresh
 coordinator, use its native automatic-creation selection with the inventory's
@@ -573,6 +585,29 @@ The successor atomically requires that failed control as its predecessor; an
 independent policy edit refuses it. Repeat the exact retry command after a lost
 reply, or use ordinary operation resume once the successor is retained. No role
 restart, runtime retargeting or work cancellation is performed by this command.
+
+Upgrade qualification dispatches all eligible host/check attempts before observing
+their results, using at most three independent controller workers. Native resource
+claims still determine execution concurrency. Pending checks do not prevent other
+eligible hosts from progressing, and failed attempts still require explicit retry.
+Exact check-retry replay recognizes the retained successor after completion even
+when ordinary admission has already reopened.
+
+Candidate qualification is retained against the upgrade intent. Waiting
+continuations inspect current roots, owners, capabilities and declarations without
+repeating full preparation. Runtime replacement and workload activation still
+verify their mutable inputs. Successful self-tests retain verified artifact
+contents for the exact publication; current assignment/agent and release evidence
+is reobserved. A new publication or attempt requires fresh verification, including
+the complete 65 MiB storage payload.
+
+Best-effort action diagnostics append to `timings.jsonl` in the native fleet
+operation directory. Records identify an invocation, action, host when known,
+UTC start, monotonic duration and outcome. They expose qualification, startup,
+RPC and artifact-transfer costs without changing the existing progress schema.
+They do not authorize transitions or replace operation receipts. Parallel/nested
+spans overlap; their sum is not deployment wall time, and a missing diagnostic
+record does not prove that no work occurred.
 
 `operation abort` restores only controls still owned by that operation, using
 native atomic expected-predecessor guards. An independent applied control
