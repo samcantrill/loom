@@ -641,8 +641,20 @@ Output retention appends separate `native_timing` workspace events, transported 
 the existing event stream. Repeating output retention preserves the exact terminal
 report and worker-result bytes. Assignment observations expose the worker spans and
 up to 256 retained publication timing events, with explicit limit evidence. These
-events measure output retention; they do not establish the duration of subsequent
-network transfer or authority acknowledgement.
+events include output retention, output declaration/transfer and terminal
+acknowledgement. The remote assignment owner measures the actual cooperative work
+and flushes its timing events after commit, before provider release. Shared outputs
+need no payload upload; their declaration still crosses the transfer boundary.
+Durations include network/cooperative waits on the agent clock and do not represent
+CPU busy time. Diagnostic write failure does not change the native result.
+
+Maintenance mutation receipts retain coordinator UTC `applied_at` on first
+application. Exact replay and coordinator restart preserve that timestamp, allowing
+a release report to join matching close/open controls without using driver process
+uptime. Old receipts can lack it; consumers must leave that interval unavailable.
+Native upgrade results also expose concise current `check_observations` and the
+current `reason_code`. A release driver can associate its measured backoff with
+those reasons without claiming the native state persisted throughout the interval.
 
 Coordinator action resolution emits best-effort deferred `stage.reuse_timing`
 events for contract loading, lookup, artifact verification, authority reads/binding

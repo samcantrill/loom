@@ -797,6 +797,7 @@ def _prepare_attempt(operation, name, check, identity, previous=None):
 
 def _run_checks(operation):
     phase(operation, "checking")
+    operation.check_observations = {}
     attempts = _attempts(operation)
     active = []
     deferred = _deferred_checks(operation).get("agents", ())
@@ -823,7 +824,7 @@ def _run_checks(operation):
         return
     deadline = time.monotonic() + operation.intent["timeout_seconds"]
 
-    def advance(identity, *, dispatch):
+    def advance(identity, *, dispatch) -> dict[str, Any]:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return {"outcome": "waiting", "code": "deadline_exceeded"}
@@ -855,6 +856,14 @@ def _run_checks(operation):
                 errors.append(exc)
                 continue
             atomic(operation.directory / (identity + "-result.json"), result)
+            operation.check_observations[identity] = {
+                "outcome": result["outcome"],
+                "checks": {
+                    name: {key: row.get(key) for key in ("operation_id", "outcome", "code")}
+                    for name, row in result.get("checks", {}).items()
+                    if row["outcome"] != "not_requested"
+                },
+            }
             if result["outcome"] in {"failed", "unsupported"}:
                 failures.append((identity, result["outcome"]))
             elif result["outcome"] != "passed":
@@ -1225,6 +1234,7 @@ def _upgrade(
             operation = _Upgrade(inventory, directory, intent, observation)
         observation.end_preparation()
         phase(operation, "recovering")
+        result: dict[str, Any]
         try:
             if defer_agents is not None:
                 _bind_deferred_checks(operation, defer_agents, defer_reason)
@@ -1281,6 +1291,8 @@ def _upgrade(
         finally:
             operation.close()
         result.update(_qualification_result(operation))
+        result["check_observations"] = getattr(operation, "check_observations", {})
+        result["reason_code"] = observation.reason
         atomic(directory / "result.json", result)
         return sshops.operation_status(inventory, operation_id)
 

@@ -2288,13 +2288,16 @@ class _ResidentAssignmentWorkspace:
         finally:
             # Keep per-invocation duration outside the deterministic terminal
             # report. The existing event stream transports it on exact replay.
-            try:
-                self.append_event(
-                    f"{self.assignment_id}:timing:{uuid4().hex}",
-                    {"kind": "native_timing", **timings.payload()},
-                )
-            except Exception:
-                pass  # Missing diagnostics cannot change publication's outcome.
+            self.record_timing(timings.payload())
+
+    def record_timing(self, payload: Mapping[str, PlainData]) -> None:
+        try:
+            self.append_event(
+                f"{self.assignment_id}:timing:{uuid4().hex}",
+                {"kind": "native_timing", **payload},
+            )
+        except Exception:
+            pass  # Missing diagnostics cannot change publication's outcome.
 
     def failed_preparation_retention_report(
         self, error: _PreparationReportRetentionError

@@ -307,6 +307,7 @@ def mutate(
             "control": value,
             "gate": state,
             "mutation_outcome": "applied",
+            "applied_at": daemon._clock(),
         }
         conn.execute(
             "UPDATE daemon_metadata SET value = ? WHERE key = ?",

@@ -133,12 +133,15 @@ def test_exact_replay_conflict_and_cancellation_while_closed(owner):
     )
 
 
-def test_gate_owner_revision_and_exact_mutation_survive_restart(owner):
+def test_gate_owner_revision_and_exact_mutation_survive_restart(owner, monkeypatch):
     view = operator(owner)
+    monkeypatch.setattr(owner, "_clock", lambda: "2026-10-19T00:00:00Z")
     request = control(owner, "close")
     receipt = view.maintenance(
         request, expected_coordinator_id=owner.status().coordinator_id
     )
+    assert receipt["applied_at"] == "2026-10-19T00:00:00Z"
+    monkeypatch.setattr(owner, "_clock", lambda: "2026-10-19T00:03:00Z")
     assert (
         view.maintenance(request, expected_coordinator_id=owner.status().coordinator_id)
         == receipt
@@ -156,7 +159,8 @@ def test_gate_owner_revision_and_exact_mutation_survive_restart(owner):
         change(owner, "open", owner="other")
     with pytest.raises(QueueConflictError):
         change(owner, "open", revision=0)
-    change(owner, "open")
+    opened = change(owner, "open")
+    assert opened["applied_at"] == "2026-10-19T00:03:00Z"
 
 
 @pytest.mark.parametrize("winner", ("accept", "close"))

@@ -177,7 +177,15 @@ def test_upgrade_dispatches_every_slot_before_waiting_or_download(tmp_path, monk
             return {"outcome": "waiting"}
         assert len(dispatched) == 9
         observed.add(operation_id)
-        return {"outcome": "waiting" if prepared[operation_id] == ("first", "gpu") else "passed"}
+        pending = prepared[operation_id] == ("first", "gpu")
+        return {
+            "outcome": "waiting" if pending else "passed",
+            "checks": {prepared[operation_id][1]: {
+                "operation_id": operation_id + "-native",
+                "outcome": "waiting" if pending else "passed",
+                "code": "waiting_for_capacity" if pending else None,
+            }},
+        }
 
     monkeypatch.setattr(upgrades, "_prepare_attempt", prepare)
     monkeypatch.setattr(upgrades, "self_test", check)
@@ -187,6 +195,9 @@ def test_upgrade_dispatches_every_slot_before_waiting_or_download(tmp_path, monk
     assert len(read(tmp_path / "checks.json")) == 9
     results = [read(path) for path in tmp_path.glob("check-*-result.json")]
     assert sum(row["outcome"] == "passed" for row in results) == 8
+    assert len(operation.check_observations) == 9
+    pending = [row for row in operation.check_observations.values() if row["outcome"] == "waiting"]
+    assert pending[0]["checks"]["gpu"]["code"] == "waiting_for_capacity"
 
 
 def test_upgrade_finishes_other_observations_after_one_check_error(tmp_path, monkeypatch):
