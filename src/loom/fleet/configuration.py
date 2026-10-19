@@ -31,6 +31,15 @@ class Inventory:
     service_manager: str
     hosts: tuple[Host, ...]
 
+    def environment_files(self, override: Path | None = None) -> dict[str, Path | None]:
+        """Select each role's environment, refusing a conflicting global override.
+
+        This performs no role loading, host qualification or remote observation.
+        Inventory-bound files retain precedence; an explicit override must match
+        every bound file. Unbound roles use the override, or no environment file.
+        """
+        return _environment_files(self, override)
+
     def select(self, names: list[str] | None) -> tuple[Host, ...]:
         if names is None:
             return self.hosts

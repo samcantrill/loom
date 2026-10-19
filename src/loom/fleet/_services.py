@@ -11,7 +11,6 @@ from pathlib import Path
 import stat
 import subprocess
 import sys
-import time
 
 from loom.queue.errors import QueueConflictError
 
@@ -190,6 +189,7 @@ def readiness(request):
 
 def start(request):
     from loom.fleet._host import atomic, keep, owner, role
+    from loom.fleet._startup import Startup
 
     prerequisites()
     readiness(request)
@@ -208,36 +208,46 @@ def start(request):
         if owner(request)["value"]["ownership"] == "live":
             raise QueueConflictError("native service already has a different owner")
         atomic(binding, request)
+    attempt = Startup(request)
     kinds = ["supervisor", "agent"] if role(request) == "agent" else ["coordinator"]
     units = admin / "units"
-    for kind in kinds:
-        # Unit definitions contain protected role paths, never secret values.
-        keep(units / unit_name(request, kind), render(request, kind).encode())
-    systemctl("daemon-reload")
-    systemctl("enable", *[str(units / unit_name(request, kind)) for kind in kinds])
-    systemctl("start", *[unit_name(request, kind) for kind in kinds])
-    deadline = time.monotonic() + 30
-    while True:
+    if not attempt.record["dispatched"] and owner(request)["value"]["ownership"] != "live":
+        for kind in kinds:
+            # Unit definitions contain protected role paths, never secret values.
+            keep(units / unit_name(request, kind), render(request, kind).encode())
+        systemctl("daemon-reload")
+        systemctl("enable", *[str(units / unit_name(request, kind)) for kind in kinds])
+        attempt.dispatch()
+        systemctl("start", "--no-block", *[unit_name(request, kind) for kind in kinds])
+
+    def probe():
         observed = owner(request)
-        pid = systemctl(
-            "show", unit_name(request, role(request)), "--property=MainPID", "--value"
-        )
-        if (
-            observed["value"]["ownership"] == "live"
-            and str(observed["value"]["expected_process"]) == pid
-        ):
-            break
-        if time.monotonic() >= deadline:
-            raise QueueConflictError(
-                "native systemd service readiness remains unproven"
-            )
-        time.sleep(0.1)
+        status = startup_status(request)
+        if status["InvocationID"]:
+            attempt.bind_backend({"unit": unit_name(request, role(request)),
+                                  "invocation": status["InvocationID"]})
+        if status["ActiveState"] in {"failed", "inactive"} and status["Job"].split()[0] == "0":
+            raise QueueConflictError("service_start_failed: systemd launch ended before readiness")
+        return observed, int(status["MainPID"])
+
+    observed = attempt.observe(probe)
     return {
         "native_owner": observed,
         "service_manager": "systemd-user",
         "boot_start": True,
         "units": [unit_name(request, kind) for kind in kinds],
     }
+
+
+def startup_status(request):
+    from loom.fleet._host import role
+    fields = {"ActiveState", "MainPID", "InvocationID", "Job"}
+    raw = systemctl("show", unit_name(request, role(request)),
+                    "--property=" + ",".join(sorted(fields)))
+    result = dict(line.split("=", 1) for line in raw.splitlines() if "=" in line)
+    if set(result) != fields or not result["MainPID"].isdigit() or not result["Job"]:
+        raise QueueConflictError("systemd startup observations unavailable")
+    return result
 
 
 if __name__ == "__main__":

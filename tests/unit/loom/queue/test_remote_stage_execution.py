@@ -540,6 +540,7 @@ def test_launch_is_unreachable_until_inputs_and_grant_are_durable(
 def test_workspace_joins_actual_launch_controls_without_rewriting_worker_bytes(
     tmp_path: Path,
     status: StageStatus,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     profile = _profile(tmp_path)
     request = _request(profile)
@@ -627,6 +628,16 @@ def test_workspace_joins_actual_launch_controls_without_rewriting_worker_bytes(
     workspace.persist_worker_result(result)
     assert workspace.retain_outputs().to_dict() == report.to_dict()
     assert result_path.read_bytes() == original_bytes
+    timings = [payload for _, _, payload in workspace.pending_events() if payload.get("kind") == "native_timing"]
+    assert len(timings) == 2
+    assert all(item["spans"][0]["action"] == "output_retention" for item in timings)
+    assert all(item["spans"][0]["elapsed_nanoseconds"] >= 0 for item in timings)
+
+    def unavailable_diagnostics(*args):
+        raise OSError("diagnostics unavailable")
+
+    monkeypatch.setattr(workspace, "append_event", unavailable_diagnostics)
+    assert workspace.retain_outputs().to_dict() == report.to_dict()
 
 
 def test_input_replay_and_event_sequence_are_durable_and_exact(tmp_path: Path) -> None:

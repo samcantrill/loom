@@ -43,9 +43,56 @@ def finish(inventory, identity, **kwargs):
     result = upgrades.upgrade(inventory, operation_id=identity, **kwargs)
     while result["outcome"] == "waiting" and time.monotonic() < deadline:
         time.sleep(0.25)
-        result = upgrades.upgrade(inventory, operation_id=identity)
+        # A retry awaiting settlement has not yet bound its successor. Replay
+        # that exact request until accepted; ordinary resume cannot invent it.
+        replay = kwargs if kwargs.get("action") == "retry-check" else {}
+        result = upgrades.upgrade(inventory, operation_id=identity, **replay)
     assert result["outcome"] == "complete", json.dumps(result)
     return result
+
+
+def retry_other_failed_checks(inventory, operation_id, *, keep):
+    """A malformed recipe now fails every dispatched slot, not only the first."""
+    from tests.integration.fleet.test_self_tests import finish as finish_check
+
+    root = inventory.path.parent
+    attempts = read(root / "operations" / operation_id / "checks.json")
+    for slot, history in attempts.items():
+        failed = history[-1]["operation_id"]
+        if failed == keep:
+            continue
+        # Nonblocking upgrade observation may report one failed slot while
+        # another admitted preparation is still running.
+        result = finish_check(inventory, failed)
+        if result["outcome"] != "failed":
+            continue
+        successor = failed + "-explicit-retry"
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            upgrades.upgrade(inventory, operation_id=operation_id, action="retry-check",
+                             failed_check=failed, new_check=successor)
+            current = read(root / "operations" / operation_id / "checks.json")
+            if current[slot][-1]["operation_id"] == successor:
+                break
+            time.sleep(0.05)
+        assert current[slot][-1]["operation_id"] == successor
+        assert finish_check(inventory, successor)["outcome"] == "passed"
+
+
+def settle_failed_checks(inventory, operation_id):
+    from tests.integration.fleet.test_self_tests import finish as finish_check
+
+    directory = inventory.path.parent / "operations" / operation_id
+    for rows in read(directory / "checks.json").values():
+        assert finish_check(inventory, rows[-1]["operation_id"])["outcome"] == "failed"
+    connection = read(directory / "intent.json")["check_selection"]["operator_connection"]
+    with CoordinatorOperatorClient.from_connection_file(connection) as operator:
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            if operator.observe_maintenance()["settled"]:
+                return
+            time.sleep(0.05)
+    pytest.fail("failed native checks did not release their claims")
 
 
 
@@ -135,6 +182,20 @@ def test_runtime_upgrade_abort_interruption_resume_and_native_checks(
     assert preview["outcome"] == "preview"
     assert preview["gate"]["state"] == "open"
     assert preview["source"]["owner"] == setup["identities"]["coordinator"]
+    # Invalid preparation refuses while the old services and admission remain usable.
+    original_source.write_text("pipeline: [invalid")
+    incompatible = upgrades.upgrade(
+        inventory, operation_id="incompatible-preflight", apply=True, **options
+    )
+    assert incompatible["outcome"] == "blocked", incompatible
+    assert "candidate preparation is incompatible" in incompatible["reason"]
+    directory = upgrades.sshops._directory(inventory, "incompatible-preflight")
+    assert not (directory / "steps/close/intent.json").exists()
+    assert not (directory / "irreversible.json").exists()
+    with CoordinatorOperatorClient.from_connection_file(setup["operator_connection"]) as operator:
+        assert operator.observe_maintenance()["state"] == "open"
+    original_source.write_bytes(source_bytes)
+    assert upgrades.upgrade(inventory, operation_id="incompatible-preflight", action="abort")["outcome"] == "aborted"
     # A lost controller before closure retains candidate evidence but no native gate.
     probes = upgrades._Upgrade.probes
 
@@ -158,6 +219,8 @@ def test_runtime_upgrade_abort_interruption_resume_and_native_checks(
     def interrupt(self, key, request, invoke):
         result = native(self, key, request, invoke)
         if key == "close" and not dropped:
+            if self.intent["operation_id"] == "upgrade-window":
+                original_source.write_text("pipeline: [invalid")
             dropped.append(request["operation_id"])
             raise upgrades.sshops.SshUnavailable("lost accepted close reply")
         return result
@@ -178,7 +241,6 @@ def test_runtime_upgrade_abort_interruption_resume_and_native_checks(
     ) as operator:
         assert operator.observe_maintenance()["state"] == "open"
     dropped.clear()
-    original_source.write_text("pipeline: [invalid")
     host_calls = upgrades.sshops.ssh
     migrations = []
 
@@ -223,6 +285,7 @@ def test_runtime_upgrade_abort_interruption_resume_and_native_checks(
         result["outcome"] == "blocked"
         and "explicit operation retry-check" in result["reason"]
     ), result
+    settle_failed_checks(inventory, "upgrade-window")
     attempts = read(inventory.path.parent / "operations/upgrade-window/checks.json")
     failed = attempts["worker:cpu"][-1]["operation_id"]
     retained_failure = read(inventory.path.parent / "checks" / failed / "result.json")
@@ -253,6 +316,7 @@ def test_runtime_upgrade_abort_interruption_resume_and_native_checks(
     original_source.write_bytes(source_bytes)
     repeated_failure = upgrades.upgrade(inventory, operation_id="upgrade-window")
     assert repeated_failure["outcome"] == "blocked"
+    retry_other_failed_checks(inventory, "upgrade-window", keep=failed)
     submit = CoordinatorClient.start_run
     submitted = []
 
@@ -293,7 +357,9 @@ def test_runtime_upgrade_abort_interruption_resume_and_native_checks(
             failed_check=failed,
             new_check="replacement-check",
         )
-    assert replacement["outcome"] == "waiting", replacement
+    # Dispatch and observation are separate passes. The lost submission reply
+    # can already be reconciled by observation in this same continuation.
+    assert replacement["outcome"] in {"waiting", "complete"}, replacement
     assert (
         read(inventory.path.parent / "operations/upgrade-window/checks.json")[
             "worker:cpu"
@@ -309,6 +375,15 @@ def test_runtime_upgrade_abort_interruption_resume_and_native_checks(
     )
     assert duplicate["outcome"] == "blocked" and "successor" in duplicate["reason"]
     result = finish(inventory, "upgrade-window")
+    replayed_retry = upgrades.upgrade(
+        inventory,
+        operation_id="upgrade-window",
+        action="retry-check",
+        failed_check=failed,
+        new_check="replacement-check",
+    )
+    assert replayed_retry["outcome"] == "complete"
+    assert replayed_retry["checks"] == result["checks"]
     assert checked_irreversible
     assert len(migrations) == 1 and submitted == ["replacement-check"]
     assert (
@@ -887,7 +962,7 @@ def test_runtime_recovery_publishes_original_result_and_finishes_downstream(
             ).fetchone() == (1,)
 
 
-def test_runtime_upgrade_repairs_stale_check_profile_without_changing_intent(
+def test_stale_check_profile_refuses_before_maintenance_without_changing_intent(
     site, tmp_path,  # noqa: F811
 ):
     from copy import deepcopy
@@ -925,37 +1000,15 @@ def test_runtime_upgrade_repairs_stale_check_profile_without_changing_intent(
     stale_bytes = stale.read_bytes()
     assert not (directory / "checks.json").exists()
     with CoordinatorOperatorClient.from_connection_file(setup["operator_connection"]) as operator:
-        gate = operator.observe_maintenance()
-        assert gate["state"] == "closed"
-    for name, candidate in (
-        ("source", replace(current, source=replace(current.source, path="different"))),
-        ("profile", replace(current, preparation_profile="missing")),
-    ):
-        path = tmp_path / (name + ".json")
-        export_connection_deployment(candidate, path)
-        refused = upgrades.upgrade(inventory, operation_id=identity,
-                                   action="repair-check-selection", deployment=path)
-        assert refused["outcome"] == "blocked", refused
-        assert not (directory / "check-selection-repair.json").exists()
-    result = finish(inventory, identity, action="repair-check-selection",
-                    deployment=Path(setup["deployment"]))
+        assert operator.observe_maintenance()["state"] == "open"
+    assert not (directory / "irreversible.json").exists()
+    assert not (directory / "steps/close/intent.json").exists()
     assert (directory / "intent.json").read_bytes() == original_intent
     assert stale.read_bytes() == stale_bytes
-    assert result["deployment"] == setup["deployment"]
-    checks = read(directory / "checks.json")
-    assert checks and all(rows[-1]["target_intent_digest"] == gate["intent_digest"]
-                          for rows in checks.values())
-    assert upgrades.upgrade(inventory, operation_id=identity,
-                            action="repair-check-selection", deployment=Path(setup["deployment"]))["outcome"] == "complete"
-    refused = upgrades.upgrade(inventory, operation_id=identity,
-                               action="repair-check-selection", deployment=stale)
-    assert refused["outcome"] == "blocked" and "repair changed" in refused["reason"]
-    with CoordinatorOperatorClient.from_connection_file(setup["operator_connection"]) as operator:
-        assert operator.observe_maintenance()["state"] == "open"
-        assert not operator.observe_agent("worker").value["drained"]
+    assert upgrades.upgrade(inventory, operation_id=identity, action="abort")["outcome"] == "aborted"
 
 
-def test_runtime_upgrade_repairs_profile_after_settled_failed_check(site, tmp_path):  # noqa: F811
+def test_runtime_upgrade_repairs_profile_after_settled_failed_check(site, tmp_path, monkeypatch):  # noqa: F811
     from copy import deepcopy
     from dataclasses import replace
     from loom.deployment import load_deployment, export_connection_deployment
@@ -973,7 +1026,15 @@ def test_runtime_upgrade_repairs_profile_after_settled_failed_check(site, tmp_pa
     assert setup['outcome'] == 'complete', setup
     source = tmp_path/'projects/pipeline.yaml'
     original_source = source.read_bytes()
-    source.write_text('pipeline: [invalid')
+    native = upgrades._Upgrade.native
+
+    def corrupt_after_preflight(operation, key, request, invoke):
+        result = native(operation, key, request, invoke)
+        if key == "close":
+            source.write_text("pipeline: [invalid")
+        return result
+
+    monkeypatch.setattr(upgrades._Upgrade, "native", corrupt_after_preflight)
     identity = 'repair-failed-profile'
     result = upgrades.upgrade(inventory, operation_id=identity, apply=True,
         runtime_release=target_bundle(inventory, tmp_path), deployment=Path(setup['deployment']),
@@ -983,6 +1044,7 @@ def test_runtime_upgrade_repairs_profile_after_settled_failed_check(site, tmp_pa
         time.sleep(.25)
         result=upgrades.upgrade(inventory, operation_id=identity)
     assert result['outcome']=='blocked' and 'retry-check' in result['reason'], result
+    settle_failed_checks(inventory, identity)
     directory=upgrades.sshops._directory(inventory, identity)
     intent=(directory/'intent.json').read_bytes()
     failed=read(directory/'checks.json')['worker:cpu'][-1]['operation_id']
@@ -992,6 +1054,16 @@ def test_runtime_upgrade_repairs_profile_after_settled_failed_check(site, tmp_pa
     selected_bytes=selected.read_bytes()
     source.write_bytes(original_source)
     deployment=load_deployment(setup['deployment'])
+    for name, invalid in (
+        ("source", replace(deployment, source=replace(deployment.source, path="different"))),
+        ("profile", replace(deployment, preparation_profile="missing")),
+    ):
+        path = tmp_path / (name + ".json")
+        export_connection_deployment(invalid, path)
+        refused = upgrades.upgrade(inventory, operation_id=identity,
+                                   action="repair-check-selection", deployment=path)
+        assert refused["outcome"] == "blocked", refused
+        assert not (directory / "check-selection-repair.json").exists()
     candidate=tmp_path/'infrastructure-checks.json'
     export_connection_deployment(replace(deployment, preparation_profile='infrastructure'), candidate)
     result=upgrades.upgrade(inventory, operation_id=identity, action='repair-check-selection', deployment=candidate)
@@ -1002,7 +1074,12 @@ def test_runtime_upgrade_repairs_profile_after_settled_failed_check(site, tmp_pa
     assert (directory/'intent.json').read_bytes()==intent
     # Repair alone does not turn the failed check into a pass or authorize a new one.
     assert len(read(directory/'checks.json')['worker:cpu'])==1
-    result=finish(inventory, identity, action='retry-check', failed_check=failed, new_check='correct-profile-check')
+    storage_failed = read(directory / 'checks.json')['worker:storage'][-1]['operation_id']
+    result = upgrades.upgrade(inventory, operation_id=identity, action='retry-check',
+                              failed_check=failed, new_check='correct-profile-check')
+    assert result['outcome'] == 'blocked' and storage_failed in result['reason'], result
+    result=finish(inventory, identity, action='retry-check',
+                  failed_check=storage_failed, new_check='correct-storage-check')
     assert result['outcome']=='complete', result
     rows=read(directory/'checks.json')['worker:cpu']
     assert [row['operation_id'] for row in rows]==[failed,'correct-profile-check']

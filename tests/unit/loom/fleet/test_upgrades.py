@@ -49,8 +49,9 @@ def test_upgrade_gpu_qualification_includes_native_inventory(
     def prepare(operation, name, check, identity):
         return {"operation_id": identity, "authorization": {"check": check}}
 
-    def self_test(inventory, *, operation_id, timeout_seconds):
-        observed.append(operation_id)
+    def self_test(inventory, *, operation_id, timeout_seconds, _dispatch_only, _wait):
+        if not _dispatch_only:
+            observed.append(operation_id)
         return {"outcome": "passed"}
 
     monkeypatch.setattr(upgrades, "_prepare_attempt", prepare)
@@ -65,7 +66,7 @@ def test_upgrade_gpu_qualification_includes_native_inventory(
     # Continuation retains each check identity instead of preparing replacements.
     monkeypatch.setattr(upgrades, "_prepare_attempt", lambda *a: pytest.fail("duplicate check"))
     upgrades._run_checks(operation)
-    assert observed[len(expected):] == observed[:len(expected)]
+    assert sorted(observed[len(expected):]) == sorted(observed[:len(expected)])
 
 
 def test_explicit_deferred_host_retains_checks_and_native_settlement(tmp_path, monkeypatch):
@@ -98,8 +99,8 @@ def test_explicit_deferred_host_retains_checks_and_native_settlement(tmp_path, m
     monkeypatch.setattr(upgrades, "_prepare_attempt", lambda operation, name, check, identity: {
         "operation_id": identity, "authorization": {"check": check},
     })
-    monkeypatch.setattr(upgrades, "self_test", lambda inventory, *, operation_id, timeout_seconds: (
-        observed.append(operation_id) or {"outcome": "passed"}
+    monkeypatch.setattr(upgrades, "self_test", lambda inventory, *, operation_id, timeout_seconds, _dispatch_only, _wait: (
+        (None if _dispatch_only else observed.append(operation_id)) or {"outcome": "passed"}
     ))
     # Deferral does not cancel the retained check or waive its effects settling.
     with pytest.raises(upgrades._Waiting, match="retained check work"):

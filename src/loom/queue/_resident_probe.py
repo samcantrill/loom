@@ -19,6 +19,7 @@ from ._process_group import OwnedProcessGroup, require_group_wait_support
 
 if TYPE_CHECKING:
     from ._agent_process_supervisor import ResidentWorkerLaunchProfile
+    from .preparation import PreparationChildInput
 
 
 _MAX_OUTPUT_BYTES = 64 * 1024
@@ -42,13 +43,15 @@ def run_resident_probe(
     timeout_seconds: float,
     device_environment: Mapping[str, str] | None = None,
     runtime: Mapping[str, PlainData] | None = None,
+    preparation: PreparationChildInput | None = None,
 ) -> ResidentProbeResult:
     """Run a fixed Python probe in the worker environment and contain its tree.
 
     The caller owns the meaning of its fixed script and mapping payload.  This
     helper owns only bounded process IO and descendant containment. An owned
     resource probe supplies its acquired resource intent through ``runtime``;
-    software-readiness callers leave it absent.
+    software-readiness callers leave it absent. Preparation probes select the
+    same captured input and read-only shared namespace as preparation workers.
     """
     if not isinstance(script, str) or not script:
         raise ValueError("resident probe script is invalid")
@@ -73,7 +76,7 @@ def run_resident_probe(
 
     if profile.container is not None:
         return _container_probe(
-            profile, script, request, float(timeout_seconds), device_environment, runtime
+            profile, script, request, float(timeout_seconds), device_environment, runtime, preparation
         )
 
     try:
@@ -254,7 +257,7 @@ def _drain_and_contain(
     )
 
 
-def _container_probe(profile, script, request, timeout_seconds, device_environment, runtime):
+def _container_probe(profile, script, request, timeout_seconds, device_environment, runtime, preparation):
     """Use the same daemon evidence owner for installed-environment probes.
 
     Unknown Docker effects retain scratch and evidence for operator recovery; they
@@ -287,6 +290,9 @@ def _container_probe(profile, script, request, timeout_seconds, device_environme
             workspace=workspace,
             environment=environment,
             runtime=runtime,
+            shared_scope=None if preparation is None else preparation.shared_scope,
+            shared_snapshot=None if preparation is None else preparation.input_receipt,
+            preparation_only=preparation is not None,
             worker=(
                 str(binding["python_executable"]),
                 "-c",

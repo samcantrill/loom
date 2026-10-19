@@ -2,7 +2,9 @@
 
 import copy
 import hashlib
+import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -63,24 +65,38 @@ def test_candidate_keeps_old_source_and_uses_native_target_qualification(
     monkeypatch.setattr(host, "payload", lambda _: original)
     monkeypatch.setattr(host, "owner", lambda _: {"owner": "original-root"})
     observed = []
+    qualified_source = SimpleNamespace(
+        immutable_fingerprint="source", active_fingerprint="source",
+        client=SimpleNamespace(resident_profiles=[SimpleNamespace(descriptor=SimpleNamespace(
+            to_dict=lambda: original["resident_profiles"][0]["descriptor"],
+        ))]),
+    )
 
-    def qualify(request, declaration, *, check_promotion=False):
+    def load(path, **kwargs):
+        observed.append((json.loads(Path(path).read_text()), False))
+        return qualified_source
+
+    def qualify(request, declaration, *, check_promotion=False, original=None):
+        assert original is qualified_source
         observed.append((declaration, check_promotion))
         return {"observed": len(observed)}
 
+    monkeypatch.setattr(host, "load_outbound_agent_service_config", load)
     monkeypatch.setattr(host, "qualify", qualify)
     candidate = copy.deepcopy(original)
     candidate["project_root"] = source_path
     result = host.probe(
         {
             "name": "agent",
+            "config": str(tmp_path / "agent.json"),
             "workload_profile": "selected",
             "image": str(image),
             "image_sha256": sha,
             **({"candidate_declaration": candidate} if source_path else {}),
         }
     )
-    assert result["source"] == {"observed": 1}
+    assert result["source"] == {"immutable": "source", "active": "source",
+                                "profile": original["resident_profiles"][0]["descriptor"]}
     assert result["target"] == {"observed": 2}
     assert observed[0] == (original, False)
     assert observed[1] == (result["declaration"], True)
@@ -133,7 +149,10 @@ def test_stopped_host_recovers_native_intent_then_starts_exact_retained_service(
     )
     monkeypatch.setattr(_host, "start", lambda value: calls.append(("start", value)))
     result = host.recover_service(request)
-    assert calls == [("recover", "native-config"), ("start", retained)]
+    assert calls == [("recover", "native-config"), ("start", {
+        **retained, "startup_id": "workload-promotion",
+        "expected_declaration": _host.digest({"current": "native-published"}),
+    })]
     assert result["declaration"] == {"current": "native-published"}
     retained["release"] = {"descriptor_sha256": "other"}
     with pytest.raises(QueueConflictError, match="retained service binding differs"):

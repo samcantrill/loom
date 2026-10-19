@@ -17,6 +17,24 @@ import sys
 import tempfile
 
 LIMIT = 128 * 1024 * 1024
+HOST_TIMINGS = []
+
+
+class ServiceStarting(ValueError):
+    """The host retained a launch whose native readiness is still pending."""
+
+
+def host_result(result):
+    reply = json.loads(result.stdout)
+    if isinstance(reply, dict):
+        HOST_TIMINGS.extend(reply.pop("_fleet_timings", []))
+    if result.returncode:
+        if reply.get("host_error", {}).get("code") == "ServiceStarting":
+            raise ServiceStarting(reply["host_error"]["reason"])
+        raise ValueError(reply.get("host_error", {}).get(
+            "reason", "native host command failed; inspect protected host evidence"
+        ))
+    return reply
 
 
 def private(path):
@@ -244,24 +262,19 @@ def main():
         input=json.dumps(request).encode(),
         capture_output=True,
     )
-    reply = json.loads(result.stdout)
-    if result.returncode:
-        raise ValueError(
-            reply.get("host_error", {}).get(
-                "reason", "native host command failed; inspect protected host evidence"
-            )
-        )
-    return reply
+    return host_result(result)
 
 
 if __name__ == "__main__":
     try:
-        print(json.dumps({"ok": True, "result": main()}, sort_keys=True))
+        result = main()
+        print(json.dumps({"ok": True, "result": result, "timings": HOST_TIMINGS}, sort_keys=True))
     except Exception as exc:
         print(
             json.dumps(
                 {
                     "ok": False,
+                    "timings": HOST_TIMINGS,
                     "code": type(exc).__name__,
                     "reason": str(exc)
                     if isinstance(exc, ValueError)

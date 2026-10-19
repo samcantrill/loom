@@ -366,8 +366,9 @@ def test_busy_gpu_deadline_preserves_cpu_storage_progress(tmp_path, monkeypatch)
     observed = []
     monkeypatch.setattr(checks_module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
 
-    def observe(client, operator, path, retained_intent, check, deadline):
+    def observe(client, operator, path, retained_intent, check, deadline, *, wait):
         assert deadline == 110.0
+        assert wait is True
         assert retained_intent["requests"] == requests
         observed.append(check)
         if check == "gpu":
@@ -415,6 +416,7 @@ def test_storage_deadline_does_not_prevent_gpu_dispatch(tmp_path, monkeypatch):
         current[0] = identity.rsplit("-", 1)[-1]
         return SimpleNamespace(
             operation=None,
+            detail=None,
             admission=SimpleNamespace(
                 state=SimpleNamespace(value="SUCCEEDED"),
                 admission_id="admission-" + current[0],
@@ -547,11 +549,20 @@ def test_native_cpu_storage_and_dropped_response_exact_continuation(fleet, monke
         assert assignment["released"] is True
         assert assignment["release_proof"]["claim_id"] == assignment["claim_id"]
         assert assignment["actual_claims"]["actual_gpu_uuids"] == []
+        timings = assignment["native_timings"]
+        actions = {span["action"] for span in timings["worker"]["spans"]}
+        assert {"input_materialization", "preparation_materialization", "worker_execution"} <= actions
+        assert timings["publication"]
+        publication = [span for event in timings["publication"] for span in event["spans"]]
+        assert {"output_retention", "output_transfer", "terminal_acknowledgement"} <= {span["action"] for span in publication}
+        assert all(span["elapsed_nanoseconds"] >= 0 for span in publication)
     before = [
         result["checks"][k]["assignment"]["value"]["assignment_id"]
         for k in ("cpu", "storage")
     ]
+    verified_downloads = len(downloaded)
     resumed = finish(inventory, result["operation_id"])
+    assert len(downloaded) == verified_downloads
     assert [
         resumed["checks"][k]["assignment"]["value"]["assignment_id"]
         for k in ("cpu", "storage")

@@ -376,6 +376,14 @@ def _assignment_observation(
             "SELECT agent_id, session_id, claim_id, state FROM coordinator_assignments WHERE assignment_id = ?",
             (assignment_id,),
         ).fetchone()
+        timing_events = [
+            json.loads(event[0])
+            for event in conn.execute(
+                "SELECT payload_json FROM coordinator_events WHERE assignment_id = ? "
+                "AND event_id LIKE ? ORDER BY sequence DESC LIMIT 256",
+                (assignment_id, assignment_id + ":timing:%"),
+            )
+        ]
     if row is None:
         raise QueueServiceError("managed assignment was not found")
     with daemon._connection() as conn:
@@ -427,6 +435,11 @@ def _assignment_observation(
             "actual_claims": ({"availability": "available", **claim} if claim is not None else {
                 "availability": "unavailable", "reason": "agent_local_evidence_required",
             }),
+            "native_timings": {
+                "worker": None if report is None else (report.get("executor_metadata") or {}).get("native_timings"),
+                "publication": list(reversed(timing_events)),
+                "publication_limit_reached": len(timing_events) == 256,
+            },
         },
     )
 

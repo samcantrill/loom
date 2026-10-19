@@ -11,7 +11,6 @@ import shlex
 import subprocess
 import sys
 import tempfile
-import time
 from typing import Any, cast
 
 from loom.queue.deployment import _load_protected_config, _protected_input_path
@@ -19,6 +18,8 @@ from loom.queue.errors import QueueConflictError
 from loom.queue.operations import inspect_native_service
 from loom.fleet.configuration import protected_directory
 from loom.fleet import _credentials as credentials
+from loom.fleet._timing import recording, timed
+from loom.fleet._startup import ServiceStarting, Startup
 from loom.fleet._ssh_bootstrap import local, publish
 
 
@@ -343,6 +344,7 @@ def initialize(request, repeated):
     return initialized_observation(request)
 
 
+@timed("service_start")
 def start(request):
     manager = request.get("service_manager", "tmux")
     binding = Path(request["admin"]) / "service.json"
@@ -357,6 +359,7 @@ def start(request):
     expected = request["expected_root_id"]
     if fact["owner"] != expected:
         raise QueueConflictError("native root identity changed")
+    attempt = Startup(request)
     admin = Path(request["admin"])
     if not binding.exists():
         atomic(binding, request)
@@ -366,15 +369,20 @@ def start(request):
         raise QueueConflictError("native host-local path is too long for tmux IPC")
     argv = ["tmux", "-f", "/dev/null", "-S", str(socket)]
     session = "loom"
-    pane = subprocess.run(
-        [*argv, "list-panes", "-t", session, "-F", "#{@loom_root}"],
-        capture_output=True,
-        text=True,
-    )
-    if pane.returncode == 0:
-        if pane.stdout.strip() != expected:
+    def pane_identity():
+        pane = subprocess.run(
+            [*argv, "list-panes", "-t", session, "-F", "#{@loom_root}\t#{@loom_start}\t#{pane_pid}"],
+            capture_output=True, text=True,
+        )
+        if pane.returncode:
+            return None
+        fields = pane.stdout.rstrip("\n").split("\t")
+        if len(fields) != 3 or fields[0] != expected or not fields[2].isdigit():
             raise QueueConflictError("existing tmux owner differs")
-    else:
+        return fields[1], int(fields[2])
+
+    pane = pane_identity()
+    if pane is None:
         if fact["value"]["ownership"] == "live":
             raise QueueConflictError("native service already has a different owner")
         native_lock = native_root(request) / "owner.lock"
@@ -402,6 +410,7 @@ def start(request):
             + shlex.quote(str(admin / "service.log"))
             + " 2>&1"
         )
+        attempt.dispatch()
         subprocess.run(
             [
                 *argv,
@@ -416,21 +425,27 @@ def start(request):
                 session,
                 "@loom_root",
                 expected,
+                ";", "set-option", "-t", session, "@loom_start", attempt.token,
             ],
             capture_output=True,
             check=True,
         )
-    deadline = time.monotonic() + 20
-    while time.monotonic() < deadline:
+    def probe():
         fact = owner(request)
-        if fact["value"]["ownership"] == "live":
-            return {
-                "native_owner": fact,
-                "service_manager": "tmux",
-                "boot_start": False,
-            }
-        time.sleep(0.1)
-    raise QueueConflictError("native service start remains unproven")
+        pane = pane_identity()
+        if pane is None:
+            raise QueueConflictError("service_start_failed: retained tmux launch exited")
+        token, pid = pane
+        if token != attempt.token and (
+            fact["value"]["ownership"] != "live"
+            or fact["value"]["expected_process"] != pid
+        ):
+            raise QueueConflictError("existing tmux startup owner differs")
+        attempt.bind_backend({"socket": str(socket), "session": session, "token": token})
+        return fact, pid
+
+    fact = attempt.observe(probe)
+    return {"native_owner": fact, "service_manager": "tmux", "boot_start": False}
 
 
 def coordinator_client(request):
@@ -712,6 +727,7 @@ def main():
     if request["action"] not in {
         "receipt", "prepare", "issue", "receive", "initialize", "start", "enroll", "bind",
         "observe", "resources", "upgrade-probe", "upgrade-settlement", "upgrade-result-recovery", "upgrade-stop",
+        "upgrade-check-capture", "upgrade-check-prepare",
         "upgrade-replace", "workload-probe", "workload-coordinator-probe", "workload-recover",
         "workload-stage", "workload-publish",
     }:
@@ -778,19 +794,24 @@ def main():
 
 
 if __name__ == "__main__":
-    try:
-        print(json.dumps(main(), sort_keys=True))
-    except Exception as exc:
-        print(
-            json.dumps(
-                {
-                    "host_error": {
-                        "code": type(exc).__name__,
-                        "reason": str(exc)
-                        if isinstance(exc, QueueConflictError)
-                        else "native host step failed",
+    with recording() as trace:
+        try:
+            result = main()
+            if isinstance(result, dict):
+                result = {**result, "_fleet_timings": trace.records}
+            print(json.dumps(result, sort_keys=True))
+        except Exception as exc:
+            print(
+                json.dumps(
+                    {
+                        "_fleet_timings": trace.records,
+                        "host_error": {
+                            "code": type(exc).__name__,
+                            "reason": str(exc)
+                            if isinstance(exc, (QueueConflictError, ServiceStarting))
+                            else "native host step failed",
+                        }
                     }
-                }
+                )
             )
-        )
-        sys.exit(1)
+            sys.exit(1)
