@@ -43,7 +43,10 @@ def finish(inventory, identity, **kwargs):
     result = upgrades.upgrade(inventory, operation_id=identity, **kwargs)
     while result["outcome"] == "waiting" and time.monotonic() < deadline:
         time.sleep(0.25)
-        result = upgrades.upgrade(inventory, operation_id=identity)
+        # A retry awaiting settlement has not yet bound its successor. Replay
+        # that exact request until accepted; ordinary resume cannot invent it.
+        replay = kwargs if kwargs.get("action") == "retry-check" else {}
+        result = upgrades.upgrade(inventory, operation_id=identity, **replay)
     assert result["outcome"] == "complete", json.dumps(result)
     return result
 
@@ -58,7 +61,9 @@ def retry_other_failed_checks(inventory, operation_id, *, keep):
         failed = history[-1]["operation_id"]
         if failed == keep:
             continue
-        result = read(root / "checks" / failed / "result.json")
+        # Nonblocking upgrade observation may report one failed slot while
+        # another admitted preparation is still running.
+        result = finish_check(inventory, failed)
         if result["outcome"] != "failed":
             continue
         successor = failed + "-explicit-retry"
@@ -72,6 +77,22 @@ def retry_other_failed_checks(inventory, operation_id, *, keep):
             time.sleep(0.05)
         assert current[slot][-1]["operation_id"] == successor
         assert finish_check(inventory, successor)["outcome"] == "passed"
+
+
+def settle_failed_checks(inventory, operation_id):
+    from tests.integration.fleet.test_self_tests import finish as finish_check
+
+    directory = inventory.path.parent / "operations" / operation_id
+    for rows in read(directory / "checks.json").values():
+        assert finish_check(inventory, rows[-1]["operation_id"])["outcome"] == "failed"
+    connection = read(directory / "intent.json")["check_selection"]["operator_connection"]
+    with CoordinatorOperatorClient.from_connection_file(connection) as operator:
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            if operator.observe_maintenance()["settled"]:
+                return
+            time.sleep(0.05)
+    pytest.fail("failed native checks did not release their claims")
 
 
 
@@ -264,6 +285,7 @@ def test_runtime_upgrade_abort_interruption_resume_and_native_checks(
         result["outcome"] == "blocked"
         and "explicit operation retry-check" in result["reason"]
     ), result
+    settle_failed_checks(inventory, "upgrade-window")
     attempts = read(inventory.path.parent / "operations/upgrade-window/checks.json")
     failed = attempts["worker:cpu"][-1]["operation_id"]
     retained_failure = read(inventory.path.parent / "checks" / failed / "result.json")
@@ -1022,6 +1044,7 @@ def test_runtime_upgrade_repairs_profile_after_settled_failed_check(site, tmp_pa
         time.sleep(.25)
         result=upgrades.upgrade(inventory, operation_id=identity)
     assert result['outcome']=='blocked' and 'retry-check' in result['reason'], result
+    settle_failed_checks(inventory, identity)
     directory=upgrades.sshops._directory(inventory, identity)
     intent=(directory/'intent.json').read_bytes()
     failed=read(directory/'checks.json')['worker:cpu'][-1]['operation_id']

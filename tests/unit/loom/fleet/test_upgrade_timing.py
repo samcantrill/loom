@@ -2,10 +2,12 @@
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 import json
+from types import SimpleNamespace
 
 import pytest
 
 from loom.fleet import _timing
+from loom.fleet import ssh_operations
 
 
 def test_diagnostics_append_across_continuations_and_retain_outcomes(tmp_path, monkeypatch):
@@ -65,3 +67,27 @@ def test_worker_contexts_join_one_trace_and_remote_records_are_bounded(tmp_path)
     assert len(rows) == 10
     assert len({r["invocation"] for r in rows}) == 1
     assert rows[-1]["host"] == "worker"
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_rpc_keeps_aggregate_and_classifies_host_action_without_payload(monkeypatch, failed):
+    def transport(*args, **kwargs):
+        if failed:
+            raise OSError("transport unavailable")
+        return SimpleNamespace(returncode=0, stdout=b'{"ok": true, "result": {}}')
+
+    monkeypatch.setattr(ssh_operations.subprocess, "run", transport)
+    with _timing.recording() as trace:
+        for host, action in (("host-a", "workload-probe"), ("host-b", "inspect")):
+            request = {"action": action, "private_key": "never-record-this"}
+            if failed:
+                with pytest.raises(ssh_operations.SshUnavailable):
+                    ssh_operations.ssh(host, request)
+            else:
+                assert ssh_operations.ssh(host, request) == {}
+    assert [(r["host"], r["action"]) for r in trace.records] == [
+        ("host-a", "rpc_workload-probe"), ("host-a", "host_rpc"),
+        ("host-b", "rpc_inspect"), ("host-b", "host_rpc"),
+    ]
+    assert {r["outcome"] for r in trace.records} == {"error" if failed else "complete"}
+    assert "never-record-this" not in json.dumps(trace.records)

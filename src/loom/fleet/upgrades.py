@@ -439,33 +439,44 @@ class _Upgrade(sshops._Operation):
         )
 
     def probes(self):
+        requests, retained = {}, {}
         for name, row in self.intent["hosts"].items():
             path = self.directory / (name + "-candidate.json")
-            old = read(path) if path.exists() else None
-            if old is not None:
-                # Stop/replacement still verifies candidate bytes at its mutable
-                # boundary. A retained qualification does not prove live ownership.
-                observed = sshops.ssh(
-                    row["host"],
-                    {**row, "action": "inspect", "release": self.intent["release"]},
+            retained[name] = path.exists()
+            request = {**row, "release": self.intent["release"]}
+            if retained[name]:
+                request["action"] = "inspect"
+            else:
+                request.update(
+                    action="upgrade-probe",
+                    expected_declaration=digest(self.intent["declarations"][name]),
+                    required_capabilities=list(REQUIRED_CAPABILITIES),
+                    descriptor_name=Path(self.intent["target_path"]).name,
+                    images=None,
                 )
-                native = observed["native_owner"]
-                if observed["installed"] not in (row["source_release"], self.intent["release"]):
-                    raise QueueConflictError("runtime service release changed")
-                if native is None or native["owner"] != row["expected_root_id"]:
-                    raise QueueConflictError("upgrade native root identity changed")
-                if native["value"]["ownership"] != "live":
-                    raise _Waiting("native service readiness: " + name)
-                continue
-            observed = self.host_observe(
-                name,
-                "upgrade-probe",
-                required_capabilities=list(REQUIRED_CAPABILITIES),
-                descriptor_name=Path(self.intent["target_path"]).name,
-                images=None if old is None else old["images"],
-            )
-            if old is None:
-                atomic(path, observed)
+            requests[name] = (row["host"], request)
+        errors = []
+        for name, observed in sshops._ssh_many(requests).items():
+            try:
+                if isinstance(observed, Exception):
+                    raise observed
+                if retained[name]:
+                    row = self.intent["hosts"][name]
+                    # Activation still verifies bytes; retained qualification
+                    # never proves current service ownership.
+                    native = observed["native_owner"]
+                    if observed["installed"] not in (row["source_release"], self.intent["release"]):
+                        raise QueueConflictError("runtime service release changed")
+                    if native is None or native["owner"] != row["expected_root_id"]:
+                        raise QueueConflictError("upgrade native root identity changed")
+                    if native["value"]["ownership"] != "live":
+                        raise _Waiting("native service readiness: " + name)
+                else:
+                    atomic(self.directory / (name + "-candidate.json"), observed)
+            except Exception as exc:
+                errors.append(exc)
+        if errors:
+            raise errors[0]
 
     def settled(self):
         phase(self, "settling")
@@ -678,6 +689,7 @@ def _preflight_checks(operation):
     deployment = load_deployment(selection["deployment"])
     declarations = operation.intent.get("target_declarations", operation.intent["declarations"])
     deferred = _deferred_checks(operation).get("agents", ())
+    preparations = []
     for name in operation.intent["agents"]:
         if name in deferred:
             continue
@@ -696,11 +708,12 @@ def _preflight_checks(operation):
             expected_root_id=operation.intent["hosts"]["coordinator"]["expected_root_id"],
             candidate_declaration=declarations["coordinator"], checks=requests,
         )
-        operation.call(
-            name, "upgrade-check-prepare", agent_id=name,
-            expected_root_id=operation.intent["hosts"][name]["expected_root_id"],
-            candidate_declaration=declarations[name], bindings=captured["bindings"],
-        )
+        preparations.append((name, "upgrade-check-prepare", {
+            "agent_id": name,
+            "expected_root_id": operation.intent["hosts"][name]["expected_root_id"],
+            "candidate_declaration": declarations[name], "bindings": captured["bindings"],
+        }))
+    operation.call_many(preparations)
 
 
 def _prepare_attempt(operation, name, check, identity, previous=None):
@@ -830,7 +843,7 @@ def _run_checks(operation):
             return {"outcome": "waiting", "code": "deadline_exceeded"}
         return self_test(
             operation.inventory, operation_id=identity,
-            timeout_seconds=remaining, _dispatch_only=dispatch,
+            timeout_seconds=remaining, _dispatch_only=dispatch, _wait=False,
         )
 
     # Each self-test owns a distinct receipt lock and its own clients. Only this
@@ -943,16 +956,16 @@ def _continue(operation):
     if not irreversible.exists():
         phase(operation, "preparing")
         _capable(operation.operator)
-        for name, row in operation.intent["hosts"].items():
-            sshops.ssh(
-                row["host"],
-                {
-                    **row,
-                    "action": "install-candidate",
-                    "release": operation.intent["release"],
-                    **sshops._bundle(operation.inventory),
-                },
-            )
+        installed = sshops._ssh_many({
+            name: (row["host"], {
+                **row, "action": "install-candidate",
+                "release": operation.intent["release"],
+                **sshops._bundle(operation.inventory),
+            }) for name, row in operation.intent["hosts"].items()
+        })
+        for response in installed.values():
+            if isinstance(response, Exception):
+                raise response
         operation.probes()
         _preflight_checks(operation)
         operation.maintenance("close", "close")
@@ -1165,6 +1178,7 @@ def _upgrade(
         except BlockingIOError as exc:
             raise QueueConflictError("operation already has an active writer") from exc
         path = directory / "intent.json"
+        prepared_plan = None
         if not path.exists():
             plan = preview(
                 inventory,
@@ -1203,6 +1217,7 @@ def _upgrade(
                 from .workload_upgrades import bind_intent
                 intent = bind_intent(intent, plan, directory)
             atomic(path, intent)
+            prepared_plan = plan
         intent = read(path)
         if intent.get("kind") not in {"runtime-upgrade", "workload-upgrade"}:
             raise QueueConflictError("operation belongs to another kind")
@@ -1230,6 +1245,7 @@ def _upgrade(
         if intent["kind"] == "workload-upgrade":
             from .workload_upgrades import WorkloadUpgrade
             operation = WorkloadUpgrade(inventory, directory, intent, observation)
+            operation._preview_qualification = prepared_plan
         else:
             operation = _Upgrade(inventory, directory, intent, observation)
         observation.end_preparation()

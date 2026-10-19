@@ -1,5 +1,6 @@
 """Waiting cost, independent progress and immutable activation boundaries."""
 import hashlib
+from copy import deepcopy
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -123,6 +124,46 @@ def test_workload_preparation_is_retained_only_after_success(tmp_path, monkeypat
     assert len(calls) == 2
 
 
+@pytest.mark.parametrize("changed", [None, "image", "root", "declaration", "binding"])
+def test_apply_reuses_only_exact_current_preview_qualification(tmp_path, monkeypatch, changed):
+    operation = object.__new__(workload_upgrades.WorkloadUpgrade)
+    operation.directory = tmp_path
+    image = tmp_path / "image.sif"
+    image.write_bytes(b"qualified")
+    release = {"release_id": "current"}
+    operation.intent = {
+        "release": release, "candidates": {"agent": {"target": {}}},
+        "workload_profile": "profile", "image": str(image),
+        "image_sha256": hashlib.sha256(image.read_bytes()).hexdigest(),
+        "hosts": {"agent": {"host": "host", "source_release": release,
+                             "expected_root_id": "root"}},
+    }
+    operation._preview_qualification = deepcopy(operation.intent)
+    observed = {"installed": release, "native_owner": {
+        "owner": "root", "value": {"ownership": "live", "capabilities": [workload_upgrades.CAPABILITY]}}}
+    def recheck():
+        if changed == "declaration":
+            raise upgrades.QueueConflictError("composed role changed")
+    operation.recheck = recheck
+    qualifications = []
+    operation.host_observe = lambda *a, **k: qualifications.append(a) or {"target": {}}
+    monkeypatch.setattr(upgrades.sshops, "ssh", lambda *a: observed)
+    if changed == "image":
+        image.write_bytes(b"replaced")
+    elif changed == "root":
+        observed["native_owner"]["owner"] = "other-root"
+    elif changed == "binding":
+        operation._preview_qualification["workload_profile"] = "another-profile"
+    if changed in {"image", "root", "declaration"}:
+        with pytest.raises(upgrades.QueueConflictError):
+            operation.probes()
+        assert not (tmp_path / "agent-candidate.json").exists()
+    else:
+        operation.probes()
+        assert read(tmp_path / "agent-candidate.json") == {"intent_digest": digest(operation.intent)}
+        assert len(qualifications) == (1 if changed == "binding" else 0)
+
+
 def test_probe_qualifies_source_once_and_reuses_it_for_promotion(tmp_path, monkeypatch):
     from loom.queue import _profile_promotion
 
@@ -171,7 +212,8 @@ def test_upgrade_dispatches_every_slot_before_waiting_or_download(tmp_path, monk
         prepared[identity] = (name, kind)
         return {"operation_id": identity, "authorization": {}}
 
-    def check(inventory, *, operation_id, timeout_seconds, _dispatch_only):
+    def check(inventory, *, operation_id, timeout_seconds, _dispatch_only, _wait):
+        assert _wait is False
         if _dispatch_only:
             dispatched.add(operation_id)
             return {"outcome": "waiting"}
@@ -212,7 +254,7 @@ def test_upgrade_finishes_other_observations_after_one_check_error(tmp_path, mon
     def prepare(op, name, kind, identity):
         identities[kind] = identity
         return {"operation_id": identity, "authorization": {}}
-    def check(inventory, *, operation_id, timeout_seconds, _dispatch_only):
+    def check(inventory, *, operation_id, timeout_seconds, _dispatch_only, _wait):
         if not _dispatch_only and operation_id == identities["cpu"]:
             raise OSError("temporary observation failure")
         return {"outcome": "passed"}

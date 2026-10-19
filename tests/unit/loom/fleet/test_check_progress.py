@@ -57,3 +57,24 @@ def test_blocked_native_admission_is_not_reported_as_capacity_wait(tmp_path, mon
     result = self_tests._observe_check(client, None, tmp_path, {"requests": {"cpu": {}}}, "cpu", self_tests.time.monotonic() + 10)
     assert result["outcome"] == "failed" and result["code"] == "native_check_failed"
     assert result["native"]["admission"]["blocked_reason"] == "stage_failed"
+
+
+@pytest.mark.parametrize("wait", [False, True])
+def test_upgrade_observation_is_bounded_while_standalone_waits(tmp_path, monkeypatch, wait):
+    monkeypatch.setattr(self_tests.RunRequest, "from_dict", lambda _: SimpleNamespace(
+        preparation=SimpleNamespace(operation_id="check-id")))
+    calls = []
+    def observe(identity, **kwargs):
+        calls.append((identity, kwargs))
+        return observation(preparing=True)
+    client = SimpleNamespace(observe_run=observe)
+    for _ in range(2):
+        result = self_tests._observe_check(
+            client, None, tmp_path, {"requests": {"cpu": {}}}, "cpu",
+            self_tests.time.monotonic() + 120, **({} if wait else {"wait": False}),
+        )
+        assert result["outcome"] == "waiting"
+    assert [identity for identity, _ in calls] == ["check-id", "check-id"]
+    assert all(options["wait"] is wait for _, options in calls)
+    assert all(100 < options["timeout_seconds"] <= 120 if wait
+               else 0 < options["timeout_seconds"] <= 10 for _, options in calls)

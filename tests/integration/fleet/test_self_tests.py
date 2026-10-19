@@ -366,8 +366,9 @@ def test_busy_gpu_deadline_preserves_cpu_storage_progress(tmp_path, monkeypatch)
     observed = []
     monkeypatch.setattr(checks_module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
 
-    def observe(client, operator, path, retained_intent, check, deadline):
+    def observe(client, operator, path, retained_intent, check, deadline, *, wait):
         assert deadline == 110.0
+        assert wait is True
         assert retained_intent["requests"] == requests
         observed.append(check)
         if check == "gpu":
@@ -415,6 +416,7 @@ def test_storage_deadline_does_not_prevent_gpu_dispatch(tmp_path, monkeypatch):
         current[0] = identity.rsplit("-", 1)[-1]
         return SimpleNamespace(
             operation=None,
+            detail=None,
             admission=SimpleNamespace(
                 state=SimpleNamespace(value="SUCCEEDED"),
                 admission_id="admission-" + current[0],

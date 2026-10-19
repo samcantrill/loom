@@ -438,9 +438,10 @@ def site(tmp_path, bundle, endpoint, request):
 
         def live(pid):
             path = Path(f"/proc/{pid}/stat")
-            return (
-                path.exists() and path.read_text().rsplit(")", 1)[1].split()[0] != "Z"
-            )
+            try:
+                return path.read_text().rsplit(")", 1)[1].split()[0] != "Z"
+            except (FileNotFoundError, ProcessLookupError):
+                return False
 
         while any(live(pid) for pid in pids) and time.monotonic() < deadline:
             time.sleep(0.05)

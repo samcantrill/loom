@@ -253,7 +253,9 @@ def test_workload_upgrade_native_promotion_history_versioned_selection_and_repla
         assert result["qualification"] == {
             "state": "partial", "deferred_agents": ["worker"], "reason": "Operator defers worker checks"
         }
-        assert "worker:storage" not in result["checks"]
+        # Dispatch precedes observation: deferral preserves the already-issued
+        # storage attempt instead of erasing its failed native history.
+        assert result["checks"]["worker:storage"] == attempts["worker:storage"]
     else:
         assert "qualification" not in result
     assert lost

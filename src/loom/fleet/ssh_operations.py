@@ -7,6 +7,8 @@ own identities. A lost transport reply is waiting, never proof of refusal.
 from __future__ import annotations
 
 import base64
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 import fcntl
 import hashlib
 import json
@@ -32,7 +34,7 @@ from loom.queue.deployment import (
 from loom.queue.errors import QueueConfigError, QueueConflictError
 from loom.coordinator import CoordinatorClientError
 from loom.fleet._host import atomic, read, digest
-from loom.fleet._timing import ingest, timed
+from loom.fleet._timing import ingest, measure
 
 
 class SshUnavailable(Exception):
@@ -44,9 +46,15 @@ class SshStarting(SshUnavailable):
     fleet_pending = True
 
 
-@timed("host_rpc")
 def ssh(host, request):
     """Send a bounded structured request using the user's existing SSH policy."""
+    # The classified span is nested in the aggregate; never add their durations.
+    with measure("host_rpc", host=host):
+        with measure("rpc_" + request.get("action", "unknown"), host=host):
+            return _ssh(host, request)
+
+
+def _ssh(host, request):
     if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", host) is None:
         raise QueueConfigError("select a plain configured SSH alias, never SSH options")
     program = Path(__file__).with_name("_ssh_bootstrap.py").read_text()
@@ -87,6 +95,24 @@ def ssh(host, request):
         raise SshUnavailable(
             "SSH returned an invalid receipt; retain this operation"
         ) from exc
+
+
+def _ssh_many(requests):
+    """Dispatch independent transports; their caller alone publishes receipts."""
+    if not requests:
+        return {}
+    results = {}
+    with ThreadPoolExecutor(max_workers=min(3, len(requests))) as workers:
+        pending = {
+            key: workers.submit(copy_context().run, ssh, host, request)
+            for key, (host, request) in requests.items()
+        }
+        for key, future in pending.items():
+            try:
+                results[key] = future.result()
+            except Exception as exc:
+                results[key] = exc
+    return results
 
 
 def _file_hash(path):
@@ -404,7 +430,7 @@ class _Operation:
         if verify_release(self.inventory.runtime_release) != self.intent["release"]:
             raise QueueConflictError("immutable service bundle changed")
 
-    def call(self, name, action, **values):
+    def _prepare_call(self, name, action, **values):
         self.recheck_composed()
         key = (
             name
@@ -454,7 +480,7 @@ class _Operation:
         if receipt.exists():
             response = read(receipt)
             self.accept_update(name, response, directory)
-            return response
+            return directory, request, response
         pending_inputs = {}
         if (directory / "dispatch.json").exists() and action != "install":
             response = ssh(row["host"], {**request, "action": "receipt"})
@@ -469,27 +495,58 @@ class _Operation:
             elif response is not None:
                 atomic(receipt, response)
                 self.accept_update(name, response, directory)
-                return response
+                return directory, request, response
         self.recheck(pending_inputs)
         atomic(
             directory / "dispatch.json",
             {"request_id": request["request_id"], "outcome": "unknown"},
         )
-        try:
-            response = ssh(row["host"], request)
-        except (SshUnavailable, QueueConflictError) as exc:
-            atomic(
-                directory / "dispatch.json",
-                {
-                    "request_id": request["request_id"],
-                    "outcome": "unknown",
-                    "reason": str(exc),
-                },
-            )
-            raise
-        atomic(receipt, response)
+        return directory, request, None
+
+    def _finish_call(self, name, directory, request, response):
+        if isinstance(response, Exception):
+            atomic(directory / "dispatch.json", {
+                "request_id": request["request_id"], "outcome": "unknown",
+                "reason": str(response),
+            })
+            raise response
+        atomic(directory / "receipt.json", response)
         self.accept_update(name, response, directory)
         return response
+
+    def call(self, name, action, **values):
+        directory, request, retained = self._prepare_call(name, action, **values)
+        if retained is not None:
+            return retained
+        try:
+            response = ssh(self.intent["hosts"][name]["host"], request)
+        except (SshUnavailable, QueueConflictError) as exc:
+            response = exc
+        return self._finish_call(name, directory, request, response)
+
+    def call_many(self, calls):
+        """Retain all independent host intents before bounded transport dispatch."""
+        prepared, results = {}, {}
+        for name, action, values in calls:
+            directory, request, retained = self._prepare_call(name, action, **values)
+            if retained is not None:
+                results[name] = retained
+            else:
+                prepared[name] = (directory, request)
+        responses = _ssh_many({
+            name: (self.intent["hosts"][name]["host"], request)
+            for name, (_, request) in prepared.items()
+        })
+        errors = []
+        for name, response in responses.items():
+            directory, request = prepared[name]
+            try:
+                results[name] = self._finish_call(name, directory, request, response)
+            except Exception as exc:
+                errors.append(exc)
+        if errors:
+            raise errors[0]
+        return results
 
     def accept_update(self, name, response, directory):
         self.recheck_composed()

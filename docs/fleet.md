@@ -605,6 +605,20 @@ eligible hosts from progressing, and failed attempts still require explicit retr
 Exact check-retry replay recognizes the retained successor after completion even
 when ordinary admission has already reopened.
 
+Upgrade continuations observe checks without waiting for each run to finish;
+each observation has a bounded transport budget. Standalone self-tests retain
+their waiting behavior. A failed check can therefore be reported while another
+already-dispatched check is still running. Retry and repair still require native
+settlement, and explicit deferral preserves every dispatched attempt's history.
+
+Independent candidate installations, qualification probes and check preparation
+requests use a pool of at most three host transports. All requests are retained
+before dispatch, and the controller alone publishes their receipts. Workload
+staging completes across eligible agents before ordered native promotion
+submissions; a pending acknowledgement on one host does not suppress later
+submissions. Coordinator publication and revision-sensitive controls keep their
+ordering. Lost replies resume the same retained requests.
+
 Candidate qualification is retained against the upgrade intent. Waiting
 continuations inspect current roots, owners, capabilities and declarations without
 repeating full preparation. Runtime replacement and workload activation still
@@ -612,6 +626,11 @@ verify their mutable inputs. Successful self-tests retain verified artifact
 contents for the exact publication; current assignment/agent and release evidence
 is reobserved. A new publication or attempt requires fresh verification, including
 the complete 65 MiB storage payload.
+
+An apply invocation can retain its own preview qualification only when the
+bound intent matches its host, root, declaration, runtime, profile and image
+inputs. Current ownership, composed inputs and activation checks remain required.
+An external preview followed by a later apply does not carry this transient proof.
 
 Pending check results reuse native run explanations and retain their owner facts.
 `waiting_for_capacity` requires current scheduling evidence; preparation, running
@@ -629,6 +648,10 @@ RPC and artifact-transfer costs without changing the existing progress schema.
 They do not authorize transitions or replace operation receipts. Parallel/nested
 spans overlap; their sum is not deployment wall time, and a missing diagnostic
 record does not prove that no work occurred.
+
+Operator RPC spans identify both host and native action (`rpc_<action>`). The
+classified span is nested inside `host_rpc`; it must not be added to the aggregate
+as extra elapsed time. Request bodies and credentials are not recorded.
 
 Resident workers retain bounded `native_timings` in executor metadata before the
 first immutable worker-result write. Input/preparation materialization and worker

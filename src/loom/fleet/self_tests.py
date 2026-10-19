@@ -247,12 +247,18 @@ def _observe_check(
     intent: Mapping[str, Any],
     check: str,
     deadline: float,
+    *,
+    wait: bool = True,
 ) -> dict[str, Any]:
     request = RunRequest.from_dict(intent["requests"][check])
     identity = request.preparation.operation_id
     try:
         observed = client.observe_run(
-            identity, timeout_seconds=max(0.001, deadline - time.monotonic())
+            identity,
+            wait=wait,
+            timeout_seconds=max(
+                0.001, min(deadline - time.monotonic(), 10.0 if not wait else float("inf"))
+            ),
         )
     except CoordinatorClientError as exc:
         if exc.code == "not_found":
@@ -368,6 +374,7 @@ def self_test(
     _prepare_id: str | None = None,
     _maintenance_binding: Mapping[str, Any] | None = None,
     _dispatch_only: bool = False,
+    _wait: bool = True,
 ) -> dict[str, Any]:
     """Run selected checks or reconnect to one protected immutable check intent.
 
@@ -551,7 +558,8 @@ def self_test(
                         _waiting("deadline_exceeded")
                         if time.monotonic() >= deadline
                         else _observe_check(
-                            client, operator, directory, intent, check, deadline
+                            client, operator, directory, intent, check, deadline,
+                            wait=_wait,
                         )
                     )
                 except CoordinatorClientError as exc:
