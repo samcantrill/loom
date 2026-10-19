@@ -434,6 +434,52 @@ def test_native_operator_authorization_gate_guards_and_wire_replay(owner, tmp_pa
         )
 
 
+def test_another_agent_promotion_requires_global_control_settlement(tmp_path):
+    import os
+    from loom.queue import LocalDaemon, LocalDaemonConfig
+    from loom.queue.local_daemon import LocalDaemonPrincipal, LocalDaemonRole
+    from loom.queue.agent_sessions import AgentControlEffect, AgentPolicyConfig, LocalOwnerOperatorPolicy
+    from tests.integration.queue.test_agent_session_transport import _policy, _request
+
+    policies = tuple(replace(_policy().agents[0], agent_id=name,
+                             principal_id=name, credential_id=name) for name in ("agent-a", "agent-b"))
+    policy = AgentPolicyConfig(agents=policies, local_owner=LocalOwnerOperatorPolicy(
+        ("maintenance", "drain"), ("agent-a", "agent-b"), ("default",)))
+    selected = LocalDaemonConfig(tmp_path / "coordinator", None, tmp_path / "runs", None,
+                                 cpu_capacity=0, agent_policy=policy)
+    LocalDaemon.initialize(selected)
+    daemon = LocalDaemon(selected)
+    daemon.start()
+    try:
+        operator = daemon.operator_view(LocalDaemonPrincipal(f"uid:{os.getuid()}", LocalDaemonRole.OPERATOR))
+        operator.maintenance({"operation_id": "close", "maintenance_id": "upgrade",
+                              "maintenance_intent_digest": "target", "action": "close",
+                              "expected_revision": 0, "check": None},
+                             expected_coordinator_id=daemon.status().coordinator_id)
+        controls = []
+        for name in ("agent-a", "agent-b"):
+            agent = daemon.agent_view(LocalDaemonPrincipal(name, LocalDaemonRole.AGENT, name))
+            session = agent.register(replace(_request(agent.handshake(), name + "-root"),
+                                             idempotency_key="register-" + name,
+                                             retirement_verifier="a" * 64))
+            control = replace(request(config(tmp_path), config(tmp_path, 2), name + "-root",
+                                      identity="promote-" + name, session=session.session_id,
+                                      revision=session.config_revision), agent_id=name)
+            drain = replace(control, operation_id="drain-" + name,
+                            kind=AgentControlKind.DRAIN, promotion=None)
+            operator.control_agent(drain)
+            agent.next_control(session.session_id)
+            agent.acknowledge_control(session.session_id, AgentControlEffect(
+                drain.operation_id, "applied", session.config_revision, session.inventory_revision, "drained"))
+            controls.append(control)
+        accepted = operator.control_agent(controls[0])
+        with pytest.raises(QueueConflictError, match="native settlement"):
+            operator.control_agent(controls[1])
+        assert operator.control_agent(controls[0]) == accepted
+    finally:
+        daemon.stop()
+
+
 def test_external_supervisor_rejoins_only_after_native_promotion(tmp_path):
     from loom.queue._agent_process_supervisor import (
         AgentProcessSupervisorService,

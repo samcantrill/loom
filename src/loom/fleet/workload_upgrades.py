@@ -402,7 +402,7 @@ class WorkloadUpgrade(maintenance._Upgrade):
             },
         )
 
-    def promote(self, name, candidate_source, *, dispatch_only=False):
+    def promote(self, name, candidate_source):
         key = name + "-promotion"
         path = self.receipts / key / "intent.json"
         if path.exists():
@@ -454,8 +454,6 @@ class WorkloadUpgrade(maintenance._Upgrade):
             return self.operator.observe_control(value["operation_id"])
 
         result = self.native(key, request, invoke)
-        if dispatch_only and result["state"] != "failed":
-            return request["operation_id"]
         if result["state"] != "applied" or not result["acknowledged"]:
             if result["state"] == "failed":
                 raise QueueConflictError(
@@ -476,16 +474,8 @@ def _promote_agents(operation):
             "target": intent["candidates"][name]["target"],
         }) for name in intent["agents"]
     ])
-    errors = []
-    # Native gate revisions are acquired in submission order. A pending
-    # acknowledgement must not suppress another independent host's submission.
-    for name in intent["agents"]:
-        try:
-            operation.promote(name, staged[name]["candidate_source"], dispatch_only=True)
-        except Exception as exc:
-            errors.append(exc)
-    if errors:
-        raise errors[0]
+    # Native promotion authorization requires global control settlement. Staging
+    # is independent; each promotion must be acknowledged before the next one.
     for name in intent["agents"]:
         operation.promote(name, staged[name]["candidate_source"])
         response = operation.recover_host(name)

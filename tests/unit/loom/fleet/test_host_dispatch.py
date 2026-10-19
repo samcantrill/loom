@@ -82,29 +82,39 @@ def test_batch_refuses_changed_authored_input_before_dispatch(tmp_path, monkeypa
         op.call_many([(name, 'workload-stage', {}) for name in op.intent['hosts']])
 
 
-def test_promotion_dispatches_other_hosts_before_pending_acknowledgement(tmp_path):
+def test_all_hosts_stage_before_promotion_preserves_native_settlement(tmp_path):
     names = ('first', 'second', 'third')
-    submitted = []
+    staged = []
     observed = []
+    acknowledged = set()
+
+    def stage(calls):
+        staged.extend(name for name, _, _ in calls)
+        return {name: {'candidate_source': '/' + name} for name, _, _ in calls}
     op = SimpleNamespace(
         intent={'agents': dict.fromkeys(names), 'target_declarations': dict.fromkeys(names, {}),
                 'image': '/image', 'image_sha256': 'sha',
                 'candidates': dict.fromkeys(names, {'target': {}})},
         receipts=tmp_path,
-        call_many=lambda calls: {name: {'candidate_source': '/' + name} for name, _, _ in calls},
+        call_many=stage,
         recover_host=lambda name: {'declaration': {}},
         accept_update=lambda *a: None,
     )
-    def promote(name, source, *, dispatch_only=False):
+    def promote(name, source):
         assert source == '/' + name
-        if dispatch_only:
-            submitted.append(name)
-        else:
-            observed.append(name)
-            assert submitted == list(names)
+        assert staged[-3:] == list(names)
+        observed.append(name)
+        if name not in acknowledged:
             raise workloads.maintenance._Waiting('native acknowledgement pending')
     op.promote = promote
     with pytest.raises(workloads.maintenance._Waiting, match='pending'):
         workloads._promote_agents(op)
-    assert submitted == list(names)
+    assert staged == list(names)
     assert observed == ['first']
+    acknowledged.add('first')
+    with pytest.raises(workloads.maintenance._Waiting, match='pending'):
+        workloads._promote_agents(op)
+    assert observed == ['first', 'first', 'second']
+    acknowledged.update(names)
+    workloads._promote_agents(op)
+    assert observed[-3:] == list(names)

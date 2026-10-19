@@ -614,10 +614,14 @@ settlement, and explicit deferral preserves every dispatched attempt's history.
 Independent candidate installations, qualification probes and check preparation
 requests use a pool of at most three host transports. All requests are retained
 before dispatch, and the controller alone publishes their receipts. Workload
-staging completes across eligible agents before ordered native promotion
-submissions; a pending acknowledgement on one host does not suppress later
-submissions. Coordinator publication and revision-sensitive controls keep their
-ordering. Lost replies resume the same retained requests.
+staging completes across eligible agents before native promotion. The current
+promotion owner requires global control settlement, so each promotion must be
+acknowledged before another is submitted. A pending promotion returns waiting;
+it must not cause a refused speculative submission to another agent. Coordinator
+publication and revision-sensitive controls keep their ordering. Lost replies
+resume the same retained requests. Concurrent promotion would require a separate
+change to that native authorization contract; host transport concurrency does
+not grant it.
 
 Candidate qualification is retained against the upgrade intent. Waiting
 continuations inspect current roots, owners, capabilities and declarations without
