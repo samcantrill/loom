@@ -168,13 +168,13 @@ def test_workload_upgrade_native_promotion_history_versioned_selection_and_repla
     def interrupt(operation, key, request, invoke):
         result = native(operation, key, request, invoke)
         if key == "worker-promotion" and result["state"] == "applied" and not lost:
+            original_source.write_text("pipeline: [invalid")
             lost.append(True)
             raise upgrades.sshops.SshUnavailable("lost applied promotion response")
         return result
 
     monkeypatch.setattr(workload_upgrades.WorkloadUpgrade, "native", interrupt)
     original_bytes = original_source.read_bytes()
-    original_source.write_text("pipeline: [invalid")
     bind_intent = workload_upgrades.bind_intent
     if promote_source:
         def lose_candidate_storage(intent, plan, directory):

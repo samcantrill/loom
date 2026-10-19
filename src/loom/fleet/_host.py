@@ -727,6 +727,7 @@ def main():
     if request["action"] not in {
         "receipt", "prepare", "issue", "receive", "initialize", "start", "enroll", "bind",
         "observe", "resources", "upgrade-probe", "upgrade-settlement", "upgrade-result-recovery", "upgrade-stop",
+        "upgrade-check-capture", "upgrade-check-prepare",
         "upgrade-replace", "workload-probe", "workload-coordinator-probe", "workload-recover",
         "workload-stage", "workload-publish",
     }:

@@ -2084,19 +2084,8 @@ class _ResidentAssignmentWorkspace:
             assert directory is not None
             context["input"] = {"kind": "staged", "directory": str(directory)}
             return context
-        alias = preparation.input_receipt.root
-        path = launch_profile.preparation_shared_roots.get(alias)
-        if preparation.shared_scope is not None and launch_profile.container is not None:
-            # Parent launch validated the physical mapping; the child reads the
-            # same retained capture in its stable container namespace.
-            source = launch_profile.preparation_shared_roots.get(alias)
-            matches = [cast(Mapping[str, PlainData], root) for root in launch_profile.shared_roots.values()
-                       if source is not None and source.is_relative_to(Path(str(cast(Mapping[str, PlainData], root)["host_path"])))]
-            if len(matches) != 1 or matches[0]["container_path"] is None:
-                raise QueueServiceError("shared snapshot container binding is unavailable")
-            assert source is not None
-            path = Path(str(matches[0]["container_path"])) / source.relative_to(Path(str(matches[0]["host_path"])))
-        context["input"] = {"kind": "shared", "roots": {} if path is None else {alias: str(path)}}
+        from .shared_execution import _preparation_input_roots
+        context["input"] = {"kind": "shared", "roots": _preparation_input_roots(launch_profile, preparation)}
         return context
 
     def _prepare_staged_input(self) -> Path | None:

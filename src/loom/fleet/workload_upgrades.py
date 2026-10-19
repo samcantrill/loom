@@ -476,6 +476,7 @@ def continue_upgrade(operation):
     operation.probes()
     irreversible = directory / "irreversible.json"
     if not irreversible.exists():
+        maintenance._preflight_checks(operation)
         if "maintenance_binding" in intent:
             operation.gate()
         else:

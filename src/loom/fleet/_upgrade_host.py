@@ -215,6 +215,12 @@ def replace(request):
 
 def execute(request):
     action = request["action"]
+    if action == "upgrade-check-capture":
+        from ._check_preflight import capture
+        return capture(request)
+    if action == "upgrade-check-prepare":
+        from ._check_preflight import prepare
+        return prepare(request)
     if action == "upgrade-probe":
         return inspect(request)
     if action == "upgrade-result-recovery":

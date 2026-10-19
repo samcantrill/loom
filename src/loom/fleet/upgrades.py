@@ -11,6 +11,7 @@ from contextvars import copy_context
 from dataclasses import replace
 import fcntl
 import hashlib
+import json
 from pathlib import Path
 from typing import Any, cast
 import math
@@ -643,6 +644,65 @@ def _repair_check_selection(operation, deployment):
 
 
 @timed("check_prepare")
+def _check_profile(declarations, name, deployment):
+    profile_id = declarations[name]["resident_profiles"][0]["descriptor"]["profile_id"]
+    policies = declarations["coordinator"]["preparation"]["profiles"]
+    matches = [key for key, value in policies.items()
+               if value["resident_profile_id"] == profile_id]
+    chosen = (deployment.preparation_profile if deployment.preparation_profile in matches
+              else matches[0] if len(matches) == 1 else None)
+    if chosen is None:
+        raise QueueConfigError("check preparation profile is ambiguous for " + name)
+    return chosen
+
+
+def _check_kinds(operation, name, declaration):
+    # Provider-backed GPU inventory need not appear in the legacy profile list.
+    devices = declaration["resident_profiles"][0].get("gpu_devices") or (
+        operation.intent["agents"][name].get("offer") or {}
+    ).get("gpu_devices")
+    return ("cpu", "storage", *(["gpu"] if devices else []))
+
+
+def _check_identity(operation, name, check):
+    return "check-" + hashlib.sha256(
+        (operation.intent["operation_id"] + name + ":" + check).encode()
+    ).hexdigest()[:24]
+
+
+def _preflight_checks(operation):
+    """Retain actual candidate preparation through existing exact host receipts."""
+    from loom.queue.preparation import PrepareRunRequest
+
+    selection = _check_selection(operation)
+    deployment = load_deployment(selection["deployment"])
+    declarations = operation.intent.get("target_declarations", operation.intent["declarations"])
+    deferred = _deferred_checks(operation).get("agents", ())
+    for name in operation.intent["agents"]:
+        if name in deferred:
+            continue
+        chosen = _check_profile(declarations, name, deployment)
+        requests = {}
+        for check in _check_kinds(operation, name, declarations[name]):
+            identity = _check_identity(operation, name, check)
+            requests[check] = PrepareRunRequest(
+                identity + "-preflight", identity, deployment.source,
+                selection["config"], chosen,
+                overrides=tuple(key + "=" + json.dumps(value)
+                                for key, value in probe_configuration(check, name).items()),
+            ).to_dict()
+        captured = operation.call(
+            "coordinator", "upgrade-check-capture", agent_id=name,
+            expected_root_id=operation.intent["hosts"]["coordinator"]["expected_root_id"],
+            candidate_declaration=declarations["coordinator"], checks=requests,
+        )
+        operation.call(
+            name, "upgrade-check-prepare", agent_id=name,
+            expected_root_id=operation.intent["hosts"][name]["expected_root_id"],
+            candidate_declaration=declarations[name], bindings=captured["bindings"],
+        )
+
+
 def _prepare_attempt(operation, name, check, identity, previous=None):
     path = operation.inventory.path.parent / "checks" / identity / "intent.json"
     binding = _maintenance_binding(operation.intent)
@@ -654,26 +714,7 @@ def _prepare_attempt(operation, name, check, identity, previous=None):
         selection = _check_selection(operation)
         deployment = load_deployment(selection["deployment"])
         declarations = operation.intent.get("target_declarations", operation.intent["declarations"])
-        profile_id = declarations[name]["resident_profiles"][0][
-            "descriptor"
-        ]["profile_id"]
-        policies = declarations["coordinator"]["preparation"][
-            "profiles"
-        ]
-        matches = [
-            key
-            for key, value in policies.items()
-            if value["resident_profile_id"] == profile_id
-        ]
-        chosen = (
-            deployment.preparation_profile
-            if deployment.preparation_profile in matches
-            else matches[0]
-            if len(matches) == 1
-            else None
-        )
-        if chosen is None:
-            raise QueueConfigError("check preparation profile is ambiguous for " + name)
+        chosen = _check_profile(declarations, name, deployment)
         from loom.deployment import export_connection_deployment
 
         # A repaired selection must not rewrite the deployment bound by failed checks.
@@ -764,25 +805,10 @@ def _run_checks(operation):
             continue
         if name in deferred:
             continue
-        profile = declaration["resident_profiles"][0]
-        # Provider-backed GPUs belong to the native inventory, so their legacy
-        # resident-profile device list can be empty even on a GPU agent.
-        devices = profile.get("gpu_devices") or (
-            operation.intent["agents"][name].get("offer") or {}
-        ).get("gpu_devices")
-        for check in (
-            "cpu",
-            "storage",
-            *(["gpu"] if devices else []),
-        ):
+        for check in _check_kinds(operation, name, declaration):
             slot = name + ":" + check
             if slot not in attempts:
-                identity = (
-                    "check-"
-                    + hashlib.sha256(
-                        (operation.intent["operation_id"] + slot).encode()
-                    ).hexdigest()[:24]
-                )
+                identity = _check_identity(operation, name, check)
                 attempts[slot] = [_prepare_attempt(operation, name, check, identity)]
                 atomic(operation.directory / "checks.json", attempts)
             attempt = attempts[slot][-1]
@@ -919,6 +945,7 @@ def _continue(operation):
                 },
             )
         operation.probes()
+        _preflight_checks(operation)
         operation.maintenance("close", "close")
         if not recovery:
             operation.settled()

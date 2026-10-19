@@ -514,7 +514,19 @@ remains. Another active successor, different target/owner or unsettled prior
 attempt refuses. Only the latest explicitly selected settled pass satisfies a
 slot, and all slots must pass before the gate reopens.
 
-If a runtime upgrade has replaced its services but cannot select a check
+New upgrades prepare each selected CPU/storage/GPU probe in its candidate
+installation before closing admission. This uses the real captured source,
+preparation policy and installed project hook, including a candidate profile that
+has not yet been advertised. It does not execute the workload or publish a target
+run. The probe's report is temporary; bounded compatibility evidence is retained
+in the existing exact host-operation receipts and reused on continuation.
+Shared container preflight mounts the selected immutable capture, declared
+read-only locations and root challenges, using the same namespace projection as
+ordinary preparation. An incompatible profile or malformed recipe leaves
+admission open and services unchanged. Abort that unactivated operation, correct
+the selection/source and start a new operation; captured evidence is immutable.
+
+If an older runtime upgrade has already replaced its services but cannot select a check
 preparation profile, or its selected project preparation rejects a generic
 probe, correct that selection explicitly before checks or after all prepared
 checks have confirmed terminal failures and their native effects have settled:
