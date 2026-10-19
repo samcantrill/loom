@@ -469,6 +469,7 @@ class TransportPrincipalPolicy:
                 "recover_unknown",
                 "recover_time",
                 "replace_session",
+                "cleanup_recovery",
             }
             if not set(actions).issubset(allowed):
                 raise QueueServiceError(
@@ -544,6 +545,7 @@ class LocalOwnerOperatorPolicy:
             "recover_unknown",
             "recover_time",
             "replace_session",
+            "cleanup_recovery",
         }
         _identifiers(self.actions, "local owner actions")
         _identifiers(self.agent_ids, "local owner agent targets")

@@ -323,3 +323,21 @@ def test_current_tree_uses_stable_machine_partition_and_rejects_other_machine(tm
         recovery.seal(
             request, profile.shared_roots, agent_id="agent-2", fence="fence-1"
         )
+
+
+def test_recovery_preview_inventory_does_not_read_payloads(tmp_path, monkeypatch):
+    workspace, profile, _ = _workspace(tmp_path)
+    _write(workspace)
+    ref = recovery.seal(
+        workspace.request(), profile.shared_roots, agent_id="agent-1", fence="fence-1"
+    )
+
+    def reject_payload_scan(*args, **kwargs):
+        raise AssertionError("metadata inspection scanned recovery payloads")
+
+    monkeypatch.setattr(recovery, "inventory", reject_payload_scan)
+    tree, receipt = recovery.inspect(ref, profile.shared_roots)
+    assert tree.is_dir()
+    assert sum(row["size_bytes"] for row in receipt["members"]) == len(b"completepartial")
+    assert {row["path"] for row in receipt["members"]} == {"checkpoints/completed", "partial"}
+    assert publication_path_is_retained(tree)

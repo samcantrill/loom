@@ -57,6 +57,7 @@ from ._maintenance import MaintenanceInProgress, MAINTENANCE_CAPABILITY
 _OPERATOR_ADMIN_MUTATIONS = frozenset({
     "operator_retire", "operator_scheduling_reload", "operator_recover_unknown",
     "operator_recover_time", "operator_replace_agent_session", "operator_reconcile",
+    "operator_release_recovery",
 })
 OPERATOR_OPERATIONS = _OPERATOR_ADMIN_MUTATIONS | frozenset({"operator_agent_retirement_ready"}) | frozenset({"operator_handshake", "operator_status", "operator_agent", "operator_assignment", "operator_control", "operator_operation", "operator_maintenance", "operator_maintenance_control", "operator_maintenance_operation"})
 CONTROL_CAPABILITY = "daemon-control-v1"
@@ -73,6 +74,7 @@ CONTROL_OPERATIONS = OPERATOR_OPERATIONS | frozenset(
         "agent",
         "inspect_run",
         "read_run_logs",
+        "preview_recovery_cleanup",
         "get_run_context",
         "patch_run_annotations",
         "append_run_note",
@@ -451,7 +453,7 @@ def decode_result(operation: str, value: Mapping[str, object]) -> Any:
     if operation == "read_run_logs":
         from ._remote_logs import decode_logs
         return decode_logs(value)
-    if operation in {"inspect_run", "get_run_context"}:
+    if operation in {"inspect_run", "get_run_context", "preview_recovery_cleanup"}:
         return value  # The diagnostic union decoder belongs above queue.
     if operation in {"trace_lineage", "select_outputs", "list_output_commits", "search_runs", "search_submissions", "search_jobs", "tag_keys", "tag_values"}:
         from loom.runs._query_page import QueryPage
@@ -514,6 +516,7 @@ def validate_request(
         "operator_recover_unknown": {"request"},
         "operator_recover_time": {"request"},
         "operator_replace_agent_session": {"request"},
+        "operator_release_recovery": {"run_uri", "assignment_id", "operation_id", "reason"},
         "operator_reconcile": set(),
         "operator_maintenance": set(),
         "operator_maintenance_control": {"control", "intent_digest"},
@@ -540,6 +543,7 @@ def validate_request(
         "agent": {"agent_id"},
         "operation": {"operation_id"},
         "inspect_run": {"run_uri"},
+        "preview_recovery_cleanup": {"run_uri"},
         "read_run_logs": {"operation_id", "stage", "stream", "tail"},
         "get_run_context": {"run_uri"},
         "patch_run_annotations": {"run_uri", "mutation_id", "patch"},
@@ -600,6 +604,10 @@ def validate_request(
             if not isinstance(change, Mapping):
                 raise ValueError("annotation patch must be an object")
             mutation_request(cast(str, value["run_uri"]), cast(str, value["mutation_id"]), operation, change)
+    if operation == "operator_release_recovery":
+        for key in ("assignment_id", "reason"):
+            if not isinstance(value[key], str) or not value[key]:
+                raise ValueError(f"recovery release {key} is invalid")
     for key in ("admission_id", "queue_item_id", "agent_id", "session_id", "operation_id", "run_uri"):
         if key in value and (not isinstance(value[key], str) or not value[key]):
             raise ValueError(f"control {key} is invalid")
@@ -767,6 +775,10 @@ def dispatch_control(
             from ._artifact_access import artifact_operation
             from ._remote_logs import read_logs
             result = read_logs(daemon, value) if operation == "read_run_logs" else artifact_operation(daemon, operation, value)
+        elif operation == "preview_recovery_cleanup":
+            from ._recovery_cleanup import preview_recovery_cleanup
+
+            result = preview_recovery_cleanup(daemon, cast(str, value["run_uri"]))
         elif operation == "get_run_context":
             from ._run_context import get_run_context
 
@@ -910,6 +922,7 @@ def _dispatch_operator(daemon: LocalDaemon, principal: LocalDaemonPrincipal, ope
             "operator_recover_unknown": "recover_unknown",
             "operator_recover_time": "recover_time",
             "operator_replace_agent_session": "replace_session",
+            "operator_release_recovery": "cleanup_recovery",
         }
         agent_id = (
             cast(SessionReplacementRequest, value["request"]).agent_id
@@ -922,6 +935,10 @@ def _dispatch_operator(daemon: LocalDaemon, principal: LocalDaemonPrincipal, ope
         except QueueServiceError as exc:
             raise control_error("unauthorized", operation, payload, boundary="authentication") from exc
         try:
+            if operation == "operator_release_recovery":
+                from ._recovery_cleanup import release_recovery
+
+                return release_recovery(daemon, principal, **value)
             if operation == "operator_retire":
                 return view.retire(cast(str, value["operation_id"]), cast(str, payload["expected_coordinator_id"]))
             if operation == "operator_agent_retirement_ready":

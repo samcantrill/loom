@@ -131,6 +131,52 @@ def worker_artifact_root(
     return tree.parent
 
 
+EXECUTION_LOGS = "loom.execution_logs"
+RECOVERY_COMPLETE = "loom.recovery_complete"
+
+
+def _retain_execution_logs(workspace: Any, result: Any, tree: Path, *, sealed: bool) -> dict[str, str]:
+    """Retain settled native log streams in the existing output publication.
+
+    The managed worker invokes retention only after process-group containment.
+    No arbitrary paths from application output metadata are used as log sources.
+    """
+    if not any(RECOVERY_COMPLETE in ref.metadata for ref in result.outputs.values()):
+        return {}
+    import shutil
+    from loom.pipeline.stores.atomic import unique_temp_path, replace_file
+
+    logs = {}
+    for stream in ("stdout", "stderr", "traceback"):
+        relative = f"_loom/logs/{stream}.log"
+        source = workspace.root / "logs" / f"{stream}.log"
+        destination = contained(tree, relative, exists=False)
+        if sealed:
+            if stream == "traceback" and not destination.exists():
+                continue
+            contained(tree, relative)
+        else:
+            if stream == "traceback" and not source.exists():
+                continue
+            source = contained(workspace.root, f"logs/{stream}.log")
+            if destination.exists():
+                if file_identity(source) != file_identity(destination):
+                    raise QueueConflictError("settled execution log replay conflicts")
+            else:
+                temporary = unique_temp_path(destination)
+                try:
+                    with os.fdopen(os.open(source, os.O_RDONLY | os.O_NOFOLLOW), "rb") as reader:
+                        with temporary.open("xb") as writer:
+                            shutil.copyfileobj(reader, writer, length=1024 * 1024)
+                            writer.flush()
+                            os.fsync(writer.fileno())
+                    replace_file(temporary, destination)
+                finally:
+                    temporary.unlink(missing_ok=True)
+        logs[stream] = relative
+    return logs
+
+
 def retain(
     workspace: _ResidentAssignmentWorkspace, result: StageWorkerResult
 ) -> list[_RemoteOutputArtifact]:
@@ -152,6 +198,7 @@ def retain(
         # can recreate an empty staging mount while decoding a retained launch.
         # Still verify the final primary bytes and complete receipt below.
         available = final if final.exists() else tree
+        logs = _retain_execution_logs(workspace, result, available, sealed=available == final)
         members = inventory(available, limits)
         indexed = {str(member["path"]): member for member in members}
         outputs = {}
@@ -227,7 +274,10 @@ def retain(
                     fingerprint=ref.fingerprint,
                     producer_stage=ref.producer_stage,
                     created_at=ref.created_at,
-                    metadata={**ref.metadata, SHARED_PUBLICATION: reference},
+                    metadata={
+                        **ref.metadata, SHARED_PUBLICATION: reference,
+                        **({EXECUTION_LOGS: logs} if logs else {}),
+                    },
                 )
             )
         return descriptors
