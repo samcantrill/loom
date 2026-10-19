@@ -630,6 +630,28 @@ They do not authorize transitions or replace operation receipts. Parallel/nested
 spans overlap; their sum is not deployment wall time, and a missing diagnostic
 record does not prove that no work occurred.
 
+Resident workers retain bounded `native_timings` in executor metadata before the
+first immutable worker-result write. Input/preparation materialization and worker
+execution are measured in their owning process. Native spans use integer
+`elapsed_nanoseconds`, a UTC `started_at`, an action and outcome; the agent event
+protocol does not admit floating-point numeric values. A `dropped_spans` count
+identifies bounded capture loss. Nested spans overlap.
+
+Output retention appends separate `native_timing` workspace events, transported by
+the existing event stream. Repeating output retention preserves the exact terminal
+report and worker-result bytes. Assignment observations expose the worker spans and
+up to 256 retained publication timing events, with explicit limit evidence. These
+events measure output retention; they do not establish the duration of subsequent
+network transfer or authority acknowledgement.
+
+Coordinator action resolution emits best-effort deferred `stage.reuse_timing`
+events for contract loading, lookup, artifact verification, authority reads/binding
+and installed-verifier observation. They are appended after revision-guarded work.
+The event links the exact installed verifier operation and child run, whose worker
+result carries the actual materialization/execution durations. A pending verifier
+observation is not a measurement of the child's execution. Missing timing evidence
+does not change native acceptance or justify inventing a zero duration.
+
 `operation abort` restores only controls still owned by that operation, using
 native atomic expected-predecessor guards. An independent applied control
 conflicts even if its drain value matches. Before closure abort has no native

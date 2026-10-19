@@ -547,6 +547,12 @@ def test_native_cpu_storage_and_dropped_response_exact_continuation(fleet, monke
         assert assignment["released"] is True
         assert assignment["release_proof"]["claim_id"] == assignment["claim_id"]
         assert assignment["actual_claims"]["actual_gpu_uuids"] == []
+        timings = assignment["native_timings"]
+        actions = {span["action"] for span in timings["worker"]["spans"]}
+        assert {"input_materialization", "preparation_materialization", "worker_execution"} <= actions
+        assert timings["publication"]
+        assert all(event["spans"][0]["action"] == "output_retention" for event in timings["publication"])
+        assert all(event["spans"][0]["elapsed_nanoseconds"] >= 0 for event in timings["publication"])
     before = [
         result["checks"][k]["assignment"]["value"]["assignment_id"]
         for k in ("cpu", "storage")

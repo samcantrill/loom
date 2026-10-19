@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
+from datetime import datetime, timezone
+from uuid import uuid4
 import json
 from typing import Any, cast
 
@@ -35,6 +38,7 @@ from loom.pipeline.stores.shared_artifacts import binding as shared_binding, ver
 from loom.serialization import PlainData
 
 from ._action_results import ActionResults
+from ._phase_timing import PhaseTimings
 from .errors import QueueConflictError
 
 
@@ -110,8 +114,29 @@ class ActionResultResolution:
         readiness: Any,
         revision: Any,
     ) -> Any:
+        timings = PhaseTimings()
+        try:
+            with timings.measure("reuse_resolution"):
+                return self._resolve(admission, intent, authority, stage_plan, readiness, revision, timings)
+        finally:
+            if len(timings.spans) > 2:
+                try:
+                    # Audit writes happen after the revision-guarded transition.
+                    self.execution._event_observers.defer_emit(
+                        self.execution._authority_for_run(admission.run_uri), admission.run_uri,
+                        event_type="stage.reuse_timing", stage_name=stage_plan.stage_name,
+                        revision=replace(revision, created_at=datetime.now(timezone.utc).isoformat()),
+                        identity=uuid4().hex, payload=timings.payload(),
+                    )
+                except Exception:
+                    pass  # Diagnostics do not authorize or reject action reuse.
+
+    def _resolve(
+        self, admission: Any, intent: Any, authority: Any, stage_plan: Any,
+        readiness: Any, revision: Any, timings: PhaseTimings,
+    ) -> Any:
         run_uri, node = admission.run_uri, stage_plan.stage_name
-        report = load_contract_report(self.execution.run_store, run_uri, config=self.execution.run_store, local_paths=self.execution.run_store)
+        report = timings.call("reuse_contract_loading", load_contract_report, self.execution.run_store, run_uri, config=self.execution.run_store, local_paths=self.execution.run_store)
         if report is None:
             return None
         descriptor = plain_mapping(report["profile_descriptor"])
@@ -130,7 +155,7 @@ class ActionResultResolution:
         contract = _worker_contract_metadata(report, spec)[
             CONTRACT
         ]
-        snapshot = authority.open_run(run_uri)
+        snapshot = timings.call("reuse_authority_read", authority.open_run, run_uri)
         stages = {stage.stage_name: stage for stage in snapshot.stages}
         inputs = {}
         for input_ in (*stage_plan.bound_inputs.values(), *stage_plan.pending_inputs):
@@ -148,7 +173,7 @@ class ActionResultResolution:
             if fact is None:
                 raise QueueConflictError("action input has no original output fact")
             try:
-                self._verify_artifact(fact.artifact)
+                timings.call("reuse_artifact_verification", self._verify_artifact, fact.artifact)
             except (ArtifactStoreError, OSError, QueueConflictError):
                 return authority.transition_stage(
                     run_uri,
@@ -195,7 +220,7 @@ class ActionResultResolution:
             "store_root": self.daemon.config.run_store_root.as_uri(),
             "installation": implementation,
         }
-        selected = self.store.select(
+        selected = timings.call("reuse_lookup", self.store.select,
             run_uri=run_uri,
             node=node,
             scope=scope,
@@ -205,13 +230,13 @@ class ActionResultResolution:
             or readiness.expected_stage_status is StageStatus.STALE,
         )
         claim = selected["claim"]
-        self._retain(claim)
+        timings.call("reuse_retention", self._retain, claim)
         if selected["decision"] == "owner":
-            authority.bind_action_producer(run_uri, self._producer_binding(claim))
+            timings.call("reuse_producer_binding", authority.bind_action_producer, run_uri, self._producer_binding(claim))
             return None
         if selected["decision"] == "wait":
-            self._observe(claim)
-            selected = self.store.select(
+            timings.call("reuse_producer_observation", self._observe, claim)
+            selected = timings.call("reuse_lookup", self.store.select,
                 run_uri=run_uri, node=node, scope=scope, identity=identity
             )
             claim = selected["claim"]
@@ -223,7 +248,7 @@ class ActionResultResolution:
             )
         if selected["decision"] == "bound":
             try:
-                self._verify_result(claim, plain_mapping(selected["binding"]["result"]))
+                self._verify_result(claim, plain_mapping(selected["binding"]["result"]), timings=timings)
             except (ArtifactStoreError, OSError, QueueConflictError):
                 return self._reject(
                     authority,
@@ -233,7 +258,7 @@ class ActionResultResolution:
                     claim,
                     "action.candidate_unavailable",
                 )
-            return authority.bind_action_result(
+            return timings.call("reuse_authority_binding", authority.bind_action_result,
                 run_uri,
                 node,
                 ActionResultBinding.from_dict(selected["binding"]),
@@ -241,7 +266,7 @@ class ActionResultResolution:
             )
         result = plain_mapping(json.loads(claim["result_json"]))
         try:
-            self._verify_result(claim, result)
+            self._verify_result(claim, result, timings=timings)
         except (ArtifactStoreError, OSError, QueueConflictError):
             return self._reject(
                 authority,
@@ -288,11 +313,12 @@ class ActionResultResolution:
             candidate["access"] = {**plain_mapping(candidate["access"]), "project_reports": reports}
         candidate["candidate_digest"] = hash_mapping(candidate)
         candidate = action_candidate(candidate)
-        verification = self.daemon._preparations.verify_action_result(
+        verification = timings.call("reuse_verifier_observation", self.daemon._preparations.verify_action_result,
             source_operation_id=cast(str, report["operation_id"]),
             node_id=node,
             contract=plain_mapping(contract),
             candidate=candidate,
+            timings=timings,
         )
         if verification is None:
             return revision
@@ -314,7 +340,7 @@ class ActionResultResolution:
         # Recheck mutable authority, bytes, retention and principal immediately
         # before the revision-guarded binding transaction.
         try:
-            self._verify_result(claim, result)
+            self._verify_result(claim, result, timings=timings)
         except (ArtifactStoreError, OSError, QueueConflictError):
             return self._reject(
                 authority,
@@ -331,7 +357,7 @@ class ActionResultResolution:
             ).fetchone()
         if current is None or current["principal_id"] != source["principal_id"]:
             raise QueueConflictError("action authorization changed before binding")
-        binding = self.store.bind(
+        binding = timings.call("reuse_binding", self.store.bind,
             run_uri=run_uri,
             node=node,
             claim_id=claim["claim_id"],
@@ -339,7 +365,7 @@ class ActionResultResolution:
             result=result,
             verification=verdict,
         )
-        return authority.bind_action_result(
+        return timings.call("reuse_authority_binding", authority.bind_action_result,
             run_uri,
             node,
             ActionResultBinding.from_dict(binding),
@@ -425,14 +451,16 @@ class ActionResultResolution:
         )
 
     def _verify_result(
-        self, claim: Mapping[str, Any], result: Mapping[str, PlainData]
+        self, claim: Mapping[str, Any], result: Mapping[str, PlainData],
+        *, timings: PhaseTimings | None = None,
     ) -> None:
+        timings = timings or PhaseTimings()
         uri = claim["owner_run_uri"]
         if not preparation_path_is_retained(
             self.execution.run_store.local_run_dir(uri)
         ):
             raise QueueConflictError("action result retention is unavailable")
-        snapshot = self.execution._authority_store(uri).open_run(uri)
+        snapshot = timings.call("reuse_authority_read", self.execution._authority_store(uri).open_run, uri)
         stage = next(
             (
                 stage
@@ -457,7 +485,7 @@ class ActionResultResolution:
         } != result:
             raise QueueConflictError("action candidate original authority changed")
         for fact in stage.artifact_facts:
-            self._verify_artifact(fact.artifact)
+            timings.call("reuse_artifact_verification", self._verify_artifact, fact.artifact)
 
     def _verify_artifact(self, ref: ArtifactRef) -> None:
         path = uri_to_path(ref.uri)

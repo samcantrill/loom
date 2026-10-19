@@ -21,6 +21,7 @@ from pathlib import Path
 import sqlite3
 import stat
 import tempfile
+from uuid import uuid4
 from typing import TYPE_CHECKING, Literal, cast
 
 if TYPE_CHECKING:
@@ -2268,10 +2269,12 @@ class _ResidentAssignmentWorkspace:
 
     def retain_outputs(self) -> _RemoteExecutionReport:
         from ._preparation_report_transfer import native_role
+        from ._phase_timing import PhaseTimings
 
+        timings = PhaseTimings()
         result = self.worker_result()
         try:
-            return self._retain_outputs(result)
+            return timings.call("output_retention", self._retain_outputs, result)
         except _RemoteTransferLimitError:
             raise
         except (QueueConflictError, QueueServiceError, OSError, ValueError) as exc:
@@ -2282,6 +2285,16 @@ class _ResidentAssignmentWorkspace:
             ):
                 raise _PreparationReportRetentionError(str(exc)) from exc
             raise
+        finally:
+            # Keep per-invocation duration outside the deterministic terminal
+            # report. The existing event stream transports it on exact replay.
+            try:
+                self.append_event(
+                    f"{self.assignment_id}:timing:{uuid4().hex}",
+                    {"kind": "native_timing", **timings.payload()},
+                )
+            except Exception:
+                pass  # Missing diagnostics cannot change publication's outcome.
 
     def failed_preparation_retention_report(
         self, error: _PreparationReportRetentionError

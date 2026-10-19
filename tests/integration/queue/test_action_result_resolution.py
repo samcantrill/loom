@@ -158,6 +158,27 @@ def test_renamed_graph_reuses_original_producers_without_attempts(tmp_path):
             == 1
         )
         assert authority(original_uri).open_run(original_uri) == before
+        events = authority(uri).list_audit_events(uri)
+        timing = [event.payload for event in events if event.event_type == "stage.reuse_timing"]
+        assert timing
+        actions = {span["action"] for item in timing for span in item["spans"]}
+        assert {
+            "reuse_lookup", "reuse_artifact_verification", "reuse_authority_read",
+            "reuse_authority_binding", "reuse_verifier_observation",
+        } <= actions
+        assert all(span["elapsed_nanoseconds"] >= 0 for item in timing for span in item["spans"])
+        children = {item["related"]["verification_run_uri"] for item in timing if "related" in item}
+        assert children
+        from loom.pipeline.stores import LocalRunStore
+
+        store = LocalRunStore(service.daemon.run_store_root)
+        for child in children:
+            child_snapshot = authority(child).open_run(child)
+            assert child_snapshot.status.value == "SUCCEEDED"
+            for stage in child_snapshot.stages:
+                for attempt in stage.attempts:
+                    worker = store.read_stage_worker_result(child, stage.stage_name, attempt=attempt.attempt)
+                    assert any(span["action"] == "worker_execution" for span in worker["executor_metadata"]["native_timings"]["spans"])
     finally:
         daemon.stop()
 

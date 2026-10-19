@@ -28,6 +28,7 @@ from .errors import QueueConflictError, QueueServiceError
 from .run import RunRequest, _public_operation_id
 from ._maintenance import MaintenanceCheckConflict
 from ._service_lifetime import ServiceRetiring
+from ._phase_timing import PhaseTimings
 from .preparation import (
     PreparationChildInput,
     PrepareRunRequest,
@@ -255,6 +256,7 @@ class CoordinatorPreparations:
     def verify_action_result(
         self, *, source_operation_id: str, node_id: str,
         contract: Mapping[str, PlainData], candidate: Mapping[str, PlainData],
+        timings: PhaseTimings | None = None,
     ) -> dict[str, PlainData] | None:
         """Join a replayable installed verifier child to a retained preparation.
 
@@ -270,6 +272,12 @@ class CoordinatorPreparations:
         requested = action_verification_request({"node_id": node_id, "contract": dict(contract), "candidate": dict(candidate)})
         intent = hash_mapping({"source_operation_id": source_operation_id, "request": requested})
         operation_id = "action-verify-" + intent.split(":", 1)[1]
+        child_name = PREPARATION_RUN_PREFIX + hashlib.sha256(operation_id.encode()).hexdigest()
+        if timings is not None:
+            timings.related.update(
+                verification_operation_id=operation_id,
+                verification_run_uri=(self.daemon.config.run_store_root / child_name).as_uri(),
+            )
         with self.daemon._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute("SELECT * FROM preparation_operations WHERE operation_id = ?", (operation_id,)).fetchone()
@@ -284,7 +292,6 @@ class CoordinatorPreparations:
                 selected.pop("reconciliation", None)
                 selected["action_verification"] = requested
                 request = replace(PrepareRunRequest.from_dict(_mapping(json.loads(str(source["request_json"])))), operation_id=operation_id)
-                child_name = PREPARATION_RUN_PREFIX + hashlib.sha256(operation_id.encode()).hexdigest()
                 result: dict[str, PlainData] = {
                     "schema_version": 1, "coordinator_id": source_result["coordinator_id"],
                     "input_receipt": source_result["input_receipt"], "preparation_admission_id": None,
