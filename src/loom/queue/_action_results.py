@@ -155,6 +155,20 @@ class ActionResults:
         with self.connection() as conn:
             return _claim(conn, claim_id)
 
+    def verification_demand_current(
+        self, run_uri: str, node: str, claim_id: str, claim_revision: int
+    ) -> bool:
+        """Check the live demand before waiting on an already-selected verifier."""
+        with self.connection() as conn:
+            return conn.execute(
+                "SELECT 1 FROM action_demands d JOIN action_claims c "
+                "ON d.claim_id = c.claim_id WHERE d.run_uri = ? AND d.node = ? "
+                "AND d.state = 'live' AND c.claim_id = ? AND c.revision = ? "
+                "AND c.state = 'succeeded' AND NOT EXISTS "
+                "(SELECT 1 FROM action_graph_cancellations WHERE run_uri = ?)",
+                (run_uri, node, claim_id, claim_revision, run_uri),
+            ).fetchone() is not None
+
     def owner(self, run_uri: str, node: str) -> dict[str, Any] | None:
         with self.connection() as conn:
             row = conn.execute(

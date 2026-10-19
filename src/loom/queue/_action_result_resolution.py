@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+from time import monotonic
 from uuid import uuid4
 import json
 from typing import Any, cast
@@ -39,7 +40,17 @@ from loom.serialization import PlainData
 
 from ._action_results import ActionResults
 from ._phase_timing import PhaseTimings
+from ._preparation_operations import _PendingActionVerification
 from .errors import QueueConflictError
+
+
+@dataclass(frozen=True, slots=True)
+class _PendingReuse:
+    readiness: tuple[Any, ...]
+    claim_id: str
+    claim_revision: int
+    child: _PendingActionVerification
+    recheck_at: float
 
 
 class ActionResultResolution:
@@ -49,12 +60,18 @@ class ActionResultResolution:
         self.execution = execution
         self.daemon = execution._daemon_owner()
         self.store = ActionResults(self.daemon._connection)
+        # Bounded, disposable wait hints. Restart/eviction repeats the full proof;
+        # no cached contract or artifact evidence can authorize adoption.
+        self._pending: dict[tuple[str, str], _PendingReuse] = {}
 
     def reconcile_producers(self, run_uri: str) -> None:
         for claim in self.store.producers(run_uri):
             self._observe(claim)
 
     def detach_graph(self, run_uri: str, operation_id: str) -> None:
+        for key in tuple(self._pending):
+            if key[0] == run_uri:
+                self._pending.pop(key, None)
         for claim in self.store.detach_graph(run_uri, operation_id):
             if claim["attempt_id"] is not None:
                 self.execution._authority_store(
@@ -119,7 +136,7 @@ class ActionResultResolution:
             with timings.measure("reuse_resolution"):
                 return self._resolve(admission, intent, authority, stage_plan, readiness, revision, timings)
         finally:
-            if len(timings.spans) > 2:
+            if len(timings.spans) > 2 or timings.related:
                 try:
                     # Audit writes happen after the revision-guarded transition.
                     self.execution._event_observers.defer_emit(
@@ -136,6 +153,30 @@ class ActionResultResolution:
         readiness: Any, revision: Any, timings: PhaseTimings,
     ) -> Any:
         run_uri, node = admission.run_uri, stage_plan.stage_name
+        key = (run_uri, node)
+        readiness_binding = (
+            admission.intent_digest, readiness.next_attempt,
+            readiness.retry_decision_id, readiness.expected_stage_status,
+        )
+        pending = self._pending.pop(key, None)
+        if (
+            pending is not None and pending.readiness == readiness_binding
+            and monotonic() < pending.recheck_at
+        ):
+            with timings.measure("reuse_verifier_observation"):
+                still_pending = self.store.verification_demand_current(
+                    run_uri, node, pending.claim_id, pending.claim_revision
+                ) and self.daemon._preparations.action_verification_pending(pending.child)
+            if still_pending:
+                self._pending[key] = pending
+                timings.related.update(
+                    verification_operation_id=pending.child.operation_id,
+                    verification_run_uri=pending.child.run_uri,
+                )
+                return revision
+        # Recheck periodically even when a child cannot finish: unavailable
+        # original bytes can prevent verifier input materialization indefinitely.
+        # Completion or changed bindings also take this full path before adoption.
         report = timings.call("reuse_contract_loading", load_contract_report, self.execution.run_store, run_uri, config=self.execution.run_store, local_paths=self.execution.run_store)
         if report is None:
             return None
@@ -320,7 +361,13 @@ class ActionResultResolution:
             candidate=candidate,
             timings=timings,
         )
-        if verification is None:
+        if isinstance(verification, _PendingActionVerification):
+            if len(self._pending) >= 256:
+                self._pending.pop(next(iter(self._pending)))
+            self._pending[key] = _PendingReuse(
+                readiness_binding, claim["claim_id"], claim["revision"], verification,
+                monotonic() + 30.0,
+            )
             return revision
         if verification["failure_code"] is not None:
             return self._reject(

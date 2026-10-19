@@ -1009,6 +1009,20 @@ into a new producer commit. A new downstream node can run against that binding.
 A successful action remains eligible when another action makes its original
 graph fail or the original graph is later cancelled.
 
+While an installed verifier is pending, the coordinator retains a bounded,
+process-local child handle. Repeated observations check the native child state
+and the live demand's claim revision, without reloading contracts or hashing
+artifacts on every wait. This handle never authorizes adoption. Completion,
+changed readiness, eviction or coordinator restart takes the full resolution
+path again: current contracts, inputs, original result bytes, principal and
+revision-guarded bindings still have to pass. Restart reconciles the existing
+native verifier operation rather than creating another child. Cancellation
+detaches the demand and discards its local wait hint.
+The hint expires after 30 seconds, causing the next resolution pass to repeat the
+full checks. This also detects damaged original bytes that prevent the verifier
+from materializing its inputs and reaching a terminal state. Expiry never changes
+the native child identity or authorizes an attempt.
+
 The installed processor also implements `operation: verify_result`. The native
 request has `schema_version: 3`, the current checked `contract`, an immutable
 `candidate`, and `artifact_access`. The candidate contains exactly:
