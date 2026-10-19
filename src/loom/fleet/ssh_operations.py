@@ -332,10 +332,16 @@ def _directory(inventory, operation_id):
     return inventory.path.parent / "operations" / operation_id
 
 
-def operation_status(inventory, operation_id):
-    """Read retained administration only; status never resumes a host operation."""
+def operation_status(inventory, operation_id, *, missing_ok=False):
+    """Read retained administration only; status never resumes a host operation.
+
+    With ``missing_ok=True``, return ``None`` if no intent has been retained.
+    Invalid operation identifiers and unsupported retained kinds still refuse.
+    """
     directory = _directory(inventory, operation_id)
     if not (directory / "intent.json").exists():
+        if missing_ok:
+            return None
         raise QueueConfigError("unknown administrative operation")
     intent = read(directory / "intent.json")
     if intent.get("kind") not in {None, "runtime-upgrade", "workload-upgrade"}:
@@ -378,6 +384,66 @@ def operation_status(inventory, operation_id):
         "ready": result["state"] == "complete",
         "intent_digest": digest(intent),
         **result,
+    }
+
+
+def operation_evidence(inventory: Inventory, operation_id: str) -> dict[str, Any]:
+    """Read diagnostic evidence for one operation without SSH or mutation.
+
+    The returned ``timings``, ``maintenance`` close/open receipts and ``checks``
+    result receipts are non-atomic observations, never transition authority.
+    Missing receipts are omitted. Interrupted or unreadable diagnostics are
+    identified in ``issues``; they do not imply zero elapsed time or success.
+    Native status/check APIs remain the owners of qualification and recovery.
+    """
+    directory = _directory(inventory, operation_id)
+    issues: list[dict[str, str]] = []
+
+    def record(path):
+        if not path.exists():
+            return None
+        try:
+            return read(path)
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError) as error:
+            issues.append({"source": str(path), "reason": type(error).__name__})
+            return None
+
+    timings = []
+    path = directory / "timings.jsonl"
+    try:
+        with path.open() as stream:
+            for line in stream:
+                try:
+                    value = json.loads(line)
+                    if not isinstance(value, dict):
+                        raise ValueError("invalid timing record")
+                    timings.append(value)
+                except ValueError:
+                    issues.append({"source": str(path), "reason": "invalid_or_partial_line"})
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        issues.append({"source": str(path), "reason": type(error).__name__})
+    checks = {}
+    for attempts in (record(directory / "checks.json") or {}).values():
+        for attempt in attempts:
+            identity = attempt["operation_id"]
+            _directory(inventory, identity)  # Validate retained identifiers before path use.
+            receipt = record(inventory.path.parent / "checks" / identity / "result.json")
+            if receipt is not None:
+                checks[identity] = receipt
+    return {
+        "operation_id": operation_id,
+        "timings": timings,
+        "maintenance": {
+            action: receipt
+            for action in ("close", "open")
+            if (receipt := record(directory / "steps" / action / "receipt.json")) is not None
+        },
+        "checks": checks,
+        "issues": issues,
     }
 
 

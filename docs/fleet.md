@@ -653,6 +653,18 @@ Operator RPC spans identify both host and native action (`rpc_<action>`). The
 classified span is nested inside `host_rpc`; it must not be added to the aggregate
 as extra elapsed time. Request bodies and credentials are not recorded.
 
+Python release drivers use `Inventory.environment_files(override=None)` for
+the same environment selection as native commands, without repeating host
+qualification. `operation_status(inventory, operation_id, missing_ok=True)`
+returns `None` only before a native intent exists; its default remains strict.
+`loom.fleet.ssh_operations.operation_evidence(inventory, operation_id)` exposes
+read-only diagnostic timings, close/open maintenance receipts, and retained
+check result receipts. Missing receipts remain absent; partial diagnostic lines
+are reported in `issues`. This non-atomic evidence never authorizes an upgrade,
+recovery or qualification decision. Native status and self-test APIs own those
+decisions. Consumers must not parse private receipt paths or import private
+helpers to obtain this evidence.
+
 Resident workers retain bounded `native_timings` in executor metadata before the
 first immutable worker-result write. Input/preparation materialization and worker
 execution are measured in their owning process. Native spans use integer
