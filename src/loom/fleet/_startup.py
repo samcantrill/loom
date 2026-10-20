@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from datetime import datetime, timezone
 import time
 
 from loom.fleet.configuration import protected_directory
@@ -74,6 +75,8 @@ class Startup:
         # A lost reply is reconciled against the backend identity. Absence after
         # dispatch is not permission to silently launch another process.
         self.record["dispatched"] = True
+        self.record["dispatched_at"] = time.monotonic()
+        self.record["dispatched_wall"] = datetime.now(timezone.utc).isoformat()
         self.save()
 
     def bind_backend(self, identity):
@@ -112,6 +115,10 @@ class Startup:
                 if not self.record["ready"]:
                     self.record["ready"] = True
                     self.save()
+                    if "dispatched_at" in self.record:
+                        from loom.fleet._timing import elapsed
+                        elapsed("launch_to_readiness", self.record["dispatched_wall"],
+                                time.monotonic() - self.record["dispatched_at"])
                 return fact
             self.pending()
             if time.monotonic() >= deadline:

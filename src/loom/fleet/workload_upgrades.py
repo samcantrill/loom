@@ -245,6 +245,8 @@ def bind_intent(intent, plan, directory):
 
 
 class WorkloadUpgrade(maintenance._Upgrade):
+    _preview_qualification: dict[str, Any] | None = None
+
     def recheck_composed(self, pending_inputs=None):
         super().recheck_composed(pending_inputs)
         sources = self.intent.get("candidate_sources")
@@ -402,7 +404,7 @@ class WorkloadUpgrade(maintenance._Upgrade):
             },
         )
 
-    def promote(self, name, candidate_source, *, dispatch_only=False):
+    def promote(self, name, candidate_source):
         key = name + "-promotion"
         path = self.receipts / key / "intent.json"
         if path.exists():
@@ -454,8 +456,6 @@ class WorkloadUpgrade(maintenance._Upgrade):
             return self.operator.observe_control(value["operation_id"])
 
         result = self.native(key, request, invoke)
-        if dispatch_only and result["state"] != "failed":
-            return request["operation_id"]
         if result["state"] != "applied" or not result["acknowledged"]:
             if result["state"] == "failed":
                 raise QueueConflictError(
@@ -476,16 +476,8 @@ def _promote_agents(operation):
             "target": intent["candidates"][name]["target"],
         }) for name in intent["agents"]
     ])
-    errors = []
-    # Native gate revisions are acquired in submission order. A pending
-    # acknowledgement must not suppress another independent host's submission.
-    for name in intent["agents"]:
-        try:
-            operation.promote(name, staged[name]["candidate_source"], dispatch_only=True)
-        except Exception as exc:
-            errors.append(exc)
-    if errors:
-        raise errors[0]
+    # Native promotion authorization requires global control settlement. Staging
+    # is independent; each promotion must be acknowledged before the next one.
     for name in intent["agents"]:
         operation.promote(name, staged[name]["candidate_source"])
         response = operation.recover_host(name)
@@ -536,14 +528,11 @@ def continue_upgrade(operation):
             for identity in list(operation.gate()["checks"]):
                 operation.maintenance("revoke-before-promotion-" + identity, "revoke", identity)
         maintenance.phase(operation, "draining")
-        for name, agent in intent["agents"].items():
-            accepted = operation.policy(
-                name,
-                name + "-drain",
-                "drain",
-                (agent.get("control") or {}).get("operation_id"),
-            )
-            operation.verify_policy(name, accepted)
+        maintenance._independent_policies(operation, [
+            (name, name + "-drain", "drain",
+             (agent.get("control") or {}).get("operation_id"))
+            for name, agent in intent["agents"].items()
+        ])
         operation.settled()
         for name in intent["agents"]:
             fact = operation.host_observe(name, "upgrade-settlement")
@@ -561,14 +550,11 @@ def continue_upgrade(operation):
     )
     restoring = directory / "restoring.json"
     if not restoring.exists():
-        for name in intent["agents"]:
-            accepted = operation.policy(
-                name,
-                name + "-checks-capacity",
-                "resume",
-                intent["operation_id"] + "-" + name + "-promotion",
-            )
-            operation.verify_policy(name, accepted)
+        maintenance._independent_policies(operation, [
+            (name, name + "-checks-capacity", "resume",
+             intent["operation_id"] + "-" + name + "-promotion")
+            for name in intent["agents"]
+        ])
         maintenance._run_checks(operation)
         atomic(restoring, {"intent_digest": digest(intent)})
     maintenance._restore(operation)

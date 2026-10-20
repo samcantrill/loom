@@ -10,6 +10,40 @@ from loom.fleet import _timing
 from loom.fleet import ssh_operations
 
 
+def test_queue_phase_timings_join_host_trace_and_keep_control_identity_in_service_log(capsys):
+    from loom.queue._phase_timing import phase, log_phases, observe_phases
+
+    with _timing.recording() as trace:
+        with phase("installation_probe"):
+            pass
+    assert [row["action"] for row in trace.records] == ["installation_probe"]
+    assert not capsys.readouterr().err
+    with phase("interpreter_probe"):
+        pass
+    assert not capsys.readouterr().err
+    with observe_phases(log_phases):
+        with phase("control_application", operation_id="exact-control"):
+            with phase("interpreter_probe"):
+                pass
+    records = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    assert [row["operation_id"] for row in records] == ["exact-control"] * 2
+    assert [row["spans"][0]["action"] for row in records] == ["interpreter_probe", "control_application"]
+
+
+def test_queue_timing_observer_failure_preserves_original_outcome():
+    from loom.queue._phase_timing import phase, observe_phases
+
+    def broken(value):
+        raise OSError("diagnostics unavailable")
+    failure = ValueError("actual probe failure")
+    with observe_phases(broken):
+        with phase("interpreter_probe"):
+            pass
+        with pytest.raises(ValueError) as raised, phase("installation_probe"):
+            raise failure
+    assert raised.value is failure
+
+
 def test_diagnostics_append_across_continuations_and_retain_outcomes(tmp_path, monkeypatch):
     now = [10.0]
     monkeypatch.setattr(_timing.time, "monotonic", lambda: now[0])

@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from pathlib import Path
 import select
 import signal
 import sys
+import time
+from typing import Any, cast
 
 from loom.fleet._host import (
     atomic,
@@ -15,20 +18,18 @@ from loom.fleet._host import (
     environment,
     native_root,
     owner,
-    payload,
     read,
     role,
-    run_native,
 )
-from loom.queue.errors import QueueConflictError
+from loom.queue.errors import QueueConflictError, QueueError
 from loom.queue.operations import probe_upgrade_compatibility
 from loom.queue.service_upgrade import inspect_service_settlement
 from loom.fleet._timing import measure, timed
 
 
 @timed("candidate_qualification")
-def inspect(request, *, native_owner=None):
-    """Recheck candidate storage, profile/image bytes and native root identity."""
+def _inspect(request, *, native_owner=None):
+    """Keep qualification local to this candidate-host activation boundary."""
     from loom.fleet.releases import verify_release
 
     bundle = (
@@ -55,17 +56,40 @@ def inspect(request, *, native_owner=None):
             "candidate compatibility unavailable: " + str(compatibility.reason)
         )
     images = {}
+    service = None
     if role(request) == "agent":
-        # The candidate native checker owns supervisor/profile compatibility.
-        run_native(request, "agent-check")
-        for profile in payload(request)["resident_profiles"]:
-            container = profile.get("container")
+        from loom.diagnostics.models import PreflightStatus
+        from loom.queue.deployment import load_outbound_agent_service_config
+        from loom.queue.preflight import check_loaded_agent
+
+        try:
+            service = load_outbound_agent_service_config(
+                config(request), env_file=environment(request),
+                _allow_unready=True, _deadline=time.monotonic() + 180,
+            )
+        except (QueueError, TimeoutError):
+            service = None
+        report = check_loaded_agent(service)
+        failed = report.status is PreflightStatus.FAIL
+        atomic(Path(request["admin"]) / "last-native.json", {
+            "command": "agent-check", "returncode": int(failed),
+            "stdout": json.dumps({"operation": "agent-check", **report.to_dict()}),
+            "stderr": "",
+        })
+        if failed:
+            raise QueueConflictError("native role command failed; inspect protected host evidence")
+        assert service is not None
+        for profile in service.client.resident_profiles:
+            container = profile.container
             if container is not None:
-                image = Path(container["container"]["image"]["reference"])
-                with measure("image_hash"), image.open("rb") as stream:
-                    images[str(image)] = hashlib.file_digest(
-                        stream, "sha256"
-                    ).hexdigest()
+                selected_container = cast(dict[str, Any], container["container"])
+                image = Path(selected_container["image"]["reference"])
+                qualified = profile.readiness_result
+                sha = None if qualified is None else qualified.image_sha256
+                if sha is None:
+                    with measure("image_hash"), image.open("rb") as stream:
+                        sha = hashlib.file_digest(stream, "sha256").hexdigest()
+                images[str(image)] = sha
     if request.get("images") is not None and images != request["images"]:
         raise QueueConflictError("immutable workload image changed")
     return {
@@ -73,7 +97,13 @@ def inspect(request, *, native_owner=None):
         "compatibility": facts,
         "images": images,
         "python": sys.executable,
-    }
+    }, service
+
+
+def inspect(request, *, native_owner=None):
+    """Recheck candidate storage, profile/image bytes and native root identity."""
+    facts, _ = _inspect(request, native_owner=native_owner)
+    return facts
 
 
 def _settled(request):
@@ -118,11 +148,12 @@ def stop_owned(request, *, observe):
                 != observed["value"]["expected_process"]
             ):
                 raise QueueConflictError("service process changed before stop")
-            signal.pidfd_send_signal(descriptor, signal.SIGTERM)
-            poll = select.poll()
-            poll.register(descriptor, select.POLLIN)
-            if not poll.poll(30000):
-                raise QueueConflictError("native stop still pending; no escalation")
+            with measure("signal_to_exit"):
+                signal.pidfd_send_signal(descriptor, signal.SIGTERM)
+                poll = select.poll()
+                poll.register(descriptor, select.POLLIN)
+                if not poll.poll(30000):
+                    raise QueueConflictError("native stop still pending; no escalation")
         finally:
             os.close(descriptor)
     elif observed["reason"] != "service_stopped":
@@ -134,7 +165,6 @@ def replace(request):
     """Preserve stopped current units, then bind the exact candidate runtime."""
     from loom.queue.deployment import (
         load_coordinator_service_config,
-        load_outbound_agent_service_config,
         service_replacement_guard,
     )
     from loom.fleet._services import unit_name, render, systemctl
@@ -155,14 +185,10 @@ def replace(request):
         }
     if owner(request)["value"]["ownership"] == "live":
         raise QueueConflictError("service must stop before replacement")
-    inspect(request)
+    _, service = _inspect(request)
     _settled(request)
-    loader = (
-        load_coordinator_service_config
-        if role(request) == "coordinator"
-        else load_outbound_agent_service_config
-    )
-    service = loader(config(request), env_file=environment(request))
+    if service is None:
+        service = load_coordinator_service_config(config(request), env_file=environment(request))
     with service_replacement_guard(
         service, request["expected_root_id"],
         recovery_results=request.get("recovery_results"),

@@ -4,11 +4,59 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
+import json
+import sys
 from time import monotonic
 from typing import Any
 
 from loom.serialization import PlainData
+
+
+_observer: ContextVar[Callable[[dict[str, PlainData]], None] | None] = ContextVar(
+    "queue_phase_observer", default=None
+)
+_operation: ContextVar[str | None] = ContextVar("queue_phase_operation", default=None)
+
+
+@contextmanager
+def observe_phases(observer: Callable[[dict[str, PlainData]], None]) -> Iterator[None]:
+    """Route bounded queue diagnostics to the current host-operation owner."""
+    token = _observer.set(observer)
+    try:
+        yield
+    finally:
+        _observer.reset(token)
+
+
+def log_phases(value: dict[str, PlainData]) -> None:
+    """Write opted-in service diagnostics to its existing stderr log."""
+    sys.stderr.write(json.dumps({"diagnostic": "loom.phase_timings", **value}) + "\n")
+
+
+@contextmanager
+def phase(action: str, *, operation_id: str | None = None) -> Iterator[None]:
+    """Record one boundary through the current diagnostic observer, if any.
+
+    Only action, duration, outcome and the existing operation identity are emitted.
+    Diagnostic failures never replace the operation's result or exception.
+    """
+    token = _operation.set(operation_id or _operation.get())
+    timing = PhaseTimings()
+    try:
+        with timing.measure(action):
+            yield
+    finally:
+        try:
+            value = {**timing.payload(), "operation_id": _operation.get()}
+            observer = _observer.get()
+            if observer is not None:
+                observer(value)
+        except Exception:
+            pass
+        finally:
+            _operation.reset(token)
 
 
 class PhaseTimings:

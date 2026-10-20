@@ -611,13 +611,29 @@ their waiting behavior. A failed check can therefore be reported while another
 already-dispatched check is still running. Retry and repair still require native
 settlement, and explicit deferral preserves every dispatched attempt's history.
 
-Independent candidate installations, qualification probes and check preparation
-requests use a pool of at most three host transports. All requests are retained
+Independent candidate installations, qualification probes, check preparation,
+agent stops and agent replacements use a pool of at most three host transports. All requests are retained
 before dispatch, and the controller alone publishes their receipts. Workload
-staging completes across eligible agents before ordered native promotion
-submissions; a pending acknowledgement on one host does not suppress later
-submissions. Coordinator publication and revision-sensitive controls keep their
-ordering. Lost replies resume the same retained requests.
+staging completes across eligible agents before native promotion. The current
+promotion owner requires global control settlement, so each promotion must be
+acknowledged before another is submitted. A pending promotion returns waiting;
+it must not cause a refused speculative submission to another agent. Coordinator
+publication and revision-sensitive controls keep their ordering. Lost replies
+resume the same retained requests. Concurrent promotion would require a separate
+change to that native authorization contract; host transport concurrency does
+not grant it. Runtime replacement waits for all agents to stop before stopping
+the coordinator, establishes coordinator readiness, then dispatches independent
+agent replacements. All required agents must be ready before check capacity is
+enabled. A pending or failed host preserves successful peers' receipts; continuation
+uses the same requests and retained startup deadlines.
+
+Initial drain and check-capacity resume controls are submitted to independent
+agents before waiting for all acknowledgements. Each retains native session and
+predecessor conditions. A pending acknowledgement does not prevent another agent's
+control submission; a substantive failure still blocks progression. All required
+acknowledgements and current policy observations form a barrier before the next
+phase. Restoration still respects intervening operator policy, and promotions
+retain their stronger global-settlement ordering.
 
 Candidate qualification is retained against the upgrade intent. Waiting
 continuations inspect current roots, owners, capabilities and declarations without
@@ -631,6 +647,17 @@ An apply invocation can retain its own preview qualification only when the
 bound intent matches its host, root, declaration, runtime, profile and image
 inputs. Current ownership, composed inputs and activation checks remain required.
 An external preview followed by a later apply does not carry this transient proof.
+Routine automation may omit the standalone preview: apply performs its own
+qualification before maintenance. Select a runtime upgrade only for a changed
+service runtime, and a workload upgrade for a changed execution image/profile.
+
+The candidate host qualifies an agent configuration once per replacement action,
+derives native preflight findings from that same service object, and passes it to
+the native replacement guard. Its observed image digest is reused within that
+boundary. The guard rereads protected declarations and refuses changes since
+qualification. No qualified object crosses a process boundary. Later startup,
+promotion and resume still perform their own qualification; staging/activation
+still detect changed image bytes. This is not a persistent qualification cache.
 
 Pending check results reuse native run explanations and retain their owner facts.
 `waiting_for_capacity` requires current scheduling evidence; preparation, running
@@ -648,6 +675,17 @@ RPC and artifact-transfer costs without changing the existing progress schema.
 They do not authorize transitions or replace operation receipts. Parallel/nested
 spans overlap; their sum is not deployment wall time, and a missing diagnostic
 record does not prove that no work occurred.
+
+Qualification additionally exposes `interpreter_probe`, `installation_probe` and
+`qualification_image_hash`. `signal_to_exit` measures actual termination separately
+from preceding qualification. `launch_to_readiness` spans the retained dispatch
+through first observed readiness across continuations, without resetting its
+deadline or relaunching. Older retained launches without dispatch timestamps omit
+this diagnostic. Queue qualification within a host action joins its existing trace;
+standalone service processes write bounded `loom.phase_timings` JSON diagnostics to
+stderr. `control_application` and its nested probes include the existing control
+operation ID. These diagnostics contain no request bodies or environment values,
+and observation/write failures do not change native outcomes or acknowledgements.
 
 Operator RPC spans identify both host and native action (`rpc_<action>`). The
 classified span is nested inside `host_rpc`; it must not be added to the aggregate

@@ -940,6 +940,25 @@ def _restore(operation, *, abort=False):
     operation.maintenance("open", "open")
 
 
+def _independent_policies(operation, requests):
+    """Dispatch ordinary per-agent controls without waiting on the first agent.
+
+    Native acceptance and exact predecessor conditions remain authoritative.
+    Promotions require global settlement and must never use this helper.
+    """
+    pending = []
+    for name, key, kind, predecessor in requests:
+        if kind not in {"drain", "resume"}:
+            raise QueueConflictError("independent policies require drain or resume")
+        try:
+            accepted = operation.policy(name, key, kind, predecessor)
+            operation.verify_policy(name, accepted)
+        except _Waiting as waiting:
+            pending.append(waiting)
+    if pending:
+        raise pending[0]
+
+
 def _continue(operation):
     if (operation.directory / "workload-repair" / "intent.json").exists():
         from .runtime_workload_repair import continue_repair
@@ -972,10 +991,11 @@ def _continue(operation):
         if not recovery:
             operation.settled()
         phase(operation, "draining")
-        for name, agent in operation.intent["agents"].items():
-            predecessor = (agent.get("control") or {}).get("operation_id")
-            accepted = operation.policy(name, name + "-drain", "drain", predecessor)
-            operation.verify_policy(name, accepted)
+        _independent_policies(operation, [
+            (name, name + "-drain", "drain",
+             (agent.get("control") or {}).get("operation_id"))
+            for name, agent in operation.intent["agents"].items()
+        ])
         if recovery:
             results = []
             for name in operation.intent["agents"]:
@@ -1002,21 +1022,19 @@ def _continue(operation):
     phase(operation, "replacing")
     recovery_options = {"recovery_results": read(recovery_path)["results"]} if recovery else {}
     # Host receipts retain exact stop/replace/start requests across coordinator downtime.
-    for name in [*operation.intent["agents"], "coordinator"]:
+    def stop_arguments(name):
         row = operation.intent["hosts"][name]
-        operation.call(
-            name,
-            "upgrade-stop",
+        return dict(
             expected_root_id=row["expected_root_id"],
             descriptor_name=Path(operation.intent["target_path"]).name,
             required_capabilities=list(REQUIRED_CAPABILITIES),
             images=read(operation.directory / (name + "-candidate.json"))["images"],
             **recovery_options,
         )
-    for name, row in operation.intent["hosts"].items():
-        operation.call(
-            name,
-            "upgrade-replace",
+
+    def replacement_arguments(name):
+        row = operation.intent["hosts"][name]
+        return dict(
             expected_root_id=row["expected_root_id"],
             source_release=row["source_release"],
             coordinator_id=operation.intent["check_selection"]["coordinator_id"],
@@ -1025,22 +1043,31 @@ def _continue(operation):
             images=read(operation.directory / (name + "-candidate.json"))["images"],
             **recovery_options,
         )
+    operation.call_many([
+        (name, "upgrade-stop", stop_arguments(name))
+        for name in operation.intent["agents"]
+    ])
+    operation.call("coordinator", "upgrade-stop", **stop_arguments("coordinator"))
+    operation.call("coordinator", "upgrade-replace", **replacement_arguments("coordinator"))
+    operation.call_many([
+        (name, "upgrade-replace", replacement_arguments(name))
+        for name in operation.intent["agents"]
+    ])
     _capable(operation.operator)
     if not (operation.receipts / "open" / "intent.json").exists():
         operation.gate()
     operation.probes()
     restoring = operation.directory / "restoring.json"
     if not restoring.exists():
+        capacity_controls = []
         for name in operation.intent["agents"]:
             if recovery and not (operation.receipts / (name + "-checks-capacity") / "intent.json").exists():
                 fact = operation.host_observe(name, "upgrade-settlement", include_pending_poll=False)
                 if fact["availability"] != "available" or not fact["value"].get("settled"):
                     raise _Waiting("retained result replay: " + name, "settlement_pending")
             predecessor = operation.intent["operation_id"] + "-" + name + "-drain"
-            accepted = operation.policy(
-                name, name + "-checks-capacity", "resume", predecessor
-            )
-            operation.verify_policy(name, accepted)
+            capacity_controls.append((name, name + "-checks-capacity", "resume", predecessor))
+        _independent_policies(operation, capacity_controls)
         if recovery:
             operation.settled()
         _run_checks(operation)

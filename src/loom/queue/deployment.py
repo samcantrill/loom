@@ -2618,6 +2618,8 @@ def service_replacement_guard(service, expected_root_id: str, *, recovery_result
 
     if isinstance(service, OutboundAgentServiceConfig):
         spec = read_agent_spec(service.source_path, env_file=service.environment_path)
+        if spec.declaration_digest != service.client.declaration_digest:
+            raise QueueConflictError("replacement declaration changed after qualification")
         journal = _RemoteAgentJournal(spec.agent_root,
             expected_configuration_fingerprint=service.immutable_fingerprint,
             expected_active_configuration_fingerprint=service.active_fingerprint)
