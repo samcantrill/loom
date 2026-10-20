@@ -696,6 +696,8 @@ def _preflight_checks(operation):
         chosen = _check_profile(declarations, name, deployment)
         requests = {}
         for check in _check_kinds(operation, name, declarations[name]):
+            if check == "gpu" and operation.intent.get("gpu_qualification") == "nonexclusive":
+                continue
             identity = _check_identity(operation, name, check)
             requests[check] = PrepareRunRequest(
                 identity + "-preflight", identity, deployment.source,
@@ -820,6 +822,24 @@ def _run_checks(operation):
         if name in deferred:
             continue
         for check in _check_kinds(operation, name, declaration):
+            if check == "gpu" and operation.intent.get("gpu_qualification") == "nonexclusive":
+                # Select the same profile used by the native CPU/storage checks.
+                profile_id = declaration["resident_profiles"][0]["descriptor"]["profile_id"]
+                observed = operation.operator.observe_agent(name)
+                if observed.availability != "available" or observed.freshness != "current":
+                    raise _Waiting("current GPU capability profile required: " + name)
+                profiles = [
+                    p for p in (thaw_plain_data(observed.value).get("offer") or {}).get("profile_identities", ())
+                    if p["profile_id"] == profile_id
+                ]
+                if len(profiles) != 1:
+                    raise QueueConflictError("GPU capability profile unavailable or ambiguous")
+                profile = profiles[0]
+                result = operation.call(name, "gpu-capability", profile=profile)
+                operation.check_observations[name + ":gpu-capability"] = result
+                if result.get("outcome") != "passed":
+                    raise QueueConflictError("GPU capability failed: " + str(result))
+                continue
             slot = name + ":" + check
             if slot not in attempts:
                 identity = _check_identity(operation, name, check)
@@ -1229,6 +1249,7 @@ def _upgrade(
                 "schema_version": 1,
                 "kind": "runtime-upgrade",
                 "recover_retained_results": recover_retained_results,
+                "gpu_qualification": inventory.gpu_qualification,
                 "operation_id": operation_id,
                 "target_path": str(target),
                 "release": plan["release"],

@@ -30,6 +30,7 @@ class Inventory:
     runtime_release: Path
     service_manager: str
     hosts: tuple[Host, ...]
+    gpu_qualification: str = "exclusive"
 
     def environment_files(self, override: Path | None = None) -> dict[str, Path | None]:
         """Select each role's environment, refusing a conflicting global override.
@@ -108,7 +109,7 @@ def load_inventory(path: Path) -> Inventory:
     if info.st_uid != os.getuid() or info.st_mode & 0o077:
         raise QueueConfigError("Fleet directory must be owner-protected")
     if (
-        set(value)
+        set(value) - {"gpu_qualification"}
         != {
             "schema_version",
             "name",
@@ -125,6 +126,9 @@ def load_inventory(path: Path) -> Inventory:
     if not isinstance(name, str) or not name:
         raise QueueConfigError("Fleet name is required")
     manager = value["service_manager"]
+    gpu_qualification = value.get("gpu_qualification", "exclusive")
+    if gpu_qualification not in {"exclusive", "nonexclusive"}:
+        raise QueueConfigError("gpu_qualification must be exclusive or nonexclusive")
     if manager not in ("systemd-user", "tmux"):
         raise QueueConfigError("unsupported service_manager")
     release = value["runtime_release"]
@@ -160,7 +164,8 @@ def load_inventory(path: Path) -> Inventory:
             )
         )
     return Inventory(
-        source, name, (source.parent / release).resolve(), manager, tuple(hosts)
+        source, name, (source.parent / release).resolve(), manager, tuple(hosts),
+        gpu_qualification,
     )
 
 
