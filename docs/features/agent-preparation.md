@@ -1406,6 +1406,9 @@ agent with these policies must declare an explicit `resources` inventory. Its
 registration declares `submitted-container-execution-v1`,
 `remote-stage-execution-v4`, `regular-file-relay-v1`, `shared-execution-v1`,
 `shared-assignment-reference-v1` and the applicable preparation capabilities.
+For shared preparation, declare `preparation-input-v2` and map each selected
+`preparation_shared_roots` snapshot directory beneath exactly one protected
+container-visible shared root, such as `/loom/snapshots`.
 Offers carry portable `container_execution_capabilities`; all images share the
 same provider objects, claims, resource inventory and assignment ceiling.
 
@@ -1430,8 +1433,18 @@ Image locations and allocation-specific GPU bindings stay outside that identity.
 Projects must include this identity in whole-run reconciliation; native action
 reuse also joins it to the admitted node binding.
 
-The feature is undergoing end-to-end and installed-SIF acceptance; synthetic
-agent/provider and report tests alone do not qualify a deployed fleet or GPU
-compute. Role qualification checks the host runtime and storage policy without
+The real-SIF continuity probe passes: one image remains active while another
+image prepares and executes code available only in that image. Service identities,
+protected configuration and open admission are checked. This CPU probe does not
+qualify cross-host recovery, a deployed fleet or GPU compute. Reproduce it with:
+
+```bash
+uv run --locked --extra config python tools/build_submitted_acceptance_images.py /absolute/new-image-directory
+LOOM_SUBMITTED_IMAGES=/absolute/new-image-directory \
+  uv run --locked --extra config --group dev pytest -q \
+  'tests/integration/queue/test_submitted_container_physical.py::test_submitted_images_preserve_execution_ownership[continuity]'
+```
+
+Role qualification checks the host runtime and storage policy without
 selecting scientific code. Workload scientific checks and compute probes use
 explicit submitted work.

@@ -43,6 +43,7 @@ from ._agent_process_supervisor import (
     AgentProcessSupervisorError,
     AgentProcessSupervisorService,
     SupervisorLaunchConfiguration,
+    _SupervisorCommunicationError,
 )
 from ._managed_local import _ManagedApplicationSuspended
 from ._agent_progress import _steps, _delay, _Spawn, _set_assignment_owner
@@ -1161,9 +1162,11 @@ def _outbound_service_steps(
                     raise QueueServiceError("agent session ended without retirement")
         except _ManagedApplicationSuspended:
             return
-        except QueueError:
+        except (QueueError, _SupervisorCommunicationError):
             if stop.is_set():
                 return
+            # A lost process-owner reply retains its launch and claims. Reopen
+            # the application and join that receipt through ordinary recovery.
             (yield from _delay(active.reconnect_seconds))
         finally:
             suspended.set()
