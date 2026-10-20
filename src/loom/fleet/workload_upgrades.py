@@ -145,7 +145,7 @@ def preview(
     aliases = {
         name: name + "-" + generation
         for name, value in policies.items()
-        if value["resident_profile_id"] == workload_profile
+        if value.get("resident_profile_id") == workload_profile
     }
     original = load_deployment(plan["checks"]["deployment"])
     if original.preparation_profile not in aliases:

@@ -581,3 +581,45 @@ def test_staged_source_keeps_predecessor_startable_and_recovers_native_publicati
         assert promotion.apply(c, control).code == "applied"
     finally:
         close(c)
+
+
+@pytest.mark.parametrize("change", ["add", "replace", "remove", "capacity"])
+def test_quiescent_promotion_can_add_container_policy_without_rebinding_capacity(tmp_path, change):
+    from loom.queue._remote_stage_execution import AgentResourceInventory
+    from tests.unit.loom.queue.test_submitted_container_policy import _submitted
+
+    policy, _, _, _ = _submitted(tmp_path)
+    old = replace(config(tmp_path), resource_inventory=AgentResourceInventory(2))
+    if change in {"replace", "remove"}:
+        old = replace(old, container_policies=(policy,))
+    new = replace(old, container_policies=(policy,),
+                  deployment_configuration_fingerprint="2" * 64,
+                  active_configuration_fingerprint="5" * 64)
+    if change == "replace":
+        new = replace(new, container_policies=(replace(policy, environment={"CHANGED": "1"}),))
+    elif change == "remove":
+        new = replace(new, container_policies=())
+    elif change == "capacity":
+        new = replace(new, resource_inventory=AgentResourceInventory(3))
+    c, old, new = client(tmp_path, (old, new))
+    root = c.agent_root_id
+    try:
+        control = request(old, new, root)
+        if change != "add":
+            with pytest.raises(QueueConflictError, match="unrelated role|container policies"):
+                apply(c, control)
+            assert c._config == old
+            return
+        effect = apply(c, control)
+        assert effect.code == "applied"
+        assert c.agent_root_id == root
+        assert c._config.resource_inventory == old.resource_inventory
+        assert c._config.resident_profiles == old.resident_profiles
+        assert c._config.container_policies == (policy,)
+        assert c._require_journal().prepare_control(control) == effect
+        close(c)
+        c = LocalDaemonAgentHttpClient(new)
+        assert c.agent_root_id == root
+        assert c._config.container_policies == (policy,)
+    finally:
+        close(c)

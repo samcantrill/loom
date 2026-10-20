@@ -158,13 +158,18 @@ def validate_candidate(previous: Any, replacement: Any, profile_id: str) -> None
     """
     allowed = {
         "resident_profiles", "deployment_configuration_fingerprint",
-        "active_configuration_fingerprint", "declaration_digest",
+        "active_configuration_fingerprint", "declaration_digest", "container_policies",
     }
     if any(
         getattr(previous, field.name) != getattr(replacement, field.name)
         for field in fields(replacement) if field.name not in allowed
     ):
         raise QueueConflictError("profile promotion cannot change unrelated role configuration")
+    # Enable submission-selected execution through the existing quiescent cut.
+    # Existing policies and the single host resource inventory remain immutable.
+    policies = {policy.policy_id: policy for policy in replacement.container_policies}
+    if any(policies.get(policy.policy_id) != policy for policy in previous.container_policies):
+        raise QueueConflictError("profile promotion cannot remove or replace container policies")
     if (
         len(previous.resident_profiles) != 1 or len(replacement.resident_profiles) != 1
         or previous.resident_profiles[0].descriptor.profile_id != profile_id
