@@ -87,8 +87,10 @@ class ExecutionRequirement:
         }
 
     @classmethod
-    def from_dict(cls, data: object) -> "ExecutionRequirement":
+    def from_dict(cls, data: object) -> "ManagedExecutionRequirement":
         mapping = _mapping(data, "ExecutionRequirement")
+        if mapping.get("kind") == "submitted_container":
+            return SubmittedContainerRequirement.from_dict(mapping)
         _exact_fields(
             mapping,
             {"project_fingerprint", "environment_fingerprint", "executor_fingerprint"},
@@ -105,6 +107,64 @@ class ExecutionRequirement:
                 mapping["executor_fingerprint"], "executor_fingerprint"
             ),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class SubmittedContainerRequirement:
+    """Host eligibility for a submitted workload; contains no installed identity.
+
+    Root requirements are portable storage qualification facts. Image bytes and
+    their implementation identity remain in the retained workload binding.
+    """
+
+    policy_id: str
+    runtime: str
+    worker_contract: str
+    shared_root_requirements: Mapping[str, PlainData]
+    policy_fingerprint: str
+
+    def __post_init__(self) -> None:
+        for name in ("policy_id", "runtime", "worker_contract", "policy_fingerprint"):
+            _non_empty(getattr(self, name), name)
+        roots = _plain_mapping(self.shared_root_requirements, "shared_root_requirements")
+        if not roots:
+            raise CoordinatorStoreError("submitted execution requires shared roots")
+        object.__setattr__(self, "shared_root_requirements", roots)
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "kind": "submitted_container",
+            "schema_version": 1,
+            "policy_id": self.policy_id,
+            "runtime": self.runtime,
+            "worker_contract": self.worker_contract,
+            "shared_root_requirements": thaw_plain_data(self.shared_root_requirements),
+            "policy_fingerprint": self.policy_fingerprint,
+        }
+
+    @classmethod
+    def from_dict(cls, data: object) -> "SubmittedContainerRequirement":
+        mapping = _mapping(data, "SubmittedContainerRequirement")
+        _exact_fields(mapping, {
+            "kind", "schema_version", "policy_id", "runtime", "worker_contract",
+            "shared_root_requirements", "policy_fingerprint",
+        }, "SubmittedContainerRequirement")
+        if (
+            mapping["kind"] != "submitted_container"
+            or type(mapping["schema_version"]) is not int
+            or mapping["schema_version"] != 1
+        ):
+            raise CoordinatorStoreError("submitted execution requirement is unsupported")
+        return cls(
+            _non_empty(mapping["policy_id"], "policy_id"),
+            _non_empty(mapping["runtime"], "runtime"),
+            _non_empty(mapping["worker_contract"], "worker_contract"),
+            _plain_mapping(_mapping(mapping["shared_root_requirements"], "shared_root_requirements"), "shared_root_requirements"),
+            _non_empty(mapping["policy_fingerprint"], "policy_fingerprint"),
+        )
+
+
+ManagedExecutionRequirement = ExecutionRequirement | SubmittedContainerRequirement
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,7 +212,7 @@ class StageWorkRecord:
     bound_inputs: Mapping[str, PlainData]
     upstream_commits: Mapping[str, str]
     placement: ResolvedStagePlacement
-    execution_requirement: ExecutionRequirement
+    execution_requirement: ManagedExecutionRequirement
     scheduling_state: SchedulingProjectionState = SchedulingProjectionState.READY
     scheduling_diagnostics: Mapping[str, PlainData] = field(default_factory=dict)
     projection_revision: int = 1
@@ -188,7 +248,7 @@ class StageWorkRecord:
             raise CoordinatorStoreError("authority_revision must be a BackendRevision")
         if not isinstance(self.placement, ResolvedStagePlacement):
             raise CoordinatorStoreError("placement must be a ResolvedStagePlacement")
-        if not isinstance(self.execution_requirement, ExecutionRequirement):
+        if not isinstance(self.execution_requirement, (ExecutionRequirement, SubmittedContainerRequirement)):
             raise CoordinatorStoreError(
                 "execution_requirement must be an ExecutionRequirement"
             )
@@ -733,7 +793,7 @@ class RunOrchestrator:
         plan: ExecutionPlan,
         authority_snapshot: AuthoritativeRunSnapshot,
         placements: Mapping[str, ResolvedStagePlacement],
-        execution_requirements: Mapping[str, ExecutionRequirement],
+        execution_requirements: Mapping[str, ManagedExecutionRequirement],
         ready_at: int,
         run_priority: int = 0,
         enqueue_sequence: int = 0,
@@ -749,7 +809,7 @@ class RunOrchestrator:
         if plan.run_uri != authority_snapshot.run_uri:
             raise CoordinatorStoreError("plan and authority snapshot run differ")
         if set(execution_requirements) != set(plan.stage_order) or any(
-            not isinstance(value, ExecutionRequirement)
+            not isinstance(value, (ExecutionRequirement, SubmittedContainerRequirement))
             for value in execution_requirements.values()
         ):
             raise CoordinatorStoreError(
@@ -983,7 +1043,7 @@ class RunOrchestrator:
         run_uri: str,
         readiness: AttemptReadiness,
         placement: ResolvedStagePlacement,
-        execution_requirement: ExecutionRequirement,
+        execution_requirement: ManagedExecutionRequirement,
         ready_at: int,
         ready_order: int,
         expected_revision: BackendRevision,

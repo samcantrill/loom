@@ -33,9 +33,12 @@ from typing import Mapping, cast
 from uuid import uuid4
 
 from loom._sqlite_inspection import inspect_sqlite_database
+from loom.fingerprints import hash_mapping
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.pipeline.runtime._resource_controls import _validated_resource_controls
 from ._process_group import OwnedProcessGroup, require_group_wait_support
+from ._submitted_container_policy import SubmittedContainerPolicy
+from .submitted_execution import SubmittedContainerCapability, SubmittedContainerExecution
 
 
 class AgentProcessSupervisorError(ValueError):
@@ -116,6 +119,7 @@ class ResidentWorkerLaunchProfile:
     container: Mapping[str, PlainData] | None = None
     shared_roots: Mapping[str, PlainData] = field(default_factory=dict)
     temporary_mounts: tuple[str, ...] = ()
+    submitted_execution: SubmittedContainerExecution | None = None
 
     def __post_init__(self) -> None:
         from .shared_execution import root_bindings
@@ -138,6 +142,10 @@ class ResidentWorkerLaunchProfile:
         object.__setattr__(
             self, "descriptor", thaw_plain_data(descriptor, path="resident profile")
         )
+        if self.submitted_execution is not None:
+            if not isinstance(self.submitted_execution, SubmittedContainerExecution) or self.container is None:
+                raise AgentProcessSupervisorError("submitted launch requires its container execution")
+            SubmittedContainerCapability.from_dict(self.descriptor).require_execution(self.submitted_execution)
         environment = dict(self.environment)
         if any(
             not isinstance(key, str) or not key or not isinstance(value, str)
@@ -165,7 +173,7 @@ class ResidentWorkerLaunchProfile:
 
     @property
     def profile_id(self) -> str:
-        value = self.descriptor.get("profile_id")
+        value = self.descriptor.get("policy_id" if self.submitted_execution is not None else "profile_id")
         if not isinstance(value, str) or not value:
             raise AgentProcessSupervisorError("resident profile ID is invalid")
         return value
@@ -177,13 +185,15 @@ class SupervisorLaunchConfiguration:
 
     agent_id: str
     profiles: tuple[ResidentWorkerLaunchProfile, ...]
+    container_policies: tuple[SubmittedContainerPolicy, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.agent_id, str) or not self.agent_id:
             raise AgentProcessSupervisorError("supervisor agent ID is invalid")
         profiles = tuple(sorted(self.profiles, key=lambda item: item.profile_id))
-        if not profiles or any(
-            not isinstance(item, ResidentWorkerLaunchProfile) for item in profiles
+        if any(
+            not isinstance(item, ResidentWorkerLaunchProfile) or item.submitted_execution is not None
+            for item in profiles
         ):
             raise AgentProcessSupervisorError("supervisor profile set is invalid")
         if len({item.profile_id for item in profiles}) != len(profiles) or len(
@@ -191,6 +201,14 @@ class SupervisorLaunchConfiguration:
         ) != len(profiles):
             raise AgentProcessSupervisorError("supervisor profiles must be unique")
         object.__setattr__(self, "profiles", profiles)
+        policies = tuple(sorted(self.container_policies, key=lambda item: item.policy_id))
+        if (
+            not (profiles or policies)
+            or any(not isinstance(item, SubmittedContainerPolicy) for item in policies)
+            or len({item.policy_id for item in policies}) != len(policies)
+        ):
+            raise AgentProcessSupervisorError("supervisor profile or container policy set is invalid")
+        object.__setattr__(self, "container_policies", policies)
 
     @property
     def fingerprint(self) -> str:
@@ -201,6 +219,10 @@ class SupervisorLaunchConfiguration:
                     {"profile_id": item.profile_id, "fingerprint": item.fingerprint}
                     for item in self.profiles
                 ],
+                **({"container_policies": [
+                    {"policy_id": item.policy_id, "fingerprint": item.fingerprint}
+                    for item in self.container_policies
+                ]} if self.container_policies else {}),
             }
         )
 
@@ -423,10 +445,11 @@ class AgentProcessSupervisor:
         *,
         agent_id: str,
         profiles: tuple[ResidentWorkerLaunchProfile, ...],
+        container_policies: tuple[SubmittedContainerPolicy, ...] = (),
         initialize: bool = False,
     ) -> None:
         self.root = Path(root).resolve()
-        self._configuration = SupervisorLaunchConfiguration(agent_id, profiles)
+        self._configuration = SupervisorLaunchConfiguration(agent_id, profiles, container_policies)
         self._agent_id = self._configuration.agent_id
         self._children: dict[str, OwnedProcessGroup] = {}
         self._namespace_inits: dict[str, int] = {}
@@ -445,12 +468,16 @@ class AgentProcessSupervisor:
         *,
         agent_id: str,
         profiles: tuple[ResidentWorkerLaunchProfile, ...],
+        container_policies: tuple[SubmittedContainerPolicy, ...] = (),
     ) -> "AgentProcessSupervisor":
         root = Path(agent_root).resolve() / "supervisor"
         if root.exists():
             raise AgentProcessSupervisorError("supervisor root already exists")
         root.mkdir(mode=0o700, parents=False)
-        return cls(root, agent_id=agent_id, profiles=profiles, initialize=True)
+        return cls(
+            root, agent_id=agent_id, profiles=profiles,
+            container_policies=container_policies, initialize=True,
+        )
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._path)
@@ -810,6 +837,8 @@ class AgentProcessSupervisor:
             from ._container_worker import qualify_shared_worker_inputs
             from ._remote_stage_execution import _ResidentAssignmentWorkspace
 
+            if profile.submitted_execution is not None:
+                _ResidentAssignmentWorkspace.require_submitted_launch(launch)
             assignment = _ResidentAssignmentWorkspace.read_request(launch.workspace_root)
             qualify_shared_worker_inputs(profile, assignment, agent_id=launch.agent_id)
         if profile.container is not None and launch.schema_version is not None:
@@ -1276,14 +1305,27 @@ class AgentProcessSupervisor:
             conn.commit()
 
     def _validate_launch(self, launch: ResidentWorkerLaunch) -> None:
-        if (
-            launch.supervisor_id != self.supervisor_id
-            or launch.agent_id != self._agent_id
-            or not any(
+        execution = launch.profile.submitted_execution
+        if execution is None:
+            permitted = any(
                 item.profile_id == launch.profile.profile_id
                 and item.fingerprint == launch.profile.fingerprint
                 for item in self._configuration.profiles
             )
+        else:
+            policy = next((
+                item for item in self._configuration.container_policies
+                if item.policy_id == launch.profile.profile_id
+            ), None)
+            permitted = (
+                policy is not None
+                and policy.launch_profile(execution, workspace=launch.workspace_root).fingerprint
+                == launch.profile.fingerprint
+            )
+        if (
+            launch.supervisor_id != self.supervisor_id
+            or launch.agent_id != self._agent_id
+            or not permitted
         ):
             raise AgentProcessSupervisorError("supervisor launch identity mismatch")
         if launch.continuity_epoch != self.continuity_epoch:
@@ -1355,6 +1397,8 @@ def _profile_value(profile: ResidentWorkerLaunchProfile) -> dict[str, object]:
         **({"shared_roots": dict(profile.shared_roots)} if profile.shared_roots else {}),
         **({"temporary_mounts": list(profile.temporary_mounts)} if profile.temporary_mounts else {}),
         **({"container": profile.container} if profile.container is not None else {}),
+        **({"submitted_execution": profile.submitted_execution.to_dict()}
+           if profile.submitted_execution is not None else {}),
         **(
             {
                 "preparation_shared_roots": {
@@ -1379,7 +1423,7 @@ def _profile_from_value(value: object) -> ResidentWorkerLaunchProfile:
     if (
         not isinstance(value, Mapping)
         or not required.issubset(value)
-        or not set(value).issubset(required | {"preparation_shared_roots", "container", "shared_roots", "temporary_mounts"})
+        or not set(value).issubset(required | {"preparation_shared_roots", "container", "shared_roots", "temporary_mounts", "submitted_execution"})
     ):
         raise AgentProcessSupervisorError("supervisor profile state is invalid")
     return ResidentWorkerLaunchProfile(
@@ -1391,6 +1435,10 @@ def _profile_from_value(value: object) -> ResidentWorkerLaunchProfile:
         container=cast(Mapping[str, PlainData] | None, value.get("container")),
         shared_roots=cast(Mapping[str, PlainData], value.get("shared_roots", {})),
         temporary_mounts=value.get("temporary_mounts", ()),
+        submitted_execution=(
+            SubmittedContainerExecution.from_dict(value["submitted_execution"])
+            if "submitted_execution" in value else None
+        ),
         preparation_shared_roots=cast(
             Mapping[str, Path], value.get("preparation_shared_roots", {})
         ),
@@ -1793,6 +1841,7 @@ class AgentProcessSupervisorService:
             root,
             agent_id=configuration.agent_id,
             profiles=configuration.profiles,
+            container_policies=configuration.container_policies,
             initialize=True,
         )
         if final_agent_root is not None:
@@ -1810,6 +1859,8 @@ class AgentProcessSupervisorService:
                         _profile_value(profile) for profile in configuration.profiles
                     ],
                     "configuration_fingerprint": configuration.fingerprint,
+                    **({"container_policies": [item.to_dict() for item in configuration.container_policies]}
+                       if configuration.container_policies else {}),
                 },
                 sort_keys=True,
                 separators=(",", ":"),
@@ -1841,7 +1892,8 @@ class AgentProcessSupervisorService:
                 "managed_supervisor_state_requires_reinitialization"
             )
         supervisor = AgentProcessSupervisor(
-            root, agent_id=configuration.agent_id, profiles=configuration.profiles
+            root, agent_id=configuration.agent_id, profiles=configuration.profiles,
+            container_policies=configuration.container_policies,
         )
         supervisor.rotate_clean_continuity()
         return cls._start(agent_root, configuration)
@@ -1933,8 +1985,9 @@ def _service_configuration(root: Path) -> SupervisorLaunchConfiguration:
         ) from exc
     if (
         not isinstance(value, Mapping)
-        or set(value) != {"agent_id", "profiles", "configuration_fingerprint"}
+        or set(value) - {"container_policies"} != {"agent_id", "profiles", "configuration_fingerprint"}
         or not isinstance(value["profiles"], list)
+        or not isinstance(value.get("container_policies", []), list)
     ):
         raise AgentProcessSupervisorError(
             "managed_supervisor_state_requires_reinitialization"
@@ -1942,6 +1995,7 @@ def _service_configuration(root: Path) -> SupervisorLaunchConfiguration:
     configuration = SupervisorLaunchConfiguration(
         cast(str, value["agent_id"]),
         tuple(_profile_from_value(item) for item in value["profiles"]),
+        tuple(SubmittedContainerPolicy.from_dict(item) for item in value.get("container_policies", [])),
     )
     if value["configuration_fingerprint"] != configuration.fingerprint:
         raise AgentProcessSupervisorError(
@@ -1978,10 +2032,11 @@ def retained_supervisor_guard(agent_root: Path, *, agent_id: str):
         raw = json.loads(config.read_text(encoding="utf-8"))
         if (
             not isinstance(raw, dict)
-            or set(raw) != {"agent_id", "profiles", "configuration_fingerprint"}
+            or set(raw) - {"container_policies"} != {"agent_id", "profiles", "configuration_fingerprint"}
             or raw["agent_id"] != agent_id
             or not isinstance(raw["profiles"], list)
-            or not raw["profiles"]
+            or not isinstance(raw.get("container_policies", []), list)
+            or not (raw["profiles"] or raw.get("container_policies"))
         ):
             raise AgentProcessSupervisorError("retained supervisor binding is invalid")
         # Profiles were normalized before being persisted. Hash their inert
@@ -1993,6 +2048,10 @@ def retained_supervisor_guard(agent_root: Path, *, agent_id: str):
                  "fingerprint": _digest(profile)}
                 for profile in raw["profiles"]
             ],
+            **({"container_policies": [
+                {"policy_id": policy["policy_id"], "fingerprint": hash_mapping(policy).split(":", 1)[1]}
+                for policy in raw["container_policies"]
+            ]} if raw.get("container_policies") else {}),
         })
         if raw["configuration_fingerprint"] != fingerprint:
             raise AgentProcessSupervisorError("retained supervisor binding is invalid")
@@ -2247,7 +2306,8 @@ def _serve(
     if expected_configuration is not None and configuration != expected_configuration:
         raise AgentProcessSupervisorError("managed supervisor configuration changed")
     supervisor = AgentProcessSupervisor(
-        root, agent_id=configuration.agent_id, profiles=configuration.profiles
+        root, agent_id=configuration.agent_id, profiles=configuration.profiles,
+        container_policies=configuration.container_policies,
     )
     if managed_start:
         from ._agent_session_journal import _RemoteAgentJournal

@@ -2,7 +2,7 @@
 
 Preparation turns authored configuration into a canonical Loom run without
 executing its target stages. The coordinator accepts the request, schedules a
-fixed preparation child in the specified existing worker environment, and
+fixed preparation child in the selected installed environment or submitted container, and
 publishes the checked result. The caller then decides whether to submit it.
 
 Use the same [native client](coordinator-client.md) on one machine or a fleet.
@@ -1346,3 +1346,135 @@ intent records require fresh preparation; they are never rewritten on load or
 made current by a replay comparison. Current replay compares against today's
 retained protected bindings, without an old-format opt-out from composition
 verification.
+
+
+## Submission-selected shared containers
+
+A request can supply `execution` to select an immutable SIF for preparation and
+all managed stages. The preparation alias then names a stable container policy,
+not an installed scientific profile. Omit `execution` for the existing installed
+profile contract. Explicit JSON `null` is not a third mode.
+
+```python
+from loom.queue.preparation import PrepareRunRequest, PreparationSource
+from loom.queue.submitted_execution import (
+    SubmittedContainerExecution,
+    SubmittedImage,
+    SUBMITTED_CONTAINER_WORKER_CONTRACT,
+)
+
+request = PrepareRunRequest(
+    operation_id="experiment-a",
+    run_name="experiment-a",
+    source=PreparationSource("shared", "projects", "experiment-a", ("config",)),
+    config_path="config/pipeline.yaml",
+    preparation_profile="shared-containers",
+    execution=SubmittedContainerExecution(
+        runtime="apptainer",
+        image=SubmittedImage(
+            {"kind": "loom.shared-location", "schema_version": 1,
+             "root_id": "workloads", "path": "images/aaa/image.sif"},
+            sha256=image_sha256,  # Complete lowercase SHA256 of the retained SIF.
+            size_bytes=image_size_bytes,
+        ),
+        python_executable="/opt/project/venv/bin/python",
+        worker_contract=SUBMITTED_CONTAINER_WORKER_CONTRACT,
+        project_integration=None,
+    ),
+)
+```
+
+`python_executable` is inside the image; the host does not resolve it. A project
+can supply the existing version-3 preparation processor value as
+`project_integration`. It must be installed inside the image. Configuration
+composition, project inspection, candidate/result verification and target work
+retain the same execution binding. Conflicting stage routes or authored native
+execution bindings refuse publication.
+
+The initial route uses outbound agents, Apptainer/Singularity and qualified
+shared storage. Images remain outside the finite configuration/relay archive.
+The coordinator pins the image directory using preparation retention before
+child dispatch. New supervisor launches verify image type, permissions, size and
+checksum on the bulk path. Existing launch replay observes the retained process
+receipt; unavailable storage does not authorize replacement or fallback.
+
+Agent service configuration accepts `container_policies` alongside optional
+installed `resident_profiles`. Container policies declare runtime options,
+private shared-root mappings, allowed read-only image roots, environment and
+mount policy, supported worker contracts and project-integration versions. An
+agent with these policies must declare an explicit `resources` inventory. Its
+registration declares `submitted-container-execution-v1`,
+`remote-stage-execution-v4`, `regular-file-relay-v1`, `shared-execution-v1`,
+`shared-assignment-reference-v1` and the applicable preparation capabilities.
+For shared preparation, declare `preparation-input-v2` and map each selected
+`preparation_shared_roots` snapshot directory beneath exactly one protected
+container-visible shared root, such as `/loom/snapshots`.
+Offers carry portable `container_execution_capabilities`; all images share the
+same provider objects, claims, resource inventory and assignment ceiling.
+
+The coordinator configures matching `container_capabilities`, its own
+`shared_roots` and `assignment_payload_root_id`. A preparation alias selects
+`container_policy_id` instead of `resident_profile_id`. Host-only image roots
+are excluded from workload-visible shared scope. Neither service configuration
+contains a workload image, and submitting another image changes none of these
+protected identities. Installing this native capability itself requires the
+ordinary runtime rollout.
+
+Submitted child inputs and preparation reports use schema 11; their private
+worker context uses schema 7. Installed child/report/context forms remain
+10/10/6. Action-verification reports use schema 10 for submitted execution and
+schema 9 for installed execution. Native reports retain complete execution and
+policy evidence independently of external tracking services.
+
+`submitted_implementation(execution, capability)` supplies the common portable
+identity for project reconciliation and native action reuse. It covers image
+bytes, runtime, contained Python/interface, project integration and environment.
+Image locations and allocation-specific GPU bindings stay outside that identity.
+Projects must include this identity in whole-run reconciliation; native action
+reuse also joins it to the admitted node binding.
+
+The real-SIF continuity probe passes: one image remains active while another
+image prepares and executes code available only in that image. Service identities,
+protected configuration and open admission are checked. This CPU probe does not
+qualify a deployed fleet. Its additional scenarios exercise lost launch replies,
+containment with a missing image, corrupt-image refusal and original-image retry.
+The `action_reuse` scenario executes each image once and then submits a renamed
+stage under the same image. Each renamed stage adopts the original committed
+artifacts without a workload attempt, after an image-contained verifier reads the
+selected outputs. Different image bytes require a new producer. All four runs
+use unchanged service identities and protected configuration.
+Reproduce continuity with:
+
+```bash
+uv run --locked --extra config python tools/build_submitted_acceptance_images.py /absolute/new-image-directory
+LOOM_SUBMITTED_IMAGES=/absolute/new-image-directory \
+  uv run --locked --extra config --group dev pytest -q \
+  'tests/integration/queue/test_submitted_container_physical.py::test_submitted_images_preserve_execution_ownership[continuity]'
+```
+
+The separate cross-host probe prepares on the caller's host and executes on an
+explicit SSH host. Both need the qualified shared root and image paths. The remote
+interpreter must have the compatible Loom distribution installed. It uses owned
+native roots and a mutual-TLS connection through an SSH reverse tunnel; no running
+fleet configuration is changed.
+
+```bash
+export LOOM_SUBMITTED_IMAGES=/shared/acceptance-images
+export LOOM_SUBMITTED_SHARED=/shared/private-acceptance
+export LOOM_SUBMITTED_REMOTE=worker-host
+export LOOM_SUBMITTED_REMOTE_PYTHON=/installed/operator/bin/python
+# Select an available UUID explicitly; omission skips the GPU case.
+export LOOM_SUBMITTED_GPU=GPU-REPLACE_WITH_AVAILABLE_DEVICE_UUID
+uv run --locked --extra config --group dev pytest -q \
+  tests/integration/queue/test_submitted_container_cross_host.py
+```
+
+CPU and GPU variants passed with preparation on Sleipnir and execution on Quark.
+The GPU variant performs a small real CUDA-driver computation and checks the
+visible UUID. B prepares while A holds its exclusive GPU claim; its supervisor
+launch appears only after release. Accounting and enforcement remain distinct:
+the probe explicitly requests `resource_policy.enforce: [gpu]`.
+
+Role qualification checks the host runtime and storage policy without
+selecting scientific code. Workload scientific checks and compute probes use
+explicit submitted work.

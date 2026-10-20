@@ -499,7 +499,7 @@ def handle_agent_supervisor_serve(namespace: argparse.Namespace) -> int:
     try:
         with observe_phases(log_phases):
             service = load_outbound_agent_service_config(namespace.config, env_file=namespace.env_file)
-            if service.client.agent_root is None or not service.client.resident_profiles:
+            if service.client.agent_root is None or not (service.client.resident_profiles or service.client.container_policies):
                 raise CliError("native supervisor requires a resident agent root")
             from loom.queue.agent_session_transport import _read_remote_agent_root_id
             AgentProcessSupervisorService.serve_initialized(
@@ -507,6 +507,7 @@ def handle_agent_supervisor_serve(namespace: argparse.Namespace) -> int:
                 configuration=SupervisorLaunchConfiguration(
                     _read_remote_agent_root_id(service.client.agent_root),
                     tuple(profile.launch_profile for profile in service.client.resident_profiles),
+                    service.client.container_policies,
                 ),
                 immutable_fingerprint=service.immutable_fingerprint,
                 active_fingerprint=service.active_fingerprint,

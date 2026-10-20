@@ -56,16 +56,12 @@ def _execute_delivered_assignment(
     suspend_requested: Callable[[], bool] | None = None,
 ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
     """Drive one already durable delivery through the native input/grant path."""
-    profile = self._profile_for_descriptor(request.profile)
-    if profile is None:
-        raise QueueConflictError(
-            "delivered assignment has no exact resident profile"
-        )
     session = self._require_journal().session(session_id)
     workspace = _ResidentAssignmentWorkspace(
         cast(Path, self._config.agent_root), request.assignment_id
     )
-    (yield from _external("bulk", workspace.persist_request, request, profile))
+    launch_profile = self._assignment_launch_profile(request, workspace)
+    (yield from _external("bulk", workspace.persist_request, request, launch_profile))
     self._require_journal().retain_assignment_reference(
         session_id, request.assignment_id
     )
@@ -281,7 +277,7 @@ def _execute_delivered_assignment(
 
         def build_supervisor_launch() -> ResidentWorkerLaunch:
             environment = _worker_environment(
-                profile.launch_profile,
+                launch_profile,
                 workspace.root,
                 commands,
                 providers,
@@ -303,7 +299,7 @@ def _execute_delivered_assignment(
                     _canonical_json(request.to_dict()).encode("utf-8")
                 ).hexdigest(),
                 workspace_root=workspace.root,
-                profile=profile.launch_profile,
+                profile=launch_profile,
                 environment=environment,
                 resource_controls=_managed_resource_controls(
                     request.resolved_runtime, bindings_prepared=True
@@ -454,7 +450,7 @@ def _resume_retained_assignments(
     execution_journal = self._execution_journal
     supervisor = self._supervisor
     if (
-        not self._config.resident_profiles
+        not (self._config.resident_profiles or self._config.container_policies)
         and not journal.unresolved_assignment_references()
     ):
         self._restart_with_retained_work = False

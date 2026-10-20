@@ -104,8 +104,9 @@ def capture_digest(report: Mapping[str, PlainData]) -> str:
                 "operation_id",
                 "input_manifest_digest",
                 "invocation",
-                "profile_descriptor",
+                "profile_descriptor", "execution", "container_capability",
             )
+            if key in report
         }
     )
 

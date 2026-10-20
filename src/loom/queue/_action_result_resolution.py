@@ -180,19 +180,10 @@ class ActionResultResolution:
         report = timings.call("reuse_contract_loading", load_contract_report, self.execution.run_store, run_uri, config=self.execution.run_store, local_paths=self.execution.run_store)
         if report is None:
             return None
-        descriptor = plain_mapping(report["profile_descriptor"])
-        if not descriptor.get("action_reuse_qualified", False):
-            return None
-        requirement = intent.execution_requirements[node].to_dict()
-        if any(descriptor[key] != value for key, value in requirement.items()):
-            raise QueueConflictError(
-                "action installation differs from admitted execution"
-            )
-        implementation = {
-            **requirement,
-            "processor": plain_mapping(report["project_preparation"])["processor"],
-        }
         spec = intent.pipeline.get_stage(node)
+        implementation = _report_implementation(report, intent.execution_requirements[node], spec)
+        if implementation is None:
+            return None
         contract = _worker_contract_metadata(report, spec)[
             CONTRACT
         ]
@@ -583,3 +574,24 @@ class ActionResultResolution:
                 },
             ),
         ).revision
+
+
+def _report_implementation(report: Mapping[str, PlainData], requirement: Any, stage: Any) -> dict[str, PlainData] | None:
+    """Join committed preparation implementation to this admitted action."""
+    from .submitted_execution import SUBMITTED_EXECUTION_SCOPE, submitted_binding, submitted_implementation
+
+    if "execution" in report:
+        binding = {key: report[key] for key in ("execution", "container_capability")}
+        execution, capability = submitted_binding(binding)
+        if requirement != capability.requirement(execution) or submitted_binding(stage.fingerprint_fields.get(SUBMITTED_EXECUTION_SCOPE)) != (execution, capability):
+            raise QueueConflictError("action implementation differs from admitted execution")
+        if execution.project_integration != plain_mapping(report["project_preparation"])["processor"]:
+            raise QueueConflictError("action integration differs from submitted execution")
+        return submitted_implementation(execution, capability)
+    descriptor = plain_mapping(report["profile_descriptor"])
+    if not descriptor.get("action_reuse_qualified", False):
+        return None
+    required = requirement.to_dict()
+    if any(descriptor[key] != value for key, value in required.items()):
+        raise QueueConflictError("action installation differs from admitted execution")
+    return {**required, "processor": plain_mapping(report["project_preparation"])["processor"]}

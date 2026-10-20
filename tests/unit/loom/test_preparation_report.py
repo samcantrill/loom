@@ -199,7 +199,7 @@ def test_relocated_retained_closure_reads_without_original_source(tmp_path):
     }
 
 
-@pytest.mark.parametrize("version", [7, True, 11])
+@pytest.mark.parametrize("version", [7, True, 12])
 def test_unsupported_report_schema_refuses_before_companion_publication(tmp_path, version):
     logical, store, _ref, companion = _write(tmp_path)
     before = companion.read_bytes()

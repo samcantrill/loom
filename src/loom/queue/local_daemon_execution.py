@@ -75,6 +75,7 @@ from loom.queue._managed_local import (
 )
 from loom.pipeline.orchestration import (
     ExecutionRequirement,
+    ManagedExecutionRequirement,
     SchedulingProjectionState,
     SQLiteStageWorkStore,
     StageWorkRecord,
@@ -144,7 +145,9 @@ from .coordinator_authority import (
     CoordinatorAuthorityFactory,
     CoordinatorAuthorityStore,
 )
+from .submitted_execution import SubmittedContainerCapability, SUBMITTED_CONTAINER_CAPABILITY
 from ._remote_stage_execution import (
+    _execution_target_id,
     MAX_TRANSFER_BYTES,
     ResidentProfileDescriptor,
     _ResidentAssignmentBundle,
@@ -192,7 +195,7 @@ class ManagedLocalIntent:
     plan: ExecutionPlan
     runtime: Mapping[str, ResolvedStageRuntimeOptions]
     placements: Mapping[str, ResolvedStagePlacement]
-    execution_requirements: Mapping[str, ExecutionRequirement]
+    execution_requirements: Mapping[str, ManagedExecutionRequirement]
     pipeline: PipelineSpec
     digest: str
     max_parallel_stages: int
@@ -525,7 +528,7 @@ class _RemoteCandidateTarget:
     scheduling_availability_revision: str
     inventory_revision: str
     offer: AgentOffer
-    profile: ResidentProfileDescriptor
+    profile: ResidentProfileDescriptor | SubmittedContainerCapability
     availability_atoms: tuple[CapacityAtom, ...]
     reflected_claim_ids: tuple[str, ...]
 
@@ -4367,12 +4370,13 @@ class LocalDaemonExecution:
             PREPARATION_STAGED_INPUT_CAPABILITY,
         )
 
-        if not self.config.remote_profiles:
+        if not (self.config.remote_profiles or self.config.container_capabilities):
             return {}
         accepted_time, _snapshot_time = self._daemon_owner()._accepted_snapshot()
         configured = {
             profile.profile_id: profile for profile in self.config.remote_profiles
         }
+        configured_containers = {item.policy_id: item for item in self.config.container_capabilities}
         with sqlite3.connect(self.config.control_database) as conn:
             conn.row_factory = sqlite3.Row
             rows = tuple(
@@ -4425,6 +4429,11 @@ class LocalDaemonExecution:
                 profile
                 for profile in offer.resident_profiles
                 if configured.get(profile.profile_id) == profile
+            )
+            matching += tuple(
+                capability for capability in offer.container_execution_capabilities
+                if configured_containers.get(capability.policy_id) == capability
+                and SUBMITTED_CONTAINER_CAPABILITY in json.loads(str(row["capabilities_json"]))
             )
             if not matching:
                 continue
@@ -4543,10 +4552,25 @@ class LocalDaemonExecution:
                     data=data,
                     atoms=kind_availability_atoms,
                 )
-            for profile in sorted(matching, key=lambda item: item.profile_id):
+            for profile in sorted(matching, key=_execution_target_id):
+                submitted = isinstance(profile, SubmittedContainerCapability)
                 candidate_id = ":".join(
-                    (agent_id, str(row["session_id"]), profile.profile_id)
+                    (agent_id, str(row["session_id"]),
+                     ("container:" if submitted else "") + _execution_target_id(profile))
                 )
+                identity: dict[str, PlainData]
+                if isinstance(profile, SubmittedContainerCapability):
+                    identity = {"container_policy_id": profile.policy_id,
+                                "container_policy_fingerprint": profile.fingerprint}
+                else:
+                    identity = {
+                        "resident_profile_id": profile.profile_id,
+                        "resident_profile_revision": profile.revision,
+                        "resident_profile_fingerprint": profile.fingerprint,
+                        "resident_project_fingerprint": profile.project_fingerprint,
+                        "resident_environment_fingerprint": profile.environment_fingerprint,
+                        "resident_executor_fingerprint": profile.executor_fingerprint,
+                    }
                 candidate = Candidate(
                     candidate_id,
                     {
@@ -4560,12 +4584,7 @@ class LocalDaemonExecution:
                     attributes={
                         "agent_id": agent_id,
                         "target": agent_id,
-                        "resident_profile_id": profile.profile_id,
-                        "resident_profile_revision": profile.revision,
-                        "resident_profile_fingerprint": profile.fingerprint,
-                        "resident_project_fingerprint": profile.project_fingerprint,
-                        "resident_environment_fingerprint": profile.environment_fingerprint,
-                        "resident_executor_fingerprint": profile.executor_fingerprint,
+                        **identity,
                         "artifact_capability": "regular-file-relay-v1",
                         **(shared_attributes({"roots": dict(profile.shared_roots)})
                            if profile.shared_roots and self._shared_assignment_candidate(profile, json.loads(str(row["capabilities_json"]))) else {}),

@@ -18,6 +18,8 @@ from uuid import uuid4
 from loom.serialization import PlainData, thaw_plain_data
 from .errors import QueueConflictError, QueueServiceError
 from .shared_execution import location, qualifications
+from .submitted_execution import SubmittedContainerCapability
+from ._submitted_container_policy import SubmittedContainerPolicy
 
 if TYPE_CHECKING:
     from ._remote_stage_execution import (
@@ -78,10 +80,14 @@ def reference(value: object) -> dict[str, PlainData] | None:
     }
 
 
+def _target_id(profile: ResidentProfileDescriptor | SubmittedContainerCapability) -> str:
+    return profile.policy_id if isinstance(profile, SubmittedContainerCapability) else profile.profile_id
+
+
 def require_root(
     root_id: str | None,
     roots: Mapping[str, PlainData],
-    profile: ResidentProfileDescriptor,
+    profile: ResidentProfileDescriptor | SubmittedContainerCapability,
 ) -> None:
     if root_id is None:
         raise _AssignmentPayloadRootRequired()
@@ -200,7 +206,7 @@ def publish(
         "attempt_id": request.attempt_id,
         "session_id": session_id,
         "issuer_epoch": issuer_epoch,
-        "profile_id": request.profile.profile_id,
+        "profile_id": _target_id(request.profile),
         "profile_fingerprint": request.profile.fingerprint,
     }
 
@@ -215,7 +221,7 @@ def verify_bundle(
         ref["session_id"] != session_id
         or request.assignment_id != ref["assignment_id"]
         or request.attempt_id != ref["attempt_id"]
-        or request.profile.profile_id != ref["profile_id"]
+        or _target_id(request.profile) != ref["profile_id"]
         or request.profile.fingerprint != ref["profile_fingerprint"]
         or len(encoded) != ref["size_bytes"]
         or hashlib.sha256(encoded).hexdigest() != ref["sha256"]
@@ -226,14 +232,15 @@ def verify_bundle(
 
 
 def resolve(
-    ref: Mapping[str, PlainData], profile: ResidentExecutionProfile, *, session_id: str
+    ref: Mapping[str, PlainData], profile: ResidentExecutionProfile | SubmittedContainerPolicy, *, session_id: str
 ) -> _ResidentAssignmentBundle:
     from ._remote_stage_execution import _ResidentAssignmentBundle
 
+    descriptor = profile.capability if isinstance(profile, SubmittedContainerPolicy) else profile.descriptor
     if (
         ref["session_id"] != session_id
-        or ref["profile_id"] != profile.descriptor.profile_id
-        or ref["profile_fingerprint"] != profile.descriptor.fingerprint
+        or ref["profile_id"] != _target_id(descriptor)
+        or ref["profile_fingerprint"] != descriptor.fingerprint
     ):
         raise QueueConflictError(
             "shared assignment reference has no exact protected profile"
@@ -244,7 +251,7 @@ def resolve(
     if not isinstance(root, Mapping):
         raise QueueServiceError("shared assignment payload root is not mapped")
     if qualifications({root_id: root}) != {
-        root_id: profile.descriptor.shared_roots[root_id]
+        root_id: descriptor.shared_roots[root_id]
     }:
         raise QueueConflictError("shared assignment root qualification changed")
     try:

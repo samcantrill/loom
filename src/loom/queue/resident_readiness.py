@@ -342,13 +342,12 @@ def _container_software_identity(profile: ResidentExecutionProfile, *, deadline:
     # Shared mounts and executable/image host prefixes belong to the protected
     # launch binding. The installed image and container-visible contract define
     # portable software identity; selected data has its own qualification.
-    container["mounts"] = [
-        {"target": mount["target"], "mode": mount.get("mode", "ro")}
-        for mount in cast(list[Mapping[str, PlainData]], container.get("mounts", []))
-    ]
-    options = dict(cast(Mapping[str, PlainData], binding["options"]))
-    options.pop("command", None)
-    return {"kind": binding["kind"], "container": container, "options": options,
+    from ._container_worker import portable_container_settings
+
+    portable = portable_container_settings(
+        container, cast(Mapping[str, PlainData], binding["options"]),
+    )
+    return {"kind": binding["kind"], **portable,
             "python_executable": binding["python_executable"]}
 
 

@@ -23,7 +23,6 @@ def temporary_mount_targets(
     """Validate the private profile declaration without inspecting storage."""
     from loom.pipeline.executors.containers import (
         ContainerMount,
-        ContainerMountMode,
         parse_container_options,
     )
 
@@ -36,16 +35,27 @@ def temporary_mount_targets(
         return ()
     if container is None:
         raise ValueError("temporary mounts require a container binding")
+    mounts = cast(
+        tuple[ContainerMount, ...],
+        parse_container_options(container["container"]).mounts,
+    )
+    return _temporary_targets_for_mounts(targets, mounts)
+
+
+def _temporary_targets_for_mounts(value: object, mounts: object) -> tuple[str, ...]:
+    """Share mount validation with policies whose image is selected at submission."""
+    from loom.pipeline.executors.containers import ContainerMount, ContainerMountMode
+
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("temporary_mounts must be a sequence of container mount targets")
+    targets = tuple(value)
     if any(
         not isinstance(item, str) or not Path(item).is_absolute() for item in targets
     ):
         raise ValueError("temporary mount targets must be absolute paths")
     if len(set(targets)) != len(targets):
         raise ValueError("temporary mount targets must be unique")
-    mounts = cast(
-        tuple[ContainerMount, ...],
-        parse_container_options(container["container"]).mounts,
-    )
+    mounts = cast(tuple[ContainerMount, ...], mounts)
     by_target = {mount.target: mount for mount in mounts}
     for target in targets:
         mount = by_target.get(target)

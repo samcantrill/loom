@@ -69,6 +69,12 @@ from ._agent_process_supervisor import (
     _preparation_root_bindings,
 )
 from .errors import QueueConflictError, QueueServiceError
+from .submitted_execution import (
+    SUBMITTED_EXECUTION_SCOPE,
+    SubmittedContainerCapability,
+    SubmittedContainerExecution,
+    assignment_binding,
+)
 
 
 RESIDENT_ASSIGNMENT_BUNDLE_SCHEMA_VERSION = 6
@@ -205,6 +211,16 @@ class ResidentProfileDescriptor:
             cast(Mapping[str, PlainData], value.get("shared_roots", {})),
             cast(bool, value.get("action_reuse_qualified", False)),
         )
+
+
+def _execution_descriptor_from_dict(value: object) -> ResidentProfileDescriptor | SubmittedContainerCapability:
+    if isinstance(value, Mapping) and value.get("kind") == "submitted_container":
+        return SubmittedContainerCapability.from_dict(value)
+    return ResidentProfileDescriptor.from_dict(value)
+
+
+def _execution_target_id(value: ResidentProfileDescriptor | SubmittedContainerCapability) -> str:
+    return value.policy_id if isinstance(value, SubmittedContainerCapability) else value.profile_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -811,7 +827,7 @@ class _ResidentAssignmentBundle:
     attempt_id: str
     offer_id: str
     claim_id: str
-    profile: ResidentProfileDescriptor
+    profile: ResidentProfileDescriptor | SubmittedContainerCapability
     prepared_at: str
     executor_name: str
     fingerprint: Mapping[str, PlainData]
@@ -843,7 +859,7 @@ class _ResidentAssignmentBundle:
             or self.attempt < 1
         ):
             raise QueueServiceError("attempt is invalid")
-        if not isinstance(self.profile, ResidentProfileDescriptor):
+        if not isinstance(self.profile, (ResidentProfileDescriptor, SubmittedContainerCapability)):
             raise QueueServiceError("resident assignment profile is invalid")
         fingerprint = freeze_plain_data(self.fingerprint, path="remote fingerprint")
         runtime = freeze_plain_data(self.resolved_runtime, path="remote runtime")
@@ -872,13 +888,26 @@ class _ResidentAssignmentBundle:
         object.__setattr__(self, "fingerprint", fingerprint)
         object.__setattr__(self, "resolved_runtime", runtime)
         object.__setattr__(self, "worker_metadata", metadata)
+        submitted = assignment_binding(fingerprint)
+        if isinstance(self.profile, SubmittedContainerCapability):
+            if submitted is None or submitted[1] != self.profile:
+                raise QueueConflictError("submitted assignment policy differs from its workload binding")
+        elif submitted is not None:
+            raise QueueConflictError("submitted assignment cannot use an installed profile")
+        if submitted is not None and assignment_scope(fingerprint) is None:
+            raise QueueServiceError("submitted containers require shared execution scope")
         assignment_scope(fingerprint)
         from ._shared_recovery import validate_wire
         validate_wire(self)
         preparation = _preparation_input_from_fingerprint(fingerprint)
         if (
             preparation is not None
-            and dict(preparation.profile_descriptor) != self.profile.to_dict()
+            and (
+                (preparation.execution is None and preparation.profile_descriptor != self.profile.to_dict())
+                or (preparation.execution is not None and (
+                    submitted is None or submitted != (preparation.execution, preparation.container_capability)
+                ))
+            )
         ):
             raise QueueConflictError(
                 "preparation assignment does not use the selected resident profile"
@@ -980,6 +1009,11 @@ class _ResidentAssignmentBundle:
     def preparation_input(self) -> "PreparationChildInput | None":
         return _preparation_input_from_fingerprint(self.fingerprint)
 
+    @property
+    def submitted_execution(self) -> SubmittedContainerExecution | None:
+        binding = assignment_binding(self.fingerprint)
+        return None if binding is None else binding[0]
+
     @classmethod
     def from_worker_request(
         cls,
@@ -990,7 +1024,7 @@ class _ResidentAssignmentBundle:
         offer_id: str,
         claim_id: str,
         worker_request: StageWorkerRequest,
-        profile: ResidentProfileDescriptor,
+        profile: ResidentProfileDescriptor | SubmittedContainerCapability,
         inputs: tuple[_RemoteArtifact, ...],
         declared_outputs: tuple[str, ...],
         claims: tuple[ResourceClaim, ...],
@@ -1131,7 +1165,7 @@ class _ResidentAssignmentBundle:
             attempt_id=cast(str, value["attempt_id"]),
             offer_id=cast(str, value["offer_id"]),
             claim_id=cast(str, value["claim_id"]),
-            profile=ResidentProfileDescriptor.from_dict(value["profile"]),
+            profile=_execution_descriptor_from_dict(value["profile"]),
             prepared_at=cast(str, value["prepared_at"]),
             executor_name=cast(str, value["executor_name"]),
             fingerprint=cast(Mapping[str, PlainData], value["fingerprint"]),
@@ -1649,7 +1683,7 @@ class _ResidentAssignmentWorkspace:
         descriptor = (
             profile.descriptor
             if isinstance(profile, ResidentExecutionProfile)
-            else ResidentProfileDescriptor.from_dict(profile.descriptor)
+            else _execution_descriptor_from_dict(profile.descriptor)
         )
         if request.profile != descriptor:
             raise QueueConflictError(
@@ -1658,6 +1692,8 @@ class _ResidentAssignmentWorkspace:
         from .preparation import _require_local_binding
 
         launch_profile = profile.launch_profile if isinstance(profile, ResidentExecutionProfile) else profile
+        if request.submitted_execution != launch_profile.submitted_execution:
+            raise QueueConflictError("assignment image differs from its launch selection")
         _require_local_binding(_assignment_local_scope(request), launch_profile)
         encoded = _canonical_json(request.to_dict())
         with self._connect() as conn:
@@ -1905,6 +1941,35 @@ class _ResidentAssignmentWorkspace:
         return self.read_supervisor_launch_json(self.root.parent.parent, self.assignment_id)
 
     @staticmethod
+    def require_submitted_launch(launch: object) -> None:
+        """Join a new submitted launch to its durable assignment and granted fence."""
+        from ._agent_process_supervisor import ResidentWorkerLaunch, _launch_json
+
+        if not isinstance(launch, ResidentWorkerLaunch):
+            raise QueueServiceError("submitted launch is invalid")
+        request = _ResidentAssignmentWorkspace.read_request(launch.workspace_root)
+        if (
+            request.submitted_execution is None
+            or request.submitted_execution != launch.profile.submitted_execution
+            or request.profile.to_dict() != launch.profile.descriptor
+            or request.assignment_id != launch.assignment_id
+            or hashlib.sha256(_canonical_json(request.to_dict()).encode()).hexdigest()
+            != launch.bundle_digest
+        ):
+            raise QueueConflictError("submitted launch conflicts with retained assignment")
+        with inspect_sqlite_database(launch.workspace_root / "resident.sqlite") as conn:
+            row = conn.execute(
+                "SELECT state, fence, supervisor_launch_json FROM request WHERE singleton = 1"
+            ).fetchone()
+        if (
+            row is None
+            or row["state"] not in {"GRANTED", "STARTED"}
+            or row["fence"] != launch.execution_fence
+            or row["supervisor_launch_json"] != _launch_json(launch)
+        ):
+            raise QueueConflictError("submitted launch has no matching retained grant and launch")
+
+    @staticmethod
     def read_request(workspace: Path) -> _ResidentAssignmentBundle:
         """Read retained request facts without creating or initializing a workspace."""
         _require_current_workspace_path(Path(workspace))
@@ -2013,7 +2078,8 @@ class _ResidentAssignmentWorkspace:
         if (value.get("assignment_id") != request.assignment_id
             or value.get("workspace_root") != str(self.root)
             or value.get("bundle_digest") != hashlib.sha256(_canonical_json(request.to_dict()).encode()).hexdigest()
-            or dict(profile.descriptor) != request.profile.to_dict()):
+            or dict(profile.descriptor) != request.profile.to_dict()
+            or profile.submitted_execution != request.submitted_execution):
             raise QueueConflictError("shared execution conflicts with retained launch")
         required = assignment_scope(request.fingerprint)
         if required is None:
@@ -2038,7 +2104,7 @@ class _ResidentAssignmentWorkspace:
                 launch.assignment_id != request.assignment_id
                 or launch.workspace_root != self.root
                 or launch.bundle_digest != hashlib.sha256(_canonical_json(request.to_dict()).encode()).hexdigest()
-                or dict(launch.profile.descriptor) != dict(preparation.profile_descriptor)
+                or launch.profile.descriptor != preparation.profile_descriptor
             ):
                 raise QueueConflictError("preparation input conflicts with the retained launch")
             launch_profile = launch.profile
@@ -2051,8 +2117,8 @@ class _ResidentAssignmentWorkspace:
         if preparation.project_preparation is not None:
             purpose = {"kind": "project", "binding": dict(preparation.project_preparation)}
         context: dict[str, PlainData] = {
-            "schema_version": PREPARATION_CONTEXT_SCHEMA_VERSION,
-            "profile_descriptor": dict(launch_profile.descriptor),
+            "schema_version": 7 if preparation.execution is not None else PREPARATION_CONTEXT_SCHEMA_VERSION,
+            **preparation.execution_data(),
             "scope": _scope_data(preparation.local_scope, preparation.shared_scope),
             "purpose": purpose,
         }
@@ -2672,10 +2738,23 @@ def _validate_remote_semantic_data(
     worker_metadata: Mapping[str, PlainData],
 ) -> None:
     """Reject coordinator-local locations from the semantic wire request."""
+    from loom.fingerprints import hash_mapping
     from .preparation import LOCAL_PREPARATION_SCOPE, _local_scope
 
     payload = cast(Mapping[str, PlainData], fingerprint["payload"])
     fields = cast(Mapping[str, PlainData], payload["fingerprint_fields"])
+    submitted = assignment_binding(fingerprint)
+    if submitted is not None:
+        # Only this typed container-internal field may carry an absolute Python
+        # path. Its decoder admits no host paths, mounts or executable authority.
+        payload = dict(payload)
+        payload["fingerprint_fields"] = {
+            **fields,
+            SUBMITTED_EXECUTION_SCOPE: {
+                "binding_digest": hash_mapping(fields[SUBMITTED_EXECUTION_SCOPE]),
+            },
+        }
+        fingerprint = {**fingerprint, "payload": payload}
     preparation = _preparation_input_from_fingerprint(fingerprint)
     if (_local_scope(fields.get(LOCAL_PREPARATION_SCOPE)) is not None
         or (preparation is not None and preparation.local_scope is not None)):
@@ -2683,8 +2762,6 @@ def _validate_remote_semantic_data(
     if preparation is not None:
         # The fixed stage's only location-bearing data is a validated finite
         # preparation reference. Every other semantic field keeps the same guard.
-        from loom.fingerprints import hash_mapping
-
         payload = cast(Mapping[str, PlainData], fingerprint["payload"])
         fingerprint = {
             **fingerprint,

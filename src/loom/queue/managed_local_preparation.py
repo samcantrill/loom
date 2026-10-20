@@ -10,7 +10,9 @@ import re
 from typing import Any, cast
 
 from loom.pipeline import PipelineSpec
-from loom.pipeline.orchestration import ExecutionRequirement
+from loom.pipeline.orchestration import (
+    ExecutionRequirement, ManagedExecutionRequirement, SubmittedContainerRequirement,
+)
 from loom.pipeline.planning import ExecutionPlan, plan_pipeline
 from loom.pipeline.status import RunStatus
 from loom.pipeline.runtime import (
@@ -96,7 +98,7 @@ def prepare_managed_run(
     composed: object,
     run_name: str,
     *,
-    execution_requirements: Mapping[str, ExecutionRequirement],
+    execution_requirements: Mapping[str, ManagedExecutionRequirement],
 ) -> ManagedLocalPreparationReceipt:
     """Prepare one managed run from trusted resolved inputs.
 
@@ -146,6 +148,8 @@ def prepare_managed_run(
         if isinstance(route, Mapping) and route.get("kind") == "slurm":
             profile = profiles.get(cast(str, route.get("profile")))
             requirement = requirements[stage.name]
+            if isinstance(requirement, SubmittedContainerRequirement):
+                raise QueueServiceError("submitted containers do not support the Slurm route")
             if profile is None or (
                 profile.project_fingerprint != requirement.project_fingerprint
                 or profile.environment_fingerprint
@@ -392,12 +396,12 @@ def _execution_requirements(
 
 def _validated_execution_requirements(
     pipeline: PipelineSpec,
-    requirements: Mapping[str, ExecutionRequirement],
-) -> dict[str, ExecutionRequirement]:
+    requirements: Mapping[str, ManagedExecutionRequirement],
+) -> dict[str, ManagedExecutionRequirement]:
     """Snapshot explicit stage requirements before creating durable state."""
 
     if set(requirements) != set(pipeline.stage_names) or any(
-        not isinstance(value, ExecutionRequirement) for value in requirements.values()
+        not isinstance(value, (ExecutionRequirement, SubmittedContainerRequirement)) for value in requirements.values()
     ):
         raise QueueServiceError(
             "managed preparation execution requirements must exactly cover the pipeline"
@@ -439,7 +443,7 @@ def _replay_receipt(
     composed: object,
     pipeline: PipelineSpec,
     options: RunOptions,
-    requirements: Mapping[str, ExecutionRequirement],
+    requirements: Mapping[str, ManagedExecutionRequirement],
     service: CoordinatorServiceConfig,
 ) -> ManagedLocalPreparationReceipt:
     try:
@@ -477,7 +481,7 @@ def _replay_matches(
     composed: object,
     pipeline: PipelineSpec,
     options: RunOptions,
-    requirements: Mapping[str, ExecutionRequirement],
+    requirements: Mapping[str, ManagedExecutionRequirement],
     service: CoordinatorServiceConfig,
 ) -> None:
     store.open_run(run_uri)

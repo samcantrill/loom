@@ -71,6 +71,9 @@ def probe_preparation(
     preparation are exercised. Only ephemeral report artifacts are written.
     A bounded, contained failure refuses compatibility before maintenance.
     """
+    if binding.execution is not None:
+        raise QueueConflictError("standalone installed-profile qualification cannot run submitted containers")
+    assert binding.profile_descriptor is not None
     if dict(binding.profile_descriptor) != dict(profile.descriptor):
         raise QueueConflictError("preparation candidate installation differs")
     _require_local_binding(binding.local_scope, profile, agent_id=agent_id)

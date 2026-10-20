@@ -13,7 +13,9 @@ from pathlib import Path
 from typing import cast
 
 from loom.pipeline.planning import ExecutionPlan
-from loom.pipeline.orchestration import ExecutionRequirement
+from loom.pipeline.orchestration import (
+    ExecutionRequirement, ManagedExecutionRequirement, SubmittedContainerRequirement,
+)
 from loom.pipeline.runtime import (
     ExecutionRoute,
     ExecutionRouteKind,
@@ -58,7 +60,7 @@ def prepare_managed_local_runtime_record(
     run_uri: str,
     plan: ExecutionPlan,
     pipeline: PipelineSpec,
-    execution_requirements: Mapping[str, ExecutionRequirement],
+    execution_requirements: Mapping[str, ManagedExecutionRequirement],
     options: RunOptions | Mapping[str, object] | None = None,
     slurm_profiles: Sequence[SlurmReadyStageProfile] = (),
     scheduling_components: LocalDaemonSchedulingComponents | None = None,
@@ -94,7 +96,7 @@ def _runtime_record_matches_current_intent(
     run_uri: str,
     plan: ExecutionPlan,
     pipeline: PipelineSpec,
-    execution_requirements: Mapping[str, ExecutionRequirement],
+    execution_requirements: Mapping[str, ManagedExecutionRequirement],
     options: RunOptions | Mapping[str, object] | None = None,
     slurm_profiles: Sequence[SlurmReadyStageProfile] = (),
     scheduling_components: LocalDaemonSchedulingComponents | None = None,
@@ -126,7 +128,7 @@ def _runtime_payload(
     run_uri: str,
     plan: ExecutionPlan,
     pipeline: PipelineSpec,
-    execution_requirements: Mapping[str, ExecutionRequirement],
+    execution_requirements: Mapping[str, ManagedExecutionRequirement],
     options: RunOptions | Mapping[str, object] | None = None,
     slurm_profiles: Sequence[SlurmReadyStageProfile] = (),
     scheduling_components: LocalDaemonSchedulingComponents | None = None,
@@ -136,7 +138,7 @@ def _runtime_payload(
     if plan.run_uri != run_uri or set(plan.stage_order) != set(pipeline.stage_names):
         raise QueueServiceError("managed-local runtime preparation identity conflicts")
     if set(execution_requirements) != set(plan.stage_order) or any(
-        not isinstance(value, ExecutionRequirement)
+        not isinstance(value, (ExecutionRequirement, SubmittedContainerRequirement))
         for value in execution_requirements.values()
     ):
         raise QueueServiceError(
@@ -284,7 +286,11 @@ def _preparation_constraints(
     if stage.factory.target_path != PREPARATION_STAGE_TARGET:
         return constraints
     binding = PreparationChildInput.from_dict(stage.stage_config)
-    profile = ResidentProfileDescriptor.from_dict(binding.profile_descriptor)
+    selection = (
+        {"container_policy_fingerprint": binding.container_capability.fingerprint}
+        if binding.container_capability is not None else
+        {"resident_profile_fingerprint": ResidentProfileDescriptor.from_dict(binding.profile_descriptor).fingerprint}
+    )
     evaluator = evaluators.get("attribute")
     if evaluator is None:
         raise QueueServiceError(
@@ -296,7 +302,7 @@ def _preparation_constraints(
             "attribute",
             {
                 "attributes": {
-                    "resident_profile_fingerprint": profile.fingerprint,
+                    **selection,
                     "preparation_input_capability": PREPARATION_INPUT_CAPABILITY,
                     **(
                         {"preparation_staged_capability": PREPARATION_STAGED_INPUT_CAPABILITY}
