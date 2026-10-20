@@ -29,6 +29,7 @@ from .run import RunRequest, _public_operation_id
 from ._maintenance import MaintenanceCheckConflict
 from ._service_lifetime import ServiceRetiring
 from ._phase_timing import PhaseTimings
+from .submitted_execution import SubmittedContainerCapability
 from .preparation import (
     PreparationChildInput,
     PrepareRunRequest,
@@ -451,10 +452,10 @@ class CoordinatorPreparations:
             )
             selected["slurm_profiles"] = [
                 item.descriptor.to_dict() for item in self.daemon.config.slurm_profiles
-            ]
+            ] if request.execution is None else []
             selected["remote_profiles"] = [
                 item.to_dict() for item in self.daemon.config.remote_profiles
-            ]
+            ] if request.execution is None else []
             if _operation_projection(conn, request.operation_id) is not None:
                 raise QueueConflictError("managed operation identity is ambiguous")
             execution = self.daemon._execution
@@ -481,6 +482,7 @@ class CoordinatorPreparations:
                 "schema_version": 1,
                 "coordinator_id": coordinator_id,
                 "input_receipt": None,
+                **({"image_retained": False} if request.execution is not None else {}),
                 "preparation_admission_id": None,
                 "preflight_status": None,
                 "preflight": None,
@@ -516,7 +518,7 @@ class CoordinatorPreparations:
                 request, queue_item_id, run_mode, retry_policy, fresh_stages).to_dict())
             check = classify(conn, request.operation_id, request=full_request, principal_id=principal_id)
             if check is not None:
-                if _mapping(selected["profile"])["profile_descriptor"] != check["profile"]:
+                if _mapping(selected["profile"]).get("profile_descriptor") != check["profile"]:
                     raise QueueConflictError("maintenance check selected profile conflicts")
                 selected["maintenance_check"] = dict(check)
             accepted_at = self.daemon._clock()
@@ -764,12 +766,23 @@ class CoordinatorPreparations:
             components = execution.preparation_scheduling_components(
                 _mapping(selected["scheduling"])
             )
+            capability_data = _mapping(selected["profile"]).get("container_capability")
+            capabilities = self.daemon.config.container_capabilities
+            if capability_data is not None:
+                capabilities = tuple(
+                    item for item in capabilities if item.to_dict() == capability_data
+                )
+                if not capabilities:
+                    raise PreparationConfigurationUnavailable(
+                        "accepted container execution policy is unavailable"
+                    )
             return replace(
                 self.daemon.config,
                 run_store_root=Path(cast(str, selected["run_store_root"])),
                 scheduling_components=components,
                 slurm_profiles=tuple(profiles),
                 remote_profiles=tuple(remote_profiles),
+                container_capabilities=capabilities,
             )
 
     def _advance(self, row: sqlite3.Row) -> None:
@@ -869,6 +882,21 @@ class CoordinatorPreparations:
             row = self._read(operation_id)
         else:
             receipt = input_receipt_from_dict(_mapping(receipt_data))
+        if request.execution is not None and not result.get("image_retained"):
+            from .submitted_execution import retain_submitted_image
+
+            try:
+                retain_submitted_image(
+                    request.execution.image,
+                    _mapping(profile["image_roots"]),
+                    coordinator_id=self.daemon._require_started(),
+                    operation_id=operation_id,
+                )
+                result["image_retained"] = True
+                self._store_result(_operation(operation_id, "pending", None, result))
+            except (QueueServiceError, OSError):
+                self._fail(row, "image_unavailable")
+                return
         from .preparation import _project_target_uri
 
         project_binding = None
@@ -887,7 +915,7 @@ class CoordinatorPreparations:
             request.preparation_profile,
             request.config_path,
             receipt,
-            _mapping(profile["profile_descriptor"]),
+            None if request.execution is not None else _mapping(profile["profile_descriptor"]),
             request.overlays,
             request.overrides,
             request.run_options,
@@ -897,6 +925,11 @@ class CoordinatorPreparations:
             shared_scope=cast(Mapping[str, PlainData] | None, profile.get("shared_scope")),
             generations=cast(Mapping[str, str] | None, selected.get("generations")),
             action_verification=cast(Mapping[str, PlainData] | None, selected.get("action_verification")),
+            execution=request.execution,
+            container_capability=(
+                SubmittedContainerCapability.from_dict(profile["container_capability"])
+                if request.execution is not None else None
+            ),
         )
         child_name = str(row["child_name"])
         if row["child_admission_id"] is None:

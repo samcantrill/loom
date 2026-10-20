@@ -36,6 +36,18 @@ def main(argv: list[str] | None = None) -> int:
     gate = workspace_root / "run.grant"
     while not gate.is_file():
         time.sleep(0.01)
+    retained = workspace.request()
+    if retained.submitted_execution is not None:
+        from .submitted_execution import SUBMITTED_CONTAINER_WORKER_CONTRACT
+        from .errors import QueueServiceError
+
+        if retained.submitted_execution.worker_contract != SUBMITTED_CONTAINER_WORKER_CONTRACT:
+            raise QueueServiceError("submitted native worker contract is unsupported")
+        # Consume the host's retained launch evidence before any project import.
+        # Image hashing remains the supervisor's new-launch responsibility.
+        profile = workspace.shared_launch_profile()
+        if profile.submitted_execution != retained.submitted_execution:
+            raise QueueServiceError("contained workload differs from retained execution")
     timings = PhaseTimings()
     request = timings.call("input_materialization", workspace.worker_request, resolve_shared=True)
     os.environ.pop(PREPARATION_INPUT_CONTEXT_ENV, None)

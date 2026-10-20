@@ -34,6 +34,7 @@ from loom.serialization import (
 
 from .errors import QueueServiceError
 from .models import validate_queue_id
+from .submitted_execution import SubmittedContainerCapability, SubmittedContainerExecution
 
 
 _MAX_INCLUDES = 100
@@ -173,6 +174,8 @@ class PrepareRunRequest:
     native config strings. Sparse plain run options override authored runtime
     settings using the existing config/profile/invocation precedence. Omitted
     option fields stay omitted through capture, worker checks and publication.
+    An explicit ``execution`` selects immutable submitted container bytes before
+    preparation; omission preserves installed-profile execution.
     """
 
     operation_id: str
@@ -184,11 +187,16 @@ class PrepareRunRequest:
     overrides: tuple[str, ...] = ()
     run_options: Mapping[str, PlainData] = field(default_factory=dict)
     context: SubmissionContext | None = None
+    execution: SubmittedContainerExecution | None = None
 
     def __post_init__(self) -> None:
         from .managed_local_preparation import _validate_run_name
 
         _invocation(self)
+        if self.execution is not None and not isinstance(
+            self.execution, SubmittedContainerExecution
+        ):
+            raise QueueServiceError("preparation execution is invalid")
         if self.context is not None:
             if not isinstance(self.context, SubmissionContext):
                 raise QueueServiceError("preparation context is invalid")
@@ -219,11 +227,12 @@ class PrepareRunRequest:
             "preparation_profile": self.preparation_profile,
             **_invocation_data(self),
             **({"context": self.context.to_dict()} if self.context is not None else {}),
+            **({"execution": self.execution.to_dict()} if self.execution is not None else {}),
         }
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> "PrepareRunRequest":
-        if set(data) - {"overlays", "overrides", "run_options", "context"} != {
+        if set(data) - {"overlays", "overrides", "run_options", "context", "execution"} != {
             "operation_id",
             "run_name",
             "source",
@@ -242,6 +251,9 @@ class PrepareRunRequest:
             cast(Mapping[str, PlainData], data.get("run_options", {})),
             None if data.get("context") is None else SubmissionContext.from_dict(
                 cast(Mapping[str, object], data["context"])
+            ),
+            None if "execution" not in data else SubmittedContainerExecution.from_dict(
+                data["execution"]
             ),
         )
 
@@ -491,7 +503,7 @@ class PreparationChildInput:
     preparation_profile: str
     config_path: str
     input_receipt: PreparationInputReceipt
-    profile_descriptor: Mapping[str, PlainData]
+    profile_descriptor: Mapping[str, PlainData] | None
     overlays: tuple[str, ...] = ()
     overrides: tuple[str, ...] = ()
     run_options: Mapping[str, PlainData] = field(default_factory=dict)
@@ -501,6 +513,8 @@ class PreparationChildInput:
     shared_scope: Mapping[str, PlainData] | None = None
     generations: Mapping[str, str] | None = None
     action_verification: Mapping[str, PlainData] | None = None
+    execution: SubmittedContainerExecution | None = None
+    container_capability: SubmittedContainerCapability | None = None
 
     def __post_init__(self) -> None:
         from types import MappingProxyType
@@ -545,10 +559,41 @@ class PreparationChildInput:
         )
         if not isinstance(self.input_receipt, (SharedInputReceipt, StagedInputReceipt)):
             raise QueueServiceError("preparation child input receipt is invalid")
-        descriptor = ResidentProfileDescriptor.from_dict(self.profile_descriptor)
-        object.__setattr__(
-            self, "profile_descriptor", MappingProxyType(descriptor.to_dict())
-        )
+        if self.execution is None:
+            if self.container_capability is not None:
+                raise QueueServiceError("container capability requires submitted execution")
+            descriptor = ResidentProfileDescriptor.from_dict(self.profile_descriptor)
+            object.__setattr__(
+                self, "profile_descriptor", MappingProxyType(descriptor.to_dict())
+            )
+        else:
+            if (
+                not isinstance(self.execution, SubmittedContainerExecution)
+                or not isinstance(self.container_capability, SubmittedContainerCapability)
+                or self.profile_descriptor is not None
+                or self.local_scope is not None
+                or self.shared_scope is None
+                or not isinstance(self.input_receipt, SharedInputReceipt)
+            ):
+                raise QueueServiceError("submitted preparation binding requires one shared container policy")
+            self.container_capability.require_execution(self.execution)
+            if (
+                self.shared_scope["roots"] != self.container_capability.workload_roots
+                or (None if project is None else project["processor"])
+                != self.execution.project_integration
+            ):
+                raise QueueServiceError("submitted preparation policy or integration conflicts")
+
+    def execution_data(self) -> dict[str, PlainData]:
+        """The exact workload selection shared by child and report boundaries."""
+        if self.execution is None:
+            assert self.profile_descriptor is not None
+            return {"profile_descriptor": dict(self.profile_descriptor)}
+        assert self.container_capability is not None
+        return {
+            "execution": self.execution.to_dict(),
+            "container_capability": self.container_capability.to_dict(),
+        }
 
     def to_dict(self) -> dict[str, PlainData]:
         purpose: dict[str, PlainData] = {"kind": "generic"}
@@ -560,12 +605,12 @@ class PreparationChildInput:
                 purpose["kind"] = "verify_result"
                 purpose["request"] = thaw_plain_data(self.action_verification)
         return {
-            "schema_version": PREPARATION_CHILD_INPUT_SCHEMA_VERSION,
+            "schema_version": 11 if self.execution is not None else PREPARATION_CHILD_INPUT_SCHEMA_VERSION,
             "operation_id": self.operation_id,
             "preparation_profile": self.preparation_profile,
             "config_path": self.config_path,
             "input_receipt": self.input_receipt.to_dict(),
-            "profile_descriptor": dict(self.profile_descriptor),
+            **self.execution_data(),
             "scope": _scope_data(self.local_scope, self.shared_scope),
             "purpose": purpose,
             **({"generations": dict(self.generations)} if self.generations is not None else {}),
@@ -576,12 +621,14 @@ class PreparationChildInput:
     def from_dict(cls, value: object) -> "PreparationChildInput":
         required = {
             "schema_version", "operation_id", "preparation_profile", "config_path",
-            "input_receipt", "profile_descriptor", "scope", "purpose",
+            "input_receipt", "scope", "purpose",
             "overlays", "overrides", "run_options",
         }
+        submitted = isinstance(value, Mapping) and "execution" in value
+        required |= {"execution", "container_capability"} if submitted else {"profile_descriptor"}
         if (not isinstance(value, Mapping)
             or type(value.get("schema_version")) is not int
-            or value["schema_version"] != PREPARATION_CHILD_INPUT_SCHEMA_VERSION
+            or value["schema_version"] != (11 if submitted else PREPARATION_CHILD_INPUT_SCHEMA_VERSION)
             or not required <= set(value) or set(value) - required - {"generations"}
             or not isinstance(value["input_receipt"], Mapping)):
             raise QueueServiceError("preparation child input fields or schema are unsupported")
@@ -602,7 +649,7 @@ class PreparationChildInput:
             preparation_profile=cast(str, value["preparation_profile"]),
             config_path=cast(str, value["config_path"]),
             input_receipt=input_receipt_from_dict(value["input_receipt"]),
-            profile_descriptor=cast(Mapping[str, PlainData], value["profile_descriptor"]),
+            profile_descriptor=cast(Mapping[str, PlainData] | None, value.get("profile_descriptor")),
             overlays=cast(tuple[str, ...], value["overlays"]),
             overrides=cast(tuple[str, ...], value["overrides"]),
             run_options=cast(Mapping[str, PlainData], value["run_options"]),
@@ -612,6 +659,8 @@ class PreparationChildInput:
             candidate=cast(Mapping[str, PlainData] | None, purpose.get("candidate")),
             generations=cast(Mapping[str, str] | None, value.get("generations")),
             action_verification=cast(Mapping[str, PlainData] | None, purpose.get("request")),
+            execution=SubmittedContainerExecution.from_dict(value["execution"]) if submitted else None,
+            container_capability=SubmittedContainerCapability.from_dict(value["container_capability"]) if submitted else None,
         )
         if result.to_dict() != thaw_plain_data(value):
             raise QueueServiceError("preparation child input is not current canonical data")

@@ -69,6 +69,7 @@ from .resident_readiness import (
 )
 from .gpu.occupancy import GpuOccupancyPolicy
 from ._preparation_policy import PreparationPolicy, load_preparation_policy
+from .submitted_execution import SubmittedContainerCapability
 from .preparation import (
     PREPARATION_INPUT_CAPABILITY,
     PREPARATION_STAGED_INPUT_CAPABILITY,
@@ -282,7 +283,7 @@ def load_coordinator_service_config(
             "agent_server",
             "authority",
         },
-        {"scheduling", "slurm_profiles", "preparation", "event_sinks", "shared_roots", "assignment_payload_root_id"},
+        {"scheduling", "slurm_profiles", "preparation", "event_sinks", "shared_roots", "assignment_payload_root_id", "container_capabilities"},
         "coordinator service config",
     )
     from ._lifecycle_observers import LifecycleObservers, parse_event_sinks
@@ -299,6 +300,10 @@ def load_coordinator_service_config(
         _profile_descriptor(_mapping_value(value, f"remote_profiles[{index}]"))
         for index, value in enumerate(_sequence(payload, "remote_profiles"))
     )
+    container_capabilities = tuple(
+        SubmittedContainerCapability.from_dict(value)
+        for value in (_sequence(payload, "container_capabilities") if "container_capabilities" in payload else ())
+    )
     preparation_policy = load_preparation_policy(
         payload.get("preparation"),
         local_agent_id=_string(payload, "machine_id"),
@@ -306,6 +311,8 @@ def load_coordinator_service_config(
         if local_agent is None
         else local_agent.profile.launch_profile,
         base=base,
+        container_capabilities=container_capabilities,
+        shared_roots=cast(Mapping[str, PlainData], payload.get("shared_roots", {})),
         descriptors=(
             *remote_profiles,
             *((local_agent.profile.descriptor,) if local_agent is not None else ()),
@@ -395,6 +402,7 @@ def load_coordinator_service_config(
         ),
         agent_policy=policy,
         remote_profiles=remote_profiles,
+        container_capabilities=container_capabilities,
         coordinator_authority_factory=authority_factory,
         scheduling_components=scheduling,
         admission_priority_resolver=priority_resolver,
@@ -1895,6 +1903,8 @@ def _coordinator_active_projection(
                 **({"assignment_payload_root_id": payload["assignment_payload_root_id"]} if payload.get("assignment_payload_root_id") is not None else {}),
                 **({"shared_roots_digest": _canonical_fingerprint(_mapping(payload, "shared_roots"))} if payload.get("shared_roots") else {}),
                 "remote_profiles": payload["remote_profiles"],
+                **({"container_capabilities": payload["container_capabilities"]}
+                   if payload.get("container_capabilities") else {}),
                 "scheduling": payload.get("scheduling"),
                 "slurm_profiles": payload.get("slurm_profiles"),
                 **(
@@ -2538,7 +2548,7 @@ def inspect_role_declaration(
         identities = [cast(PlainData, profile["descriptor"]) for profile in profiles]
     else:
         source, _, payload, _ = _load_protected_config(path, env_file=env_file)
-        _required_allowed(payload, {"schema_version", "kind", "deployment_root", "run_store_root", "machine_id", "poll_interval_seconds", "max_accepted_time_step_seconds", "local_agent", "remote_profiles", "agent_policy", "agent_server", "authority"}, {"scheduling", "slurm_profiles", "preparation", "event_sinks", "shared_roots", "assignment_payload_root_id"}, "coordinator service config")
+        _required_allowed(payload, {"schema_version", "kind", "deployment_root", "run_store_root", "machine_id", "poll_interval_seconds", "max_accepted_time_step_seconds", "local_agent", "remote_profiles", "agent_policy", "agent_server", "authority"}, {"scheduling", "slurm_profiles", "preparation", "event_sinks", "shared_roots", "assignment_payload_root_id", "container_capabilities"}, "coordinator service config")
         _header(payload, "loom.coordinator-service")
         normalized = dict(_normalize_coordinator_payload(payload))
         if payload["agent_server"] is not None:

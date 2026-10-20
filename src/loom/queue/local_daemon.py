@@ -68,6 +68,7 @@ from ._agent_process_supervisor import (
 from ._managed_local import AgentResourceProvider
 from ._remote_stage_execution import GpuDeviceDescriptor, ResidentProfileDescriptor
 from ._preparation_policy import PreparationPolicy
+from .submitted_execution import SubmittedContainerCapability
 from .errors import QueueConflictError, QueueServiceError, QueueStorageError
 from ._service_signals import _ChangeConnection, _ServiceSignal
 from ._recovery_retry import _RecoveryRetry
@@ -677,6 +678,7 @@ class LocalDaemonConfig:
     resident_preparation_staged_ready: bool = False
     shared_roots: Mapping[str, PlainData] = field(default_factory=dict)
     assignment_payload_root_id: str | None = None
+    container_capabilities: tuple[SubmittedContainerCapability, ...] = ()
 
     @property
     def coordinator_shared_roots(self) -> Mapping[str, PlainData]:
@@ -993,6 +995,13 @@ class LocalDaemonConfig:
             raise QueueServiceError("remote resident profiles are invalid")
         if len({item.profile_id for item in profiles}) != len(profiles):
             raise QueueServiceError("remote resident profile IDs must be unique")
+        capabilities = tuple(self.container_capabilities)
+        if (
+            any(not isinstance(item, SubmittedContainerCapability) for item in capabilities)
+            or len({item.policy_id for item in capabilities}) != len(capabilities)
+        ):
+            raise QueueServiceError("container execution capabilities must have unique policy IDs")
+        object.__setattr__(self, "container_capabilities", capabilities)
         slurm_profiles = tuple(self.slurm_profiles)
         if any(not isinstance(item, SlurmReadyStageProfile) for item in slurm_profiles):
             raise QueueServiceError("protected SLURM profiles are invalid")
@@ -5059,6 +5068,8 @@ def _scheduling_fingerprint(config: LocalDaemonConfig) -> str:
             }
         ),
         "remote_profiles": [item.to_dict() for item in config.remote_profiles],
+        **({"container_capabilities": [item.to_dict() for item in config.container_capabilities]}
+           if config.container_capabilities else {}),
         "slurm_profiles": [
             {
                 "profile_id": item.profile_id,

@@ -11,12 +11,13 @@ from typing import cast
 
 from loom.fingerprints import hash_mapping, hash_text
 from loom.pipeline.runtime.options import RunOptions
-from loom.serialization import PlainData
+from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 
 from ._remote_stage_execution import ResidentProfileDescriptor
 from .errors import QueueConfigError, QueueError, QueueServiceError
 from .models import validate_queue_id
 from .preparation import PrepareRunRequest, _project_processor
+from .submitted_execution import SubmittedContainerCapability
 
 
 _IMPLEMENTED_MODES = frozenset({"shared", "staged"})
@@ -57,11 +58,33 @@ class PreparationProfile:
 
 
 @dataclass(frozen=True, slots=True)
+class SubmittedPreparationProfile:
+    """Protected source and image permissions without an installed workload."""
+
+    capability: SubmittedContainerCapability
+    allowed_source_roots: tuple[str, ...]
+    source_modes: tuple[str, ...]
+    runtime_options: RunOptions
+    shared_scope: Mapping[str, PlainData]
+    image_roots: Mapping[str, PlainData]
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "container_capability": self.capability.to_dict(),
+            "allowed_source_roots": list(self.allowed_source_roots),
+            "source_modes": list(self.source_modes),
+            "runtime_options": self.runtime_options.to_dict(),
+            "shared_scope": thaw_plain_data(self.shared_scope),
+            "image_roots": thaw_plain_data(self.image_roots),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class PreparationPolicy:
     """Validated protected policy; only effective aliases are safe to advertise."""
 
     source_roots: Mapping[str, PreparationSourceRoot]
-    profiles: Mapping[str, PreparationProfile]
+    profiles: Mapping[str, PreparationProfile | SubmittedPreparationProfile]
 
     @property
     def effective_profiles(self) -> tuple[str, ...]:
@@ -83,10 +106,19 @@ class PreparationPolicy:
         profile = self.profiles.get(request.preparation_profile)
         if profile is None or request.source.root not in profile.allowed_source_roots:
             raise QueueServiceError("preparation profile/root selection is not allowed")
+        if isinstance(profile, SubmittedPreparationProfile):
+            if request.execution is None:
+                raise QueueServiceError("container preparation policy requires submitted execution")
+            profile.capability.require_execution(request.execution)
+        elif request.execution is not None:
+            raise QueueServiceError("installed preparation profile does not support submitted execution")
         if request.source.mode not in _IMPLEMENTED_MODES or request.source.mode not in profile.source_modes:
             raise QueueServiceError("preparation source mode is unsupported")
         root = self.source_roots[request.source.root]
-        return {"source_root": root.to_dict(), "profile": profile.to_dict()}
+        selected = profile.to_dict()
+        if request.execution is not None:
+            selected["project_processor"] = thaw_plain_data(request.execution.project_integration)
+        return {"source_root": root.to_dict(), "profile": selected}
 
     def safe_identity(self) -> dict[str, object]:
         """Hash private paths/options while retaining the effective policy meaning."""
@@ -98,13 +130,19 @@ class PreparationPolicy:
             } for alias, root in sorted(self.source_roots.items())],
             "profiles": [{
                 "alias": alias,
-                "profile_descriptor": profile.descriptor.to_dict(),
+                **({"profile_descriptor": profile.descriptor.to_dict()}
+                   if isinstance(profile, PreparationProfile) else {
+                       "container_capability": profile.capability.to_dict(),
+                       "image_roots_digest": hash_mapping(thaw_plain_data(profile.image_roots)),
+                   }),
                 "allowed_source_roots": list(profile.allowed_source_roots),
                 "source_modes": list(profile.source_modes),
                 "runtime_options_digest": hash_mapping(profile.runtime_options.to_dict()),
                 **({"shared_scope": dict(profile.shared_scope)} if profile.shared_scope is not None else {}),
-                **({"local_scope": dict(profile.local_scope)} if profile.local_scope is not None else {}),
-                **({"project_processor": dict(profile.project_processor)} if profile.project_processor is not None else {}),
+                **({"local_scope": dict(profile.local_scope)}
+                   if isinstance(profile, PreparationProfile) and profile.local_scope is not None else {}),
+                **({"project_processor": dict(profile.project_processor)}
+                   if isinstance(profile, PreparationProfile) and profile.project_processor is not None else {}),
             } for alias, profile in sorted(self.profiles.items())],
             "effective_modes": list(self.effective_modes),
         }
@@ -113,6 +151,8 @@ class PreparationPolicy:
 def load_preparation_policy(
     value: object, *, base: Path, descriptors: Sequence[ResidentProfileDescriptor],
     local_agent_id: str | None = None, local_launch_profile: object = None,
+    container_capabilities: Sequence[SubmittedContainerCapability] = (),
+    shared_roots: Mapping[str, PlainData] | None = None,
 ) -> PreparationPolicy | None:
     """Decode only explicit roots, qualified descriptor selections and native options.
 
@@ -135,14 +175,25 @@ def load_preparation_policy(
             _path(data["path"], base),
             None if data.get("shared_snapshot_root") is None else _path(data["shared_snapshot_root"], base),
         )
-    profiles: dict[str, PreparationProfile] = {}
+    profiles: dict[str, PreparationProfile | SubmittedPreparationProfile] = {}
     for alias, raw in raw_profiles.items():
         _alias(alias, "preparation profile")
-        data = _mapping(raw, "preparation profile", required={"resident_profile_id", "allowed_source_roots", "source_modes", "runtime_options"}, optional={"configuration_policy", "project_processor", "shared_locations"})
-        profile_id = _alias(data["resident_profile_id"], "resident_profile_id")
-        matches = {descriptor for descriptor in descriptors if descriptor.profile_id == profile_id}
+        submitted = isinstance(raw, Mapping) and "container_policy_id" in raw
+        selector = "container_policy_id" if submitted else "resident_profile_id"
+        data = _mapping(
+            raw, "preparation profile",
+            required={selector, "allowed_source_roots", "source_modes", "runtime_options"},
+            optional={"configuration_policy", "shared_locations"}
+            | (set() if submitted else {"project_processor"}),
+        )
+        profile_id = _alias(data[selector], selector)
+        matches = (
+            [item for item in container_capabilities if item.policy_id == profile_id]
+            if submitted else
+            list({item for item in descriptors if item.profile_id == profile_id})
+        )
         if len(matches) != 1:
-            raise QueueConfigError("preparation resident_profile_id must select one qualified descriptor")
+            raise QueueConfigError(f"preparation {selector} must select one qualified capability")
         allowed = _strings(data["allowed_source_roots"], "allowed_source_roots")
         if not set(allowed).issubset(roots):
             raise QueueConfigError("preparation profile names an unknown source root")
@@ -157,7 +208,9 @@ def load_preparation_policy(
             raise QueueConfigError("preparation runtime_options are invalid") from exc
         if options.executor != "local":
             raise QueueConfigError("preparation runtime_options must explicitly select the local managed executor")
-        mode = data.get("configuration_policy", "portable")
+        mode = data.get("configuration_policy", "shared" if submitted else "portable")
+        if submitted and mode != "shared":
+            raise QueueConfigError("submitted containers require shared configuration")
         if mode not in ("portable", "local", "shared"):
             raise QueueConfigError("preparation configuration_policy must be portable, local or shared")
         scope = None
@@ -170,7 +223,9 @@ def load_preparation_policy(
             if not descriptor.shared_roots:
                 raise QueueConfigError("shared configuration requires qualified shared roots")
             shared = shared_scope({"capability": SHARED_EXECUTION_CAPABILITY,
-                "roots": dict(descriptor.shared_roots), "locations": data.get("shared_locations", [])})
+                "roots": (descriptor.workload_roots if isinstance(descriptor, SubmittedContainerCapability)
+                          else dict(descriptor.shared_roots)),
+                "locations": data.get("shared_locations", [])})
         if mode == "local":
             from ._agent_process_supervisor import ResidentWorkerLaunchProfile
 
@@ -185,7 +240,30 @@ def load_preparation_policy(
             raise QueueConfigError(str(exc)) from exc
         if processor is not None and scope is None and shared is None:
             raise QueueConfigError("project preparation requires protected local or shared policy")
-        profiles[alias] = PreparationProfile(next(iter(matches)), allowed, modes, options, scope, processor, shared)
+        if submitted:
+            from .shared_execution import root_bindings
+
+            capability = cast(SubmittedContainerCapability, matches[0])
+            private_roots = root_bindings({} if shared_roots is None else shared_roots)
+            image_roots: dict[str, PlainData] = {}
+            for root_id in capability.allowed_image_roots:
+                private = private_roots.get(root_id)
+                if not isinstance(private, Mapping) or {
+                    key: item for key, item in private.items() if key != "host_path"
+                } != capability.shared_roots[root_id]:
+                    raise QueueConfigError("container image root lacks the protected coordinator mapping")
+                image_roots[root_id] = cast(PlainData, private)
+            assert shared is not None
+            profiles[alias] = SubmittedPreparationProfile(
+                capability, allowed, modes, options,
+                cast(Mapping[str, PlainData], freeze_plain_data(shared)),
+                cast(Mapping[str, PlainData], freeze_plain_data(image_roots)),
+            )
+        else:
+            profiles[alias] = PreparationProfile(
+                cast(ResidentProfileDescriptor, matches[0]), allowed, modes,
+                options, scope, processor, shared,
+            )
     return PreparationPolicy(MappingProxyType(roots), MappingProxyType(profiles))
 
 

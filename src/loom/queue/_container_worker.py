@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 import re
+import stat
 from typing import TYPE_CHECKING, cast
 
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
@@ -64,6 +65,20 @@ def container_binding(
         ).is_absolute():
             raise ValueError("Apptainer requires an installed absolute image path")
     return cast(Mapping[str, PlainData], data)
+
+
+def portable_container_settings(
+    container: Mapping[str, PlainData], options: Mapping[str, PlainData],
+) -> dict[str, PlainData]:
+    """Project container-visible settings without host mount/runtime prefixes."""
+    portable = dict(container)
+    portable["mounts"] = [
+        {"target": mount["target"], "mode": mount.get("mode", "ro")}
+        for mount in cast(Sequence[Mapping[str, PlainData]], container.get("mounts", ()))
+    ]
+    runtime = dict(options)
+    runtime.pop("command", None)
+    return {"container": portable, "options": runtime}
 
 
 def _base_worker_mounts(profile: ResidentWorkerLaunchProfile, workspace: Path, *,
@@ -185,6 +200,26 @@ def qualify_shared_worker_inputs(
     from ._shared_recovery import validate_wire, current_tree, resolve as resolve_recovery
     from loom.pipeline.stores.shared_artifacts import binding as shared_binding
 
+    if profile.submitted_execution is not None:
+        from ._remote_stage_execution import _file_digest
+        from .shared_execution import qualifications, resolve
+
+        execution = profile.submitted_execution
+        if execution != assignment.submitted_execution:
+            raise ValueError("submitted launch image differs from its assignment")
+        alias = str(execution.image.location["root_id"])
+        root = cast(Mapping[str, PlainData], profile.shared_roots[alias])
+        if qualifications({alias: dict(root)})[alias] != assignment.profile.shared_roots[alias]:
+            raise ValueError("submitted image root qualification conflicts")
+        path = resolve(root, str(execution.image.location["path"]))
+        details = path.stat()
+        if (
+            not stat.S_ISREG(details.st_mode)
+            or details.st_mode & 0o222
+            or details.st_size != execution.image.size_bytes
+            or _file_digest(path) != execution.image.sha256
+        ):
+            raise ValueError("submitted image bytes or immutable publication differ from retained intent")
     shared_scope = assignment_scope(assignment.fingerprint)
     if shared_scope is None:
         return

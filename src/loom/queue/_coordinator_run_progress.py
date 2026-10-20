@@ -10,7 +10,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
-from loom.pipeline.orchestration import RunOrchestrator
+from loom.pipeline.orchestration import RunOrchestrator, SubmittedContainerRequirement
+from .submitted_execution import SubmittedContainerCapability
 from loom.pipeline.runtime import ExecutionRouteKind
 from loom.pipeline.status import StageStatus
 from loom.scheduling import PolicyDecisionState
@@ -20,7 +21,7 @@ from .errors import QueueServiceError
 from .local_daemon import LocalDaemonAdmissionState
 
 if TYPE_CHECKING:
-    from loom.pipeline.orchestration import ExecutionRequirement, SQLiteStageWorkStore, StageWorkRecord
+    from loom.pipeline.orchestration import ManagedExecutionRequirement, SQLiteStageWorkStore, StageWorkRecord
     from loom.pipeline.planning import AttemptReadiness, StagePlan
     from loom.pipeline.stores.read_models import BackendRevision
     from ._coordinator_run_authority import _ScopedCoordinatorAuthority
@@ -377,10 +378,15 @@ def schedule_once(
 
 
 def _profile_satisfies_requirement(
-    profile: ResidentProfileDescriptor, requirement: ExecutionRequirement
+    profile: ResidentProfileDescriptor | SubmittedContainerCapability,
+    requirement: ManagedExecutionRequirement,
 ) -> bool:
     """Compare inert identities before any reservation or delivery."""
 
+    if isinstance(requirement, SubmittedContainerRequirement):
+        return isinstance(profile, SubmittedContainerCapability) and profile.satisfies(requirement)
+    if isinstance(profile, SubmittedContainerCapability):
+        return False
     return (
         profile.project_fingerprint == requirement.project_fingerprint
         and profile.environment_fingerprint == requirement.environment_fingerprint

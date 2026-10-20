@@ -75,6 +75,7 @@ from loom.queue._managed_local import (
 )
 from loom.pipeline.orchestration import (
     ExecutionRequirement,
+    ManagedExecutionRequirement,
     SchedulingProjectionState,
     SQLiteStageWorkStore,
     StageWorkRecord,
@@ -192,7 +193,7 @@ class ManagedLocalIntent:
     plan: ExecutionPlan
     runtime: Mapping[str, ResolvedStageRuntimeOptions]
     placements: Mapping[str, ResolvedStagePlacement]
-    execution_requirements: Mapping[str, ExecutionRequirement]
+    execution_requirements: Mapping[str, ManagedExecutionRequirement]
     pipeline: PipelineSpec
     digest: str
     max_parallel_stages: int
