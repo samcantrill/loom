@@ -69,6 +69,8 @@ if TYPE_CHECKING:
     )
 
 
+from .submitted_execution import SubmittedContainerCapability, SUBMITTED_CONTAINER_CAPABILITY
+
 PROTOCOL_VERSION = "13"
 CONTROL_WAIT_CAPABILITY = "agent-control-wait-v1"
 _MAX_RECEIVED_CONTROLS = 1025
@@ -733,6 +735,7 @@ class AgentOffer:
 
     external_slurm_profiles: tuple[tuple[str, str], ...] = ()
     max_concurrent_assignments: int = 1
+    container_execution_capabilities: tuple[SubmittedContainerCapability, ...] = ()
 
     def __post_init__(self) -> None:
         if (
@@ -846,6 +849,7 @@ class AgentOffer:
             or capacity_atoms
             or self.gpu_devices
             or self.resident_profiles
+            or self.container_execution_capabilities
         ):
             raise QueueServiceError("offer provider composition is required")
         provider_kinds = {item.descriptor.kind for item in providers}
@@ -875,6 +879,12 @@ class AgentOffer:
         if len({item.profile_id for item in profiles}) != len(profiles):
             raise QueueServiceError("offer resident profile IDs must be unique")
         object.__setattr__(self, "resident_profiles", profiles)
+        capabilities = tuple(self.container_execution_capabilities)
+        if any(not isinstance(item, SubmittedContainerCapability) for item in capabilities) or len(
+            {item.policy_id for item in capabilities}
+        ) != len(capabilities):
+            raise QueueServiceError("offer container execution capabilities are invalid")
+        object.__setattr__(self, "container_execution_capabilities", capabilities)
         devices = tuple(self.gpu_devices)
         if any(not isinstance(item, GpuDeviceDescriptor) for item in devices) or len(
             {item.device_id for item in devices}
@@ -983,6 +993,8 @@ class AgentOffer:
             "pools": list(self.pools),
             "reflected_claim_ids": list(self.reflected_claim_ids),
             "resident_profiles": [item.to_dict() for item in self.resident_profiles],
+            **({"container_execution_capabilities": [item.to_dict() for item in self.container_execution_capabilities]}
+               if self.container_execution_capabilities else {}),
             "gpu_devices": [device.to_dict() for device in self.gpu_devices],
             "resource_status": [item.to_dict() for item in self.resource_status],
         }
@@ -1005,10 +1017,9 @@ class AgentOffer:
             "gpu_devices",
             "resource_status",
         }
-        if not isinstance(value, Mapping) or set(value) not in (
-            expected,
-            expected | {"max_concurrent_assignments"},
-        ):
+        if not isinstance(value, Mapping) or not expected.issubset(value) or set(value) - expected - {
+            "max_concurrent_assignments", "container_execution_capabilities"
+        }:
             raise QueueServiceError("agent offer is invalid")
         status_values = value["resource_status"]
         if not isinstance(status_values, (list, tuple)):
@@ -1052,6 +1063,7 @@ class AgentOffer:
         pools = value["pools"]
         claims = value["reflected_claim_ids"]
         profiles = value["resident_profiles"]
+        capabilities = value.get("container_execution_capabilities", ())
         gpu_devices = value["gpu_devices"]
         provider_composition = value["provider_composition"]
         if (
@@ -1061,6 +1073,7 @@ class AgentOffer:
             or isinstance(claims, (str, bytes))
             or not isinstance(profiles, Sequence)
             or isinstance(profiles, (str, bytes))
+            or not isinstance(capabilities, (tuple, list))
             or not isinstance(gpu_devices, Sequence)
             or isinstance(gpu_devices, (str, bytes))
             or not isinstance(provider_composition, Sequence)
@@ -1090,6 +1103,9 @@ class AgentOffer:
             reflected_claim_ids=tuple(cast(Sequence[str], claims)),
             resident_profiles=tuple(
                 ResidentProfileDescriptor.from_dict(item) for item in profiles
+            ),
+            container_execution_capabilities=tuple(
+                SubmittedContainerCapability.from_dict(item) for item in capabilities
             ),
             gpu_devices=tuple(
                 GpuDeviceDescriptor.from_dict(item) for item in gpu_devices
@@ -2020,6 +2036,7 @@ class AgentSessionService:
                     "agent-sessions-v12",
                     CONTROL_WAIT_CAPABILITY,
                     "concurrent-resident-assignments-v1",
+                    SUBMITTED_CONTAINER_CAPABILITY,
                     "shared-assignment-reference-v1",
                     SLURM_SUBMISSION_CAPABILITY,
                     REMOTE_EXECUTION_CAPABILITY,
@@ -2836,13 +2853,15 @@ class AgentSessionService:
                 raise QueueConflictError(
                     "agent offer GPU inventory does not match protected policy"
                 )
-            if offer.resident_profiles and not {
+            if (offer.resident_profiles or offer.container_execution_capabilities) and not {
                 REMOTE_EXECUTION_CAPABILITY,
                 REGULAR_FILE_RELAY_CAPABILITY,
             }.issubset(session.capabilities):
                 raise QueueServiceError(
                     "agent session lacks remote execution capabilities"
                 )
+            if offer.container_execution_capabilities and SUBMITTED_CONTAINER_CAPABILITY not in session.capabilities:
+                raise QueueServiceError("agent session lacks submitted container capability")
             replacement = conn.execute(
                 "SELECT operation_id, old_session_id, readiness, "
                 "decision_projection_digest FROM session_replacements "
@@ -5990,7 +6009,10 @@ def _target_remote_delivery(
         ).fetchone()[0]
         if outstanding >= offer_value.get("max_concurrent_assignments", 1):
             raise QueueConflictError("agent resident assignment ceiling is exhausted")
-        offered_profiles = offer_value.get("resident_profiles", [])
+        offered_profiles = offer_value.get(
+            "container_execution_capabilities" if isinstance(request.profile, SubmittedContainerCapability)
+            else "resident_profiles", []
+        )
         if request.profile.to_dict() not in offered_profiles:
             raise QueueConflictError(
                 "targeted delivery resident profile is not in the current offer"

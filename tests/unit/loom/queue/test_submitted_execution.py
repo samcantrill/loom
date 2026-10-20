@@ -1,10 +1,11 @@
 """Submitted workloads retain exact image intent without host path authority."""
 
 from dataclasses import replace
+from typing import Any, cast
 
 import pytest
 
-from loom.queue.errors import QueueServiceError
+from loom.queue.errors import QueueConflictError, QueueServiceError
 from loom.queue.preparation import PreparationSource, PrepareRunRequest
 from loom.queue.run import RunRequest
 from loom.queue.submitted_execution import (
@@ -72,15 +73,15 @@ def test_omitted_execution_keeps_installed_request_wire():
 
 def test_request_retains_image_and_freezes_nested_selection():
     execution = _execution()
-    payload = execution.to_dict()
+    payload = cast(dict[str, Any], execution.to_dict())
     retained = SubmittedContainerExecution.from_dict(payload)
     payload["image"]["location"]["path"] = "another.sif"
     payload["project_integration"]["callable"] = "another:inspect"
     assert retained == execution
     with pytest.raises(TypeError):
-        retained.image.location["path"] = "another.sif"
+        cast(Any, retained.image.location)["path"] = "another.sif"
     with pytest.raises(TypeError):
-        retained.project_integration["callable"] = "another:inspect"
+        cast(Any, retained.project_integration)["callable"] = "another:inspect"
     request = replace(_request(), execution=execution)
     run = RunRequest(request, queue_item_id="queued-a")
     assert RunRequest.from_dict(run.to_dict()) == run
@@ -202,7 +203,7 @@ def test_policy_selects_capability_without_an_installed_descriptor(tmp_path):
     policy = _policy(tmp_path)
     request = replace(_request(), execution=_execution())
     selected = policy.select(request)
-    profile = selected["profile"]
+    profile = cast(dict[str, Any], selected["profile"])
     assert "profile_descriptor" not in profile
     assert profile["container_capability"] == _capability(tmp_path).to_dict()
     assert profile["project_processor"] == _execution().to_dict()["project_integration"]
@@ -221,9 +222,9 @@ def test_installed_and_submitted_modes_never_fall_back(tmp_path):
         policy.select(_request())
     with pytest.raises(QueueServiceError, match="does not support"):
         policy.select(replace(_request(), preparation_profile="installed", execution=_execution()))
-    assert "profile_descriptor" in policy.select(
+    assert "profile_descriptor" in cast(dict[str, Any], policy.select(
         replace(_request(), preparation_profile="installed")
-    )["profile"]
+    )["profile"])
     with pytest.raises(QueueServiceError, match="not allowed"):
         policy.select(replace(
             _request(), execution=replace(_execution(), worker_contract="future-worker"),
@@ -322,7 +323,7 @@ def test_native_acceptance_replays_image_intent_and_refuses_retargeting(tmp_path
         accepted = client.prepare_run(request)
         assert client.prepare_run(request) == accepted
         assert accepted.state == "pending"
-        assert accepted.result["image_retained"] is False
+        assert cast(dict[str, Any], accepted.result)["image_retained"] is False
         with pytest.raises(QueueConflictError, match="intent conflicts"):
             client.prepare_run(replace(
                 request, execution=replace(
@@ -457,3 +458,34 @@ def test_preparation_resumes_retention_before_dispatch_without_recapturing(
         if operation._reconcile_lock.locked():
             operation._reconcile_lock.release()
         daemon.stop()
+
+
+def test_implementation_identity_tracks_bytes_and_environment_not_locations(tmp_path):
+    from loom.queue.submitted_execution import submitted_implementation
+
+    execution, capability = _execution(), _capability(tmp_path)
+    identity = submitted_implementation(execution, capability)
+    moved = replace(execution, image=replace(execution.image, location={
+        **execution.image.location, "path": "archive/aaa/image.sif"}))
+    assert submitted_implementation(moved, capability) == identity
+    assert submitted_implementation(replace(execution, image=replace(execution.image, sha256="b" * 64)), capability) != identity
+    assert submitted_implementation(execution, replace(capability, environment_fingerprint="sha256:" + "c" * 64)) != identity
+    assert submitted_implementation(replace(execution, python_executable="/other/python"), capability) != identity
+    assert "location" not in identity and "policy_id" not in identity
+
+
+def test_action_implementation_joins_the_report_image_to_its_admitted_node(tmp_path):
+    from types import SimpleNamespace
+    from loom.queue._action_result_resolution import _report_implementation
+    from loom.queue.submitted_execution import SUBMITTED_EXECUTION_SCOPE, submitted_implementation
+
+    execution, capability = _execution(), _capability(tmp_path)
+    binding = {"execution": execution.to_dict(), "container_capability": capability.to_dict()}
+    assert execution.project_integration is not None
+    report = {**binding, "project_preparation": {"processor": dict(execution.project_integration)}}
+    stage = SimpleNamespace(fingerprint_fields={SUBMITTED_EXECUTION_SCOPE: binding})
+    requirement = capability.requirement(execution)
+    assert _report_implementation(report, requirement, stage) == submitted_implementation(execution, capability)
+    changed = replace(execution, image=replace(execution.image, sha256="b" * 64))
+    with pytest.raises(QueueConflictError, match="implementation differs"):
+        _report_implementation({**report, "execution": changed.to_dict()}, requirement, stage)

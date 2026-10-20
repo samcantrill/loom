@@ -186,12 +186,13 @@ def _supervisor_value(root_id: str, config: Any) -> dict[str, Any]:
     from ._agent_process_supervisor import SupervisorLaunchConfiguration, _profile_value
 
     value = SupervisorLaunchConfiguration(
-        root_id, tuple(p.launch_profile for p in config.resident_profiles)
+        root_id, tuple(p.launch_profile for p in config.resident_profiles), config.container_policies
     )
     return {
         "agent_id": root_id,
         "profiles": [_profile_value(p) for p in value.profiles],
         "configuration_fingerprint": value.fingerprint,
+        **({"container_policies": [policy.to_dict() for policy in value.container_policies]} if value.container_policies else {}),
     }
 
 

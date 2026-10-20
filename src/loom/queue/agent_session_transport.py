@@ -114,7 +114,10 @@ from ._remote_stage_execution import (
     _decode_chunk,
     _encode_chunk,
 )
+from ._submitted_container_policy import SubmittedContainerPolicy
+from .submitted_execution import SubmittedContainerCapability
 from ._agent_process_supervisor import (
+    ResidentWorkerLaunchProfile,
     AgentProcessSupervisor,
     AgentProcessSupervisorClient,
     AgentProcessSupervisorError,
@@ -234,7 +237,7 @@ class AgentTlsClientConfig:
     agent_root: Path | None = None
     resident_profiles: tuple[ResidentExecutionProfile, ...] = ()
     agent_resource_provider_factory: (
-        Callable[[str, ResidentExecutionProfile], Sequence[AgentResourceProvider]]
+        Callable[[str, ResidentExecutionProfile | AgentResourceInventory], Sequence[AgentResourceProvider]]
         | None
     ) = None
     deployment_configuration_fingerprint: str | None = None
@@ -246,6 +249,7 @@ class AgentTlsClientConfig:
     max_concurrent_assignments: int = 1
     declaration_digest: str | None = None
     external_supervisor: bool = False
+    container_policies: tuple[SubmittedContainerPolicy, ...] = ()
 
     def __post_init__(self) -> None:
         if type(self.external_supervisor) is not bool:
@@ -299,10 +303,20 @@ class AgentTlsClientConfig:
             )
             for item in profiles
         }
+        policies = tuple(self.container_policies)
+        if any(not isinstance(item, SubmittedContainerPolicy) for item in policies) or len(
+            {item.policy_id for item in policies}
+        ) != len(policies):
+            raise QueueServiceError("agent container policies are invalid")
+        object.__setattr__(self, "container_policies", policies)
         inventory = self.resource_inventory
+        if policies and inventory is None:
+            raise QueueServiceError("submitted containers require explicit agent resource inventory")
+        if policies and self.agent_root is None:
+            raise QueueServiceError("submitted containers require an agent root")
         if inventory is not None and not isinstance(inventory, AgentResourceInventory):
             raise QueueServiceError("agent resource inventory is invalid")
-        if inventory is not None and not profiles:
+        if inventory is not None and not (profiles or policies):
             raise QueueServiceError(
                 "agent resource inventory requires a resident profile"
             )
@@ -343,6 +357,18 @@ class AgentTlsClientConfig:
             or active is None
         ):
             raise QueueServiceError("agent declaration binding is invalid")
+
+    @property
+    def execution_inventory(self) -> AgentResourceInventory:
+        """One host capacity domain, independent of submitted workload images."""
+        if self.resource_inventory is not None:
+            return self.resource_inventory
+        if not self.resident_profiles:
+            raise QueueServiceError("agent has no executable resource inventory")
+        profile = self.resident_profiles[0]
+        return AgentResourceInventory(
+            profile.cpu_capacity, profile.memory_capacity_bytes, profile.gpu_devices
+        )
 
     @property
     def capacity_profile(self) -> ResidentExecutionProfile:
@@ -409,7 +435,7 @@ class RunInspectionTlsClientConfig:
 
 def _default_remote_providers(
     agent_id: str,
-    profile: ResidentExecutionProfile,
+    profile: ResidentExecutionProfile | AgentResourceInventory,
     *,
     occupancy_policy: GpuOccupancyPolicy | None = None,
 ) -> tuple[AgentResourceProvider, ...]:
@@ -462,7 +488,7 @@ def _default_remote_providers(
 def _configured_remote_provider_members(
     config: AgentTlsClientConfig,
     agent_id: str,
-    profile: ResidentExecutionProfile,
+    profile: ResidentExecutionProfile | AgentResourceInventory,
 ) -> tuple[AgentResourceProvider, ...]:
     """Construct the configured members for live execution or idle qualification."""
 
@@ -473,11 +499,13 @@ def _configured_remote_provider_members(
         return _default_remote_providers(
             agent_id, profile, occupancy_policy=config.gpu_occupancy_policy
         )
-    return tuple(factory(agent_id, profile))
+    # Preserve installed-only custom factories' historical profile argument.
+    capacity = config.execution_inventory if config.container_policies else config.capacity_profile
+    return tuple(factory(agent_id, capacity))
 
 
 def _resident_provider_descriptors(
-    profile: ResidentExecutionProfile,
+    profile: ResidentExecutionProfile | AgentResourceInventory,
     agent_id: str,
     *,
     resource_kinds: set[str] | None = None,
@@ -950,7 +978,7 @@ class LocalDaemonAgentHttpClient:
         """
         if (
             config.agent_root is None
-            or not config.resident_profiles
+            or not (config.resident_profiles or config.container_policies)
             or config.slurm_profiles
         ):
             raise QueueServiceError("reboot recovery requires native resident profiles")
@@ -980,6 +1008,7 @@ class LocalDaemonAgentHttpClient:
                     profiles=tuple(
                         item.launch_profile for item in config.resident_profiles
                     ),
+                    container_policies=config.container_policies,
                 )
                 return supervisor.recover_reboot(operation_id)
         except (AgentProcessSupervisorError, ManagedLocalError, sqlite3.Error) as exc:
@@ -996,7 +1025,7 @@ class LocalDaemonAgentHttpClient:
         Opening an existing root never fills in or upgrades that identity.
         """
         if config.agent_root is None or not (
-            config.resident_profiles or config.slurm_profiles
+            config.resident_profiles or config.container_policies or config.slurm_profiles
         ):
             raise QueueServiceError(
                 "remote agent initialization requires resident profiles"
@@ -1061,11 +1090,11 @@ class LocalDaemonAgentHttpClient:
                     config
                 ),
             )
-            if config.resident_profiles:
+            if config.resident_profiles or config.container_policies:
                 profiles = tuple(
                     item.launch_profile for item in config.resident_profiles
                 )
-                configuration = SupervisorLaunchConfiguration(journal.root_id, profiles)
+                configuration = SupervisorLaunchConfiguration(journal.root_id, profiles, config.container_policies)
                 AgentProcessSupervisorService.initialize_process_free(
                     staging, configuration=configuration, final_agent_root=target
                 )
@@ -1086,7 +1115,7 @@ class LocalDaemonAgentHttpClient:
     def _open_supervisor(
         config: AgentTlsClientConfig,
     ) -> tuple[AgentProcessSupervisorClient | None, bool]:
-        if not config.resident_profiles:
+        if not (config.resident_profiles or config.container_policies):
             if (
                 config.agent_root is not None
                 and (Path(config.agent_root).resolve() / "supervisor").exists()
@@ -1106,6 +1135,7 @@ class LocalDaemonAgentHttpClient:
                 SupervisorLaunchConfiguration(
                     root_id,
                     tuple(item.launch_profile for item in config.resident_profiles),
+                    config.container_policies,
                 ),
             ), False
         except AgentProcessSupervisorError as exc:
@@ -1119,6 +1149,7 @@ class LocalDaemonAgentHttpClient:
                             tuple(
                                 item.launch_profile for item in config.resident_profiles
                             ),
+                            config.container_policies,
                         ),
                     ), True
                 except AgentProcessSupervisorError as start_exc:
@@ -1511,8 +1542,9 @@ class LocalDaemonAgentHttpClient:
             raise QueueConflictError(
                 "installing SLURM submission requires fresh agent-root initialization"
             )
-        if _resident_launch_profile_set(replacement) != _resident_launch_profile_set(
-            self._config
+        if (
+            _resident_launch_profile_set(replacement) != _resident_launch_profile_set(self._config)
+            or replacement.container_policies != self._config.container_policies
         ):
             raise QueueConflictError(
                 "agent reload requires fresh agent-root initialization for "
@@ -1601,7 +1633,7 @@ class LocalDaemonAgentHttpClient:
             return False
         if self._slurm_agent is not None and self._slurm_agent.has_retained_work():
             return False
-        if not self._config.resident_profiles:
+        if not (self._config.resident_profiles or self._config.container_policies):
             self._restart_with_retained_work = self._has_retained_agent_work()
             return not self._restart_with_retained_work
         execution = self._execution_journal
@@ -2451,14 +2483,18 @@ class LocalDaemonAgentHttpClient:
             if item.descriptor.profile_id == ref["profile_id"]
             and item.descriptor.fingerprint == ref["profile_fingerprint"]), None)
         if profile is None:
-            raise QueueConflictError("shared assignment reference has no exact protected profile")
+            profile = next((policy for policy in self._config.container_policies
+                if policy.policy_id == ref["profile_id"] and policy.capability.fingerprint == ref["profile_fingerprint"]), None)
+        if profile is None:
+            raise QueueConflictError("shared assignment reference has no exact protected policy")
         workspace = _ResidentAssignmentWorkspace(cast(Path, self._config.agent_root), str(ref["assignment_id"]))
         if workspace.has_request():
             request = workspace.request()
             verify_bundle(ref, request, session_id=session_id)
             return request
         request = (yield from _external("bulk", resolve, ref, profile, session_id=session_id))
-        (yield from _external("bulk", workspace.persist_request, request, profile))
+        launch_profile = self._assignment_launch_profile(request, workspace)
+        (yield from _external("bulk", workspace.persist_request, request, launch_profile))
         return request
 
     @_cooperative
@@ -2665,7 +2701,7 @@ class LocalDaemonAgentHttpClient:
     def _runtime_owners(
         self, session: AgentSession
     ) -> tuple[dict[str, AgentResourceProvider], SQLiteAgentJournal]:
-        profile = self._config.capacity_profile
+        profile = self._config.execution_inventory
         journal = self._execution_journal
         if journal is None:
             raise QueueServiceError("remote execution journal is required")
@@ -2701,7 +2737,7 @@ class LocalDaemonAgentHttpClient:
         return self._providers, journal
 
     def _provider_composition(
-        self, agent_id: str, capacity_profile: ResidentExecutionProfile
+        self, agent_id: str, capacity_profile: ResidentExecutionProfile | AgentResourceInventory
     ) -> dict[str, AgentResourceProvider]:
         if self._configured_provider_members is None:
             members = _configured_remote_provider_members(
@@ -2725,7 +2761,7 @@ class LocalDaemonAgentHttpClient:
         *,
         session_id: str,
         availability_revision: str,
-        capacity_profile: ResidentExecutionProfile,
+        capacity_profile: ResidentExecutionProfile | AgentResourceInventory,
     ) -> tuple[
         tuple[AgentProviderDescriptor, ...],
         tuple[CapacityAtom, ...],
@@ -2805,7 +2841,10 @@ class LocalDaemonAgentHttpClient:
 
     def _profile_for_descriptor(
         self, descriptor: object
-    ) -> ResidentExecutionProfile | None:
+    ) -> ResidentExecutionProfile | SubmittedContainerPolicy | None:
+        if isinstance(descriptor, SubmittedContainerCapability):
+            return next((policy for policy in self._config.container_policies
+                         if policy.capability == descriptor), None)
         active = self._profiles.get(getattr(descriptor, "profile_id", ""))
         if active is not None and active.descriptor == descriptor:
             return active
@@ -2817,6 +2856,19 @@ class LocalDaemonAgentHttpClient:
             ),
             None,
         )
+
+    def _assignment_launch_profile(
+        self, request: _ResidentAssignmentBundle, workspace: _ResidentAssignmentWorkspace,
+    ) -> ResidentWorkerLaunchProfile:
+        selected = self._profile_for_descriptor(request.profile)
+        if isinstance(selected, SubmittedContainerPolicy):
+            execution = request.submitted_execution
+            if execution is None:
+                raise QueueConflictError("submitted assignment has no retained execution")
+            return selected.launch_profile(execution, workspace=workspace.root)
+        if selected is None:
+            raise QueueConflictError("assignment has no exact protected execution policy")
+        return selected.launch_profile
 
     @_cooperative
     def _flush_workspace_events(

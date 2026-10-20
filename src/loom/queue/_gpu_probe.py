@@ -134,6 +134,12 @@ def run_role_gpu_probes(
             )
     gpu_profiles = tuple(profile for profile in profiles if profile.gpu_devices)
     if not gpu_profiles:
+        if not isinstance(configuration, CoordinatorServiceConfig) and configuration.client.container_policies:
+            return (_finding(
+                Status.SKIP,
+                "GPU compute qualification requires an explicitly submitted workload image.",
+                applicability="submission boundary; host inventory is not compute proof",
+            ),)
         return (
             _finding(
                 Status.SKIP,
@@ -248,14 +254,15 @@ def _probe_owner(
             agent_id = root_id if session is None else session.agent_id
             providers = _compose_agent_resource_providers(
                 _configured_remote_provider_members(
-                    client, agent_id, client.capacity_profile
+                    client, agent_id, client.execution_inventory
                 )
             )
             extra_retained = control.has_unresolved_assignment_references()
 
         retained_configuration = _service_configuration(Path(root) / "supervisor")
         current = SupervisorLaunchConfiguration(
-            root_id, tuple(profile.launch_profile for profile in profiles)
+            root_id, tuple(profile.launch_profile for profile in profiles),
+            () if isinstance(configuration, CoordinatorServiceConfig) else configuration.client.container_policies,
         )
         if current.fingerprint != retained_configuration.fingerprint:
             raise ManagedLocalError("GPU probe launch binding conflicts")

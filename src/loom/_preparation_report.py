@@ -14,6 +14,7 @@ from loom.refs import ResourceRef
 from loom.serialization import PlainData, ensure_plain_data, stable_json_bytes
 
 PREPARATION_REPORT_SCHEMA_VERSION = 10
+SUBMITTED_PREPARATION_REPORT_SCHEMA_VERSION = 11
 REPORT_FORMAT = "loom.preparation_report.v1"
 _COMPOSITION_SCHEMA = "loom.preparation_composition.v1"
 _LOGICAL_FIELDS = {"resolved", "redacted", "recipe_manifest", "manifest", "provenance"}
@@ -33,7 +34,7 @@ def _equal(left: PlainData, right: PlainData) -> bool:
 
 def _require_current_report(report: dict[str, PlainData]) -> None:
     if (type(report.get("schema_version")) is not int
-        or report["schema_version"] != PREPARATION_REPORT_SCHEMA_VERSION):
+        or report["schema_version"] not in {PREPARATION_REPORT_SCHEMA_VERSION, SUBMITTED_PREPARATION_REPORT_SCHEMA_VERSION}):
         raise QueueConflictError(
             "preparation report schema is unsupported; regenerate preparation"
         )

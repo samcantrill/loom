@@ -22,6 +22,7 @@ from .shared_execution import location, qualified_roots
 
 
 SUBMITTED_CONTAINER_WORKER_CONTRACT = "resident-submitted-container-v1"
+SUBMITTED_CONTAINER_CAPABILITY = "submitted-container-execution-v1"
 SUBMITTED_EXECUTION_SCOPE = "loom.submitted_execution"
 
 
@@ -335,3 +336,26 @@ def assignment_binding(
     if SUBMITTED_EXECUTION_SCOPE not in fields:
         return None
     return submitted_binding(fields[SUBMITTED_EXECUTION_SCOPE])
+
+
+def submitted_implementation(
+    execution: SubmittedContainerExecution, capability: SubmittedContainerCapability,
+) -> dict[str, PlainData]:
+    """Portable implementation identity for reconciliation, reuse and recovery.
+
+    Image bytes, contained interpreter/interface, project integration and the
+    policy's portable environment participate. Image locations, host runtime
+    paths, assignment identities and allocated GPU bindings do not. This is an
+    identity projection; new-launch byte verification remains with the supervisor.
+    """
+    capability.require_execution(execution)
+    return {
+        "schema_version": 1,
+        "kind": "submitted_container",
+        "image_sha256": execution.image.sha256,
+        "runtime": execution.runtime,
+        "python_executable": execution.python_executable,
+        "worker_contract": execution.worker_contract,
+        "project_integration": None if execution.project_integration is None else thaw_plain_data(execution.project_integration),
+        "environment_fingerprint": capability.environment_fingerprint,
+    }

@@ -1814,6 +1814,8 @@ def _agent_config_revision(config: AgentTlsClientConfig) -> str:
             "profiles": [
                 _resident_profile_key(profile) for profile in config.resident_profiles
             ],
+            **({"container_policies": [policy.fingerprint for policy in config.container_policies]}
+               if config.container_policies else {}),
             "slurm_profiles": [
                 [profile.profile_id, profile.configuration_fingerprint]
                 for profile in config.slurm_profiles
@@ -1823,9 +1825,9 @@ def _agent_config_revision(config: AgentTlsClientConfig) -> str:
 
 
 def _agent_inventory_revision(config: AgentTlsClientConfig) -> str:
-    if not config.resident_profiles:
+    if not (config.resident_profiles or config.container_policies):
         return _agent_revision("inventory", {"capacity": None})
-    capacity = config.capacity_profile
+    capacity = config.execution_inventory
     return _agent_revision(
         "inventory",
         {

@@ -17,7 +17,7 @@ import traceback
 from pathlib import Path
 from typing import Any, cast
 
-from loom._preparation_report import PREPARATION_REPORT_SCHEMA_VERSION
+from loom._preparation_report import PREPARATION_REPORT_SCHEMA_VERSION, SUBMITTED_PREPARATION_REPORT_SCHEMA_VERSION
 from loom.artifacts import ArtifactRef
 from loom.diagnostics.models import (
     PreflightCheckStatus,
@@ -32,7 +32,8 @@ from loom.diagnostics.preflight import run_preflight_composed
 from loom.errors import SerializationError, ValidationError
 from loom.io.codecs.errors import CodecDecodeError
 from loom.pipeline.context import StageContext
-from loom.pipeline.orchestration import ExecutionRequirement
+from loom.pipeline.specs import StageSpec
+from loom.pipeline.orchestration import ExecutionRequirement, ManagedExecutionRequirement
 from loom.pipeline.execution.models import StageWorkerResult
 from loom.pipeline.runtime.options import RunOptions
 from loom.pipeline.runtime import merge_config_run_options
@@ -47,6 +48,7 @@ from loom.queue._remote_stage_execution import (
     ResidentProfileDescriptor,
     _reject_path_bearing_data,
 )
+from loom.queue.submitted_execution import SUBMITTED_EXECUTION_SCOPE, submitted_binding
 from loom.queue.deployment import CoordinatorServiceConfig
 from loom.queue.errors import QueueConflictError, QueueServiceError
 from loom.queue.local_daemon import LocalDaemonAdmission, LocalDaemonConfig
@@ -108,7 +110,6 @@ class PreparationStage:
         del inputs
         binding = PreparationChildInput.from_dict(context.stage_config)
         private = _worker_context()
-        profile = ResidentProfileDescriptor.from_dict(private["profile_descriptor"])
         local, shared = _decode_scope(private["scope"])
         purpose = _plain_mapping(private["purpose"])
         access = _plain_mapping(private["input"])
@@ -122,7 +123,7 @@ class PreparationStage:
             raise QueueConflictError("preparation local policy identity conflicts")
         if _project_binding(purpose.get("binding")) != binding.project_preparation:
             raise QueueConflictError("preparation project processor identity conflicts")
-        if profile.to_dict() != dict(binding.profile_descriptor):
+        if not _execution_matches(private, binding):
             raise QueueConflictError("preparation installation_mismatch")
         if binding.action_verification is not None:
             return {"report": context.save_artifact(
@@ -182,6 +183,9 @@ class PreparationStage:
         if binding.shared_scope is not None and preflight.status != PreflightStatus.FAIL:
             bind_snapshot(cast(dict[str, PlainData], composition["resolved"]), binding.shared_scope,
                           redacted=cast(dict[str, PlainData], composition["redacted"]))
+        if binding.execution is not None and preflight.status != PreflightStatus.FAIL:
+            _bind_submitted_snapshot(cast(dict[str, PlainData], composition["resolved"]), binding,
+                                     redacted=cast(dict[str, PlainData], composition["redacted"]))
         provenance = cast(dict[str, PlainData], composition["provenance"])
         metadata = cast(dict[str, PlainData], provenance["metadata"])
         metadata["loom_invocation"] = _invocation_data(binding)
@@ -208,12 +212,12 @@ class PreparationStage:
             pipeline = _pipeline_from_resolved(
                 cast(Mapping[str, object], composition["resolved"])
             )
-            requirement = _profile_requirement(profile)
+            requirement = _binding_requirement(binding)
             requirements = {
                 name: requirement.to_dict() for name in pipeline.stage_names
             }
         report: dict[str, PlainData] = {
-            "schema_version": PREPARATION_REPORT_SCHEMA_VERSION,
+            "schema_version": _report_schema(binding),
             **({"generations": dict(binding.generations)} if binding.generations is not None else {}),
             **({"candidate": dict(binding.candidate),
                 "verification": verification} if binding.candidate is not None else {}),
@@ -225,7 +229,7 @@ class PreparationStage:
             "operation_id": binding.operation_id,
             "input_manifest_digest": binding.input_receipt.manifest_digest,
             "preparation_profile": binding.preparation_profile,
-            "profile_descriptor": profile.to_dict(),
+            **binding.execution_data(),
             "composition": composition,
             "execution_requirements": requirements,
             "preflight": preflight.to_dict(),
@@ -293,8 +297,8 @@ def _run_action_verification(binding: PreparationChildInput, artifact_access: ob
         traceback.print_exc()
         failure = "action_verification_invalid"
     return {
-        "schema_version": 9, "operation_id": binding.operation_id,
-        "profile_descriptor": dict(binding.profile_descriptor),
+        "schema_version": 10 if binding.execution is not None else 9, "operation_id": binding.operation_id,
+        **binding.execution_data(),
         "action_verification": requested, "verification": response, "failure_code": failure,
     }
 
@@ -304,9 +308,9 @@ def _decode_action_verification_report(value: object, binding: PreparationChildI
     from loom.serialization import thaw_plain_data
 
     report = _plain_mapping(value)
-    if set(report) != {"schema_version", "operation_id", "profile_descriptor", "action_verification", "verification", "failure_code"} or type(report["schema_version"]) is not int or report["schema_version"] != 9:
+    if set(report) != {"schema_version", "operation_id", "action_verification", "verification", "failure_code"} | set(binding.execution_data()) or type(report["schema_version"]) is not int or report["schema_version"] != (10 if binding.execution is not None else 9):
         raise QueueConflictError("action verification report fields are invalid")
-    if report["operation_id"] != binding.operation_id or report["profile_descriptor"] != dict(binding.profile_descriptor) or report["action_verification"] != thaw_plain_data(binding.action_verification):
+    if report["operation_id"] != binding.operation_id or not _execution_matches(report, binding) or report["action_verification"] != thaw_plain_data(binding.action_verification):
         raise QueueConflictError("action verification report binding conflicts")
     if report["failure_code"] is None:
         action_verification_response(report["verification"], _plain_mapping(_plain_mapping(report["action_verification"])["candidate"]))
@@ -352,7 +356,7 @@ def _inspect_project(
             "operation_id": binding.operation_id,
             "input_manifest_digest": binding.input_receipt.manifest_digest,
             "preparation_profile": binding.preparation_profile,
-            "profile_descriptor": dict(binding.profile_descriptor),
+            **binding.execution_data(),
             **({"shared_scope": dict(binding.shared_scope)} if binding.shared_scope is not None else {"local_scope": dict(binding.local_scope or {})}),
             "project_preparation": dict(binding.project_preparation),
         }
@@ -422,7 +426,7 @@ def _verify_project_candidate(binding: PreparationChildInput, composition: Mappi
             "effective_run_options": None if options is None else options.to_dict(),
             "operation_id": binding.operation_id, "invocation": _invocation_data(binding),
             "input_manifest_digest": binding.input_receipt.manifest_digest,
-            "profile_descriptor": dict(binding.profile_descriptor),
+            **binding.execution_data(),
             "project_preparation": dict(binding.project_preparation),
             **({"generations": dict(binding.generations)} if binding.generations is not None else {}),
             **({"shared_scope": dict(binding.shared_scope)} if binding.shared_scope is not None else {"local_scope": dict(binding.local_scope or {})}),
@@ -481,7 +485,7 @@ def _bind_local_snapshot(
     """Validate resolved locality and annotate executable and diagnostic views."""
     pipeline = _pipeline_from_resolved(snapshot)
     for stage in pipeline.stages:
-        if LOCAL_PREPARATION_SCOPE in stage.fingerprint_fields or SHARED_EXECUTION_SCOPE in stage.fingerprint_fields:
+        if {LOCAL_PREPARATION_SCOPE, SHARED_EXECUTION_SCOPE, SUBMITTED_EXECUTION_SCOPE}.intersection(stage.fingerprint_fields):
             raise QueueConflictError("captured configuration cannot select protected preparation scope")
         if scope is not None:
             target = stage.placement.get("target")
@@ -533,10 +537,14 @@ def _worker_context() -> Mapping[str, PlainData]:
         raise QueueServiceError("preparation requires its managed worker input binding")
     try:
         value = json.loads(encoded)
-        if (not isinstance(value, dict)
-            or set(value) != {"schema_version", "profile_descriptor", "input", "scope", "purpose"}
-            or type(value["schema_version"]) is not int
-            or value["schema_version"] != PREPARATION_CONTEXT_SCHEMA_VERSION):
+        if not isinstance(value, dict) or type(value.get("schema_version")) is not int:
+            raise ValueError
+        common = {"schema_version", "input", "scope", "purpose"}
+        if value["schema_version"] == PREPARATION_CONTEXT_SCHEMA_VERSION and set(value) == common | {"profile_descriptor"}:
+            ResidentProfileDescriptor.from_dict(value["profile_descriptor"])
+        elif value["schema_version"] == 7 and set(value) == common | {"execution", "container_capability"}:
+            submitted_binding({key: value[key] for key in ("execution", "container_capability")})
+        else:
             raise ValueError
         _decode_scope(value["scope"])
         access = value["input"]
@@ -630,7 +638,7 @@ def decode_preparation_report(
     value: object,
     *,
     expected: PreparationChildInput,
-) -> tuple[object, dict[str, ExecutionRequirement], PreflightResult]:
+) -> tuple[object, dict[str, ManagedExecutionRequirement], PreflightResult]:
     """Decode one committed child's report after its durable artifact join.
 
     The coordinator operation owner must first establish the committed artifact's
@@ -648,17 +656,17 @@ def _decode_preparation_report(
     value: object,
     *,
     expected: PreparationChildInput,
-) -> tuple[object, dict[str, ExecutionRequirement], PreflightResult]:
+) -> tuple[object, dict[str, ManagedExecutionRequirement], PreflightResult]:
     report = _plain_mapping(value)
     if (
-        set(report) != (_REPORT_FIELDS | ({"shared_scope"} if expected.shared_scope is not None else set()) | ({"local_scope"} if expected.local_scope is not None else set())
+        set(report) != ((_REPORT_FIELDS - {"profile_descriptor"}) | set(expected.execution_data()) | ({"shared_scope"} if expected.shared_scope is not None else set()) | ({"local_scope"} if expected.local_scope is not None else set())
                         | ({"project_preparation", "requested_composition", "project_result"} if expected.project_preparation is not None else set())
                         | ({"candidate", "verification"} if expected.candidate is not None else set())
                         | ({"project_contracts"} if expected.project_preparation is not None else set())
                         | ({"generations"} if expected.generations is not None else set()))
         or report["report_format"] != "loom.preparation_report.v1"
         or type(report["schema_version"]) is not int
-        or report["schema_version"] != PREPARATION_REPORT_SCHEMA_VERSION
+        or report["schema_version"] != _report_schema(expected)
     ):
         raise QueueServiceError("preparation report fields or capability are unsupported")
     if expected.generations is not None:
@@ -689,9 +697,7 @@ def _decode_preparation_report(
         or report["preparation_profile"] != expected.preparation_profile
     ):
         raise QueueConflictError("preparation report identity conflicts")
-    if ResidentProfileDescriptor.from_dict(
-        report["profile_descriptor"]
-    ).to_dict() != dict(expected.profile_descriptor):
+    if not _execution_matches(report, expected):
         raise PreparationInstallationMismatch(
             "preparation report installation identity conflicts"
         )
@@ -762,9 +768,7 @@ def _decode_preparation_report(
             raise QueueConflictError(
                 "preparation report invocation provenance conflicts"
             )
-        requirement = _profile_requirement(
-            ResidentProfileDescriptor.from_dict(expected.profile_descriptor)
-        )
+        requirement = _binding_requirement(expected)
         if set(requirements) != set(pipeline.stage_names):
             raise QueueConflictError(
                 "preparation execution requirements must exactly cover stages"
@@ -774,6 +778,13 @@ def _decode_preparation_report(
                 "preparation execution requirements do not match the selected installation"
             )
         for stage in pipeline.stages:
+            submitted = stage.fingerprint_fields.get(SUBMITTED_EXECUTION_SCOPE)
+            if expected.execution is not None:
+                if not isinstance(submitted, Mapping) or not _execution_matches(submitted, expected):
+                    raise QueueConflictError("prepared stage submitted execution conflicts")
+                _require_submitted_route(stage)
+            elif submitted is not None:
+                raise QueueConflictError("installed preparation cannot select a submitted image")
             scope = _local_scope(stage.fingerprint_fields.get(LOCAL_PREPARATION_SCOPE))
             if scope != expected.local_scope or (scope is not None and stage.placement.get("target") != scope["agent_id"]):
                 raise QueueConflictError("preparation report local placement conflicts")
@@ -839,6 +850,8 @@ def prepare_child_run(
     if binding.shared_scope is not None:
         stage = cast(list[dict[str, PlainData]], cast(Mapping[str, PlainData], resolved["pipeline"])["stages"])[0]
         stage["fingerprint"] = {SHARED_EXECUTION_SCOPE: dict(binding.shared_scope)}
+    if binding.execution is not None:
+        _bind_submitted_snapshot(resolved, binding)
     # The fixed child has no authored composition/recipe provenance. Its native
     # plan fingerprint includes the complete validated input and profile binding.
     composed = _ReceivedComposition(
@@ -849,11 +862,50 @@ def prepare_child_run(
         composed,
         run_name,
         execution_requirements={
-            "prepare": _profile_requirement(
-                ResidentProfileDescriptor.from_dict(binding.profile_descriptor)
-            ),
+            "prepare": _binding_requirement(binding),
         },
     )
+
+
+def _report_schema(binding: PreparationChildInput) -> int:
+    return SUBMITTED_PREPARATION_REPORT_SCHEMA_VERSION if binding.execution is not None else PREPARATION_REPORT_SCHEMA_VERSION
+
+
+def _execution_matches(value: Mapping[str, PlainData], binding: PreparationChildInput) -> bool:
+    selected = binding.execution_data()
+    return stable_json_bytes({key: value.get(key) for key in selected}) == stable_json_bytes(selected)
+
+
+def _binding_requirement(binding: PreparationChildInput) -> ManagedExecutionRequirement:
+    if binding.execution is not None:
+        assert binding.container_capability is not None
+        return binding.container_capability.requirement(binding.execution)
+    return _profile_requirement(ResidentProfileDescriptor.from_dict(binding.profile_descriptor))
+
+
+def _require_submitted_route(stage: StageSpec) -> None:
+    route = stage.placement.get("execution_route")
+    if route is not None and route != {"kind": "managed_agent"}:
+        raise QueueConflictError("submitted containers require the managed agent route")
+
+
+def _bind_submitted_snapshot(
+    snapshot: dict[str, PlainData], binding: PreparationChildInput,
+    *, redacted: dict[str, PlainData] | None = None,
+) -> None:
+    """Bind one accepted image to every node, including the preparation child."""
+    pipeline = _pipeline_from_resolved(snapshot)
+    for stage in pipeline.stages:
+        _require_submitted_route(stage)
+        if SUBMITTED_EXECUTION_SCOPE in stage.fingerprint_fields:
+            raise QueueConflictError("authored configuration cannot select submitted execution")
+    for view in (snapshot,) if redacted is None else (snapshot, redacted):
+        definition = cast(dict[str, PlainData], view["pipeline"])
+        for stage in cast(list[dict[str, PlainData]], definition["stages"]):
+            stage["fingerprint"] = {
+                **cast(dict[str, PlainData], stage.get("fingerprint", {})),
+                SUBMITTED_EXECUTION_SCOPE: binding.execution_data(),
+            }
 
 
 def _profile_requirement(profile: ResidentProfileDescriptor) -> ExecutionRequirement:
@@ -1095,7 +1147,7 @@ class CoordinatorPreparation:
         report: PreparationReport,
     ) -> ManagedLocalPreparationReceipt:
         composed, requirements = cast(
-            tuple[object, Mapping[str, ExecutionRequirement]], report.publication_data
+            tuple[object, Mapping[str, ManagedExecutionRequirement]], report.publication_data
         )
         received = cast(_ReceivedComposition, composed)
         if received.project_preparation is not None and received.project_preparation["target_run_uri"] is None:

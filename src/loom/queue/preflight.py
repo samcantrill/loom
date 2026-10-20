@@ -113,6 +113,7 @@ def _check_loaded_role(
             )
         )
 
+    container_policies = ()
     try:
         if service is None:
             raise QueueServiceError("protected role configuration is unavailable")
@@ -132,6 +133,7 @@ def _check_loaded_role(
             outbound = cast("OutboundAgentServiceConfig", service)
             gpu_configuration = outbound
             profiles = outbound.client.resident_profiles
+            container_policies = outbound.client.container_policies
             agent_root = outbound.client.agent_root
             roots = () if agent_root is None else (agent_root,)
             capacity = outbound.effective_capacity
@@ -217,7 +219,23 @@ def _check_loaded_role(
                     },
                 )
             )
-    if not profiles:
+    for policy in container_policies:
+        add(
+            "execution.container_policy", Group.IDENTITY, Status.PASS,
+            "Host container runtime and shared roots were qualified by the role loader.",
+            owner="container execution policy",
+            repair="Keep the runtime and shared root challenges available.",
+            evidence={"policy_id": policy.policy_id, "capability_fingerprint": policy.capability.fingerprint},
+        )
+    if not profiles and container_policies:
+        add(
+            "packages.workload", Group.PACKAGES, Status.SKIP,
+            "The submission selects its image; contained-worker compatibility is checked before project imports.",
+            owner="submitted workload",
+            repair="Submit a compatible immutable workload image.",
+            applicability="submission boundary",
+        )
+    if not profiles and not container_policies:
         for name, group in (
             ("packages.required_imports", Group.PACKAGES),
             ("environment.worker", Group.ENVIRONMENT),
@@ -236,18 +254,18 @@ def _check_loaded_role(
         "resources.capacity",
         Group.RESOURCES,
         (Status.PASS if capacity is not None else Status.WARN)
-        if profiles
+        if profiles or container_policies
         else Status.SKIP,
         (
             "Agent resource selection was checked against available supported limits."
             if capacity is not None
             else "Legacy profile capacity is declared; host limits and GPU selection were not discovered."
         )
-        if profiles
+        if profiles or container_policies
         else "A pure coordinator needs no execution resources.",
         owner="agent resource providers",
         repair="Select valid agent capacity; current claims are distinct from declared capacity.",
-        applicability="agent resources" if profiles else "coordinator only",
+        applicability="agent resources" if profiles or container_policies else "coordinator only",
         evidence={
             "effective_capacity": None if capacity is None else capacity.to_dict()
         },
@@ -303,7 +321,7 @@ def _check_loaded_role(
         try:
             retained = _service_configuration(Path(agent_root) / "supervisor")
             current = SupervisorLaunchConfiguration(
-                retained.agent_id, tuple(profile.launch_profile for profile in profiles)
+                retained.agent_id, tuple(profile.launch_profile for profile in profiles), container_policies
             )
             matches = retained.fingerprint == current.fingerprint
         except (AgentProcessSupervisorError, OSError):

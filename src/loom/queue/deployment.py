@@ -491,6 +491,7 @@ def read_agent_spec(
             "resources",
             "slurm_profiles",
             "max_concurrent_assignments",
+            "container_policies",
         },
         "outbound agent service config",
     )
@@ -563,7 +564,12 @@ def read_agent_spec(
         )
         for index, value in enumerate(_sequence(payload, "resident_profiles"))
     ]
-    if not profiles and not slurm:
+    policies = _submitted_container_policies(payload)
+    if policies:
+        declarations["container_policies"] = [policy.to_dict() for policy in policies]
+        if declarations["resources"] is None:
+            raise QueueConfigError("submitted containers require explicit agent resource inventory")
+    if not profiles and not slurm and not policies:
         raise QueueConfigError(
             "resident_profiles must not be empty without external SLURM profiles"
         )
@@ -575,7 +581,7 @@ def read_agent_spec(
         }
     ) != len(profiles):
         raise QueueConfigError("agent resident profile IDs must be unique")
-    if declarations["resources"] is not None and not profiles:
+    if declarations["resources"] is not None and not (profiles or policies):
         raise QueueConfigError("agent resource inventory requires a resident profile")
     if declarations["resources"] is None and profiles:
         capacities = [
@@ -663,7 +669,10 @@ def qualify_agent_spec(
         )
         for index, value in enumerate(_sequence(payload, "resident_profiles"))
     )
-    if not profiles and not payload.get("slurm_profiles"):
+    policies = _submitted_container_policies(payload)
+    for policy in policies:
+        policy.qualify()
+    if not profiles and not payload.get("slurm_profiles") and not policies:
         raise QueueConfigError(
             "resident_profiles must not be empty without external SLURM profiles"
         )
@@ -729,6 +738,7 @@ def qualify_agent_spec(
             Any, _slurm_profile_composition(payload.get("slurm_profiles"))
         ),
         resident_profiles=profiles,
+        container_policies=policies,
         resource_inventory=resource_inventory,
         gpu_occupancy_policy=occupancy_policy,
         agent_resource_provider_factory=cast(Any, provider_factory),
@@ -1203,6 +1213,7 @@ def _open_outbound_agent(
     configuration = SupervisorLaunchConfiguration(
         _read_remote_agent_root_id(config.agent_root),
         tuple(item.launch_profile for item in config.resident_profiles),
+        config.container_policies,
     )
     try:
         AgentProcessSupervisorService.start_empty_initialized(
@@ -1390,6 +1401,17 @@ def _local_agent_service(
         effective_capacity=effective_capacity,
         gpu_occupancy_policy=occupancy_policy,
     )
+
+
+def _submitted_container_policies(payload: Mapping[str, object]):
+    from ._submitted_container_policy import SubmittedContainerPolicy
+
+    policies = tuple(SubmittedContainerPolicy.from_dict(value)
+                     for value in (_sequence(payload, "container_policies")
+                                   if "container_policies" in payload else ()))
+    if len({policy.policy_id for policy in policies}) != len(policies):
+        raise QueueConfigError("agent container policy IDs must be unique")
+    return policies
 
 
 def _normalize_outbound_agent_payload(
@@ -1877,6 +1899,8 @@ def _outbound_immutable_projection(
         "kind": payload["kind"],
         "url": payload["url"],
         "resident_profiles": profiles,
+        **({"container_capabilities": [policy.capability.to_dict() for policy in _submitted_container_policies(payload)]}
+           if payload.get("container_policies") else {}),
     }
 
 
@@ -1998,6 +2022,8 @@ def _outbound_active_projection(payload: Mapping[str, object]) -> dict[str, obje
                 "registration": payload["registration"],
                 "reconnect_seconds": payload["reconnect_seconds"],
                 "resident_profiles": profiles,
+                **({"container_policy_fingerprints": [policy.fingerprint for policy in _submitted_container_policies(payload)]}
+                   if payload.get("container_policies") else {}),
                 "provider_factory": payload.get("provider_factory"),
                 "slurm_profiles": payload.get("slurm_profiles"),
                 **(
@@ -2546,6 +2572,7 @@ def inspect_role_declaration(
         fingerprint = spec.declaration_digest
         profiles = cast(Sequence[Mapping[str, object]], spec.declarations["resident_profiles"])
         identities = [cast(PlainData, profile["descriptor"]) for profile in profiles]
+        identities.extend(policy.capability.to_dict() for policy in _submitted_container_policies(spec.declarations))
     else:
         source, _, payload, _ = _load_protected_config(path, env_file=env_file)
         _required_allowed(payload, {"schema_version", "kind", "deployment_root", "run_store_root", "machine_id", "poll_interval_seconds", "max_accepted_time_step_seconds", "local_agent", "remote_profiles", "agent_policy", "agent_server", "authority"}, {"scheduling", "slurm_profiles", "preparation", "event_sinks", "shared_roots", "assignment_payload_root_id", "container_capabilities"}, "coordinator service config")

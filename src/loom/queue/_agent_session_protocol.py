@@ -44,6 +44,7 @@ from ._remote_stage_execution import (
 )
 
 from .errors import QueueConflictError, QueueServiceError
+from .submitted_execution import SUBMITTED_CONTAINER_CAPABILITY
 
 from ._agent_progress import _Progress, _steps, _external
 
@@ -91,6 +92,8 @@ def handshake(self: LocalDaemonAgentHttpClient, *, role: str = "agent") -> Gener
             raise QueueServiceError(
                 f"coordinator upgrade required: missing {CONTROL_WAIT_CAPABILITY}"
             )
+        if self._config.container_policies and SUBMITTED_CONTAINER_CAPABILITY not in capabilities:
+            raise QueueServiceError("coordinator upgrade required: submitted containers unsupported")
     return result
 
 
@@ -113,8 +116,16 @@ def register(self: LocalDaemonAgentHttpClient, request: AgentRegistration) -> Ge
         # Reference transport runs in this host application. Workers consume
         # the unchanged full bundle, so their existing qualification remains
         # sufficient, including installations retained for inline recovery.
+    if self._config.container_policies:
+        if not {SUBMITTED_CONTAINER_CAPABILITY, SHARED_EXECUTION_CAPABILITY, CAPABILITY}.issubset(request.declared_capabilities):
+            raise QueueServiceError("submitted container policies require shared execution declarations")
+        yield from _steps(self.handshake)
+        for policy in self._config.container_policies:
+            yield from _external("bulk", policy.qualify)
+    elif SUBMITTED_CONTAINER_CAPABILITY in request.declared_capabilities:
+        raise QueueServiceError("submitted container capability requires protected host policy")
     if SHARED_EXECUTION_CAPABILITY in request.declared_capabilities:
-        if not any(profile.shared_roots for profile in self._profiles.values()):
+        if not self._config.container_policies and not any(profile.shared_roots for profile in self._profiles.values()):
             raise QueueServiceError("shared execution capability requires qualified roots")
         for profile in self._profiles.values():
             if not profile.shared_roots:
@@ -129,7 +140,7 @@ def register(self: LocalDaemonAgentHttpClient, request: AgentRegistration) -> Ge
     if (
         PREPARATION_INPUT_CAPABILITY in request.declared_capabilities or staged
     ) and (
-        not self._profiles
+        not (self._profiles or self._config.container_policies)
         or any(
             profile.readiness_result is None
             or not profile.readiness_result.preparation_ready
@@ -224,7 +235,7 @@ def publish_offer(
             "restarted agent with retained remote work cannot advertise "
             "executable capacity"
         )
-    if offer.resident_profiles:
+    if offer.resident_profiles or offer.container_execution_capabilities:
         local_descriptors = {
             profile.descriptor.profile_id: profile
             for profile in self._profiles.values()
@@ -235,7 +246,10 @@ def publish_offer(
             for descriptor in offer.resident_profiles
         ):
             raise QueueConflictError("offer names an unavailable resident profile")
-        capacity = self._config.capacity_profile
+        configured_capabilities = tuple(policy.capability for policy in self._config.container_policies)
+        if any(item not in configured_capabilities for item in offer.container_execution_capabilities):
+            raise QueueConflictError("offer names an unavailable container policy")
+        capacity = self._config.execution_inventory
         if (
             offer.cpu > capacity.cpu_capacity
             or offer.memory_bytes > capacity.memory_capacity_bytes
@@ -341,13 +355,13 @@ def refresh_resource_offer(
         return None
     (yield from _steps(self._replay_pending_resource_mutation, session.session_id))
     session = journal.session(session.session_id)
-    if not self._config.resident_profiles:
+    if not (self._config.resident_profiles or self._config.container_policies):
         if not (yield from _steps(self._qualify_service_admission)):
             return None
         profile = None
         descriptors, atoms, claims, statuses = (), (), (), ()
     else:
-        profile = self._config.capacity_profile
+        profile = self._config.execution_inventory
         self._provider_composition(session.agent_id, profile)
         for provider in self._configured_provider_members or ():
             if isinstance(provider, GpuResourceProvider):
@@ -392,6 +406,9 @@ def refresh_resource_offer(
         else self._slurm_agent.offered_profiles(),
         resident_profiles=tuple(
             item.descriptor for item in self._config.resident_profiles
+        ),
+        container_execution_capabilities=tuple(
+            policy.capability for policy in self._config.container_policies
         ),
         gpu_devices=()
         if profile is None

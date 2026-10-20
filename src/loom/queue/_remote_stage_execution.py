@@ -894,6 +894,8 @@ class _ResidentAssignmentBundle:
                 raise QueueConflictError("submitted assignment policy differs from its workload binding")
         elif submitted is not None:
             raise QueueConflictError("submitted assignment cannot use an installed profile")
+        if submitted is not None and assignment_scope(fingerprint) is None:
+            raise QueueServiceError("submitted containers require shared execution scope")
         assignment_scope(fingerprint)
         from ._shared_recovery import validate_wire
         validate_wire(self)
