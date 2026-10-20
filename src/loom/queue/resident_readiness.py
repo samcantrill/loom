@@ -24,6 +24,7 @@ from loom.diagnostics.models import (
 from loom.serialization import PlainData
 
 from ._resident_probe import MAX_RESIDENT_PROBE_TIMEOUT_SECONDS, run_resident_probe
+from ._phase_timing import phase
 
 if TYPE_CHECKING:
     from ._remote_stage_execution import ResidentExecutionProfile, ResidentProfileDescriptor
@@ -270,11 +271,16 @@ class ResidentReadinessRequirements:
 
 @dataclass(frozen=True, slots=True)
 class ResidentReadinessResult:
-    """Ephemeral findings and the observed portable software descriptor fields."""
+    """Ephemeral findings and the observed portable software descriptor fields.
+
+    ``image_sha256`` is the image digest consumed by this qualification, when
+    present. It is an observation for this boundary, not a persistent cache.
+    """
 
     checks: tuple[PreflightCheckResult, ...]
     identity: str | None
     fingerprints: Mapping[str, str] = field(default_factory=dict)
+    image_sha256: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -326,7 +332,7 @@ def _container_software_identity(profile: ResidentExecutionProfile, *, deadline:
     identity = image["reference"]
     if binding["kind"] == "apptainer":
         digest = hashlib.sha256()
-        with Path(str(identity)).open("rb") as stream:
+        with phase("qualification_image_hash"), Path(str(identity)).open("rb") as stream:
             while chunk := stream.read(1024 * 1024):
                 if deadline is not None and time.monotonic() >= deadline:
                     raise TimeoutError("resident readiness caller deadline elapsed")
@@ -395,12 +401,13 @@ def qualify_resident_profile(
             )
         )
 
-    response = run_resident_probe(
-        profile.launch_profile,
-        _HANDSHAKE,
-        {},
-        timeout_seconds=probe_timeout(),
-    )
+    with phase("interpreter_probe"):
+        response = run_resident_probe(
+            profile.launch_profile,
+            _HANDSHAKE,
+            {},
+            timeout_seconds=probe_timeout(),
+        )
     probe_timeout()
     python = response.payload
     valid = (
@@ -504,12 +511,13 @@ def qualify_resident_profile(
             request["shared_container"] = True
     if requirements.preparation_staged:
         request["preparation_staged"] = True
-    response = run_resident_probe(
-        profile.launch_profile,
-        _INSTALLATION,
-        request,
-        timeout_seconds=probe_timeout(),
-    )
+    with phase("installation_probe"):
+        response = run_resident_probe(
+            profile.launch_profile,
+            _INSTALLATION,
+            request,
+            timeout_seconds=probe_timeout(),
+        )
     probe_timeout()
     observed = response.payload
     valid = (
@@ -625,6 +633,14 @@ def qualify_resident_profile(
     )
     if any(check.status is PreflightCheckStatus.FAIL for check in checks):
         return ResidentReadinessResult(tuple(checks), None)
+    container_identity = (
+        _container_software_identity(profile, deadline=_deadline)
+        if profile.container is not None else None
+    )
+    image_sha256 = None
+    if profile.container is not None and profile.shared_roots and profile.container["kind"] == "apptainer":
+        assert isinstance(container_identity, dict)
+        image_sha256 = container_identity["container"]["image"]["reference"].removeprefix("sha256:")
     fingerprints = {
         "project_fingerprint": _digest(
             {"imports": imports, "sources": sorted(cast(list[str], sources))}
@@ -636,7 +652,7 @@ def qualify_resident_profile(
             {
                 "worker": "loom.queue._resident_stage_worker",
                 "protocol": "resident-v3",
-                **({"container": _container_software_identity(profile, deadline=_deadline)} if profile.container is not None else {}),
+                **({"container": container_identity} if profile.container is not None else {}),
                 "python": python,
             }
         ),
@@ -653,7 +669,7 @@ def qualify_resident_profile(
             "descriptor": _qualified_descriptor(profile, fingerprints).to_dict(),
         },
     )
-    return ResidentReadinessResult(tuple(checks), identity, fingerprints)
+    return ResidentReadinessResult(tuple(checks), identity, fingerprints, image_sha256)
 
 
 def _qualified_descriptor(

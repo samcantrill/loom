@@ -245,6 +245,8 @@ def bind_intent(intent, plan, directory):
 
 
 class WorkloadUpgrade(maintenance._Upgrade):
+    _preview_qualification: dict[str, Any] | None = None
+
     def recheck_composed(self, pending_inputs=None):
         super().recheck_composed(pending_inputs)
         sources = self.intent.get("candidate_sources")
@@ -526,14 +528,11 @@ def continue_upgrade(operation):
             for identity in list(operation.gate()["checks"]):
                 operation.maintenance("revoke-before-promotion-" + identity, "revoke", identity)
         maintenance.phase(operation, "draining")
-        for name, agent in intent["agents"].items():
-            accepted = operation.policy(
-                name,
-                name + "-drain",
-                "drain",
-                (agent.get("control") or {}).get("operation_id"),
-            )
-            operation.verify_policy(name, accepted)
+        maintenance._independent_policies(operation, [
+            (name, name + "-drain", "drain",
+             (agent.get("control") or {}).get("operation_id"))
+            for name, agent in intent["agents"].items()
+        ])
         operation.settled()
         for name in intent["agents"]:
             fact = operation.host_observe(name, "upgrade-settlement")
@@ -551,14 +550,11 @@ def continue_upgrade(operation):
     )
     restoring = directory / "restoring.json"
     if not restoring.exists():
-        for name in intent["agents"]:
-            accepted = operation.policy(
-                name,
-                name + "-checks-capacity",
-                "resume",
-                intent["operation_id"] + "-" + name + "-promotion",
-            )
-            operation.verify_policy(name, accepted)
+        maintenance._independent_policies(operation, [
+            (name, name + "-checks-capacity", "resume",
+             intent["operation_id"] + "-" + name + "-promotion")
+            for name in intent["agents"]
+        ])
         maintenance._run_checks(operation)
         atomic(restoring, {"intent_digest": digest(intent)})
     maintenance._restore(operation)

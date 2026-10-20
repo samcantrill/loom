@@ -50,14 +50,15 @@ def run_role_preflight(
 
 
 def check_loaded_agent(
-    service: OutboundAgentServiceConfig,
+    service: OutboundAgentServiceConfig | None,
     *,
     probe_io: bool = False,
     probe_gpu: bool = False,
 ) -> "PreflightResult":
     """Assemble native checks from one already qualified outbound service.
 
-    Software qualification is not repeated. Existing-root binding checks and
+    ``None`` reports unavailable configuration, as :func:`run_role_preflight`
+    does when its loader fails. Software qualification is not repeated. Existing-root binding checks and
     requested IO/GPU probes still run at this boundary. This report is not a
     reusable qualification cache or permission to start a different declaration.
     """

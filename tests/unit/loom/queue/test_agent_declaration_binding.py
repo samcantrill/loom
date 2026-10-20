@@ -22,6 +22,20 @@ from loom.queue.retirement import (
 from tests.unit.loom.queue.test_deployment import _agent_config, _write_protected
 
 
+def test_replacement_refuses_declaration_changed_since_qualification(tmp_path):
+    from loom.queue.deployment import service_replacement_guard
+
+    source = _agent_config(tmp_path)
+    service = load_outbound_agent_service_config(source)
+    authored = json.loads(source.read_text())
+    authored["reconnect_seconds"] += 1
+    _write_protected(source, authored)
+    with pytest.raises(QueueError, match="declaration changed after qualification"):
+        with service_replacement_guard(service, "unused-root"):
+            pytest.fail("changed declaration entered replacement")
+    assert not service.client.agent_root.exists()
+
+
 def test_initialized_binding_matches_qualified_declaration_and_native_revision(
     tmp_path,
 ):

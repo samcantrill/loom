@@ -180,6 +180,23 @@ def test_runtime_replacement_continues_start_without_repeating_activation(startu
         _upgrade_host.replace(request)
 
 
+def test_launch_to_readiness_timing_survives_continuation_without_relaunch(startup, monkeypatch):
+    from loom.fleet import _timing
+    request, state, now = startup
+    state.ready_at = 150
+    tmux_backend(monkeypatch, state)
+    with _timing.recording() as trace:
+        with pytest.raises(_startup.ServiceStarting):
+            _host.start(request)
+        assert not any(row["action"] == "launch_to_readiness" for row in trace.records)
+        now[0] = 150
+        _host.start(request)
+        _host.start(request)
+    rows = [row for row in trace.records if row["action"] == "launch_to_readiness"]
+    assert len(rows) == 1 and rows[0]["elapsed_seconds"] == 50
+    assert state.launches == 1
+
+
 def test_workload_pending_start_recovers_and_qualifies_once(startup, monkeypatch):
     from loom.queue import _profile_promotion
     request, state, now = startup

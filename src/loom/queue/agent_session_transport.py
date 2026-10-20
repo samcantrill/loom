@@ -1303,12 +1303,14 @@ class LocalDaemonAgentHttpClient:
                 ),
             )
         if effect is None:
-            effect = (yield from _steps(self._apply_agent_control,
-                control,
-                prepared_reload=prepared_reload,
-                prepared_error=prepared_error,
-                cancellation_prepared=cancellation_prepared,
-            ))
+            from ._phase_timing import phase
+            with phase("control_application", operation_id=control.operation_id):
+                effect = (yield from _steps(self._apply_agent_control,
+                    control,
+                    prepared_reload=prepared_reload,
+                    prepared_error=prepared_error,
+                    cancellation_prepared=cancellation_prepared,
+                ))
             journal.record_control_effect(control, effect)
         (yield from _steps(self._call,
             "control_ack",

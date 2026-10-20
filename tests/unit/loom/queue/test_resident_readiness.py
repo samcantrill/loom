@@ -458,6 +458,33 @@ def test_shared_image_identity_tracks_bytes_not_host_prefix(tmp_path):
     assert _container_software_identity(profile(first)) != _container_software_identity(profile(second))
 
 
+def test_qualified_image_digest_is_the_observation_used_by_software_identity(tmp_path, monkeypatch):
+    import hashlib
+    from loom.queue import resident_readiness
+
+    image = tmp_path / "image.sif"
+    image.write_bytes(b"first image")
+    (tmp_path / "identity").write_bytes(b"root")
+    local = _profile(tmp_path)
+    candidate = replace(local, shared_roots={"data": {
+        "host_path": str(tmp_path), "container_path": "/loom/data", "access": "ro",
+        "challenge": {"path": "identity", "sha256": hashlib.sha256(b"root").hexdigest()},
+    }}, container={"kind": "apptainer", "container": {"image": {"reference": str(image)}},
+                  "options": {"command": "/bin/true"}, "python_executable": "/usr/bin/python3",
+                  "daemon_endpoint": None})
+    probe = resident_readiness.run_resident_probe
+    monkeypatch.setattr(resident_readiness, "run_resident_probe",
+                        lambda launch, *args, **kwargs: probe(local.launch_profile, *args, **kwargs))
+    first = qualify_resident_profile(candidate)
+    repeated = qualify_resident_profile(candidate)
+    assert first.ok and first.image_sha256 == hashlib.sha256(b"first image").hexdigest()
+    assert first.identity == repeated.identity and first.fingerprints == repeated.fingerprints
+    image.write_bytes(b"second image")
+    changed = qualify_resident_profile(candidate)
+    assert changed.ok and changed.image_sha256 == hashlib.sha256(b"second image").hexdigest()
+    assert changed.identity != first.identity
+
+
 def test_shared_installed_source_identity_ignores_private_workspace_prefix(tmp_path):
     from loom.queue.resident_readiness import _INSTALLATION
     from loom.queue._resident_probe import run_resident_probe

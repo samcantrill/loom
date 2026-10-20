@@ -68,13 +68,33 @@ class Trace:
 
 @contextmanager
 def recording():
+    from loom.queue._phase_timing import observe_phases
+
     trace = Trace()
     token = _active.set(trace)
     try:
-        yield trace
+        with observe_phases(_queue_phases):
+            yield trace
     finally:
         _active.reset(token)
         trace.flush()
+
+
+def _queue_phases(value):
+    ingest([
+        {"action": span["action"], "started_at": span["started_at"],
+         "elapsed_seconds": span["elapsed_nanoseconds"] / 1_000_000_000,
+         "outcome": span["outcome"], "host": None}
+        for span in value["spans"]
+    ])
+
+
+def elapsed(action, started_at, seconds):
+    """Publish a retained launch duration once readiness is first established."""
+    trace = _active.get()
+    if trace is not None:
+        trace.add({"action": action, "started_at": started_at,
+                   "elapsed_seconds": seconds, "outcome": "complete", "host": None})
 
 
 def bind_directory(directory: Path):

@@ -491,24 +491,26 @@ def handle_daemon_retire(namespace: argparse.Namespace) -> int:
 def handle_agent_supervisor_serve(namespace: argparse.Namespace) -> int:
     """Serve a preinitialized supervisor without creating or replacing identity."""
     from loom.queue.deployment import load_outbound_agent_service_config
+    from loom.queue._phase_timing import log_phases, observe_phases
     from loom.queue._agent_process_supervisor import (
         AgentProcessSupervisorService, AgentProcessSupervisorError, SupervisorLaunchConfiguration,
     )
 
     try:
-        service = load_outbound_agent_service_config(namespace.config, env_file=namespace.env_file)
-        if service.client.agent_root is None or not service.client.resident_profiles:
-            raise CliError("native supervisor requires a resident agent root")
-        from loom.queue.agent_session_transport import _read_remote_agent_root_id
-        AgentProcessSupervisorService.serve_initialized(
-            service.client.agent_root,
-            configuration=SupervisorLaunchConfiguration(
-                _read_remote_agent_root_id(service.client.agent_root),
-                tuple(profile.launch_profile for profile in service.client.resident_profiles),
-            ),
-            immutable_fingerprint=service.immutable_fingerprint,
-            active_fingerprint=service.active_fingerprint,
-        )
+        with observe_phases(log_phases):
+            service = load_outbound_agent_service_config(namespace.config, env_file=namespace.env_file)
+            if service.client.agent_root is None or not service.client.resident_profiles:
+                raise CliError("native supervisor requires a resident agent root")
+            from loom.queue.agent_session_transport import _read_remote_agent_root_id
+            AgentProcessSupervisorService.serve_initialized(
+                service.client.agent_root,
+                configuration=SupervisorLaunchConfiguration(
+                    _read_remote_agent_root_id(service.client.agent_root),
+                    tuple(profile.launch_profile for profile in service.client.resident_profiles),
+                ),
+                immutable_fingerprint=service.immutable_fingerprint,
+                active_fingerprint=service.active_fingerprint,
+            )
     except (QueueError, AgentProcessSupervisorError) as exc:
         raise CliError(str(exc)) from exc
     return int(ExitCode.SUCCESS)
@@ -517,6 +519,7 @@ def handle_agent_supervisor_serve(namespace: argparse.Namespace) -> int:
 def handle_agent_serve(namespace: argparse.Namespace) -> int:
     """Run one foreground outbound agent with bounded reconnect."""
     from threading import Event
+    from loom.queue._phase_timing import log_phases, observe_phases
     from loom.queue.deployment import (
         load_outbound_agent_service_config,
         run_outbound_agent_service,
@@ -543,21 +546,22 @@ def handle_agent_serve(namespace: argparse.Namespace) -> int:
     try:
         for handled_signal in handled_signals:
             signal.signal(handled_signal, request_stop)
-        service = load_service()
-        _emit_daemon_payload(
-            namespace,
-            {
-                "operation": "agent-serve",
-                "agent_root": str(service.client.agent_root),
-                "coordinator_url": service.client.url,
-            },
-        )
-        run_outbound_agent_service(
-            service,
-            stop=stop,
-            expected_coordinator_id=getattr(namespace, "expected_coordinator_id", None),
-            trusted_config_loader=load_service,
-        )
+        with observe_phases(log_phases):
+            service = load_service()
+            _emit_daemon_payload(
+                namespace,
+                {
+                    "operation": "agent-serve",
+                    "agent_root": str(service.client.agent_root),
+                    "coordinator_url": service.client.url,
+                },
+            )
+            run_outbound_agent_service(
+                service,
+                stop=stop,
+                expected_coordinator_id=getattr(namespace, "expected_coordinator_id", None),
+                trusted_config_loader=load_service,
+            )
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     finally:

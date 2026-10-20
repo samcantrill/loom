@@ -228,6 +228,13 @@ def test_workload_upgrade_native_promotion_history_versioned_selection_and_repla
     attempts = read(inventory.path.parent / "operations/workload-window/checks.json")
     failed = attempts["worker:cpu"][-1]["operation_id"]
     failed_path = inventory.path.parent / "checks" / failed / "result.json"
+    # An independent storage failure can block the upgrade while CPU preparation
+    # is still pending. Only the selected check's terminal failure is immutable.
+    deadline = time.monotonic() + 60
+    while read(failed_path)["outcome"] != "failed" and time.monotonic() < deadline:
+        time.sleep(.2)
+        upgrades.upgrade(inventory, operation_id="workload-window")
+    assert read(failed_path)["outcome"] == "failed"
     retained_failure = failed_path.read_bytes()
     original_source.write_bytes(original_bytes)
     assert upgrades.upgrade(inventory, operation_id="workload-window")["outcome"] == "blocked"
