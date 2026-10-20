@@ -68,6 +68,20 @@ def snapshot(root):
     }
 
 
+@pytest.mark.parametrize("mode", ["exclusive", "nonexclusive", "invalid"])
+def test_gpu_qualification_policy(tmp_path, mode):
+    path = inventory(tmp_path)
+    assert load_inventory(path).gpu_qualification == "exclusive"
+    value = json.loads(path.read_text())
+    value["gpu_qualification"] = mode
+    _write_protected(path, value)
+    if mode == "invalid":
+        with pytest.raises(QueueConfigError, match="gpu_qualification"):
+            load_inventory(path)
+    else:
+        assert load_inventory(path).gpu_qualification == mode
+
+
 def forbid(*args, **kwargs):
     pytest.fail("read-only Fleet command attempted process/native-state access")
 

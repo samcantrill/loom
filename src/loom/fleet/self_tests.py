@@ -493,6 +493,20 @@ def self_test(
             "profile": profiles[0],
             "requests": requests,
         }
+        if "gpu" in checks and inventory.gpu_qualification == "nonexclusive":
+            from loom.fleet import ssh_operations
+            from loom.fleet.releases import verify_release
+            from loom.fleet._host import digest
+
+            rows, declarations = ssh_operations._selection(inventory, [str(agent_id)], env_file)
+            intent["gpu_capability"] = {
+                **rows[str(agent_id)],
+                "action": "gpu-capability",
+                "request_id": operation_id + "-gpu-capability",
+                "release": verify_release(inventory.runtime_release),
+                "expected_declaration": digest(declarations[str(agent_id)]),
+                "profile": profiles[0],
+            }
         if retry_of is not None:
             if Path(retry_of).name != retry_of or retry_of in {".", ".."}:
                 raise QueueConfigError("invalid predecessor operation")
@@ -533,6 +547,8 @@ def self_test(
             for check in ("cpu", "storage", "gpu"):
                 if check not in intent["requests"]:
                     continue
+                if check == "gpu" and "gpu_capability" in intent:
+                    continue
                 if previous_results.get(check, {}).get("outcome") == "failed":
                     continue
                 if time.monotonic() >= deadline:
@@ -548,6 +564,12 @@ def self_test(
             # Serialized intent key order is not execution order.
             for check in ("cpu", "storage", "gpu"):
                 if check not in intent["requests"]:
+                    continue
+                if check == "gpu" and "gpu_capability" in intent:
+                    from loom.fleet.ssh_operations import ssh
+
+                    request = intent["gpu_capability"]
+                    results[check] = ssh(request["host"], request)
                     continue
                 request = intent["requests"][check]
                 if previous_results.get(check, {}).get("outcome") == "failed":
