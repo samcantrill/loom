@@ -3598,7 +3598,30 @@ class LocalDaemon:
                         for rule in candidate.agents
                     )
                 )
-                if not additive:
+                capability_addition = (
+                    replace(candidate, agents=current.agents) == current
+                    and len(candidate.agents) == len(current.agents)
+                    and all(
+                        any(
+                            replace(new, capabilities=old.capabilities) == old
+                            and set(old.capabilities).issubset(new.capabilities)
+                            for new in candidate.agents
+                        )
+                        for old in current.agents
+                    )
+                )
+                if capability_addition:
+                    from ._maintenance import observe
+
+                    gate = observe(self)
+                    capability_addition = (
+                        gate["state"] == "closed"
+                        and gate["settled"]
+                        and not gate["checks"]
+                    )
+                # Expanding the protected allow-list does not grant capabilities
+                # to retained sessions. Native promotion owns that later change.
+                if not (additive or capability_addition):
                     raise QueueConflictError(
                         "scheduling reload cannot replace credentials for a live agent session"
                     )

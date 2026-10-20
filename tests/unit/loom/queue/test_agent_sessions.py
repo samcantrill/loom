@@ -1159,6 +1159,62 @@ def test_scheduling_reload_rejects_credential_change_for_a_live_agent_session(
         daemon.stop()
 
 
+@pytest.mark.parametrize("change", ["add", "open", "credential", "pool", "remove", "revision"])
+def test_maintenance_policy_addition_preserves_retained_session_scope(
+    tmp_path: Path, change: str,
+) -> None:
+    policy = _policy()
+    policy = replace(policy, principals=(replace(
+        policy.principals[0], actions=(*policy.principals[0].actions, "maintenance"),
+    ),))
+    rule = replace(policy.agents[0], capabilities=("python", "submitted-container-execution-v1"))
+    if change == "credential":
+        rule = replace(rule, credential_id="rotated-agent")
+    elif change == "pool":
+        rule = replace(rule, pools=("default", "extra"))
+    elif change == "remove":
+        rule = replace(rule, capabilities=("submitted-container-execution-v1",))
+    candidate = replace(policy, agents=(rule,))
+    if change == "revision":
+        candidate = replace(candidate, revision="policy-2")
+    config = _config(tmp_path, policy)
+    replacement = replace(config, agent_policy=candidate)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config, trusted_scheduling_loader=lambda: replacement)
+    before = daemon.start()
+    try:
+        session = _register(daemon)
+        operator = daemon.operator_view(LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR))
+        if change != "open":
+            operator.maintenance({
+                "operation_id": "enable-policy-close", "maintenance_id": "enable-policy",
+                "maintenance_intent_digest": "enable-policy-intent", "action": "close",
+                "expected_revision": operator.observe_maintenance()["revision"], "check": None,
+            }, expected_coordinator_id=before.coordinator_id)
+            assert operator.observe_maintenance()["settled"]
+        request = CoordinatorSchedulingReload("enable-container-policy", before.scheduling_epoch, "Enable submitted images")
+        result = operator.reload_scheduling(request)
+        assert result["state"] == ("applied" if change == "add" else "failed")
+        assert operator.reload_scheduling(request) == result
+        # The pre-existing worker remains authorized but has gained no scope.
+        retained = _view(daemon).reconcile(session, session.coordinator_epoch, idempotency_key="unchanged-session")
+        assert retained == session
+        assert retained.capabilities == ("python",)
+        active = daemon.config
+    finally:
+        daemon.stop()
+    if change == "add":
+        restarted = LocalDaemon(active)
+        after = restarted.start()
+        try:
+            resumed = _view(restarted).reconcile(session, after.coordinator_epoch, idempotency_key="after-policy-restart")
+            assert resumed.capabilities == session.capabilities
+            assert resumed.session_id == session.session_id
+            assert restarted.config.agent_policy == candidate
+        finally:
+            restarted.stop()
+
+
 def test_policy_removal_fences_existing_session_and_overlap_reconciles(
     tmp_path: Path,
 ) -> None:

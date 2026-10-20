@@ -1489,3 +1489,13 @@ the probe explicitly requests `resource_policy.enforce: [gpu]`.
 Role qualification checks the host runtime and storage policy without
 selecting scientific code. Workload scientific checks and compute probes use
 explicit submitted work.
+
+For an existing fleet, authorize `submitted-container-execution-v1` in the
+protected coordinator agent rules before promoting the agent container policies.
+Scheduling reload permits capability additions for existing rules only during
+closed, settled maintenance with no qualification checks active. Credentials,
+pools, resource limits, policy revision and the rest of the authorization policy
+must remain unchanged. The reload preserves existing session capabilities;
+the subsequent native container-policy promotion grants the new capability.
+Reopen admission after each completed maintenance operation. Changing a later
+submission's image needs neither policy reload nor maintenance.
