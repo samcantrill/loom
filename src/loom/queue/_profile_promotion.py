@@ -38,11 +38,10 @@ def validate_promotion(value: object) -> None:
         "profile_id",
         "target_profile",
     }
-    if not isinstance(value, Mapping) or set(value) not in (
-        keys,
-        keys | {"candidate_source"},
-    ):
+    if not isinstance(value, Mapping) or set(value) - {"candidate_source", "enable_submitted_containers"} != keys:
         raise QueueServiceError("profile promotion binding fields are invalid")
+    if "enable_submitted_containers" in value and value["enable_submitted_containers"] is not True:
+        raise QueueServiceError("submitted container enablement must be true")
     if "candidate_source" in value and (
         not isinstance(value["candidate_source"], str)
         or not Path(value["candidate_source"]).is_absolute()
@@ -69,6 +68,11 @@ def authorize(daemon: Any, conn: sqlite3.Connection, control: Any) -> None:
     from ._service_lifetime import _retained_coordinator_operations
 
     value = control.promotion
+    if value.get("enable_submitted_containers"):
+        from .submitted_execution import SUBMITTED_CONTAINER_CAPABILITY
+        rule = next(rule for rule in daemon._agent_policy.agents if rule.agent_id == control.agent_id)
+        if SUBMITTED_CONTAINER_CAPABILITY not in rule.capabilities:
+            raise QueueConflictError("submitted container capability is not authorized by agent policy")
     gate = _read(conn)
     if (
         gate["state"] != "closed"
@@ -137,6 +141,8 @@ def _validate_target(config: Any, control: Any) -> None:
     from ._agent_session_journal import _agent_active_fingerprint
 
     p = control.promotion
+    if p.get("enable_submitted_containers") and not config.container_policies:
+        raise QueueConflictError("submitted container enablement requires a protected policy")
     if (
         config.deployment_configuration_fingerprint != p["target_immutable"]
         or _agent_active_fingerprint(config) != p["target_active"]
@@ -327,6 +333,8 @@ def apply(client: Any, control: Any) -> Any:
             "profile promotion predecessor or native settlement conflicts"
         )
     validate_candidate(client._config, replacement, p["profile_id"])
+    if not client._config.container_policies and replacement.container_policies and not p.get("enable_submitted_containers"):
+        raise QueueConflictError("adding container policies requires explicit session capability enablement")
     root = Path(replacement.agent_root)
     install = (
         client._prepare_role_reload(replacement)
@@ -494,3 +502,11 @@ def publication_state(root: Path, operation_id: str) -> str | None:
 def completed(root: Path, operation_id: str) -> bool:
     """Read the native local effect before restarting its changed supervisor."""
     return publication_state(root, operation_id) == "applied"
+
+
+def promoted_capabilities(control: Any, previous: tuple[str, ...]) -> tuple[str, ...]:
+    """Apply only the capability transition retained in an accepted promotion."""
+    if control.promotion and control.promotion.get("enable_submitted_containers"):
+        from .submitted_execution import SUBMITTED_CONTAINER_CAPABILITY
+        return tuple(sorted({*previous, SUBMITTED_CONTAINER_CAPABILITY}))
+    return previous
