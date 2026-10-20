@@ -7,6 +7,8 @@ own identities. A lost transport reply is waiting, never proof of refusal.
 from __future__ import annotations
 
 import base64
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 import fcntl
 import hashlib
 import json
@@ -32,14 +34,27 @@ from loom.queue.deployment import (
 from loom.queue.errors import QueueConfigError, QueueConflictError
 from loom.coordinator import CoordinatorClientError
 from loom.fleet._host import atomic, read, digest
+from loom.fleet._timing import ingest, measure
 
 
 class SshUnavailable(Exception):
     """No authoritative host result was received; dispatch may have happened."""
 
 
+class SshStarting(SshUnavailable):
+    """The exact host launch is retained and its readiness remains pending."""
+    fleet_pending = True
+
+
 def ssh(host, request):
     """Send a bounded structured request using the user's existing SSH policy."""
+    # The classified span is nested in the aggregate; never add their durations.
+    with measure("host_rpc", host=host):
+        with measure("rpc_" + request.get("action", "unknown"), host=host):
+            return _ssh(host, request)
+
+
+def _ssh(host, request):
     if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", host) is None:
         raise QueueConfigError("select a plain configured SSH alias, never SSH options")
     program = Path(__file__).with_name("_ssh_bootstrap.py").read_text()
@@ -70,13 +85,34 @@ def ssh(host, request):
         if len(result.stdout) > 16 * 1024 * 1024:
             raise ValueError
         reply = json.loads(result.stdout)
+        ingest(reply.get("timings", []), host=request.get("name", host))
         if reply["ok"] is not True:
+            if reply.get("code") == "ServiceStarting":
+                raise SshStarting(reply["reason"])
             raise QueueConflictError(reply.get("reason", "host operation refused"))
         return reply["result"]
     except (KeyError, ValueError, TypeError) as exc:
         raise SshUnavailable(
             "SSH returned an invalid receipt; retain this operation"
         ) from exc
+
+
+def _ssh_many(requests):
+    """Dispatch independent transports; their caller alone publishes receipts."""
+    if not requests:
+        return {}
+    results = {}
+    with ThreadPoolExecutor(max_workers=min(3, len(requests))) as workers:
+        pending = {
+            key: workers.submit(copy_context().run, ssh, host, request)
+            for key, (host, request) in requests.items()
+        }
+        for key, future in pending.items():
+            try:
+                results[key] = future.result()
+            except Exception as exc:
+                results[key] = exc
+    return results
 
 
 def _file_hash(path):
@@ -296,10 +332,16 @@ def _directory(inventory, operation_id):
     return inventory.path.parent / "operations" / operation_id
 
 
-def operation_status(inventory, operation_id):
-    """Read retained administration only; status never resumes a host operation."""
+def operation_status(inventory, operation_id, *, missing_ok=False):
+    """Read retained administration only; status never resumes a host operation.
+
+    With ``missing_ok=True``, return ``None`` if no intent has been retained.
+    Invalid operation identifiers and unsupported retained kinds still refuse.
+    """
     directory = _directory(inventory, operation_id)
     if not (directory / "intent.json").exists():
+        if missing_ok:
+            return None
         raise QueueConfigError("unknown administrative operation")
     intent = read(directory / "intent.json")
     if intent.get("kind") not in {None, "runtime-upgrade", "workload-upgrade"}:
@@ -342,6 +384,66 @@ def operation_status(inventory, operation_id):
         "ready": result["state"] == "complete",
         "intent_digest": digest(intent),
         **result,
+    }
+
+
+def operation_evidence(inventory: Inventory, operation_id: str) -> dict[str, Any]:
+    """Read diagnostic evidence for one operation without SSH or mutation.
+
+    The returned ``timings``, ``maintenance`` close/open receipts and ``checks``
+    result receipts are non-atomic observations, never transition authority.
+    Missing receipts are omitted. Interrupted or unreadable diagnostics are
+    identified in ``issues``; they do not imply zero elapsed time or success.
+    Native status/check APIs remain the owners of qualification and recovery.
+    """
+    directory = _directory(inventory, operation_id)
+    issues: list[dict[str, str]] = []
+
+    def record(path):
+        if not path.exists():
+            return None
+        try:
+            return read(path)
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError) as error:
+            issues.append({"source": str(path), "reason": type(error).__name__})
+            return None
+
+    timings = []
+    path = directory / "timings.jsonl"
+    try:
+        with path.open() as stream:
+            for line in stream:
+                try:
+                    value = json.loads(line)
+                    if not isinstance(value, dict):
+                        raise ValueError("invalid timing record")
+                    timings.append(value)
+                except ValueError:
+                    issues.append({"source": str(path), "reason": "invalid_or_partial_line"})
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        issues.append({"source": str(path), "reason": type(error).__name__})
+    checks = {}
+    for attempts in (record(directory / "checks.json") or {}).values():
+        for attempt in attempts:
+            identity = attempt["operation_id"]
+            _directory(inventory, identity)  # Validate retained identifiers before path use.
+            receipt = record(inventory.path.parent / "checks" / identity / "result.json")
+            if receipt is not None:
+                checks[identity] = receipt
+    return {
+        "operation_id": operation_id,
+        "timings": timings,
+        "maintenance": {
+            action: receipt
+            for action in ("close", "open")
+            if (receipt := record(directory / "steps" / action / "receipt.json")) is not None
+        },
+        "checks": checks,
+        "issues": issues,
     }
 
 
@@ -394,7 +496,7 @@ class _Operation:
         if verify_release(self.inventory.runtime_release) != self.intent["release"]:
             raise QueueConflictError("immutable service bundle changed")
 
-    def call(self, name, action, **values):
+    def _prepare_call(self, name, action, **values):
         self.recheck_composed()
         key = (
             name
@@ -444,7 +546,7 @@ class _Operation:
         if receipt.exists():
             response = read(receipt)
             self.accept_update(name, response, directory)
-            return response
+            return directory, request, response
         pending_inputs = {}
         if (directory / "dispatch.json").exists() and action != "install":
             response = ssh(row["host"], {**request, "action": "receipt"})
@@ -459,27 +561,58 @@ class _Operation:
             elif response is not None:
                 atomic(receipt, response)
                 self.accept_update(name, response, directory)
-                return response
+                return directory, request, response
         self.recheck(pending_inputs)
         atomic(
             directory / "dispatch.json",
             {"request_id": request["request_id"], "outcome": "unknown"},
         )
-        try:
-            response = ssh(row["host"], request)
-        except (SshUnavailable, QueueConflictError) as exc:
-            atomic(
-                directory / "dispatch.json",
-                {
-                    "request_id": request["request_id"],
-                    "outcome": "unknown",
-                    "reason": str(exc),
-                },
-            )
-            raise
-        atomic(receipt, response)
+        return directory, request, None
+
+    def _finish_call(self, name, directory, request, response):
+        if isinstance(response, Exception):
+            atomic(directory / "dispatch.json", {
+                "request_id": request["request_id"], "outcome": "unknown",
+                "reason": str(response),
+            })
+            raise response
+        atomic(directory / "receipt.json", response)
         self.accept_update(name, response, directory)
         return response
+
+    def call(self, name, action, **values):
+        directory, request, retained = self._prepare_call(name, action, **values)
+        if retained is not None:
+            return retained
+        try:
+            response = ssh(self.intent["hosts"][name]["host"], request)
+        except (SshUnavailable, QueueConflictError) as exc:
+            response = exc
+        return self._finish_call(name, directory, request, response)
+
+    def call_many(self, calls):
+        """Retain all independent host intents before bounded transport dispatch."""
+        prepared, results = {}, {}
+        for name, action, values in calls:
+            directory, request, retained = self._prepare_call(name, action, **values)
+            if retained is not None:
+                results[name] = retained
+            else:
+                prepared[name] = (directory, request)
+        responses = _ssh_many({
+            name: (self.intent["hosts"][name]["host"], request)
+            for name, (_, request) in prepared.items()
+        })
+        errors = []
+        for name, response in responses.items():
+            directory, request = prepared[name]
+            try:
+                results[name] = self._finish_call(name, directory, request, response)
+            except Exception as exc:
+                errors.append(exc)
+        if errors:
+            raise errors[0]
+        return results
 
     def accept_update(self, name, response, directory):
         self.recheck_composed()
@@ -669,6 +802,8 @@ def _apply_locked(
     atomic(directory / "result.json", {"state": "running"})
     try:
         result = _continue(operation)
+    except SshStarting as exc:
+        result = {"state": "waiting", "reason": str(exc)}
     except SshUnavailable:
         result = {
             "state": "waiting",

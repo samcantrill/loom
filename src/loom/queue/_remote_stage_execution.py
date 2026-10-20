@@ -21,6 +21,7 @@ from pathlib import Path
 import sqlite3
 import stat
 import tempfile
+from uuid import uuid4
 from typing import TYPE_CHECKING, Literal, cast
 
 if TYPE_CHECKING:
@@ -631,7 +632,7 @@ class _RemoteArtifact:
         metadata = freeze_plain_data(self.metadata, path="remote artifact metadata")
         if not isinstance(metadata, Mapping):
             raise QueueServiceError("remote artifact metadata is invalid")
-        _reject_path_bearing_data({key: value for key, value in metadata.items() if key != SHARED_PUBLICATION}, "artifact metadata")
+        _reject_path_bearing_data(metadata, "artifact metadata")
         object.__setattr__(self, "metadata", metadata)
 
     @classmethod
@@ -1203,7 +1204,7 @@ class _RemoteOutputArtifact:
         )
         if not isinstance(metadata, Mapping):
             raise QueueServiceError("remote output artifact metadata is invalid")
-        _reject_path_bearing_data({key: value for key, value in metadata.items() if key != SHARED_PUBLICATION}, "output artifact metadata")
+        _reject_path_bearing_data(metadata, "output artifact metadata")
         object.__setattr__(self, "metadata", metadata)
         if self.preparation_report_transfer is not None:
             from ._preparation_report_transfer import header
@@ -2084,19 +2085,8 @@ class _ResidentAssignmentWorkspace:
             assert directory is not None
             context["input"] = {"kind": "staged", "directory": str(directory)}
             return context
-        alias = preparation.input_receipt.root
-        path = launch_profile.preparation_shared_roots.get(alias)
-        if preparation.shared_scope is not None and launch_profile.container is not None:
-            # Parent launch validated the physical mapping; the child reads the
-            # same retained capture in its stable container namespace.
-            source = launch_profile.preparation_shared_roots.get(alias)
-            matches = [cast(Mapping[str, PlainData], root) for root in launch_profile.shared_roots.values()
-                       if source is not None and source.is_relative_to(Path(str(cast(Mapping[str, PlainData], root)["host_path"])))]
-            if len(matches) != 1 or matches[0]["container_path"] is None:
-                raise QueueServiceError("shared snapshot container binding is unavailable")
-            assert source is not None
-            path = Path(str(matches[0]["container_path"])) / source.relative_to(Path(str(matches[0]["host_path"])))
-        context["input"] = {"kind": "shared", "roots": {} if path is None else {alias: str(path)}}
+        from .shared_execution import _preparation_input_roots
+        context["input"] = {"kind": "shared", "roots": _preparation_input_roots(launch_profile, preparation)}
         return context
 
     def _prepare_staged_input(self) -> Path | None:
@@ -2279,10 +2269,12 @@ class _ResidentAssignmentWorkspace:
 
     def retain_outputs(self) -> _RemoteExecutionReport:
         from ._preparation_report_transfer import native_role
+        from ._phase_timing import PhaseTimings
 
+        timings = PhaseTimings()
         result = self.worker_result()
         try:
-            return self._retain_outputs(result)
+            return timings.call("output_retention", self._retain_outputs, result)
         except _RemoteTransferLimitError:
             raise
         except (QueueConflictError, QueueServiceError, OSError, ValueError) as exc:
@@ -2293,6 +2285,19 @@ class _ResidentAssignmentWorkspace:
             ):
                 raise _PreparationReportRetentionError(str(exc)) from exc
             raise
+        finally:
+            # Keep per-invocation duration outside the deterministic terminal
+            # report. The existing event stream transports it on exact replay.
+            self.record_timing(timings.payload())
+
+    def record_timing(self, payload: Mapping[str, PlainData]) -> None:
+        try:
+            self.append_event(
+                f"{self.assignment_id}:timing:{uuid4().hex}",
+                {"kind": "native_timing", **payload},
+            )
+        except Exception:
+            pass  # Missing diagnostics cannot change publication's outcome.
 
     def failed_preparation_retention_report(
         self, error: _PreparationReportRetentionError
@@ -2624,22 +2629,36 @@ def _assignment_local_scope(request: _ResidentAssignmentBundle) -> Mapping[str, 
     return scope
 
 
-def _reject_path_bearing_data(value: object, field: str) -> None:
+def _reject_path_bearing_data(value: object, field: str, *, shared_members: bool = False) -> None:
     forbidden_keys = ("path", "root", "uri", "url", "directory", "cwd")
     if isinstance(value, Mapping):
+        if SHARED_PUBLICATION in value:
+            shared_members = shared_binding(value) is not None
         for key, item in value.items():
             if key == SHARED_PUBLICATION:
                 shared_binding({SHARED_PUBLICATION: item})
+                continue
+            if shared_members and key == "path":
+                # Shared metadata can name a member, never a host location. The
+                # consuming artifact contract still admits that member against
+                # the publication inventory before opening it.
+                from loom.pipeline.stores.shared_artifacts import relative
+
+                try:
+                    relative(item)
+                except ArtifactStoreError as exc:
+                    raise QueueServiceError(f"remote {field} has an invalid member path") from exc
+                _reject_path_bearing_data(item, field)
                 continue
             lowered = key.lower()
             if any(part in lowered for part in forbidden_keys):
                 raise QueueServiceError(
                     f"remote {field} must not contain path-bearing fields"
                 )
-            _reject_path_bearing_data(item, field)
+            _reject_path_bearing_data(item, field, shared_members=shared_members)
     elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         for item in value:
-            _reject_path_bearing_data(item, field)
+            _reject_path_bearing_data(item, field, shared_members=shared_members)
     elif isinstance(value, str) and (
         value.startswith(("file:", "http:", "https:", "/")) or "\\" in value
     ):

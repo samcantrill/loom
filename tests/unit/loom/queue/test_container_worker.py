@@ -328,7 +328,8 @@ def test_shared_containers_mount_only_selected_products_in_fixed_namespace(tmp_p
     assert "/loom/data" not in " ".join(command.argv)
 
 
-def test_shared_preparation_binds_only_immutable_capture_at_fixed_target(tmp_path):
+@pytest.mark.parametrize("preparation_only", [False, True], ids=["assignment", "preflight"])
+def test_shared_preparation_binds_only_immutable_capture_at_fixed_target(tmp_path, preparation_only):
     import hashlib
     from loom.queue.preparation import SharedInputReceipt
     from loom.queue.shared_execution import qualifications
@@ -343,7 +344,13 @@ def test_shared_preparation_binds_only_immutable_capture_at_fixed_target(tmp_pat
     workspace.mkdir(parents=True)
     profile = _persist_shared_workspace(tmp_path, workspace, _binding(), roots,
         preparation_shared_roots={"projects": root})
+    if preparation_only:
+        # A candidate has no accepted assignment. Its preparation namespace still
+        # contains exactly the selected capture, never the whole authoring root.
+        workspace = tmp_path / "candidate-preflight"
+        workspace.mkdir()
     command = build_container_worker(profile, workspace=workspace, worker=("python3",), environment={}, shared_scope=scope,
-        shared_snapshot=SharedInputReceipt("sha256:" + "a" * 64, "projects", "capture-one"))
+        shared_snapshot=SharedInputReceipt("sha256:" + "a" * 64, "projects", "capture-one"),
+        preparation_only=preparation_only)
     assert any("source=" + str(capture) in arg and "target=/loom/snapshots/capture-one" in arg for arg in command.argv)
     assert all("source=" + str(root) not in arg.split(",") for arg in command.argv)

@@ -30,6 +30,7 @@ from ._managed_local import (
     _start_failed_worker_result, _worker_environment,
 )
 from .agent_sessions import AgentSession
+from ._phase_timing import PhaseTimings
 from ._remote_stage_execution import (
     _ResidentAssignmentBundle, _ResidentAssignmentWorkspace,
     _PreparationReportRetentionError,
@@ -948,72 +949,79 @@ def _complete_remote_result_and_release(
     )
     if not completed_before_start:
         (yield from _steps(self._flush_workspace_events, session.session_id, workspace))
-    authorization = (yield from _steps(self._fresh_transfer_authorization,
-        session_id=session.session_id,
-        assignment_id=request.assignment_id,
-        expected_revision=authorization_revision,
-    ))
-    authorization_id = cast(str, authorization["authorization_id"])
-    authorization_revision = cast(int, authorization["revision"])
-    _, authorization_id, authorization_revision = (yield from _steps(self._authorized_transfer_call,
-        session_id=session.session_id,
-        assignment_id=request.assignment_id,
-        authorization_id=authorization_id,
-        authorization_revision=authorization_revision,
-        operation=lambda current_id, current_revision: _steps(self.declare_outputs,
-            session.session_id,
-            request.assignment_id,
-            fence=fence,
-            authorization_id=current_id,
-            authorization_revision=current_revision,
-            report=report,
-        ),
-    ))
-    for item in report.outputs:
-        from loom.pipeline.stores.shared_artifacts import binding
-        if binding(item.metadata) is not None:
-            continue
-        offset = 0
-        while True:
+    timings = PhaseTimings()
+    try:
+        with timings.measure("output_transfer"):
+            authorization = (yield from _steps(self._fresh_transfer_authorization,
+                session_id=session.session_id,
+                assignment_id=request.assignment_id,
+                expected_revision=authorization_revision,
+            ))
+            authorization_id = cast(str, authorization["authorization_id"])
+            authorization_revision = cast(int, authorization["revision"])
+            _, authorization_id, authorization_revision = (yield from _steps(self._authorized_transfer_call,
+                session_id=session.session_id,
+                assignment_id=request.assignment_id,
+                authorization_id=authorization_id,
+                authorization_revision=authorization_revision,
+                operation=lambda current_id, current_revision: _steps(self.declare_outputs,
+                    session.session_id,
+                    request.assignment_id,
+                    fence=fence,
+                    authorization_id=current_id,
+                    authorization_revision=current_revision,
+                    report=report,
+                ),
+            ))
+            for item in report.outputs:
+                from loom.pipeline.stores.shared_artifacts import binding
+                if binding(item.metadata) is not None:
+                    continue
+                offset = 0
+                while True:
+                    _raise_if_application_suspended(suspend_requested)
+                    data, final = (yield from _external("bulk", workspace.output_chunk, item.transfer_id, offset))
+                    response, authorization_id, authorization_revision = (
+                        (yield from _steps(self._authorized_transfer_call,
+                            session_id=session.session_id,
+                            assignment_id=request.assignment_id,
+                            authorization_id=authorization_id,
+                            authorization_revision=authorization_revision,
+                            operation=lambda current_id, current_revision: (
+                                _steps(self.upload_output_chunk,
+                                    session.session_id,
+                                    request.assignment_id,
+                                    item.transfer_id,
+                                    offset=offset,
+                                    data=data,
+                                    final=final,
+                                    authorization_id=current_id,
+                                    authorization_revision=current_revision,
+                                )
+                            ),
+                        ))
+                    )
+                    offset = cast(
+                        int, cast(Mapping[str, PlainData], response)["received_bytes"]
+                    )
+                    (yield from _steps(self._maintain_resource_offer))
+                    if final:
+                        break
+        with timings.measure("terminal_acknowledgement"):
             _raise_if_application_suspended(suspend_requested)
-            data, final = (yield from _external("bulk", workspace.output_chunk, item.transfer_id, offset))
-            response, authorization_id, authorization_revision = (
-                (yield from _steps(self._authorized_transfer_call,
-                    session_id=session.session_id,
-                    assignment_id=request.assignment_id,
-                    authorization_id=authorization_id,
-                    authorization_revision=authorization_revision,
-                    operation=lambda current_id, current_revision: (
-                        _steps(self.upload_output_chunk,
-                            session.session_id,
-                            request.assignment_id,
-                            item.transfer_id,
-                            offset=offset,
-                            data=data,
-                            final=final,
-                            authorization_id=current_id,
-                            authorization_revision=current_revision,
-                        )
-                    ),
-                ))
-            )
-            offset = cast(
-                int, cast(Mapping[str, PlainData], response)["received_bytes"]
-            )
-            (yield from _steps(self._maintain_resource_offer))
-            if final:
-                break
-    _raise_if_application_suspended(suspend_requested)
-    yield from _steps(self.poll_assignment_control, session.session_id)
-    (yield from _steps(self._assignment_call,
-        session.session_id,
-        request.assignment_id,
-        lambda: _steps(self.commit_result,
-            session.session_id, request.assignment_id, fence=fence
-        ),
-    ))
-    if completed_before_start:
-        (yield from _steps(self._flush_workspace_events, session.session_id, workspace))
+            yield from _steps(self.poll_assignment_control, session.session_id)
+            (yield from _steps(self._assignment_call,
+                session.session_id,
+                request.assignment_id,
+                lambda: _steps(self.commit_result,
+                    session.session_id, request.assignment_id, fence=fence
+                ),
+            ))
+    finally:
+        workspace.record_timing(timings.payload())
+    # The terminal assignment still accepts events before provider release.
+    # Failed transfers leave their diagnostic event in the existing replay outbox.
+    (yield from _steps(self._flush_workspace_events, session.session_id, workspace))
     released_session = yield from _steps(
         _release_completed_assignment, self, session, assignment, commands,
         providers, execution_journal, fence=fence,

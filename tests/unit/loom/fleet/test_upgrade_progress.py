@@ -154,7 +154,10 @@ def test_only_confirmed_failed_checks_are_labelled_failed(tmp_path, monkeypatch,
                 "declarations": {"worker": {"resident_profiles": [{}]}}},
         maintenance=lambda *args: None,
     )
-    atomic(tmp_path / "checks.json", {"worker:cpu": [{"operation_id": "check", "authorization": {}}]})
+    atomic(tmp_path / "checks.json", {
+        "worker:" + kind: [{"operation_id": "check-" + kind, "authorization": {}}]
+        for kind in ("cpu", "storage")
+    })
     monkeypatch.setattr(upgrades, "self_test", lambda *args, **kwargs: {"outcome": outcome})
     with pytest.raises(upgrades.QueueConflictError):
         upgrades._run_checks(operation)

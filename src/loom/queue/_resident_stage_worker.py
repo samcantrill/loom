@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable
+from dataclasses import replace
 import json
 import os
 from pathlib import Path
@@ -16,6 +17,7 @@ from loom.pipeline.execution.stage_worker import (
 from loom.pipeline.stores.atomic import atomic_write_json
 
 from ._remote_stage_execution import _ResidentAssignmentWorkspace
+from ._phase_timing import PhaseTimings
 from .preparation import PREPARATION_INPUT_CONTEXT_ENV
 
 
@@ -34,9 +36,10 @@ def main(argv: list[str] | None = None) -> int:
     gate = workspace_root / "run.grant"
     while not gate.is_file():
         time.sleep(0.01)
-    request = workspace.worker_request(resolve_shared=True)
+    timings = PhaseTimings()
+    request = timings.call("input_materialization", workspace.worker_request, resolve_shared=True)
     os.environ.pop(PREPARATION_INPUT_CONTEXT_ENV, None)
-    preparation = workspace.preparation_context()
+    preparation = timings.call("preparation_materialization", workspace.preparation_context)
     if preparation is not None:
         os.environ[PREPARATION_INPUT_CONTEXT_ENV] = json.dumps(preparation, sort_keys=True, separators=(",", ":"))
     resolver: Callable[[object], object] | None = None
@@ -51,11 +54,11 @@ def main(argv: list[str] | None = None) -> int:
         shared_roots = roots
         if workspace.request().preparation_input is None:
             def resolve_locations(value: object) -> object:
-                return materialize(value, roots, container=container_execution)
+                return timings.call("location_materialization", materialize, value, roots, container=container_execution)
             resolver = resolve_locations
     from ._shared_publication import worker_artifact_root
     artifact_root = worker_artifact_root(workspace, container=container_execution)
-    result = execute_resident_stage_worker_request(
+    result = timings.call("worker_execution", execute_resident_stage_worker_request,
         worker_request=request,
         location_resolver=resolver,
         artifact_root=artifact_root,
@@ -63,6 +66,9 @@ def main(argv: list[str] | None = None) -> int:
         workspace_root=workspace_root,
         process_containment_owner=ProcessContainmentOwner.OUTER_BOUNDARY,
     )
+    result = replace(result, executor_metadata={
+        **result.executor_metadata, "native_timings": timings.payload(),
+    })
     atomic_write_json(workspace_root / "worker-result.json", result.to_dict())
     return 0
 

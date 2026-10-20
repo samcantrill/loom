@@ -306,6 +306,18 @@ require their explicit lifecycle paths. The completed setup result reports
 This describes configured boot-start wiring; it is not evidence of physical
 boot or reboot qualification.
 
+Service startup retains one launch attempt under the host operation. Its first
+observation waits up to twenty seconds; a process still starting returns
+`waiting` with `service_starting`, without publishing a completed host receipt.
+Continuing the same operation observes that launch rather than starting another.
+The three-minute readiness deadline is retained against the Linux boot and
+monotonic clock, so restarting the operator does not extend it. Tmux binds the
+session marker and process start identity; systemd binds the unit invocation and
+native process identity. A failed launch, changed owner/boot or expired readiness
+deadline blocks with an explicit reason. Inspect the protected service log and
+native ownership before recovery; continuation never silently replaces a failed
+launch. Systemd's configured service restart policy remains its own responsibility.
+
 Setup requires an immutable offline service bundle and an explicit native
 `loom.deployment` selection for the synthetic probe source/profile. For a fresh
 coordinator, use its native automatic-creation selection with the inventory's
@@ -502,7 +514,19 @@ remains. Another active successor, different target/owner or unsettled prior
 attempt refuses. Only the latest explicitly selected settled pass satisfies a
 slot, and all slots must pass before the gate reopens.
 
-If a runtime upgrade has replaced its services but cannot select a check
+New upgrades prepare each selected CPU/storage/GPU probe in its candidate
+installation before closing admission. This uses the real captured source,
+preparation policy and installed project hook, including a candidate profile that
+has not yet been advertised. It does not execute the workload or publish a target
+run. The probe's report is temporary; bounded compatibility evidence is retained
+in the existing exact host-operation receipts and reused on continuation.
+Shared container preflight mounts the selected immutable capture, declared
+read-only locations and root challenges, using the same namespace projection as
+ordinary preparation. An incompatible profile or malformed recipe leaves
+admission open and services unchanged. Abort that unactivated operation, correct
+the selection/source and start a new operation; captured evidence is immutable.
+
+If an older runtime upgrade has already replaced its services but cannot select a check
 preparation profile, or its selected project preparation rejects a generic
 probe, correct that selection explicitly before checks or after all prepared
 checks have confirmed terminal failures and their native effects have settled:
@@ -573,6 +597,107 @@ The successor atomically requires that failed control as its predecessor; an
 independent policy edit refuses it. Repeat the exact retry command after a lost
 reply, or use ordinary operation resume once the successor is retained. No role
 restart, runtime retargeting or work cancellation is performed by this command.
+
+Upgrade qualification dispatches all eligible host/check attempts before observing
+their results, using at most three independent controller workers. Native resource
+claims still determine execution concurrency. Pending checks do not prevent other
+eligible hosts from progressing, and failed attempts still require explicit retry.
+Exact check-retry replay recognizes the retained successor after completion even
+when ordinary admission has already reopened.
+
+Upgrade continuations observe checks without waiting for each run to finish;
+each observation has a bounded transport budget. Standalone self-tests retain
+their waiting behavior. A failed check can therefore be reported while another
+already-dispatched check is still running. Retry and repair still require native
+settlement, and explicit deferral preserves every dispatched attempt's history.
+
+Independent candidate installations, qualification probes and check preparation
+requests use a pool of at most three host transports. All requests are retained
+before dispatch, and the controller alone publishes their receipts. Workload
+staging completes across eligible agents before ordered native promotion
+submissions; a pending acknowledgement on one host does not suppress later
+submissions. Coordinator publication and revision-sensitive controls keep their
+ordering. Lost replies resume the same retained requests.
+
+Candidate qualification is retained against the upgrade intent. Waiting
+continuations inspect current roots, owners, capabilities and declarations without
+repeating full preparation. Runtime replacement and workload activation still
+verify their mutable inputs. Successful self-tests retain verified artifact
+contents for the exact publication; current assignment/agent and release evidence
+is reobserved. A new publication or attempt requires fresh verification, including
+the complete 65 MiB storage payload.
+
+An apply invocation can retain its own preview qualification only when the
+bound intent matches its host, root, declaration, runtime, profile and image
+inputs. Current ownership, composed inputs and activation checks remain required.
+An external preview followed by a later apply does not carry this transient proof.
+
+Pending check results reuse native run explanations and retain their owner facts.
+`waiting_for_capacity` requires current scheduling evidence; preparation, running
+assignments, durable results awaiting publication, and cleanup have distinct codes.
+Missing or stale evidence yields `check_pending_unknown`, never a capacity claim.
+These are observed states, not measured execution or publication durations. A native
+`BLOCKED` admission is a failed check requiring explicit repair/retry, not an endless
+capacity wait. Successful observations reuse their existing admission detail instead
+of making the same owner query twice.
+
+Best-effort action diagnostics append to `timings.jsonl` in the native fleet
+operation directory. Records identify an invocation, action, host when known,
+UTC start, monotonic duration and outcome. They expose qualification, startup,
+RPC and artifact-transfer costs without changing the existing progress schema.
+They do not authorize transitions or replace operation receipts. Parallel/nested
+spans overlap; their sum is not deployment wall time, and a missing diagnostic
+record does not prove that no work occurred.
+
+Operator RPC spans identify both host and native action (`rpc_<action>`). The
+classified span is nested inside `host_rpc`; it must not be added to the aggregate
+as extra elapsed time. Request bodies and credentials are not recorded.
+
+Python release drivers use `Inventory.environment_files(override=None)` for
+the same environment selection as native commands, without repeating host
+qualification. `operation_status(inventory, operation_id, missing_ok=True)`
+returns `None` only before a native intent exists; its default remains strict.
+`loom.fleet.ssh_operations.operation_evidence(inventory, operation_id)` exposes
+read-only diagnostic timings, close/open maintenance receipts, and retained
+check result receipts. Missing receipts remain absent; partial diagnostic lines
+are reported in `issues`. This non-atomic evidence never authorizes an upgrade,
+recovery or qualification decision. Native status and self-test APIs own those
+decisions. Consumers must not parse private receipt paths or import private
+helpers to obtain this evidence.
+
+Resident workers retain bounded `native_timings` in executor metadata before the
+first immutable worker-result write. Input/preparation materialization and worker
+execution are measured in their owning process. Native spans use integer
+`elapsed_nanoseconds`, a UTC `started_at`, an action and outcome; the agent event
+protocol does not admit floating-point numeric values. A `dropped_spans` count
+identifies bounded capture loss. Nested spans overlap.
+
+Output retention appends separate `native_timing` workspace events, transported by
+the existing event stream. Repeating output retention preserves the exact terminal
+report and worker-result bytes. Assignment observations expose the worker spans and
+up to 256 retained publication timing events, with explicit limit evidence. These
+events include output retention, output declaration/transfer and terminal
+acknowledgement. The remote assignment owner measures the actual cooperative work
+and flushes its timing events after commit, before provider release. Shared outputs
+need no payload upload; their declaration still crosses the transfer boundary.
+Durations include network/cooperative waits on the agent clock and do not represent
+CPU busy time. Diagnostic write failure does not change the native result.
+
+Maintenance mutation receipts retain coordinator UTC `applied_at` on first
+application. Exact replay and coordinator restart preserve that timestamp, allowing
+a release report to join matching close/open controls without using driver process
+uptime. Old receipts can lack it; consumers must leave that interval unavailable.
+Native upgrade results also expose concise current `check_observations` and the
+current `reason_code`. A release driver can associate its measured backoff with
+those reasons without claiming the native state persisted throughout the interval.
+
+Coordinator action resolution emits best-effort deferred `stage.reuse_timing`
+events for contract loading, lookup, artifact verification, authority reads/binding
+and installed-verifier observation. They are appended after revision-guarded work.
+The event links the exact installed verifier operation and child run, whose worker
+result carries the actual materialization/execution durations. A pending verifier
+observation is not a measurement of the child's execution. Missing timing evidence
+does not change native acceptance or justify inventing a zero duration.
 
 `operation abort` restores only controls still owned by that operation, using
 native atomic expected-predecessor guards. An independent applied control

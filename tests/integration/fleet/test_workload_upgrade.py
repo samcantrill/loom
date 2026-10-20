@@ -168,13 +168,13 @@ def test_workload_upgrade_native_promotion_history_versioned_selection_and_repla
     def interrupt(operation, key, request, invoke):
         result = native(operation, key, request, invoke)
         if key == "worker-promotion" and result["state"] == "applied" and not lost:
+            original_source.write_text("pipeline: [invalid")
             lost.append(True)
             raise upgrades.sshops.SshUnavailable("lost applied promotion response")
         return result
 
     monkeypatch.setattr(workload_upgrades.WorkloadUpgrade, "native", interrupt)
     original_bytes = original_source.read_bytes()
-    original_source.write_text("pipeline: [invalid")
     bind_intent = workload_upgrades.bind_intent
     if promote_source:
         def lose_candidate_storage(intent, plan, directory):
@@ -231,6 +231,9 @@ def test_workload_upgrade_native_promotion_history_versioned_selection_and_repla
     retained_failure = failed_path.read_bytes()
     original_source.write_bytes(original_bytes)
     assert upgrades.upgrade(inventory, operation_id="workload-window")["outcome"] == "blocked"
+    if not defer_checks:
+        from tests.integration.fleet.test_runtime_upgrade import retry_other_failed_checks
+        retry_other_failed_checks(inventory, "workload-window", keep=failed)
     if defer_checks:
         result = upgrades.upgrade(inventory, operation_id="workload-window", action="defer-checks",
                                   defer_agents=["worker"], defer_reason="Operator defers worker checks")
@@ -250,7 +253,9 @@ def test_workload_upgrade_native_promotion_history_versioned_selection_and_repla
         assert result["qualification"] == {
             "state": "partial", "deferred_agents": ["worker"], "reason": "Operator defers worker checks"
         }
-        assert "worker:storage" not in result["checks"]
+        # Dispatch precedes observation: deferral preserves the already-issued
+        # storage attempt instead of erasing its failed native history.
+        assert result["checks"]["worker:storage"] == attempts["worker:storage"]
     else:
         assert "qualification" not in result
     assert lost

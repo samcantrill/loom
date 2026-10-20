@@ -145,7 +145,7 @@ AgentProcessSupervisorService.serve_initialized(root,
             running["agent"].close()
             running["agent"] = None
             record_process(root, stopped=True)
-        elif args == ("start", supervisor_unit, agent_unit):
+        elif args == ("start", "--no-block", supervisor_unit, agent_unit):
             assert running["agent"] is None
             process = subprocess.Popen(
                 command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
@@ -180,6 +180,10 @@ AgentProcessSupervisorService.serve_initialized(root,
 
     monkeypatch.setattr(_workload_host.os, "pidfd_open", simulated_pidfd)
     monkeypatch.setattr(_services, "systemctl", systemctl)
+    monkeypatch.setattr(_services, "startup_status", lambda _: {
+        "ActiveState": "active", "MainPID": str(os.getpid()),
+        "InvocationID": "retained-test-launch", "Job": "0 /",
+    })
     try:
         assert (
             _workload_host.recover_service(selection)["publication_state"] == "applied"
@@ -306,7 +310,8 @@ signal.pause()
             return ""
 
         def start(retained):
-            assert retained == selection
+            assert retained == {**selection, "startup_id": "workload-" + selection["promotion_id"],
+                                "expected_declaration": _host.digest({})}
             assert actions == ["stop"]
             stopped = _workload_host.owner(selection)
             assert stopped["reason"] == "process_missing"

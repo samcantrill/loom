@@ -96,6 +96,8 @@ def test_binding_keeps_original_result_and_rejects_cancel_during_verification(tm
     claim = _select(store)["claim"]["claim_id"]
     result = _publish(store, claim)
     candidate = _select(store, "run-b")["claim"]
+    assert store.verification_demand_current("run-b", "generate", claim, candidate["revision"])
+    assert not store.verification_demand_current("run-b", "generate", claim, candidate["revision"] - 1)
     binding = store.bind(
         run_uri="run-b",
         node="generate",
@@ -107,8 +109,11 @@ def test_binding_keeps_original_result_and_rejects_cancel_during_verification(tm
     assert binding["origin_run_uri"] == "run-a"
     assert binding["result"] == result
     assert _select(_store(tmp_path), "run-b")["binding"] == binding
+    assert not store.verification_demand_current("run-b", "generate", claim, candidate["revision"])
     _select(store, "run-c")
+    assert store.verification_demand_current("run-c", "generate", claim, candidate["revision"])
     store.detach_graph("run-c", "cancel-c")
+    assert not store.verification_demand_current("run-c", "generate", claim, candidate["revision"])
     with pytest.raises(QueueConflictError, match="no longer live"):
         store.bind(
             run_uri="run-c",

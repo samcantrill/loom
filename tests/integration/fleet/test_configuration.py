@@ -448,22 +448,20 @@ def test_setup_plan_requires_complete_selection_before_ssh(tmp_path, monkeypatch
 
 
 def test_inventory_environment_compatibility_paths_and_protection(tmp_path):
-    from loom.fleet.configuration import _environment_files
-
     path = inventory(tmp_path)
     old = load_inventory(path)
     assert all(host.env_file is None for host in old.hosts)
     env = tmp_path / "machine.env"
     env.write_text("VALUE=explicit\n")
     env.chmod(0o600)
-    assert set(_environment_files(old, env).values()) == {env}
+    assert set(old.environment_files(env).values()) == {env}
     authored = json.loads(path.read_text())
     authored["coordinator"]["env_file"] = "machine.env"
     authored["agents"]["gpu01"]["env_file"] = str(env)
     _write_protected(path, authored)
     bound = load_inventory(path)
     assert {host.env_file for host in bound.hosts} == {env}
-    assert _environment_files(bound, env) == _environment_files(bound, None)
+    assert bound.environment_files(env) == bound.environment_files()
     env.chmod(0o644)
     with pytest.raises(QueueConfigError, match="owner-protected"):
         load_inventory(path)

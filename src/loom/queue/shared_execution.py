@@ -330,6 +330,23 @@ def project_snapshot_mount(profile: object, receipt: object) -> tuple[Path, Path
     return matches[0]
 
 
+def _preparation_input_roots(
+    profile: object, binding: object,
+) -> dict[str, PlainData]:
+    """Project the selected capture root into the worker's actual namespace."""
+    from ._agent_process_supervisor import ResidentWorkerLaunchProfile
+    from .preparation import PreparationChildInput, SharedInputReceipt
+    assert isinstance(profile, ResidentWorkerLaunchProfile)
+    assert isinstance(binding, PreparationChildInput)
+    receipt = binding.input_receipt
+    assert isinstance(receipt, SharedInputReceipt)
+    path = profile.preparation_shared_roots.get(receipt.root)
+    if binding.shared_scope is not None and profile.container is not None:
+        _, target = project_snapshot_mount(profile, receipt)
+        path = target.parents[len(Path(receipt.path).parts) - 1]
+    return {} if path is None else {receipt.root: str(path)}
+
+
 def snapshot_mount(profile: object, receipt: object) -> tuple[Path, Path]:
     """Qualify the native captured snapshot below its one permitted shared root."""
     source, target = project_snapshot_mount(profile, receipt)

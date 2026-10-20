@@ -22,8 +22,10 @@ from loom.queue.deployment import (
     load_outbound_agent_service_config,
 )
 from loom.serialization import thaw_plain_data
+from loom.fleet._timing import timed
 
 
+@timed("image_hash")
 def _image(path, expected):
     path = Path(path)
     if not path.is_absolute() or not path.is_file():
@@ -47,7 +49,16 @@ def _candidate_config(request, declaration):
         Path(temporary).unlink(missing_ok=True)
 
 
-def qualify(request, declaration, *, check_promotion=False):
+def _qualified(service):
+    return {
+        "immutable": service.immutable_fingerprint,
+        "active": service.active_fingerprint,
+        "profile": service.client.resident_profiles[0].descriptor.to_dict(),
+    }
+
+
+@timed("candidate_qualification")
+def qualify(request, declaration, *, check_promotion=False, original=None):
     """Qualify using the native protected loader in the existing path frame."""
     with _candidate_config(request, declaration) as temporary:
         service = load_outbound_agent_service_config(
@@ -56,15 +67,12 @@ def qualify(request, declaration, *, check_promotion=False):
         if check_promotion:
             from loom.queue._profile_promotion import validate_candidate
 
-            original = load_outbound_agent_service_config(
-                config(request), env_file=environment(request)
-            )
+            if original is None:
+                original = load_outbound_agent_service_config(
+                    config(request), env_file=environment(request)
+                )
             validate_candidate(original.client, service.client, request["workload_profile"])
-        return {
-            "immutable": service.immutable_fingerprint,
-            "active": service.active_fingerprint,
-            "profile": service.client.resident_profiles[0].descriptor.to_dict(),
-        }
+        return _qualified(service)
 
 
 def coordinator_probe(request):
@@ -104,9 +112,13 @@ def probe(request):
         "profile_id": request["workload_profile"],
         "revision": "image-" + sha[:24],
     }
+    with _candidate_config(request, authored) as temporary:
+        original = load_outbound_agent_service_config(
+            temporary, env_file=environment(request)
+        )
     return {
-        "source": qualify(request, authored),
-        "target": qualify(request, after, check_promotion=True),
+        "source": _qualified(original),
+        "target": qualify(request, after, check_promotion=True, original=original),
         "image_sha256": sha,
         "declaration": after,
         "native_owner": owner(request),
@@ -174,7 +186,8 @@ def recover_service(request):
     This action is reobserved on each continuation: a previous start receipt
     cannot prove the current process survived. It never creates a service binding.
     """
-    from loom.fleet._host import start
+    from loom.fleet._host import start, digest
+    from loom.fleet._startup import startup_path
     from loom.queue._profile_promotion import recover, completed, publication_state
 
     fact = owner(request)
@@ -239,12 +252,16 @@ def recover_service(request):
                 fact = stopped
             finally:
                 os.close(descriptor)
-    if fact["value"]["ownership"] != "live":
-        service = load_outbound_agent_service_config(
-            config(request), env_file=environment(request)
-        )
-        recover(service.client)
-        start(retained)
+    startup = {**retained, "startup_id": "workload-" + request["promotion_id"],
+               "expected_declaration": digest(payload(request))}
+    launch = startup_path(startup)
+    if fact["value"]["ownership"] != "live" or (launch.exists() and not read(launch)["ready"]):
+        if not launch.exists():
+            service = load_outbound_agent_service_config(
+                config(request), env_file=environment(request)
+            )
+            recover(service.client)
+        start(startup)
     return {
         "outcome": "applied",
         "declaration": payload(request),

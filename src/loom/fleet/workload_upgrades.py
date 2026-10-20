@@ -105,9 +105,9 @@ def preview(
         target_declarations, candidate_inputs, candidate_sources = source_candidates(
             inventory, workload_inventory, plan, consumers, env_file
         )
-    candidates = {}
+    requests = {}
     for name, row in consumers.items():
-        candidates[name] = sshops.ssh(
+        requests[name] = (
             row["host"],
             {
                 **row,
@@ -120,6 +120,10 @@ def preview(
                 **({"candidate_declaration": target_declarations[name]} if target_declarations is not None else {}),
             },
         )
+    candidates = sshops._ssh_many(requests)
+    for candidate in candidates.values():
+        if isinstance(candidate, Exception):
+            raise candidate
     profiles = [candidate["target"]["profile"] for candidate in candidates.values()]
     if any(profile != profiles[0] for profile in profiles):
         raise QueueConflictError("native target profile differs across consuming hosts")
@@ -299,6 +303,20 @@ class WorkloadUpgrade(maintenance._Upgrade):
         )
 
     def probes(self):
+        # Retain preparation once after intent binding, before closing admission.
+        # Staging/promotion still revalidates mutable inputs at activation.
+        preview = getattr(self, "_preview_qualification", None)
+        reuse_preview = preview is not None and all(
+            preview.get(key) == self.intent.get(key) for key in (
+                "release", "hosts", "declarations", "agents", "workload_profile",
+                "image", "image_sha256", "candidates", "target_declarations",
+                "workload_inventory", "candidate_sources", "coordinator_target",
+            )
+        )
+        if reuse_preview:
+            self.recheck()
+            if sshops._file_hash(Path(self.intent["image"])) != self.intent["image_sha256"]:
+                raise QueueConflictError("workload image changed after qualification")
         for name, row in self.intent["hosts"].items():
             observed = sshops.ssh(
                 row["host"],
@@ -315,13 +333,6 @@ class WorkloadUpgrade(maintenance._Upgrade):
                 name == "coordinator" or name in self.intent["candidates"]
             ) and SOURCE_PROMOTION_CAPABILITY not in native["value"].get("capabilities", ()):
                 raise QueueConflictError("running source inventory promotion capability unavailable")
-            if name == "coordinator" and self.intent.get("coordinator_target") is not None:
-                target = self.host_observe(
-                    name, "workload-coordinator-probe",
-                    declaration=self.intent["target_declarations"][name],
-                )
-                if target != self.intent["coordinator_target"]:
-                    raise QueueConflictError("coordinator workload target qualification changed")
             if name in self.intent["candidates"]:
                 if native["value"]["ownership"] != "live" or CAPABILITY not in native[
                     "value"
@@ -329,19 +340,32 @@ class WorkloadUpgrade(maintenance._Upgrade):
                     raise QueueConflictError(
                         "running workload source promotion capability unavailable"
                     )
+            prepared = self.directory / (name + "-candidate.json")
+            if prepared.exists():
+                if read(prepared).get("intent_digest") != digest(self.intent):
+                    raise QueueConflictError("workload qualification intent changed")
+                continue
+            if reuse_preview:
+                atomic(prepared, {"intent_digest": digest(self.intent)})
+                continue
+            if name == "coordinator" and self.intent.get("coordinator_target") is not None:
+                target = self.host_observe(
+                    name, "workload-coordinator-probe",
+                    declaration=self.intent["target_declarations"][name],
+                )
+                if target != self.intent["coordinator_target"]:
+                    raise QueueConflictError("coordinator workload target qualification changed")
+            elif name in self.intent["candidates"]:
                 candidate = self.host_observe(
-                    name,
-                    "workload-probe",
+                    name, "workload-probe",
                     workload_profile=self.intent["workload_profile"],
-                    image=self.intent["image"],
-                    image_sha256=self.intent["image_sha256"],
+                    image=self.intent["image"], image_sha256=self.intent["image_sha256"],
                     **({"candidate_declaration": self.intent["target_declarations"][name]}
                        if self.intent.get("workload_inventory") is not None else {}),
                 )
                 if candidate["target"] != self.intent["candidates"][name]["target"]:
-                    raise QueueConflictError(
-                        "immutable workload target qualification changed"
-                    )
+                    raise QueueConflictError("immutable workload target qualification changed")
+            atomic(prepared, {"intent_digest": digest(self.intent)})
 
     def recover_host(self, name):
         """Authorize a communication stop only while our promotion is current."""
@@ -378,7 +402,7 @@ class WorkloadUpgrade(maintenance._Upgrade):
             },
         )
 
-    def promote(self, name, candidate_source):
+    def promote(self, name, candidate_source, *, dispatch_only=False):
         key = name + "-promotion"
         path = self.receipts / key / "intent.json"
         if path.exists():
@@ -430,6 +454,8 @@ class WorkloadUpgrade(maintenance._Upgrade):
             return self.operator.observe_control(value["operation_id"])
 
         result = self.native(key, request, invoke)
+        if dispatch_only and result["state"] != "failed":
+            return request["operation_id"]
         if result["state"] != "applied" or not result["acknowledged"]:
             if result["state"] == "failed":
                 raise QueueConflictError(
@@ -439,6 +465,33 @@ class WorkloadUpgrade(maintenance._Upgrade):
                 "native profile promotion acknowledgement: " + request["operation_id"]
             )
         return request["operation_id"]
+
+
+def _promote_agents(operation):
+    intent = operation.intent
+    staged = operation.call_many([
+        (name, "workload-stage", {
+            "declaration": intent["target_declarations"][name],
+            "image": intent["image"], "image_sha256": intent["image_sha256"],
+            "target": intent["candidates"][name]["target"],
+        }) for name in intent["agents"]
+    ])
+    errors = []
+    # Native gate revisions are acquired in submission order. A pending
+    # acknowledgement must not suppress another independent host's submission.
+    for name in intent["agents"]:
+        try:
+            operation.promote(name, staged[name]["candidate_source"], dispatch_only=True)
+        except Exception as exc:
+            errors.append(exc)
+    if errors:
+        raise errors[0]
+    for name in intent["agents"]:
+        operation.promote(name, staged[name]["candidate_source"])
+        response = operation.recover_host(name)
+        receipt = operation.receipts / (name + "-native-publication")
+        sshops.protected_directory(receipt)
+        operation.accept_update(name, response, receipt)
 
 
 def continue_upgrade(operation):
@@ -471,6 +524,7 @@ def continue_upgrade(operation):
     operation.probes()
     irreversible = directory / "irreversible.json"
     if not irreversible.exists():
+        maintenance._preflight_checks(operation)
         if "maintenance_binding" in intent:
             operation.gate()
         else:
@@ -499,20 +553,7 @@ def continue_upgrade(operation):
             irreversible, {"step": "profile-promotion", "intent_digest": digest(intent)}
         )
     maintenance.phase(operation, "replacing")
-    for name in intent["agents"]:
-        staged = operation.call(
-            name,
-            "workload-stage",
-            declaration=intent["target_declarations"][name],
-            image=intent["image"],
-            image_sha256=intent["image_sha256"],
-            target=intent["candidates"][name]["target"],
-        )
-        operation.promote(name, staged["candidate_source"])
-        response = operation.recover_host(name)
-        receipt = operation.receipts / (name + "-native-publication")
-        sshops.protected_directory(receipt)
-        operation.accept_update(name, response, receipt)
+    _promote_agents(operation)
     operation.call(
         "coordinator",
         "workload-publish",

@@ -6,12 +6,16 @@ capacity, settlement and policy decision comes from a fresh native observation.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from dataclasses import replace
 import fcntl
 import hashlib
+import json
 from pathlib import Path
 from typing import Any, cast
 import math
+import time
 
 from loom.coordinator import CoordinatorClientError, CoordinatorOperatorClient
 from loom.deployment import load_deployment
@@ -19,6 +23,7 @@ from loom.fleet.configuration import protected_directory, _environment_files
 from loom.fleet._host import atomic, read, digest
 from loom.fleet import ssh_operations as sshops
 from loom.fleet._upgrade_progress import Observation, ProgressSink, phase, reason
+from loom.fleet._timing import bind_directory, measure, recording, timed
 from loom.fleet.releases import verify_release
 from loom.fleet.self_tests import self_test
 from loom.fleet.probes import probe_configuration
@@ -44,6 +49,8 @@ class _Waiting(Exception):
 def _reason_code(exc):
     if isinstance(exc, _Waiting):
         return exc.code
+    if isinstance(exc, sshops.SshStarting):
+        return "acknowledgement_pending"
     if isinstance(exc, sshops.SshUnavailable):
         return "host_unavailable"
     if isinstance(exc, CoordinatorClientError):
@@ -432,18 +439,44 @@ class _Upgrade(sshops._Operation):
         )
 
     def probes(self):
+        requests, retained = {}, {}
         for name, row in self.intent["hosts"].items():
             path = self.directory / (name + "-candidate.json")
-            old = read(path) if path.exists() else None
-            observed = self.host_observe(
-                name,
-                "upgrade-probe",
-                required_capabilities=list(REQUIRED_CAPABILITIES),
-                descriptor_name=Path(self.intent["target_path"]).name,
-                images=None if old is None else old["images"],
-            )
-            if old is None:
-                atomic(path, observed)
+            retained[name] = path.exists()
+            request = {**row, "release": self.intent["release"]}
+            if retained[name]:
+                request["action"] = "inspect"
+            else:
+                request.update(
+                    action="upgrade-probe",
+                    expected_declaration=digest(self.intent["declarations"][name]),
+                    required_capabilities=list(REQUIRED_CAPABILITIES),
+                    descriptor_name=Path(self.intent["target_path"]).name,
+                    images=None,
+                )
+            requests[name] = (row["host"], request)
+        errors = []
+        for name, observed in sshops._ssh_many(requests).items():
+            try:
+                if isinstance(observed, Exception):
+                    raise observed
+                if retained[name]:
+                    row = self.intent["hosts"][name]
+                    # Activation still verifies bytes; retained qualification
+                    # never proves current service ownership.
+                    native = observed["native_owner"]
+                    if observed["installed"] not in (row["source_release"], self.intent["release"]):
+                        raise QueueConflictError("runtime service release changed")
+                    if native is None or native["owner"] != row["expected_root_id"]:
+                        raise QueueConflictError("upgrade native root identity changed")
+                    if native["value"]["ownership"] != "live":
+                        raise _Waiting("native service readiness: " + name)
+                else:
+                    atomic(self.directory / (name + "-candidate.json"), observed)
+            except Exception as exc:
+                errors.append(exc)
+        if errors:
+            raise errors[0]
 
     def settled(self):
         phase(self, "settling")
@@ -621,6 +654,68 @@ def _repair_check_selection(operation, deployment):
     return _continue(operation)
 
 
+@timed("check_prepare")
+def _check_profile(declarations, name, deployment):
+    profile_id = declarations[name]["resident_profiles"][0]["descriptor"]["profile_id"]
+    policies = declarations["coordinator"]["preparation"]["profiles"]
+    matches = [key for key, value in policies.items()
+               if value["resident_profile_id"] == profile_id]
+    chosen = (deployment.preparation_profile if deployment.preparation_profile in matches
+              else matches[0] if len(matches) == 1 else None)
+    if chosen is None:
+        raise QueueConfigError("check preparation profile is ambiguous for " + name)
+    return chosen
+
+
+def _check_kinds(operation, name, declaration):
+    # Provider-backed GPU inventory need not appear in the legacy profile list.
+    devices = declaration["resident_profiles"][0].get("gpu_devices") or (
+        operation.intent["agents"][name].get("offer") or {}
+    ).get("gpu_devices")
+    return ("cpu", "storage", *(["gpu"] if devices else []))
+
+
+def _check_identity(operation, name, check):
+    return "check-" + hashlib.sha256(
+        (operation.intent["operation_id"] + name + ":" + check).encode()
+    ).hexdigest()[:24]
+
+
+def _preflight_checks(operation):
+    """Retain actual candidate preparation through existing exact host receipts."""
+    from loom.queue.preparation import PrepareRunRequest
+
+    selection = _check_selection(operation)
+    deployment = load_deployment(selection["deployment"])
+    declarations = operation.intent.get("target_declarations", operation.intent["declarations"])
+    deferred = _deferred_checks(operation).get("agents", ())
+    preparations = []
+    for name in operation.intent["agents"]:
+        if name in deferred:
+            continue
+        chosen = _check_profile(declarations, name, deployment)
+        requests = {}
+        for check in _check_kinds(operation, name, declarations[name]):
+            identity = _check_identity(operation, name, check)
+            requests[check] = PrepareRunRequest(
+                identity + "-preflight", identity, deployment.source,
+                selection["config"], chosen,
+                overrides=tuple(key + "=" + json.dumps(value)
+                                for key, value in probe_configuration(check, name).items()),
+            ).to_dict()
+        captured = operation.call(
+            "coordinator", "upgrade-check-capture", agent_id=name,
+            expected_root_id=operation.intent["hosts"]["coordinator"]["expected_root_id"],
+            candidate_declaration=declarations["coordinator"], checks=requests,
+        )
+        preparations.append((name, "upgrade-check-prepare", {
+            "agent_id": name,
+            "expected_root_id": operation.intent["hosts"][name]["expected_root_id"],
+            "candidate_declaration": declarations[name], "bindings": captured["bindings"],
+        }))
+    operation.call_many(preparations)
+
+
 def _prepare_attempt(operation, name, check, identity, previous=None):
     path = operation.inventory.path.parent / "checks" / identity / "intent.json"
     binding = _maintenance_binding(operation.intent)
@@ -632,26 +727,7 @@ def _prepare_attempt(operation, name, check, identity, previous=None):
         selection = _check_selection(operation)
         deployment = load_deployment(selection["deployment"])
         declarations = operation.intent.get("target_declarations", operation.intent["declarations"])
-        profile_id = declarations[name]["resident_profiles"][0][
-            "descriptor"
-        ]["profile_id"]
-        policies = declarations["coordinator"]["preparation"][
-            "profiles"
-        ]
-        matches = [
-            key
-            for key, value in policies.items()
-            if value["resident_profile_id"] == profile_id
-        ]
-        chosen = (
-            deployment.preparation_profile
-            if deployment.preparation_profile in matches
-            else matches[0]
-            if len(matches) == 1
-            else None
-        )
-        if chosen is None:
-            raise QueueConfigError("check preparation profile is ambiguous for " + name)
+        chosen = _check_profile(declarations, name, deployment)
         from loom.deployment import export_connection_deployment
 
         # A repaired selection must not rewrite the deployment bound by failed checks.
@@ -734,32 +810,19 @@ def _prepare_attempt(operation, name, check, identity, previous=None):
 
 def _run_checks(operation):
     phase(operation, "checking")
+    operation.check_observations = {}
     attempts = _attempts(operation)
+    active = []
     deferred = _deferred_checks(operation).get("agents", ())
     for name, declaration in operation.intent.get("target_declarations", operation.intent["declarations"]).items():
         if name == "coordinator" or name not in operation.intent["agents"]:
             continue
         if name in deferred:
             continue
-        profile = declaration["resident_profiles"][0]
-        # Provider-backed GPUs belong to the native inventory, so their legacy
-        # resident-profile device list can be empty even on a GPU agent.
-        devices = profile.get("gpu_devices") or (
-            operation.intent["agents"][name].get("offer") or {}
-        ).get("gpu_devices")
-        for check in (
-            "cpu",
-            "storage",
-            *(["gpu"] if devices else []),
-        ):
+        for check in _check_kinds(operation, name, declaration):
             slot = name + ":" + check
             if slot not in attempts:
-                identity = (
-                    "check-"
-                    + hashlib.sha256(
-                        (operation.intent["operation_id"] + slot).encode()
-                    ).hexdigest()[:24]
-                )
+                identity = _check_identity(operation, name, check)
                 attempts[slot] = [_prepare_attempt(operation, name, check, identity)]
                 atomic(operation.directory / "checks.json", attempts)
             attempt = attempts[slot][-1]
@@ -767,23 +830,68 @@ def _run_checks(operation):
             operation.maintenance(
                 "authorize-" + identity, "authorize", attempt["authorization"]
             )
-            result = self_test(
-                operation.inventory,
-                operation_id=identity,
-                timeout_seconds=operation.intent["timeout_seconds"],
-            )
+            active.append(identity)
+
+    if not active:
+        operation.settled()
+        return
+    deadline = time.monotonic() + operation.intent["timeout_seconds"]
+
+    def advance(identity, *, dispatch) -> dict[str, Any]:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return {"outcome": "waiting", "code": "deadline_exceeded"}
+        return self_test(
+            operation.inventory, operation_id=identity,
+            timeout_seconds=remaining, _dispatch_only=dispatch, _wait=False,
+        )
+
+    # Each self-test owns a distinct receipt lock and its own clients. Only this
+    # thread owns the upgrade's shared attempt inventory and result publication.
+    with ThreadPoolExecutor(max_workers=min(3, len(active))) as workers:
+        dispatched = [workers.submit(copy_context().run, advance, identity, dispatch=True)
+                      for identity in active]
+        dispatch_errors = []
+        for future in dispatched:
+            try:
+                future.result()
+            except Exception as exc:
+                dispatch_errors.append(exc)
+        if dispatch_errors:
+            raise dispatch_errors[0]
+        observed = [(identity, workers.submit(copy_context().run, advance, identity, dispatch=False))
+                    for identity in active]
+        failures, waiting, errors = [], [], []
+        for identity, future in observed:
+            try:
+                result = future.result()
+            except Exception as exc:
+                errors.append(exc)
+                continue
             atomic(operation.directory / (identity + "-result.json"), result)
-            if result["outcome"] != "passed":
-                if result["outcome"] in {"failed", "unsupported"}:
-                    reason(operation, "check_failed" if result["outcome"] == "failed" else "native_refusal")
-                    raise QueueConflictError(
-                        "check "
-                        + identity
-                        + " "
-                        + result["outcome"]
-                        + "; explicit operation retry-check required"
-                    )
-                raise _Waiting("check " + identity + ": " + result["outcome"])
+            operation.check_observations[identity] = {
+                "outcome": result["outcome"],
+                "checks": {
+                    name: {key: row.get(key) for key in ("operation_id", "outcome", "code")}
+                    for name, row in result.get("checks", {}).items()
+                    if row["outcome"] != "not_requested"
+                },
+            }
+            if result["outcome"] in {"failed", "unsupported"}:
+                failures.append((identity, result["outcome"]))
+            elif result["outcome"] != "passed":
+                waiting.append(identity)
+    if failures:
+        reason(operation, "check_failed" if any(outcome == "failed" for _, outcome in failures)
+               else "native_refusal")
+        raise QueueConflictError(
+            "; ".join("check " + identity + " " + outcome for identity, outcome in failures)
+            + "; explicit operation retry-check required"
+        )
+    if errors:
+        raise errors[0]
+    if waiting:
+        raise _Waiting("checks pending: " + ", ".join(waiting))
     operation.settled()
 
 
@@ -848,17 +956,18 @@ def _continue(operation):
     if not irreversible.exists():
         phase(operation, "preparing")
         _capable(operation.operator)
-        for name, row in operation.intent["hosts"].items():
-            sshops.ssh(
-                row["host"],
-                {
-                    **row,
-                    "action": "install-candidate",
-                    "release": operation.intent["release"],
-                    **sshops._bundle(operation.inventory),
-                },
-            )
+        installed = sshops._ssh_many({
+            name: (row["host"], {
+                **row, "action": "install-candidate",
+                "release": operation.intent["release"],
+                **sshops._bundle(operation.inventory),
+            }) for name, row in operation.intent["hosts"].items()
+        })
+        for response in installed.values():
+            if isinstance(response, Exception):
+                raise response
         operation.probes()
+        _preflight_checks(operation)
         operation.maintenance("close", "close")
         if not recovery:
             operation.settled()
@@ -991,7 +1100,12 @@ def upgrade(
         raise QueueConfigError("progress requires an applied or retained upgrade")
     observation = Observation(progress, "apply" if apply else action)
     try:
-        result = _upgrade(**options, observation=observation)
+        with recording(), measure("upgrade_continuation") as timing:
+            result = _upgrade(**options, observation=observation)
+            if result.get("outcome") == "waiting":
+                timing["outcome"] = "waiting"
+            elif result.get("outcome") in {"blocked", "failed"}:
+                timing["outcome"] = "error"
     except BaseException as exc:
         code = _reason_code(exc)
         observation.finish("interrupted" if isinstance(exc, (KeyboardInterrupt, SystemExit)) else "error", code)
@@ -1057,12 +1171,14 @@ def _upgrade(
     if not (directory / "intent.json").exists() and not apply:
         raise QueueConfigError("unknown upgrade operation")
     protected_directory(directory)
+    bind_directory(directory)
     with (directory / "writer.lock").open("a") as writer:
         try:
             fcntl.flock(writer, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise QueueConflictError("operation already has an active writer") from exc
         path = directory / "intent.json"
+        prepared_plan = None
         if not path.exists():
             plan = preview(
                 inventory,
@@ -1101,6 +1217,7 @@ def _upgrade(
                 from .workload_upgrades import bind_intent
                 intent = bind_intent(intent, plan, directory)
             atomic(path, intent)
+            prepared_plan = plan
         intent = read(path)
         if intent.get("kind") not in {"runtime-upgrade", "workload-upgrade"}:
             raise QueueConflictError("operation belongs to another kind")
@@ -1128,10 +1245,12 @@ def _upgrade(
         if intent["kind"] == "workload-upgrade":
             from .workload_upgrades import WorkloadUpgrade
             operation = WorkloadUpgrade(inventory, directory, intent, observation)
+            operation._preview_qualification = prepared_plan
         else:
             operation = _Upgrade(inventory, directory, intent, observation)
         observation.end_preparation()
         phase(operation, "recovering")
+        result: dict[str, Any]
         try:
             if defer_agents is not None:
                 _bind_deferred_checks(operation, defer_agents, defer_reason)
@@ -1188,6 +1307,8 @@ def _upgrade(
         finally:
             operation.close()
         result.update(_qualification_result(operation))
+        result["check_observations"] = getattr(operation, "check_observations", {})
+        result["reason_code"] = observation.reason
         atomic(directory / "result.json", result)
         return sshops.operation_status(inventory, operation_id)
 
@@ -1292,8 +1413,6 @@ def _retry_check(operation, failed, successor):
         raise QueueConfigError("retry-check requires --failed-check and --operation-id")
     sshops._directory(operation.inventory, successor)
     operation.recheck()
-    operation.gate()
-    operation.probes()
     attempts = _attempts(operation)
     selected = [
         rows
@@ -1312,6 +1431,8 @@ def _retry_check(operation, failed, successor):
         return _continue(operation)
     if rows[-1]["operation_id"] != failed:
         raise QueueConflictError("another successor already selects this slot")
+    operation.gate()
+    operation.probes()
     _require_failed_check(operation, failed)
     operation.settled()
     for name in operation.intent["hosts"]:

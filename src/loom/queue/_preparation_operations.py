@@ -28,6 +28,7 @@ from .errors import QueueConflictError, QueueServiceError
 from .run import RunRequest, _public_operation_id
 from ._maintenance import MaintenanceCheckConflict
 from ._service_lifetime import ServiceRetiring
+from ._phase_timing import PhaseTimings
 from .preparation import (
     PreparationChildInput,
     PrepareRunRequest,
@@ -53,6 +54,14 @@ PREPARATION_RUN_PREFIX = "loom-preparation-"
 _MAX_RESULT_BYTES = 64 * 1024
 _TERMINAL = frozenset({"applied", "failed", "cancelled", "conflict"})
 _LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class _PendingActionVerification:
+    """A native child still in progress; never a result-adoption proof."""
+
+    operation_id: str
+    run_uri: str
 
 
 class _InvalidInitialContext(ValueError):
@@ -255,7 +264,8 @@ class CoordinatorPreparations:
     def verify_action_result(
         self, *, source_operation_id: str, node_id: str,
         contract: Mapping[str, PlainData], candidate: Mapping[str, PlainData],
-    ) -> dict[str, PlainData] | None:
+        timings: PhaseTimings | None = None,
+    ) -> dict[str, PlainData] | _PendingActionVerification:
         """Join a replayable installed verifier child to a retained preparation.
 
         Native action resolution is the sole caller. Reuse the captured input,
@@ -270,6 +280,15 @@ class CoordinatorPreparations:
         requested = action_verification_request({"node_id": node_id, "contract": dict(contract), "candidate": dict(candidate)})
         intent = hash_mapping({"source_operation_id": source_operation_id, "request": requested})
         operation_id = "action-verify-" + intent.split(":", 1)[1]
+        child_name = PREPARATION_RUN_PREFIX + hashlib.sha256(operation_id.encode()).hexdigest()
+        pending = _PendingActionVerification(
+            operation_id, (self.daemon.config.run_store_root / child_name).as_uri()
+        )
+        if timings is not None:
+            timings.related.update(
+                verification_operation_id=operation_id,
+                verification_run_uri=pending.run_uri,
+            )
         with self.daemon._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute("SELECT * FROM preparation_operations WHERE operation_id = ?", (operation_id,)).fetchone()
@@ -284,7 +303,6 @@ class CoordinatorPreparations:
                 selected.pop("reconciliation", None)
                 selected["action_verification"] = requested
                 request = replace(PrepareRunRequest.from_dict(_mapping(json.loads(str(source["request_json"])))), operation_id=operation_id)
-                child_name = PREPARATION_RUN_PREFIX + hashlib.sha256(operation_id.encode()).hexdigest()
                 result: dict[str, PlainData] = {
                     "schema_version": 1, "coordinator_id": source_result["coordinator_id"],
                     "input_receipt": source_result["input_receipt"], "preparation_admission_id": None,
@@ -295,12 +313,12 @@ class CoordinatorPreparations:
                              (operation_id, source["principal_id"], intent, _json(request.to_dict()), _json(selected), child_name, _json(result)))
                 conn.commit()
                 self.daemon._wake.set()
-                return None
+                return pending
             if row["intent_digest"] != intent:
                 raise QueueConflictError("action verification operation conflicts")
             conn.commit()
         if row["state"] not in _TERMINAL:
-            return None
+            return pending
         if row["state"] != "applied":
             raise QueueConflictError("installed action verification child failed")
         result = _mapping(json.loads(str(row["result_json"])))
@@ -309,6 +327,15 @@ class CoordinatorPreparations:
         if report["action_verification"] != requested or report["operation_id"] != operation_id:
             raise QueueConflictError("action verification retained report conflicts")
         return report
+
+    def action_verification_pending(self, pending: _PendingActionVerification) -> bool:
+        """Observe only native progress; completed children require full resolution."""
+        with self.daemon._connection() as conn:
+            row = conn.execute(
+                "SELECT state FROM preparation_operations WHERE operation_id = ?",
+                (pending.operation_id,),
+            ).fetchone()
+        return row is not None and row["state"] not in _TERMINAL
 
     def accept_run(
         self, request: RunRequest, principal_id: str

@@ -399,3 +399,73 @@ transition. Suggested actions never execute recovery. Missing revision/time and
 unknown or stale freshness stay visible. Independently read owners do not form
 an atomic snapshot, and a successful logical result remains successful while
 cleanup is pending or a later owner cannot be reached. No remote logs are needed.
+
+### Recovery cleanup preview
+
+`client.preview_recovery_cleanup(run_uri)` inspects retained assignments for one
+managed run. It returns each assignment's stage/attempt identity, retained
+payload bytes, reclaimable payload bytes, eligibility, and explicit blocking
+reasons. This is read-only: the response is neither a release reservation nor a
+deletion capability. The normal managed-run authorization applies.
+
+```python
+preview = client.preview_recovery_cleanup(run_uri)
+for attempt in preview["entries"]:
+    print(attempt["attempt_id"], attempt["retained_payload_bytes"], attempt["reasons"])
+```
+
+Sizes come from the coordinator-pinned recovery inventory, not a recursive
+payload hash or a filesystem free-space estimate. The preview is bounded to
+1,000 assignments per run. Restart admission continues to verify payload bytes.
+Older producers without a complete diagnostic-publication declaration remain
+ineligible. Pending provider settlement, recovery-dependent work, uncommitted
+outputs, and unpublished logs also block release. This preview does not change
+scientific status or remove existing evidence.
+
+A producer may declare `loom.recovery_complete` on a committed output, with
+`schema_version: 1` and `required_outputs` containing exactly the action's output
+names. This is the application owner's assertion that all needed application
+state (including histories, profiles, configuration and promised checkpoints)
+is in those publications; Loom does not interpret scientific schemas. Absence
+of this assertion keeps historical workspaces retained.
+
+For such shared-output attempts, native retention also includes settled stdout,
+stderr and any traceback in `_loom/logs/` within the same immutable publication.
+`loom.execution_logs` maps stream names to these inventory members. These paths
+are derived by the runtime from assignment ownership, never accepted as host
+paths supplied by application metadata. Publication runs after process-group
+containment. Replay can use the committed publication after assignment logs
+have been removed. Recovery preview checks this published log inventory rather
+than assuming an empty or missing log stream was successfully retained.
+
+An operator with the explicit `cleanup_recovery` action for the assignment's
+machine can release one eligible recovery tree. Machine scope uses the logical
+`agent_id` from the assignment's recorded session (for example, `quark`), not
+that machine's storage-root identity `agent_root_id`:
+
+```python
+receipt = operator.release_recovery(
+    run_uri,
+    assignment_id,
+    operation_id="cleanup-my-attempt",
+    reason="Scientific outputs and diagnostics are durably published",
+    expected_coordinator_id=coordinator_id,
+)
+```
+
+Keep these arguments unchanged when retrying. A durable coordinator reservation
+is keyed to the assignment and exact request. It is created under the same
+transaction boundary used to acquire recovery predecessors; an active dependent
+or unsettled provider prevents reservation. The original seal receipt remains in
+the coordinator journal. Only the reserved recovery tree's filesystem retention
+marker is retired, after which normal cleanup checks and append-only cleanup
+results apply. Scientific publications keep their retention markers.
+
+A per-assignment advisory lock serializes duplicate deletion requests without
+holding the coordinator write transaction during filesystem traversal. Its small
+lock file remains under the coordinator's `recovery-cleanup-locks/` directory so
+concurrent waiters cannot acquire different lock inodes. Interrupted deletion is
+resumed from the reservation, including after the filesystem marker is removed.
+A failed cleanup reports zero reclaimed bytes and leaves scientific status
+unchanged. The preview reports the reservation state and operation ID after
+release begins; a completed request returns its existing receipt on replay.

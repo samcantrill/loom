@@ -289,8 +289,9 @@ def verify_ref(ref: ArtifactRef, primary: Path) -> None:
 def publication_path_is_retained(path: Path) -> bool:
     """Retain native publication receipts, staging and their complete trees.
 
-    There is no implicit expiry or unpin operation. Native authority/reference
-    settlement must precede a future explicit reclamation policy.
+    There is no implicit expiry. The native recovery-release authority may
+    retire an exact recovery pin after settlement and a durable reservation;
+    ordinary cleanup never unpins scientific publications.
     """
     target = path.absolute()
     try:

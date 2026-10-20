@@ -17,6 +17,7 @@ from loom.coordinator import (
     CoordinatorClient,
     CoordinatorClientError,
     CoordinatorOperatorClient,
+    RunObservation,
     RunRequest,
 )
 from loom.deployment import load_deployment
@@ -33,6 +34,7 @@ from loom.serialization import thaw_plain_data
 
 from .configuration import _environment_files, Inventory, exclude_captures, protected_directory
 from .probes import probe_configuration, verify_storage
+from ._timing import measure, timed
 
 
 def _publish(path: Path, value: Any) -> None:
@@ -157,6 +159,7 @@ def verify_check(
     return {"outcome": "passed", "code": "check_complete"}
 
 
+@timed("check_dispatch")
 def _submit_check(
     client: CoordinatorClient, directory: Path, check: str, request: RunRequest
 ) -> dict[str, Any] | None:
@@ -197,6 +200,46 @@ def _dispatch_check(
     return None
 
 
+def _pending_observation(observed: RunObservation) -> tuple[str, dict[str, Any]]:
+    """Explain already-observed native facts without another owner query."""
+    from loom.diagnostics.run_explanation import explain_run
+    from loom.diagnostics.run_inspection import RunInspectionAxisName
+
+    explanation = explain_run(observed.inspection, observation=observed)
+    current = [
+        fact for fact in explanation.facts
+        if fact.availability == "available" and fact.freshness == "current"
+    ]
+    families = {
+        family for family, fact in explanation.reasons
+        if fact in current or family == "preparation_incomplete"
+    }
+    if "publication_pending" in families:
+        code = "publication_pending"
+    elif "cleanup_pending" in families:
+        code = "settlement_pending"
+    elif any(
+        fact.name in {RunInspectionAxisName.ASSIGNMENT, RunInspectionAxisName.TRANSFER_RESULT}
+        and fact.state.lower() == "running" for fact in current
+    ):
+        code = "check_running"
+    elif "waiting_for_resources" in families:
+        code = "waiting_for_capacity"
+    elif "preparation_incomplete" in families:
+        code = "preparation_pending"
+    else:
+        code = "check_pending_unknown"
+    return code, {
+        "summary": explanation.summary,
+        "facts": [fact.to_dict() for fact in explanation.facts],
+        "reasons": [
+            {"family": family, "evidence": fact.to_dict()}
+            for family, fact in explanation.reasons
+        ],
+    }
+
+
+@timed("check_observation")
 def _observe_check(
     client: CoordinatorClient,
     operator: CoordinatorOperatorClient,
@@ -204,12 +247,18 @@ def _observe_check(
     intent: Mapping[str, Any],
     check: str,
     deadline: float,
+    *,
+    wait: bool = True,
 ) -> dict[str, Any]:
     request = RunRequest.from_dict(intent["requests"][check])
     identity = request.preparation.operation_id
     try:
         observed = client.observe_run(
-            identity, timeout_seconds=max(0.001, deadline - time.monotonic())
+            identity,
+            wait=wait,
+            timeout_seconds=max(
+                0.001, min(deadline - time.monotonic(), 10.0 if not wait else float("inf"))
+            ),
         )
     except CoordinatorClientError as exc:
         if exc.code == "not_found":
@@ -223,12 +272,13 @@ def _observe_check(
         observed.operation is not None
         and observed.operation.state in {"failed", "cancelled", "conflict"}
         or observed.admission is not None
-        and observed.admission.state.value in {"FAILED", "CANCELLED"}
+        and observed.admission.state.value in {"FAILED", "CANCELLED", "BLOCKED"}
     ):
         return {"outcome": "failed", "code": "native_check_failed", **facts}
     if observed.admission is None or observed.admission.state.value != "SUCCEEDED":
-        return _waiting("waiting_for_capacity", **facts)
-    detail = client.admission(observed.admission.admission_id)
+        code, explanation = _pending_observation(observed)
+        return _waiting(code, explanation=explanation, **facts)
+    detail = observed.detail or client.admission(observed.admission.admission_id)
     assignments = (
         cast(dict[str, Any], thaw_plain_data(detail.owners))
         .get("assignment", {})
@@ -261,27 +311,41 @@ def _observe_check(
     artifact = selected.items[0].get("artifact") or {}
     if "loom.shared_publication" not in (artifact.get("metadata") or {}):
         return {"outcome": "failed", "code": "shared_publication_required", **facts}
-    # Operator receipts may live on NFS, where atomic artifact-directory
-    # publication is unavailable. Downloads use the operator's temporary storage.
-    with tempfile.TemporaryDirectory(prefix="loom-fleet-check-") as destination:
-        fetched = client.fetch_artifacts(selected.items, destination, deadline=deadline)
-        row = fetched["items"][0]
-        if row["outcome"] != "available":
-            return {
-                "outcome": "failed"
-                if row["outcome"] == "integrity_failed"
-                else "waiting",
-                "code": "publication_" + row["outcome"],
-                **facts,
-            }
-        path = Path(row["primary_path"])
-        report = json.loads(path.read_text())
+    retained = (
+        _read(directory / "result.json").get("checks", {}).get(check, {})
+        if (directory / "result.json").exists() else {}
+    )
+    if retained.get("verified_artifact") == artifact:
+        # This exact attempt/publication already crossed the artifact-integrity
+        # boundary. Assignment/owner/release facts above and below remain fresh.
+        report = retained["report"]
         if check == "storage":
-            try:
-                facts["storage"] = verify_storage(path.parent / "values.bin")
-            except (OSError, ValueError):
-                return {"outcome": "failed", "code": "storage_result_mismatch", **facts}
-        facts["report"] = report
+            facts["storage"] = retained["storage"]
+        with measure("artifact_verification") as timing:
+            timing["outcome"] = "reused"
+    else:
+        # Operator receipts may live on NFS. Downloads use local temporary storage.
+        with tempfile.TemporaryDirectory(prefix="loom-fleet-check-") as destination:
+            with measure("artifact_download"):
+                fetched = client.fetch_artifacts(selected.items, destination, deadline=deadline)
+            row = fetched["items"][0]
+            if row["outcome"] != "available":
+                return {
+                    "outcome": "failed"
+                    if row["outcome"] == "integrity_failed"
+                    else "waiting",
+                    "code": "publication_" + row["outcome"],
+                    **facts,
+                }
+            path = Path(row["primary_path"])
+            report = json.loads(path.read_text())
+            if check == "storage":
+                try:
+                    with measure("artifact_verification"):
+                        facts["storage"] = verify_storage(path.parent / "values.bin")
+                except (OSError, ValueError):
+                    return {"outcome": "failed", "code": "storage_result_mismatch", **facts}
+    facts.update(report=report, verified_artifact=thaw_plain_data(artifact))
     result = verify_check(
         check,
         report,
@@ -309,6 +373,8 @@ def self_test(
     env_file: Path | None = None,
     _prepare_id: str | None = None,
     _maintenance_binding: Mapping[str, Any] | None = None,
+    _dispatch_only: bool = False,
+    _wait: bool = True,
 ) -> dict[str, Any]:
     """Run selected checks or reconnect to one protected immutable check intent.
 
@@ -474,6 +540,10 @@ def self_test(
                 dispatched = _dispatch_check(client, directory, intent, check)
                 if dispatched is not None:
                     dispatch_results[check] = dispatched
+            if _dispatch_only:
+                # Upgrade orchestration dispatches every independent slot before
+                # any result download. Do not overwrite retained verification.
+                return {"outcome": "waiting", "code": "checks_dispatched"}
             # Observe CPU/storage before GPU capacity waiting can exhaust the deadline.
             # Serialized intent key order is not execution order.
             for check in ("cpu", "storage", "gpu"):
@@ -488,7 +558,8 @@ def self_test(
                         _waiting("deadline_exceeded")
                         if time.monotonic() >= deadline
                         else _observe_check(
-                            client, operator, directory, intent, check, deadline
+                            client, operator, directory, intent, check, deadline,
+                            wait=_wait,
                         )
                     )
                 except CoordinatorClientError as exc:

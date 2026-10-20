@@ -420,6 +420,8 @@ def test_remote_semantic_request_rejects_path_bearing_fields(tmp_path: Path) -> 
             portable_request.inputs[0],
             metadata={"source_url": "https://coordinator.invalid/input"},
         )
+    with pytest.raises(QueueServiceError, match="path-bearing"):
+        replace(portable_request.inputs[0], metadata={"index": {"path": "relative.json"}})
 
 
 def test_only_fixed_preparation_input_can_cross_the_semantic_path_guard(
@@ -540,6 +542,7 @@ def test_launch_is_unreachable_until_inputs_and_grant_are_durable(
 def test_workspace_joins_actual_launch_controls_without_rewriting_worker_bytes(
     tmp_path: Path,
     status: StageStatus,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     profile = _profile(tmp_path)
     request = _request(profile)
@@ -627,6 +630,16 @@ def test_workspace_joins_actual_launch_controls_without_rewriting_worker_bytes(
     workspace.persist_worker_result(result)
     assert workspace.retain_outputs().to_dict() == report.to_dict()
     assert result_path.read_bytes() == original_bytes
+    timings = [payload for _, _, payload in workspace.pending_events() if payload.get("kind") == "native_timing"]
+    assert len(timings) == 2
+    assert all(item["spans"][0]["action"] == "output_retention" for item in timings)
+    assert all(item["spans"][0]["elapsed_nanoseconds"] >= 0 for item in timings)
+
+    def unavailable_diagnostics(*args):
+        raise OSError("diagnostics unavailable")
+
+    monkeypatch.setattr(workspace, "append_event", unavailable_diagnostics)
+    assert workspace.retain_outputs().to_dict() == report.to_dict()
 
 
 def test_input_replay_and_event_sequence_are_durable_and_exact(tmp_path: Path) -> None:
@@ -1651,6 +1664,15 @@ def _shared_publication_workspace(tmp_path, *, limits=None, assignment_id="assig
         executor_metadata={})
     workspace.persist_worker_result(result)
     return workspace, profile, launch, result
+
+
+@pytest.mark.parametrize("member", ["/host/private", "../outside", "nested/../../outside", "file:private", "http:private", "nested\\outside"])
+def test_shared_output_metadata_rejects_external_member_locations(tmp_path, member):
+    workspace, _, _, result = _shared_publication_workspace(tmp_path)
+    report = workspace._retain_outputs(result)
+    descriptor = report.outputs[0]
+    with pytest.raises(QueueServiceError, match="member path|paths or URLs"):
+        replace(descriptor, metadata={**descriptor.metadata, "diagnostic_index": {"path": member}})
 
 
 def test_completed_shared_container_reports_and_publishes_without_original_input(tmp_path):
