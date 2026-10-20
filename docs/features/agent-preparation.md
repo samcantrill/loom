@@ -1418,7 +1418,13 @@ The coordinator configures matching `container_capabilities`, its own
 are excluded from workload-visible shared scope. Neither service configuration
 contains a workload image, and submitting another image changes none of these
 protected identities. Installing this native capability itself requires the
-ordinary runtime rollout.
+ordinary runtime rollout. For an existing installed-profile agent, its protected
+candidate may add a new container policy through the existing maintenance-only
+profile promotion. Existing policies cannot be replaced or removed, and the host
+resource inventory must remain unchanged. The native drain, settlement, clean
+supervisor cut, retained publication and replay guards all apply. Ordinary agent
+reload still refuses executable-policy changes. Keep the existing image selected
+for this one-time promotion; later submitted image changes use no promotion.
 
 Submitted child inputs and preparation reports use schema 11; their private
 worker context uses schema 7. Installed child/report/context forms remain
