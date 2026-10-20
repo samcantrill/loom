@@ -5073,6 +5073,44 @@ def test_report_metadata_preserves_plain_values(output_kind) -> None:
         _decode(encoded)
 
 
+def test_report_metadata_preserves_generated_container_command() -> None:
+    from loom.pipeline.executors.apptainer import build_apptainer_exec_command
+    from loom.pipeline.executors.containers import (
+        ContainerEnvironment, ContainerMount, ContainerOptions,
+    )
+
+    command = build_apptainer_exec_command(
+        container_options=ContainerOptions(
+            image="workload.sif",
+            mounts=tuple(
+                ContainerMount(f"/host/input-{index}", f"/inputs/{index}", "ro")
+                for index in range(16)
+            ),
+            environment=ContainerEnvironment(
+                variables={f"WORKER_{index}": "private-value" for index in range(16)},
+            ),
+        ),
+        worker_command=("python", "-m", "loom"),
+        host_environment={},
+    )
+    argv = command.to_dict()["redacted_argv"]
+    assert isinstance(argv, list) and len(argv) > 64
+    assert "private-value" not in repr(argv)
+    report = replace(_successful_output_report({}), output_kind="shared",
+                     executor_metadata={"command": argv})
+    value = {"report": report.to_dict()}
+    for envelope in (value, {"evidence": {"result_operation": "report", **value}}):
+        encoded = json.dumps(envelope).encode()
+        assert _decode(encoded, failure_report=True) == envelope
+    decoded = _decode(json.dumps(value).encode(), failure_report=True)
+    assert _RemoteExecutionReport.from_dict(decoded["report"]).to_dict() == report.to_dict()
+    with pytest.raises(QueueServiceError, match="collection is too large"):
+        _decode(json.dumps(value).encode())
+    oversized = replace(report, executor_metadata={"command": ["x" * 65_536]})
+    with pytest.raises(QueueServiceError, match="maximum 65536 bytes"):
+        _decode(json.dumps({"report": oversized.to_dict()}).encode(), failure_report=True)
+
+
 @pytest.mark.parametrize("number", ["NaN", "Infinity", "-Infinity", "1e999"])
 def test_report_metadata_rejects_nonfinite_numbers(number: str) -> None:
     report = replace(_failure_report({}), output_kind="shared",
