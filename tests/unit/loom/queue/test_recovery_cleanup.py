@@ -89,13 +89,20 @@ def test_settled_logs_share_publication_and_survive_assignment_removal(tmp_path)
     result = replace(original, outputs={"result": replace(output, metadata={
         **output.metadata,
         RECOVERY_COMPLETE: {"schema_version": 1, "required_outputs": ["result"]},
+        "diagnostic_index": {"path": "primary.json"},
     })})
     log_root = workspace.root / "logs"
     log_root.mkdir(exist_ok=True)
     (log_root / "stdout.log").write_bytes(b"completed output\n")
     (log_root / "stderr.log").write_bytes(b"diagnostic warning\n")
     report = workspace._retain_outputs(result)
+    from loom.queue._remote_stage_execution import _RemoteExecutionReport, _RemoteArtifact
+    report = _RemoteExecutionReport.from_dict(report.to_dict())
     refs = publish(workspace.request(), report, profile.shared_roots, agent_id="agent-1", fence="fence-1")
+    consumer, _ = _RemoteArtifact.from_local_ref(
+        transfer_id="consumer-input", logical_name="result", ref=refs["result"]
+    )
+    assert _RemoteArtifact.from_dict(consumer.to_dict()).metadata["diagnostic_index"]["path"] == "primary.json"
     fact = SimpleNamespace(artifact_name="result", artifact=refs["result"])
     assert cleanup._complete_outputs([fact])
     assert cleanup._published_logs([fact], profile.shared_roots)

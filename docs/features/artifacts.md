@@ -1640,6 +1640,15 @@ reference remains unchanged; the store resolves its logical root under the
 consumer's mapping before opening files. This supports candidate and checkpoint
 verification using the same binding as ordinary downstream stage inputs.
 
+Metadata within a native shared-publication binding may contain `path` fields
+that name normalized relative publication members, including nested diagnostic
+or catalog selectors. These references survive output transport and downstream
+input fingerprints. They do not identify host locations or grant filesystem
+access: the consuming contract must resolve them against the admitted publication
+inventory. Absolute paths, traversal, URLs and backslashes remain rejected, as
+do path-bearing metadata on ordinary relay artifacts. Semantic configuration
+outside a shared-publication binding retains its existing path restrictions.
+
 [Shared artifact publication](agent-preparation.md#shared-artifact-publication)
 owns the protected configuration, finite budgets, native fencing, atomic
 publication, container mount scope and conservative retention policy.
