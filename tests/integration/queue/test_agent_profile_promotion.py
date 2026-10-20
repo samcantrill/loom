@@ -605,8 +605,9 @@ def test_quiescent_promotion_can_add_container_policy_without_rebinding_capacity
     root = c.agent_root_id
     try:
         control = request(old, new, root)
+        control = replace(control, promotion={**control.promotion, "enable_submitted_containers": True})
         if change != "add":
-            with pytest.raises(QueueConflictError, match="unrelated role|container policies"):
+            with pytest.raises(QueueConflictError, match="unrelated role|container policies|requires a protected policy"):
                 apply(c, control)
             assert c._config == old
             return
@@ -616,6 +617,7 @@ def test_quiescent_promotion_can_add_container_policy_without_rebinding_capacity
         assert c._config.resource_inventory == old.resource_inventory
         assert c._config.resident_profiles == old.resident_profiles
         assert c._config.container_policies == (policy,)
+        assert "submitted-container-execution-v1" in c.active_session().capabilities
         assert c._require_journal().prepare_control(control) == effect
         close(c)
         c = LocalDaemonAgentHttpClient(new)
@@ -623,3 +625,44 @@ def test_quiescent_promotion_can_add_container_policy_without_rebinding_capacity
         assert c._config.container_policies == (policy,)
     finally:
         close(c)
+
+
+@pytest.mark.parametrize("owner", [("drain", "maintenance")], indirect=True)
+@pytest.mark.parametrize("authorized", [True, False])
+@pytest.mark.parametrize("effect_code", ["applied", "reload_rejected"])
+def test_container_enablement_updates_coordinator_session_only_after_authorized_effect(owner, tmp_path, authorized, effect_code):  # noqa: F811
+    from loom.queue.agent_sessions import AgentControlEffect
+    from loom.queue.submitted_execution import SUBMITTED_CONTAINER_CAPABILITY
+
+    daemon, agent, session, operator = owner
+    if authorized:
+        policy = daemon.config.agent_policy
+        rule = policy.agents[0]
+        daemon.replace_agent_policy(replace(policy, agents=(replace(
+            rule, capabilities=(*rule.capabilities, SUBMITTED_CONTAINER_CAPABILITY)),)))
+    old, new = config(tmp_path), config(tmp_path, 2)
+    control = request(old, new, "remote-root", session=session.session_id, revision=session.config_revision)
+    control = replace(control, promotion={**control.promotion, "enable_submitted_containers": True})
+    operator.maintenance({"operation_id":"enable-close", "maintenance_id":"upgrade",
+        "maintenance_intent_digest":"target", "action":"close", "expected_revision":0, "check":None},
+        expected_coordinator_id=daemon.status().coordinator_id)
+    drain = replace(control, operation_id="enable-drain", kind=AgentControlKind.DRAIN, promotion=None)
+    operator.control_agent(drain)
+    agent.next_control(session.session_id)
+    agent.acknowledge_control(session.session_id, AgentControlEffect(
+        drain.operation_id,"applied",session.config_revision,session.inventory_revision,"drained"))
+    if not authorized:
+        with pytest.raises(QueueConflictError, match="not authorized"):
+            operator.control_agent(control)
+        return
+    operator.control_agent(control)
+    delivered=agent.next_control(session.session_id)
+    assert delivered == control
+    effect=AgentControlEffect(control.operation_id,effect_code,session.config_revision,session.inventory_revision,"drained")
+    agent.acknowledge_control(session.session_id,effect)
+    agent.acknowledge_control(session.session_id,effect)
+    expected = replace(session, availability_revision="drained", capabilities=(
+        tuple(sorted({*session.capabilities, SUBMITTED_CONTAINER_CAPABILITY}))
+        if effect_code == "applied" else session.capabilities))
+    current=agent.reconcile(expected,session.coordinator_epoch,idempotency_key="enabled-session")
+    assert (SUBMITTED_CONTAINER_CAPABILITY in current.capabilities) == (effect_code == "applied")

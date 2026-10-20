@@ -2223,14 +2223,19 @@ class AgentSessionService:
                 raise QueueConflictError("agent control acknowledgement is stale")
             applied = effect.code == "applied"
             if applied:
+                from ._profile_promotion import promoted_capabilities
+                capabilities = promoted_capabilities(control, session.capabilities)
+                if not set(capabilities).issubset(rule.capabilities):
+                    raise QueueConflictError("promoted session capabilities are no longer authorized")
                 conn.execute(
                     "UPDATE agent_sessions SET config_revision = ?, "
-                    "inventory_revision = ?, availability_revision = ? "
+                    "inventory_revision = ?, availability_revision = ?, capabilities_json = ? "
                     "WHERE session_id = ?",
                     (
                         effect.config_revision,
                         effect.inventory_revision,
                         effect.availability_revision,
+                        json.dumps(capabilities),
                         session_id,
                     ),
                 )

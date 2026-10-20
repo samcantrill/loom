@@ -1423,7 +1423,12 @@ candidate may add a new container policy through the existing maintenance-only
 profile promotion. Existing policies cannot be replaced or removed, and the host
 resource inventory must remain unchanged. The native drain, settlement, clean
 supervisor cut, retained publication and replay guards all apply. Ordinary agent
-reload still refuses executable-policy changes. Keep the existing image selected
+reload still refuses executable-policy changes. First enablement carries
+`enable_submitted_containers: true` in the native promotion intent. The coordinator
+requires that capability in protected agent policy, and both session journals add
+it only after successful promotion; failed controls and exact replay cannot grant
+new scope. Fleet supplies this field from the qualified candidate automatically.
+Keep the existing image selected
 for this one-time promotion; later submitted image changes use no promotion.
 
 Submitted child inputs and preparation reports use schema 11; their private

@@ -299,8 +299,11 @@ class _RemoteAgentJournal:
                 or str(availability["value"]) != "drained"
             ):
                 raise QueueServiceError("remote active configuration is unavailable")
+            from ._profile_promotion import promoted_capabilities
+
             updated = replace(
                 session,
+                capabilities=promoted_capabilities(control, session.capabilities),
                 config_revision=effect.config_revision,
                 inventory_revision=effect.inventory_revision,
                 availability_revision=effect.availability_revision,

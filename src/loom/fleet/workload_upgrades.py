@@ -439,6 +439,9 @@ class WorkloadUpgrade(maintenance._Upgrade):
                         "candidate_source": candidate_source,
                         "profile_id": self.intent["workload_profile"],
                         "target_profile": candidate["target"]["profile"],
+                        **({"enable_submitted_containers": True} if
+                           candidate["declaration"].get("container_policies") and not
+                           self.intent["declarations"][name].get("container_policies") else {}),
                     },
                 ).value(),
             )
