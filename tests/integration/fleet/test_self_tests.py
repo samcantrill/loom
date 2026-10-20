@@ -390,6 +390,41 @@ def test_busy_gpu_deadline_preserves_cpu_storage_progress(tmp_path, monkeypatch)
     assert (directory / "intent.json").read_bytes() == retained
 
 
+def test_nonexclusive_gpu_does_not_dispatch_or_wait_for_scheduler(tmp_path, monkeypatch):
+    from contextlib import nullcontext
+    import loom.fleet.self_tests as checks_module
+    from loom.fleet import ssh_operations
+
+    inventory, directory, intent, requests = retained_checks(tmp_path, "check-capability")
+    intent["gpu_capability"] = {"host": "test-host", "action": "gpu-capability"}
+    (directory / "intent.json").write_text(json.dumps(intent))
+    dispatched = []
+    observed = []
+    for client in (checks_module.CoordinatorClient, checks_module.CoordinatorOperatorClient):
+        monkeypatch.setattr(client, "from_connection_file", lambda *a, **kw: nullcontext())
+    monkeypatch.setattr(
+        checks_module, "_dispatch_check",
+        lambda client, directory, intent, check: dispatched.append(check),
+    )
+
+    def observe(client, operator, directory, intent, check, deadline, **kwargs):
+        observed.append(check)
+        return {"outcome": "passed"}
+
+    monkeypatch.setattr(checks_module, "_observe_check", observe)
+    monkeypatch.setattr(
+        ssh_operations, "ssh",
+        lambda host, request: {
+            "outcome": "passed", "mode": "nonexclusive",
+            "exclusive_scheduling": "not_tested", "contained": True,
+        },
+    )
+    result = self_test(inventory, operation_id="check-capability")
+    assert dispatched == observed == ["cpu", "storage"]
+    assert result["outcome"] == "passed"
+    assert result["checks"]["gpu"]["exclusive_scheduling"] == "not_tested"
+
+
 def test_storage_deadline_does_not_prevent_gpu_dispatch(tmp_path, monkeypatch):
     from contextlib import nullcontext
 

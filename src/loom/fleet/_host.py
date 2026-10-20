@@ -687,6 +687,29 @@ def bind_principal(request, directory):
 
 def execute(request, repeated, directory):
     action = request["action"]
+    if action == "gpu-capability":
+        from dataclasses import replace
+        from loom.fleet._gpu_capability import gpu_capability
+        from loom.queue.deployment import load_outbound_agent_service_config
+
+        if repeated:
+            raise QueueConflictError("GPU capability probe completion unknown; inspect host evidence")
+        if role(request) != "agent":
+            raise QueueConflictError("GPU capability requires an agent profile")
+        service = load_outbound_agent_service_config(
+            config(request), env_file=environment(request)
+        )
+        profiles = [
+            p for p in service.client.resident_profiles
+            if p.descriptor.profile_id == request["profile"]["profile_id"]
+        ]
+        if len(profiles) != 1 or profiles[0].descriptor.to_dict() != request["profile"]:
+            raise QueueConflictError("GPU capability profile differs from admitted selection")
+        profile = profiles[0]
+        inventory = service.client.resource_inventory
+        if inventory is not None:
+            profile = replace(profile, gpu_devices=inventory.gpu_devices)
+        return gpu_capability(profile)
     if action.startswith("workload-"):
         from loom.fleet._workload_host import execute as workload_step
         return workload_step(request, directory)
@@ -726,6 +749,7 @@ def main():
     request = json.loads(sys.stdin.buffer.read(128 * 1024 * 1024 + 1))
     if request["action"] not in {
         "receipt", "prepare", "issue", "receive", "initialize", "start", "enroll", "bind",
+        "gpu-capability",
         "observe", "resources", "upgrade-probe", "upgrade-settlement", "upgrade-result-recovery", "upgrade-stop",
         "upgrade-check-capture", "upgrade-check-prepare",
         "upgrade-replace", "workload-probe", "workload-coordinator-probe", "workload-recover",

@@ -178,6 +178,29 @@ prove remote profile installation, qualification or authorization.
 
 ## Deliberate infrastructure self-tests
 
+GPU qualification has two explicitly different scopes. Set the optional
+top-level fleet inventory field to use a minimal capability check:
+
+```yaml
+gpu_qualification: nonexclusive
+```
+
+This policy applies to newly created self-tests and upgrade operations. It runs
+the fixed 2×2 CUDA matrix multiplication in the selected resident runtime on one
+healthy declared GPU, even when that device is occupied. The device UUID,
+numerical result and process containment must match. It neither acquires nor
+modifies scheduler GPU claims. Busy GPUs do not cause a capacity wait; allocation,
+driver, timeout and cleanup failures still fail the check. The receipt explicitly
+reports `exclusive_scheduling: not_tested`.
+
+CPU and storage checks still use native scheduled jobs. Normal workload resource
+policies and external-process occupancy handling are unchanged. Use
+`gpu_qualification: exclusive` (also the default when omitted) to exercise GPU
+assignment, execution and release through the scheduler. Retained operations
+keep their original policy; editing the inventory does not reinterpret existing
+receipts. Install a service release supporting this field before enabling it.
+The policy qualifies capability, not performance or spare GPU memory.
+
 `self-test` runs finite native jobs against an explicitly selected existing agent
 and shared workload profile. It starts no service and performs no installation.
 The profile's workload must contain `loom.fleet.probes.ProbeStage` (and Torch with
