@@ -169,13 +169,13 @@ def releasable_attempt(tmp_path, monkeypatch):
                 principal_id TEXT, operation TEXT, idempotency_key TEXT, result_json TEXT,
                 digest TEXT, PRIMARY KEY(principal_id, operation, idempotency_key));
             CREATE TABLE agent_deliveries (assignment_id TEXT, request_json TEXT);
-            CREATE TABLE agent_sessions (session_id TEXT, agent_root_id TEXT);
+            CREATE TABLE agent_sessions (session_id TEXT, agent_id TEXT, agent_root_id TEXT);
         """)
         conn.execute("INSERT INTO remote_assignments VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (
             workspace.assignment_id, "run", workspace.request().stage_name, 1, "attempt-1", "RELEASED",
             "{}", json.dumps({"status": "SUCCEEDED"}), "fence-1", "session", 1,
         ))
-        conn.execute("INSERT INTO agent_sessions VALUES ('session', 'agent-1')")
+        conn.execute("INSERT INTO agent_sessions VALUES ('session', 'agent-1', 'local-root-1')")
         conn.execute("INSERT INTO agent_deliveries VALUES (?, ?)",
                      (workspace.assignment_id, json.dumps(workspace.request().to_dict())))
         conn.execute("INSERT INTO agent_receipts VALUES (?, ?, ?, ?, ?)", (
@@ -355,6 +355,7 @@ def test_release_replays_after_deletion_before_result_ack(releasable_attempt, mo
     (("cleanup_recovery",), ("agent-1",), True),
     (("drain",), ("agent-1",), False),
     (("cleanup_recovery",), ("another-agent",), False),
+    (("cleanup_recovery",), ("local-root-1",), False),
 ])
 def test_release_uses_native_action_and_machine_scope(releasable_attempt, actions, machines, allowed):
     from loom.queue import LocalDaemonPrincipal, LocalDaemonRole

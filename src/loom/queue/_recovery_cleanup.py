@@ -185,11 +185,11 @@ def release_recovery(daemon: Any, principal: Any, *, run_uri: str, assignment_id
         if assignment is None:
             raise QueueConflictError("recovery assignment is not in the selected run")
         # Authorization targets the assignment's recorded machine, not a caller path.
-        session = conn.execute("SELECT agent_root_id FROM agent_sessions WHERE session_id = ?",
+        session = conn.execute("SELECT agent_id FROM agent_sessions WHERE session_id = ?",
                                (assignment["session_id"],)).fetchone()
         if session is None:
             raise QueueConflictError("recovery assignment machine is unavailable")
-        daemon._authorizer().require_operator(principal, "cleanup_recovery", agent_id=session["agent_root_id"])
+        daemon._authorizer().require_operator(principal, "cleanup_recovery", agent_id=session["agent_id"])
         record = _release_record(conn, assignment_id)
         if record is not None:
             if record["request_digest"] != request_digest:
