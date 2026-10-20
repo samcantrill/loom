@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -23,7 +24,7 @@ def test_resident_main_passes_outer_boundary_containment_owner(
 
     class FakeWorkspace:
         def request(self):
-            return SimpleNamespace(fingerprint={"payload": {"factory_target": "pkg.Stage", "fingerprint_fields": {}}}, preparation_input=None)
+            return SimpleNamespace(fingerprint={"payload": {"factory_target": "pkg.Stage", "fingerprint_fields": {}}}, preparation_input=None, submitted_execution=None)
 
         def worker_request(self, *, resolve_shared: bool = False) -> object:
             assert resolve_shared
@@ -60,11 +61,18 @@ def test_resident_main_passes_outer_boundary_containment_owner(
     )
     decoded = StageWorkerResult.from_dict(saved[0])
     assert decoded.executor_metadata["existing"] == "kept"
-    spans = decoded.executor_metadata["native_timings"]["spans"]
-    assert [(span["action"], span["elapsed_nanoseconds"]) for span in spans] == [
+    native_timings = decoded.executor_metadata["native_timings"]
+    assert isinstance(native_timings, Mapping)
+    spans = native_timings["spans"]
+    assert isinstance(spans, (list, tuple))
+    actual = []
+    for span in spans:
+        assert isinstance(span, Mapping)
+        actual.append((span["action"], span["elapsed_nanoseconds"]))
+        assert span["outcome"] == "complete"
+    assert actual == [
         ("input_materialization", 2_000_000_000), ("preparation_materialization", 3_000_000_000), ("worker_execution", 7_000_000_000),
     ]
-    assert all(span["outcome"] == "complete" for span in spans)
     assert "native_timings" not in result.executor_metadata
 
 
@@ -74,7 +82,8 @@ def test_timing_preserves_failure_and_bounds_repeated_materialization():
     with pytest.raises(RuntimeError) as observed, timings.measure("materialization"):
         raise failure
     assert observed.value is failure
-    assert timings.spans[0]["outcome"] == "error"
+    first_span = timings.spans[0]
+    assert isinstance(first_span, Mapping) and first_span["outcome"] == "error"
     for _ in range(70):
         with timings.measure("materialization"):
             pass

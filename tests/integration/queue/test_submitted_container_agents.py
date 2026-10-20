@@ -3,13 +3,15 @@
 from dataclasses import replace
 import hashlib
 import json
+from pathlib import Path
+import sys
 
 import pytest
 
 from loom.pipeline.planning import StageFingerprintRecord
 from loom.queue import GpuDeviceDescriptor, LocalDaemon, LocalDaemonConfig, LocalDaemonPrincipal, LocalDaemonRole
 from loom.queue._managed_local import AssignmentState, ClaimCommand, ManagedAssignment
-from loom.queue._remote_stage_execution import AgentResourceInventory, ResidentGpuDevice
+from loom.queue._remote_stage_execution import AgentResourceInventory, ResidentExecutionProfile, ResidentGpuDevice, ResidentProfileDescriptor
 from loom.queue._shared_assignment import publish
 from loom.queue.agent_session_transport import AgentTlsClientConfig, LocalDaemonAgentHttpClient, _resident_provider_descriptors
 from loom.queue.agent_sessions import AgentOffer, AgentPolicyConfig, AgentPrincipalPolicy, AgentRegistration, AgentSession, AgentSessionState
@@ -61,7 +63,8 @@ def _close(client):
     client.close()
 
 
-def test_container_only_agent_images_share_resource_owners_and_exclusive_gpu(tmp_path):
+@pytest.mark.parametrize("installed_first", [False, True])
+def test_container_only_agent_images_share_resource_owners_and_exclusive_gpu(tmp_path, installed_first):
     policy, first, request = _fixture(tmp_path)
     second = replace(first, image=replace(first.image, sha256="b" * 64))
     inventory = AgentResourceInventory(2, gpu_devices=(ResidentGpuDevice(
@@ -69,6 +72,13 @@ def test_container_only_agent_images_share_resource_owners_and_exclusive_gpu(tmp
     config = _config(tmp_path, policy, inventory)
     with pytest.raises(QueueServiceError, match="explicit agent resource inventory"):
         replace(config, resource_inventory=None)
+    legacy = ResidentExecutionProfile(
+        ResidentProfileDescriptor(
+            "installed", "1", "project", policy.capability.environment_fingerprint, "executor"),
+        tmp_path, Path(sys.executable), cpu_capacity=99,
+    )
+    if installed_first:
+        config = replace(config, resident_profiles=(legacy,))
     LocalDaemonAgentHttpClient.initialize_agent_root(config)
     client = LocalDaemonAgentHttpClient(config)
     session = AgentSession("session", "coordinator", "epoch", "agent", client.agent_root_id,
@@ -80,10 +90,20 @@ def test_container_only_agent_images_share_resource_owners_and_exclusive_gpu(tmp
         commands_by_assignment = []
         for index, image in enumerate((first, second, second)):
             selected = _bound(request, image, policy)
+            if installed_first and index == 0:
+                fingerprint = StageFingerprintRecord.from_dict(selected.fingerprint)
+                selected = replace(selected, profile=legacy.descriptor,
+                    fingerprint=StageFingerprintRecord.create(
+                        algorithm=fingerprint.algorithm, inputs_summary=fingerprint.inputs_summary,
+                        payload=replace(fingerprint.payload, fingerprint_fields={
+                            key: value for key, value in fingerprint.payload.fingerprint_fields.items()
+                            if key != SUBMITTED_EXECUTION_SCOPE
+                        }),
+                    ).to_dict())
             from loom.queue._remote_stage_execution import _ResidentAssignmentWorkspace
             workspace = _ResidentAssignmentWorkspace(config.agent_root, f"work-{index}")
             launch = client._assignment_launch_profile(selected, workspace)
-            assert launch.submitted_execution == image
+            assert launch.submitted_execution == (None if installed_first and index == 0 else image)
             current, same_journal = client._runtime_owners(session)
             assert same_journal is journal and all(current[key] is value for key, value in providers.items())
             assignment = ManagedAssignment(f"work-{index}", f"run-{index}", f"stage-{index}", "probe", 1,
@@ -92,7 +112,7 @@ def test_container_only_agent_images_share_resource_owners_and_exclusive_gpu(tmp
                 ResourceClaim(atom.owner_resource_kind, providers[atom.owner_resource_kind].claim_contracts[0],
                     (replace(atom, amount=ExactQuantity(1)),), 1), providers[atom.owner_resource_kind].descriptor)
                 for atom in inventory.capacity_atoms("agent"))
-            journal.persist_request(assignment, {"execution": image.to_dict()})
+            journal.persist_request(assignment, {"profile": selected.profile.to_dict()})
             state = journal.prepare_composite(assignment, commands, current)
             assert state is (AssignmentState.DECLINED if index == 1 else AssignmentState.PREPARED)
             commands_by_assignment.append((assignment, commands))

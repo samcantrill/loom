@@ -79,7 +79,7 @@ def _image(images, name):
 
 @pytest.mark.parametrize("scenario", [
     "continuity", "lost_launch_reply", "cancel_with_missing_image", "corrupt_new_image",
-    "retry_original_image",
+    "retry_original_image", "action_reuse",
 ])
 def test_submitted_images_preserve_execution_ownership(tmp_path, monkeypatch, scenario):
     selected = os.environ.get("LOOM_SUBMITTED_IMAGES")
@@ -181,11 +181,15 @@ def test_submitted_images_preserve_execution_ownership(tmp_path, monkeypatch, sc
     started = monotonic()
     times = {}
 
-    def request(name, execution, *, wait, reconcile=False):
+    def request(name, execution, *, wait, reconcile=False, reuse=False, stage_name="produce"):
         pipeline = json.loads((tmp_path / "projects" / "pipeline.yaml").read_text())
         stage = pipeline["pipeline"]["stages"][0]
-        stage["factory"] = {"_target_": f"submitted_probe.{'Probe' if wait or reconcile else 'NewStage'}"}
-        stage["config"] = {"barrier": wait, **({"fail_once": True} if reconcile else {})}
+        stage["name"] = stage_name
+        stage["factory"] = {"_target_": f"submitted_probe.{'Probe' if wait or reconcile or reuse else 'NewStage'}"}
+        stage["config"] = {
+            "barrier": wait, **({"fail_once": True} if reconcile else {}),
+            **({"reuse": True} if reuse else {}),
+        }
         path = f"{name}.yaml"
         (tmp_path / "projects" / path).write_text(json.dumps(pipeline))
         preparation = PrepareRunRequest(
@@ -227,6 +231,72 @@ def test_submitted_images_preserve_execution_ownership(tmp_path, monkeypatch, sc
 
     try:
         with CoordinatorClient.from_unix_socket(service.daemon.endpoint) as client:
+            if scenario == "action_reuse":
+                authority = service.daemon.coordinator_authority_factory
+                assert authority is not None
+                runs = {}
+                before = None
+                for name, execution, stage_name, expected in (
+                    ("aaa", first, "produce", 11),
+                    ("aaa-reused", first, "renamed-a", 11),
+                    ("aab", second, "produce", 29),
+                    ("aab-reused", second, "renamed-b", 29),
+                ):
+                    client.start_run(request(
+                        name, execution, wait=False, reuse=True, stage_name=stage_name))
+                    operation = prepared(client, f"submit-{name}")
+                    assert operation.state == "applied", operation
+                    finished = client.wait(name, timeout_seconds=50)
+                    assert finished.state.value == "SUCCEEDED", finished
+                    uri = finished.run_uri
+                    assert uri is not None
+                    snapshot = authority(uri).open_run(uri)
+                    stage, = snapshot.stages
+                    fact, = stage.artifact_facts
+                    product = LocalArtifactStore(
+                        LocalRunStore(service.daemon.run_store_root).local_artifact_root(uri)
+                    ).load(fact.artifact)
+                    assert isinstance(product, dict) and product["value"] == expected
+                    runs[name] = (uri, stage)
+                    if name.endswith("-reused"):
+                        original = runs[name.removesuffix("-reused")][1]
+                        assert stage.attempts == ()
+                        assert stage.result_binding is not None
+                        assert stage.latest_commit == original.latest_commit
+                        assert stage.artifact_facts == original.artifact_facts
+                        events = authority(uri).list_audit_events(uri)
+                        assert any(
+                            event.event_type == "stage.reuse_timing"
+                            and isinstance(related := event.payload.get("related"), Mapping)
+                            and "verification_run_uri" in related
+                            for event in events
+                        )
+                    else:
+                        assert len(stage.attempts) == 1
+                    if before is None:
+                        before = identity()
+                    assert identity() == before
+                    assert protected == (coordinator_path.read_bytes(), agent_path.read_bytes())
+                assert len({uri for uri, _ in runs.values()}) == 4
+                with sqlite3.connect(tmp_path / "agent/supervisor/supervisor.sqlite") as conn:
+                    launches = conn.execute("SELECT launch_json FROM launches").fetchall()
+                from loom.queue._agent_process_supervisor import _launch_from_value
+                from loom.queue._remote_stage_execution import _ResidentAssignmentWorkspace
+
+                workload_images = []
+                for (raw,) in launches:
+                    retained = _launch_from_value(json.loads(raw))
+                    worker = _ResidentAssignmentWorkspace.read_request(retained.workspace_root)
+                    if worker.stage_name == "produce":
+                        assert worker.submitted_execution is not None
+                        workload_images.append(worker.submitted_execution.image.sha256)
+                assert sorted(workload_images) == sorted([first.image.sha256, second.image.sha256])
+                (tmp_path / "acceptance.json").write_text(json.dumps({
+                    "complete": monotonic() - started,
+                    "workload_images": workload_images,
+                    "runs": {name: uri for name, (uri, _) in runs.items()},
+                }, indent=2))
+                return
             if scenario == "retry_original_image":
                 original = request("aaa", first, wait=False, reconcile=True)
                 client.start_run(original)

@@ -17,6 +17,22 @@ def inspect(request):
     from loom.queue.submitted_execution import submitted_binding, submitted_implementation
 
     assert request["schema_version"] == 3
+    if request["operation"] == "verify_result":
+        from loom.artifacts import ArtifactRef
+        from loom.pipeline.stores import LocalArtifactStore
+
+        candidate = request["candidate"]
+        assert request["contract"]["semantic_key"] == candidate["semantic_key"]
+        assert request["contract"]["namespace"] == candidate["namespace"] == "submitted-probe"
+        assert request["artifact_access"]["mode"] == "read_only"
+        store = LocalArtifactStore(Path.cwd())
+        for fact in candidate["result"]["artifact_facts"]:
+            materialized = request["artifact_access"]["outputs"][fact["artifact_name"]]
+            assert materialized["artifact_id"] == fact["artifact"]["artifact_id"]
+            product = store.load(ArtifactRef.from_dict(materialized))
+            assert isinstance(product, dict) and product["value"] == VALUE
+        return {"schema_version": 1, "candidate_digest": candidate["candidate_digest"],
+                "verdict": "verified"}
     if request["operation"] == "verify_candidate":
         candidate = request["candidate"]
         for contract in candidate["project_contracts"].values():
@@ -53,7 +69,13 @@ def inspect(request):
             }).split(":", 1)[1],
         },
         "stage_contracts": {
-            stage["name"]: {"semantic_key": None, "payload": evidence}
+            stage["name"]: {
+                "semantic_key": {
+                    "version": 1,
+                    "digest": hash_mapping(stage["config"]).split(":", 1)[1],
+                } if stage["config"].get("reuse") else None,
+                "payload": evidence,
+            }
             for stage in composition["resolved"]["pipeline"]["stages"]
         },
     }

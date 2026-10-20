@@ -1438,6 +1438,11 @@ image prepares and executes code available only in that image. Service identitie
 protected configuration and open admission are checked. This CPU probe does not
 qualify a deployed fleet. Its additional scenarios exercise lost launch replies,
 containment with a missing image, corrupt-image refusal and original-image retry.
+The `action_reuse` scenario executes each image once and then submits a renamed
+stage under the same image. Each renamed stage adopts the original committed
+artifacts without a workload attempt, after an image-contained verifier reads the
+selected outputs. Different image bytes require a new producer. All four runs
+use unchanged service identities and protected configuration.
 Reproduce continuity with:
 
 ```bash
