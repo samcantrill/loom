@@ -7,6 +7,7 @@ The second image alone defines submitted_probe.NewStage.
 
 from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Mapping
+from dataclasses import replace
 import hashlib
 import json
 import os
@@ -78,6 +79,7 @@ def _image(images, name):
 
 @pytest.mark.parametrize("scenario", [
     "continuity", "lost_launch_reply", "cancel_with_missing_image", "corrupt_new_image",
+    "retry_original_image",
 ])
 def test_submitted_images_preserve_execution_ownership(tmp_path, monkeypatch, scenario):
     selected = os.environ.get("LOOM_SUBMITTED_IMAGES")
@@ -179,17 +181,18 @@ def test_submitted_images_preserve_execution_ownership(tmp_path, monkeypatch, sc
     started = monotonic()
     times = {}
 
-    def request(name, execution, *, wait):
+    def request(name, execution, *, wait, reconcile=False):
         pipeline = json.loads((tmp_path / "projects" / "pipeline.yaml").read_text())
         stage = pipeline["pipeline"]["stages"][0]
-        stage["factory"] = {"_target_": f"submitted_probe.{'Probe' if wait else 'NewStage'}"}
-        stage["config"] = {"barrier": wait}
+        stage["factory"] = {"_target_": f"submitted_probe.{'Probe' if wait or reconcile else 'NewStage'}"}
+        stage["config"] = {"barrier": wait, **({"fail_once": True} if reconcile else {})}
         path = f"{name}.yaml"
         (tmp_path / "projects" / path).write_text(json.dumps(pipeline))
-        return RunRequest(PrepareRunRequest(
-            f"submit-{name}", name, PreparationSource("shared", "projects", ".", (path,)),
+        preparation = PrepareRunRequest(
+            f"submit-{name}", None if reconcile else name, PreparationSource("shared", "projects", ".", (path,)),
             path, "containers", execution=execution,
-        ), name)
+        )
+        return RunRequest(preparation, mode="reconcile") if reconcile else RunRequest(preparation, name)
 
     def identity():
         with sqlite3.connect(tmp_path / "agent" / "supervisor" / "supervisor.sqlite") as conn:
@@ -203,11 +206,11 @@ def test_submitted_images_preserve_execution_ownership(tmp_path, monkeypatch, sc
         assert gate["state"] == "open" and gate["revision"] == 0
         return supervisor, coordinator, agent_identity
 
-    def value(client, name):
+    def value(client, name, attempt=1):
         admission = client.admission_for_queue_item(name)
         store = LocalRunStore(service.daemon.run_store_root)
         result = StageWorkerResult.from_dict(
-            store.read_stage_worker_result(admission.run_uri, "produce", attempt=1))
+            store.read_stage_worker_result(admission.run_uri, "produce", attempt=attempt))
         loaded = LocalArtifactStore(store.local_artifact_root(admission.run_uri)).load(
             result.outputs["data"])
         assert isinstance(loaded, dict)
@@ -224,6 +227,59 @@ def test_submitted_images_preserve_execution_ownership(tmp_path, monkeypatch, sc
 
     try:
         with CoordinatorClient.from_unix_socket(service.daemon.endpoint) as client:
+            if scenario == "retry_original_image":
+                original = request("aaa", first, wait=False, reconcile=True)
+                client.start_run(original)
+                initial = prepared(client, original.preparation.operation_id)
+                assert initial.state == "applied", initial
+                assert isinstance(initial.result, Mapping)
+                queue_id = initial.result["queue_item_id"]
+                assert isinstance(queue_id, str)
+                failed = client.wait(queue_id, timeout_seconds=25)
+                assert failed.state.value == "FAILED"
+                before = identity()
+                client.start_run(request("aab", second, wait=False))
+                assert prepared(client, "submit-aab").state == "applied"
+                assert client.wait("aab", timeout_seconds=25).state.value == "SUCCEEDED"
+                assert value(client, "aab")["value"] == 29
+                retry = replace(
+                    original, preparation=replace(original.preparation, operation_id="retry-aaa"),
+                    retry_policy="one_observed_failure",
+                )
+                client.start_run(retry)
+                retried = prepared(client, "retry-aaa")
+                assert retried.state == "applied", retried
+                completed = client.wait(queue_id, timeout_seconds=25)
+                assert completed.state.value == "SUCCEEDED" and completed.run_uri == failed.run_uri
+                assert value(client, queue_id, attempt=2)["value"] == 11
+                verify = replace(original, preparation=replace(
+                    original.preparation, operation_id="verify-aaa"))
+                client.start_run(verify)
+                verified = prepared(client, "verify-aaa")
+                assert verified.state == "applied", verified
+                assert isinstance(verified.result, Mapping)
+                assert verified.result["queue_item_id"] == queue_id
+                client.start_run(retry)
+                assert identity() == before
+                assert protected == (coordinator_path.read_bytes(), agent_path.read_bytes())
+                with sqlite3.connect(tmp_path / "agent/supervisor/supervisor.sqlite") as conn:
+                    launches = conn.execute("SELECT launch_json FROM launches").fetchall()
+                from loom.queue._agent_process_supervisor import _launch_from_value
+                from loom.queue._remote_stage_execution import _ResidentAssignmentWorkspace
+                stage_images = []
+                for (raw,) in launches:
+                    retained_launch = _launch_from_value(json.loads(raw))
+                    worker = _ResidentAssignmentWorkspace.read_request(retained_launch.workspace_root)
+                    if worker.stage_name == "produce":
+                        assert worker.submitted_execution is not None
+                        stage_images.append(worker.submitted_execution.image.sha256)
+                assert stage_images.count(first.image.sha256) == 2
+                assert stage_images.count(second.image.sha256) == 1
+                (tmp_path / "acceptance.json").write_text(json.dumps({
+                    "complete": monotonic() - started, "stage_images": stage_images,
+                    "retry_run_uri": completed.run_uri,
+                }, indent=2))
+                return
             request_a = request("aaa", first, wait=True)
             client.start_run(request_a)
             operation = prepared(client, "submit-aaa")

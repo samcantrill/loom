@@ -39,6 +39,7 @@ def main():
          "--no-hashes", "--format", "requirements-txt", "--output-file", str(requirements)])
     wheel, = (output / "wheels").glob("*.whl")
     source = (repository / "tests/support/submitted_container_probe.py").read_text()
+    cuda = (repository / "tests/support/submitted_container_cuda.py").read_text()
     receipts = {}
     with tempfile.TemporaryDirectory(prefix="loom-submitted-images-") as temporary:
         sandbox = Path(temporary) / "base"
@@ -51,6 +52,9 @@ def main():
         for path in [site, *site.rglob("*")]:
             if not path.is_symlink():
                 path.chmod(path.stat().st_mode | (0o555 if path.is_dir() else 0o444))
+        cuda_path = site / "submitted_container_cuda.py"
+        cuda_path.write_text(cuda)
+        cuda_path.chmod(0o644)
         for name, value in (("aaa", 11), ("aab", 29)):
             probe = site / "submitted_probe.py"
             probe.write_text(source.replace("VALUE = 11", f"VALUE = {value}"))
@@ -73,6 +77,7 @@ def main():
         "base": BASE, "wheel_sha256": hashlib.sha256(wheel.read_bytes()).hexdigest(),
         "requirements_sha256": hashlib.sha256(requirements.read_bytes()).hexdigest(),
         "probe_sha256": hashlib.sha256(source.encode()).hexdigest(),
+        "cuda_probe_sha256": hashlib.sha256(cuda.encode()).hexdigest(),
         "images": receipts,
     }, indent=2) + "\n")
 

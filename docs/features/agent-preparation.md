@@ -1436,7 +1436,9 @@ reuse also joins it to the admitted node binding.
 The real-SIF continuity probe passes: one image remains active while another
 image prepares and executes code available only in that image. Service identities,
 protected configuration and open admission are checked. This CPU probe does not
-qualify cross-host recovery, a deployed fleet or GPU compute. Reproduce it with:
+qualify a deployed fleet. Its additional scenarios exercise lost launch replies,
+containment with a missing image, corrupt-image refusal and original-image retry.
+Reproduce continuity with:
 
 ```bash
 uv run --locked --extra config python tools/build_submitted_acceptance_images.py /absolute/new-image-directory
@@ -1444,6 +1446,29 @@ LOOM_SUBMITTED_IMAGES=/absolute/new-image-directory \
   uv run --locked --extra config --group dev pytest -q \
   'tests/integration/queue/test_submitted_container_physical.py::test_submitted_images_preserve_execution_ownership[continuity]'
 ```
+
+The separate cross-host probe prepares on the caller's host and executes on an
+explicit SSH host. Both need the qualified shared root and image paths. The remote
+interpreter must have the compatible Loom distribution installed. It uses owned
+native roots and a mutual-TLS connection through an SSH reverse tunnel; no running
+fleet configuration is changed.
+
+```bash
+export LOOM_SUBMITTED_IMAGES=/shared/acceptance-images
+export LOOM_SUBMITTED_SHARED=/shared/private-acceptance
+export LOOM_SUBMITTED_REMOTE=worker-host
+export LOOM_SUBMITTED_REMOTE_PYTHON=/installed/operator/bin/python
+# Select an available UUID explicitly; omission skips the GPU case.
+export LOOM_SUBMITTED_GPU=GPU-REPLACE_WITH_AVAILABLE_DEVICE_UUID
+uv run --locked --extra config --group dev pytest -q \
+  tests/integration/queue/test_submitted_container_cross_host.py
+```
+
+CPU and GPU variants passed with preparation on Sleipnir and execution on Quark.
+The GPU variant performs a small real CUDA-driver computation and checks the
+visible UUID. B prepares while A holds its exclusive GPU claim; its supervisor
+launch appears only after release. Accounting and enforcement remain distinct:
+the probe explicitly requests `resource_policy.enforce: [gpu]`.
 
 Role qualification checks the host runtime and storage policy without
 selecting scientific code. Workload scientific checks and compute probes use
