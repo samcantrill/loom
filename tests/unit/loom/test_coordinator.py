@@ -395,3 +395,26 @@ def test_operator_recovery_and_readiness_decode_current_typed_results(tmp_path):
         with CoordinatorOperatorClient.from_unix_socket(endpoint, expected_coordinator_id="coordinator-a") as client:
             assert client.recover_time(TimeRecoveryRequest("time-1", 1, "old-epoch", "recovered")) == receipt
             assert client.agent_retirement_ready("agent-a", "session-a") is True
+
+
+def test_recovery_cleanup_clients_preserve_selection_and_coordinator_guard(tmp_path):
+    def respond(connection, request):
+        from loom.queue._coordinator_control import validate_request
+        operation = str(request["operation"])
+        payload = {k: v for k, v in request.items() if k not in {"operation", "daemon_control"}}
+        validate_request(operation, payload)
+        result = ({"run_uri": "run", "entries": []} if operation == "preview_recovery_cleanup"
+                  else {"run_uri": "run", "assignment_id": "assignment-1", "state": "deleted"})
+        connection.sendall(encode_wire({"ok": True, "result": result}) + b"\n")
+
+    with _peer(tmp_path / "service.sock", respond) as requests:
+        client = CoordinatorClient.from_unix_socket(tmp_path / "service.sock")
+        assert client.preview_recovery_cleanup("run") == {"run_uri": "run", "entries": []}
+        operator = CoordinatorOperatorClient.from_unix_socket(tmp_path / "service.sock")
+        result = operator.release_recovery("run", "assignment-1", operation_id="release-1",
+                                           reason="published", expected_coordinator_id="coordinator-a")
+        assert result["state"] == "deleted"
+    released = next(row for row in requests if row["operation"] == "operator_release_recovery")
+    assert released["expected_coordinator_id"] == "coordinator-a"
+    assert released["assignment_id"] == "assignment-1"
+    assert released["operation_id"] == "release-1"

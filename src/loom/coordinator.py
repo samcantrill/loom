@@ -314,6 +314,14 @@ class CoordinatorClient(NativeCoordinatorClient):
             error_code=error_code,
         )
 
+    def preview_recovery_cleanup(self, run_uri: str, *, expected_coordinator_id: str | None = None) -> dict[str, Any]:
+        """Preview retained payload bytes and release blockers for a managed run.
+
+        This metadata-only observation does not authorize or delete anything.
+        """
+        return cast(dict[str, Any], self._native_call(
+            "preview_recovery_cleanup", {"run_uri": run_uri}, expected_coordinator_id))
+
     def get_run_context(self, run_uri: str, *, expected_coordinator_id: str | None = None) -> RunContext:
         """Read original intent, current annotations and native evidence without execution."""
         return RunContext.from_dict(self._native_call(
@@ -554,6 +562,18 @@ class CoordinatorOperatorClient(NativeCoordinatorClient):
     def recover_time(self, request: TimeRecoveryRequest, *, expected_coordinator_id: str | None = None) -> TimeRecoveryReceipt:
         """Apply/replay recovery of the exact degraded coordinator time revision."""
         return self._native_call("operator_recover_time", {"request": request.to_dict()}, expected_coordinator_id)
+
+    def release_recovery(self, run_uri: str, assignment_id: str, *, operation_id: str,
+                         reason: str, expected_coordinator_id: str) -> Mapping[str, PlainData]:
+        """Reclaim one eligible recovery tree, or resume the exact release request.
+
+        Requires the explicit ``cleanup_recovery`` operator action for the
+        assignment's machine. Cleanup status is separate from scientific status.
+        """
+        return self._native_call("operator_release_recovery", {
+            "run_uri": run_uri, "assignment_id": assignment_id,
+            "operation_id": operation_id, "reason": reason,
+        }, expected_coordinator_id)
 
     def replace_agent_session(self, request: SessionReplacementRequest, *, expected_coordinator_id: str | None = None) -> Mapping[str, PlainData]:
         """Fence a classified old session before permitting successor registration."""

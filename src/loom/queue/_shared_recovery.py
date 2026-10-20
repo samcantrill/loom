@@ -189,6 +189,13 @@ def bind_delivery(
         report = None if row["report_json"] is None else json.loads(row["report_json"])
         if report is not None and report["status"] != "FAILED":
             continue
+        released = conn.execute(
+            "SELECT 1 FROM agent_receipts WHERE principal_id = ? "
+            "AND operation = 'release_recovery' AND idempotency_key = ?",
+            (_PRINCIPAL, row["assignment_id"]),
+        ).fetchone()
+        if released is not None:
+            raise QueueConflictError("recovery predecessor has been reserved for cleanup")
         ref = _reference(json.loads(row["recovery_json"]))
         if (
             ref["identity"]["assignment_id"] != row["assignment_id"]
@@ -257,7 +264,13 @@ def current_tree(
     return tree
 
 
-def resolve(value: object, roots: Mapping[str, PlainData]) -> Path:
+def inspect(value: object, roots: Mapping[str, PlainData]) -> tuple[Path, dict[str, Any]]:
+    """Inspect a sealed recovery inventory without reading its payload files.
+
+    Used for cleanup planning and byte estimates, not for admitting restart
+    state. The coordinator seal pins the inventory digest and assignment owner.
+    Recovery consumers continue to use ``resolve`` for full byte verification.
+    """
     ref = _reference(value)
     root = roots.get(ref["root_id"])
     if not isinstance(root, Mapping) or root.get("publication") != ref["budgets"]:
@@ -267,12 +280,25 @@ def resolve(value: object, roots: Mapping[str, PlainData]) -> Path:
     if hashlib.sha256(data).hexdigest() != ref["receipt_digest"]:
         raise QueueConflictError("recovery receipt integrity conflicts")
     receipt = json.loads(data)
-    if receipt != {
-        "schema_version": 1,
-        "publication_id": ref["publication_id"],
-        "identity": ref["identity"],
-        "members": inventory(tree, ref["budgets"]),
-    }:
+    if (
+        not isinstance(receipt, dict)
+        or set(receipt) != {"schema_version", "publication_id", "identity", "members"}
+        or receipt["schema_version"] != 1
+        or receipt["publication_id"] != ref["publication_id"]
+        or receipt["identity"] != ref["identity"]
+        or not isinstance(receipt["members"], list)
+        or len(receipt["members"]) > ref["budgets"]["max_members"]
+    ):
+        raise QueueConflictError("recovery receipt ownership conflicts")
+    # The bounded inventory was produced and pinned by the native seal owner.
+    # Its payload is deliberately not reopened just to estimate reclaimable bytes.
+    return tree, receipt
+
+
+def resolve(value: object, roots: Mapping[str, PlainData]) -> Path:
+    ref = _reference(value)
+    tree, receipt = inspect(ref, roots)
+    if receipt["members"] != inventory(tree, ref["budgets"]):
         raise QueueConflictError("recovery closure integrity conflicts")
     return tree
 
