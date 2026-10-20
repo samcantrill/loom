@@ -89,13 +89,20 @@ def test_settled_logs_share_publication_and_survive_assignment_removal(tmp_path)
     result = replace(original, outputs={"result": replace(output, metadata={
         **output.metadata,
         RECOVERY_COMPLETE: {"schema_version": 1, "required_outputs": ["result"]},
+        "diagnostic_index": {"path": "primary.json"},
     })})
     log_root = workspace.root / "logs"
     log_root.mkdir(exist_ok=True)
     (log_root / "stdout.log").write_bytes(b"completed output\n")
     (log_root / "stderr.log").write_bytes(b"diagnostic warning\n")
     report = workspace._retain_outputs(result)
+    from loom.queue._remote_stage_execution import _RemoteExecutionReport, _RemoteArtifact
+    report = _RemoteExecutionReport.from_dict(report.to_dict())
     refs = publish(workspace.request(), report, profile.shared_roots, agent_id="agent-1", fence="fence-1")
+    consumer, _ = _RemoteArtifact.from_local_ref(
+        transfer_id="consumer-input", logical_name="result", ref=refs["result"]
+    )
+    assert _RemoteArtifact.from_dict(consumer.to_dict()).metadata["diagnostic_index"]["path"] == "primary.json"
     fact = SimpleNamespace(artifact_name="result", artifact=refs["result"])
     assert cleanup._complete_outputs([fact])
     assert cleanup._published_logs([fact], profile.shared_roots)
@@ -162,13 +169,13 @@ def releasable_attempt(tmp_path, monkeypatch):
                 principal_id TEXT, operation TEXT, idempotency_key TEXT, result_json TEXT,
                 digest TEXT, PRIMARY KEY(principal_id, operation, idempotency_key));
             CREATE TABLE agent_deliveries (assignment_id TEXT, request_json TEXT);
-            CREATE TABLE agent_sessions (session_id TEXT, agent_root_id TEXT);
+            CREATE TABLE agent_sessions (session_id TEXT, agent_id TEXT, agent_root_id TEXT);
         """)
         conn.execute("INSERT INTO remote_assignments VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (
             workspace.assignment_id, "run", workspace.request().stage_name, 1, "attempt-1", "RELEASED",
             "{}", json.dumps({"status": "SUCCEEDED"}), "fence-1", "session", 1,
         ))
-        conn.execute("INSERT INTO agent_sessions VALUES ('session', 'agent-1')")
+        conn.execute("INSERT INTO agent_sessions VALUES ('session', 'agent-1', 'local-root-1')")
         conn.execute("INSERT INTO agent_deliveries VALUES (?, ?)",
                      (workspace.assignment_id, json.dumps(workspace.request().to_dict())))
         conn.execute("INSERT INTO agent_receipts VALUES (?, ?, ?, ?, ?)", (
@@ -348,6 +355,7 @@ def test_release_replays_after_deletion_before_result_ack(releasable_attempt, mo
     (("cleanup_recovery",), ("agent-1",), True),
     (("drain",), ("agent-1",), False),
     (("cleanup_recovery",), ("another-agent",), False),
+    (("cleanup_recovery",), ("local-root-1",), False),
 ])
 def test_release_uses_native_action_and_machine_scope(releasable_attempt, actions, machines, allowed):
     from loom.queue import LocalDaemonPrincipal, LocalDaemonRole

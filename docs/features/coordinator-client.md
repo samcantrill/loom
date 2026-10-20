@@ -439,7 +439,9 @@ have been removed. Recovery preview checks this published log inventory rather
 than assuming an empty or missing log stream was successfully retained.
 
 An operator with the explicit `cleanup_recovery` action for the assignment's
-machine can release one eligible recovery tree:
+machine can release one eligible recovery tree. Machine scope uses the logical
+`agent_id` from the assignment's recorded session (for example, `quark`), not
+that machine's storage-root identity `agent_root_id`:
 
 ```python
 receipt = operator.release_recovery(

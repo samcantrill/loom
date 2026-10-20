@@ -49,7 +49,8 @@ class SharedClosureProducer:
         return {"manifest": context.save_artifact("manifest", {
             "payload": "values.bin", "ids": "sample_ids.json", "catalog": "checkpoints/catalog.json",
             "size": size, "digest": digest.hexdigest(), "producer_pid": os.getpid(),
-        }, artifact_type="json", codec_key="json.v1", metadata={"measurement": 0.1803790032863617})}
+        }, artifact_type="json", codec_key="json.v1", metadata={"measurement": 0.1803790032863617,
+            "sample_index": {"path": "sample_ids.json"}})}
 
 
 class SharedClosureConsumer:
@@ -60,6 +61,8 @@ class SharedClosureConsumer:
         manifest = context.load_input("manifest")
         assert context.input_artifact("manifest").metadata["measurement"] == 0.1803790032863617
         root = uri_to_path(context.input_artifact("manifest").uri).parent
+        index = context.input_artifact("manifest").metadata["sample_index"]["path"]
+        assert json.loads((root / index).read_text()) == ["sample-1"]
         digest = hashlib.sha256()
         size = 0
         with (root / manifest["payload"]).open("rb") as stream:

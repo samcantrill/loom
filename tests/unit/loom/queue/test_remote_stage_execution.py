@@ -420,6 +420,8 @@ def test_remote_semantic_request_rejects_path_bearing_fields(tmp_path: Path) -> 
             portable_request.inputs[0],
             metadata={"source_url": "https://coordinator.invalid/input"},
         )
+    with pytest.raises(QueueServiceError, match="path-bearing"):
+        replace(portable_request.inputs[0], metadata={"index": {"path": "relative.json"}})
 
 
 def test_only_fixed_preparation_input_can_cross_the_semantic_path_guard(
@@ -1662,6 +1664,15 @@ def _shared_publication_workspace(tmp_path, *, limits=None, assignment_id="assig
         executor_metadata={})
     workspace.persist_worker_result(result)
     return workspace, profile, launch, result
+
+
+@pytest.mark.parametrize("member", ["/host/private", "../outside", "nested/../../outside", "file:private", "http:private", "nested\\outside"])
+def test_shared_output_metadata_rejects_external_member_locations(tmp_path, member):
+    workspace, _, _, result = _shared_publication_workspace(tmp_path)
+    report = workspace._retain_outputs(result)
+    descriptor = report.outputs[0]
+    with pytest.raises(QueueServiceError, match="member path|paths or URLs"):
+        replace(descriptor, metadata={**descriptor.metadata, "diagnostic_index": {"path": member}})
 
 
 def test_completed_shared_container_reports_and_publishes_without_original_input(tmp_path):

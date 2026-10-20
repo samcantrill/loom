@@ -632,7 +632,7 @@ class _RemoteArtifact:
         metadata = freeze_plain_data(self.metadata, path="remote artifact metadata")
         if not isinstance(metadata, Mapping):
             raise QueueServiceError("remote artifact metadata is invalid")
-        _reject_path_bearing_data({key: value for key, value in metadata.items() if key != SHARED_PUBLICATION}, "artifact metadata")
+        _reject_path_bearing_data(metadata, "artifact metadata")
         object.__setattr__(self, "metadata", metadata)
 
     @classmethod
@@ -1204,7 +1204,7 @@ class _RemoteOutputArtifact:
         )
         if not isinstance(metadata, Mapping):
             raise QueueServiceError("remote output artifact metadata is invalid")
-        _reject_path_bearing_data({key: value for key, value in metadata.items() if key != SHARED_PUBLICATION}, "output artifact metadata")
+        _reject_path_bearing_data(metadata, "output artifact metadata")
         object.__setattr__(self, "metadata", metadata)
         if self.preparation_report_transfer is not None:
             from ._preparation_report_transfer import header
@@ -2629,22 +2629,36 @@ def _assignment_local_scope(request: _ResidentAssignmentBundle) -> Mapping[str, 
     return scope
 
 
-def _reject_path_bearing_data(value: object, field: str) -> None:
+def _reject_path_bearing_data(value: object, field: str, *, shared_members: bool = False) -> None:
     forbidden_keys = ("path", "root", "uri", "url", "directory", "cwd")
     if isinstance(value, Mapping):
+        if SHARED_PUBLICATION in value:
+            shared_members = shared_binding(value) is not None
         for key, item in value.items():
             if key == SHARED_PUBLICATION:
                 shared_binding({SHARED_PUBLICATION: item})
+                continue
+            if shared_members and key == "path":
+                # Shared metadata can name a member, never a host location. The
+                # consuming artifact contract still admits that member against
+                # the publication inventory before opening it.
+                from loom.pipeline.stores.shared_artifacts import relative
+
+                try:
+                    relative(item)
+                except ArtifactStoreError as exc:
+                    raise QueueServiceError(f"remote {field} has an invalid member path") from exc
+                _reject_path_bearing_data(item, field)
                 continue
             lowered = key.lower()
             if any(part in lowered for part in forbidden_keys):
                 raise QueueServiceError(
                     f"remote {field} must not contain path-bearing fields"
                 )
-            _reject_path_bearing_data(item, field)
+            _reject_path_bearing_data(item, field, shared_members=shared_members)
     elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         for item in value:
-            _reject_path_bearing_data(item, field)
+            _reject_path_bearing_data(item, field, shared_members=shared_members)
     elif isinstance(value, str) and (
         value.startswith(("file:", "http:", "https:", "/")) or "\\" in value
     ):
