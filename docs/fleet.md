@@ -733,6 +733,12 @@ execution are measured in their owning process. Native spans use integer
 protocol does not admit floating-point numeric values. A `dropped_spans` count
 identifies bounded capture loss. Nested spans overlap.
 
+Current execution reports retain the redacted container command even when its
+bind and environment options exceed 64 arguments. The flat string list at
+`executor_metadata.command` uses the existing 64 KiB message budget; other
+executor metadata keeps its existing collection and nesting limits. This also
+applies when an execution report travels through the Slurm relay.
+
 Output retention appends separate `native_timing` workspace events, transported by
 the existing event stream. Repeating output retention preserves the exact terminal
 report and worker-result bytes. Assignment observations expose the worker spans and

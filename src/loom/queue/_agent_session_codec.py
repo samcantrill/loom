@@ -262,7 +262,15 @@ def _decode(raw: bytes, *, failure_report: bool = False, control_wait: bool = Fa
         envelope_report = {**report, "failure": None}
         if "executor_metadata" in report:
             # Route metadata is plain data; keep its original envelope depth.
-            _bounded_json(report["executor_metadata"], depth=2, plain_scalars=True)
+            metadata = report["executor_metadata"]
+            if isinstance(metadata, Mapping):
+                command = metadata.get("command")
+                if isinstance(command, list) and all(isinstance(arg, str) for arg in command):
+                    # Container binds and environment flags can exceed 64 argv
+                    # entries. Only this flat list uses the full message budget.
+                    _bounded_json(command, depth=3, max_collection=_MAX_BODY_BYTES)
+                    metadata = {**metadata, "command": None}
+            _bounded_json(metadata, depth=2, plain_scalars=True)
             envelope_report["executor_metadata"] = None
         outputs = report.get("outputs")
         if isinstance(outputs, list):
