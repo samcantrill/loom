@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 import json
 import math
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import sqlite3
 import time
 from typing import cast
@@ -121,15 +121,27 @@ def _validate_run_arguments(
 def _validate_run_selection(request: RunRequest, selection: DeploymentSelection) -> None:
     """Validate the selected source closure before availability or a receipt."""
     preparation = request.preparation
+    source = preparation.source
+    selected = selection.source
+    captured_source = (
+        preparation.execution is not None
+        and source.mode == selected.mode
+        and source.root == selected.root
+        and PurePosixPath(source.path).is_relative_to(selected.path)
+        and all(
+            any(PurePosixPath(item).is_relative_to(parent) for parent in selected.include)
+            for item in source.include
+        )
+    )
     if (
-        preparation.source != selection.source
+        (source != selected and not captured_source)
         or preparation.preparation_profile != selection.preparation_profile
     ):
         raise QueueConfigError("run preparation conflicts with deployment selection")
     for path in (preparation.config_path, *preparation.overlays):
         if not any(
             include == "." or path == include or path.startswith(include + "/")
-            for include in selection.source.include
+            for include in source.include
         ):
             raise QueueConfigError(
                 "experiment path is outside the preparation source closure"
