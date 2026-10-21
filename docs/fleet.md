@@ -543,6 +543,10 @@ preparation policy and installed project hook, including a candidate profile tha
 has not yet been advertised. It does not execute the workload or publish a target
 run. The probe's report is temporary; bounded compatibility evidence is retained
 in the existing exact host-operation receipts and reused on continuation.
+Check selection considers preparation aliases for the selected resident profile;
+submitted-container aliases may coexist and are excluded from that selection.
+An explicit matching alias takes precedence. Otherwise there must be exactly one
+matching resident alias; a missing or ambiguous selection still refuses.
 Shared container preflight mounts the selected immutable capture, declared
 read-only locations and root challenges, using the same namespace projection as
 ordinary preparation. An incompatible profile or malformed recipe leaves
