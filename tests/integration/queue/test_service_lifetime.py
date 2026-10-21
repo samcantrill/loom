@@ -940,3 +940,43 @@ def test_matching_owner_binds_preinitialized_native_root(tmp_path):
             "SELECT value FROM daemon_metadata WHERE key=?",
             ("startup-attachment:matching-owner",),
         ).fetchone() is not None
+
+
+@pytest.mark.parametrize('change', ['captured', 'legacy', 'root', 'sibling', 'include', 'mode', 'profile', 'config'])
+def test_submitted_capture_stays_within_deployment_source_before_dispatch(tmp_path, change):
+    from dataclasses import replace
+    from loom.coordinator import CoordinatorClientError
+    from loom.queue.errors import QueueConfigError
+    from loom.queue.preparation import PreparationSource
+    from tests.unit.loom.queue.test_submitted_execution import _execution
+
+    path = _selection(tmp_path)
+    payload = json.loads(path.read_text())
+    selected = PreparationSource('shared', _request().source.root, 'captures', ('configs',))
+    payload['preparation']['source'] = selected.to_dict()
+    path.write_text(json.dumps(payload))
+    source = replace(selected, path='captures/aaa/configuration')
+    if change == 'root':
+        source = replace(source, root='another-source')
+    elif change == 'sibling':
+        source = replace(source, path='captures-other/aaa/configuration')
+    elif change == 'include':
+        source = replace(source, include=('.',))
+    elif change == 'mode':
+        source = replace(source, mode='staged')
+    request = RunRequest(replace(
+        _request(), source=source, execution=None if change == 'legacy' else _execution(),
+        config_path='outside.yaml' if change == 'config' else 'configs/run.yaml',
+        preparation_profile='another-profile' if change == 'profile' else _request().preparation_profile,
+    ), 'capture-queue')
+    if change == 'captured':
+        # An expired deadline proves source validation passed, without starting
+        # a fixture service or pretending a synthetic image is executable.
+        with pytest.raises(CoordinatorClientError) as failure:
+            loom.run(request, deployment=path, wait=False, timeout_seconds=0)
+        assert failure.value.code == 'deadline_exceeded'
+    else:
+        with pytest.raises(QueueConfigError, match='conflicts|outside'):
+            loom.run(request, deployment=path, wait=False)
+    assert not (tmp_path / 'deployment').exists()
+    assert not (tmp_path / 'binding.json').exists()

@@ -1499,3 +1499,10 @@ must remain unchanged. The reload preserves existing session capabilities;
 the subsequent native container-policy promotion grants the new capability.
 Reopen admission after each completed maintenance operation. Changing a later
 submission's image needs neither policy reload nor maintenance.
+
+The public `loom.run` client accepts a submitted-container request's captured
+configuration subdirectory under the deployment's selected source path. Source
+root, delivery mode and preparation profile remain fixed; requested includes may
+only narrow the selected include closure, and config/overlay paths must stay in
+that narrowed closure. Installed-profile requests still require the exact
+deployment source. Coordinator source policies remain the authorization owner.
