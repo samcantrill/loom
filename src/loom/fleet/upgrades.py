@@ -659,7 +659,7 @@ def _check_profile(declarations, name, deployment):
     profile_id = declarations[name]["resident_profiles"][0]["descriptor"]["profile_id"]
     policies = declarations["coordinator"]["preparation"]["profiles"]
     matches = [key for key, value in policies.items()
-               if value["resident_profile_id"] == profile_id]
+               if value.get("resident_profile_id") == profile_id]
     chosen = (deployment.preparation_profile if deployment.preparation_profile in matches
               else matches[0] if len(matches) == 1 else None)
     if chosen is None:

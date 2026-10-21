@@ -7,6 +7,37 @@ import pytest
 from loom.fleet import upgrades
 
 
+@pytest.mark.parametrize("selected", ["infrastructure", "previous-generation"])
+def test_check_profile_selects_resident_alias_among_submitted_container_policies(selected):
+    declarations = {
+        "worker": {"resident_profiles": [{"descriptor": {"profile_id": "analysis"}}]},
+        "coordinator": {"preparation": {"profiles": {
+            "submitted": {"container_policy_id": "submitted"},
+            "infrastructure": {"resident_profile_id": "analysis"},
+        }}},
+    }
+    assert upgrades._check_profile(
+        declarations, "worker", SimpleNamespace(preparation_profile=selected)
+    ) == "infrastructure"
+
+
+@pytest.mark.parametrize("resident_aliases", [[], ["first", "second"]])
+def test_container_policy_does_not_resolve_missing_or_ambiguous_resident_check(resident_aliases):
+    from loom.queue.errors import QueueConfigError
+
+    declarations = {
+        "worker": {"resident_profiles": [{"descriptor": {"profile_id": "analysis"}}]},
+        "coordinator": {"preparation": {"profiles": {
+            "submitted": {"container_policy_id": "submitted"},
+            **{alias: {"resident_profile_id": "analysis"} for alias in resident_aliases},
+        }}},
+    }
+    with pytest.raises(QueueConfigError, match="ambiguous"):
+        upgrades._check_profile(
+            declarations, "worker", SimpleNamespace(preparation_profile="submitted")
+        )
+
+
 def test_runtime_workload_repair_cli_retains_parent_and_target():
     from loom.cli.main import build_parser
 
