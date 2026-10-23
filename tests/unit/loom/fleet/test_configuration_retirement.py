@@ -197,6 +197,32 @@ def test_candidate_source_retirement_preserves_existing_logical_bindings():
         workload_sources._retirement_coordinator(before, after)
 
 
+@pytest.mark.parametrize("changed", [None, "host", "root", "env_file"])
+def test_retirement_accepts_temporary_candidate_without_changing_role_ownership(tmp_path, monkeypatch, changed):
+    inventory = SimpleNamespace(service_manager="tmux", runtime_release=tmp_path / "release.json")
+    before = {"host": "worker", "root": "/private/native", "env_file": None,
+              "config": "/private/roles/coordinator.json"}
+    after = {**before, "config": str(tmp_path / "candidate.json")}
+    if changed:
+        after[changed] = "different"
+    declaration = {"shared_roots": {}, "preparation": {"profiles": {}, "source_roots": {}}}
+    plan = {"hosts": {"coordinator": before}, "declarations": {"coordinator": declaration}}
+    monkeypatch.setattr(workload_sources, "load_inventory", lambda path: inventory)
+    monkeypatch.setattr(workload_sources.sshops, "_selection", lambda *args: (
+        {"coordinator": after}, {"coordinator": declaration}))
+    monkeypatch.setattr(workload_sources.sshops, "_inputs", lambda *args: {})
+    if changed:
+        with pytest.raises(QueueConflictError, match="same host, root and environment"):
+            workload_sources.candidates(inventory, tmp_path / "fleet.json", plan, (), None,
+                                        retire_configuration=True)
+    else:
+        result = workload_sources.candidates(inventory, tmp_path / "fleet.json", plan, (), None,
+                                             retire_configuration=True)
+        assert result[2]["hosts"]["coordinator"]["config"] == after["config"]
+        with pytest.raises(QueueConflictError, match="sibling file"):
+            workload_sources.candidates(inventory, tmp_path / "fleet.json", plan, (), None)
+
+
 @pytest.mark.parametrize("change", [None, "policy", "root", "challenge", "image", "integration"])
 def test_candidate_capability_retirement_narrows_permissions(tmp_path, change):
     from dataclasses import replace

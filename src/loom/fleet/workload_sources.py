@@ -17,7 +17,7 @@ from loom.queue.shared_execution import _readonly_root_relocations
 
 
 def candidates(inventory, path, plan, consumers, env_file, *, retire_configuration=False):
-    """Read a compatible target inventory in each retained role's path frame."""
+    """Read compatible normalized targets; retirement inputs may be disposable."""
     candidate = load_inventory(Path(path))
     if (
         candidate.service_manager != inventory.service_manager
@@ -31,11 +31,11 @@ def candidates(inventory, path, plan, consumers, env_file, *, retire_configurati
         previous = plan["hosts"][name]
         if (
             any(row[key] != previous[key] for key in ("host", "root", "env_file"))
-            or Path(row["config"]).parent != Path(previous["config"]).parent
+            or (not retire_configuration and Path(row["config"]).parent != Path(previous["config"]).parent)
             or row["config"] == previous["config"]
         ):
             raise QueueConflictError(
-                "workload candidate needs a separate sibling role file with the same host, root and environment"
+                "workload candidate needs a separate role file with the same host, root and environment; ordinary promotion requires a sibling file"
             )
         if name != "coordinator" and name not in consumers:
             if declarations[name] != plan["declarations"][name]:

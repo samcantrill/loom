@@ -1025,6 +1025,14 @@ resident profile or image promotion. It is mutually exclusive with
 execution still identifies the actual workload image and must pass the normal
 policy, integrity, preparation, and execution checks.
 
+Retirement candidate inventories and role files may live in a task directory
+under `/tmp`. Each role must still name the same host, native state root and
+environment as its live predecessor, and use a distinct source file. The
+operation retains declarations and pins the source inputs: keep those temporary
+files until the maintenance operation completes, including interrupted retries.
+Completed production roles use their published protected sources. Ordinary workload
+promotion continues to require candidate role files beside their predecessors.
+
 Without `--runtime-release`, preview requires retirement support from the running coordinator and every
 agent; continuation checks that support again before staging. It qualifies
 the candidate against accepted predecessor bindings, then uses the existing
