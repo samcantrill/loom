@@ -79,7 +79,7 @@ def _image(images, name):
 
 @pytest.mark.parametrize("scenario", [
     "continuity", "lost_launch_reply", "cancel_with_missing_image", "corrupt_new_image",
-    "retry_original_image", "action_reuse",
+    "retry_original_image", "action_reuse", "incompatible_new_image",
 ])
 def test_submitted_images_preserve_execution_ownership(tmp_path, monkeypatch, scenario):
     selected = os.environ.get("LOOM_SUBMITTED_IMAGES")
@@ -95,6 +95,8 @@ def test_submitted_images_preserve_execution_ownership(tmp_path, monkeypatch, sc
         for name in ("aaa", "aab"):
             shutil.copytree(original_images / name, images / name)
     first, second = _image(images, "aaa"), _image(images, "aab")
+    if scenario == "incompatible_new_image":
+        second = replace(second, python_executable="/missing-selected-python")
     lost = Event()
     if scenario == "lost_launch_reply":
         from loom.queue._agent_process_supervisor import (
@@ -374,7 +376,7 @@ def test_submitted_images_preserve_execution_ownership(tmp_path, monkeypatch, sc
                 corrupt.chmod(0o444)
             client.start_run(request("aab", second, wait=False))
             operation = prepared(client, "submit-aab")
-            if scenario == "corrupt_new_image":
+            if scenario in {"corrupt_new_image", "incompatible_new_image"}:
                 assert operation.state == "failed" and operation.code == "preparation_child_failed"
                 assert isinstance(operation.result, Mapping)
                 child_id = operation.result["preparation_admission_id"]
@@ -385,8 +387,14 @@ def test_submitted_images_preserve_execution_ownership(tmp_path, monkeypatch, sc
                         child.run_uri, "prepare", attempt=1))
                 assert isinstance(result.failure, ExecutionFailure)
                 failure = result.failure
-                assert failure.details["process_created"] is False
-                assert "image bytes" in failure.message
+                if scenario == "corrupt_new_image":
+                    assert failure.details["process_created"] is False
+                    assert "image bytes" in failure.message
+                else:
+                    assert failure.details["process_created"] is True
+                    assert failure.exit_code == 255
+                    assert failure.details["worker_result"] == "missing"
+                    assert "without a durable worker result" in failure.message
             else:
                 assert operation.state == "applied", operation
                 assert client.wait("aab", timeout_seconds=25).state.value == "SUCCEEDED"
@@ -406,7 +414,8 @@ def test_submitted_images_preserve_execution_ownership(tmp_path, monkeypatch, sc
             assert protected == (coordinator_path.read_bytes(), agent_path.read_bytes())
             with sqlite3.connect(tmp_path / "agent" / "supervisor" / "supervisor.sqlite") as conn:
                 count = conn.execute("SELECT COUNT(*) FROM launches").fetchone()[0]
-            assert count == (2 if scenario == "corrupt_new_image" else 4)
+            assert count == (2 if scenario == "corrupt_new_image" else
+                             3 if scenario == "incompatible_new_image" else 4)
             if scenario == "lost_launch_reply":
                 assert lost.is_set()
             (tmp_path / "acceptance.json").write_text(json.dumps(times, indent=2))

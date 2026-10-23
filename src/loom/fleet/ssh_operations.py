@@ -344,7 +344,7 @@ def operation_status(inventory, operation_id, *, missing_ok=False):
             return None
         raise QueueConfigError("unknown administrative operation")
     intent = read(directory / "intent.json")
-    if intent.get("kind") not in {None, "runtime-upgrade", "workload-upgrade", "runtime-upgrade-publication", "workload-upgrade-publication", "configuration-retirement", "configuration-retirement-publication"}:
+    if intent.get("kind") not in {None, "runtime-upgrade", "workload-upgrade", "runtime-upgrade-publication", "workload-upgrade-publication", "configuration-retirement", "configuration-retirement-publication", "container-policy-addition", "container-policy-addition-publication"}:
         raise QueueConflictError("unsupported administrative operation kind")
     result = (
         read(directory / "result.json")

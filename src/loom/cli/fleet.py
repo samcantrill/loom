@@ -79,6 +79,8 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     target.add_argument("--runtime-release", type=Path)
     target.add_argument("--workload-profile")
     upgrade.add_argument("--retire-configuration", action="store_true")
+    upgrade.add_argument("--add-container-policies", action="store_true",
+                         help="add qualified container policies without changing retained selections")
     upgrade.add_argument("--recover-retained-results", action="store_true", help="replace communication runtimes after proving only durable contained results remain")
     upgrade.add_argument("--hold-admission", action="store_true", help="hold qualified maintenance for client publication")
     upgrade.add_argument("--image", type=Path)
@@ -274,9 +276,9 @@ def handle(namespace: argparse.Namespace) -> int:
                 if namespace.defer_agents is not None or namespace.defer_reason is not None:
                     raise ValueError("qualification exceptions require --apply")
                 from loom.fleet.upgrades import preview
-                result = preview(inventory, hold_admission=namespace.hold_admission, runtime_release=namespace.runtime_release, recover_retained_results=namespace.recover_retained_results, workload_profile=namespace.workload_profile, retire_configuration=namespace.retire_configuration, image=namespace.image, workload_inventory=namespace.workload_inventory, deployment=namespace.deployment, connection=namespace.connection, config=namespace.config, check_execution=_execution(namespace.check_execution), env_file=namespace.env_file)
+                result = preview(inventory, hold_admission=namespace.hold_admission, runtime_release=namespace.runtime_release, recover_retained_results=namespace.recover_retained_results, workload_profile=namespace.workload_profile, retire_configuration=namespace.retire_configuration, add_container_policies=namespace.add_container_policies, image=namespace.image, workload_inventory=namespace.workload_inventory, deployment=namespace.deployment, connection=namespace.connection, config=namespace.config, check_execution=_execution(namespace.check_execution), env_file=namespace.env_file)
             else:
-                result = upgrade(inventory, operation_id=namespace.operation_id, runtime_release=namespace.runtime_release, recover_retained_results=namespace.recover_retained_results, workload_profile=namespace.workload_profile, retire_configuration=namespace.retire_configuration, image=namespace.image, workload_inventory=namespace.workload_inventory, deployment=namespace.deployment, connection=namespace.connection, config=namespace.config, check_execution=_execution(namespace.check_execution), env_file=namespace.env_file, timeout_seconds=namespace.timeout, apply=True, hold_admission=namespace.hold_admission, defer_agents=namespace.defer_agents, defer_reason=namespace.defer_reason, progress=progress)
+                result = upgrade(inventory, operation_id=namespace.operation_id, runtime_release=namespace.runtime_release, recover_retained_results=namespace.recover_retained_results, workload_profile=namespace.workload_profile, retire_configuration=namespace.retire_configuration, add_container_policies=namespace.add_container_policies, image=namespace.image, workload_inventory=namespace.workload_inventory, deployment=namespace.deployment, connection=namespace.connection, config=namespace.config, check_execution=_execution(namespace.check_execution), env_file=namespace.env_file, timeout_seconds=namespace.timeout, apply=True, hold_admission=namespace.hold_admission, defer_agents=namespace.defer_agents, defer_reason=namespace.defer_reason, progress=progress)
         elif command in {"apply", "operation"}:
             from loom.fleet.ssh_operations import apply, operation_status
 
@@ -284,11 +286,11 @@ def handle(namespace: argparse.Namespace) -> int:
                 from loom.fleet._host import read
                 from loom.fleet.ssh_operations import _directory
                 intent = read(_directory(inventory, namespace.operation_id) / "intent.json")
-                if progress is not None and intent.get("kind") not in {"runtime-upgrade", "workload-upgrade", "runtime-upgrade-publication", "workload-upgrade-publication", "configuration-retirement", "configuration-retirement-publication"}:
+                if progress is not None and intent.get("kind") not in {"runtime-upgrade", "workload-upgrade", "runtime-upgrade-publication", "workload-upgrade-publication", "configuration-retirement", "configuration-retirement-publication", "container-policy-addition", "container-policy-addition-publication"}:
                     raise ValueError("progress requires a maintenance upgrade")
                 if namespace.operation_command == "status":
                     result = operation_status(inventory, namespace.operation_id)
-                elif intent.get("kind") in {"runtime-upgrade", "workload-upgrade", "runtime-upgrade-publication", "workload-upgrade-publication", "configuration-retirement", "configuration-retirement-publication"}:
+                elif intent.get("kind") in {"runtime-upgrade", "workload-upgrade", "runtime-upgrade-publication", "workload-upgrade-publication", "configuration-retirement", "configuration-retirement-publication", "container-policy-addition", "container-policy-addition-publication"}:
                     from loom.fleet.upgrades import upgrade
                     result = upgrade(inventory, operation_id=namespace.operation_id, action=namespace.operation_command, deployment=getattr(namespace, "deployment", None), failed_check=getattr(namespace, "failed_check", None), new_check=getattr(namespace, "new_check", None), failed_control=getattr(namespace, "failed_control", None), new_control=getattr(namespace, "new_control", None), workload_profile=getattr(namespace, "workload_profile", None), image=getattr(namespace, "image", None), workload_inventory=getattr(namespace, "workload_inventory", None), defer_agents=getattr(namespace, "defer_agents", None), defer_reason=getattr(namespace, "defer_reason", None), progress=progress)
                 elif namespace.operation_command == "resume":

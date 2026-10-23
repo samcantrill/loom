@@ -16,7 +16,7 @@ from loom.queue.errors import QueueConflictError
 from loom.queue.shared_execution import _readonly_root_relocations
 
 
-def candidates(inventory, path, plan, consumers, env_file, *, retire_configuration=False):
+def candidates(inventory, path, plan, consumers, env_file, *, retire_configuration=False, add_container_policies=False):
     """Read compatible normalized targets; retirement inputs may be disposable."""
     candidate = load_inventory(Path(path))
     if (
@@ -31,7 +31,7 @@ def candidates(inventory, path, plan, consumers, env_file, *, retire_configurati
         previous = plan["hosts"][name]
         if (
             any(row[key] != previous[key] for key in ("host", "root", "env_file"))
-            or (not retire_configuration and Path(row["config"]).parent != Path(previous["config"]).parent)
+            or (not (retire_configuration or add_container_policies) and Path(row["config"]).parent != Path(previous["config"]).parent)
             or row["config"] == previous["config"]
         ):
             raise QueueConflictError(
@@ -42,13 +42,16 @@ def candidates(inventory, path, plan, consumers, env_file, *, retire_configurati
                 raise QueueConflictError("workload inventory changed an unselected agent")
     before, after = plan["declarations"]["coordinator"], declarations["coordinator"]
     allowed = {"preparation", "shared_roots"}
-    if retire_configuration:
+    if retire_configuration or add_container_policies:
         allowed |= {"remote_profiles", "container_capabilities"}
     if {key: value for key, value in before.items() if key not in allowed} != {
         key: value for key, value in after.items() if key not in allowed
     }:
         raise QueueConflictError("workload inventory changed unrelated coordinator policy")
-    if retire_configuration:
+    if add_container_policies:
+        from loom.queue._container_policy_addition import validate_coordinator_declarations
+        validate_coordinator_declarations(before, after)
+    elif retire_configuration:
         _retirement_coordinator(before, after)
     else:
         # The operation derives new descriptors and preparation generations. Target

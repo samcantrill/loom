@@ -123,6 +123,7 @@ class CoordinatorSchedulingReload:
     expected_scheduling_epoch: str
     reason: str
     retirement: Mapping[str, PlainData] | None = None
+    container_policy_addition: Mapping[str, PlainData] | None = None
 
     def __post_init__(self) -> None:
         for value, name in (
@@ -140,8 +141,12 @@ class CoordinatorSchedulingReload:
                 "scheduling reload reason must be 1..512 characters"
             )
 
-        if self.retirement is not None:
-            value = self.retirement
+        if self.retirement is not None and self.container_policy_addition is not None:
+            raise QueueServiceError("policy addition and retirement are mutually exclusive")
+        for name in ("retirement", "container_policy_addition"):
+            value = getattr(self, name)
+            if value is None:
+                continue
             if (not isinstance(value, Mapping)
                 or set(value) != {"maintenance_id", "maintenance_intent_digest", "expected_gate_revision"}
                 or any(not isinstance(value[key], str) or not value[key] or len(value[key]) > 512
@@ -149,7 +154,7 @@ class CoordinatorSchedulingReload:
                 or type(value["expected_gate_revision"]) is not int
                 or value["expected_gate_revision"] < 0):
                 raise QueueServiceError("coordinator retirement binding is invalid")
-            object.__setattr__(self, "retirement", freeze_plain_data(value))
+            object.__setattr__(self, name, freeze_plain_data(value))
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
@@ -157,13 +162,16 @@ class CoordinatorSchedulingReload:
             "expected_scheduling_epoch": self.expected_scheduling_epoch,
             "reason": self.reason,
             **({"retirement": thaw_plain_data(self.retirement)} if self.retirement is not None else {}),
+            **({"container_policy_addition": thaw_plain_data(self.container_policy_addition)}
+               if self.container_policy_addition is not None else {}),
         }
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> "CoordinatorSchedulingReload":
         _exact_fields(
             data,
-            {"operation_id", "expected_scheduling_epoch", "reason"} | ({"retirement"} if "retirement" in data else set()),
+            {"operation_id", "expected_scheduling_epoch", "reason"} | ({"retirement"} if "retirement" in data else set())
+            | ({"container_policy_addition"} if "container_policy_addition" in data else set()),
             "coordinator scheduling reload",
         )
         return cls(
@@ -173,6 +181,7 @@ class CoordinatorSchedulingReload:
             ),
             reason=_required_string(data, "reason"),
             retirement=data.get("retirement"),
+            container_policy_addition=data.get("container_policy_addition"),
         )
 
 
@@ -2988,7 +2997,8 @@ class LocalDaemon:
                         "trusted scheduling configuration loader is unavailable"
                     )
                 replacement = loader()
-                self._validate_scheduling_replacement(replacement, retirement=request.retirement)
+                self._validate_scheduling_replacement(replacement, retirement=request.retirement,
+                                                      container_policy_addition=request.container_policy_addition)
                 candidate_fingerprint = _scheduling_fingerprint(replacement)
                 if (
                     replacement_fingerprint is not None
@@ -3542,7 +3552,7 @@ class LocalDaemon:
             "active_configuration_revision": str(next_revision),
         }
 
-    def _validate_scheduling_replacement(self, replacement: LocalDaemonConfig, *, retirement=None) -> None:
+    def _validate_scheduling_replacement(self, replacement: LocalDaemonConfig, *, retirement=None, container_policy_addition=None) -> None:
         if not isinstance(replacement, LocalDaemonConfig):
             raise QueueServiceError("trusted scheduling configuration is invalid")
         if (
@@ -3573,6 +3583,9 @@ class LocalDaemon:
         replacement_roots = replacement.coordinator_shared_roots
         from .shared_execution import _readonly_root_relocations
 
+        if container_policy_addition is not None:
+            self._validate_coordinator_retirement(replacement, container_policy_addition, addition=True)
+            return
         if retirement is not None:
             self._validate_coordinator_retirement(replacement, retirement)
             return
@@ -3643,7 +3656,7 @@ class LocalDaemon:
                         "scheduling reload cannot replace credentials for a live agent session"
                     )
 
-    def _validate_coordinator_retirement(self, replacement, binding):
+    def _validate_coordinator_retirement(self, replacement, binding, *, addition=False):
         from ._maintenance import observe
 
         gate = observe(self)
@@ -3652,6 +3665,10 @@ class LocalDaemon:
             or gate["intent_digest"] != binding["maintenance_intent_digest"]
             or gate["revision"] != binding["expected_gate_revision"]):
             raise QueueConflictError("coordinator retirement requires exact settled maintenance")
+        if addition:
+            from ._container_policy_addition import validate_coordinator
+            validate_coordinator(self.config, replacement)
+            return
         mutable = {"shared_roots", "preparation_policy", "remote_profiles",
                    "container_capabilities", "active_configuration_fingerprint"}
         if self.config.agent_root is not None or any(

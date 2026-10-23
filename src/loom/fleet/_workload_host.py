@@ -72,7 +72,8 @@ def qualify(request, declaration, *, check_promotion=False, original=None):
                 original = load_outbound_agent_service_config(
                     config(request), env_file=environment(request)
                 )
-            validate_candidate(original.client, service.client, request["workload_profile"])
+            validate_candidate(original.client, service.client, request.get("workload_profile"),
+                               **({"add_container_policies": True} if request.get("add_container_policies") else {}))
         return _qualified(service)
 
 
@@ -81,6 +82,9 @@ def coordinator_probe(request):
     if role(request) != "coordinator":
         raise QueueConflictError("coordinator candidate requires a coordinator")
     predecessor = None
+    if request.get("add_container_policies"):
+        from loom.queue._container_policy_addition import validate_coordinator_declarations
+        validate_coordinator_declarations(payload(request), request["declaration"])
     if request.get("retire_configuration"):
         predecessor = _coordinator_retirement_predecessor(request)
         from .workload_sources import _retirement_coordinator
@@ -134,6 +138,12 @@ def probe(request):
     authored = payload(request)
     if request.get("retire_configuration"):
         return _retirement_probe(request, authored)
+    if request.get("add_container_policies"):
+        original = load_outbound_agent_service_config(config(request), env_file=environment(request))
+        after = request["candidate_declaration"]
+        return {"source": _qualified(original),
+                "target": qualify(request, after, check_promotion=True, original=original),
+                "declaration": after, "native_owner": owner(request)}
     profiles = authored["resident_profiles"]
     if (
         len(profiles) != 1
@@ -205,6 +215,7 @@ def publish(request, directory):
     stopped = request.get("stopped_retirement", False)
     if stopped and (request.get("retirement") is None or not request.get("expected_scheduling_epoch")):
         raise QueueConflictError("stopped retirement requires an exact maintenance and scheduling binding")
+    addition = request.get("container_policy_addition")
     binding = read(Path(request["admin"]) / "service.json")
     releases = (request.get("source_release"), request["release"]) if stopped else (request["release"],)
     if (any(binding.get(key) != request.get(key) for key in ("root", "config"))
@@ -218,9 +229,15 @@ def publish(request, directory):
     current = payload(request)
     target = request["declaration"]
     retained = directory / "reload.json"
+    if addition is not None and (not retained.exists() or current != target):
+        from loom.fleet._host import coordinator_client
+        from loom.queue._container_policy_addition import CAPABILITY
+        _, addition_client = coordinator_client(bound_request)
+        _retirement_publication_ready(addition_client, addition, capability=CAPABILITY)
     if retained.exists():
         intent = read(retained)
         if (intent["after"] != target or intent.get("reload", {}).get("retirement") != request.get("retirement")
+            or intent.get("reload", {}).get("container_policy_addition") != addition
             or intent.get("stopped_retirement", False) != stopped
             or (stopped and intent["reload"]["expected_scheduling_epoch"] != request["expected_scheduling_epoch"])):
             raise QueueConflictError("workload publication target or retirement binding changed")
@@ -247,6 +264,7 @@ def publish(request, directory):
                 ("Fleet selected configuration retirement" if request.get("retirement") is not None
                  else "Fleet selected workload profile promotion"),
                 retirement=request.get("retirement"),
+                container_policy_addition=addition,
             ).to_dict()
             if not stopped and request.get("retirement") is not None:
                 _retirement_publication_ready(client, request["retirement"])
@@ -288,9 +306,8 @@ def publish(request, directory):
     return result
 
 
-def _retirement_publication_ready(client, binding):
+def _retirement_publication_ready(client, binding, *, capability="quiescent-coordinator-retirement-v1"):
     """Protect the source write; native reload owns final acceptance and replay."""
-    capability = "quiescent-coordinator-retirement-v1"
     if capability not in client.describe_connection().capabilities:
         raise QueueConflictError("unsupported_capability: " + capability)
     gate = client.observe_maintenance()
@@ -431,7 +448,9 @@ def retire_stopped(request):
 
 
 def stage(request):
-    if request.get("retire_configuration"):
+    if request.get("add_container_policies"):
+        target = qualify(request, request["declaration"], check_promotion=True)
+    elif request.get("retire_configuration"):
         target = _retirement_probe({**request, "candidate_declaration": request["declaration"]}, payload(request))["target"]
     else:
         _image(request["image"], request["image_sha256"])

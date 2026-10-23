@@ -1449,6 +1449,10 @@ image prepares and executes code available only in that image. Service identitie
 protected configuration and open admission are checked. This CPU probe does not
 qualify a deployed fleet. Its additional scenarios exercise lost launch replies,
 containment with a missing image, corrupt-image refusal and original-image retry.
+An image missing its selected Python fails preparation with a nonzero runtime
+exit and missing-worker-result diagnostic while the original image keeps running.
+Namespace ownership is established during runtime startup, before Singularity
+renames the init process, so this failure still has a captured containment owner.
 The `action_reuse` scenario executes each image once and then submits a renamed
 stage under the same image. Each renamed stage adopts the original committed
 artifacts without a workload attempt, after an image-contained verifier reads the

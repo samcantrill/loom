@@ -157,3 +157,63 @@ def test_runtime_retirement_with_deleted_inputs_preserves_identity_and_publicati
             assert client.observe_maintenance()["state"] == "open"
         for host in inventory.hosts:
             assert "obsolete-input" not in host.config.read_text()
+
+        # The resulting fleet has no resident profiles. Add a qualified dataset
+        # policy without changing the service runtime or any retained selection.
+        inventory = load_inventory(inventory.path)
+        before_addition = {host.name: read(host.config) for host in inventory.hosts}
+        added_root = tmp_path / "configured-dataset"
+        added_root.mkdir()
+        (added_root / "challenge").write_bytes(b"dataset identity")
+        root_binding = {"host_path": str(added_root), "container_path": "/loom/datasets/added",
+                        "access": "ro", "challenge": {"path": "challenge",
+                        "sha256": hashlib.sha256(b"dataset identity").hexdigest()}}
+        from loom.queue._submitted_container_policy import SubmittedContainerPolicy
+        retained_policy = SubmittedContainerPolicy.from_dict(before_addition["worker"]["container_policies"][0])
+        added_policy = replace(retained_policy, policy_id="added-dataset",
+            shared_roots={**retained_policy.shared_roots, "formatted-added": root_binding})
+        candidate = read(inventory.path)
+        for host in inventory.hosts:
+            declaration = read(host.config)
+            if host.name == "coordinator":
+                declaration["shared_roots"]["formatted-added"] = root_binding
+                declaration["container_capabilities"].append(added_policy.capability.to_dict())
+                declaration["preparation"]["profiles"]["added"] = {
+                    **declaration["preparation"]["profiles"]["submitted"], "container_policy_id": added_policy.policy_id}
+                entry = candidate["coordinator"]
+            else:
+                assert declaration["resident_profiles"] == []
+                declaration["container_policies"].append(added_policy.to_dict())
+                entry = candidate["agents"][host.name]
+            entry["config"] = str(write(host.config.with_name(host.name + "-addition.json"), declaration))
+        candidate_path = write(tmp_path / "add-policy-fleet.json", candidate)
+        added_deployment = tmp_path / "added-deployment.json"
+        export_connection_deployment(replace(load_deployment(submitted_deployment),
+            preparation_profile="added"), added_deployment)
+        lost.clear()
+        interruptions = {("coordinator", "workload-publish"), ("worker", "workload-recover")}
+        result = upgrades.upgrade(inventory, operation_id="add-policy", apply=True,
+            add_container_policies=True, workload_inventory=candidate_path,
+            check_execution=execution, deployment=added_deployment,
+            connection=Path(setup["operator_connection"]), config=selection["config"], hold_admission=True)
+        deadline = time.monotonic() + 240
+        while result["outcome"] == "waiting" and not result.get("publication_ready") and time.monotonic() < deadline:
+            time.sleep(0.25)
+            result = upgrades.upgrade(inventory, operation_id="add-policy")
+        assert result.get("publication_ready"), json.dumps(result)
+        assert lost == interruptions
+        with CoordinatorOperatorClient.from_connection_file(setup["operator_connection"]) as client:
+            assert client.observe_maintenance()["state"] == "closed"
+            for name, identity in roots.items():
+                assert client.observe_agent(name).value["agent_root_id"] == identity
+        assert finish(inventory, "add-policy", action="release-admission")["outcome"] == "complete"
+        assert finish(inventory, "add-policy")["outcome"] == "complete"
+        for host in inventory.hosts:
+            after = read(host.config)
+            before = before_addition[host.name]
+            if host.name == "coordinator":
+                assert all(after["shared_roots"][key] == value for key, value in before["shared_roots"].items())
+                assert after["preparation"]["profiles"]["submitted"] == before["preparation"]["profiles"]["submitted"]
+            else:
+                assert after["resident_profiles"] == []
+                assert after["container_policies"][:-1] == before["container_policies"]

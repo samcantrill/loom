@@ -72,18 +72,6 @@ class RuntimeRetirementUpgrade(WorkloadUpgrade):
                 "descriptor_name": Path(self.intent["target_path"]).name,
                 "required_capabilities": list(maintenance.REQUIRED_CAPABILITIES), "images": {}}
 
-    def reconcile_publications(self):
-        # Only one source-changing action is dispatched at a time. Reconcile
-        # that exact retained call before the global input-byte check.
-        for name, action in [("coordinator", "workload-publish"), *[
-            (name, "workload-stopped-retire") for name in self.intent["agents"]]]:
-            directory = self.receipts / (name + "-" + action)
-            if not (directory / "dispatch.json").exists():
-                continue
-            request = read(directory / "intent.json")
-            generated = {"name", "host", "config", "root", "env_file", "env_sha256",
-                         "service_manager", "action", "release", "request_id", "expected_declaration"}
-            self.call(name, action, **{key: value for key, value in request.items() if key not in generated})
 
 
 def continue_upgrade(operation):

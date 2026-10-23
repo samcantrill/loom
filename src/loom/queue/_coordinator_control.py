@@ -1010,7 +1010,7 @@ def _connection_description(daemon: LocalDaemon, status: DaemonStatus, transport
             CONTROL_CAPABILITY,
             OPERATOR_CAPABILITY,
             CONDITIONAL_CONTROL_CAPABILITY,
-            "quiescent-profile-promotion-v2", "quiescent-source-promotion-v1", "quiescent-configuration-retirement-v1", "quiescent-coordinator-retirement-v1",
+            "quiescent-profile-promotion-v2", "quiescent-source-promotion-v1", "quiescent-configuration-retirement-v1", "quiescent-coordinator-retirement-v1", "quiescent-container-policy-addition-v1",
             MAINTENANCE_CAPABILITY,
             SUBMITTED_CHECK_CAPABILITY,
             "run-context-v1",
