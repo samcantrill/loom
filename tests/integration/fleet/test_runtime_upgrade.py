@@ -1090,3 +1090,84 @@ def test_runtime_upgrade_repairs_profile_after_settled_failed_check(site, tmp_pa
     assert load_deployment(directory/'worker-repaired-check-selection.json').preparation_profile=='infrastructure'
     with CoordinatorOperatorClient.from_connection_file(setup['operator_connection']) as operator:
         assert operator.observe_maintenance()['state']=='open'
+
+
+def test_qualified_upgrade_holds_admission_until_explicit_publication_release(site, tmp_path):  # noqa: F811
+    inventory, base, selection = site
+    inventory = bind_environments(inventory)
+    authored = read(inventory.hosts[0].config)
+    for principal in authored["agent_policy"]["principals"]:
+        if principal["role"] == "operator":
+            principal["actions"].append("resume")
+    write(inventory.hosts[0].config, authored)
+    setup = apply(inventory, operation_id="setup-publication", issuer=base / "issuer", check_selection=selection)
+    assert setup["outcome"] == "complete", setup
+    target = target_bundle(inventory, tmp_path)
+    options = dict(runtime_release=target, deployment=Path(setup["deployment"]),
+                   connection=Path(setup["operator_connection"]), config=selection["config"],
+                   hold_admission=True)
+    result = upgrades.upgrade(inventory, operation_id="publication", apply=True, **options)
+    deadline = time.monotonic() + 240
+    while not result.get("publication_ready") and result["outcome"] == "waiting" and time.monotonic() < deadline:
+        time.sleep(0.25)
+        result = upgrades.upgrade(inventory, operation_id="publication")
+    assert result.get("publication_ready") and result["outcome"] == "waiting", result
+    directory = upgrades.sshops._directory(inventory, "publication")
+    assert read(directory / "intent.json")["kind"] == "runtime-upgrade-publication"
+    assert not (directory / "complete.json").exists()
+    with CoordinatorOperatorClient.from_connection_file(setup["operator_connection"]) as operator:
+        gate = operator.observe_maintenance()
+        assert gate["state"] == "closed"
+        assert upgrades.upgrade(inventory, operation_id="publication")["publication_ready"]
+        assert operator.observe_maintenance()["state"] == "closed"
+    # Publication is an external caller responsibility. Its success authorizes
+    # this explicit continuation; normal resume cannot infer success from time.
+    intent = read(directory / "intent.json")
+    environments = {row["env_file"] for row in intent["hosts"].values() if row["env_file"]}
+    assert environments
+    for environment in environments:
+        path = Path(environment)
+        path.write_text(path.read_text() + "\nCLIENT_SELECTION=published\n")
+    result = finish(inventory, "publication", action="release-admission")
+    assert result["outcome"] == "complete"
+    assert read(directory / "restoring.json")["publication_released"] is True
+    assert upgrades.upgrade(inventory, operation_id="publication", action="release-admission")["outcome"] == "complete"
+    with CoordinatorOperatorClient.from_connection_file(setup["operator_connection"]) as operator:
+        assert operator.observe_maintenance()["state"] == "open"
+
+
+def test_preview_compares_accepted_coordinator_identity_after_input_disappears(site, tmp_path):  # noqa: F811
+    import hashlib
+    from loom.queue.errors import QueueConflictError
+
+    inventory, base, selection = site
+    inventory = bind_environments(inventory)
+    authored = read(inventory.hosts[0].config)
+    for principal in authored["agent_policy"]["principals"]:
+        if principal["role"] == "operator":
+            principal["actions"].append("resume")
+    obsolete = base / "obsolete-dataset"
+    obsolete.mkdir()
+    (obsolete / "challenge").write_bytes(b"obsolete")
+    authored.setdefault("shared_roots", {})["obsolete"] = {
+        "host_path": str(obsolete), "container_path": "/loom/obsolete", "access": "ro",
+        "challenge": {"path": "challenge", "sha256": hashlib.sha256(b"obsolete").hexdigest()},
+    }
+    write(inventory.hosts[0].config, authored)
+    setup = apply(inventory, operation_id="setup-preview", issuer=base / "issuer", check_selection=selection)
+    assert setup["outcome"] == "complete", setup
+    (obsolete / "challenge").unlink()
+    obsolete.rmdir()
+    options = dict(runtime_release=target_bundle(inventory, tmp_path),
+                   deployment=Path(setup["deployment"]), connection=Path(setup["operator_connection"]),
+                   config=selection["config"])
+    result = upgrades.preview(inventory, **options)
+    assert result["outcome"] == "preview"
+    assert result["declarations"]["coordinator"]["shared_roots"]["obsolete"]["host_path"] == str(obsolete)
+    with CoordinatorOperatorClient.from_connection_file(setup["operator_connection"]) as operator:
+        assert operator.observe_maintenance()["state"] == "open"
+    assert not obsolete.exists()
+    authored["shared_roots"]["obsolete"]["host_path"] = str(base / "unaccepted-path")
+    write(inventory.hosts[0].config, authored)
+    with pytest.raises(QueueConflictError, match="authored policy differs"):
+        upgrades.preview(inventory, **options)

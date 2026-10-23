@@ -47,7 +47,9 @@ def _temporary_targets_for_mounts(value: object, mounts: object) -> tuple[str, .
     from loom.pipeline.executors.containers import ContainerMount, ContainerMountMode
 
     if not isinstance(value, (list, tuple)):
-        raise ValueError("temporary_mounts must be a sequence of container mount targets")
+        raise ValueError(
+            "temporary_mounts must be a sequence of container mount targets"
+        )
     targets = tuple(value)
     if any(
         not isinstance(item, str) or not Path(item).is_absolute() for item in targets
@@ -117,10 +119,17 @@ def assignment_mounts(
 def _directory(path: Path, *, create: bool = False) -> None:
     if create:
         path.mkdir(mode=0o700, exist_ok=True)
-    if not stat.S_ISDIR(path.lstat().st_mode):
+    info = path.lstat()
+    if not stat.S_ISDIR(info.st_mode):
         raise OSError(
             errno.ENOTDIR,
             "temporary storage must be a non-symlink directory",
+            str(path),
+        )
+    if info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise PermissionError(
+            errno.EACCES,
+            "temporary storage requires an owner-private directory",
             str(path),
         )
 
@@ -132,7 +141,7 @@ def prepare_assignment_storage(
     for path in assignment_mounts(
         profile, workspace=workspace, agent_id=agent_id
     ).values():
-        _directory(path.parent.parent)
+        _directory(path.parent.parent, create=True)
         _directory(path.parent, create=True)
         _directory(path, create=True)
 

@@ -16,7 +16,7 @@ from loom.fleet._host import atomic, read, digest
 from loom.fleet.configuration import _environment_files
 from loom.fleet import ssh_operations as sshops
 from loom.fleet import upgrades as maintenance
-from loom.queue._profile_promotion import CAPABILITY
+from loom.queue._profile_promotion import CAPABILITY, RETIREMENT_CAPABILITY
 from loom.queue.shared_execution import SOURCE_PROMOTION_CAPABILITY
 from loom.queue.agent_sessions import AgentControl, AgentControlKind
 from loom.queue.deployment import _load_protected_config
@@ -200,6 +200,57 @@ def preview(
     return plan
 
 
+def retirement_preview(inventory, *, workload_inventory, deployment, connection, config, check_execution, env_file):
+    """Qualify narrowed declarations using retained native predecessor evidence."""
+    if workload_inventory is None or check_execution is None:
+        raise QueueConfigError("configuration retirement requires candidate inventory and submitted check execution")
+    plan = maintenance.preview(inventory, runtime_release=inventory.runtime_release,
+        deployment=deployment, connection=connection, config=config,
+        check_execution=check_execution, env_file=env_file)
+    required = {RETIREMENT_CAPABILITY, "quiescent-coordinator-retirement-v1"}
+    if not required <= set(plan["source"]["value"].get("capabilities", ())):
+        raise QueueConflictError("source runtime lacks configuration retirement capability")
+    consumers = {name: row for name, row in plan["hosts"].items() if name != "coordinator"}
+    for row in plan["hosts"].values():
+        if row["source_release"] != plan["release"]:
+            raise QueueConflictError("retirement cannot change the service runtime")
+    for name, row in consumers.items():
+        if RETIREMENT_CAPABILITY not in row["native_owner"]["value"].get("capabilities", ()):
+            raise QueueConflictError("agent runtime lacks configuration retirement capability: " + name)
+    from .workload_sources import candidates as source_candidates
+
+    declarations, inputs, sources = source_candidates(inventory, workload_inventory, plan,
+        consumers, env_file, retire_configuration=True)
+    candidates = sshops._ssh_many({name: (row["host"], {
+        **row, "release": plan["release"], "action": "workload-probe",
+        "expected_declaration": digest(plan["declarations"][name]),
+        "retire_configuration": True, "candidate_declaration": declarations[name],
+    }) for name, row in consumers.items()})
+    for candidate in candidates.values():
+        if isinstance(candidate, Exception):
+            raise candidate
+    original = load_deployment(plan["checks"]["deployment"])
+    for name in consumers:
+        if maintenance._check_profile(declarations, name, original, check_execution) != original.preparation_profile:
+            raise QueueConfigError("retirement check deployment must select a retained submitted profile")
+    row = plan["hosts"]["coordinator"]
+    target = sshops.ssh(row["host"], {**row, "release": plan["release"],
+        "action": "workload-coordinator-probe",
+        "retire_configuration": True,
+        "expected_declaration": digest(plan["declarations"]["coordinator"]),
+        "declaration": declarations["coordinator"]})
+    plan.update(retire_configuration=True, workload_profile=None, image=None, image_sha256=None,
+        generation="retirement-" + digest(declarations)[:16],
+        workload_inventory=str(Path(workload_inventory).resolve()), candidate_inputs=inputs,
+        candidate_sources=sources, coordinator_target=target, candidates=candidates,
+        target_declarations=declarations, preparation_profile=original.preparation_profile,
+        sequence=["qualify target declarations", "close and settle admission", "drain agents",
+                  "retire agent declarations", "retire coordinator declarations", "run submitted checks",
+                  "publish clients at held checkpoint", "restore admission"],
+        irreversible="first native retirement intent")
+    return plan
+
+
 def bind_intent(intent, plan, directory):
     original = load_deployment(plan["checks"]["deployment"])
     destination = directory / ("deployment-" + plan["generation"] + ".json")
@@ -216,7 +267,9 @@ def bind_intent(intent, plan, directory):
         export_connection_deployment(selected, destination)
     return {
         **intent,
-        "kind": "workload-upgrade",
+        "kind": "configuration-retirement" if plan.get("retire_configuration") else "workload-upgrade",
+        **({"retire_configuration": True} if plan.get("retire_configuration") else {}),
+        **({"runtime_retirement": True} if plan.get("runtime_retirement") else {}),
         **{
             key: plan[key]
             for key in (
@@ -313,11 +366,12 @@ class WorkloadUpgrade(maintenance._Upgrade):
                 "release", "hosts", "declarations", "agents", "workload_profile",
                 "image", "image_sha256", "candidates", "target_declarations",
                 "workload_inventory", "candidate_sources", "coordinator_target",
+                "retire_configuration",
             )
         )
         if reuse_preview:
             self.recheck()
-            if sshops._file_hash(Path(self.intent["image"])) != self.intent["image_sha256"]:
+            if not self.intent.get("retire_configuration") and sshops._file_hash(Path(self.intent["image"])) != self.intent["image_sha256"]:
                 raise QueueConflictError("workload image changed after qualification")
         for name, row in self.intent["hosts"].items():
             observed = sshops.ssh(
@@ -331,6 +385,15 @@ class WorkloadUpgrade(maintenance._Upgrade):
             native = observed["native_owner"]
             if native is None or native["owner"] != row["expected_root_id"]:
                 raise QueueConflictError("workload native root identity changed")
+            if self.intent.get("retire_configuration"):
+                required = (
+                    "quiescent-coordinator-retirement-v1"
+                    if name == "coordinator" else RETIREMENT_CAPABILITY
+                )
+                if required not in native["value"].get("capabilities", ()):
+                    raise QueueConflictError(
+                        "running source retirement capability unavailable: " + name
+                    )
             if self.intent.get("workload_inventory") is not None and (
                 name == "coordinator" or name in self.intent["candidates"]
             ) and SOURCE_PROMOTION_CAPABILITY not in native["value"].get("capabilities", ()):
@@ -354,14 +417,17 @@ class WorkloadUpgrade(maintenance._Upgrade):
                 target = self.host_observe(
                     name, "workload-coordinator-probe",
                     declaration=self.intent["target_declarations"][name],
+                    **({"retire_configuration": True} if self.intent.get("retire_configuration") else {}),
                 )
                 if target != self.intent["coordinator_target"]:
                     raise QueueConflictError("coordinator workload target qualification changed")
             elif name in self.intent["candidates"]:
                 candidate = self.host_observe(
                     name, "workload-probe",
-                    workload_profile=self.intent["workload_profile"],
-                    image=self.intent["image"], image_sha256=self.intent["image_sha256"],
+                    **({"retire_configuration": True} if self.intent.get("retire_configuration") else {
+                        "workload_profile": self.intent["workload_profile"],
+                        "image": self.intent["image"], "image_sha256": self.intent["image_sha256"],
+                    }),
                     **({"candidate_declaration": self.intent["target_declarations"][name]}
                        if self.intent.get("workload_inventory") is not None else {}),
                 )
@@ -404,7 +470,11 @@ class WorkloadUpgrade(maintenance._Upgrade):
             },
         )
 
-    def promote(self, name, candidate_source):
+    def promotion_candidate(self, name):
+        return self.intent["candidates"][name]
+
+    def accept_promotion(self, name, candidate_source):
+        """Retain and submit the exact control before waiting for its agent effect."""
         key = name + "-promotion"
         path = self.receipts / key / "intent.json"
         if path.exists():
@@ -415,7 +485,7 @@ class WorkloadUpgrade(maintenance._Upgrade):
             current = cast(
                 dict[str, Any], thaw_plain_data(self.operator.observe_agent(name).value)
             )
-            candidate = self.intent["candidates"][name]
+            candidate = self.promotion_candidate(name)
             request = cast(
                 dict[str, Any],
                 AgentControl(
@@ -437,8 +507,10 @@ class WorkloadUpgrade(maintenance._Upgrade):
                         "target_immutable": candidate["target"]["immutable"],
                         "target_active": candidate["target"]["active"],
                         "candidate_source": candidate_source,
-                        "profile_id": self.intent["workload_profile"],
-                        "target_profile": candidate["target"]["profile"],
+                        **({"retire_configuration": True} if self.intent.get("retire_configuration") else {
+                            "profile_id": self.intent["workload_profile"],
+                            "target_profile": candidate["target"]["profile"],
+                        }),
                         **({"enable_submitted_containers": True} if
                            candidate["declaration"].get("container_policies") and not
                            self.intent["declarations"][name].get("container_policies") else {}),
@@ -459,15 +531,38 @@ class WorkloadUpgrade(maintenance._Upgrade):
             return self.operator.observe_control(value["operation_id"])
 
         result = self.native(key, request, invoke)
+        if result["state"] == "failed":
+            raise QueueConflictError("native profile promotion failed: " + str(result))
+        return request, result
+
+    def promote(self, name, candidate_source):
+        request, result = self.accept_promotion(name, candidate_source)
         if result["state"] != "applied" or not result["acknowledged"]:
-            if result["state"] == "failed":
-                raise QueueConflictError(
-                    "native profile promotion failed: " + str(result)
-                )
             raise maintenance._Waiting(
                 "native profile promotion acknowledgement: " + request["operation_id"]
             )
         return request["operation_id"]
+
+    def promote_stopped(self, name, candidate_source, replacement):
+        """Convert a stopped agent, replace its runtime, then await native ack.
+
+        Resume host publication before submitting the retained control again:
+        publication may have changed source bytes before its reply was received.
+        Each agent must acknowledge before the next promotion is authorized.
+        """
+        if not self.intent.get("retire_configuration"):
+            raise QueueConflictError("stopped promotion requires configuration retirement")
+        host_intent = self.receipts / (name + "-workload-stopped-retire") / "intent.json"
+        if host_intent.exists():
+            control = read(host_intent)["control"]
+        else:
+            control, _ = self.accept_promotion(name, candidate_source)
+        row = self.intent["hosts"][name]
+        self.call(name, "workload-stopped-retire", control=control,
+            expected_root_id=row["expected_root_id"], source_release=row["source_release"],
+            coordinator_id=self.intent["check_selection"]["coordinator_id"])
+        self.call(name, "upgrade-replace", **replacement)
+        return self.promote(name, candidate_source)
 
 
 def _promote_agents(operation):
@@ -475,7 +570,9 @@ def _promote_agents(operation):
     staged = operation.call_many([
         (name, "workload-stage", {
             "declaration": intent["target_declarations"][name],
-            "image": intent["image"], "image_sha256": intent["image_sha256"],
+            **({"retire_configuration": True} if intent.get("retire_configuration") else {
+                "image": intent["image"], "image_sha256": intent["image_sha256"],
+            }),
             "target": intent["candidates"][name]["target"],
         }) for name in intent["agents"]
     ])
@@ -493,6 +590,9 @@ def continue_upgrade(operation):
     directory, intent = operation.directory, operation.intent
     if (directory / "complete.json").exists():
         return read(directory / "complete.json")
+    if intent["kind"].endswith("-publication") and (directory / "restoring.json").exists():
+        maintenance._restore(operation)
+        return _complete_workload(operation)
     for name in intent["agents"]:
         if (operation.receipts / (name + "-promotion") / "intent.json").exists():
             response = operation.recover_host(name)
@@ -550,6 +650,11 @@ def continue_upgrade(operation):
         "coordinator",
         "workload-publish",
         declaration=intent["target_declarations"]["coordinator"],
+        **({"retirement": {
+            "maintenance_id": maintenance._maintenance_binding(intent)["operation_id"],
+            "maintenance_intent_digest": maintenance._maintenance_binding(intent)["target_intent_digest"],
+            "expected_gate_revision": operation.gate()["revision"],
+        }} if intent.get("retire_configuration") else {}),
     )
     restoring = directory / "restoring.json"
     if not restoring.exists():
@@ -561,6 +666,11 @@ def continue_upgrade(operation):
         maintenance._run_checks(operation)
         atomic(restoring, {"intent_digest": digest(intent)})
     maintenance._restore(operation)
+    return _complete_workload(operation)
+
+
+def _complete_workload(operation):
+    directory, intent = operation.directory, operation.intent
     result = {
         "state": "complete",
         "release": intent["release"],

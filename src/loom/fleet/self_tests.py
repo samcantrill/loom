@@ -29,6 +29,7 @@ from loom.queue.deployment import (
 from loom.queue.errors import QueueConfigError
 from loom.queue.models import validate_queue_id
 from loom.queue.preparation import PrepareRunRequest
+from loom.queue.submitted_execution import SubmittedContainerCapability, SubmittedContainerExecution
 from loom.runs.outputs import OutputSelection
 from loom.serialization import thaw_plain_data
 
@@ -325,7 +326,7 @@ def _observe_check(
             timing["outcome"] = "reused"
     else:
         # Operator receipts may live on NFS. Downloads use local temporary storage.
-        with tempfile.TemporaryDirectory(prefix="loom-fleet-check-") as destination:
+        with tempfile.TemporaryDirectory(prefix="loom-fleet-check-", dir="/tmp") as destination:
             with measure("artifact_download"):
                 fetched = client.fetch_artifacts(selected.items, destination, deadline=deadline)
             row = fetched["items"][0]
@@ -359,12 +360,32 @@ def _observe_check(
     return {**result, **facts}
 
 
+def selected_check_profile(policy, agent, execution=None):
+    """Bind a check to one currently offered installed or container policy."""
+    offer = agent.get("offer") or {}
+    submitted = "container_policy_id" in policy
+    if submitted != (execution is not None):
+        raise QueueConfigError("container checks require explicit submitted execution; installed checks must omit it")
+    if submitted:
+        matches = [p for p in offer.get("container_execution_capabilities", ())
+                   if p["policy_id"] == policy["container_policy_id"]]
+    else:
+        matches = [p for p in offer.get("profile_identities", ())
+                   if p["profile_id"] == policy["resident_profile_id"]]
+    if len(matches) != 1:
+        raise QueueConfigError("selected profile is unavailable or ambiguous")
+    if execution is not None:
+        SubmittedContainerCapability.from_dict(matches[0]).require_execution(execution)
+    return matches[0]
+
+
 def self_test(
     inventory: Inventory,
     *,
     deployment: Path | None = None,
     operator_connection: Path | None = None,
     config: str = "fleet-check.yaml",
+    execution: SubmittedContainerExecution | None = None,
     agent_id: str | None = None,
     checks: Sequence[str] = ("cpu", "storage"),
     operation_id: str | None = None,
@@ -383,6 +404,8 @@ def self_test(
     or replacement. Selected requests dispatch before result observation within
     that deadline. The connection-only deployment pins native source/profile;
     the selected source must contain the base config and allow generic probes.
+    Container preparation aliases require explicit ``execution``. Its immutable
+    image, interpreter and interface are retained in each request for replay.
     """
     environments = _environment_files(inventory, env_file)
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
@@ -395,6 +418,8 @@ def self_test(
         raise QueueConfigError("checks must select cpu, storage and/or gpu")
     intent: dict[str, Any] = {}
     continuing = operation_id is not None
+    if continuing and execution is not None:
+        raise QueueConfigError("continued checks use their retained execution; omit execution")
     operation_id = operation_id or _prepare_id or "check-" + uuid4().hex
     if _prepare_id is not None and (continuing or len(checks) != 1):
         raise QueueConfigError("maintenance preparation requires one new check slot")
@@ -452,13 +477,7 @@ def self_test(
         if observed.availability != "available" or observed.freshness != "current":
             raise QueueConfigError("selected agent/profile observation is unavailable")
         agent = cast(dict[str, Any], thaw_plain_data(observed.value))
-        profiles = [
-            p
-            for p in (agent.get("offer") or {}).get("profile_identities", ())
-            if p["profile_id"] == policy["resident_profile_id"]
-        ]
-        if len(profiles) != 1:
-            raise QueueConfigError("selected profile is unavailable or ambiguous")
+        profile = selected_check_profile(policy, agent, execution)
         if "gpu" in checks and not (agent.get("offer") or {}).get("gpu_devices"):
             raise QueueConfigError("GPU check requires a declared GPU profile")
         requests = {}
@@ -472,6 +491,7 @@ def self_test(
                     selection.source,
                     config,
                     selection.preparation_profile,
+                    execution=execution,
                     overrides=tuple(
                         key + "=" + json.dumps(value)
                         for key, value in composition.items()
@@ -490,7 +510,7 @@ def self_test(
             "agent_id": agent_id,
             "session_id": agent["session_id"],
             "agent_root_id": agent["agent_root_id"],
-            "profile": profiles[0],
+            "profile": profile,
             "requests": requests,
         }
         if "gpu" in checks and inventory.gpu_qualification == "nonexclusive":
@@ -505,7 +525,8 @@ def self_test(
                 "request_id": operation_id + "-gpu-capability",
                 "release": verify_release(inventory.runtime_release),
                 "expected_declaration": digest(declarations[str(agent_id)]),
-                "profile": profiles[0],
+                "profile": profile,
+                **({"execution": execution.to_dict()} if execution is not None else {}),
             }
         if retry_of is not None:
             if Path(retry_of).name != retry_of or retry_of in {".", ".."}:

@@ -190,3 +190,66 @@ def test_check_selection_repair_cli_retains_parent_and_explicit_deployment():
     ])
     assert selected.operation_id == "runtime-window"
     assert selected.deployment == Path("/shared/current-checks.json")
+
+
+def test_container_only_preflight_retains_selected_execution(tmp_path, monkeypatch):
+    from loom.queue.preparation import PreparationSource, PrepareRunRequest
+    from tests.integration.queue.test_submitted_container_agents import _fixture
+
+    policy, execution, _ = _fixture(tmp_path)
+    declarations = {
+        "worker": {"resident_profiles": [], "container_policies": [{"policy_id": policy.policy_id}]},
+        "coordinator": {"preparation": {"profiles": {
+            "submitted": {"container_policy_id": policy.policy_id},
+            "old": {"resident_profile_id": "legacy"},
+        }}},
+    }
+    deployment = SimpleNamespace(preparation_profile="submitted",
+        source=PreparationSource("shared", "projects", ".", ("probe.yaml",)))
+    selected = {"deployment": "selected.json", "config": "probe.yaml", "execution": execution.to_dict()}
+    calls = []
+    operation = SimpleNamespace(directory=tmp_path, intent={
+        "operation_id": "container-qualification", "check_selection": selected,
+        "declarations": declarations, "agents": {"worker": {"offer": {"gpu_devices": []}}},
+        "hosts": {name: {"expected_root_id": name + "-root"} for name in declarations},
+    })
+
+    def capture(name, action, **kwargs):
+        calls.append((name, action, kwargs))
+        return {"bindings": {"cpu": "captured-cpu", "storage": "captured-storage"}}
+
+    operation.call = capture
+    operation.call_many = lambda batch: calls.extend(batch)
+    monkeypatch.setattr(upgrades, "load_deployment", lambda path: deployment)
+    upgrades._preflight_checks(operation)
+    assert len(calls) == 2
+    assert set(calls[0][2]["checks"]) == {"cpu", "storage"}
+    for raw in calls[0][2]["checks"].values():
+        request = PrepareRunRequest.from_dict(raw)
+        assert request.execution == execution
+        assert request.preparation_profile == "submitted"
+        assert request.source == deployment.source
+    assert calls[1][2]["candidate_declaration"]["resident_profiles"] == []
+    from loom.queue.errors import QueueConfigError
+    with pytest.raises(QueueConfigError, match="ambiguous"):
+        upgrades._check_profile(declarations, "worker", deployment)
+
+
+def test_cli_accepts_explicit_submitted_check_selection():
+    from loom.cli.main import build_parser
+
+    parser = build_parser()
+    check = parser.parse_args(["fleet", "self-test", "--fleet", "site", "--execution", "/private/execution.json"])
+    assert check.execution == Path("/private/execution.json")
+    upgrade = parser.parse_args(["fleet", "upgrade", "--fleet", "site", "--runtime-release", "/private/release.json",
+                                 "--check-execution", "/private/execution.json"])
+    assert upgrade.check_execution == check.execution
+
+
+def test_resident_promotion_cannot_substitute_submitted_qualification(monkeypatch):
+    from loom.queue.errors import QueueConfigError
+
+    monkeypatch.setattr(upgrades, "_environment_files", lambda *args: {})
+    with pytest.raises(QueueConfigError, match="installed-profile checks"):
+        upgrades.preview(object(), workload_profile="resident", image=Path("/image.sif"),
+                         check_execution=object())

@@ -52,7 +52,7 @@ from ._preparation_operations import PreparationChildReserved, PreparationNotAcc
 
 
 from .operations import OPERATOR_CAPABILITY, CONDITIONAL_CONTROL_CAPABILITY, OperatorObservation
-from ._maintenance import MaintenanceInProgress, MAINTENANCE_CAPABILITY
+from ._maintenance import MaintenanceInProgress, MAINTENANCE_CAPABILITY, SUBMITTED_CHECK_CAPABILITY
 
 _OPERATOR_ADMIN_MUTATIONS = frozenset({
     "operator_retire", "operator_scheduling_reload", "operator_recover_unknown",
@@ -1010,8 +1010,9 @@ def _connection_description(daemon: LocalDaemon, status: DaemonStatus, transport
             CONTROL_CAPABILITY,
             OPERATOR_CAPABILITY,
             CONDITIONAL_CONTROL_CAPABILITY,
-            "quiescent-profile-promotion-v2", "quiescent-source-promotion-v1",
+            "quiescent-profile-promotion-v2", "quiescent-source-promotion-v1", "quiescent-configuration-retirement-v1", "quiescent-coordinator-retirement-v1",
             MAINTENANCE_CAPABILITY,
+            SUBMITTED_CHECK_CAPABILITY,
             "run-context-v1",
             "run-query-v1",
             "output-query-v1",

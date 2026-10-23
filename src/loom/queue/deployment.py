@@ -249,22 +249,7 @@ class RunInspectionClientConfig:
     source_path: Path
 
 
-def load_coordinator_service_config(
-    path: str | Path,
-    *,
-    env_file: str | Path | None = None,
-    current: CoordinatorServiceConfig | None = None,
-    _allow_unready: bool = False,
-    _deadline: float | None = None,
-) -> CoordinatorServiceConfig:
-    """Load one protected coordinator role, observing its selected installation.
-
-    During reload, pass the currently installed service snapshot as ``current``.
-    An unchanged scheduling declaration from the same protected source reuses
-    its existing component instances and priority resolver. Changed declarations
-    are constructed normally and remain subject to the daemon's retained-identity
-    checks. This does not activate the replacement or bypass the reload gate.
-    """
+def _read_coordinator_declaration(path, *, env_file=None):
     source, environment_path, payload, _ = _load_protected_config(
         path, env_file=env_file
     )
@@ -287,16 +272,30 @@ def load_coordinator_service_config(
         {"scheduling", "slurm_profiles", "preparation", "event_sinks", "shared_roots", "assignment_payload_root_id", "container_capabilities"},
         "coordinator service config",
     )
-    from ._lifecycle_observers import LifecycleObservers, parse_event_sinks
-
-    observers = LifecycleObservers(parse_event_sinks(payload.get("event_sinks")))
     _header(payload, "loom.coordinator-service")
     payload = _normalize_coordinator_payload(payload)
-    base = source.parent
-    root = _path(payload, "deployment_root", base)
-    local_agent = _local_agent_service(
-        payload["local_agent"], base, allow_unready=_allow_unready, deadline=_deadline
-    )
+    return source, environment_path, payload
+
+
+def read_coordinator_scheduling_fingerprint(path: str | Path, *, env_file: str | Path | None = None) -> str:
+    """Read a pure coordinator's authored scheduling identity without execution IO.
+
+    This only compares a protected declaration with already accepted native
+    scheduling evidence. It does not qualify storage, construct scheduler or
+    authority plugins, initialize state, or authorize a new configuration.
+    Colocated agents require observed execution and are not supported here.
+    """
+    source, _, payload = _read_coordinator_declaration(path, env_file=env_file)
+    if payload["local_agent"] is not None:
+        raise QueueConfigError("declaration-only scheduling identity requires a pure coordinator")
+    _, _, preparation = _coordinator_execution_declarations(payload, source.parent, None)
+    return _canonical_fingerprint({
+        "coordinator": _coordinator_active_projection(payload, preparation=preparation),
+        "local_agent": _local_agent_active_projection(None),
+    })
+
+
+def _coordinator_execution_declarations(payload, base, local_agent):
     remote_profiles = tuple(
         _profile_descriptor(_mapping_value(value, f"remote_profiles[{index}]"))
         for index, value in enumerate(_sequence(payload, "remote_profiles"))
@@ -318,6 +317,37 @@ def load_coordinator_service_config(
             *remote_profiles,
             *((local_agent.profile.descriptor,) if local_agent is not None else ()),
         ),
+    )
+    return remote_profiles, container_capabilities, preparation_policy
+
+
+def load_coordinator_service_config(
+    path: str | Path,
+    *,
+    env_file: str | Path | None = None,
+    current: CoordinatorServiceConfig | None = None,
+    _allow_unready: bool = False,
+    _deadline: float | None = None,
+) -> CoordinatorServiceConfig:
+    """Load one protected coordinator role, observing its selected installation.
+
+    During reload, pass the currently installed service snapshot as ``current``.
+    An unchanged scheduling declaration from the same protected source reuses
+    its existing component instances and priority resolver. Changed declarations
+    are constructed normally and remain subject to the daemon's retained-identity
+    checks. This does not activate the replacement or bypass the reload gate.
+    """
+    source, environment_path, payload = _read_coordinator_declaration(path, env_file=env_file)
+    from ._lifecycle_observers import LifecycleObservers, parse_event_sinks
+
+    observers = LifecycleObservers(parse_event_sinks(payload.get("event_sinks")))
+    base = source.parent
+    root = _path(payload, "deployment_root", base)
+    local_agent = _local_agent_service(
+        payload["local_agent"], base, allow_unready=_allow_unready, deadline=_deadline
+    )
+    remote_profiles, container_capabilities, preparation_policy = _coordinator_execution_declarations(
+        payload, base, local_agent
     )
     authority_factory = _coordinator_authority_factory(
         _mapping(payload, "authority"), base, deployment_root=root
@@ -2548,6 +2578,7 @@ __all__ = [
     "OutboundAgentServiceConfig",
     "RunInspectionClientConfig",
     "load_coordinator_service_config",
+    "read_coordinator_scheduling_fingerprint",
     "load_outbound_agent_service_config",
     "load_run_inspection_client_config",
     "qualify_agent_spec",
@@ -2643,6 +2674,10 @@ def service_replacement_guard(service, expected_root_id: str, *, recovery_result
     The caller has already drained admission/work and stopped the communication
     service. Pending poll outcomes and missing native evidence refuse; no work is
     cancelled, no root initialized and no identity replaced by this guard.
+    An ``AgentSpec`` may inspect an unavailable predecessor without execution
+    probes, but requires its exact accepted native declaration binding. This
+    grants ownership only; candidate qualification and maintenance authorization
+    remain the caller's responsibility.
     Explicit ``recovery_results`` instead rechecks the Fleet-owned cohort of
     durable successful contained results. Journals remain retained for ordinary
     startup replay; this does not assert logical settlement.
@@ -2650,20 +2685,36 @@ def service_replacement_guard(service, expected_root_id: str, *, recovery_result
     from .errors import QueueConflictError
     from ._agent_session_journal import _RemoteAgentJournal
     from .agent_session_transport import _has_retained_agent_work
-    from .retirement import _retained_agent_owners, require_unretired
+    from .retirement import (
+        _retained_agent_owners, read_agent_declaration_binding, require_unretired,
+    )
     from ._agent_process_supervisor import retained_supervisor_guard
     from .local_daemon import _acquire_lock, _open_root
     from ._service_lifetime import _retained_coordinator_operations
     from .local_daemon_execution import local_daemon_owner_work_is_retained
 
-    if isinstance(service, OutboundAgentServiceConfig):
+    if isinstance(service, (OutboundAgentServiceConfig, AgentSpec)):
         spec = read_agent_spec(service.source_path, env_file=service.environment_path)
-        if spec.declaration_digest != service.client.declaration_digest:
-            raise QueueConflictError("replacement declaration changed after qualification")
+        binding = None
+        if isinstance(service, AgentSpec):
+            if spec.declaration_digest != service.declaration_digest:
+                raise QueueConflictError("replacement declaration changed after inspection")
+            binding = read_agent_declaration_binding(spec.agent_root, spec.declaration_digest)
+            if binding is None:
+                raise QueueConflictError("replacement requires accepted agent declaration binding")
+            immutable, active = binding.immutable_fingerprint, binding.active_fingerprint
+        else:
+            if spec.declaration_digest != service.client.declaration_digest:
+                raise QueueConflictError("replacement declaration changed after qualification")
+            immutable, active = service.immutable_fingerprint, service.active_fingerprint
         journal = _RemoteAgentJournal(spec.agent_root,
-            expected_configuration_fingerprint=service.immutable_fingerprint,
-            expected_active_configuration_fingerprint=service.active_fingerprint)
+            expected_configuration_fingerprint=immutable,
+            expected_active_configuration_fingerprint=active)
         try:
+            if binding is not None and read_agent_declaration_binding(
+                spec.agent_root, spec.declaration_digest
+            ) != binding:
+                raise QueueConflictError("replacement declaration changed during ownership check")
             require_unretired(spec.agent_root)
             if journal.root_id != expected_root_id:
                 raise QueueConflictError("replacement native root identity changed")

@@ -34,7 +34,7 @@ from loom.queue.preparation import PREPARATION_INPUT_CONTEXT_ENV
 
 request = json.loads(sys.argv[1])
 os.environ[PREPARATION_INPUT_CONTEXT_ENV] = json.dumps(request["context"])
-with tempfile.TemporaryDirectory(prefix="loom-preparation-probe-") as directory:
+with tempfile.TemporaryDirectory(prefix="loom-preparation-probe-", dir="/tmp") as directory:
     root = Path(directory)
     store = LocalArtifactStore(root / "artifacts")
     context = StageContext(
@@ -51,7 +51,8 @@ with tempfile.TemporaryDirectory(prefix="loom-preparation-probe-") as directory:
             "allowed": preparation_checks_allow_publication(preflight),
             "preflight": report["preflight"],
             "input_manifest_digest": report["input_manifest_digest"],
-            "profile_descriptor": report["profile_descriptor"],
+            **({"execution": report["execution"], "container_capability": report["container_capability"]}
+               if "execution" in report else {"profile_descriptor": report["profile_descriptor"]}),
         }
     except Exception as exc:
         result = {"allowed": False, "error_type": type(exc).__name__}
@@ -72,9 +73,11 @@ def probe_preparation(
     A bounded, contained failure refuses compatibility before maintenance.
     """
     if binding.execution is not None:
-        raise QueueConflictError("standalone installed-profile qualification cannot run submitted containers")
-    assert binding.profile_descriptor is not None
-    if dict(binding.profile_descriptor) != dict(profile.descriptor):
+        if (profile.submitted_execution != binding.execution
+            or binding.container_capability is None
+            or dict(profile.descriptor) != binding.container_capability.to_dict()):
+            raise QueueConflictError("preparation candidate submitted execution differs")
+    elif binding.profile_descriptor is None or dict(binding.profile_descriptor) != dict(profile.descriptor):
         raise QueueConflictError("preparation candidate installation differs")
     _require_local_binding(binding.local_scope, profile, agent_id=agent_id)
     if not isinstance(binding.input_receipt, SharedInputReceipt):
@@ -90,8 +93,8 @@ def probe_preparation(
     if binding.project_preparation is not None:
         purpose = {"kind": "project", "binding": dict(binding.project_preparation)}
     context: dict[str, PlainData] = {
-        "schema_version": PREPARATION_CONTEXT_SCHEMA_VERSION,
-        "profile_descriptor": dict(profile.descriptor),
+        "schema_version": 7 if binding.execution is not None else PREPARATION_CONTEXT_SCHEMA_VERSION,
+        **binding.execution_data(),
         "scope": _scope_data(binding.local_scope, binding.shared_scope),
         "purpose": purpose,
         "input": {"kind": "shared", "roots": _preparation_input_roots(profile, binding)},
@@ -105,7 +108,7 @@ def probe_preparation(
     if result.payload.get("allowed") is not True:
         raise QueueConflictError("candidate preparation is incompatible: " + str(dict(result.payload)))
     if (
-        result.payload.get("profile_descriptor") != dict(profile.descriptor)
+        any(result.payload.get(key) != value for key, value in binding.execution_data().items())
         or result.payload.get("input_manifest_digest") != binding.input_receipt.manifest_digest
     ):
         raise QueueConflictError("candidate preparation evidence differs")

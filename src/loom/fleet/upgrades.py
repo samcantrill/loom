@@ -70,7 +70,7 @@ def _maintenance_binding(intent):
     })
 
 
-def _checks(inventory, deployment, connection, config):
+def _checks(inventory, deployment, connection, config, check_execution=None):
     if deployment is None or connection is None:
         for path in sorted(
             (inventory.path.parent / "operations").glob("*/result.json"),
@@ -112,6 +112,7 @@ def _checks(inventory, deployment, connection, config):
         "operator_connection": str(Path(connection).resolve()),
         "config": config,
         "coordinator_id": expected,
+        **({"execution": check_execution.to_dict()} if check_execution is not None else {}),
     }
 
 
@@ -134,12 +135,15 @@ def preview(
     *,
     runtime_release=None,
     recover_retained_results=False,
+    hold_admission=False,
     workload_profile=None,
+    retire_configuration=False,
     image=None,
     workload_inventory=None,
     deployment=None,
     connection=None,
     config="fleet-check.yaml",
+    check_execution=None,
     env_file=None,
 ):
     """Inspect source and exact target bytes without installs or native mutations.
@@ -148,18 +152,36 @@ def preview(
     preview never presents an uninstalled candidate as qualified.
     """
     _environment_files(inventory, env_file)
+    if retire_configuration:
+        if workload_profile is not None or image is not None or recover_retained_results:
+            raise QueueConfigError("configuration retirement cannot select resident image promotion or result recovery")
+        if runtime_release is not None:
+            from .runtime_retirement import preview as retirement_preview
+            result = retirement_preview(inventory, runtime_release=runtime_release,
+                workload_inventory=workload_inventory, deployment=deployment,
+                connection=connection, config=config, check_execution=check_execution, env_file=env_file)
+            return {**result, "hold_admission": hold_admission}
+        from .workload_upgrades import retirement_preview
+
+        result = retirement_preview(inventory, workload_inventory=workload_inventory,
+            deployment=deployment, connection=connection, config=config,
+            check_execution=check_execution, env_file=env_file)
+        return {**result, "hold_admission": hold_admission}
     if recover_retained_results and (runtime_release is None or workload_profile is not None):
         raise QueueConfigError("retained-result recovery requires a runtime target")
     if workload_profile is not None or image is not None or workload_inventory is not None:
+        if check_execution is not None:
+            raise QueueConfigError("resident workload promotion requires installed-profile checks")
         if runtime_release is not None:
             raise QueueConfigError("service and workload targets are mutually exclusive")
         from .workload_upgrades import preview as workload_preview
-        return workload_preview(inventory, workload_profile=workload_profile, image=image, workload_inventory=workload_inventory,
+        result = workload_preview(inventory, workload_profile=workload_profile, image=image, workload_inventory=workload_inventory,
             deployment=deployment, connection=connection, config=config, env_file=env_file)
+        return {**result, "hold_admission": hold_admission}
     if runtime_release is None:
         raise QueueConfigError("upgrade requires a runtime or workload target")
     target = verify_release(Path(runtime_release), previous=inventory.runtime_release)
-    selected = _checks(inventory, deployment, connection, config)
+    selected = _checks(inventory, deployment, connection, config, check_execution)
     rows, declarations = sshops._selection(inventory, None, env_file)
     if len(rows) < 2:
         raise QueueConfigError(
@@ -180,12 +202,12 @@ def preview(
                 ):
                     raise QueueConflictError("source agent unavailable: " + name)
                 agents[name] = thaw_plain_data(observation.value)
-    from loom.queue.deployment import load_coordinator_service_config
+    from loom.queue.deployment import read_coordinator_scheduling_fingerprint
 
-    accepted = load_coordinator_service_config(
+    authored_fingerprint = read_coordinator_scheduling_fingerprint(
         inventory.hosts[0].config, env_file=_environment_files(inventory, env_file)["coordinator"]
     )
-    if source["value"]["scheduling_fingerprint"] != accepted.active_fingerprint:
+    if source["value"]["scheduling_fingerprint"] != authored_fingerprint:
         raise QueueConflictError(
             "source authored policy differs from accepted native configuration"
         )
@@ -251,6 +273,7 @@ def preview(
     return {
         "schema_version": 1,
         "outcome": "preview",
+        "hold_admission": hold_admission,
         "fleet": inventory.name,
         "release": target,
         "source": source,
@@ -608,7 +631,7 @@ def _repair_check_selection(operation, deployment):
         _check_selection(operation)
         return _continue(operation)
     if (
-        operation.intent["kind"] != "runtime-upgrade"
+        operation.intent["kind"] not in {"runtime-upgrade", "runtime-upgrade-publication"}
         or not (operation.directory / "irreversible.json").exists()
         or any((operation.directory / item).exists() for item in (
             "restoring.json", "complete.json", "aborted.json",
@@ -635,11 +658,10 @@ def _repair_check_selection(operation, deployment):
     candidate = load_deployment(candidate_path)
     if replace(candidate, path=original.path, preparation_profile=original.preparation_profile) != original:
         raise QueueConfigError("check selection repair may change only the preparation profile")
-    policies = operation.intent["declarations"]["coordinator"]["preparation"]["profiles"]
-    chosen = policies.get(candidate.preparation_profile)
+    declarations = operation.intent.get("target_declarations", operation.intent["declarations"])
+    execution = _check_execution(_check_selection(operation))
     for name in operation.intent["agents"]:
-        resident = operation.intent["declarations"][name]["resident_profiles"][0]["descriptor"]["profile_id"]
-        if chosen is None or chosen["resident_profile_id"] != resident:
+        if _check_profile(declarations, name, candidate, execution) != candidate.preparation_profile:
             raise QueueConfigError("repaired preparation profile does not match " + name)
         if not attempts and (operation.directory / (name + "-check-selection.json")).exists():
             raise QueueConflictError("check preparation already started")
@@ -654,12 +676,25 @@ def _repair_check_selection(operation, deployment):
     return _continue(operation)
 
 
+def _check_execution(selection):
+    from loom.queue.submitted_execution import SubmittedContainerExecution
+
+    raw = selection.get("execution")
+    return None if raw is None else SubmittedContainerExecution.from_dict(raw)
+
+
 @timed("check_prepare")
-def _check_profile(declarations, name, deployment):
-    profile_id = declarations[name]["resident_profiles"][0]["descriptor"]["profile_id"]
+def _check_profile(declarations, name, deployment, execution=None):
+    declaration = declarations[name]
     policies = declarations["coordinator"]["preparation"]["profiles"]
-    matches = [key for key, value in policies.items()
-               if value.get("resident_profile_id") == profile_id]
+    if execution is not None:
+        ids = {p["policy_id"] for p in declaration.get("container_policies", ())}
+        matches = [key for key, value in policies.items()
+                   if value.get("container_policy_id") in ids]
+    else:
+        ids = {p["descriptor"]["profile_id"] for p in declaration["resident_profiles"]}
+        matches = [key for key, value in policies.items()
+                   if value.get("resident_profile_id") in ids]
     chosen = (deployment.preparation_profile if deployment.preparation_profile in matches
               else matches[0] if len(matches) == 1 else None)
     if chosen is None:
@@ -668,8 +703,8 @@ def _check_profile(declarations, name, deployment):
 
 
 def _check_kinds(operation, name, declaration):
-    # Provider-backed GPU inventory need not appear in the legacy profile list.
-    devices = declaration["resident_profiles"][0].get("gpu_devices") or (
+    # Provider-backed GPU inventory need not appear in a resident profile list.
+    devices = any(p.get("gpu_devices") for p in declaration["resident_profiles"]) or (
         operation.intent["agents"][name].get("offer") or {}
     ).get("gpu_devices")
     return ("cpu", "storage", *(["gpu"] if devices else []))
@@ -693,7 +728,7 @@ def _preflight_checks(operation):
     for name in operation.intent["agents"]:
         if name in deferred:
             continue
-        chosen = _check_profile(declarations, name, deployment)
+        chosen = _check_profile(declarations, name, deployment, _check_execution(selection))
         requests = {}
         for check in _check_kinds(operation, name, declarations[name]):
             if check == "gpu" and operation.intent.get("gpu_qualification") == "nonexclusive":
@@ -702,6 +737,7 @@ def _preflight_checks(operation):
             requests[check] = PrepareRunRequest(
                 identity + "-preflight", identity, deployment.source,
                 selection["config"], chosen,
+                execution=_check_execution(selection),
                 overrides=tuple(key + "=" + json.dumps(value)
                                 for key, value in probe_configuration(check, name).items()),
             ).to_dict()
@@ -729,7 +765,7 @@ def _prepare_attempt(operation, name, check, identity, previous=None):
         selection = _check_selection(operation)
         deployment = load_deployment(selection["deployment"])
         declarations = operation.intent.get("target_declarations", operation.intent["declarations"])
-        chosen = _check_profile(declarations, name, deployment)
+        chosen = _check_profile(declarations, name, deployment, _check_execution(selection))
         from loom.deployment import export_connection_deployment
 
         # A repaired selection must not rewrite the deployment bound by failed checks.
@@ -752,6 +788,7 @@ def _prepare_attempt(operation, name, check, identity, previous=None):
             deployment=selected_path,
             operator_connection=Path(selection["operator_connection"]),
             config=selection["config"],
+            execution=_check_execution(selection),
             agent_id=name,
             checks=[check],
             env_file=None
@@ -823,19 +860,22 @@ def _run_checks(operation):
             continue
         for check in _check_kinds(operation, name, declaration):
             if check == "gpu" and operation.intent.get("gpu_qualification") == "nonexclusive":
-                # Select the same profile used by the native CPU/storage checks.
-                profile_id = declaration["resident_profiles"][0]["descriptor"]["profile_id"]
                 observed = operation.operator.observe_agent(name)
                 if observed.availability != "available" or observed.freshness != "current":
                     raise _Waiting("current GPU capability profile required: " + name)
-                profiles = [
-                    p for p in (thaw_plain_data(observed.value).get("offer") or {}).get("profile_identities", ())
-                    if p["profile_id"] == profile_id
-                ]
-                if len(profiles) != 1:
-                    raise QueueConflictError("GPU capability profile unavailable or ambiguous")
-                profile = profiles[0]
-                result = operation.call(name, "gpu-capability", profile=profile)
+                selection = _check_selection(operation)
+                execution = _check_execution(selection)
+                if execution is None:
+                    policy = {"resident_profile_id": declaration["resident_profiles"][0]["descriptor"]["profile_id"]}
+                else:
+                    declarations = operation.intent.get("target_declarations", operation.intent["declarations"])
+                    chosen = _check_profile(declarations, name, load_deployment(selection["deployment"]), execution)
+                    policy = declarations["coordinator"]["preparation"]["profiles"][chosen]
+                from .self_tests import selected_check_profile
+
+                profile = selected_check_profile(policy, thaw_plain_data(observed.value), execution)
+                result = operation.call(name, "gpu-capability", profile=profile,
+                    **({"execution": execution.to_dict()} if execution is not None else {}))
                 operation.check_observations[name + ":gpu-capability"] = result
                 if result.get("outcome") != "passed":
                     raise QueueConflictError("GPU capability failed: " + str(result))
@@ -915,7 +955,41 @@ def _run_checks(operation):
     operation.settled()
 
 
+def _release_publication_hold(operation):
+    if not operation.intent["kind"].endswith("-publication"):
+        raise QueueConflictError("operation has no client publication hold")
+    path = operation.directory / "restoring.json"
+    if not path.exists():
+        raise QueueConflictError("native checks have not completed")
+    receipt = read(path)
+    if receipt.get("intent_digest") != digest(operation.intent):
+        raise QueueConflictError("publication checkpoint intent changed")
+    if receipt.get("publication_released"):
+        return
+    operation.gate()
+    operation.settled()
+    # External client publication can change unused host-default keys, but must
+    # leave every composed native role and all other pinned inputs unchanged.
+    updates_path = operation.directory / "accepted-inputs.json"
+    updates = read(updates_path) if updates_path.exists() else {}
+    environments = {
+        row["env_file"]: sshops._file_hash(Path(row["env_file"]))
+        for row in operation.intent["hosts"].values() if row["env_file"] is not None
+    }
+    operation.recheck(environments)
+    atomic(updates_path, {**updates, **environments})
+    operation.recheck()
+    atomic(path, {**receipt, "publication_released": True})
+
+
 def _restore(operation, *, abort=False):
+    if not abort and operation.intent["kind"].endswith("-publication"):
+        receipt = read(operation.directory / "restoring.json")
+        if receipt.get("intent_digest") != digest(operation.intent):
+            raise QueueConflictError("publication checkpoint intent changed")
+        if not receipt.get("publication_released"):
+            operation.gate()
+            raise _Waiting("qualified native checks await client publication", "publication_pending")
     phase(operation, "restoring")
     for name, original in operation.intent.get("restore_agents", operation.intent["agents"]).items():
         keys = [name + "-drain", name + "-checks-capacity"]
@@ -983,11 +1057,17 @@ def _continue(operation):
     if (operation.directory / "workload-repair" / "intent.json").exists():
         from .runtime_workload_repair import continue_repair
         return continue_repair(operation)
-    if operation.intent.get("kind") == "workload-upgrade":
+    if operation.intent.get("runtime_retirement"):
+        from .runtime_retirement import continue_upgrade
+        return continue_upgrade(operation)
+    if operation.intent.get("kind") in {"workload-upgrade", "workload-upgrade-publication", "configuration-retirement", "configuration-retirement-publication"}:
         from .workload_upgrades import continue_upgrade
         return continue_upgrade(operation)
     if (operation.directory / "complete.json").exists():
         return read(operation.directory / "complete.json")
+    if operation.intent["kind"].endswith("-publication") and (operation.directory / "restoring.json").exists():
+        _restore(operation)
+        return _complete_runtime(operation)
     operation.recheck()
     irreversible = operation.directory / "irreversible.json"
     recovery = operation.intent.get("recover_retained_results", False)
@@ -1093,6 +1173,10 @@ def _continue(operation):
         _run_checks(operation)
         atomic(restoring, {"intent_digest": digest(operation.intent)})
     _restore(operation)
+    return _complete_runtime(operation)
+
+
+def _complete_runtime(operation):
     result = {
         "state": "complete",
         "release": operation.intent["release"],
@@ -1113,12 +1197,15 @@ def upgrade(
     operation_id=None,
     runtime_release=None,
     recover_retained_results=False,
+    hold_admission=False,
     workload_profile=None,
+    retire_configuration=False,
     image=None,
     workload_inventory=None,
     deployment=None,
     connection=None,
     config="fleet-check.yaml",
+    check_execution=None,
     env_file=None,
     apply=False,
     timeout_seconds=120,
@@ -1167,12 +1254,15 @@ def _upgrade(
     operation_id=None,
     runtime_release=None,
     recover_retained_results=False,
+    hold_admission=False,
     workload_profile=None,
+    retire_configuration=False,
     image=None,
     workload_inventory=None,
     deployment=None,
     connection=None,
     config="fleet-check.yaml",
+    check_execution=None,
     env_file=None,
     apply=False,
     timeout_seconds=120,
@@ -1187,7 +1277,7 @@ def _upgrade(
 ):
     """Preview/apply or continue one immutable service upgrade; never cancel work."""
     if apply:
-        observation.kind = "workload-upgrade" if workload_profile is not None else "runtime-upgrade"
+        observation.kind = "configuration-retirement" if retire_configuration else ("workload-upgrade" if workload_profile is not None else "runtime-upgrade")
     _environment_files(inventory, env_file)
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise QueueConfigError("timeout must be positive and finite")
@@ -1197,19 +1287,24 @@ def _upgrade(
         raise QueueConfigError("qualification reason requires deferred agents")
     if defer_agents is not None and not apply and operation_id is None:
         raise QueueConfigError("qualification exceptions require an applied upgrade")
-    if runtime_release is not None and (workload_profile is not None or image is not None or workload_inventory is not None):
+    if runtime_release is not None and (workload_profile is not None or image is not None or (workload_inventory is not None and not retire_configuration)):
         raise QueueConfigError("service and workload targets are mutually exclusive")
-    if apply and runtime_release is None and (workload_profile is None or image is None):
+    if retire_configuration and (workload_profile is not None or image is not None or recover_retained_results):
+        raise QueueConfigError("configuration retirement cannot select resident image promotion or result recovery")
+    if apply and not retire_configuration and runtime_release is None and (workload_profile is None or image is None):
         raise QueueConfigError("apply requires --runtime-release or --workload-profile and --image")
     if not apply and operation_id is None:
         return preview(
             inventory,
             runtime_release=runtime_release,
             recover_retained_results=recover_retained_results,
+            hold_admission=hold_admission,
             workload_profile=workload_profile, image=image, workload_inventory=workload_inventory,
+            retire_configuration=retire_configuration,
             deployment=deployment,
             connection=connection,
             config=config,
+            check_execution=check_execution,
             env_file=env_file,
         )
     if operation_id is None:
@@ -1231,10 +1326,13 @@ def _upgrade(
                 inventory,
                 runtime_release=runtime_release,
                 recover_retained_results=recover_retained_results,
+                hold_admission=hold_admission,
                 workload_profile=workload_profile, image=image, workload_inventory=workload_inventory,
+                retire_configuration=retire_configuration,
                 deployment=deployment,
                 connection=connection,
                 config=config,
+                check_execution=check_execution,
                 env_file=env_file,
             )
             target = Path(str(runtime_release or inventory.runtime_release)).resolve()
@@ -1261,15 +1359,17 @@ def _upgrade(
                 "env_file": None if env_file is None else str(Path(env_file).resolve()),
                 "timeout_seconds": timeout_seconds,
             }
-            if workload_profile is not None:
+            if workload_profile is not None or retire_configuration:
                 from .workload_upgrades import bind_intent
                 intent = bind_intent(intent, plan, directory)
+            if hold_admission:
+                intent["kind"] += "-publication"
             atomic(path, intent)
             prepared_plan = plan
         intent = read(path)
-        if intent.get("kind") not in {"runtime-upgrade", "workload-upgrade"}:
+        if intent.get("kind") not in {"runtime-upgrade", "workload-upgrade", "runtime-upgrade-publication", "workload-upgrade-publication", "configuration-retirement", "configuration-retirement-publication"}:
             raise QueueConflictError("operation belongs to another kind")
-        observation.kind = intent["kind"]
+        observation.kind = intent["kind"].removesuffix("-publication")
         if runtime_release is not None and Path(runtime_release).resolve() != Path(
             intent["target_path"]
         ):
@@ -1281,16 +1381,25 @@ def _upgrade(
         ):
             raise QueueConflictError("workload inventory intent changed")
         if apply:
+            if bool(intent.get("retire_configuration")) != retire_configuration:
+                raise QueueConflictError("configuration retirement intent changed")
+            if retire_configuration and (workload_inventory is None or intent["workload_inventory"] != str(Path(workload_inventory).resolve())):
+                raise QueueConflictError("configuration retirement candidate inventory changed")
+            if intent["kind"].endswith("-publication") != hold_admission:
+                raise QueueConflictError("publication hold intent changed")
             if bool(intent.get("recover_retained_results")) != recover_retained_results:
                 raise QueueConflictError("retained-result recovery intent changed")
-            selected = _checks(inventory, deployment, connection, config)
+            selected = _checks(inventory, deployment, connection, config, check_execution)
             if (
                 selected != intent.get("original_check_selection", intent["check_selection"])
                 or (None if env_file is None else str(Path(env_file).resolve()))
                 != intent["env_file"]
             ):
                 raise QueueConflictError("upgrade check or environment intent changed")
-        if intent["kind"] == "workload-upgrade":
+        if intent.get("runtime_retirement"):
+            from .runtime_retirement import RuntimeRetirementUpgrade
+            operation = RuntimeRetirementUpgrade(inventory, directory, intent, observation)
+        elif intent["kind"] in {"workload-upgrade", "workload-upgrade-publication", "configuration-retirement", "configuration-retirement-publication"}:
             from .workload_upgrades import WorkloadUpgrade
             operation = WorkloadUpgrade(inventory, directory, intent, observation)
             operation._preview_qualification = prepared_plan
@@ -1318,6 +1427,9 @@ def _upgrade(
                         _restore(operation, abort=True)
                     atomic(directory / "aborted.json", {"state": "aborted"})
                     result = {"state": "aborted"}
+            elif action == "release-admission":
+                _release_publication_hold(operation)
+                result = _continue(operation)
             elif action == "repair-check-selection":
                 result = _repair_check_selection(operation, deployment)
             elif action == "repair-workload":
@@ -1338,6 +1450,10 @@ def _upgrade(
         except (_Waiting, sshops.SshUnavailable) as exc:
             observation.reason = _reason_code(exc)
             result = {"state": "waiting", "reason": str(exc)}
+            if getattr(exc, "code", None) == "publication_pending":
+                result.update(publication_ready=True, checks=_attempts(operation))
+                if "image_sha256" in intent:
+                    result["image_sha256"] = intent["image_sha256"]
         except CoordinatorClientError as exc:
             observation.reason = _reason_code(exc)
             result = {

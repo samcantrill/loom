@@ -267,6 +267,12 @@ def test_bound_control_owner_refuses_unresolved_delivery_before_shutdown(
     monkeypatch.setattr(
         "loom.queue.agent_session_transport._exchange_agent_request", forbidden
     )
+    from loom.queue.deployment import service_replacement_guard
+
+    binding = read_agent_declaration_binding(spec.agent_root, spec.declaration_digest)
+    with pytest.raises(QueueError, match="settled agent work"):
+        with service_replacement_guard(spec, binding.root_id):
+            pytest.fail("replacement accepted unresolved delivery")
     with pytest.raises(QueueError, match="retained work"):
         retire_outbound_agent(
             spec,
@@ -289,3 +295,58 @@ def test_bound_control_owner_refuses_unresolved_delivery_before_shutdown(
             ).fetchone()
             is None
         )
+
+
+def test_replacement_spec_holds_native_owners_without_deleted_execution_inputs(tmp_path, monkeypatch):
+    from loom.queue.deployment import service_replacement_guard
+    from loom.queue._agent_process_supervisor import (
+        AgentProcessSupervisorError, retained_supervisor_guard,
+    )
+
+    project = tmp_path / "project"
+    project.mkdir()
+    source = _agent_config(tmp_path)
+    authored = json.loads(source.read_text())
+    authored["resident_profiles"][0]["project_root"] = str(project)
+    _write_protected(source, authored)
+    service = load_outbound_agent_service_config(source)
+    LocalDaemonAgentHttpClient.initialize_agent_root(service.client)
+    spec = read_agent_spec(source)
+    binding = read_agent_declaration_binding(spec.agent_root, spec.declaration_digest)
+    project.rmdir()
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("replacement ownership guard qualified unavailable execution")
+
+    monkeypatch.setattr("loom.queue.deployment.qualify_agent_spec", forbidden)
+    with service_replacement_guard(spec, binding.root_id):
+        with pytest.raises(QueueError, match="already locked"):
+            with agent_declaration_guard(spec.agent_root, spec.declaration_digest):
+                pytest.fail("agent owner lock was not held")
+        with pytest.raises(AgentProcessSupervisorError, match="still owned"):
+            with retained_supervisor_guard(spec.agent_root, agent_id=binding.root_id):
+                pytest.fail("supervisor owner lock was not held")
+    assert read_agent_declaration_binding(spec.agent_root, spec.declaration_digest) == binding
+    assert not project.exists()
+
+
+@pytest.mark.parametrize("change", ["source", "unaccepted", "root"])
+def test_replacement_spec_requires_exact_accepted_predecessor(tmp_path, change):
+    from loom.queue.deployment import service_replacement_guard
+
+    source = _agent_config(tmp_path)
+    service = load_outbound_agent_service_config(source)
+    LocalDaemonAgentHttpClient.initialize_agent_root(
+        replace(service.client, declaration_digest=None) if change == "unaccepted" else service.client
+    )
+    spec = read_agent_spec(source)
+    with sqlite3.connect(spec.agent_root / "control.sqlite") as conn:
+        root_id = conn.execute("SELECT value FROM root_metadata WHERE key='stable_id'").fetchone()[0]
+    if change == "source":
+        authored = json.loads(source.read_text())
+        authored["reconnect_seconds"] += 1
+        _write_protected(source, authored)
+    expected = {"source": "changed after inspection", "unaccepted": "accepted agent declaration", "root": "root identity changed"}
+    with pytest.raises(QueueError, match=expected[change]):
+        with service_replacement_guard(spec, "wrong-root" if change == "root" else root_id):
+            pytest.fail("unaccepted predecessor acquired replacement ownership")

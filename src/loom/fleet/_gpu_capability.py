@@ -29,14 +29,27 @@ def gpu_capability(profile: ResidentExecutionProfile) -> dict[str, object]:
     exclusive scheduling, available memory, throughput or claim release.
     Provider occupancy and live resource claims are neither read nor changed.
     """
+    return _probe(profile.launch_profile, profile.gpu_devices,
+                  profile.readiness_requirements.timeout_seconds, profile.descriptor.to_dict())
+
+
+def submitted_gpu_capability(policy, execution, inventory, *, workspace):
+    """Probe an explicit submitted image using the agent's declared GPU inventory."""
+    launch = policy.launch_profile(execution, workspace=workspace)
+    return _probe(launch, inventory.gpu_devices, 120, policy.capability.to_dict())
+
+
+def _probe(launch, gpu_devices, timeout_seconds, identity):
     devices = sorted(
-        (device for device in profile.gpu_devices if device.descriptor.healthy),
+        (device for device in gpu_devices if device.descriptor.healthy),
         key=lambda device: device.descriptor.device_id,
     )
     evidence: dict[str, object] = {
         "mode": "nonexclusive",
         "scope": "cuda_capability",
-        "profile": profile.descriptor.to_dict(),
+        "profile": identity,
+        **({"execution": launch.submitted_execution.to_dict()}
+           if launch.submitted_execution is not None else {}),
         "exclusive_scheduling": "not_tested",
     }
     if not devices:
@@ -61,10 +74,10 @@ def gpu_capability(profile: ResidentExecutionProfile) -> dict[str, object]:
         "resource_selection": {"account_for": [], "enforce": ["gpu"]},
     }
     result = run_resident_probe(
-        profile.launch_profile,
+        launch,
         _SCRIPT,
         {},
-        timeout_seconds=profile.readiness_requirements.timeout_seconds,
+        timeout_seconds=timeout_seconds,
         device_environment={"CUDA_VISIBLE_DEVICES": binding},
         runtime=runtime,
     )

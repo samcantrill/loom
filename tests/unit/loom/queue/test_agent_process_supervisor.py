@@ -1077,7 +1077,7 @@ def test_apptainer_namespace_signal_race_preserves_supervisor_ownership(
 
     with fake_apptainer() as binding:
         cache_base = tmp_path / "cache"
-        cache_base.mkdir()
+        cache_base.mkdir(mode=0o700)
         profile = replace(_profile(), container={
             **binding, "container": {**binding["container"], "mounts": [
                 {"source": str(cache_base), "target": "/loom/cache", "mode": "rw"}

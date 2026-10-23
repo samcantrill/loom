@@ -699,6 +699,19 @@ def execute(request, repeated, directory):
         service = load_outbound_agent_service_config(
             config(request), env_file=environment(request)
         )
+        if request.get("execution") is not None:
+            from loom.fleet._gpu_capability import submitted_gpu_capability
+            from loom.queue.submitted_execution import SubmittedContainerExecution
+
+            execution = SubmittedContainerExecution.from_dict(request["execution"])
+            policies = [p for p in service.client.container_policies
+                        if p.capability.to_dict() == request["profile"]]
+            if len(policies) != 1:
+                raise QueueConflictError("GPU capability policy differs from admitted selection")
+            return submitted_gpu_capability(
+                policies[0], execution, service.client.execution_inventory,
+                workspace=service.client.agent_root,
+            )
         profiles = [
             p for p in service.client.resident_profiles
             if p.descriptor.profile_id == request["profile"]["profile_id"]
@@ -753,7 +766,7 @@ def main():
         "observe", "resources", "upgrade-probe", "upgrade-settlement", "upgrade-result-recovery", "upgrade-stop",
         "upgrade-check-capture", "upgrade-check-prepare",
         "upgrade-replace", "workload-probe", "workload-coordinator-probe", "workload-recover",
-        "workload-stage", "workload-publish",
+        "workload-stage", "workload-publish", "workload-stopped-retire",
     }:
         raise QueueConflictError("unsupported fixed native host action")
     admin = Path(request["admin"])
@@ -763,6 +776,18 @@ def main():
             receipt = admin / "operations" / request["request_id"] / "receipt.json"
             if receipt.exists():
                 return read(receipt)
+            intent = receipt.parent / "intent.json"
+            if intent.exists() and read(intent)["action"] == "workload-stopped-retire":
+                from loom.queue._profile_promotion import publication_declaration
+                from loom.queue.agent_sessions import AgentControl
+                from loom.queue.deployment import read_agent_spec
+
+                retained = read(intent)
+                spec = read_agent_spec(config(retained), env_file=environment(retained))
+                if spec.agent_root != Path(retained["root"]):
+                    raise QueueConflictError("retained publication selects another native root")
+                after = publication_declaration(spec, AgentControl.from_value(retained["control"]))
+                return None if after is None else {"pending_publication": {"after": after}}
             publication = receipt.parent / "reload.json"
             return (
                 {"pending_publication": read(publication)}
@@ -797,7 +822,7 @@ def main():
         if not repeated:
             atomic(dispatched, {"request_id": request["request_id"]})
         if (
-            request["action"] != "prepare"
+            request["action"] not in {"prepare", "workload-stopped-retire"}
             and request.get("expected_declaration") is not None
         ):
             if digest(payload(request)) != request["expected_declaration"]:

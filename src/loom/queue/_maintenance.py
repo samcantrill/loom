@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from .local_daemon_execution import ManagedLocalIntent
 
 MAINTENANCE_CAPABILITY = "maintenance-admission-v1"
+SUBMITTED_CHECK_CAPABILITY = "maintenance-submitted-check-v1"
 _KEY = "maintenance-gate"
 _PREFIX = "maintenance-control:"
 
@@ -155,7 +156,13 @@ def validate_check(check: Mapping[str, object]) -> None:
     request = RunRequest.from_dict(check["request"])
     if request.mode != "exact" or request.fresh_stages:
         raise ValueError("maintenance check requires an exact fresh native request")
-    ResidentProfileDescriptor.from_dict(cast(Mapping[str, object], check["profile"]))
+    if request.preparation.execution is None:
+        ResidentProfileDescriptor.from_dict(cast(Mapping[str, object], check["profile"]))
+    else:
+        from .submitted_execution import SubmittedContainerCapability
+
+        capability = SubmittedContainerCapability.from_dict(check["profile"])
+        capability.require_execution(request.preparation.execution)
     ResourceRequest.from_dict(check["resources"])
     ResourceRequest.from_dict(check["preparation_resources"])
     count = check["max_stages"]
@@ -251,7 +258,10 @@ def mutate(
                 )
                 if (
                     not isinstance(selected_profile, Mapping)
-                    or selected_profile["profile_descriptor"] != check["profile"]
+                    or selected_profile.get(
+                        "container_capability" if request.preparation.execution is not None
+                        else "profile_descriptor"
+                    ) != check["profile"]
                 ):
                     raise QueueConflictError("maintenance check profile conflicts")
                 retained_key = "maintenance-check:" + check_id
@@ -374,14 +384,33 @@ def _check_target(
 ) -> None:
     from loom.pipeline.orchestration import ExecutionRequirement
 
-    profile = check["profile"]
-    requirement = ExecutionRequirement(
-        profile["project_fingerprint"],
-        profile["environment_fingerprint"],
-        profile["executor_fingerprint"],
+    from .run import RunRequest
+    from .submitted_execution import (
+        SUBMITTED_EXECUTION_SCOPE, SubmittedContainerCapability, submitted_binding,
     )
+
+    profile = check["profile"]
+    execution = RunRequest.from_dict(check["request"]).preparation.execution
+    capability = None
+    if execution is None:
+        requirement = ExecutionRequirement(
+            profile["project_fingerprint"],
+            profile["environment_fingerprint"],
+            profile["executor_fingerprint"],
+        )
+    else:
+        capability = SubmittedContainerCapability.from_dict(profile)
+        requirement = capability.requirement(execution)
     if len(intent.pipeline.stages) > (1 if preparation_child else check["max_stages"]):
         raise MaintenanceCheckConflict("maintenance check exceeds stage bound")
+    if execution is not None:
+        # Eligibility alone does not bind image bytes. Both preparation and
+        # composed stages must retain the exact operator-authorized execution.
+        for stage in intent.pipeline.stages:
+            if submitted_binding(stage.fingerprint_fields.get(SUBMITTED_EXECUTION_SCOPE)) != (
+                execution, capability,
+            ):
+                raise MaintenanceCheckConflict("maintenance check submitted execution conflicts")
     for name, placement in intent.placements.items():
         if (
             placement.target != check["agent_id"]

@@ -9,6 +9,16 @@ import sys
 from pathlib import Path
 
 
+def _execution(path):
+    if path is None:
+        return None
+    from loom.queue.deployment import _protected_input_path
+    from loom.queue.submitted_execution import SubmittedContainerExecution
+
+    _protected_input_path(path, label="check execution", require_owner_only=True)
+    return SubmittedContainerExecution.from_dict(json.loads(path.read_text()))
+
+
 def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     parser = subparsers.add_parser(
         "fleet", help="inspect and prepare a generic native fleet"
@@ -27,6 +37,7 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     check.add_argument("--deployment", type=Path)
     check.add_argument("--connection", type=Path, help="protected operator connection")
     check.add_argument("--config", default="fleet-check.yaml")
+    check.add_argument("--execution", type=Path, help="protected submitted-container execution JSON for new checks")
     check.add_argument("--agent", dest="agent_id")
     check.add_argument("--checks", default="cpu,storage")
     check.add_argument(
@@ -64,10 +75,12 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     apply_command.set_defaults(handler=handle)
     upgrade = commands.add_parser("upgrade", help="preview or apply service or selected workload maintenance")
     upgrade.add_argument("--fleet", required=True)
-    target = upgrade.add_mutually_exclusive_group(required=True)
+    target = upgrade.add_mutually_exclusive_group()
     target.add_argument("--runtime-release", type=Path)
     target.add_argument("--workload-profile")
+    upgrade.add_argument("--retire-configuration", action="store_true")
     upgrade.add_argument("--recover-retained-results", action="store_true", help="replace communication runtimes after proving only durable contained results remain")
+    upgrade.add_argument("--hold-admission", action="store_true", help="hold qualified maintenance for client publication")
     upgrade.add_argument("--image", type=Path)
     upgrade.add_argument(
         "--workload-inventory", type=Path,
@@ -80,6 +93,7 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     upgrade.add_argument("--deployment", type=Path)
     upgrade.add_argument("--connection", type=Path)
     upgrade.add_argument("--config", default="fleet-check.yaml")
+    upgrade.add_argument("--check-execution", type=Path, help="protected submitted-container execution JSON for qualification")
     upgrade.add_argument("--env-file", type=Path)
     upgrade.add_argument("--timeout", type=float, default=120)
     upgrade.add_argument("--defer-checks-for", dest="defer_agents", action="append")
@@ -91,7 +105,7 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
         "operation", help="inspect or continue retained setup"
     )
     operations = operation.add_subparsers(dest="operation_command", required=True)
-    for action in ("status", "resume", "abort", "retry-check", "retry-control", "repair-workload", "repair-check-selection", "defer-checks"):
+    for action in ("status", "resume", "abort", "retry-check", "retry-control", "repair-workload", "repair-check-selection", "defer-checks", "release-admission"):
         item = operations.add_parser(action)
         item.add_argument("operation_id")
         item.add_argument("--fleet", required=True)
@@ -260,9 +274,9 @@ def handle(namespace: argparse.Namespace) -> int:
                 if namespace.defer_agents is not None or namespace.defer_reason is not None:
                     raise ValueError("qualification exceptions require --apply")
                 from loom.fleet.upgrades import preview
-                result = preview(inventory, runtime_release=namespace.runtime_release, recover_retained_results=namespace.recover_retained_results, workload_profile=namespace.workload_profile, image=namespace.image, workload_inventory=namespace.workload_inventory, deployment=namespace.deployment, connection=namespace.connection, config=namespace.config, env_file=namespace.env_file)
+                result = preview(inventory, hold_admission=namespace.hold_admission, runtime_release=namespace.runtime_release, recover_retained_results=namespace.recover_retained_results, workload_profile=namespace.workload_profile, retire_configuration=namespace.retire_configuration, image=namespace.image, workload_inventory=namespace.workload_inventory, deployment=namespace.deployment, connection=namespace.connection, config=namespace.config, check_execution=_execution(namespace.check_execution), env_file=namespace.env_file)
             else:
-                result = upgrade(inventory, operation_id=namespace.operation_id, runtime_release=namespace.runtime_release, recover_retained_results=namespace.recover_retained_results, workload_profile=namespace.workload_profile, image=namespace.image, workload_inventory=namespace.workload_inventory, deployment=namespace.deployment, connection=namespace.connection, config=namespace.config, env_file=namespace.env_file, timeout_seconds=namespace.timeout, apply=True, defer_agents=namespace.defer_agents, defer_reason=namespace.defer_reason, progress=progress)
+                result = upgrade(inventory, operation_id=namespace.operation_id, runtime_release=namespace.runtime_release, recover_retained_results=namespace.recover_retained_results, workload_profile=namespace.workload_profile, retire_configuration=namespace.retire_configuration, image=namespace.image, workload_inventory=namespace.workload_inventory, deployment=namespace.deployment, connection=namespace.connection, config=namespace.config, check_execution=_execution(namespace.check_execution), env_file=namespace.env_file, timeout_seconds=namespace.timeout, apply=True, hold_admission=namespace.hold_admission, defer_agents=namespace.defer_agents, defer_reason=namespace.defer_reason, progress=progress)
         elif command in {"apply", "operation"}:
             from loom.fleet.ssh_operations import apply, operation_status
 
@@ -270,11 +284,11 @@ def handle(namespace: argparse.Namespace) -> int:
                 from loom.fleet._host import read
                 from loom.fleet.ssh_operations import _directory
                 intent = read(_directory(inventory, namespace.operation_id) / "intent.json")
-                if progress is not None and intent.get("kind") not in {"runtime-upgrade", "workload-upgrade"}:
+                if progress is not None and intent.get("kind") not in {"runtime-upgrade", "workload-upgrade", "runtime-upgrade-publication", "workload-upgrade-publication", "configuration-retirement", "configuration-retirement-publication"}:
                     raise ValueError("progress requires a maintenance upgrade")
                 if namespace.operation_command == "status":
                     result = operation_status(inventory, namespace.operation_id)
-                elif intent.get("kind") in {"runtime-upgrade", "workload-upgrade"}:
+                elif intent.get("kind") in {"runtime-upgrade", "workload-upgrade", "runtime-upgrade-publication", "workload-upgrade-publication", "configuration-retirement", "configuration-retirement-publication"}:
                     from loom.fleet.upgrades import upgrade
                     result = upgrade(inventory, operation_id=namespace.operation_id, action=namespace.operation_command, deployment=getattr(namespace, "deployment", None), failed_check=getattr(namespace, "failed_check", None), new_check=getattr(namespace, "new_check", None), failed_control=getattr(namespace, "failed_control", None), new_control=getattr(namespace, "new_control", None), workload_profile=getattr(namespace, "workload_profile", None), image=getattr(namespace, "image", None), workload_inventory=getattr(namespace, "workload_inventory", None), defer_agents=getattr(namespace, "defer_agents", None), defer_reason=getattr(namespace, "defer_reason", None), progress=progress)
                 elif namespace.operation_command == "resume":
@@ -315,6 +329,7 @@ def handle(namespace: argparse.Namespace) -> int:
                 deployment=namespace.deployment,
                 operator_connection=namespace.connection,
                 config=namespace.config,
+                execution=_execution(namespace.execution),
                 agent_id=namespace.agent_id,
                 checks=namespace.checks.split(","),
                 operation_id=namespace.operation_id,

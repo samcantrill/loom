@@ -576,3 +576,51 @@ def test_retired_socket_protocol_is_refused_before_operator_mutation(owner, tmp_
         assert daemon.agent(session.agent_id).session_id == session.session_id
     finally:
         server.stop()
+
+
+@pytest.mark.parametrize("owner", [("scheduling_reload", "maintenance")], indirect=True)
+@pytest.mark.parametrize("unsupported", [False, True])
+def test_coordinator_retirement_negotiates_before_sending_mutation(owner, monkeypatch, unsupported):
+    from loom.queue import CoordinatorSchedulingReload
+    import loom.queue.local_daemon_transport as unix
+
+    daemon, _, _, _ = owner
+    server = LocalDaemonSocketServer(daemon, daemon.config.endpoint)
+    server.start()
+    calls = []
+    original = unix.dispatch_control
+
+    def old_peer(daemon, principal, operation, payload, **kwargs):
+        calls.append(operation)
+        result = dict(original(daemon, principal, operation, payload, **kwargs))
+        if operation == "operator_handshake" and unsupported:
+            result["capabilities"] = [value for value in result["capabilities"]
+                                      if value != "quiescent-coordinator-retirement-v1"]
+        return result
+
+    monkeypatch.setattr(unix, "dispatch_control", old_peer)
+    try:
+        with CoordinatorOperatorClient.from_unix_socket(
+            daemon.config.endpoint, expected_coordinator_id=daemon._require_started()
+        ) as client:
+            request = CoordinatorSchedulingReload("retire", daemon._scheduling_epoch, "retire roots", {
+                "maintenance_id": "upgrade", "maintenance_intent_digest": "selected",
+                "expected_gate_revision": 1,
+            })
+            if unsupported:
+                with pytest.raises(CoordinatorClientError) as caught:
+                    client.reload_scheduling(request)
+                assert caught.value.code == "unsupported_capability"
+                assert caught.value.ids["missing_capability"] == "quiescent-coordinator-retirement-v1"
+                assert calls == ["operator_handshake"]
+            else:
+                daemon._trusted_scheduling_loader = lambda: daemon.config
+                client.maintenance({"operation_id": "close", "maintenance_id": "upgrade",
+                    "maintenance_intent_digest": "selected", "action": "close",
+                    "expected_revision": 0, "check": None})
+                result = client.reload_scheduling(request)
+                assert result["state"] == "applied"
+                assert client.reload_scheduling(request) == result
+                assert client.observe_maintenance()["state"] == "closed"
+    finally:
+        server.stop()

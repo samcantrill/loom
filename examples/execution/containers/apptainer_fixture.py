@@ -15,7 +15,7 @@ import tempfile
 def fake_apptainer():
     from loom.pipeline.executors.apptainer import _timeout
 
-    with tempfile.TemporaryDirectory(prefix="loom-fake-apptainer-") as scratch:
+    with tempfile.TemporaryDirectory(prefix="loom-fake-apptainer-", dir="/tmp") as scratch:
         root = Path(scratch)
         command = root / "apptainer"
         command.write_text(f"""#!{sys.executable}
@@ -27,7 +27,7 @@ if args == ['--version']:
 assert args.pop(0) == 'exec'
 while args and args[0].startswith('--'):
     option = args.pop(0)
-    if option in ('--pid', '--no-init=false', '--cleanenv', '--nv', '--rocm', '--fakeroot', '--no-home'):
+    if option in ('--pid', '--contain', '--containall', '--no-init=false', '--cleanenv', '--nv', '--rocm', '--fakeroot', '--no-home'):
         continue
     value = args.pop(0)
     if option == '--env':

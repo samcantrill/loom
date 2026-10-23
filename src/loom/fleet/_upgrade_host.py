@@ -45,7 +45,10 @@ def _inspect(request, *, native_owner=None):
         raise QueueConflictError("upgrade native root identity changed")
     compatibility = probe_upgrade_compatibility(
         native_root(request),
-        required_capabilities=tuple(request["required_capabilities"]),
+        required_capabilities=tuple(request["required_capabilities"]) + (
+            ("quiescent-configuration-retirement-v1", "quiescent-coordinator-retirement-v1")
+            if request.get("retirement_declaration") is not None else ()
+        ),
     )
     facts = compatibility.to_dict()
     if (
@@ -57,7 +60,22 @@ def _inspect(request, *, native_owner=None):
         )
     images = {}
     service = None
-    if role(request) == "agent":
+    retirement = None
+    predecessor = None
+    if request.get("retirement_declaration") is not None:
+        from loom.fleet._workload_host import probe, coordinator_probe
+
+        candidate = {**request, "retire_configuration": True}
+        if role(request) == "agent":
+            candidate["candidate_declaration"] = request["retirement_declaration"]
+            qualified = probe(candidate)
+            retirement, predecessor = qualified["target"], qualified["source"]
+        else:
+            candidate["declaration"] = request["retirement_declaration"]
+            retirement = coordinator_probe(candidate)
+        if request.get("retirement_target") is not None and retirement != request["retirement_target"]:
+            raise QueueConflictError("runtime retirement candidate qualification changed")
+    elif role(request) == "agent":
         from loom.diagnostics.models import PreflightStatus
         from loom.queue.deployment import load_outbound_agent_service_config
         from loom.queue.preflight import check_loaded_agent
@@ -97,6 +115,8 @@ def _inspect(request, *, native_owner=None):
         "compatibility": facts,
         "images": images,
         "python": sys.executable,
+        **({"retirement_target": retirement} if retirement is not None else {}),
+        **({"retirement_source": predecessor} if predecessor is not None else {}),
     }, service
 
 
@@ -170,6 +190,8 @@ def replace(request):
     from loom.fleet._services import unit_name, render, systemctl
     from loom.fleet._host import start, keep
 
+    if request.get("retirement_declaration") is not None:
+        raise QueueConflictError("runtime replacement requires native retirement publication first")
     admin = Path(request["admin"])
     previous = read(admin / "active.json")
     if previous not in (request["source_release"], request["release"]):

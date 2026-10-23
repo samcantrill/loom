@@ -91,7 +91,7 @@ class OperatorObservation:
 
 
 def _coordinator_observation(daemon: LocalDaemon) -> OperatorObservation:
-    from ._maintenance import MAINTENANCE_CAPABILITY
+    from ._maintenance import MAINTENANCE_CAPABILITY, SUBMITTED_CHECK_CAPABILITY
     status = daemon.status()
     with daemon._connection() as conn:
         metadata = dict(
@@ -110,7 +110,7 @@ def _coordinator_observation(daemon: LocalDaemon) -> OperatorObservation:
             "configuration_revision": metadata.get("active_configuration_revision"),
             "configuration_fingerprint": daemon.config.active_configuration_fingerprint,
             "scheduling_fingerprint": metadata.get("scheduling_fingerprint"),
-            "capabilities": [OPERATOR_CAPABILITY, MAINTENANCE_CAPABILITY, CONDITIONAL_CONTROL_CAPABILITY, "quiescent-profile-promotion-v2", "quiescent-source-promotion-v1"],
+            "capabilities": [OPERATOR_CAPABILITY, MAINTENANCE_CAPABILITY, SUBMITTED_CHECK_CAPABILITY, CONDITIONAL_CONTROL_CAPABILITY, "quiescent-profile-promotion-v2", "quiescent-source-promotion-v1", "quiescent-configuration-retirement-v1", "quiescent-coordinator-retirement-v1"],
         },
     )
 
@@ -183,6 +183,9 @@ def _agent_observation(daemon: LocalDaemon, agent_id: str) -> OperatorObservatio
             "memory_bytes": offer.memory_bytes,
             "profile_identities": [
                 profile.to_dict() for profile in offer.resident_profiles
+            ],
+            "container_execution_capabilities": [
+                capability.to_dict() for capability in offer.container_execution_capabilities
             ],
             "gpu_devices": [device.to_dict() for device in offer.gpu_devices],
             "gpu_atoms": [atom.to_dict() for atom in offer.gpu_atoms],
@@ -300,7 +303,7 @@ def probe_upgrade_compatibility(
     """
     from .local_daemon import _COORDINATOR_SCHEMA_VERSION, _AGENT_SCHEMA_VERSION, _validate_coordinator_schema
     from .agent_sessions import validate_agent_session_schema
-    from ._maintenance import MAINTENANCE_CAPABILITY
+    from ._maintenance import MAINTENANCE_CAPABILITY, SUBMITTED_CHECK_CAPABILITY
     from .errors import QueueError
 
     owner = None
@@ -324,7 +327,7 @@ def probe_upgrade_compatibility(
                 if role == "coordinator":
                     _validate_coordinator_schema(conn)
         missing = sorted(
-            set(required_capabilities) - {OPERATOR_CAPABILITY, "daemon-control-v1", MAINTENANCE_CAPABILITY, CONDITIONAL_CONTROL_CAPABILITY, "quiescent-profile-promotion-v2", "quiescent-source-promotion-v1"}
+            set(required_capabilities) - {OPERATOR_CAPABILITY, "daemon-control-v1", MAINTENANCE_CAPABILITY, SUBMITTED_CHECK_CAPABILITY, CONDITIONAL_CONTROL_CAPABILITY, "quiescent-profile-promotion-v2", "quiescent-source-promotion-v1", "quiescent-configuration-retirement-v1", "quiescent-coordinator-retirement-v1"}
         )
         reason = (
             "unsupported_capability"
@@ -344,7 +347,7 @@ def probe_upgrade_compatibility(
                 "target_storage_version": target,
                 "compatible": supported and not missing,
                 "protocol_version": "1",
-                "capabilities": ["daemon-control-v1", OPERATOR_CAPABILITY, MAINTENANCE_CAPABILITY, CONDITIONAL_CONTROL_CAPABILITY, "quiescent-profile-promotion-v2", "quiescent-source-promotion-v1"],
+                "capabilities": ["daemon-control-v1", OPERATOR_CAPABILITY, MAINTENANCE_CAPABILITY, SUBMITTED_CHECK_CAPABILITY, CONDITIONAL_CONTROL_CAPABILITY, "quiescent-profile-promotion-v2", "quiescent-source-promotion-v1", "quiescent-configuration-retirement-v1", "quiescent-coordinator-retirement-v1"],
                 "missing_capabilities": cast(list[PlainData], missing),
                 "profile_constraints": "unchanged_bindings_require_separate_qualification",
             },

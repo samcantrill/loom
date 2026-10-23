@@ -2714,3 +2714,167 @@ def test_protected_shared_mount_changes_retain_software_but_change_binding(tmp_p
     (other / "challenge").write_bytes(b"wrong filesystem")
     with pytest.raises(QueueServiceError, match="bytes mismatch"):
         load_coordinator_service_config(source)
+
+
+@pytest.mark.parametrize("condition", ["owned", "interrupted", "ordinary", "open", "wrong_owner", "unrelated"])
+def test_coordinator_retirement_removes_deleted_root_only_at_owned_gate(tmp_path, monkeypatch, condition):
+    from loom.queue import CoordinatorSchedulingReload, LocalDaemonPrincipal, LocalDaemonRole
+
+    source = _coordinator_config(tmp_path)
+    payload = json.loads(source.read_text())
+    payload["local_agent"] = None
+    payload["agent_policy"]["local_owner"] = {
+        "actions": ["scheduling_reload", "maintenance"], "agent_ids": [], "pools": [],
+    }
+    old_data = tmp_path / "obsolete"
+    old_data.mkdir()
+    (old_data / "identity").write_bytes(b"obsolete")
+    payload["shared_roots"] = {"obsolete": {
+        "host_path": str(old_data), "container_path": "/loom/obsolete", "access": "ro",
+        "challenge": {"path": "identity", "sha256": hashlib.sha256(b"obsolete").hexdigest()},
+    }}
+    _write_protected(source, payload)
+    original = load_coordinator_service_config(source)
+    LocalDaemon.initialize_deployment(original.daemon)
+    daemon = LocalDaemon(original.daemon, trusted_scheduling_loader=lambda:
+        load_coordinator_service_config(source, current=original).daemon)
+    started = daemon.start()
+    operator = daemon.operator_view(LocalDaemonPrincipal(
+        f"uid:{tmp_path.stat().st_uid}", LocalDaemonRole.OPERATOR))
+    payload["shared_roots"] = {}
+    _write_protected(source, payload)
+    (old_data / "identity").unlink()
+    old_data.rmdir()
+    if condition == "unrelated":
+        # Native loader's independently authored scheduler change is outside retirement.
+        from dataclasses import replace
+        daemon._trusted_scheduling_loader = lambda: replace(
+            original.daemon, shared_roots={}, poll_interval_seconds=2)
+    binding = {"maintenance_id": "retire-roots", "maintenance_intent_digest": "selected",
+               "expected_gate_revision": 1}
+    try:
+        if condition != "open":
+            operator.maintenance({"operation_id": "close", **{
+                "maintenance_id": "retire-roots", "maintenance_intent_digest": "selected"},
+                "action": "close", "expected_revision": 0, "check": None},
+                expected_coordinator_id=started.coordinator_id)
+        if condition == "wrong_owner":
+            binding["maintenance_id"] = "other-operation"
+        request = CoordinatorSchedulingReload("retire", started.scheduling_epoch, "retire unused roots",
+                                             retirement=None if condition == "ordinary" else binding)
+        assert CoordinatorSchedulingReload.from_dict(request.to_dict()) == request
+        if condition == "interrupted":
+            record = daemon._record_scheduling_reload_intent
+            def interrupted(**kwargs):
+                record(**kwargs)
+                raise RuntimeError("accepted-retirement")
+            with monkeypatch.context() as patch:
+                patch.setattr(daemon, "_record_scheduling_reload_intent", interrupted)
+                with pytest.raises(RuntimeError, match="accepted-retirement"):
+                    operator.reload_scheduling(request)
+        result = operator.reload_scheduling(request)
+        if condition not in {"owned", "interrupted"}:
+            assert result["code"] == "reload_rejected"
+            assert "obsolete" in daemon.config.coordinator_shared_roots
+        else:
+            assert result["state"] == "applied"
+            assert not daemon.config.coordinator_shared_roots
+            assert operator.reload_scheduling(request) == result
+        assert not old_data.exists()
+    finally:
+        daemon.stop()
+    if condition in {"owned", "interrupted"}:
+        restarted = LocalDaemon(load_coordinator_service_config(source).daemon)
+        try:
+            assert restarted.start().coordinator_id == started.coordinator_id
+            assert not restarted.config.coordinator_shared_roots
+        finally:
+            restarted.stop()
+
+
+def test_coordinator_retirement_preserves_retained_preparation_alias_meaning(tmp_path):
+    from dataclasses import replace
+    from loom.queue import CoordinatorSchedulingReload, LocalDaemonPrincipal, LocalDaemonRole
+    from loom.queue._preparation_policy import PreparationPolicy, PreparationProfile, PreparationSourceRoot
+    from loom.queue._remote_stage_execution import ResidentProfileDescriptor
+    from loom.pipeline.runtime.options import RunOptions
+
+    source = _coordinator_config(tmp_path)
+    payload = json.loads(source.read_text())
+    payload["local_agent"] = None
+    payload["agent_policy"]["local_owner"] = {
+        "actions": ["scheduling_reload", "maintenance"], "agent_ids": [], "pools": [],
+    }
+    _write_protected(source, payload)
+    base = load_coordinator_service_config(source).daemon
+    root = PreparationSourceRoot(tmp_path / "project", tmp_path / "snapshots")
+    profile = PreparationProfile(ResidentProfileDescriptor("worker", "1", "p", "e", "x"),
+                                 ("current", "obsolete"), ("shared",), RunOptions())
+    before = replace(base, preparation_policy=PreparationPolicy(
+        {"current": root, "obsolete": root}, {"current": profile, "obsolete": profile}))
+    after = replace(before, preparation_policy=PreparationPolicy(
+        {"current": root}, {"current": replace(profile, allowed_source_roots=("current",))}))
+    LocalDaemon.initialize_deployment(before)
+    candidate = [replace(after, preparation_policy=PreparationPolicy(
+        {"current": PreparationSourceRoot(tmp_path / "different", root.shared_snapshot_root)},
+        after.preparation_policy.profiles))]
+    daemon = LocalDaemon(before, trusted_scheduling_loader=lambda: candidate[0])
+    started = daemon.start()
+    operator = daemon.operator_view(LocalDaemonPrincipal(
+        f"uid:{tmp_path.stat().st_uid}", LocalDaemonRole.OPERATOR))
+    binding = {"maintenance_id": "retire", "maintenance_intent_digest": "selected", "expected_gate_revision": 1}
+    try:
+        operator.maintenance({"operation_id": "close", "maintenance_id": "retire",
+            "maintenance_intent_digest": "selected", "action": "close", "expected_revision": 0,
+            "check": None}, expected_coordinator_id=started.coordinator_id)
+        assert operator.reload_scheduling(CoordinatorSchedulingReload(
+            "rebound", started.scheduling_epoch, "remove aliases", binding))["code"] == "reload_rejected"
+        candidate[0] = after
+        assert operator.reload_scheduling(CoordinatorSchedulingReload(
+            "remove", started.scheduling_epoch, "remove aliases", binding))["state"] == "applied"
+        assert daemon.config.preparation_policy == after.preparation_policy
+    finally:
+        daemon.stop()
+
+
+def test_pure_coordinator_identity_reads_deleted_input_without_constructing_runtime(tmp_path, monkeypatch):
+    from loom.queue import deployment
+
+    source = _coordinator_config(tmp_path)
+    payload = json.loads(source.read_text())
+    payload["local_agent"] = None
+    payload["remote_profiles"] = [_resident_profile(tmp_path, "local-profile")["descriptor"]]
+    payload["preparation"] = _preparation_policy_payload()
+    data = tmp_path / "dataset"
+    data.mkdir()
+    (data / "challenge").write_bytes(b"dataset")
+    payload["shared_roots"] = {"data": {
+        "host_path": str(data), "container_path": "/loom/data", "access": "ro",
+        "challenge": {"path": "challenge", "sha256": hashlib.sha256(b"dataset").hexdigest()},
+    }}
+    _write_protected(source, payload)
+    accepted = load_coordinator_service_config(source)
+    (data / "challenge").unlink()
+    data.rmdir()
+    with pytest.raises(QueueServiceError):
+        load_coordinator_service_config(source)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("declaration inspection constructed runtime or qualified storage")
+
+    for name in ("LocalDaemonConfig", "_scheduling_composition", "_coordinator_authority_factory"):
+        monkeypatch.setattr(deployment, name, forbidden)
+    assert deployment.read_coordinator_scheduling_fingerprint(source) == accepted.active_fingerprint
+    payload["shared_roots"]["data"]["host_path"] = str(tmp_path / "another-dataset")
+    _write_protected(source, payload)
+    assert deployment.read_coordinator_scheduling_fingerprint(source) != accepted.active_fingerprint
+    assert not data.exists()
+    assert not accepted.daemon.coordinator_root.exists()
+
+
+def test_declaration_only_coordinator_identity_refuses_colocated_execution(tmp_path):
+    from loom.queue.deployment import read_coordinator_scheduling_fingerprint
+
+    source = _coordinator_config(tmp_path)
+    with pytest.raises(QueueConfigError, match="pure coordinator"):
+        read_coordinator_scheduling_fingerprint(source)

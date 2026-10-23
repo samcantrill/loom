@@ -120,7 +120,7 @@ def _file_hash(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def _selection(inventory, hosts, env_file):
+def _selection(inventory, hosts, env_file, *, require_resident=False):
     environments = _environment_files(inventory, env_file)
     selected = inventory.select(hosts)
     names = [entry.name for entry in selected]
@@ -168,7 +168,7 @@ def _selection(inventory, hosts, env_file):
         else:
             spec = read_agent_spec(entry.config, env_file=selected_env)
             declared = cast(dict[str, Any], thaw_plain_data(spec.declarations))
-            if len(declared["resident_profiles"]) != 1 or declared["slurm_profiles"]:
+            if declared["slurm_profiles"] or (require_resident and len(declared["resident_profiles"]) != 1):
                 raise QueueConfigError(
                     "setup requires one native resident profile per agent"
                 )
@@ -207,7 +207,7 @@ def plan(inventory: Inventory, *, hosts=None, issuer=None, env_file=None):
     Only the release descriptor is hashed here. Apply verifies every immutable
     artifact before dispatch. Target-local filesystem evidence is authoritative.
     """
-    rows, declarations = _selection(inventory, hosts, env_file)
+    rows, declarations = _selection(inventory, hosts, env_file, require_resident=True)
     requested = {"descriptor_sha256": _file_hash(inventory.runtime_release)}
     for name, row in rows.items():
         try:
@@ -344,7 +344,7 @@ def operation_status(inventory, operation_id, *, missing_ok=False):
             return None
         raise QueueConfigError("unknown administrative operation")
     intent = read(directory / "intent.json")
-    if intent.get("kind") not in {None, "runtime-upgrade", "workload-upgrade"}:
+    if intent.get("kind") not in {None, "runtime-upgrade", "workload-upgrade", "runtime-upgrade-publication", "workload-upgrade-publication", "configuration-retirement", "configuration-retirement-publication"}:
         raise QueueConflictError("unsupported administrative operation kind")
     result = (
         read(directory / "result.json")
@@ -744,7 +744,7 @@ def _apply_locked(
             raise QueueConfigError(
                 "unbound credentials require explicit coordinator-local --issuer before setup"
             )
-        rows, declarations = _selection(inventory, hosts, env_file)
+        rows, declarations = _selection(inventory, hosts, env_file, require_resident=True)
         release = verify_release(inventory.runtime_release)
         _validate_checks(inventory, check_selection, declarations)
         check_selection = cast(dict[str, Any], check_selection)
@@ -774,7 +774,7 @@ def _apply_locked(
     else:
         intent = read(directory / "intent.json")
         if not resume:
-            rows, declarations = _selection(inventory, hosts, env_file)
+            rows, declarations = _selection(inventory, hosts, env_file, require_resident=True)
             same_hosts = {
                 n: (r["host"], r["config"], r["root"]) for n, r in rows.items()
             } == {

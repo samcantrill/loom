@@ -285,9 +285,8 @@ def test_unix_codec_mutation_outcomes_unknown_operation_and_cli(owner, capsys):
 
 
 def check_binding(owner, request):
-    profile = owner.config.preparation_policy.select(request.preparation)["profile"][
-        "profile_descriptor"
-    ]
+    selected = owner.config.preparation_policy.select(request.preparation)["profile"]
+    profile = selected.get("container_capability", selected.get("profile_descriptor"))
     from loom.pipeline.resources import ResourceRequest, ResourceEntry
 
     resources = ResourceRequest({"cpu": ResourceEntry("cpu", 1, "count")}).to_dict()
@@ -745,3 +744,94 @@ def test_maintenance_owner_and_check_identity_remain_immutable_after_revocation(
             changed_owner, expected_coordinator_id=owner.status().coordinator_id
         )
     assert operator(owner).observe_maintenance()["state"] == "open"
+
+
+@pytest.mark.parametrize("unsupported", [False, True])
+def test_submitted_check_authorization_is_negotiated_and_retained(tmp_path, monkeypatch, unsupported):
+    from loom.queue import _coordinator_control
+    from loom.queue._maintenance import SUBMITTED_CHECK_CAPABILITY
+    from loom.queue._preparation_policy import SubmittedPreparationProfile
+    from tests.integration.queue.test_submitted_container_agents import _fixture
+
+    selected = service(tmp_path)
+    policy, execution, _ = _fixture(tmp_path)
+    preparation = selected.daemon.preparation_policy
+    installed = preparation.profiles["existing-project"]
+    submitted = SubmittedPreparationProfile(
+        policy.capability, installed.allowed_source_roots, installed.source_modes,
+        installed.runtime_options,
+        {"capability": "shared-execution-v1", "roots": policy.capability.workload_roots, "locations": []},
+        policy.shared_roots,
+    )
+    selected = replace(selected, daemon=replace(selected.daemon,
+        preparation_policy=replace(preparation, profiles={"containers": submitted})))
+    LocalDaemon.initialize_deployment(selected.daemon)
+    daemon = LocalDaemon(selected.daemon, preparation=CoordinatorPreparation(selected))
+    daemon.start()
+    server = LocalDaemonSocketServer(daemon, daemon.config.endpoint)
+    try:
+        server.start()
+        request = RunRequest(replace(_request(), preparation_profile="containers", execution=execution), "check")
+        binding = check_binding(daemon, request)
+        change(daemon, "close")
+        original = _coordinator_control._connection_description
+        if unsupported:
+            def description(*args, **kwargs):
+                result = original(*args, **kwargs)
+                return replace(result, capabilities=tuple(c for c in result.capabilities if c != SUBMITTED_CHECK_CAPABILITY))
+            monkeypatch.setattr(_coordinator_control, "_connection_description", description)
+        with CoordinatorOperatorClient.from_unix_socket(daemon.config.endpoint) as client:
+            authorization = control(daemon, "authorize", check=binding)
+            if unsupported:
+                with pytest.raises(CoordinatorClientError) as error:
+                    client.maintenance(authorization, expected_coordinator_id=daemon.status().coordinator_id)
+                assert error.value.code == "unsupported_capability"
+                assert error.value.mutation_outcome == "not_applied"
+                assert operator(daemon).observe_maintenance()["checks"] == {}
+                return
+            receipt = client.maintenance(authorization, expected_coordinator_id=daemon.status().coordinator_id)
+            assert client.maintenance(authorization, expected_coordinator_id=daemon.status().coordinator_id) == receipt
+        daemon.stop()
+        daemon.start()
+        assert operator(daemon).observe_maintenance()["checks"]["prepare-1"] == binding
+        changed = {**binding, "profile": {**binding["profile"], "environment_fingerprint": "sha256:" + "d" * 64}}
+        changed["request"] = replace(request, preparation=replace(request.preparation, operation_id="other", run_name="other"), queue_item_id="other").to_dict()
+        with pytest.raises(QueueConflictError, match="profile conflicts"):
+            change(daemon, "authorize", operation_id="different-policy", check=changed)
+    finally:
+        server.stop()
+        daemon.stop()
+
+
+@pytest.mark.parametrize("changed", [None, "image", "resources", "agent"])
+def test_submitted_maintenance_child_binds_exact_execution_and_placement(tmp_path, monkeypatch, changed):
+    from loom.pipeline.runtime.options import RunOptions
+    from loom.preparation import prepare_child_run
+    from loom.queue import _maintenance
+    from loom.queue.local_daemon_execution import load_managed_local_intent
+    from tests.integration.queue.test_submitted_preparation import _run
+
+    selected, child_binding, _ = _run(tmp_path, monkeypatch)
+    monkeypatch.setattr(_maintenance, "preparation_placement", lambda *args: {
+        "target": selected.daemon.machine_id, "pool": "default",
+    })
+    child = prepare_child_run(selected, child_binding, "maintenance-child", runtime_options=RunOptions(executor="local"))
+    intent = load_managed_local_intent(selected.daemon, child.run_uri)
+    execution = child_binding.execution
+    if changed == "image":
+        execution = replace(execution, image=replace(execution.image, sha256="d" * 64))
+    request = RunRequest(replace(_request(), execution=execution), "check")
+    resources = intent.placements["prepare"].resource_request.to_dict()
+    check = {
+        "request": request.to_dict(), "profile": child_binding.container_capability.to_dict(),
+        "agent_id": "other" if changed == "agent" else selected.daemon.machine_id,
+        "pool": "default", "resources": resources, "preparation_resources": resources,
+        "max_stages": 1,
+    }
+    if changed == "resources":
+        check["preparation_resources"] = {"entries": {"cpu": {"kind": "cpu", "amount": 99, "unit": "count"}}}
+    if changed is None:
+        _maintenance._check_target(check, intent, preparation_child=True)
+    else:
+        with pytest.raises(_maintenance.MaintenanceCheckConflict):
+            _maintenance._check_target(check, intent, preparation_child=True)

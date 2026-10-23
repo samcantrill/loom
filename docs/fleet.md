@@ -186,7 +186,7 @@ gpu_qualification: nonexclusive
 ```
 
 This policy applies to newly created self-tests and upgrade operations. It runs
-the fixed 2×2 CUDA matrix multiplication in the selected resident runtime on one
+the fixed 2×2 CUDA matrix multiplication in the selected workload runtime on one
 healthy declared GPU, even when that device is occupied. The device UUID,
 numerical result and process containment must match. It neither acquires nor
 modifies scheduler GPU claims. Busy GPUs do not cause a capacity wait; allocation,
@@ -219,6 +219,22 @@ loom fleet self-test --fleet lab --agent gpu01 \
   --connection /PRIVATE/operator-connection.yaml --checks cpu,storage,gpu
 loom fleet self-test --fleet lab --operation-id check-RETURNED-ID
 ```
+
+For a submitted-container preparation alias, supply `--execution /PRIVATE/check-execution.json`
+on the new self-test. The owner-private JSON contains the existing native
+`SubmittedContainerExecution.to_dict()` representation: immutable image location,
+digest and size, contained Python, worker contract and optional project integration.
+The agent's current native offer must advertise the selected policy. Its resident
+profile list may be empty. Installed-profile checks omit this option.
+
+Runtime upgrades accept the same selection through `--check-execution`. The
+operation retains the decoded execution in its existing immutable check intent;
+candidate preflight, authorized jobs and nonexclusive GPU probing all use that
+selection. Ordinary continuation uses the retained bytes, without rereading the
+selection file; do not supply a new execution when continuing a self-test.
+Resident workload-image promotion still checks the resident image it promotes
+and rejects a submitted check override. The installed image must include the
+probe implementation; selecting an image does not grant new filesystem access.
 
 The deployment and operator connection must pin the same coordinator. They use
 separate client and operator credentials; self-tests grant no new privileges.
@@ -543,10 +559,11 @@ preparation policy and installed project hook, including a candidate profile tha
 has not yet been advertised. It does not execute the workload or publish a target
 run. The probe's report is temporary; bounded compatibility evidence is retained
 in the existing exact host-operation receipts and reused on continuation.
-Check selection considers preparation aliases for the selected resident profile;
-submitted-container aliases may coexist and are excluded from that selection.
-An explicit matching alias takes precedence. Otherwise there must be exactly one
-matching resident alias; a missing or ambiguous selection still refuses.
+Without an explicit submitted execution, check selection considers installed
+resident aliases. With one, it considers the agent's declared container policies.
+An explicit matching alias takes precedence; otherwise exactly one matching alias
+must exist. Missing or ambiguous selections refuse without substituting execution
+modes. Provider-backed GPU inventory is considered even with no resident profile.
 Shared container preflight mounts the selected immutable capture, declared
 read-only locations and root challenges, using the same namespace projection as
 ordinary preparation. An incompatible profile or malformed recipe leaves
@@ -890,6 +907,27 @@ relative to the selection file; the report must be new. The owner records native
 old-run observation, unchanged historical evidence, checks and settlement,
 service identities throughout promotion, old-client refusal, and exact replay.
 
+### Hold admission for client publication
+
+Use `fleet upgrade --apply --hold-admission` when matching external client/settings
+publication must precede reopening. After native checks pass, the operation
+returns `outcome: waiting`, `publication_ready: true`, and
+`reason_code: publication_pending`, with its check receipts retained. Ordinary
+`operation resume` preserves this hold. Publish the matching clients with their
+own checked before/after receipts, then call
+`loom fleet operation release-admission <operation-id> --fleet <fleet>`.
+This continuation requires the qualified checkpoint, matching maintenance owner
+and native settlement. Its authorization is retained in the existing restoration
+receipt, so an interrupted release resumes without another publication.
+
+Held operations use distinct `runtime-upgrade-publication` or
+`workload-upgrade-publication` intent kinds; older controllers reject them instead
+of reopening without understanding the hold. Hold selection is immutable on
+repeated apply. No timeout or ordinary resume implies that client publication
+succeeded. The external publisher owns its publication evidence; Loom owns
+admission restoration. Aborting before the irreversible boundary retains the
+existing abort behavior.
+
 ### Live upgrade diagnostics
 
 Add `--progress json` to `fleet upgrade --apply`, or to `fleet operation resume`,
@@ -925,7 +963,7 @@ Every diagnostic record has exactly these fields:
 | `action` | `apply`, `resume`, `abort`, `retry-check`, `retry-control` |
 | `phase` | `preparing`, `closing_admission`, `settling`, `draining`, `replacing`, `checking`, `restoring`, `reopening_admission`, `recovering`, `finished` |
 | `state` | `running`, then native `complete`, `aborted`, `waiting`, `blocked`; `interrupted`/`error` when no native result returns |
-| `reason_code` | `none`, `settlement_pending`, `acknowledgement_pending`, `check_failed`, `host_unavailable`, `coordinator_unavailable`, `native_refusal`, `input_invalid`, `unknown` |
+| `reason_code` | `none`, `settlement_pending`, `acknowledgement_pending`, `publication_pending`, `check_failed`, `host_unavailable`, `coordinator_unavailable`, `native_refusal`, `input_invalid`, `unknown` |
 | `elapsed_seconds` | Local monotonic seconds since invocation entry |
 | `phase_elapsed_seconds` | Seconds since the latest phase change |
 | `preparation_seconds` | Accumulated initial validation and pre-close candidate preparation seconds |
@@ -965,3 +1003,147 @@ a callback blocked indefinitely may leave a daemon thread until process exit.
 Interruption preserves native recovery; resume uses the same retained operation
 and fresh local clocks. No additional observation RPC or SSH child is started
 for a heartbeat.
+
+
+Candidate preparation preflight supports submitted-container execution without
+an installed resident profile. The coordinator captures the check using its
+selected container preparation policy, and the agent qualifies the exact
+execution against that policy. The bounded probe verifies the read-only image
+bytes before launch and returns the image/interpreter/interface and portable
+policy identity with the captured-input digest. A missing or changed image,
+mismatched policy, or incompatible preparation refuses qualification. This
+preflight does not execute the scientific pipeline or prove physical GPU
+readiness; maintenance orchestration must still retain and authorize the same
+execution for its actual CPU/storage/GPU checks.
+
+Use `fleet upgrade --retire-configuration --workload-inventory <candidate>`
+with `--check-execution <execution.json>` to select configuration retirement.
+By default this keeps the installed service release, uses the candidate inventory's
+container policies and retained preparation alias, and does not select a
+resident profile or image promotion. It is mutually exclusive with
+`--workload-profile` and `--image`. The submitted check
+execution still identifies the actual workload image and must pass the normal
+policy, integrity, preparation, and execution checks.
+
+Without `--runtime-release`, preview requires retirement support from the running coordinator and every
+agent; continuation checks that support again before staging. It qualifies
+the candidate against accepted predecessor bindings, then uses the existing
+maintenance operation to close admission, settle and drain native work,
+activate agents, publish coordinator scheduling, and run target checks.
+`--hold-admission` retains the publication checkpoint for matching settings
+and client updates; `fleet operation release-admission <operation-id> --fleet <fleet>`
+continues that same operation.
+Resume retains the selected candidate and execution. For an older runtime, add
+`--runtime-release /qualified/runtime.yaml` to the retirement command. Combined
+preview checks current maintenance authority and candidate declarations without
+installing code or claiming target qualification. Apply installs and qualifies
+the new runtime against the candidate before closing admission. It then drains
+and stops the roles, converts/replaces the coordinator, and converts/replaces
+each agent with native acknowledgement before proceeding to the next. Target
+checks and the optional publication hold precede admission restoration. Passing
+preview alone does not establish activation or physical container execution.
+The combined sequence has passed a disposable-fleet test using installed runtime
+bundles, SSH, native services, a deleted predecessor input, submitted CPU/storage
+checks and the publication hold. The two-agent case resumes lost replies after
+coordinator publication, agent conversion and runtime replacement. Its simulated
+container launcher does not prove physical mount permissions. Qualify each actual
+deployment predecessor before live use by running the exact
+`tests/integration/fleet/test_runtime_retirement.py` selection with
+`LOOM_TEST_RETIREMENT_PREDECESSOR` set to the retained service-release descriptor.
+The test installs that predecessor only in its disposable fleet and upgrades to
+the current checkout's bundle; it never alters the supplied bundle or live roles.
+
+Bounded container probes map declared temporary mount targets to private
+subdirectories of their own `/tmp/loom-resident-probe-*` tree. They never mount a
+production assignment scratch base directly. Confirmed process containment
+allows the existing probe owner to remove the whole tree; uncertain containment
+retains it for investigation. This preserves the configured container targets
+while keeping disposable qualification files separate from assignments.
+
+Coordinator retirement source publication uses the existing `workload-publish`
+host action with the native `retirement` maintenance binding. Before writing new
+source, the host checks coordinator retirement support and the exact closed,
+settled gate with no authorized checks. The binding is retained in the existing
+reload intent; a continuation cannot replace it. If source publication already
+occurred, continuation replays the exact native request, allowing the native
+journal to resolve a lost response. Publication does not reopen admission.
+The host action assumes the candidate was qualified; it is not a standalone
+fleet-wide migration or an offline bootstrap command.
+
+Upgrade preview compares the protected pure coordinator declaration with its
+accepted native scheduling fingerprint without probing execution storage or
+constructing scheduler/authority plugins. The declaration reader shares schema,
+normalization and preparation-policy decoding with the full service loader.
+A disappeared predecessor input therefore does not by itself prevent inspection;
+a changed authored scheduling identity still refuses. This comparison does not
+qualify a candidate or permit a service to start with missing inputs. Colocated
+agent execution is outside this declaration-only preview boundary.
+
+Agent retirement candidate probes require an existing accepted declaration
+binding. They return the predecessor's retained immutable and active fingerprints
+alongside the qualified target, and verify the native root identity. Missing or
+changed predecessor evidence refuses before target qualification; a second
+binding read detects changes during qualification. This read-only observation
+provides no activation authority: maintenance, settlement and mutation guards
+still own the update.
+
+Coordinator retirement probes likewise compare the authored predecessor with
+the accepted scheduling fingerprint without accessing its execution roots.
+They qualify the candidate, verify its immutable deployment binding, and recheck
+the predecessor's scheduling epoch and revision. A changed source or native
+owner refuses qualification. These probes are read-only and can inspect a
+deleted predecessor input; they do not authorize stopped-role conversion or
+replace the maintenance gate.
+
+The staged runtime's native stopped-coordinator retirement step can retain a
+qualified target in the existing scheduling-reload journal. It requires the
+stopped role lock, exact closed maintenance binding, native settlement, accepted
+predecessor scheduling identity, unchanged immutable deployment binding, and
+local-owner maintenance and scheduling-reload permissions. It qualifies a
+separate sibling candidate and leaves the old source untouched. Once the checked
+publisher installs that target, ordinary startup completes the recorded reload
+without reopening admission. Exact staging replay returns the retained receipt.
+Fleet's existing `workload-publish` host action can invoke this step with an
+explicit stopped-retirement mode and predecessor scheduling epoch. Its retained
+publication intent binds that mode, epoch and maintenance owner before native
+staging. It stages the native reload before replacing source, reports startup
+recovery as pending, and resumes after interruption on either side of the source
+write. Source publication does not claim runtime activation or reopen admission.
+The combined runtime/retirement operation invokes this step before coordinator
+runtime replacement and subsequent agent conversion.
+
+The native stopped-agent promotion path accepts only an exact retirement control
+already retained by authenticated control delivery. It acquires the agent owner
+lock, verifies the accepted predecessor, drained session and settled work, then
+qualifies the candidate without loading retired inputs. Live and stopped agents
+share the existing promotion transaction and supervisor recovery machinery.
+Interrupted source/binding publication resumes only the matching pending control;
+normal agent continuation still owns acknowledgement to the coordinator. The
+stopped-agent reader uses the selected TLS credentials and retained session to
+receive that exact control through the normal agent protocol. It checks the
+coordinator identity and native drained predecessor before retaining delivery;
+a lost reply is retried without inventing local authority. Retained delivery
+replays locally, and normal startup acknowledges the completed effect.
+Fleet's `workload-stopped-retire` host action binds the retained service root,
+source and source/target runtime releases before receiving and applying that
+control. Its immutable host intent resumes pending native publication or an
+already applied effect after a lost receipt, without redelivering against the
+old declaration. It reports `runtime_start_required`; it does not start a runtime
+or acknowledge the control; the combined Fleet operation owns those steps.
+The workload operation's stopped-agent continuation accepts the native control,
+executes source conversion and runtime replacement, then waits for normal agent
+acknowledgement. On retry it reconciles a retained host publication before
+resubmitting the control, so a lost reply cannot make the authorized source
+change fail the controller's predecessor check. The combined operation invokes
+this sequence serially after the coordinator runs the target runtime.
+When the host receipt is missing, the receipt reader obtains the expected source
+from the exact native pending promotion or the applied control plus its accepted
+declaration binding. The controller can reconcile that source change and retry
+the same host request; unrelated source edits remain conflicts. This observation
+is read-only and adds no second publication journal.
+The candidate runtime's host probe and stop qualification can receive the exact
+retirement declaration and expected target fingerprints. They verify runtime
+bytes/storage compatibility, compare the accepted predecessor without loading
+its removed inputs, and qualify the target through the native retirement probe.
+This does not publish the candidate. Runtime replacement still requires native
+retirement publication first and then qualifies the canonical published source.
