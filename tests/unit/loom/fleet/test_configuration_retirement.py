@@ -121,10 +121,11 @@ def test_promotion_acceptance_retains_exact_control_before_acknowledgement(tmp_p
 
 
 @pytest.mark.parametrize("unsupported", [None, "coordinator", "worker"])
-def test_retirement_preview_uses_bound_predecessors_and_preserves_profile_alias(tmp_path, monkeypatch, unsupported):
+@pytest.mark.parametrize("addition", [False, True])
+def test_configuration_preview_uses_bound_predecessors_and_preserves_profile_alias(tmp_path, monkeypatch, unsupported, addition):
     release = {"release_id": "current"}
     capabilities = [workload_upgrades.CAPABILITY, workload_upgrades.RETIREMENT_CAPABILITY,
-                    "quiescent-coordinator-retirement-v1"]
+                    "quiescent-coordinator-retirement-v1", workload_upgrades.ADDITION_CAPABILITY]
     declarations = {
         "coordinator": {"preparation": {"profiles": {"retained": {"container_policy_id": "containers"}}}},
         "worker": {"resident_profiles": [], "container_policies": [{"policy_id": "containers"}]},
@@ -142,7 +143,7 @@ def test_retirement_preview_uses_bound_predecessors_and_preserves_profile_alias(
     candidates = []
 
     def source_candidates(*args, **kwargs):
-        assert kwargs == {"retire_configuration": True}
+        assert kwargs == {"add_container_policies" if addition else "retire_configuration": True}
         candidates.append(True)
         return deepcopy(declarations), {}, {"hosts": {}, "declarations": {}}
 
@@ -158,18 +159,18 @@ def test_retirement_preview_uses_bound_predecessors_and_preserves_profile_alias(
     monkeypatch.setattr(workload_upgrades.sshops, "_ssh_many", probe)
     monkeypatch.setattr(workload_upgrades.sshops, "ssh", lambda *args: {"active": "target-coordinator"})
     kwargs = dict(workload_inventory=tmp_path / "candidate.json", deployment=None, connection=None,
-                  config="check.yaml", check_execution=object(), env_file=None)
+                  config="check.yaml", check_execution=object(), env_file=None, add_container_policies=addition)
     inventory = SimpleNamespace(runtime_release=Path("/runtime.json"))
     if unsupported:
-        with pytest.raises(QueueConflictError, match="retirement capability"):
-            workload_upgrades.retirement_preview(inventory, **kwargs)
+        with pytest.raises(QueueConflictError, match="retirement capability|policy addition capability"):
+            workload_upgrades.configuration_preview(inventory, **kwargs)
         assert not candidates and not requests
         return
-    result = workload_upgrades.retirement_preview(inventory, **kwargs)
-    assert result["retire_configuration"] and result["preparation_profile"] == "retained"
+    result = workload_upgrades.configuration_preview(inventory, **kwargs)
+    assert result["add_container_policies" if addition else "retire_configuration"] and result["preparation_profile"] == "retained"
     assert result["image"] is None and result["workload_profile"] is None
     assert result["checks"] == plan["checks"]
-    assert requests[0]["retire_configuration"]
+    assert requests[0]["add_container_policies" if addition else "retire_configuration"]
     assert not {"image", "image_sha256", "workload_profile"}.intersection(requests[0])
 
 
@@ -179,7 +180,7 @@ def test_retirement_requires_explicit_candidate_and_submitted_execution(missing)
                   connection=None, config="check.yaml", env_file=None)
     kwargs[missing] = None
     with pytest.raises(QueueConfigError, match="candidate inventory and submitted"):
-        workload_upgrades.retirement_preview(object(), **kwargs)
+        workload_upgrades.configuration_preview(object(), **kwargs)
 
 
 def test_candidate_source_retirement_preserves_existing_logical_bindings():

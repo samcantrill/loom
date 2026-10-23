@@ -162,12 +162,20 @@ class NativeCoordinatorClient:
                     capability = "quiescent-coordinator-retirement-v1"
                     if capability not in description.capabilities:
                         raise control_error("unsupported_capability", operation, payload, ids={"missing_capability": capability})
+                if operation == "operator_scheduling_reload" and cast(Mapping[str, PlainData], payload["request"]).get("container_policy_addition") is not None:
+                    from ._container_policy_addition import CAPABILITY
+                    if CAPABILITY not in description.capabilities:
+                        raise control_error("unsupported_capability", operation, payload, ids={"missing_capability": CAPABILITY})
                 if operation == "operator_control" and "condition" in payload:
                     from .operations import CONDITIONAL_CONTROL_CAPABILITY
                     if CONDITIONAL_CONTROL_CAPABILITY not in description.capabilities:
                         raise control_error("unsupported_capability", operation, payload, ids={"missing_capability": CONDITIONAL_CONTROL_CAPABILITY})
                 if operation == "operator_control" and isinstance(payload.get("control"), Mapping) and cast(Mapping[str, PlainData], payload["control"]).get("promotion") is not None:
                     promotion = cast(Mapping[str, PlainData], cast(Mapping[str, PlainData], payload["control"])["promotion"])
+                    if promotion.get("add_container_policies"):
+                        from ._container_policy_addition import CAPABILITY
+                        if CAPABILITY not in description.capabilities:
+                            raise control_error("unsupported_capability", operation, payload, ids={"missing_capability": CAPABILITY})
                     if promotion.get("retire_configuration") and "quiescent-configuration-retirement-v1" not in description.capabilities:
                         raise control_error("unsupported_capability", operation, payload, ids={"missing_capability": "quiescent-configuration-retirement-v1"})
                     if "quiescent-profile-promotion-v2" not in description.capabilities:

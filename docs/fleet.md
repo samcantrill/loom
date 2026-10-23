@@ -907,6 +907,24 @@ relative to the selection file; the report must be new. The owner records native
 old-run observation, unchanged historical evidence, checks and settlement,
 service identities throughout promotion, old-client refusal, and exact replay.
 
+### Runtime inventory publication
+
+New runtime upgrades retain the exact previous inventory digest and replacement
+document in their existing operation intent. Once required checks and any client
+publication hold succeed, Fleet atomically updates the inventory's
+`runtime_release` before restoring admission. Unrelated fields and permissions
+are preserved. The published inventory selects the intended release; native
+observations still establish which service release is running.
+
+An interrupted replacement resumes only when the inventory matches either the
+retained original or this operation's dispatched replacement. Other edits refuse
+without overwriting the operator's changes. The accepted replacement digest joins
+the operation's existing accepted-input record. One operation-owned sibling staging
+file is reused after interruption and removed after publication; production
+publication never depends on temporary qualification output. Historical operation
+intents without this selection remain readable and do not acquire an implicit
+inventory write. Workload-only promotions leave the runtime selection unchanged.
+
 ### Hold admission for client publication
 
 Use `fleet upgrade --apply --hold-admission` when matching external client/settings
@@ -1155,3 +1173,34 @@ bytes/storage compatibility, compare the accepted predecessor without loading
 its removed inputs, and qualify the target through the native retirement probe.
 This does not publish the candidate. Runtime replacement still requires native
 retirement publication first and then qualifies the canonical published source.
+
+### Add submitted-container policies
+
+An existing submitted-container fleet can add a qualified storage policy without
+selecting an image or creating a resident profile:
+
+```sh
+loom fleet upgrade --fleet /PROTECTED/fleet.yaml \
+  --add-container-policies --workload-inventory /tmp/TASK/candidate-fleet.json \
+  --deployment /PROTECTED/target-check-client.json \
+  --connection /PROTECTED/operator.json --check-execution /PROTECTED/check-image.json \
+  --hold-admission --operation-id add-dataset-policy --apply
+```
+
+First install a runtime advertising `quiescent-container-policy-addition-v1` on
+the coordinator and every participating agent. This operation uses the existing
+maintenance gate, promotion journals, scheduling reload and publication hold.
+It requires explicit agent resources and existing container policies, qualifies
+every candidate on its host, drains settled work, and retains native role and
+session identities. Candidates may live in a task directory: accepted native
+publication updates the existing protected role sources before completion.
+
+Existing policies, shared-root bindings, preparation aliases and source mappings
+must remain identical. New preparation aliases select submitted-container
+policies. Credentials, resident profiles, resource capacity, runtime and other
+role settings cannot change in this operation. Choose a new policy ID when
+changing a dataset mount; image versions continue to share a storage policy.
+Use the target preparation alias for the submitted checks, then publish the
+matching client at the held checkpoint and release admission normally. Interrupted
+publication replays the retained exact intent. Configuration retirement remains
+an explicit narrowing operation and cannot authorize additions.

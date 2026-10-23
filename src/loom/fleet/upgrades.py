@@ -138,6 +138,7 @@ def preview(
     hold_admission=False,
     workload_profile=None,
     retire_configuration=False,
+    add_container_policies=False,
     image=None,
     workload_inventory=None,
     deployment=None,
@@ -152,6 +153,14 @@ def preview(
     preview never presents an uninstalled candidate as qualified.
     """
     _environment_files(inventory, env_file)
+    if add_container_policies:
+        if retire_configuration or runtime_release is not None or workload_profile is not None or image is not None or recover_retained_results:
+            raise QueueConfigError("container policy addition must be separate from runtime, retirement and image changes")
+        from .workload_upgrades import configuration_preview
+        result = configuration_preview(inventory, workload_inventory=workload_inventory,
+            deployment=deployment, connection=connection, config=config, check_execution=check_execution,
+            env_file=env_file, add_container_policies=True)
+        return {**result, "hold_admission": hold_admission}
     if retire_configuration:
         if workload_profile is not None or image is not None or recover_retained_results:
             raise QueueConfigError("configuration retirement cannot select resident image promotion or result recovery")
@@ -161,9 +170,9 @@ def preview(
                 workload_inventory=workload_inventory, deployment=deployment,
                 connection=connection, config=config, check_execution=check_execution, env_file=env_file)
             return {**result, "hold_admission": hold_admission}
-        from .workload_upgrades import retirement_preview
+        from .workload_upgrades import configuration_preview
 
-        result = retirement_preview(inventory, workload_inventory=workload_inventory,
+        result = configuration_preview(inventory, workload_inventory=workload_inventory,
             deployment=deployment, connection=connection, config=config,
             check_execution=check_execution, env_file=env_file)
         return {**result, "hold_admission": hold_admission}
@@ -321,6 +330,9 @@ class _Upgrade(sshops._Operation):
         )
 
     def recheck(self, pending_inputs=None):
+        from ._inventory_publication import reconcile
+
+        reconcile(self)
         super().recheck(pending_inputs)
         _check_selection(self)
 
@@ -990,6 +1002,10 @@ def _restore(operation, *, abort=False):
         if not receipt.get("publication_released"):
             operation.gate()
             raise _Waiting("qualified native checks await client publication", "publication_pending")
+    if not abort:
+        from ._inventory_publication import publish
+
+        publish(operation)
     phase(operation, "restoring")
     for name, original in operation.intent.get("restore_agents", operation.intent["agents"]).items():
         keys = [name + "-drain", name + "-checks-capacity"]
@@ -1060,7 +1076,7 @@ def _continue(operation):
     if operation.intent.get("runtime_retirement"):
         from .runtime_retirement import continue_upgrade
         return continue_upgrade(operation)
-    if operation.intent.get("kind") in {"workload-upgrade", "workload-upgrade-publication", "configuration-retirement", "configuration-retirement-publication"}:
+    if operation.intent.get("kind") in {"workload-upgrade", "workload-upgrade-publication", "configuration-retirement", "configuration-retirement-publication", "container-policy-addition", "container-policy-addition-publication"}:
         from .workload_upgrades import continue_upgrade
         return continue_upgrade(operation)
     if (operation.directory / "complete.json").exists():
@@ -1200,6 +1216,7 @@ def upgrade(
     hold_admission=False,
     workload_profile=None,
     retire_configuration=False,
+    add_container_policies=False,
     image=None,
     workload_inventory=None,
     deployment=None,
@@ -1257,6 +1274,7 @@ def _upgrade(
     hold_admission=False,
     workload_profile=None,
     retire_configuration=False,
+    add_container_policies=False,
     image=None,
     workload_inventory=None,
     deployment=None,
@@ -1277,7 +1295,7 @@ def _upgrade(
 ):
     """Preview/apply or continue one immutable service upgrade; never cancel work."""
     if apply:
-        observation.kind = "configuration-retirement" if retire_configuration else ("workload-upgrade" if workload_profile is not None else "runtime-upgrade")
+        observation.kind = "container-policy-addition" if add_container_policies else "configuration-retirement" if retire_configuration else ("workload-upgrade" if workload_profile is not None else "runtime-upgrade")
     _environment_files(inventory, env_file)
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise QueueConfigError("timeout must be positive and finite")
@@ -1291,7 +1309,9 @@ def _upgrade(
         raise QueueConfigError("service and workload targets are mutually exclusive")
     if retire_configuration and (workload_profile is not None or image is not None or recover_retained_results):
         raise QueueConfigError("configuration retirement cannot select resident image promotion or result recovery")
-    if apply and not retire_configuration and runtime_release is None and (workload_profile is None or image is None):
+    if add_container_policies and (retire_configuration or runtime_release is not None or workload_profile is not None or image is not None or recover_retained_results):
+        raise QueueConfigError("container policy addition must be separate from runtime, retirement and image changes")
+    if apply and not (retire_configuration or add_container_policies) and runtime_release is None and (workload_profile is None or image is None):
         raise QueueConfigError("apply requires --runtime-release or --workload-profile and --image")
     if not apply and operation_id is None:
         return preview(
@@ -1300,7 +1320,7 @@ def _upgrade(
             recover_retained_results=recover_retained_results,
             hold_admission=hold_admission,
             workload_profile=workload_profile, image=image, workload_inventory=workload_inventory,
-            retire_configuration=retire_configuration,
+            retire_configuration=retire_configuration, add_container_policies=add_container_policies,
             deployment=deployment,
             connection=connection,
             config=config,
@@ -1328,7 +1348,7 @@ def _upgrade(
                 recover_retained_results=recover_retained_results,
                 hold_admission=hold_admission,
                 workload_profile=workload_profile, image=image, workload_inventory=workload_inventory,
-                retire_configuration=retire_configuration,
+                retire_configuration=retire_configuration, add_container_policies=add_container_policies,
                 deployment=deployment,
                 connection=connection,
                 config=config,
@@ -1359,15 +1379,21 @@ def _upgrade(
                 "env_file": None if env_file is None else str(Path(env_file).resolve()),
                 "timeout_seconds": timeout_seconds,
             }
-            if workload_profile is not None or retire_configuration:
+            if workload_profile is not None or retire_configuration or add_container_policies:
                 from .workload_upgrades import bind_intent
                 intent = bind_intent(intent, plan, directory)
+            if runtime_release is not None:
+                from ._inventory_publication import bind
+
+                intent["inventory_publication"] = bind(
+                    inventory, target, inputs[str(inventory.path)]
+                )
             if hold_admission:
                 intent["kind"] += "-publication"
             atomic(path, intent)
             prepared_plan = plan
         intent = read(path)
-        if intent.get("kind") not in {"runtime-upgrade", "workload-upgrade", "runtime-upgrade-publication", "workload-upgrade-publication", "configuration-retirement", "configuration-retirement-publication"}:
+        if intent.get("kind") not in {"runtime-upgrade", "workload-upgrade", "runtime-upgrade-publication", "workload-upgrade-publication", "configuration-retirement", "configuration-retirement-publication", "container-policy-addition", "container-policy-addition-publication"}:
             raise QueueConflictError("operation belongs to another kind")
         observation.kind = intent["kind"].removesuffix("-publication")
         if runtime_release is not None and Path(runtime_release).resolve() != Path(
@@ -1381,6 +1407,10 @@ def _upgrade(
         ):
             raise QueueConflictError("workload inventory intent changed")
         if apply:
+            if bool(intent.get("add_container_policies")) != add_container_policies:
+                raise QueueConflictError("container policy addition intent changed")
+            if add_container_policies and (workload_inventory is None or intent["workload_inventory"] != str(Path(workload_inventory).resolve())):
+                raise QueueConflictError("container policy addition candidate inventory changed")
             if bool(intent.get("retire_configuration")) != retire_configuration:
                 raise QueueConflictError("configuration retirement intent changed")
             if retire_configuration and (workload_inventory is None or intent["workload_inventory"] != str(Path(workload_inventory).resolve())):
@@ -1399,7 +1429,7 @@ def _upgrade(
         if intent.get("runtime_retirement"):
             from .runtime_retirement import RuntimeRetirementUpgrade
             operation = RuntimeRetirementUpgrade(inventory, directory, intent, observation)
-        elif intent["kind"] in {"workload-upgrade", "workload-upgrade-publication", "configuration-retirement", "configuration-retirement-publication"}:
+        elif intent["kind"] in {"workload-upgrade", "workload-upgrade-publication", "configuration-retirement", "configuration-retirement-publication", "container-policy-addition", "container-policy-addition-publication"}:
             from .workload_upgrades import WorkloadUpgrade
             operation = WorkloadUpgrade(inventory, directory, intent, observation)
             operation._preview_qualification = prepared_plan

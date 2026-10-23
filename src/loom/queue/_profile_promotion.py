@@ -40,6 +40,9 @@ def validate_promotion(value: object) -> None:
         "target_profile",
     }
     retirement = isinstance(value, Mapping) and value.get("retire_configuration") is True
+    addition = isinstance(value, Mapping) and value.get("add_container_policies") is True
+    if addition:
+        keys = keys - {"profile_id", "target_profile"} | {"add_container_policies"}
     if retirement:
         keys = keys - {"profile_id", "target_profile"} | {"retire_configuration"}
     if not isinstance(value, Mapping) or set(value) - {"candidate_source", "enable_submitted_containers"} != keys:
@@ -51,7 +54,7 @@ def validate_promotion(value: object) -> None:
         or not Path(value["candidate_source"]).is_absolute()
     ):
         raise QueueServiceError("profile promotion candidate source is invalid")
-    for key in keys - {"expected_gate_revision", "target_profile", "retire_configuration"}:
+    for key in keys - {"expected_gate_revision", "target_profile", "retire_configuration", "add_container_policies"}:
         if not isinstance(value[key], str) or not value[key] or len(value[key]) > 512:
             raise QueueServiceError("profile promotion binding is invalid")
     if (
@@ -61,7 +64,9 @@ def validate_promotion(value: object) -> None:
         raise QueueServiceError("profile promotion gate revision is invalid")
     from ._remote_stage_execution import ResidentProfileDescriptor
 
-    if retirement:
+    if retirement or addition:
+        if retirement and addition:
+            raise QueueServiceError("policy addition and retirement are mutually exclusive")
         if "enable_submitted_containers" in value:
             raise QueueServiceError("configuration retirement cannot enable a new execution capability")
         return
@@ -154,7 +159,7 @@ def _validate_target(config: Any, control: Any) -> None:
     if (
         config.deployment_configuration_fingerprint != p["target_immutable"]
         or _agent_active_fingerprint(config) != p["target_active"]
-        or (not p.get("retire_configuration") and (
+        or (not (p.get("retire_configuration") or p.get("add_container_policies")) and (
             len(config.resident_profiles) != 1
             or config.resident_profiles[0].descriptor.to_dict()
             != thaw_plain_data(p["target_profile"])
@@ -165,7 +170,7 @@ def _validate_target(config: Any, control: Any) -> None:
         )
 
 
-def validate_candidate(previous: Any, replacement: Any, profile_id: str | None, *, retire_configuration: bool = False) -> None:
+def validate_candidate(previous: Any, replacement: Any, profile_id: str | None, *, retire_configuration: bool = False, add_container_policies: bool = False) -> None:
     """Check a selected native profile candidate before or during promotion.
 
     Capacity, snapshot mappings and logical storage qualifications are retained.
@@ -181,6 +186,12 @@ def validate_candidate(previous: Any, replacement: Any, profile_id: str | None, 
         for field in fields(replacement) if field.name not in allowed
     ):
         raise QueueConflictError("profile promotion cannot change unrelated role configuration")
+    if add_container_policies:
+        if retire_configuration:
+            raise QueueConflictError("policy addition and retirement are mutually exclusive")
+        from ._container_policy_addition import validate_agent
+        validate_agent(previous, replacement)
+        return
     if retire_configuration:
         _validate_retirement(previous, replacement)
         return
@@ -395,7 +406,8 @@ def apply(client: Any, control: Any) -> Any:
             "profile promotion predecessor or native settlement conflicts"
         )
     validate_candidate(client._config, replacement, p.get("profile_id"),
-                       retire_configuration=p.get("retire_configuration", False))
+                       retire_configuration=p.get("retire_configuration", False),
+                       add_container_policies=p.get("add_container_policies", False))
     if not client._config.container_policies and replacement.container_policies and not p.get("enable_submitted_containers"):
         raise QueueConflictError("adding container policies requires explicit session capability enablement")
     install = (

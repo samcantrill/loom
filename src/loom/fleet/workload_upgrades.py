@@ -17,6 +17,7 @@ from loom.fleet.configuration import _environment_files
 from loom.fleet import ssh_operations as sshops
 from loom.fleet import upgrades as maintenance
 from loom.queue._profile_promotion import CAPABILITY, RETIREMENT_CAPABILITY
+from loom.queue._container_policy_addition import CAPABILITY as ADDITION_CAPABILITY
 from loom.queue.shared_execution import SOURCE_PROMOTION_CAPABILITY
 from loom.queue.agent_sessions import AgentControl, AgentControlKind
 from loom.queue.deployment import _load_protected_config
@@ -200,31 +201,33 @@ def preview(
     return plan
 
 
-def retirement_preview(inventory, *, workload_inventory, deployment, connection, config, check_execution, env_file):
-    """Qualify narrowed declarations using retained native predecessor evidence."""
+def configuration_preview(inventory, *, workload_inventory, deployment, connection, config, check_execution, env_file, add_container_policies=False):
+    """Qualify additive or narrowing declarations under existing maintenance."""
+    label = "container policy addition" if add_container_policies else "configuration retirement"
     if workload_inventory is None or check_execution is None:
-        raise QueueConfigError("configuration retirement requires candidate inventory and submitted check execution")
+        raise QueueConfigError(label + " requires candidate inventory and submitted check execution")
     plan = maintenance.preview(inventory, runtime_release=inventory.runtime_release,
         deployment=deployment, connection=connection, config=config,
         check_execution=check_execution, env_file=env_file)
-    required = {RETIREMENT_CAPABILITY, "quiescent-coordinator-retirement-v1"}
+    mode = "add_container_policies" if add_container_policies else "retire_configuration"
+    required = {ADDITION_CAPABILITY} if add_container_policies else {RETIREMENT_CAPABILITY, "quiescent-coordinator-retirement-v1"}
     if not required <= set(plan["source"]["value"].get("capabilities", ())):
-        raise QueueConflictError("source runtime lacks configuration retirement capability")
+        raise QueueConflictError("source runtime lacks " + label + " capability")
     consumers = {name: row for name, row in plan["hosts"].items() if name != "coordinator"}
     for row in plan["hosts"].values():
         if row["source_release"] != plan["release"]:
-            raise QueueConflictError("retirement cannot change the service runtime")
+            raise QueueConflictError(label + " cannot change the service runtime")
     for name, row in consumers.items():
-        if RETIREMENT_CAPABILITY not in row["native_owner"]["value"].get("capabilities", ()):
-            raise QueueConflictError("agent runtime lacks configuration retirement capability: " + name)
+        if (ADDITION_CAPABILITY if add_container_policies else RETIREMENT_CAPABILITY) not in row["native_owner"]["value"].get("capabilities", ()):
+            raise QueueConflictError("agent runtime lacks " + label + " capability: " + name)
     from .workload_sources import candidates as source_candidates
 
     declarations, inputs, sources = source_candidates(inventory, workload_inventory, plan,
-        consumers, env_file, retire_configuration=True)
+        consumers, env_file, **{mode: True})
     candidates = sshops._ssh_many({name: (row["host"], {
         **row, "release": plan["release"], "action": "workload-probe",
         "expected_declaration": digest(plan["declarations"][name]),
-        "retire_configuration": True, "candidate_declaration": declarations[name],
+        mode: True, "candidate_declaration": declarations[name],
     }) for name, row in consumers.items()})
     for candidate in candidates.values():
         if isinstance(candidate, Exception):
@@ -232,15 +235,15 @@ def retirement_preview(inventory, *, workload_inventory, deployment, connection,
     original = load_deployment(plan["checks"]["deployment"])
     for name in consumers:
         if maintenance._check_profile(declarations, name, original, check_execution) != original.preparation_profile:
-            raise QueueConfigError("retirement check deployment must select a retained submitted profile")
+            raise QueueConfigError(label + " check deployment must select the target submitted profile")
     row = plan["hosts"]["coordinator"]
     target = sshops.ssh(row["host"], {**row, "release": plan["release"],
         "action": "workload-coordinator-probe",
-        "retire_configuration": True,
+        mode: True,
         "expected_declaration": digest(plan["declarations"]["coordinator"]),
         "declaration": declarations["coordinator"]})
-    plan.update(retire_configuration=True, workload_profile=None, image=None, image_sha256=None,
-        generation="retirement-" + digest(declarations)[:16],
+    plan.update(**{mode: True}, workload_profile=None, image=None, image_sha256=None,
+        generation=("policy-addition-" if add_container_policies else "retirement-") + digest(declarations)[:16],
         workload_inventory=str(Path(workload_inventory).resolve()), candidate_inputs=inputs,
         candidate_sources=sources, coordinator_target=target, candidates=candidates,
         target_declarations=declarations, preparation_profile=original.preparation_profile,
@@ -248,6 +251,11 @@ def retirement_preview(inventory, *, workload_inventory, deployment, connection,
                   "retire agent declarations", "retire coordinator declarations", "run submitted checks",
                   "publish clients at held checkpoint", "restore admission"],
         irreversible="first native retirement intent")
+    if add_container_policies:
+        plan["sequence"] = ["qualify added policies", "close and settle admission", "drain agents",
+                            "add agent policies", "add coordinator selections", "run submitted checks",
+                            "publish clients at held checkpoint", "restore admission"]
+        plan["irreversible"] = "first native policy addition intent"
     return plan
 
 
@@ -267,7 +275,9 @@ def bind_intent(intent, plan, directory):
         export_connection_deployment(selected, destination)
     return {
         **intent,
-        "kind": "configuration-retirement" if plan.get("retire_configuration") else "workload-upgrade",
+        "kind": ("container-policy-addition" if plan.get("add_container_policies") else
+                 "configuration-retirement" if plan.get("retire_configuration") else "workload-upgrade"),
+        **({"add_container_policies": True} if plan.get("add_container_policies") else {}),
         **({"retire_configuration": True} if plan.get("retire_configuration") else {}),
         **({"runtime_retirement": True} if plan.get("runtime_retirement") else {}),
         **{
@@ -299,6 +309,21 @@ def bind_intent(intent, plan, directory):
 
 class WorkloadUpgrade(maintenance._Upgrade):
     _preview_qualification: dict[str, Any] | None = None
+
+    def reconcile_publications(self):
+        # Only one source-changing action is dispatched at a time. Reconcile
+        # that exact retained call before the global input-byte check.
+        calls = [("coordinator", "workload-publish")]
+        if self.intent.get("runtime_retirement"):
+            calls.extend((name, "workload-stopped-retire") for name in self.intent["agents"])
+        for name, action in calls:
+            directory = self.receipts / (name + "-" + action)
+            if not (directory / "dispatch.json").exists():
+                continue
+            request = read(directory / "intent.json")
+            generated = {"name", "host", "config", "root", "env_file", "env_sha256",
+                         "service_manager", "action", "release", "request_id", "expected_declaration"}
+            self.call(name, action, **{key: value for key, value in request.items() if key not in generated})
 
     def recheck_composed(self, pending_inputs=None):
         super().recheck_composed(pending_inputs)
@@ -366,12 +391,12 @@ class WorkloadUpgrade(maintenance._Upgrade):
                 "release", "hosts", "declarations", "agents", "workload_profile",
                 "image", "image_sha256", "candidates", "target_declarations",
                 "workload_inventory", "candidate_sources", "coordinator_target",
-                "retire_configuration",
+                "retire_configuration", "add_container_policies",
             )
         )
         if reuse_preview:
             self.recheck()
-            if not self.intent.get("retire_configuration") and sshops._file_hash(Path(self.intent["image"])) != self.intent["image_sha256"]:
+            if not (self.intent.get("retire_configuration") or self.intent.get("add_container_policies")) and sshops._file_hash(Path(self.intent["image"])) != self.intent["image_sha256"]:
                 raise QueueConflictError("workload image changed after qualification")
         for name, row in self.intent["hosts"].items():
             observed = sshops.ssh(
@@ -385,6 +410,8 @@ class WorkloadUpgrade(maintenance._Upgrade):
             native = observed["native_owner"]
             if native is None or native["owner"] != row["expected_root_id"]:
                 raise QueueConflictError("workload native root identity changed")
+            if self.intent.get("add_container_policies") and ADDITION_CAPABILITY not in native["value"].get("capabilities", ()):
+                raise QueueConflictError("running container policy addition capability unavailable: " + name)
             if self.intent.get("retire_configuration"):
                 required = (
                     "quiescent-coordinator-retirement-v1"
@@ -417,14 +444,16 @@ class WorkloadUpgrade(maintenance._Upgrade):
                 target = self.host_observe(
                     name, "workload-coordinator-probe",
                     declaration=self.intent["target_declarations"][name],
-                    **({"retire_configuration": True} if self.intent.get("retire_configuration") else {}),
+                    **({"add_container_policies": True} if self.intent.get("add_container_policies") else
+                       {"retire_configuration": True} if self.intent.get("retire_configuration") else {}),
                 )
                 if target != self.intent["coordinator_target"]:
                     raise QueueConflictError("coordinator workload target qualification changed")
             elif name in self.intent["candidates"]:
                 candidate = self.host_observe(
                     name, "workload-probe",
-                    **({"retire_configuration": True} if self.intent.get("retire_configuration") else {
+                    **({"add_container_policies": True} if self.intent.get("add_container_policies") else
+                           {"retire_configuration": True} if self.intent.get("retire_configuration") else {
                         "workload_profile": self.intent["workload_profile"],
                         "image": self.intent["image"], "image_sha256": self.intent["image_sha256"],
                     }),
@@ -507,7 +536,8 @@ class WorkloadUpgrade(maintenance._Upgrade):
                         "target_immutable": candidate["target"]["immutable"],
                         "target_active": candidate["target"]["active"],
                         "candidate_source": candidate_source,
-                        **({"retire_configuration": True} if self.intent.get("retire_configuration") else {
+                        **({"add_container_policies": True} if self.intent.get("add_container_policies") else
+                           {"retire_configuration": True} if self.intent.get("retire_configuration") else {
                             "profile_id": self.intent["workload_profile"],
                             "target_profile": candidate["target"]["profile"],
                         }),
@@ -570,7 +600,8 @@ def _promote_agents(operation):
     staged = operation.call_many([
         (name, "workload-stage", {
             "declaration": intent["target_declarations"][name],
-            **({"retire_configuration": True} if intent.get("retire_configuration") else {
+            **({"add_container_policies": True} if intent.get("add_container_policies") else
+               {"retire_configuration": True} if intent.get("retire_configuration") else {
                 "image": intent["image"], "image_sha256": intent["image_sha256"],
             }),
             "target": intent["candidates"][name]["target"],
@@ -609,6 +640,7 @@ def continue_upgrade(operation):
                 receipt = operation.receipts / (name + "-native-publication")
                 sshops.protected_directory(receipt)
                 operation.accept_update(name, response, receipt)
+    operation.reconcile_publications()
     maintenance.phase(operation, "preparing")
     operation.recheck()
     source = maintenance._capable(operation.operator)
@@ -646,15 +678,22 @@ def continue_upgrade(operation):
         )
     maintenance.phase(operation, "replacing")
     _promote_agents(operation)
+    publication = {}
+    if intent.get("retire_configuration") or intent.get("add_container_policies"):
+        kind = "container_policy_addition" if intent.get("add_container_policies") else "retirement"
+        retained = operation.receipts / "coordinator-workload-publish" / "intent.json"
+        # Health checks advance the gate revision after publication. Every resume
+        # must replay the original authorization, including a lost applied reply.
+        publication[kind] = read(retained)[kind] if retained.exists() else {
+            "maintenance_id": maintenance._maintenance_binding(intent)["operation_id"],
+            "maintenance_intent_digest": maintenance._maintenance_binding(intent)["target_intent_digest"],
+            "expected_gate_revision": operation.gate()["revision"],
+        }
     operation.call(
         "coordinator",
         "workload-publish",
         declaration=intent["target_declarations"]["coordinator"],
-        **({"retirement": {
-            "maintenance_id": maintenance._maintenance_binding(intent)["operation_id"],
-            "maintenance_intent_digest": maintenance._maintenance_binding(intent)["target_intent_digest"],
-            "expected_gate_revision": operation.gate()["revision"],
-        }} if intent.get("retire_configuration") else {}),
+        **publication,
     )
     restoring = directory / "restoring.json"
     if not restoring.exists():

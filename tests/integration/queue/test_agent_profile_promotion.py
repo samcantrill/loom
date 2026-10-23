@@ -359,8 +359,8 @@ def test_stale_local_predecessor_and_retained_work_have_no_binding_effect(
 
 
 @pytest.mark.parametrize("owner", [("maintenance", "drain")], indirect=True)
-@pytest.mark.parametrize("retirement", [False, True])
-def test_native_operator_authorization_gate_guards_and_wire_replay(owner, tmp_path, retirement):  # noqa: F811
+@pytest.mark.parametrize("mode", [None, "retire_configuration", "add_container_policies"])
+def test_native_operator_authorization_gate_guards_and_wire_replay(owner, tmp_path, mode):  # noqa: F811
     from loom.coordinator import CoordinatorOperatorClient, CoordinatorClientError
     from loom.queue import LocalDaemonSocketServer
 
@@ -374,11 +374,11 @@ def test_native_operator_authorization_gate_guards_and_wire_replay(owner, tmp_pa
         revision=session.config_revision,
     )
     assert control.promotion is not None
-    if retirement:
+    if mode:
         control = replace(control, promotion={
             **{key: value for key, value in control.promotion.items()
                if key not in {"profile_id", "target_profile"}},
-            "retire_configuration": True,
+            mode: True,
         })
     server = LocalDaemonSocketServer(daemon, daemon.config.endpoint)
     server.start()
@@ -905,3 +905,49 @@ def test_stopped_retirement_uses_received_control_with_deleted_inputs(tmp_path, 
     finally:
         close(restarted)
     assert promotion.apply_stopped(read_agent_spec(canonical), control) == effect
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_policy_addition_preserves_native_owner_and_recovers_container_only_target(tmp_path, monkeypatch, interrupted):
+    from loom.queue._remote_stage_execution import AgentResourceInventory
+    from tests.unit.loom.queue.test_submitted_container_policy import _submitted
+
+    policy, _, _, _ = _submitted(tmp_path)
+    old = replace(config(tmp_path), resident_profiles=(), resource_inventory=AgentResourceInventory(2),
+                  container_policies=(policy,))
+    new = replace(old, container_policies=(policy, replace(policy, policy_id="new-dataset")),
+                  deployment_configuration_fingerprint="2" * 64,
+                  active_configuration_fingerprint="5" * 64)
+    c, old, new = client(tmp_path, (old, new))
+    root_id = c.agent_root_id
+    control = request(old, config(tmp_path), root_id)
+    control = replace(control, promotion={
+        **{key: value for key, value in control.promotion.items()
+           if key not in {"profile_id", "target_profile", "target_immutable", "target_active"}},
+        "add_container_policies": True,
+        "target_immutable": new.deployment_configuration_fingerprint,
+        "target_active": new.active_configuration_fingerprint,
+    })
+    try:
+        secret = (old.agent_root / "supervisor/service.secret").read_bytes()
+        if interrupted:
+            finish = promotion._finish
+            monkeypatch.setattr(promotion, "_finish", lambda *args: (_ for _ in ()).throw(RuntimeError("interrupted")))
+            with pytest.raises(RuntimeError, match="interrupted"):
+                apply(c, control)
+            c.close()
+            monkeypatch.setattr(promotion, "_finish", finish)
+            c = LocalDaemonAgentHttpClient(new)
+        else:
+            assert apply(c, control).code == "applied"
+        assert c._config == new and c._drained
+        assert c.agent_root_id == root_id
+        assert c._config.resource_inventory == old.resource_inventory
+        assert (old.agent_root / "supervisor/service.secret").read_bytes() == secret
+        assert c._require_journal().replayed_control_effect(control).code == "applied"
+        close(c)
+        c = LocalDaemonAgentHttpClient(new)
+        assert c.agent_root_id == root_id and c._config.container_policies == new.container_policies
+        assert promotion.apply(c, control).code == "applied"
+    finally:
+        close(c)

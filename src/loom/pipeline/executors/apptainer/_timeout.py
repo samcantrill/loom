@@ -141,9 +141,12 @@ def _capture_init(process: subprocess.Popen[bytes], group: int) -> int | None:
                     )
                 }
                 namespace_pids = status.get("NSpid", "").split()
+                # Singularity names this process sinit only after resolving and
+                # starting the selected executable. Capture the namespace init
+                # during startup too, so an incompatible image can fail without
+                # losing its already-created containment boundary.
                 accepted = (
                     status.get("PPid") == str(process.pid)
-                    and status.get("Name") == "sinit"
                     and len(namespace_pids) > 1
                     and namespace_pids[-1] == "1"
                     and os.getpgid(pid) == group

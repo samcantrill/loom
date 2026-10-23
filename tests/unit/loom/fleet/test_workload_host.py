@@ -644,3 +644,34 @@ def test_runtime_probe_qualifies_retirement_target_before_stopping_deleted_prede
         _upgrade_host.replace(request)
     assert Path(request["config"]).read_bytes() == original
     assert not missing.exists()
+
+
+@pytest.mark.parametrize("refusal", [None, "capability", "open", "revision"])
+def test_policy_addition_publication_guards_and_exact_replay(publication, refusal):
+    from loom.fleet._host import read
+    from loom.queue._container_policy_addition import CAPABILITY
+    from loom.coordinator import CoordinatorClientError
+
+    request, _, directory, state = publication
+    binding = _retirement_publication(request)["retirement"]
+    request = {**request, "container_policy_addition": binding}
+    state.capabilities.append(CAPABILITY)
+    if refusal == "capability":
+        state.capabilities.remove(CAPABILITY)
+    elif refusal == "open":
+        state.gate["state"] = "open"
+    elif refusal == "revision":
+        state.gate["revision"] += 1
+    if refusal:
+        with pytest.raises(QueueConflictError, match="unsupported_capability|exact settled maintenance"):
+            host.publish(request, directory)
+        assert not (directory / "reload.json").exists()
+        assert read(Path(request["config"])) == {"profiles": "before"}
+        return
+    state.lost = True
+    with pytest.raises(CoordinatorClientError):
+        host.publish(request, directory)
+    state.gate["state"] = "open"
+    assert host.publish(request, directory)["reload"]["state"] == "applied"
+    assert state.reloads[0] == state.reloads[1]
+    assert state.reloads[0]["container_policy_addition"] == binding
