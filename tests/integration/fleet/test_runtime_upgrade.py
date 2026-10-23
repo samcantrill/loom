@@ -1092,7 +1092,7 @@ def test_runtime_upgrade_repairs_profile_after_settled_failed_check(site, tmp_pa
         assert operator.observe_maintenance()['state']=='open'
 
 
-def test_qualified_upgrade_holds_admission_until_explicit_publication_release(site, tmp_path):  # noqa: F811
+def test_qualified_upgrade_holds_admission_until_explicit_publication_release(site, tmp_path, monkeypatch):  # noqa: F811
     inventory, base, selection = site
     inventory = bind_environments(inventory)
     authored = read(inventory.hosts[0].config)
@@ -1103,6 +1103,7 @@ def test_qualified_upgrade_holds_admission_until_explicit_publication_release(si
     setup = apply(inventory, operation_id="setup-publication", issuer=base / "issuer", check_selection=selection)
     assert setup["outcome"] == "complete", setup
     target = target_bundle(inventory, tmp_path)
+    original_inventory = inventory.path.read_bytes()
     options = dict(runtime_release=target, deployment=Path(setup["deployment"]),
                    connection=Path(setup["operator_connection"]), config=selection["config"],
                    hold_admission=True)
@@ -1115,6 +1116,7 @@ def test_qualified_upgrade_holds_admission_until_explicit_publication_release(si
     directory = upgrades.sshops._directory(inventory, "publication")
     assert read(directory / "intent.json")["kind"] == "runtime-upgrade-publication"
     assert not (directory / "complete.json").exists()
+    assert inventory.path.read_bytes() == original_inventory
     with CoordinatorOperatorClient.from_connection_file(setup["operator_connection"]) as operator:
         gate = operator.observe_maintenance()
         assert gate["state"] == "closed"
@@ -1128,9 +1130,32 @@ def test_qualified_upgrade_holds_admission_until_explicit_publication_release(si
     for environment in environments:
         path = Path(environment)
         path.write_text(path.read_text() + "\nCLIENT_SELECTION=published\n")
+    from loom.fleet import _inventory_publication
+
+    replace_file = _inventory_publication.os.replace
+    interrupted = []
+
+    def lose_inventory_reply(source, destination):
+        replace_file(source, destination)
+        if Path(destination) == inventory.path and not interrupted:
+            interrupted.append(True)
+            raise OSError("lost inventory publication reply")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(_inventory_publication.os, "replace", lose_inventory_reply)
+        result = upgrades.upgrade(inventory, operation_id="publication", action="release-admission")
+    assert interrupted and result["outcome"] != "complete", result
+    with CoordinatorOperatorClient.from_connection_file(setup["operator_connection"]) as operator:
+        assert operator.observe_maintenance()["state"] == "closed"
+    from loom.fleet.configuration import load_inventory
+
+    # A new CLI invocation reloads the now-published inventory from disk.
+    inventory = load_inventory(inventory.path)
     result = finish(inventory, "publication", action="release-admission")
     assert result["outcome"] == "complete"
     assert read(directory / "restoring.json")["publication_released"] is True
+    assert read(inventory.path)["runtime_release"] == str(target.resolve())
+    assert read(directory / "steps/publish-inventory/receipt.json")["state"] == "published"
     assert upgrades.upgrade(inventory, operation_id="publication", action="release-admission")["outcome"] == "complete"
     with CoordinatorOperatorClient.from_connection_file(setup["operator_connection"]) as operator:
         assert operator.observe_maintenance()["state"] == "open"

@@ -321,6 +321,9 @@ class _Upgrade(sshops._Operation):
         )
 
     def recheck(self, pending_inputs=None):
+        from ._inventory_publication import reconcile
+
+        reconcile(self)
         super().recheck(pending_inputs)
         _check_selection(self)
 
@@ -990,6 +993,10 @@ def _restore(operation, *, abort=False):
         if not receipt.get("publication_released"):
             operation.gate()
             raise _Waiting("qualified native checks await client publication", "publication_pending")
+    if not abort:
+        from ._inventory_publication import publish
+
+        publish(operation)
     phase(operation, "restoring")
     for name, original in operation.intent.get("restore_agents", operation.intent["agents"]).items():
         keys = [name + "-drain", name + "-checks-capacity"]
@@ -1362,6 +1369,12 @@ def _upgrade(
             if workload_profile is not None or retire_configuration:
                 from .workload_upgrades import bind_intent
                 intent = bind_intent(intent, plan, directory)
+            if runtime_release is not None:
+                from ._inventory_publication import bind
+
+                intent["inventory_publication"] = bind(
+                    inventory, target, inputs[str(inventory.path)]
+                )
             if hold_admission:
                 intent["kind"] += "-publication"
             atomic(path, intent)

@@ -907,6 +907,24 @@ relative to the selection file; the report must be new. The owner records native
 old-run observation, unchanged historical evidence, checks and settlement,
 service identities throughout promotion, old-client refusal, and exact replay.
 
+### Runtime inventory publication
+
+New runtime upgrades retain the exact previous inventory digest and replacement
+document in their existing operation intent. Once required checks and any client
+publication hold succeed, Fleet atomically updates the inventory's
+`runtime_release` before restoring admission. Unrelated fields and permissions
+are preserved. The published inventory selects the intended release; native
+observations still establish which service release is running.
+
+An interrupted replacement resumes only when the inventory matches either the
+retained original or this operation's dispatched replacement. Other edits refuse
+without overwriting the operator's changes. The accepted replacement digest joins
+the operation's existing accepted-input record. One operation-owned sibling staging
+file is reused after interruption and removed after publication; production
+publication never depends on temporary qualification output. Historical operation
+intents without this selection remain readable and do not acquire an implicit
+inventory write. Workload-only promotions leave the runtime selection unchanged.
+
 ### Hold admission for client publication
 
 Use `fleet upgrade --apply --hold-admission` when matching external client/settings

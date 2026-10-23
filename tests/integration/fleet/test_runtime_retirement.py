@@ -152,6 +152,7 @@ def test_runtime_retirement_with_deleted_inputs_preserves_identity_and_publicati
         assert not obsolete.exists()
         result = finish(inventory, "retirement", action="release-admission")
         assert result["outcome"] == "complete"
+        assert read(inventory.path)["runtime_release"] == str(options["runtime_release"].resolve())
         with CoordinatorOperatorClient.from_connection_file(setup["operator_connection"]) as client:
             assert client.observe_maintenance()["state"] == "open"
         for host in inventory.hosts:
