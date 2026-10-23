@@ -762,3 +762,36 @@ advanced GPU mapping
 
 Container execution should remain optional until local and SLURM execution are
 stable.
+
+### Named read-only roots
+
+Resolved container configuration may supply a `read_only_roots` mapping. Each
+value becomes an ordinary read-only bind at the same absolute host and container
+path. Labels organize the input declaration; they do not look up filesystem
+locations or grant native shared-storage access.
+
+```yaml
+deployment:
+  input_roots:
+    first: /host/datasets/first
+    second: /host/datasets/second
+runtime_profiles:
+  singularity:
+    executor: singularity
+    adapter_options:
+      container:
+        image: {reference: /images/workload.sif}
+        read_only_roots: ${deployment.input_roots}
+        mounts:
+        - {source: /host/cache, target: /host/cache, mode: rw}
+```
+
+`ContainerOptions.from_dict` expands the final values after composition,
+interpolation and ordinary overrides. Changing a root or the set of roots thus
+changes mounts without rebuilding the image. The result serializes through the
+existing `mounts` list; executor projections, identity and replay use that same
+representation. Existing validation rejects relative/unresolved paths and
+conflicting duplicate targets, including attempts to add a writable mount over
+one of these roots. The parser performs no directory creation or fallback lookup.
+Native submitted-container workers continue to use their published storage
+policy; this option does not replace native storage qualification.

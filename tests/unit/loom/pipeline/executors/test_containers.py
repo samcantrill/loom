@@ -445,3 +445,59 @@ def test_container_build_records_reject_invalid_shapes() -> None:
             source={"kind": "definition_file", "path": "a.def"},
             output={"kind": "apptainer_sif", "path": "a.sif"},
         )
+
+
+def test_named_read_only_roots_expand_after_configuration_overrides(tmp_path) -> None:
+    from weave import compose_config
+
+    entry = tmp_path / "experiment.yaml"
+    entry.write_text("""dataset:
+  roots: {old: /unused}
+deployment:
+  roots: ${dataset.roots}
+container:
+  image: {reference: /images/workload.sif}
+  read_only_roots: ${deployment.roots}
+  mounts:
+  - {source: /cache, target: /cache, mode: rw}
+""")
+    configured = compose_config(
+        entry, overrides=('dataset.roots={"alpha": "/host/a", "beta": "/host/b"}',)
+    ).resolved
+    options = parse_container_options(configured["container"])
+    assert [mount.to_dict() for mount in options.mounts] == [
+        {"source": "/cache", "target": "/cache", "mode": "rw"},
+        {"source": "/host/a", "target": "/host/a", "mode": "ro"},
+        {"source": "/host/b", "target": "/host/b", "mode": "ro"},
+    ]
+    document = options.to_dict()
+    assert "read_only_roots" not in document
+    assert ContainerOptions.from_dict(document).to_dict() == document
+    changed = compose_config(
+        entry, overrides=('deployment.roots={"third": "/different/host/path"}',)
+    ).resolved
+    mounts = parse_container_options(changed["container"]).mounts
+    assert mounts[-1].source == mounts[-1].target == "/different/host/path"
+    assert mounts[-1].mode == ContainerMountMode.READ_ONLY
+
+
+@pytest.mark.parametrize("root", ["relative/path", "", None, {"root_id": "unresolved"}])
+def test_named_read_only_roots_reject_unresolved_or_invalid_paths(root) -> None:
+    with pytest.raises(ContainerOptionError):
+        parse_container_options(
+            {
+                "image": {"reference": "/images/workload.sif"},
+                "read_only_roots": {"input": root},
+            }
+        )
+
+
+def test_named_read_only_roots_cannot_be_widened_by_a_writable_mount() -> None:
+    with pytest.raises(ContainerOptionError, match="duplicate target"):
+        parse_container_options(
+            {
+                "image": {"reference": "/images/workload.sif"},
+                "read_only_roots": {"input": "/data"},
+                "mounts": [{"source": "/data", "target": "/data", "mode": "rw"}],
+            }
+        )

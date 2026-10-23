@@ -38,9 +38,11 @@ _PATH_PARITY_FIELDS = frozenset(
         "reason",
     }
 )
-_OPTIONS_FIELDS = frozenset({"image", "workdir", "mounts", "environment", "resources"})
+_OPTIONS_FIELDS = frozenset(
+    {"image", "workdir", "mounts", "read_only_roots", "environment", "resources"}
+)
 _DOCKER_RESERVED_GENERIC_FIELDS = frozenset(
-    {"image", "workdir", "mounts", "environment", "resources"}
+    {"image", "workdir", "mounts", "read_only_roots", "environment", "resources"}
 )
 _BUILD_SOURCE_FIELDS = frozenset(
     {"schema_version", "kind", "path", "uri", "context_path", "recipe_path", "metadata"}
@@ -566,9 +568,33 @@ class ContainerOptions:
 
     @classmethod
     def from_dict(cls, data: object) -> "ContainerOptions":
+        """Parse resolved options, projecting named read-only roots into mounts.
+
+        ``read_only_roots`` is an optional mapping of labels to absolute paths.
+        Each path is mounted at the same container path with ``ro`` access. It
+        is expanded here, after configuration interpolation and overrides, and
+        serialized as ordinary mounts. Existing mount validation rejects invalid
+        paths and duplicate targets, including conflicts with writable mounts.
+        No filesystem locations are created, searched for, or substituted.
+        """
         mapping = _mapping(data, path="ContainerOptions")
         _reject_unknown(mapping, _OPTIONS_FIELDS, path="ContainerOptions")
         _require_fields(mapping, {"image"}, path="ContainerOptions")
+        read_only_roots = _mapping(
+            mapping.get("read_only_roots", {}), path="ContainerOptions.read_only_roots"
+        )
+        projected_mounts = tuple(
+            ContainerMount(
+                source=_string(
+                    root, path=f"ContainerOptions.read_only_roots[{name!r}]"
+                ),
+                target=_string(
+                    root, path=f"ContainerOptions.read_only_roots[{name!r}]"
+                ),
+                mode=ContainerMountMode.READ_ONLY,
+            )
+            for name, root in read_only_roots.items()
+        )
         return cls(
             image=ContainerImageReference.from_dict(mapping["image"]),
             workdir=_optional_string(
@@ -581,7 +607,8 @@ class ContainerOptions:
                         mapping.get("mounts", ()), path="ContainerOptions.mounts"
                     ),
                 )
-            ),
+            )
+            + projected_mounts,
             environment=cast(
                 Mapping[str, object] | None,
                 mapping.get("environment"),
