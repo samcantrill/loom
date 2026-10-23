@@ -248,6 +248,65 @@ free resources or proof of every platform constraint. JSON output from
 agent resources. A `null` CPU or memory value means no supported bound was
 available; a `null` whole object means no agent-level resources were selected.
 
+Native agent promotion also supports the negotiated capability
+`quiescent-configuration-retirement-v1`. A retirement control uses
+`retire_configuration: true` in place of `profile_id` and `target_profile`,
+while retaining the exact maintenance gate and predecessor/target fingerprints.
+It may remove unused resident profiles, policies, shared roots and preparation
+aliases, and replace retained container policies. Retained resident profiles,
+logical root identity, resource inventory, transport and authority remain fixed;
+read-only host relocation retains the existing qualification contract. A target
+must retain submitted-container execution. Ordinary reload and profile promotion
+remain restricted. Retirement uses the existing settled promotion journal and
+supervisor guards, and recovery replays its accepted effect without creating a
+new agent identity. Fleet orchestration must negotiate this capability before
+requesting retirement; this primitive alone does not coordinate fleet activation
+or publication of external clients.
+
+For an unavailable predecessor, the host retirement candidate probe compares
+IO-free agent declarations and fully qualifies only the proposed target. The
+service replacement guard can hold an `AgentSpec` only when its declaration
+digest matches the accepted native binding, rechecked under the agent lock.
+It still rejects unresolved work and holds the retained supervisor owner. This
+ownership inspection neither authorizes configuration changes nor qualifies a
+replacement. The staged-runtime conversion and coordinated Fleet activation
+must supply those separate boundaries; candidate probing alone is not a
+completed migration.
+
+`agent-serve` checks retained promotion recovery before qualifying the authored
+configuration. When an accepted promotion has not finished publishing its source,
+startup can decode the old declaration without accessing its execution inputs,
+qualify the recorded candidate, and complete that same promotion under native
+locks. The selected source/environment and candidate native root must match the
+retained operation. Independent source edits or unavailable target inputs leave
+the operation pending. Without a pending promotion, ordinary full startup
+qualification remains mandatory. This recovers an accepted conversion; it does
+not create authorization for a new conversion on an older runtime.
+
+Coordinator scheduling retirement requires `quiescent-coordinator-retirement-v1`.
+Pass a `retirement` mapping on `CoordinatorSchedulingReload` containing
+`maintenance_id`, `maintenance_intent_digest`, and `expected_gate_revision`.
+The exact gate must be closed and settled with no authorized checks. This permits
+removing unused shared roots, execution identities and preparation aliases;
+retained preparation aliases may narrow their allowed source roots. Retained
+root identity and preparation execution meaning stay fixed, and unrelated role
+changes are refused. Ordinary scheduling reload still rejects root removal.
+The existing scheduling-reload journal owns interruption and exact replay, and
+retirement does not reopen admission. Clients refuse an unsupported peer before
+sending the mutation. This running-coordinator operation does not itself solve
+staged-runtime bootstrap when the predecessor cannot start.
+
+Closed-gate checks for submitted containers require the negotiated capability
+`maintenance-submitted-check-v1`. The exact retained run request selects the
+image, contained interpreter and worker interface; the check's `profile` field
+contains the native submitted-container capability instead of a resident
+profile descriptor. Authorization compares it with the selected preparation
+policy. Both the preparation child and the composed workload must retain that
+exact execution and capability, as well as the authorized agent, pool, resources
+and stage limit. A policy's scheduling eligibility alone does not authorize a
+different image. Check continuation and revocation use the existing maintenance
+journal; older coordinators refuse the new capability before mutation.
+
 A container resident profile may declare `temporary_mounts: ["/loom/cache"]`.
 Each target must already select a writable installed container mount. Its source
 is the host-specific storage base; Loom substitutes an owned directory beneath
@@ -257,6 +316,14 @@ of the same launch retains the same directory. Omitting the declaration keeps th
 installed mount's existing lifetime. Empty declarations preserve the previous
 profile identity; a nonempty declaration changes the active launch identity and
 must be adopted through the normal profile update route.
+
+For disposable worker scratch, bind a private host base under `/tmp` to the
+container target `/tmp` and declare `temporary_mounts: ["/tmp"]`. Loom recreates
+a missing base with mode 0700 before launch, provided its parent exists. Existing
+bases and attempt directories must belong to the service user and have no group
+or other permissions. Symlink, foreign-owned and shared directories are rejected
+without changing their permissions or ownership. This allows a host's temporary
+file cleanup to remove an idle base without making the next launch depend on it.
 
 The supervisor records ownership before allocating storage. It removes only the
 owned directory after proving containment of the entire assignment, including

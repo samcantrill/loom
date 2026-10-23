@@ -11,8 +11,25 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.mark.parametrize("outcome", ["passed", "failed"])
-def test_upgrade_uses_host_capability_and_keeps_cpu_storage_checks(tmp_path, monkeypatch, outcome):
+@pytest.mark.parametrize("submitted", [False, True])
+def test_upgrade_uses_host_capability_and_keeps_cpu_storage_checks(tmp_path, monkeypatch, outcome, submitted):
     profile = {"profile_id": "selected"}
+    execution = None
+    declarations = {"worker": {"resident_profiles": [{"descriptor": profile}]}}
+    offer = {"profile_identities": [profile]}
+    selection = {}
+    if submitted:
+        from tests.integration.queue.test_submitted_container_agents import _fixture
+
+        policy, execution, _ = _fixture(tmp_path)
+        profile = policy.capability.to_dict()
+        offer = {"profile_identities": [], "container_execution_capabilities": [profile]}
+        declarations = {
+            "worker": {"resident_profiles": [], "container_policies": [{"policy_id": policy.policy_id}]},
+            "coordinator": {"preparation": {"profiles": {"submitted": {"container_policy_id": policy.policy_id}}}},
+        }
+        selection = {"execution": execution.to_dict(), "deployment": "selected.json"}
+        monkeypatch.setattr(upgrades, "load_deployment", lambda path: SimpleNamespace(preparation_profile="submitted"))
     calls = []
     prepared = []
     settled = []
@@ -21,12 +38,13 @@ def test_upgrade_uses_host_capability_and_keeps_cpu_storage_checks(tmp_path, mon
         inventory=None,
         operator=SimpleNamespace(observe_agent=lambda name: SimpleNamespace(
             availability="available", freshness="current",
-            value={"offer": {"profile_identities": [profile]}},
+            value={"offer": offer},
         )),
         intent={
             "operation_id": "upgrade-test",
+            "check_selection": selection,
             "agents": {"worker": {}},
-            "declarations": {"worker": {"resident_profiles": [{"descriptor": profile}]}},
+            "declarations": declarations,
             "gpu_qualification": "nonexclusive",
             "timeout_seconds": 20,
         },
@@ -55,4 +73,5 @@ def test_upgrade_uses_host_capability_and_keeps_cpu_storage_checks(tmp_path, mon
         upgrades._run_checks(op)
         assert settled == [True]
     assert prepared == ["cpu", "storage"]
-    assert calls == [("worker", "gpu-capability", {"profile": profile})]
+    assert calls == [("worker", "gpu-capability", {"profile": profile,
+        **({"execution": execution.to_dict()} if execution is not None else {})})]

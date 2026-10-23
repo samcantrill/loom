@@ -32,6 +32,8 @@ def capture(request):
             raise QueueConflictError("check preflight requires a named target")
         policy.select(selected)
         profile = policy.profiles[selected.preparation_profile]
+        processor = (selected.execution.project_integration if selected.execution is not None
+                     else profile.project_processor)
         source = policy.source_roots[selected.source.root]
         if source.shared_snapshot_root is None:
             raise QueueConflictError("check preparation requires shared capture")
@@ -43,9 +45,9 @@ def capture(request):
             )
         receipt = captures[capture_key]
         project = None
-        if profile.project_processor is not None:
+        if processor is not None:
             project = {
-                "processor": dict(profile.project_processor),
+                "processor": dict(processor),
                 "target_run_uri": _project_target_uri(service.daemon.run_store_root, selected.run_name),
             }
         bindings[check] = PreparationChildInput(
@@ -53,11 +55,13 @@ def capture(request):
             preparation_profile=selected.preparation_profile,
             config_path=selected.config_path,
             input_receipt=receipt,
-            profile_descriptor=profile.descriptor.to_dict(),
+            profile_descriptor=None if selected.execution is not None else profile.descriptor.to_dict(),
+            execution=selected.execution,
+            container_capability=profile.capability if selected.execution is not None else None,
             overlays=selected.overlays,
             overrides=selected.overrides,
             run_options=selected.run_options,
-            local_scope=profile.local_scope,
+            local_scope=None if selected.execution is not None else profile.local_scope,
             project_preparation=project,
             shared_scope=profile.shared_scope,
         ).to_dict()
@@ -79,11 +83,21 @@ def prepare(request):
     results = {}
     for check, raw in request["bindings"].items():
         binding = PreparationChildInput.from_dict(raw)
-        matches = [p for p in service.client.resident_profiles
-                   if p.descriptor.to_dict() == dict(binding.profile_descriptor)]
-        if len(matches) != 1:
-            raise QueueConflictError("candidate check profile is unavailable or ambiguous")
+        if binding.execution is None:
+            matches = [p for p in service.client.resident_profiles
+                       if p.descriptor.to_dict() == dict(binding.profile_descriptor)]
+            if len(matches) != 1:
+                raise QueueConflictError("candidate check profile is unavailable or ambiguous")
+            launch = matches[0].launch_profile
+        else:
+            policies = [p for p in service.client.container_policies
+                        if p.capability == binding.container_capability]
+            if len(policies) != 1:
+                raise QueueConflictError("candidate check container policy is unavailable or ambiguous")
+            # The bounded probe creates its own workspace; this path supplies
+            # the native launch's host context, never a new dataset root.
+            launch = policies[0].launch_profile(binding.execution, workspace=service.client.agent_root)
         results[check] = dict(probe_preparation(
-            matches[0].launch_profile, binding, agent_id=request["agent_id"],
+            launch, binding, agent_id=request["agent_id"],
         ))
     return {"checks": results}

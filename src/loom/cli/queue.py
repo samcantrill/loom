@@ -548,6 +548,10 @@ def handle_agent_serve(namespace: argparse.Namespace) -> int:
         for handled_signal in handled_signals:
             signal.signal(handled_signal, request_stop)
         with observe_phases(log_phases):
+            from loom.queue.deployment import read_agent_spec
+            from loom.queue._profile_promotion import recover
+
+            recover(read_agent_spec(namespace.config, env_file=namespace.env_file))
             service = load_service()
             _emit_daemon_payload(
                 namespace,

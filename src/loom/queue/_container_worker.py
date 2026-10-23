@@ -6,7 +6,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 import re
-import stat
 from typing import TYPE_CHECKING, cast
 
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
@@ -201,8 +200,8 @@ def qualify_shared_worker_inputs(
     from loom.pipeline.stores.shared_artifacts import binding as shared_binding
 
     if profile.submitted_execution is not None:
-        from ._remote_stage_execution import _file_digest
-        from .shared_execution import qualifications, resolve
+        from .submitted_execution import verify_submitted_image
+        from .shared_execution import qualifications
 
         execution = profile.submitted_execution
         if execution != assignment.submitted_execution:
@@ -211,15 +210,7 @@ def qualify_shared_worker_inputs(
         root = cast(Mapping[str, PlainData], profile.shared_roots[alias])
         if qualifications({alias: dict(root)})[alias] != assignment.profile.shared_roots[alias]:
             raise ValueError("submitted image root qualification conflicts")
-        path = resolve(root, str(execution.image.location["path"]))
-        details = path.stat()
-        if (
-            not stat.S_ISREG(details.st_mode)
-            or details.st_mode & 0o222
-            or details.st_size != execution.image.size_bytes
-            or _file_digest(path) != execution.image.sha256
-        ):
-            raise ValueError("submitted image bytes or immutable publication differ from retained intent")
+        verify_submitted_image(execution.image, profile.shared_roots)
     shared_scope = assignment_scope(assignment.fingerprint)
     if shared_scope is None:
         return

@@ -518,7 +518,8 @@ class CoordinatorPreparations:
                 request, queue_item_id, run_mode, retry_policy, fresh_stages).to_dict())
             check = classify(conn, request.operation_id, request=full_request, principal_id=principal_id)
             if check is not None:
-                if _mapping(selected["profile"]).get("profile_descriptor") != check["profile"]:
+                profile_key = "container_capability" if request.execution is not None else "profile_descriptor"
+                if _mapping(selected["profile"]).get(profile_key) != check["profile"]:
                     raise QueueConflictError("maintenance check selected profile conflicts")
                 selected["maintenance_check"] = dict(check)
             accepted_at = self.daemon._clock()

@@ -53,7 +53,8 @@ def _qualified(service):
     return {
         "immutable": service.immutable_fingerprint,
         "active": service.active_fingerprint,
-        "profile": service.client.resident_profiles[0].descriptor.to_dict(),
+        "profile": (service.client.resident_profiles[0].descriptor.to_dict()
+                    if service.client.resident_profiles else None),
     }
 
 
@@ -79,20 +80,60 @@ def coordinator_probe(request):
     """Qualify the derived coordinator target on its owning host without reload."""
     if role(request) != "coordinator":
         raise QueueConflictError("coordinator candidate requires a coordinator")
+    predecessor = None
+    if request.get("retire_configuration"):
+        predecessor = _coordinator_retirement_predecessor(request)
+        from .workload_sources import _retirement_coordinator
+
+        before, after = payload(request), request["declaration"]
+        mutable = {"preparation", "shared_roots", "remote_profiles", "container_capabilities"}
+        if {key: value for key, value in before.items() if key not in mutable} != {
+            key: value for key, value in after.items() if key not in mutable
+        }:
+            raise QueueConflictError("coordinator retirement changed unrelated declaration")
+        _retirement_coordinator(before, after)
     with _candidate_config(request, request["declaration"]) as temporary:
         service = load_coordinator_service_config(
             temporary, env_file=environment(request)
         )
+        if predecessor is not None:
+            from loom.queue.local_daemon import _validate_deployment_binding
+
+            _validate_deployment_binding(service.daemon, coordinator_id=predecessor[0])
+            if _coordinator_retirement_predecessor(request) != predecessor:
+                raise QueueConflictError("coordinator predecessor changed during qualification")
         return {
             "immutable": service.immutable_fingerprint,
             "active": service.active_fingerprint,
         }
 
 
+def _coordinator_retirement_predecessor(request):
+    """Compare authored identity with accepted state without probing old roots."""
+    from loom.fleet._host import native_root
+    from loom.queue.deployment import read_coordinator_scheduling_fingerprint
+    from loom.queue.operations import _readonly_root
+
+    authored = read_coordinator_scheduling_fingerprint(config(request), env_file=environment(request))
+    native = owner(request)
+    if native["owner"] != request["expected_root_id"]:
+        raise QueueConflictError("coordinator predecessor native root identity changed")
+    with _readonly_root(native_root(request)) as conn:
+        accepted = dict(conn.execute(
+            "SELECT key,value FROM daemon_metadata WHERE key IN "
+            "('scheduling_fingerprint','scheduling_epoch','active_configuration_revision')"
+        ))
+    if accepted.get("scheduling_fingerprint") != authored:
+        raise QueueConflictError("coordinator predecessor differs from accepted scheduling")
+    return native["owner"], accepted
+
+
 def probe(request):
     if role(request) != "agent":
         raise QueueConflictError("workload candidate requires an agent")
     authored = payload(request)
+    if request.get("retire_configuration"):
+        return _retirement_probe(request, authored)
     profiles = authored["resident_profiles"]
     if (
         len(profiles) != 1
@@ -125,12 +166,49 @@ def probe(request):
     }
 
 
+def _retirement_probe(request, authored):
+    """Qualify a retirement target without probing the discarded predecessor."""
+    from loom.queue.deployment import read_agent_spec
+    from loom.queue._profile_promotion import validate_retirement_specs
+    from loom.queue.retirement import read_agent_declaration_binding
+
+    if any(key in request for key in ("workload_profile", "image", "image_sha256")):
+        raise QueueConflictError("retirement must not select resident image promotion")
+    after = request["candidate_declaration"]
+    with _candidate_config(request, authored) as source:
+        previous = read_agent_spec(source, env_file=environment(request))
+    accepted = read_agent_declaration_binding(previous.agent_root, previous.declaration_digest)
+    if accepted is None:
+        raise QueueConflictError("retirement requires an accepted predecessor declaration")
+    native = owner(request)
+    if native["owner"] != accepted.root_id:
+        raise QueueConflictError("retirement predecessor native root identity changed")
+    with _candidate_config(request, after) as target:
+        candidate = read_agent_spec(target, env_file=environment(request))
+        validate_retirement_specs(previous, candidate)
+        service = load_outbound_agent_service_config(target, env_file=environment(request))
+    if read_agent_declaration_binding(previous.agent_root, previous.declaration_digest) != accepted:
+        raise QueueConflictError("retirement predecessor changed during qualification")
+    return {
+        "source": {"declaration_digest": previous.declaration_digest,
+                   "immutable": accepted.immutable_fingerprint, "active": accepted.active_fingerprint},
+        "target": {**_qualified(service), "declaration_digest": candidate.declaration_digest},
+        "declaration": after,
+        "native_owner": native,
+    }
+
+
 def publish(request, directory):
     """Retain before/after source and reload only through native control owners."""
     if role(request) != "coordinator":
         raise QueueConflictError("native promotion owns agent source publication")
+    stopped = request.get("stopped_retirement", False)
+    if stopped and (request.get("retirement") is None or not request.get("expected_scheduling_epoch")):
+        raise QueueConflictError("stopped retirement requires an exact maintenance and scheduling binding")
     binding = read(Path(request["admin"]) / "service.json")
-    if any(binding.get(key) != request.get(key) for key in ("root", "config", "release")):
+    releases = (request.get("source_release"), request["release"]) if stopped else (request["release"],)
+    if (any(binding.get(key) != request.get(key) for key in ("root", "config"))
+        or binding.get("release") not in releases):
         raise QueueConflictError("workload retained service binding differs")
     if owner(request)["owner"] != binding["expected_root_id"]:
         raise QueueConflictError("workload native root identity changed")
@@ -142,26 +220,56 @@ def publish(request, directory):
     retained = directory / "reload.json"
     if retained.exists():
         intent = read(retained)
-        if intent["after"] != target:
-            raise QueueConflictError("workload publication target changed")
+        if (intent["after"] != target or intent.get("reload", {}).get("retirement") != request.get("retirement")
+            or intent.get("stopped_retirement", False) != stopped
+            or (stopped and intent["reload"]["expected_scheduling_epoch"] != request["expected_scheduling_epoch"])):
+            raise QueueConflictError("workload publication target or retirement binding changed")
+        if not stopped and current != intent["after"] and request.get("retirement") is not None:
+            from loom.fleet._host import coordinator_client
+
+            _, client = coordinator_client(bound_request)
+            _retirement_publication_ready(client, request["retirement"])
     else:
         intent = {"before": current, "after": target}
         if role(request) == "coordinator":
             from loom.fleet._host import coordinator_client
             from loom.queue.local_daemon import CoordinatorSchedulingReload
 
-            _, client = coordinator_client(bound_request)
+            if stopped:
+                epoch = request["expected_scheduling_epoch"]
+                intent["stopped_retirement"] = True
+            else:
+                _, client = coordinator_client(bound_request)
+                epoch = client.status().scheduling_epoch
             intent["reload"] = CoordinatorSchedulingReload(
                 request["request_id"],
-                client.status().scheduling_epoch,
-                "Fleet selected workload profile promotion",
+                epoch,
+                ("Fleet selected configuration retirement" if request.get("retirement") is not None
+                 else "Fleet selected workload profile promotion"),
+                retirement=request.get("retirement"),
             ).to_dict()
+            if not stopped and request.get("retirement") is not None:
+                _retirement_publication_ready(client, request["retirement"])
         atomic(retained, intent)
     if current not in (intent["before"], intent["after"]):
         raise QueueConflictError("workload role source changed during publication")
+    staged = None
+    if stopped:
+        from loom.queue._coordinator_retirement import stage_retirement
+        from loom.queue.local_daemon import CoordinatorSchedulingReload
+
+        with _candidate_config(request, target) as candidate:
+            staged = stage_retirement(config(request), candidate,
+                CoordinatorSchedulingReload.from_dict(intent["reload"]),
+                expected_root_id=binding["expected_root_id"], env_file=environment(request))
+        if payload(request) != current:
+            raise QueueConflictError("stopped retirement source changed before publication")
     if current != intent["after"]:
         atomic(config(request), intent["after"])
     result = {"outcome": "applied", "declaration": target}
+    if stopped:
+        return {**result, "reload": thaw_plain_data(staged),
+                "activation": "applied" if staged["state"] == "applied" else "startup_recovery_required"}
     if role(request) == "coordinator":
         from loom.fleet._host import coordinator_client
         from loom.queue.local_daemon import CoordinatorSchedulingReload
@@ -178,6 +286,19 @@ def publish(request, directory):
         if result["reload"]["state"] != "applied":
             raise QueueConflictError("native workload scheduling reload incomplete")
     return result
+
+
+def _retirement_publication_ready(client, binding):
+    """Protect the source write; native reload owns final acceptance and replay."""
+    capability = "quiescent-coordinator-retirement-v1"
+    if capability not in client.describe_connection().capabilities:
+        raise QueueConflictError("unsupported_capability: " + capability)
+    gate = client.observe_maintenance()
+    if (gate["state"] != "closed" or not gate["settled"] or gate["checks"]
+        or gate["maintenance_id"] != binding["maintenance_id"]
+        or gate["intent_digest"] != binding["maintenance_intent_digest"]
+        or gate["revision"] != binding["expected_gate_revision"]):
+        raise QueueConflictError("coordinator source publication requires exact settled maintenance")
 
 
 def recover_service(request):
@@ -271,9 +392,51 @@ def recover_service(request):
     }
 
 
+def retire_stopped(request):
+    """Receive and apply native retirement while the agent service is stopped.
+
+    Native delivery and promotion journals own authorization and interrupted
+    source publication. Runtime replacement/start and acknowledgement remain
+    separate Fleet continuation steps.
+    """
+    from loom.fleet._host import digest
+    from loom.queue.agent_sessions import AgentControl, AgentControlKind
+    from loom.queue.deployment import read_agent_spec
+    from loom.queue._profile_promotion import receive_stopped, apply_stopped, publication_state
+
+    if role(request) != "agent":
+        raise QueueConflictError("stopped retirement requires an agent")
+    control = AgentControl.from_value(request["control"])
+    if (control.kind is not AgentControlKind.PROMOTE
+        or not control.promotion.get("retire_configuration")
+        or control.promotion["agent_root_id"] != request["expected_root_id"]):
+        raise QueueConflictError("stopped retirement control identity differs")
+    binding = read(Path(request["admin"]) / "service.json")
+    if (any(binding.get(key) != request.get(key) for key in ("root", "config", "expected_root_id"))
+        or binding.get("release") not in (request["source_release"], request["release"])):
+        raise QueueConflictError("workload retained service binding differs")
+    spec = read_agent_spec(config(request), env_file=environment(request))
+    if spec.agent_root != Path(request["root"]):
+        raise QueueConflictError("stopped retirement source selects another native root")
+    state = publication_state(spec.agent_root, control.operation_id)
+    if state is None:
+        if digest(payload(request)) != request["expected_declaration"]:
+            raise QueueConflictError("target declaration changed since expected input")
+        receive_stopped(spec, control, expected_coordinator_id=request["coordinator_id"])
+    # Pending/applied effects must bypass predecessor delivery: the native
+    # journal validates exact control replay and owns the changed source bytes.
+    effect = apply_stopped(spec, control)
+    return {"outcome": "applied", "effect": effect.value(),
+            "declaration": payload(request), "activation": "runtime_start_required"}
+
+
 def stage(request):
-    _image(request["image"], request["image_sha256"])
-    if qualify(request, request["declaration"]) != request["target"]:
+    if request.get("retire_configuration"):
+        target = _retirement_probe({**request, "candidate_declaration": request["declaration"]}, payload(request))["target"]
+    else:
+        _image(request["image"], request["image_sha256"])
+        target = qualify(request, request["declaration"])
+    if target != request["target"]:
         raise QueueConflictError("workload target qualification changed")
     from loom.fleet._host import keep
 
@@ -293,6 +456,8 @@ def execute(request, directory):
         return recover_service(request)
     if request["action"] == "workload-stage":
         return stage(request)
+    if request["action"] == "workload-stopped-retire":
+        return retire_stopped(request)
     if request["action"] == "workload-publish":
         return publish(request, directory)
     raise QueueConflictError("unsupported fixed workload host action")

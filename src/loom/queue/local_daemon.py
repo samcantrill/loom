@@ -19,7 +19,7 @@ from .run import _public_operation_id
 from collections import deque
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from enum import StrEnum
 import fcntl
 import hashlib
@@ -122,6 +122,7 @@ class CoordinatorSchedulingReload:
     operation_id: str
     expected_scheduling_epoch: str
     reason: str
+    retirement: Mapping[str, PlainData] | None = None
 
     def __post_init__(self) -> None:
         for value, name in (
@@ -139,18 +140,30 @@ class CoordinatorSchedulingReload:
                 "scheduling reload reason must be 1..512 characters"
             )
 
+        if self.retirement is not None:
+            value = self.retirement
+            if (not isinstance(value, Mapping)
+                or set(value) != {"maintenance_id", "maintenance_intent_digest", "expected_gate_revision"}
+                or any(not isinstance(value[key], str) or not value[key] or len(value[key]) > 512
+                       for key in ("maintenance_id", "maintenance_intent_digest"))
+                or type(value["expected_gate_revision"]) is not int
+                or value["expected_gate_revision"] < 0):
+                raise QueueServiceError("coordinator retirement binding is invalid")
+            object.__setattr__(self, "retirement", freeze_plain_data(value))
+
     def to_dict(self) -> dict[str, PlainData]:
         return {
             "operation_id": self.operation_id,
             "expected_scheduling_epoch": self.expected_scheduling_epoch,
             "reason": self.reason,
+            **({"retirement": thaw_plain_data(self.retirement)} if self.retirement is not None else {}),
         }
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> "CoordinatorSchedulingReload":
         _exact_fields(
             data,
-            {"operation_id", "expected_scheduling_epoch", "reason"},
+            {"operation_id", "expected_scheduling_epoch", "reason"} | ({"retirement"} if "retirement" in data else set()),
             "coordinator scheduling reload",
         )
         return cls(
@@ -159,6 +172,7 @@ class CoordinatorSchedulingReload:
                 data, "expected_scheduling_epoch"
             ),
             reason=_required_string(data, "reason"),
+            retirement=data.get("retirement"),
         )
 
 
@@ -2974,7 +2988,7 @@ class LocalDaemon:
                         "trusted scheduling configuration loader is unavailable"
                     )
                 replacement = loader()
-                self._validate_scheduling_replacement(replacement)
+                self._validate_scheduling_replacement(replacement, retirement=request.retirement)
                 candidate_fingerprint = _scheduling_fingerprint(replacement)
                 if (
                     replacement_fingerprint is not None
@@ -3528,7 +3542,7 @@ class LocalDaemon:
             "active_configuration_revision": str(next_revision),
         }
 
-    def _validate_scheduling_replacement(self, replacement: LocalDaemonConfig) -> None:
+    def _validate_scheduling_replacement(self, replacement: LocalDaemonConfig, *, retirement=None) -> None:
         if not isinstance(replacement, LocalDaemonConfig):
             raise QueueServiceError("trusted scheduling configuration is invalid")
         if (
@@ -3559,6 +3573,9 @@ class LocalDaemon:
         replacement_roots = replacement.coordinator_shared_roots
         from .shared_execution import _readonly_root_relocations
 
+        if retirement is not None:
+            self._validate_coordinator_retirement(replacement, retirement)
+            return
         relocations = _readonly_root_relocations(current_roots, replacement_roots)
         if relocations:
             # Reload already holds the cycle lock shared with admission and
@@ -3625,6 +3642,24 @@ class LocalDaemon:
                     raise QueueConflictError(
                         "scheduling reload cannot replace credentials for a live agent session"
                     )
+
+    def _validate_coordinator_retirement(self, replacement, binding):
+        from ._maintenance import observe
+
+        gate = observe(self)
+        if (gate["state"] != "closed" or not gate["settled"] or gate["checks"]
+            or gate["maintenance_id"] != binding["maintenance_id"]
+            or gate["intent_digest"] != binding["maintenance_intent_digest"]
+            or gate["revision"] != binding["expected_gate_revision"]):
+            raise QueueConflictError("coordinator retirement requires exact settled maintenance")
+        mutable = {"shared_roots", "preparation_policy", "remote_profiles",
+                   "container_capabilities", "active_configuration_fingerprint"}
+        if self.config.agent_root is not None or any(
+            getattr(self.config, item.name) != getattr(replacement, item.name)
+            for item in fields(LocalDaemonConfig) if item.name not in mutable
+        ):
+            raise QueueConflictError("coordinator retirement cannot change unrelated role configuration")
+        _validate_retired_coordinator_execution(self.config, replacement)
 
     def _wait(
         self, queue_item_id: str, *, timeout_seconds: float | None
@@ -5162,3 +5197,46 @@ __all__ = [
     "TimeRecoveryReceipt",
     "TimeRecoveryRequest",
 ]
+
+
+def _validate_retired_coordinator_execution(previous, replacement):
+    """Share retirement execution constraints across live and stopped owners."""
+    if not set(replacement.coordinator_shared_roots) <= set(previous.coordinator_shared_roots):
+        raise QueueConflictError("coordinator retirement cannot add shared roots")
+    for name in ("remote_profiles",):
+        if any(value not in getattr(previous, name) for value in getattr(replacement, name)):
+            raise QueueConflictError("coordinator retirement cannot add or change execution identities")
+    from .submitted_execution import _validate_retired_capabilities
+    _validate_retired_capabilities(previous.container_capabilities, replacement.container_capabilities)
+    from .shared_execution import _readonly_root_relocations
+
+    _readonly_root_relocations(
+        {key: previous.coordinator_shared_roots[key] for key in replacement.coordinator_shared_roots},
+        replacement.coordinator_shared_roots,
+    )
+    old, new = previous.preparation_policy, replacement.preparation_policy
+    if new is None:
+        return
+    if old is None or any(old.source_roots.get(key) != value for key, value in new.source_roots.items()):
+        raise QueueConflictError("coordinator retirement cannot add or rebind preparation roots")
+    for key, profile in new.profiles.items():
+        previous = old.profiles.get(key)
+        comparable = profile
+        from ._preparation_policy import SubmittedPreparationProfile
+        if isinstance(profile, SubmittedPreparationProfile) and isinstance(previous, SubmittedPreparationProfile):
+            if profile.capability.policy_id != previous.capability.policy_id:
+                raise QueueConflictError("coordinator retirement cannot rebind preparation policy")
+            _validate_retired_capabilities((previous.capability,), (profile.capability,))
+            old_scope, new_scope = previous.shared_scope, profile.shared_scope
+            if (any(old_scope["roots"].get(alias) != value for alias, value in new_scope["roots"].items())
+                or {**new_scope, "roots": old_scope["roots"]} != old_scope):
+                raise QueueConflictError("coordinator retirement cannot expand preparation shared scope")
+            if not set(profile.image_roots) <= set(previous.image_roots):
+                raise QueueConflictError("coordinator retirement cannot add preparation image roots")
+            _readonly_root_relocations(
+                {alias: previous.image_roots[alias] for alias in profile.image_roots}, profile.image_roots)
+            comparable = replace(profile, capability=previous.capability,
+                                 shared_scope=previous.shared_scope, image_roots=previous.image_roots)
+        if (previous is None or not set(profile.allowed_source_roots) <= set(previous.allowed_source_roots)
+            or replace(comparable, allowed_source_roots=previous.allowed_source_roots) != previous):
+            raise QueueConflictError("coordinator retirement cannot add or change preparation execution")

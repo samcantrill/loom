@@ -37,7 +37,7 @@ def test_container_public_run_and_retained_replay(tmp_path_factory, kind):
     cache = tmp_path / "local-cache"
     with _backend(kind, tmp_path) as (binding, calls):
         if binding is not None:
-            cache.mkdir()
+            cache.mkdir(mode=0o700)
             binding = {**binding, "container": {**binding["container"], "mounts": [
                 {"source": str(cache), "target": "/loom/cache", "mode": "rw"}
             ]}}
@@ -120,7 +120,7 @@ def test_temporary_storage_failures_release_assignment_claims(tmp_path, fault, d
         )
         recipe.write_text(json.dumps(value))
     cache = tmp_path / "local-cache"
-    cache.mkdir()
+    cache.mkdir(mode=0o700)
     with fake_apptainer() as binding:
         fixture = Path(binding["options"]["command"]).parent / "sitecustomize.py"
         with fixture.open("a") as stream:

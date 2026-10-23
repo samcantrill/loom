@@ -12,12 +12,12 @@ ProgressSink = Callable[[dict[str, Any]], None]
 
 _ENUMS = {
     "event": {"phase", "heartbeat", "result"},
-    "kind": {"runtime-upgrade", "workload-upgrade", "unknown"},
+    "kind": {"runtime-upgrade", "workload-upgrade", "configuration-retirement", "unknown"},
     "action": {"apply", "resume", "abort", "retry-check", "retry-control"},
     "phase": {"preparing", "closing_admission", "settling", "draining", "replacing",
               "checking", "restoring", "reopening_admission", "recovering", "finished"},
     "state": {"running", "complete", "aborted", "waiting", "blocked", "interrupted", "error"},
-    "reason_code": {"none", "settlement_pending", "acknowledgement_pending", "check_failed",
+    "reason_code": {"none", "settlement_pending", "acknowledgement_pending", "check_failed", "publication_pending",
                     "host_unavailable", "coordinator_unavailable", "native_refusal", "input_invalid", "unknown"},
 }
 _CLOCKS = {"elapsed_seconds", "phase_elapsed_seconds", "preparation_seconds", "admission_closed_seconds"}

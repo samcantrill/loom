@@ -25,7 +25,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
 
 @pytest.fixture
-def fleet(tmp_path):
+def fleet(tmp_path, request):
     from loom.preparation import CoordinatorPreparation
     from loom.queue import LocalDaemon, LocalDaemonSocketServer
     from loom.queue.agent_sessions import AgentRegistration
@@ -103,6 +103,49 @@ def fleet(tmp_path):
         "shared-assignment-reference-v1",
         "preparation-input-v2",
     )
+    submitted_policy = execution = None
+    if getattr(request, "param", None) in {"submitted", "submitted-execution"}:
+        from dataclasses import replace
+        from tests.integration.queue.test_submitted_container_agents import _fixture
+
+        site = tmp_path / "submitted"
+        site.mkdir()
+        submitted_policy, execution, _ = _fixture(site)
+        snapshots = tmp_path / "snapshots"
+        snapshots.mkdir(exist_ok=True)
+        (snapshots / "challenge").write_bytes(b"snapshots")
+        submitted_policy = replace(submitted_policy,
+            preparation_shared_roots={"projects": snapshots},
+            shared_roots={**submitted_policy.shared_roots, **roots, "snapshots": {
+                "host_path": str(snapshots), "container_path": "/loom/snapshots", "access": "ro",
+                "challenge": {"path": "challenge", "sha256": hashlib.sha256(b"snapshots").hexdigest()},
+            }})
+        if request.param == "submitted-execution":
+            from examples.execution.containers.apptainer_fixture import fake_apptainer
+
+            runtime = fake_apptainer()
+            binding = runtime.__enter__()
+            request.addfinalizer(lambda: runtime.__exit__(None, None, None))
+            # This fake runtime has no mount namespace. Resolve the child's
+            # selected roots to host coordinates; physical mount qualification
+            # remains a separate acceptance test.
+            seam = Path(binding["options"]["command"]).parent / "sitecustomize.py"
+            with seam.open("a") as stream:
+                stream.write("\nfrom loom.queue import shared_execution\n"
+                    "from dataclasses import replace\n"
+                    "_roots = shared_execution.execution_roots\n"
+                    "shared_execution.execution_roots = lambda roots, *, container: _roots(roots, container=False)\n"
+                    "_input_roots = shared_execution._preparation_input_roots\n"
+                    "shared_execution._preparation_input_roots = lambda profile, preparation: _input_roots(replace(profile, container=None, submitted_execution=None), preparation)\n")
+            command = seam.parent / "apptainer"
+            command.write_text(command.read_text().replace(
+                "os.execvpe(args[0], args, os.environ)",
+                f"os.environ['PYTHONPATH'] = {str(seam.parent)!r}\nos.execvpe(args[0], args, os.environ)",
+            ))
+            submitted_policy = replace(submitted_policy,
+                runtime_options=binding["options"])
+            execution = replace(execution, python_executable=sys.executable)
+        capabilities = (*capabilities, "submitted-container-execution-v1")
     config_path = tmp_path / "coordinator.json"
     authored = json.loads(config_path.read_text())
     authored.update(
@@ -116,6 +159,14 @@ def fleet(tmp_path):
         shared_locations=[],
         resident_profile_id="probe-profile",
     )
+    if submitted_policy is not None:
+        from loom.serialization import thaw_plain_data
+
+        authored.update(remote_profiles=[], shared_roots=thaw_plain_data(submitted_policy.shared_roots),
+                        container_capabilities=[submitted_policy.capability.to_dict()])
+        selected = authored["preparation"]["profiles"]["existing-project"]
+        del selected["resident_profile_id"]
+        selected["container_policy_id"] = submitted_policy.policy_id
     authored["agent_policy"]["agents"] = [
         {
             "credential_id": "agent",
@@ -187,6 +238,12 @@ def fleet(tmp_path):
         tmp_path / "remote",
         (profile,),
     )
+    if submitted_policy is not None:
+        from dataclasses import replace
+        from loom.queue.agent_session_transport import AgentResourceInventory
+
+        agent_config = replace(agent_config, resident_profiles=(),
+            container_policies=(submitted_policy,), resource_inventory=AgentResourceInventory(2))
     LocalDaemonAgentHttpClient.initialize_agent_root(agent_config)
     remote = LocalDaemonAgentHttpClient(agent_config)
     hello = remote.handshake()
@@ -279,7 +336,10 @@ def fleet(tmp_path):
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(work)
         try:
-            yield inventory, deployment, daemon, remote
+            if execution is None:
+                yield inventory, deployment, daemon, remote
+            else:
+                yield inventory, deployment, daemon, remote, execution
         finally:
             stop.set()
             try:
@@ -902,3 +962,89 @@ def test_installed_acceptance_requires_both_explicit_opt_ins(monkeypatch):
     monkeypatch.delenv("LOOM_FLEET_ACCEPTANCE_CONFIG", raising=False)
     with pytest.raises(pytest.fail.Exception, match="no fleet discovery"):
         acceptance_selection()
+
+
+@pytest.mark.parametrize("fleet", ["submitted"], indirect=True)
+def test_submitted_check_retains_native_offered_policy_and_exact_request(fleet):
+    from dataclasses import replace
+    from loom.coordinator import CoordinatorOperatorClient, RunRequest
+    from loom.fleet.self_tests import _read
+    from loom.queue.errors import QueueConfigError
+
+    inventory, deployment, daemon, remote, execution = fleet
+    assert remote._config.resident_profiles == ()
+    connection = inventory.path.parent / "operator.json"
+    with CoordinatorOperatorClient.from_connection_file(connection) as client:
+        observed = client.observe_agent("worker").value
+    assert observed["offer"]["profile_identities"] == () or observed["offer"]["profile_identities"] == []
+    assert len(observed["offer"]["container_execution_capabilities"]) == 1
+    with pytest.raises(QueueConfigError, match="explicit submitted execution"):
+        self_test(inventory, deployment=deployment, operator_connection=connection,
+                  config="pipeline.yaml", checks=["cpu"], _prepare_id="missing-image")
+    intent = self_test(inventory, deployment=deployment, operator_connection=connection,
+        config="pipeline.yaml", checks=["cpu"], execution=execution, _prepare_id="submitted-check",
+        _maintenance_binding={"operation_id": "maintenance", "target_intent_digest": "candidate"})
+    request = RunRequest.from_dict(intent["requests"]["cpu"])
+    assert request.preparation.execution == execution
+    assert intent["profile"] == remote._config.container_policies[0].capability.to_dict()
+    assert _read(inventory.path.parent / "checks/submitted-check/intent.json") == intent
+    with pytest.raises(QueueConfigError, match="retained execution"):
+        self_test(inventory, operation_id="submitted-check",
+                  execution=replace(execution, image=replace(execution.image, sha256="d" * 64)))
+    assert not (inventory.path.parent / "checks/submitted-check/cpu.dispatch.json").exists()
+
+
+@pytest.mark.parametrize("fleet", ["submitted-execution"], indirect=True)
+def test_submitted_cpu_storage_checks_execute_without_resident_profile(fleet):
+    inventory, deployment, _, remote, execution = fleet
+    assert not remote._config.resident_profiles
+    result = self_test(inventory, deployment=deployment,
+        operator_connection=inventory.path.parent / "operator.json",
+        config="pipeline.yaml", checks=("cpu", "storage"), execution=execution,
+        timeout_seconds=45)
+    result = finish(inventory, result["operation_id"])
+    assert result["outcome"] == "passed", result
+    assert result["checks"]["cpu"]["report"]["result"] == 49995000
+    assert result["checks"]["storage"]["storage"]["bytes"] == STORAGE_BYTES
+    for kind in ("cpu", "storage"):
+        assignment = result["checks"][kind]["assignment"]["value"]
+        assert assignment["released"] is True
+        assert assignment["release_proof"]["claim_id"] == assignment["claim_id"]
+
+
+@pytest.mark.parametrize("fleet", ["submitted-execution"], indirect=True)
+def test_submitted_maintenance_checks_execute_and_replay_with_admission_closed(fleet):
+    from loom.fleet.probes import probe_configuration
+    from loom.pipeline.resources import ResourceEntry, ResourceRequest
+    from tests.integration.queue.test_maintenance_admission import change, operator
+
+    inventory, deployment, daemon, remote, execution = fleet
+    assert not remote._config.resident_profiles
+    change(daemon, "close")
+    connection = inventory.path.parent / "operator.json"
+    binding = {"operation_id": "maint-1", "target_intent_digest": "intent-maint-1"}
+    identities = {}
+    for kind in ("cpu", "storage"):
+        identity = "maintenance-" + kind
+        intent = self_test(inventory, deployment=deployment, operator_connection=connection,
+            config="pipeline.yaml", checks=(kind,), execution=execution,
+            _prepare_id=identity, _maintenance_binding=binding)
+        resources = probe_configuration(kind, "worker")["pipeline"]["stages"][0]["resources"]
+        preparation = probe_configuration("cpu", "worker")["pipeline"]["stages"][0]["resources"]
+        change(daemon, "authorize", operation_id="authorize-" + kind, check={
+            "request": intent["requests"][kind], "principal_id": "caller",
+            "agent_id": "worker", "pool": "default", "profile": intent["profile"],
+            "resources": ResourceRequest({key: ResourceEntry.from_dict(value) for key, value in resources["entries"].items()}).to_dict(),
+            "preparation_resources": ResourceRequest({key: ResourceEntry.from_dict(value) for key, value in preparation["entries"].items()}).to_dict(),
+            "max_stages": 1, "previous_check_id": None,
+        })
+        result = finish(inventory, identity)
+        assert result["outcome"] == "passed", result
+        assignment = result["checks"][kind]["assignment"]["value"]
+        assert assignment["released"] is True
+        identities[kind] = assignment["assignment_id"]
+        assert operator(daemon).observe_maintenance()["state"] == "closed"
+    for kind, assignment_id in identities.items():
+        replay = finish(inventory, "maintenance-" + kind)
+        assert replay["checks"][kind]["assignment"]["value"]["assignment_id"] == assignment_id
+    assert operator(daemon).observe_maintenance()["state"] == "closed"

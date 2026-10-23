@@ -27,10 +27,10 @@ from tests.unit.loom.queue.test_agent_process_supervisor import (
 from tests.unit.loom.queue.test_docker_worker import Daemon
 
 
-def _owned(tmp_path, monkeypatch):
+def _owned(tmp_path, monkeypatch, *, target="/loom/cache"):
     resident, request, _ = _shared_container_request(tmp_path, backend="docker")
     base = tmp_path / "local-cache"
-    base.mkdir()
+    base.mkdir(mode=0o700)
     binding = resident.container
     assert binding is not None and isinstance(binding["container"], Mapping)
     resident = replace(
@@ -39,12 +39,10 @@ def _owned(tmp_path, monkeypatch):
             **binding,
             "container": {
                 **binding["container"],
-                "mounts": [
-                    {"source": str(base), "target": "/loom/cache", "mode": "rw"}
-                ],
+                "mounts": [{"source": str(base), "target": target, "mode": "rw"}],
             },
         },
-        temporary_mounts=("/loom/cache",),
+        temporary_mounts=(target,),
     )
     daemon = Daemon()
     initialize = DockerWorker.__init__
@@ -61,8 +59,54 @@ def _owned(tmp_path, monkeypatch):
     launch = _retain_shared_launch(supervisor, tmp_path, resident, request)
     directory = storage.assignment_mounts(
         launch.profile, workspace=launch.workspace_root, agent_id=launch.agent_id
-    )["/loom/cache"]
+    )[target]
     return supervisor, launch, daemon, base, directory
+
+
+def test_missing_scratch_base_is_recreated_and_only_attempt_is_cleaned(
+    tmp_path, monkeypatch
+):
+    supervisor, launch, daemon, base, directory = _owned(
+        tmp_path, monkeypatch, target="/tmp"
+    )
+    base.rmdir()
+    assert supervisor.launch(launch).state is SupervisorLaunchState.RUNNING
+    assert base.stat().st_mode & 0o777 == 0o700
+    assert directory.stat().st_mode & 0o777 == 0o700
+    assert f"source={directory},target=/tmp" in " ".join(launch.container_command.argv)
+    (directory / "scratch").write_bytes(b"temporary")
+    (base / "keep").write_bytes(b"base-owned")
+    daemon.finish()
+    assert supervisor.contain(launch).qualified_success
+    assert not directory.exists()
+    assert (base / "keep").read_bytes() == b"base-owned"
+    assert launch.workspace_root.is_dir()
+
+
+@pytest.mark.parametrize("unsafe", ["symlink", "shared", "foreign"])
+def test_unsafe_scratch_base_is_rejected_without_repair(tmp_path, monkeypatch, unsafe):
+    supervisor, launch, daemon, base, directory = _owned(
+        tmp_path, monkeypatch, target="/tmp"
+    )
+    if unsafe == "symlink":
+        base.rmdir()
+        other = tmp_path / "other"
+        other.mkdir(mode=0o700)
+        base.symlink_to(other, target_is_directory=True)
+    elif unsafe == "shared":
+        base.chmod(0o777)
+    else:
+        monkeypatch.setattr(storage.os, "getuid", lambda: base.stat().st_uid + 1)
+    with pytest.raises((PermissionError, NotADirectoryError)):
+        storage.prepare_assignment_storage(
+            launch.profile, workspace=launch.workspace_root, agent_id=launch.agent_id
+        )
+    assert not directory.exists()
+    assert daemon.calls == []
+    if unsafe == "shared":
+        assert base.stat().st_mode & 0o777 == 0o777
+    elif unsafe == "symlink":
+        assert base.is_symlink() and list(other.iterdir()) == []
 
 
 def test_projection_and_retained_identity_do_not_allocate_storage(
@@ -83,7 +127,7 @@ def test_projection_and_retained_identity_do_not_allocate_storage(
         restored = _launch_from_value(json.loads(json.dumps(saved)))
         assert restored.spec_digest == launch.spec_digest
         assert restored.profile.temporary_mounts == ("/loom/cache",)
-        assert restored.command_argv == launch.command_argv
+    assert restored.command_argv == launch.command_argv
     assert list(base.iterdir()) == []
     assert supervisor.query(launch).state is SupervisorLaunchState.NOT_ACCEPTED
     other = storage.assignment_mounts(

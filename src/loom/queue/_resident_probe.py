@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import os
 from pathlib import Path
@@ -80,7 +80,7 @@ def run_resident_probe(
         )
 
     try:
-        temporary = tempfile.TemporaryDirectory(prefix="loom-resident-probe-")
+        temporary = tempfile.TemporaryDirectory(prefix="loom-resident-probe-", dir="/tmp")
     except OSError:
         return ResidentProbeResult(None, "resident probe scratch creation failed", True)
     result: ResidentProbeResult | None = None
@@ -271,7 +271,7 @@ def _container_probe(profile, script, request, timeout_seconds, device_environme
     from ._docker_worker import DockerWorker
     from ._managed_local import _worker_environment
 
-    scratch = Path(tempfile.mkdtemp(prefix="loom-resident-probe-"))
+    scratch = Path(tempfile.mkdtemp(prefix="loom-resident-probe-", dir="/tmp"))
     workspace = scratch / "assignments" / "probe"
     workspace.mkdir(parents=True)
     output = workspace / "probe.json"
@@ -285,6 +285,25 @@ def _container_probe(profile, script, request, timeout_seconds, device_environme
     environment = _worker_environment(profile, workspace, (), {})
     environment.update(device_environment or {})
     try:
+        if profile.temporary_mounts:
+            from loom.pipeline.executors.containers import ContainerMount, parse_container_options
+
+            container = parse_container_options(binding["container"])
+            mounts = []
+            for index, mount in enumerate(container.mounts):
+                if mount.target in profile.temporary_mounts:
+                    temporary = scratch / ("mount-" + str(index))
+                    temporary.mkdir(mode=0o700)
+                    mount = ContainerMount(source=str(temporary), target=mount.target, mode=mount.mode)
+                mounts.append(mount)
+            # Probes have no assignment journal. Their existing containment
+            # owner retains/removes this entire scratch tree, including mounts.
+            binding = {**binding, "container": replace(container, mounts=tuple(mounts)).to_dict()}
+            profile = replace(profile, container=binding, temporary_mounts=())
+        if profile.submitted_execution is not None:
+            from .submitted_execution import verify_submitted_image
+
+            verify_submitted_image(profile.submitted_execution.image, profile.shared_roots)
         command = build_container_worker(
             profile,
             workspace=workspace,

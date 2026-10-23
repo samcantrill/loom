@@ -181,7 +181,12 @@ def main():
             ),
         }
     private(admin)
-    upgrading = request["action"] in {"install-candidate", "receipt"} or request["action"].startswith("upgrade-")
+    retirement = (
+        request["action"] == "workload-stopped-retire"
+        or (request["action"] == "workload-stage" and request.get("retire_configuration") is True)
+        or (request["action"] == "workload-publish" and request.get("stopped_retirement") is True)
+    )
+    upgrading = retirement or request["action"] in {"install-candidate", "receipt"} or request["action"].startswith("upgrade-")
     if active.exists() and json.loads(active.read_text()) != release and not upgrading:
         raise ValueError("service release change requires explicit upgrade")
     import fcntl

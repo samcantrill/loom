@@ -329,11 +329,21 @@ def publication(tmp_path, monkeypatch):
     _host.atomic(tmp_path / "service.json", binding)
     directory = tmp_path / "publication"
     directory.mkdir()
-    state = SimpleNamespace(owner="original-coordinator", bindings=[], reloads=[], lost=False, statuses=0)
+    state = SimpleNamespace(owner="original-coordinator", bindings=[], reloads=[], lost=False, statuses=0,
+        capabilities=["quiescent-coordinator-retirement-v1"], gate={
+            "state": "closed", "settled": True, "checks": {}, "maintenance_id": "retire",
+            "intent_digest": "selected", "revision": 1,
+        })
     monkeypatch.setattr(host, "owner", lambda _: {"owner": state.owner})
     monkeypatch.setattr(host, "payload", lambda _: _host.read(config))
 
     class Client:
+        def describe_connection(self):
+            return SimpleNamespace(capabilities=state.capabilities)
+
+        def observe_maintenance(self):
+            return state.gate
+
         def status(self):
             state.statuses += 1
             return SimpleNamespace(scheduling_epoch="original-epoch")
@@ -395,3 +405,242 @@ def test_publication_refuses_changed_service_or_native_owner_before_writes(publi
     assert not (directory / "reload.json").exists()
     assert not state.bindings and not state.reloads
     assert read(Path(request["admin"]) / "service.json") == binding
+
+
+@pytest.fixture
+def retirement_candidate(tmp_path, monkeypatch):
+    from tests.unit.loom.queue.test_deployment import _agent_config, _write_protected
+    from tests.unit.loom.queue.test_submitted_container_policy import _submitted
+    from loom.queue.deployment import load_outbound_agent_service_config
+    from loom.queue.agent_session_transport import LocalDaemonAgentHttpClient
+    from loom.queue.retirement import read_agent_declaration_binding
+
+    policy, _, _, _ = _submitted(tmp_path)
+    source = _agent_config(tmp_path)
+    before = json.loads(source.read_text())
+    before["resources"] = {
+        "cpu_capacity": 1, "memory_capacity_bytes": 0,
+        "gpu": {"provider": "nvidia", "devices": "none"},
+    }
+    before["container_policies"] = [policy.to_dict()]
+    missing = tmp_path / "deleted-qualification-data"
+    missing.mkdir()
+    (missing / "challenge").write_bytes(b"old-data")
+    before["container_policies"][0]["shared_roots"]["obsolete"] = {
+        "host_path": str(missing), "container_path": "/loom/obsolete", "access": "ro",
+        "challenge": {"path": "challenge", "sha256": hashlib.sha256(b"old-data").hexdigest()},
+    }
+    # A discarded resident's execution files must not be probed either.
+    before["resident_profiles"][0]["project_root"] = str(missing)
+    _write_protected(source, before)
+    service = load_outbound_agent_service_config(source)
+    LocalDaemonAgentHttpClient.initialize_agent_root(service.client)
+    accepted = read_agent_declaration_binding(service.client.agent_root, service.client.declaration_digest)
+    (missing / "challenge").unlink()
+    missing.rmdir()
+    after = copy.deepcopy(before)
+    after["resident_profiles"] = []
+    del after["container_policies"][0]["shared_roots"]["obsolete"]
+    request = {"name": "worker", "config": str(source),
+               "retire_configuration": True, "candidate_declaration": after}
+    monkeypatch.setattr(host, "owner", lambda _: {"owner": accepted.root_id})
+    return request, missing
+
+
+def test_retirement_probe_qualifies_container_only_target_with_deleted_predecessor(retirement_candidate):
+    from loom.queue.deployment import read_agent_spec
+
+    request, missing = retirement_candidate
+    source = Path(request["config"])
+    original = source.read_bytes()
+    siblings = set(source.parent.iterdir())
+    result = host.probe(request)
+    assert result["source"]["declaration_digest"] == read_agent_spec(source).declaration_digest
+    assert result["target"]["declaration_digest"] != result["source"]["declaration_digest"]
+    assert result["target"]["profile"] is None
+    assert result["target"]["immutable"] and result["target"]["active"]
+    from loom.queue.retirement import read_agent_declaration_binding
+    spec = read_agent_spec(source)
+    accepted = read_agent_declaration_binding(spec.agent_root, spec.declaration_digest)
+    assert result["source"]["immutable"] == accepted.immutable_fingerprint
+    assert result["source"]["active"] == accepted.active_fingerprint
+    assert result["native_owner"] == {"owner": accepted.root_id}
+    assert source.read_bytes() == original
+    assert set(source.parent.iterdir()) == siblings
+    assert not missing.exists()
+
+
+@pytest.mark.parametrize("change", ["resources", "transport", "new_policy", "root_identity", "missing_target"])
+def test_retirement_probe_refuses_invalid_target_without_publishing(retirement_candidate, change):
+    from loom.queue.errors import QueueServiceError
+
+    request, missing = retirement_candidate
+    after = request["candidate_declaration"]
+    policy = after["container_policies"][0]
+    if change == "resources":
+        after["resources"]["cpu_capacity"] = 2
+    elif change == "transport":
+        after["url"] = "https://different.example:8443"
+    elif change == "new_policy":
+        policy["policy_id"] = "unaccepted-policy"
+    elif change == "root_identity":
+        policy["shared_roots"]["workloads"]["challenge"]["sha256"] = "b" * 64
+    else:
+        policy["shared_roots"]["workloads"]["host_path"] = str(missing)
+    source = Path(request["config"])
+    original = source.read_bytes()
+    siblings = set(source.parent.iterdir())
+    with pytest.raises((QueueConflictError, QueueServiceError)):
+        host.probe(request)
+    assert source.read_bytes() == original
+    assert set(source.parent.iterdir()) == siblings
+    assert not missing.exists()
+
+
+def _retirement_publication(request):
+    return {**request, "retirement": {
+        "maintenance_id": "retire", "maintenance_intent_digest": "selected",
+        "expected_gate_revision": 1,
+    }}
+
+
+@pytest.mark.parametrize("refusal", ["unsupported", "open", "wrong_owner", "unsettled", "checks"])
+def test_retirement_publication_refuses_before_source_or_intent_write(publication, refusal):
+    request, _, directory, state = publication
+    request = _retirement_publication(request)
+    source = Path(request["config"])
+    original = source.read_bytes()
+    if refusal == "unsupported":
+        state.capabilities = []
+    elif refusal == "open":
+        state.gate["state"] = "open"
+    elif refusal == "wrong_owner":
+        state.gate["maintenance_id"] = "another-maintenance"
+    elif refusal == "unsettled":
+        state.gate["settled"] = False
+    else:
+        state.gate["checks"] = {"active-check": {}}
+    with pytest.raises(QueueConflictError, match="unsupported_capability|exact settled maintenance"):
+        host.publish(request, directory)
+    assert source.read_bytes() == original
+    assert not (directory / "reload.json").exists()
+    assert not state.reloads
+
+
+def test_retirement_publication_replays_exact_binding_after_lost_reply(publication):
+    from loom.coordinator import CoordinatorClientError
+
+    request, _, directory, state = publication
+    request = _retirement_publication(request)
+    state.lost = True
+    with pytest.raises(CoordinatorClientError):
+        host.publish(request, directory)
+    before = (directory / "reload.json").read_bytes()
+    # Already-written source can replay the native request without reacquiring
+    # a gate; the native journal decides whether that exact effect was accepted.
+    state.gate["state"] = "open"
+    assert host.publish(request, directory)["reload"]["state"] == "applied"
+    assert state.reloads[0] == state.reloads[1]
+    assert state.reloads[0]["retirement"] == request["retirement"]
+    assert (directory / "reload.json").read_bytes() == before
+    changed = {**request, "retirement": {**request["retirement"], "expected_gate_revision": 2}}
+    with pytest.raises(QueueConflictError, match="retirement binding changed"):
+        host.publish(changed, directory)
+    assert len(state.reloads) == 2
+
+
+def test_retirement_publication_rechecks_gate_after_interrupted_source_write(publication, monkeypatch):
+    request, _, directory, state = publication
+    request = _retirement_publication(request)
+    source = Path(request["config"])
+    before = source.read_bytes()
+    atomic = host.atomic
+
+    def interrupt(path, value):
+        if path == source:
+            raise RuntimeError("before-source-write")
+        return atomic(path, value)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(host, "atomic", interrupt)
+        with pytest.raises(RuntimeError, match="before-source-write"):
+            host.publish(request, directory)
+    assert (directory / "reload.json").exists()
+    state.gate["revision"] += 1
+    with pytest.raises(QueueConflictError, match="exact settled maintenance"):
+        host.publish(request, directory)
+    assert source.read_bytes() == before
+    assert not state.reloads
+
+
+@pytest.mark.parametrize("change", ["declaration", "native_owner", "uninitialized"])
+def test_retirement_probe_requires_accepted_predecessor_before_target_qualification(retirement_candidate, monkeypatch, change):
+    from loom.queue.errors import QueueError
+    from tests.unit.loom.queue.test_deployment import _write_protected
+
+    request, missing = retirement_candidate
+    source = Path(request["config"])
+    authored = json.loads(source.read_text())
+    if change == "native_owner":
+        monkeypatch.setattr(host, "owner", lambda _: {"owner": "different-root"})
+    else:
+        key, value = ("reconnect_seconds", 0.5) if change == "declaration" else ("agent_root", "uninitialized")
+        authored[key] = value
+        request["candidate_declaration"][key] = value
+        _write_protected(source, authored)
+    monkeypatch.setattr(host, "load_outbound_agent_service_config",
+                        lambda *args, **kwargs: pytest.fail("unaccepted predecessor qualified a target"))
+    with pytest.raises(QueueError):
+        host.probe(request)
+    assert not missing.exists()
+    assert not (source.parent / "uninitialized").exists()
+
+
+def test_retirement_staging_qualifies_exact_container_target_without_resident_image(retirement_candidate):
+    request, missing = retirement_candidate
+    target = host.probe(request)["target"]
+    declaration = request.pop("candidate_declaration")
+    request.update(declaration=declaration, target=target, request_id="retirement-stage")
+    result = host.stage(request)
+    assert json.loads(Path(result["candidate_source"]).read_text()) == declaration
+    assert json.loads(Path(request["config"]).read_text())["resident_profiles"]
+    assert not missing.exists()
+
+
+def test_runtime_probe_qualifies_retirement_target_before_stopping_deleted_predecessor(
+    retirement_candidate, monkeypatch, tmp_path,
+):
+    from loom.fleet import _upgrade_host, releases
+    from loom.queue.deployment import read_agent_spec
+
+    request, missing = retirement_candidate
+    qualified = host.probe(request)
+    spec = read_agent_spec(request["config"])
+    release = {"descriptor_sha256": "a" * 64}
+    request = {
+        **request, "admin": str(tmp_path / "admin"), "root": str(spec.agent_root),
+        "release": release, "descriptor_name": "release.yaml",
+        "expected_root_id": qualified["native_owner"]["owner"],
+        "required_capabilities": [], "images": {},
+        "retirement_declaration": request["candidate_declaration"],
+        "retirement_target": qualified["target"],
+    }
+    monkeypatch.setattr(releases, "verify_release", lambda _: release)
+    monkeypatch.setattr(_upgrade_host, "owner", host.owner)
+    original = Path(request["config"]).read_bytes()
+    facts = _upgrade_host.inspect(request)
+    assert facts["compatibility"]["value"]["compatible"]
+    assert facts["retirement_target"] == qualified["target"]
+    assert facts["images"] == {}
+    stopped = []
+    monkeypatch.setattr(_upgrade_host, "stop_owned", lambda value, **_: stopped.append(value) or {"outcome": "stopped"})
+    assert _upgrade_host.stop(request) == {"outcome": "stopped"}
+    assert stopped == [request]
+    changed = {**request, "retirement_target": {**qualified["target"], "active": "stale"}}
+    with pytest.raises(QueueConflictError, match="qualification changed"):
+        _upgrade_host.stop(changed)
+    assert len(stopped) == 1
+    with pytest.raises(QueueConflictError, match="publication first"):
+        _upgrade_host.replace(request)
+    assert Path(request["config"]).read_bytes() == original
+    assert not missing.exists()

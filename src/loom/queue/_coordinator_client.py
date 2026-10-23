@@ -158,17 +158,33 @@ class NativeCoordinatorClient:
                     from .operations import OPERATOR_CAPABILITY
                     if OPERATOR_CAPABILITY not in description.capabilities:
                         raise control_error("unsupported_capability", operation, payload, ids={"missing_capability": OPERATOR_CAPABILITY})
+                if operation == "operator_scheduling_reload" and cast(Mapping[str, PlainData], payload["request"]).get("retirement") is not None:
+                    capability = "quiescent-coordinator-retirement-v1"
+                    if capability not in description.capabilities:
+                        raise control_error("unsupported_capability", operation, payload, ids={"missing_capability": capability})
                 if operation == "operator_control" and "condition" in payload:
                     from .operations import CONDITIONAL_CONTROL_CAPABILITY
                     if CONDITIONAL_CONTROL_CAPABILITY not in description.capabilities:
                         raise control_error("unsupported_capability", operation, payload, ids={"missing_capability": CONDITIONAL_CONTROL_CAPABILITY})
                 if operation == "operator_control" and isinstance(payload.get("control"), Mapping) and cast(Mapping[str, PlainData], payload["control"]).get("promotion") is not None:
+                    promotion = cast(Mapping[str, PlainData], cast(Mapping[str, PlainData], payload["control"])["promotion"])
+                    if promotion.get("retire_configuration") and "quiescent-configuration-retirement-v1" not in description.capabilities:
+                        raise control_error("unsupported_capability", operation, payload, ids={"missing_capability": "quiescent-configuration-retirement-v1"})
                     if "quiescent-profile-promotion-v2" not in description.capabilities:
                         raise control_error("unsupported_capability", operation, payload, ids={"missing_capability": "quiescent-profile-promotion-v2"})
                 if operation.startswith("operator_maintenance"):
                     from ._maintenance import MAINTENANCE_CAPABILITY
                     if MAINTENANCE_CAPABILITY not in description.capabilities:
                         raise control_error("unsupported_capability", operation, payload, ids={"missing_capability": MAINTENANCE_CAPABILITY})
+                if operation == "operator_maintenance_control":
+                    from ._maintenance import SUBMITTED_CHECK_CAPABILITY
+
+                    control = payload.get("control")
+                    check = control.get("check") if isinstance(control, Mapping) else None
+                    profile = check.get("profile") if isinstance(check, Mapping) else None
+                    if isinstance(profile, Mapping) and profile.get("kind") == "submitted_container":
+                        if SUBMITTED_CHECK_CAPABILITY not in description.capabilities:
+                            raise control_error("unsupported_capability", operation, payload, ids={"missing_capability": SUBMITTED_CHECK_CAPABILITY})
                 if operation == "read_run_logs" and "bounded-run-logs-v1" not in description.capabilities:
                     raise control_error("unsupported_capability", operation, payload, ids={"missing_capability": "bounded-run-logs-v1"})
                 requested = envelope.get("request")

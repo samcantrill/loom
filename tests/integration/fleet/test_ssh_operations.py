@@ -174,14 +174,17 @@ def endpoint(tmp_path, monkeypatch):
     import tempfile
 
     authorization_root = Path(
-        tempfile.mkdtemp(prefix="loom-ssh-fixture-", dir=Path.home() / ".cache")
+        tempfile.mkdtemp(prefix="loom-ssh-fixture-", dir="/tmp")
     )
     authorized = authorization_root / "authorized_keys"
     authorized.write_text(key)
     authorized.chmod(0o600)
     configuration = root / "sshd_config"
     configuration.write_text(
-        f"Port {port}\nListenAddress 127.0.0.1\nHostKey {root / 'host'}\nPidFile {root / 'pid'}\nAuthorizedKeysFile {authorized}\nStrictModes yes\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nUsePAM no\nAllowUsers {pwd.getpwuid(os.getuid()).pw_name}\nLogLevel ERROR\n"
+        # This disposable loopback daemon uses a task-owned key under /tmp;
+        # production sshd settings are never touched. StrictModes rejects the
+        # world-writable /tmp ancestor even though the task/key are private.
+        f"Port {port}\nListenAddress 127.0.0.1\nHostKey {root / 'host'}\nPidFile {root / 'pid'}\nAuthorizedKeysFile {authorized}\nStrictModes no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nUsePAM no\nAcceptEnv PYTHONPATH\nAllowUsers {pwd.getpwuid(os.getuid()).pw_name}\nLogLevel ERROR\n"
     )
     known = root / "known_hosts"
     known.write_text(f"[127.0.0.1]:{port} " + (root / "host.pub").read_text())

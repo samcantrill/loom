@@ -359,7 +359,8 @@ def test_stale_local_predecessor_and_retained_work_have_no_binding_effect(
 
 
 @pytest.mark.parametrize("owner", [("maintenance", "drain")], indirect=True)
-def test_native_operator_authorization_gate_guards_and_wire_replay(owner, tmp_path):  # noqa: F811
+@pytest.mark.parametrize("retirement", [False, True])
+def test_native_operator_authorization_gate_guards_and_wire_replay(owner, tmp_path, retirement):  # noqa: F811
     from loom.coordinator import CoordinatorOperatorClient, CoordinatorClientError
     from loom.queue import LocalDaemonSocketServer
 
@@ -373,6 +374,12 @@ def test_native_operator_authorization_gate_guards_and_wire_replay(owner, tmp_pa
         revision=session.config_revision,
     )
     assert control.promotion is not None
+    if retirement:
+        control = replace(control, promotion={
+            **{key: value for key, value in control.promotion.items()
+               if key not in {"profile_id", "target_profile"}},
+            "retire_configuration": True,
+        })
     server = LocalDaemonSocketServer(daemon, daemon.config.endpoint)
     server.start()
     try:
@@ -666,3 +673,235 @@ def test_container_enablement_updates_coordinator_session_only_after_authorized_
         if effect_code == "applied" else session.capabilities))
     current=agent.reconcile(expected,session.coordinator_epoch,idempotency_key="enabled-session")
     assert (SUBMITTED_CONTAINER_CAPABILITY in current.capabilities) == (effect_code == "applied")
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_retirement_preserves_native_owner_and_recovers_container_only_target(tmp_path, monkeypatch, interrupted):
+    from loom.queue._remote_stage_execution import AgentResourceInventory
+    from tests.unit.loom.queue.test_submitted_container_policy import _submitted
+
+    policy, _, _, _ = _submitted(tmp_path)
+    obsolete = {**dict(policy.shared_roots["workloads"]), "host_path": str(tmp_path / "deleted-data")}
+    previous_policy = replace(policy, shared_roots={**policy.shared_roots, "obsolete": obsolete})
+    old = replace(config(tmp_path), resource_inventory=AgentResourceInventory(2),
+                  container_policies=(previous_policy, replace(previous_policy, policy_id="unused")))
+    new = replace(old, resident_profiles=(), container_policies=(policy,),
+                  deployment_configuration_fingerprint="2" * 64,
+                  active_configuration_fingerprint="5" * 64)
+    c, old, new = client(tmp_path, (old, new))
+    root_id = c.agent_root_id
+    control = request(old, old, root_id)
+    control = replace(control, promotion={
+        **{key: value for key, value in control.promotion.items()
+           if key not in {"profile_id", "target_profile", "target_immutable", "target_active"}},
+        "retire_configuration": True,
+        "target_immutable": new.deployment_configuration_fingerprint,
+        "target_active": new.active_configuration_fingerprint,
+    })
+    try:
+        secret = (old.agent_root / "supervisor/service.secret").read_bytes()
+        if interrupted:
+            finish = promotion._finish
+            monkeypatch.setattr(promotion, "_finish", lambda *args: (_ for _ in ()).throw(RuntimeError("interrupted")))
+            with pytest.raises(RuntimeError, match="interrupted"):
+                apply(c, control)
+            c.close()
+            monkeypatch.setattr(promotion, "_finish", finish)
+            c = LocalDaemonAgentHttpClient(new)
+        else:
+            assert apply(c, control).code == "applied"
+        assert c._config == new and c._drained
+        assert c.agent_root_id == root_id
+        assert c._config.resource_inventory == old.resource_inventory
+        assert (old.agent_root / "supervisor/service.secret").read_bytes() == secret
+        assert c._require_journal().replayed_control_effect(control).code == "applied"
+        assert not (tmp_path / "deleted-data").exists()
+        close(c)
+        c = LocalDaemonAgentHttpClient(new)
+        assert c.agent_root_id == root_id and c._config.container_policies == (policy,)
+        assert promotion.apply(c, control).code == "applied"
+    finally:
+        close(c)
+
+
+@pytest.mark.parametrize("change", ["capacity", "transport", "root-identity", "new-policy"])
+def test_retirement_rejects_unrelated_identity_changes(tmp_path, change):
+    from loom.queue._remote_stage_execution import AgentResourceInventory
+    from tests.unit.loom.queue.test_submitted_container_policy import _submitted
+
+    policy, _, _, _ = _submitted(tmp_path)
+    old = replace(config(tmp_path), resource_inventory=AgentResourceInventory(2), container_policies=(policy,))
+    new = replace(old, resident_profiles=())
+    if change == "capacity":
+        new = replace(new, resource_inventory=AgentResourceInventory(3))
+    elif change == "transport":
+        new = replace(new, url="https://another-host")
+    elif change == "new-policy":
+        new = replace(new, container_policies=(replace(policy, policy_id="replacement-name"),))
+    else:
+        roots = dict(policy.shared_roots)
+        roots["workloads"] = {**dict(roots["workloads"]), "container_path": "/loom/changed"}
+        new = replace(new, container_policies=(replace(policy, shared_roots=roots),))
+    with pytest.raises(QueueConflictError):
+        promotion.validate_candidate(old, new, None, retire_configuration=True)
+
+
+@pytest.mark.parametrize("failure", [None, "source_conflict", "missing_target", "candidate_root"])
+def test_retirement_recovers_authored_source_before_loading_deleted_predecessor(tmp_path, monkeypatch, failure):
+    import json
+    from tests.unit.loom.queue.test_deployment import _agent_config, _write_protected
+    from tests.unit.loom.queue.test_submitted_container_policy import _submitted
+    from loom.queue.deployment import load_outbound_agent_service_config, read_agent_spec
+    from loom.queue.errors import QueueError
+
+    policy, _, _, _ = _submitted(tmp_path)
+    canonical = _agent_config(tmp_path)
+    before = json.loads(canonical.read_text())
+    before["resident_profiles"][0]["descriptor"]["profile_id"] = "work"
+    before["resources"] = {"cpu_capacity": 1, "memory_capacity_bytes": 0,
+                           "gpu": {"provider": "nvidia", "devices": "none"}}
+    old_data = tmp_path / "obsolete-data"
+    old_data.mkdir()
+    (old_data / "challenge").write_bytes(b"images")
+    old_policy = policy.to_dict()
+    old_policy["shared_roots"]["obsolete"] = {
+        **old_policy["shared_roots"]["workloads"], "host_path": str(old_data),
+    }
+    before["container_policies"] = [old_policy]
+    _write_protected(canonical, before)
+    after = {**before, "resident_profiles": [], "container_policies": [policy.to_dict()]}
+    candidate = _write_protected(tmp_path / "candidate.json", after)
+    old_service = load_outbound_agent_service_config(canonical)
+    new_service = load_outbound_agent_service_config(candidate)
+    c, old, new = client(tmp_path, (old_service.client, new_service.client))
+    control = request(old, old, c.agent_root_id)
+    control = replace(control, promotion={
+        **{key: value for key, value in control.promotion.items()
+           if key not in {"profile_id", "target_profile", "target_immutable", "target_active"}},
+        "retire_configuration": True, "candidate_source": str(candidate),
+        "target_immutable": new.deployment_configuration_fingerprint,
+        "target_active": new.active_configuration_fingerprint,
+    })
+    original = canonical.read_text()
+    source = {"path": str(canonical), "candidate": str(candidate), "environment": None,
+              "before": original, "after": candidate.read_text()}
+    c._trusted_promotion_loader = lambda _: (new, source)
+    finish = promotion._finish
+    monkeypatch.setattr(promotion, "_finish", lambda *args: (_ for _ in ()).throw(RuntimeError("interrupted")))
+    try:
+        with pytest.raises(RuntimeError, match="interrupted"):
+            apply(c, control)
+    finally:
+        c.close()
+    monkeypatch.setattr(promotion, "_finish", finish)
+    (old_data / "challenge").unlink()
+    old_data.rmdir()
+    with pytest.raises(QueueError):
+        load_outbound_agent_service_config(canonical)
+    if failure == "source_conflict":
+        _write_protected(canonical, {**before, "reconnect_seconds": 0.3})
+    elif failure == "missing_target":
+        (tmp_path / "workloads" / "challenge").unlink()
+    elif failure == "candidate_root":
+        _write_protected(candidate, {**after, "agent_root": "different-agent"})
+    current = canonical.read_bytes()
+    spec = read_agent_spec(canonical)
+    if failure:
+        with pytest.raises(QueueError):
+            promotion.recover(spec)
+        assert canonical.read_bytes() == current
+        assert promotion.publication_state(spec.agent_root, control.operation_id) == "pending"
+    else:
+        from argparse import Namespace
+        from loom.cli import queue as cli
+        from loom.queue import deployment
+
+        started = []
+        monkeypatch.setattr(cli, "_emit_daemon_payload", lambda *args, **kwargs: None)
+        monkeypatch.setattr(deployment, "run_outbound_agent_service",
+                            lambda service, **kwargs: started.append(service))
+        assert cli.handle_agent_serve(Namespace(config=str(canonical), env_file=None)) == 0
+        assert len(started) == 1
+        recovered = started[0].client
+        assert recovered.deployment_configuration_fingerprint == new.deployment_configuration_fingerprint
+        assert canonical.read_text() == source["after"]
+        assert promotion.completed(spec.agent_root, control.operation_id)
+        service = load_outbound_agent_service_config(canonical)
+        restarted = LocalDaemonAgentHttpClient(service.client)
+        try:
+            assert restarted.agent_root_id == control.promotion["agent_root_id"]
+            assert restarted._drained and not restarted._config.resident_profiles
+            assert promotion.apply(restarted, control).code == "applied"
+        finally:
+            close(restarted)
+    assert not old_data.exists()
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_stopped_retirement_uses_received_control_with_deleted_inputs(tmp_path, monkeypatch, interrupted):
+    import json
+    from tests.unit.loom.queue.test_deployment import _agent_config, _write_protected
+    from tests.unit.loom.queue.test_submitted_container_policy import _submitted
+    from loom.queue.deployment import load_outbound_agent_service_config, read_agent_spec
+    from loom.queue.errors import QueueError
+
+    policy, _, _, _ = _submitted(tmp_path)
+    canonical = _agent_config(tmp_path)
+    before = json.loads(canonical.read_text())
+    before["resident_profiles"][0]["descriptor"]["profile_id"] = "work"
+    before["resources"] = {"cpu_capacity": 1, "memory_capacity_bytes": 0,
+                           "gpu": {"provider": "nvidia", "devices": "none"}}
+    obsolete = tmp_path / "obsolete-data"
+    obsolete.mkdir()
+    (obsolete / "challenge").write_bytes(b"images")
+    old_policy = policy.to_dict()
+    old_policy["shared_roots"]["obsolete"] = {
+        **old_policy["shared_roots"]["workloads"], "host_path": str(obsolete),
+    }
+    before["container_policies"] = [old_policy]
+    _write_protected(canonical, before)
+    candidate = _write_protected(tmp_path / "candidate.json",
+        {**before, "resident_profiles": [], "container_policies": [policy.to_dict()]})
+    old_service = load_outbound_agent_service_config(canonical)
+    new_service = load_outbound_agent_service_config(candidate)
+    c, old, new = client(tmp_path, (old_service.client, new_service.client))
+    control = request(old, old, c.agent_root_id)
+    control = replace(control, promotion={
+        **{key: value for key, value in control.promotion.items()
+           if key not in {"profile_id", "target_profile", "target_immutable", "target_active"}},
+        "retire_configuration": True, "candidate_source": str(candidate),
+        "target_immutable": new.deployment_configuration_fingerprint,
+        "target_active": new.active_configuration_fingerprint,
+    })
+    c._require_journal().retain_control(control)
+    assert c._require_journal().prepare_control(control) is None
+    close(c)
+    secret = (old.agent_root / "supervisor/service.secret").read_bytes()
+    (obsolete / "challenge").unlink()
+    obsolete.rmdir()
+    with pytest.raises(QueueError):
+        load_outbound_agent_service_config(canonical)
+    spec = read_agent_spec(canonical)
+    with pytest.raises(QueueConflictError, match="delivery or native predecessor"):
+        promotion.apply_stopped(spec, replace(control, operation_id="undelivered"))
+    original = canonical.read_bytes()
+    if interrupted:
+        finish = promotion._finish
+        monkeypatch.setattr(promotion, "_finish", lambda *args: (_ for _ in ()).throw(RuntimeError("interrupted")))
+        with pytest.raises(RuntimeError, match="interrupted"):
+            promotion.apply_stopped(spec, control)
+        assert canonical.read_bytes() == original
+        monkeypatch.setattr(promotion, "_finish", finish)
+    effect = promotion.apply_stopped(spec, control)
+    assert effect.code == "applied"
+    assert not obsolete.exists()
+    assert (old.agent_root / "supervisor/service.secret").read_bytes() == secret
+    accepted = load_outbound_agent_service_config(canonical)
+    restarted = LocalDaemonAgentHttpClient(accepted.client)
+    try:
+        assert restarted.agent_root_id == control.promotion["agent_root_id"]
+        assert restarted._drained and not restarted._config.resident_profiles
+        assert restarted._require_journal().replayed_control_effect(control) == effect
+    finally:
+        close(restarted)
+    assert promotion.apply_stopped(read_agent_spec(canonical), control) == effect

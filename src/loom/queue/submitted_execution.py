@@ -283,6 +283,24 @@ class SubmittedContainerCapability:
         )
 
 
+def verify_submitted_image(image: SubmittedImage, roots: Mapping[str, PlainData]) -> Path:
+    """Verify immutable image bytes at a physical worker or probe launch boundary."""
+    from ._remote_stage_execution import _file_digest
+    from .shared_execution import resolve
+
+    root = cast(Mapping[str, PlainData], roots[str(image.location["root_id"])])
+    path = resolve(root, str(image.location["path"]))
+    details = path.stat()
+    if (
+        not stat.S_ISREG(details.st_mode)
+        or details.st_mode & 0o222
+        or details.st_size != image.size_bytes
+        or _file_digest(path) != image.sha256
+    ):
+        raise ValueError("submitted image bytes or immutable publication differ from retained intent")
+    return path
+
+
 def retain_submitted_image(
     image: SubmittedImage,
     roots: Mapping[str, PlainData],
@@ -336,6 +354,26 @@ def assignment_binding(
     if SUBMITTED_EXECUTION_SCOPE not in fields:
         return None
     return submitted_binding(fields[SUBMITTED_EXECUTION_SCOPE])
+
+
+def _validate_retired_capabilities(previous, replacement):
+    """Match narrowed portable permissions to retained policy IDs at retirement.
+
+    The environment digest may change with the explicitly replaced policy's
+    environment/scratch mounts. Runtime, roots, image permissions and worker
+    interfaces cannot expand or rebind retained portable storage identities.
+    """
+    from .errors import QueueConflictError
+
+    policies = {value.policy_id: value for value in previous}
+    for value in replacement:
+        old = policies.get(value.policy_id)
+        if (old is None or old.runtime != value.runtime
+            or not set(value.worker_contracts) <= set(old.worker_contracts)
+            or not set(value.allowed_image_roots) <= set(old.allowed_image_roots)
+            or not set(value.project_integration_versions) <= set(old.project_integration_versions)
+            or any(old.shared_roots.get(key) != root for key, root in value.shared_roots.items())):
+            raise QueueConflictError("coordinator retirement cannot expand or rebind container capability")
 
 
 def submitted_implementation(
