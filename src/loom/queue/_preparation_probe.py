@@ -33,6 +33,14 @@ from loom.preparation import PreparationStage, preparation_checks_allow_publicat
 from loom.queue.preparation import PREPARATION_INPUT_CONTEXT_ENV
 
 request = json.loads(sys.argv[1])
+execution = request["binding"].get("execution")
+if execution is not None:
+    from loom.queue import submitted_execution as implementation
+    supported = getattr(implementation, "SUPPORTED_WORKER_CONTRACTS", (implementation.SUBMITTED_CONTAINER_WORKER_CONTRACT,))
+    if execution["worker_contract"] not in supported:
+        print(json.dumps({"allowed": False, "error_type": "UnsupportedWorkerContract",
+                          "required": execution["worker_contract"]}))
+        sys.exit(0)
 os.environ[PREPARATION_INPUT_CONTEXT_ENV] = json.dumps(request["context"])
 with tempfile.TemporaryDirectory(prefix="loom-preparation-probe-", dir="/tmp") as directory:
     root = Path(directory)

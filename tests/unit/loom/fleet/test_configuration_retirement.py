@@ -22,6 +22,38 @@ def test_cli_retirement_selects_no_resident_image():
     assert selected.workload_profile is None and selected.image is None
 
 
+def test_policy_publication_exports_required_worker_contract_without_rewriting_old_client(tmp_path):
+    from dataclasses import replace
+    from loom.deployment import load_deployment
+    from loom.queue.submitted_execution import INPUT_DIRECTORY_WORKER_CONTRACT
+    from tests.integration.fleet.test_configuration import selection
+    from tests.unit.loom.queue.test_submitted_container_policy import _submitted
+
+    original = selection(tmp_path)
+    original_bytes = original.read_bytes()
+    policy, _, _, _ = _submitted(tmp_path)
+    data = tmp_path / "input"
+    data.mkdir()
+    policy = replace(policy, policy_id="inputs", worker_contracts=(INPUT_DIRECTORY_WORKER_CONTRACT,),
+        shared_roots={**policy.shared_roots, "input": {
+            "host_path": str(data), "container_path": "/loom/inputs/input", "access": "ro",
+            "qualification": {"kind": "input_directory"}}})
+    coordinator = {"preparation": {"profiles": {"selected": {"container_policy_id": "inputs"}}},
+                   "container_capabilities": [policy.capability.to_dict()]}
+    plan = {"checks": {"deployment": str(original)}, "generation": "inputs", "preparation_profile": "selected",
+            "target_declarations": {"coordinator": coordinator}, "add_container_policies": True,
+            "workload_profile": None, "image": None, "image_sha256": None, "candidates": {},
+            "workload_inventory": None, "candidate_sources": {}, "coordinator_target": {}, "candidate_inputs": {}}
+    intent = {"check_selection": {}, "inputs": {}}
+    published = workload_upgrades.bind_intent(intent, plan, tmp_path)
+    selected = load_deployment(published["check_selection"]["deployment"])
+    assert selected.worker_contract == INPUT_DIRECTORY_WORKER_CONTRACT
+    assert selected.preparation_profile == "selected"
+    assert original.read_bytes() == original_bytes
+    assert load_deployment(original).worker_contract == "resident-submitted-container-v1"
+    assert workload_upgrades.bind_intent(intent, plan, tmp_path) == published
+
+
 @pytest.mark.parametrize("interruption", [None, "workload-stopped-retire", "upgrade-replace"])
 def test_stopped_promotion_reconciles_publication_before_control_replay(tmp_path, interruption):
     from loom.fleet._host import atomic

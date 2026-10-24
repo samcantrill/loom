@@ -103,7 +103,7 @@ class SubmittedContainerPolicy:
         return hash_mapping(self.to_dict()).split(":", 1)[1]
 
     def qualify(self) -> SubmittedContainerCapability:
-        """Check host runtime and bounded shared-root challenges, without images."""
+        """Check host runtime and each root's declared qualification, without images."""
         command = str(self.runtime_options["command"])
         if not Path(command).is_file() or not os.access(command, os.X_OK):
             raise QueueServiceError("container policy runtime is unavailable")

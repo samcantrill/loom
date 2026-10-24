@@ -275,6 +275,8 @@ def project_container_worker(
         # Root challenge files permit the child to recheck its actual namespace.
         for alias in cast(Mapping[str, PlainData], shared_scope["roots"]):
             root = cast(Mapping[str, PlainData], profile.shared_roots[alias])
+            if "qualification" in root:
+                continue
             challenge = cast(Mapping[str, PlainData], root["challenge"])
             target = str(Path(str(root["container_path"])) / str(challenge["path"]))
             mounts[target] = ContainerMount(source=str(project_path(root, str(challenge["path"]))), target=target, mode="ro")

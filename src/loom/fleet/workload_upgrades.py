@@ -263,12 +263,19 @@ def bind_intent(intent, plan, directory):
     original = load_deployment(plan["checks"]["deployment"])
     destination = directory / ("deployment-" + plan["generation"] + ".json")
     selected = replace(original, preparation_profile=plan["preparation_profile"])
+    coordinator = plan["target_declarations"]["coordinator"]
+    policy_id = coordinator["preparation"]["profiles"][selected.preparation_profile].get("container_policy_id")
+    if policy_id is not None:
+        from loom.queue.submitted_execution import SubmittedContainerCapability
+        capability = next(item for item in coordinator["container_capabilities"] if item["policy_id"] == policy_id)
+        selected = replace(selected, worker_contract=SubmittedContainerCapability.from_dict(capability).required_worker_contract)
     if destination.exists():
         retained = load_deployment(destination)
         if (
             retained.source != selected.source
             or retained.connection != selected.connection
             or retained.preparation_profile != selected.preparation_profile
+            or retained.worker_contract != selected.worker_contract
         ):
             raise QueueConflictError("versioned workload selection conflicts")
     else:

@@ -222,10 +222,17 @@ def load_preparation_policy(
             descriptor = next(iter(matches))
             if not descriptor.shared_roots:
                 raise QueueConfigError("shared configuration requires qualified shared roots")
+            locations = data.get("shared_locations", [])
+            if not isinstance(locations, (list, tuple)):
+                raise QueueConfigError("shared_locations must be a sequence")
+            from .shared_execution import location
+            selected_roots = {str(location(item)["root_id"]) for item in locations}
+            permitted_roots = (descriptor.workload_roots if isinstance(descriptor, SubmittedContainerCapability)
+                               else dict(descriptor.shared_roots))
             shared = shared_scope({"capability": SHARED_EXECUTION_CAPABILITY,
-                "roots": (descriptor.workload_roots if isinstance(descriptor, SubmittedContainerCapability)
-                          else dict(descriptor.shared_roots)),
-                "locations": data.get("shared_locations", [])})
+                "roots": {alias: root for alias, root in permitted_roots.items()
+                          if "qualification" not in cast(Mapping[str, PlainData], root) or alias in selected_roots},
+                "locations": locations})
         if mode == "local":
             from ._agent_process_supervisor import ResidentWorkerLaunchProfile
 

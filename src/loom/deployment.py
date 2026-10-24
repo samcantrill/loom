@@ -36,6 +36,7 @@ from loom.queue.local_daemon import (
     _validate_deployment_binding,
 )
 from loom.queue.preparation import PreparationSource
+from loom.queue.submitted_execution import SUBMITTED_CONTAINER_WORKER_CONTRACT, SUPPORTED_WORKER_CONTRACTS
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,7 @@ class DeploymentSelection:
     preparation_profile: str
     startup_seconds: float
     wait_seconds: float | None
+    worker_contract: str = SUBMITTED_CONTAINER_WORKER_CONTRACT
 
 
 def load_deployment(path: str | Path) -> DeploymentSelection:
@@ -133,11 +135,14 @@ def load_deployment(path: str | Path) -> DeploymentSelection:
     preparation = value.get("preparation")
     if (
         not isinstance(preparation, Mapping)
-        or set(preparation) != {"source", "profile"}
+        or set(preparation) - {"worker_contract"} != {"source", "profile"}
         or not isinstance(preparation["source"], Mapping)
         or not isinstance(preparation["profile"], str)
     ):
         raise QueueConfigError("deployment preparation selection is invalid")
+    contract = preparation.get("worker_contract", SUBMITTED_CONTAINER_WORKER_CONTRACT)
+    if not isinstance(contract, str) or contract not in SUPPORTED_WORKER_CONTRACTS:
+        raise QueueConfigError("deployment preparation worker contract is unsupported")
     return DeploymentSelection(
         source,
         connection,
@@ -148,6 +153,7 @@ def load_deployment(path: str | Path) -> DeploymentSelection:
         preparation["profile"],
         cast(float, duration("startup_seconds", 30.0)),
         duration("wait_seconds", None),
+        contract,
     )
 
 
@@ -167,7 +173,9 @@ def export_connection_deployment(selection: DeploymentSelection, destination: st
     value = {
         "schema_version": 1, "kind": "loom.deployment",
         "connection": str(selection.connection.resolve()),
-        "preparation": {"source": selection.source.to_dict(), "profile": selection.preparation_profile},
+        "preparation": {"source": selection.source.to_dict(), "profile": selection.preparation_profile,
+                        **({"worker_contract": selection.worker_contract}
+                           if selection.worker_contract != SUBMITTED_CONTAINER_WORKER_CONTRACT else {})},
         "startup_seconds": selection.startup_seconds, "wait_seconds": selection.wait_seconds,
     }
     try:

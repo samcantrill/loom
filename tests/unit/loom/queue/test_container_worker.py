@@ -292,7 +292,8 @@ def test_managed_model_filtered_gpu_launch_retains_provider_binding(tmp_path):
 
 
 @pytest.mark.parametrize("runtime", ["docker", "apptainer"])
-def test_shared_containers_mount_only_selected_products_in_fixed_namespace(tmp_path, runtime):
+@pytest.mark.parametrize("input_directory", [False, True])
+def test_shared_containers_mount_only_selected_products_in_fixed_namespace(tmp_path, runtime, input_directory):
     import hashlib
     from loom.queue.shared_execution import qualifications, stage_scope
     data = tmp_path / "nas" / "data"
@@ -304,6 +305,12 @@ def test_shared_containers_mount_only_selected_products_in_fixed_namespace(tmp_p
     roots = {alias: {"host_path": str(path), "container_path": "/loom/" + alias, "access": "ro",
         "challenge": {"path": "challenge", "sha256": hashlib.sha256(b"shared").hexdigest()}}
         for alias, path in (("data", data), ("other", other))}
+    if input_directory:
+        for root in roots.values():
+            del root["challenge"]
+            root["qualification"] = {"kind": "input_directory"}
+        for path in (data, other):
+            (path / "challenge").unlink()
     binding = _binding()
     if runtime == "apptainer":
         binding.update(kind="apptainer", daemon_endpoint=None)
@@ -318,6 +325,8 @@ def test_shared_containers_mount_only_selected_products_in_fixed_namespace(tmp_p
         environment={"PYTHONPATH": str(tmp_path / "editable")}, shared_scope=scope)
     argv = " ".join(command.argv)
     assert "/loom/data/selected" in argv and str(data / "selected") in argv
+    if input_directory:
+        assert "challenge" not in argv
     assert str(other) not in argv and "/loom/other" not in argv
     assert "PYTHONPATH" not in argv and "PYTHONSAFEPATH=1" in argv
     if runtime == "apptainer":

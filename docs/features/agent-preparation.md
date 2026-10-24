@@ -724,6 +724,44 @@ than its host filename. Container readiness source/import paths must name the
 installed image namespace; source identity does not depend on the private
 assignment workspace prefix.
 
+Externally managed inputs can instead use an explicit read-only directory:
+
+```yaml
+shared_roots:
+  input-recordings:
+    host_path: /mnt/lab/recordings
+    container_path: /loom/inputs/recordings
+    access: ro
+    qualification:
+      kind: input_directory
+```
+
+Qualification checks an existing canonical directory with read/search access;
+it never creates paths or reads/writes a marker. Selected locations retain the
+same containment, symlink and regular-file rules. Portable facts describe access
+permission, not identical contents across hosts. The application must check its
+own manifests, pins and selected resources at preparation and execution.
+Input directories cannot be writable, publish outputs, hold submitted images,
+carry assignment control payloads, or supply captured configuration storage.
+Those managed storage purposes retain their existing contracts.
+
+Installed resident interpreters must pass `packages.input_directories` readiness.
+Submitted policies containing these roots must permit
+`resident-submitted-container-v2` and requests must select it. Updated workers
+also support `resident-submitted-container-v1`; legacy facts, fingerprints and
+launch commands keep their encoding. A new-contract launch checks support in
+the selected image before decoding the assignment. An older image fails with
+the required worker-contract name; updating the host does not upgrade the image.
+The shared-location and shared-execution transport envelopes remain version one;
+the explicit qualification form and submitted worker contract identify the new
+input semantics.
+
+Protected client deployments can select the policy requirement with
+`preparation.worker_contract: resident-submitted-container-v2`. Omitting it
+retains the legacy v1 requirement. Native workload-policy publication derives
+this value from the target capability; the coordinator still authorizes the
+request against that policy. This declaration is not proof of image support.
+
 The preparation profile selects `source_modes: [shared]`,
 `configuration_policy: shared` and `shared_locations`: the explicit union of
 locations its installed processor needs to inspect. Its descriptor must contain
@@ -779,7 +817,8 @@ container locations. Host execution should use typed locations. Native assignmen
 workspace/output paths remain owned by the worker.
 
 Container execution mounts only the selected relative products and bounded
-challenge files, read-only, plus its own assignment workspace. Preparation also
+challenge files for challenged roots, read-only, plus its own assignment workspace.
+Input-directory roots require no challenge mount. Preparation also
 mounts exactly its immutable captured snapshot. Container targets must be under
 `/loom/`; snapshot bindings must resolve below exactly one protected shared root.
 Unselected dataset roots are not mounted. Do not add shared roots again as broad

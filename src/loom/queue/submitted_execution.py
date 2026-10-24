@@ -18,12 +18,46 @@ from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 
 from .errors import QueueServiceError
 from .models import validate_queue_id
-from .shared_execution import location, qualified_roots
+from .shared_execution import has_input_directories, location, qualified_roots
 
 
 SUBMITTED_CONTAINER_WORKER_CONTRACT = "resident-submitted-container-v1"
+INPUT_DIRECTORY_WORKER_CONTRACT = "resident-submitted-container-v2"
+SUPPORTED_WORKER_CONTRACTS = (SUBMITTED_CONTAINER_WORKER_CONTRACT, INPUT_DIRECTORY_WORKER_CONTRACT)
 SUBMITTED_CONTAINER_CAPABILITY = "submitted-container-execution-v1"
 SUBMITTED_EXECUTION_SCOPE = "loom.submitted_execution"
+
+_WORKER_BOOTSTRAP = """\
+import runpy, sys
+from pathlib import Path
+from loom.queue import submitted_execution as implementation
+required = sys.argv.pop(1)
+supported = getattr(implementation, "SUPPORTED_WORKER_CONTRACTS", (implementation.SUBMITTED_CONTAINER_WORKER_CONTRACT,))
+if required not in supported:
+    message = "Selected workload image does not support required worker contract: " + required
+    logs = Path(sys.argv[-1]) / "logs"
+    logs.mkdir(exist_ok=True)
+    with (logs / "stderr.log").open("a") as output:
+        output.write(message + "\\n")
+    raise SystemExit(message)
+sys.argv[0] = "loom.queue._resident_stage_worker"
+runpy.run_module(sys.argv[0], run_name="__main__")
+"""
+
+
+def submitted_worker_command(execution: SubmittedContainerExecution, workspace: Path) -> tuple[str, ...]:
+    """Check newer worker contracts in the selected image before request decoding.
+
+    Legacy commands remain byte-for-byte unchanged for retained launch replay.
+    The fixed bootstrap executes through the selected image's interpreter.
+    Incompatibilities reach assignment stderr before the installed worker starts
+    its usual logging and result handling.
+    """
+    if execution.worker_contract == SUBMITTED_CONTAINER_WORKER_CONTRACT:
+        return (execution.python_executable, "-m", "loom.queue._resident_stage_worker",
+                "--workspace", str(workspace))
+    return (execution.python_executable, "-c", f"exec({_WORKER_BOOTSTRAP!r})", execution.worker_contract,
+            "--workspace", str(workspace))
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,7 +183,7 @@ class SubmittedContainerExecution:
 class SubmittedContainerCapability:
     """Portable site permission for submitted SIF execution, without image identity.
 
-    Hosts qualify the same logical storage challenges using their private paths.
+    Hosts qualify logical storage permissions using their private paths.
     All workloads admitted by this capability share the host's resource inventory.
     The callback interface versions authorize the existing processor protocol,
     not a project package list.
@@ -175,11 +209,13 @@ class SubmittedContainerCapability:
         if (
             not isinstance(contracts, (tuple, list))
             or not contracts
-            or any(item != SUBMITTED_CONTAINER_WORKER_CONTRACT for item in contracts)
+            or any(item not in SUPPORTED_WORKER_CONTRACTS for item in contracts)
         ):
             raise QueueServiceError("container policy worker contracts are unsupported")
         object.__setattr__(self, "worker_contracts", tuple(sorted(set(contracts))))
         roots = qualified_roots(self.shared_roots)
+        if has_input_directories(roots) and INPUT_DIRECTORY_WORKER_CONTRACT not in contracts:
+            raise QueueServiceError("input directories require the resident-submitted-container-v2 worker contract")
         allowed = self.allowed_image_roots
         if (
             not isinstance(allowed, (tuple, list))
@@ -189,6 +225,8 @@ class SubmittedContainerCapability:
             raise QueueServiceError("container policy image roots are invalid")
         if any(cast(Mapping[str, PlainData], roots[item])["access"] != "ro" for item in allowed):
             raise QueueServiceError("container image roots must be read-only for workloads")
+        if any("qualification" in cast(Mapping[str, PlainData], roots[item]) for item in allowed):
+            raise QueueServiceError("container image roots require challenged storage")
         object.__setattr__(self, "allowed_image_roots", tuple(sorted(set(allowed))))
         object.__setattr__(self, "shared_roots", freeze_plain_data(roots))
         versions = self.project_integration_versions
@@ -203,6 +241,8 @@ class SubmittedContainerCapability:
         if (
             execution.runtime != self.runtime
             or execution.worker_contract not in self.worker_contracts
+            or (has_input_directories(self.shared_roots)
+                and execution.worker_contract != INPUT_DIRECTORY_WORKER_CONTRACT)
             or execution.image.location["root_id"] not in self.allowed_image_roots
             or (
                 execution.project_integration is not None
@@ -211,6 +251,17 @@ class SubmittedContainerCapability:
             )
         ):
             raise QueueServiceError("submitted execution is not allowed by container policy")
+
+    @property
+    def required_worker_contract(self) -> str:
+        """Select the least worker contract permitted by this storage policy.
+
+        This is a policy requirement, not evidence of an image's implementation.
+        The selected image checks support before decoding the worker request.
+        """
+        if has_input_directories(self.shared_roots):
+            return INPUT_DIRECTORY_WORKER_CONTRACT
+        return next(item for item in SUPPORTED_WORKER_CONTRACTS if item in self.worker_contracts)
 
     def requirement(self, execution: SubmittedContainerExecution) -> SubmittedContainerRequirement:
         """Project eligibility only after this site policy permits the request."""

@@ -440,6 +440,21 @@ def test_shared_qualification_checks_selected_installation_capability(tmp_path):
     assert next(check for check in unsupported.checks if check.check_id == "packages.shared_execution").status == "FAIL"
 
 
+def test_input_directory_readiness_checks_actual_selected_installation(tmp_path):
+    root = tmp_path / "data"
+    root.mkdir()
+    roots = {"data": {"host_path": str(root), "container_path": "/loom/data", "access": "ro",
+                      "qualification": {"kind": "input_directory"}}}
+    assert qualify_resident_profile(replace(_profile(tmp_path), shared_roots=roots)).ok
+    (tmp_path / "sitecustomize.py").write_text(
+        "import loom.queue.shared_execution as shared\ndel shared.INPUT_DIRECTORY_CAPABILITY\n"
+    )
+    result = qualify_resident_profile(replace(_profile(tmp_path), shared_roots=roots,
+                                             environment={"PYTHONPATH": str(tmp_path)}))
+    assert not result.ok
+    assert next(check for check in result.checks if check.check_id == "packages.input_directories").status == "FAIL"
+
+
 def test_shared_image_identity_tracks_bytes_not_host_prefix(tmp_path):
     from loom.queue.resident_readiness import _container_software_identity
     def profile(path):

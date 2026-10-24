@@ -910,12 +910,20 @@ def test_stopped_retirement_uses_received_control_with_deleted_inputs(tmp_path, 
 @pytest.mark.parametrize("interrupted", [False, True])
 def test_policy_addition_preserves_native_owner_and_recovers_container_only_target(tmp_path, monkeypatch, interrupted):
     from loom.queue._remote_stage_execution import AgentResourceInventory
+    from loom.queue.submitted_execution import INPUT_DIRECTORY_WORKER_CONTRACT
     from tests.unit.loom.queue.test_submitted_container_policy import _submitted
 
     policy, _, _, _ = _submitted(tmp_path)
     old = replace(config(tmp_path), resident_profiles=(), resource_inventory=AgentResourceInventory(2),
                   container_policies=(policy,))
-    new = replace(old, container_policies=(policy, replace(policy, policy_id="new-dataset")),
+    dataset = tmp_path / "new-dataset"
+    dataset.mkdir()
+    added = replace(policy, policy_id="new-dataset", worker_contracts=(INPUT_DIRECTORY_WORKER_CONTRACT,),
+                    shared_roots={**policy.shared_roots, "input": {
+                        "host_path": str(dataset), "container_path": "/loom/inputs/new-dataset", "access": "ro",
+                        "qualification": {"kind": "input_directory"}}})
+    assert added.qualify() == added.capability
+    new = replace(old, container_policies=(policy, added),
                   deployment_configuration_fingerprint="2" * 64,
                   active_configuration_fingerprint="5" * 64)
     c, old, new = client(tmp_path, (old, new))
