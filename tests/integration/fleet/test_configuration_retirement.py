@@ -12,8 +12,38 @@ from loom.queue import LocalDaemon, LocalDaemonSocketServer
 from loom.queue.deployment import load_coordinator_service_config
 from loom.queue.errors import QueueConflictError
 from tests.unit.loom.queue.test_deployment import _coordinator_config, _write_protected
+from tests.integration.queue.test_operator_observations import owner  # noqa: F401
 
 pytestmark = pytest.mark.integration
+
+
+def test_retirement_resume_uses_live_coordinator_capabilities(owner, tmp_path, monkeypatch):  # noqa: F811
+    from loom.fleet import workload_upgrades
+    from loom.queue._service_lifetime import record_process
+    from loom.queue.operations import inspect_native_service
+
+    daemon, _, _, operator = owner
+    root = daemon.config.coordinator_root
+    record_process(root, stopped=False)
+    observed = inspect_native_service(root).to_dict()
+    required = "quiescent-coordinator-retirement-v1"
+    assert required not in observed["value"]["capabilities"]
+    assert required in operator.observe_status().value["capabilities"]
+    operation = object.__new__(workload_upgrades.WorkloadUpgrade)
+    operation.directory = tmp_path / "retirement"
+    operation.directory.mkdir()
+    operation.operator = operator
+    operation.intent = {
+        "retire_configuration": True, "release": "release",
+        "hosts": {"coordinator": {"host": "coordinator", "source_release": "release",
+                                  "expected_root_id": daemon.status().coordinator_id}},
+        "candidates": {}, "coordinator_target": None,
+    }
+    monkeypatch.setattr(workload_upgrades.sshops, "ssh", lambda *args: {
+        "installed": "release", "native_owner": observed,
+    })
+    operation.probes()
+    assert (operation.directory / "coordinator-candidate.json").is_file()
 
 
 def test_coordinator_publication_replays_native_retirement_after_lost_reply(tmp_path, monkeypatch):

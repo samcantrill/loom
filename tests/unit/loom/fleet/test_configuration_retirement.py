@@ -294,12 +294,40 @@ def test_retirement_resume_rechecks_peer_support_before_staging(tmp_path, monkey
         "retire_configuration": True, "release": "release",
         "hosts": {name: {"host": name, "source_release": "release", "expected_root_id": "owner"}},
     }
+    operation.operator = SimpleNamespace(observe_status=lambda: SimpleNamespace(
+        availability="available", freshness="current", owner="owner",
+        value={"capabilities": [workload_upgrades.CAPABILITY]},
+    ))
     monkeypatch.setattr(workload_upgrades.sshops, "ssh", lambda *args: {
         "installed": "release", "native_owner": {"owner": "owner", "value": {
             "ownership": "live", "capabilities": [workload_upgrades.CAPABILITY],
         }},
     })
     with pytest.raises(QueueConflictError, match="retirement capability unavailable: " + name):
+        operation.probes()
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("changed", ["availability", "freshness", "owner"])
+def test_retirement_resume_requires_current_coordinator_observation(tmp_path, monkeypatch, changed):
+    operation = object.__new__(workload_upgrades.WorkloadUpgrade)
+    operation.directory = tmp_path
+    operation.intent = {
+        "retire_configuration": True, "release": "release",
+        "hosts": {"coordinator": {"host": "coordinator", "source_release": "release",
+                                  "expected_root_id": "owner"}},
+    }
+    observation = SimpleNamespace(availability="available", freshness="current", owner="owner",
+        value={"capabilities": ["quiescent-coordinator-retirement-v1"]})
+    setattr(observation, changed, {"availability": "unavailable", "freshness": "retained",
+                                   "owner": "another-owner"}[changed])
+    operation.operator = SimpleNamespace(observe_status=lambda: observation)
+    monkeypatch.setattr(workload_upgrades.sshops, "ssh", lambda *args: {
+        "installed": "release", "native_owner": {"owner": "owner", "value": {
+            "ownership": "live", "capabilities": [workload_upgrades.CAPABILITY],
+        }},
+    })
+    with pytest.raises(QueueConflictError, match="current coordinator retirement capability observation unavailable"):
         operation.probes()
     assert not list(tmp_path.iterdir())
 

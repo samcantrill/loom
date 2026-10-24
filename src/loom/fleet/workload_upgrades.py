@@ -6,6 +6,7 @@ supply native promotion/recovery on every consuming agent and coordinator.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import replace
 import json
 from pathlib import Path
@@ -424,7 +425,16 @@ class WorkloadUpgrade(maintenance._Upgrade):
                     "quiescent-coordinator-retirement-v1"
                     if name == "coordinator" else RETIREMENT_CAPABILITY
                 )
-                if required not in native["value"].get("capabilities", ()):
+                capabilities = native["value"].get("capabilities", ())
+                if name == "coordinator":
+                    # Process records describe shared service features; the live
+                    # coordinator advertises its role-specific retirement API.
+                    source = self.operator.observe_status()
+                    if (source.availability != "available" or source.freshness != "current"
+                        or source.owner != row["expected_root_id"]):
+                        raise QueueConflictError("current coordinator retirement capability observation unavailable")
+                    capabilities = cast(Sequence[str], source.value.get("capabilities", ()))
+                if required not in capabilities:
                     raise QueueConflictError(
                         "running source retirement capability unavailable: " + name
                     )

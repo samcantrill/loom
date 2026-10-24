@@ -1069,7 +1069,11 @@ Completed production roles use their published protected sources. Ordinary workl
 promotion continues to require candidate role files beside their predecessors.
 
 Without `--runtime-release`, preview requires retirement support from the running coordinator and every
-agent; continuation checks that support again before staging. It qualifies
+agent; continuation checks that support again before staging. Coordinator
+retirement support comes from its current live operator observation, matched to
+the expected native owner. The shared process record is not the authority for
+coordinator-specific APIs. Unavailable, stale or mismatched observations refuse
+staging; agent support still comes from its native ownership observation. It qualifies
 the candidate against accepted predecessor bindings, then uses the existing
 maintenance operation to close admission, settle and drain native work,
 activate agents, publish coordinator scheduling, and run target checks.
