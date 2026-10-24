@@ -107,7 +107,7 @@ def register(self: LocalDaemonAgentHttpClient, request: AgentRegistration) -> Ge
         require_unretired(self._config.agent_root)
 
     from ._shared_assignment import CAPABILITY
-    from .shared_execution import SHARED_EXECUTION_CAPABILITY, qualifications
+    from .shared_execution import SHARED_EXECUTION_CAPABILITY, has_input_directories, qualifications
     if CAPABILITY in request.declared_capabilities:
         if CAPABILITY not in cast(Sequence[str], (yield from _steps(self.handshake))["capabilities"]):
             raise QueueServiceError("coordinator lacks shared-assignment-reference-v1")
@@ -132,6 +132,8 @@ def register(self: LocalDaemonAgentHttpClient, request: AgentRegistration) -> Ge
                 continue
             if profile.readiness_result is None or not profile.readiness_result.ok or not any(check.check_id == "packages.shared_execution" and check.status.value == "PASS" for check in profile.readiness_result.checks):
                 raise QueueServiceError("selected installation lacks shared execution qualification")
+            if has_input_directories(profile.shared_roots) and not any(check.check_id == "packages.input_directories" and check.status.value == "PASS" for check in profile.readiness_result.checks):
+                raise QueueServiceError("selected installation lacks input-directory qualification")
             if any("publication" in cast(Mapping[str, PlainData], root) for root in profile.shared_roots.values()) and not any(check.check_id == "packages.shared_publication" and check.status.value == "PASS" for check in profile.readiness_result.checks):
                 raise QueueServiceError("selected installation lacks shared publication qualification")
             if (yield from _external("bulk", qualifications, profile.shared_roots)) != profile.descriptor.shared_roots:

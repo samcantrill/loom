@@ -269,16 +269,15 @@ class ResidentWorkerLaunch:
         assert binding is not None
         assignment = _ResidentAssignmentWorkspace.read_request(self.workspace_root)
         preparation = assignment.preparation_input
+        from .submitted_execution import submitted_worker_command
+        worker = (submitted_worker_command(self.profile.submitted_execution, self.workspace_root)
+                  if self.profile.submitted_execution is not None else (
+                      str(binding["python_executable"]), "-m", "loom.queue._resident_stage_worker",
+                      "--workspace", str(self.workspace_root)))
         return project_container_worker(
             self.profile,
             workspace=self.workspace_root,
-            worker=(
-                str(binding["python_executable"]),
-                "-m",
-                "loom.queue._resident_stage_worker",
-                "--workspace",
-                str(self.workspace_root),
-            ),
+            worker=worker,
             environment=self.environment,
             # Worker materialization validates this retained launch; reading only
             # the assignment runtime avoids recursively decoding it here.

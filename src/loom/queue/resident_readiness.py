@@ -67,6 +67,13 @@ if request.get("shared_publication", False):
         result["shared_publication_available"] = CAPABILITY == "shared-artifact-publication-v1"
     except Exception:
         result["shared_publication_available"] = False
+if request.get("input_directories", False):
+    try:
+        with contextlib.redirect_stdout(sys.stderr):
+            from loom.queue.shared_execution import INPUT_DIRECTORY_CAPABILITY
+        result["input_directories_available"] = INPUT_DIRECTORY_CAPABILITY == "input-directory-v1"
+    except Exception:
+        result["input_directories_available"] = False
 for name in request["imports"]:
     try:
         with contextlib.redirect_stdout(sys.stderr):
@@ -504,7 +511,9 @@ def qualify_resident_profile(
     if preparation:
         request["preparation"] = True
     if profile.shared_roots:
+        from .shared_execution import has_input_directories
         request["shared_execution"] = True
+        request["input_directories"] = has_input_directories(profile.shared_roots)
         request["shared_publication"] = any("publication" in cast(Mapping[str, PlainData], root) for root in profile.shared_roots.values())
         if profile.container is not None:
             request["shared_container"] = True
@@ -601,6 +610,11 @@ def qualify_resident_profile(
         add("packages.shared_publication", PreflightGroup.PACKAGES,
             observed.get("shared_publication_available") is True,
             "Selected installation supports shared artifact publication." if observed.get("shared_publication_available") is True else "Selected installation lacks shared artifact publication.",
+            "Install a compatible Loom in the selected interpreter or image.")
+    if request.get("input_directories"):
+        add("packages.input_directories", PreflightGroup.PACKAGES,
+            observed.get("input_directories_available") is True,
+            "Selected installation supports input directories." if observed.get("input_directories_available") is True else "Selected installation lacks input-directory-v1.",
             "Install a compatible Loom in the selected interpreter or image.")
     environment_ok = observed["environment"] == {
         name: True for name in requirements.required_environment

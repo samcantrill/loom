@@ -868,7 +868,7 @@ mappings and preparation policies. Fleet derives the new qualified descriptors,
 preparation generation and versioned client. Other coordinator policy stays fixed.
 
 A read-only shared root may move to a new `host_path` only when its alias,
-challenge, access, container path and publication policy are unchanged. Writable
+qualification, access, container path and publication policy are unchanged. Writable
 root relocation and logical-root replacement are refused. Native agent promotion
 and coordinator reload require settled closed maintenance before activating the
 move. The coordinator and selected agents must advertise
@@ -880,6 +880,23 @@ the declared challenge, not whole-tree equivalence. A useful layout retains the
 old source namespace and adds new immutable release directories beneath it;
 select the new release as the project/preparation path. Fleet never copies
 project trees or certifies application semantics.
+
+Changing a challenged dataset binding to `qualification: {kind: input_directory}`
+changes its permission identity. Publish a new root ID/container target and a new
+container policy through native policy addition. Both bindings may refer to the
+same existing host directory; no data copy is needed. Keep retained root facts
+unchanged. The new policy requires the v2 submitted worker contract and its
+published client carries that requirement.
+
+Agent startup qualifies every configured policy. A retained policy whose dataset
+challenge is unavailable can prevent activation of an otherwise valid candidate.
+Use guarded configuration retirement to remove unavailable dataset permissions
+and dependent preparation declarations after settling their consumers, preserving
+required image/control/output permissions. Retirement cannot introduce the new
+permissions; follow it with policy addition using a compatible service runtime.
+Historical requests retain their original dependencies and are never rewritten
+to the new root semantics. Candidate diagnostics may be disposable; activated
+roles, images and client selections must use retained deployment storage.
 
 Preview qualifies agents and the fully derived coordinator configuration on their
 owning hosts without changing the running installation. Apply rechecks that
@@ -1052,7 +1069,11 @@ Completed production roles use their published protected sources. Ordinary workl
 promotion continues to require candidate role files beside their predecessors.
 
 Without `--runtime-release`, preview requires retirement support from the running coordinator and every
-agent; continuation checks that support again before staging. It qualifies
+agent; continuation checks that support again before staging. Coordinator
+retirement support comes from its current live operator observation, matched to
+the expected native owner. The shared process record is not the authority for
+coordinator-specific APIs. Unavailable, stale or mismatched observations refuse
+staging; agent support still comes from its native ownership observation. It qualifies
 the candidate against accepted predecessor bindings, then uses the existing
 maintenance operation to close admission, settle and drain native work,
 activate agents, publish coordinator scheduling, and run target checks.

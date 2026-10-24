@@ -1,7 +1,8 @@
 """Protected root qualification and explicit shared workload locations.
 
-Locations contain logical identity only. Host mappings are private launch policy;
-qualification reads a bounded regular-file challenge, never an entire dataset.
+Locations contain logical identity only. Host mappings are private launch policy.
+Managed storage uses a bounded challenge; external input directories establish
+read-only access. Applications own input content identity.
 """
 from __future__ import annotations
 
@@ -17,6 +18,7 @@ from loom.serialization import PlainData, thaw_plain_data
 from .errors import QueueServiceError
 
 SHARED_EXECUTION_CAPABILITY = "shared-execution-v1"
+INPUT_DIRECTORY_CAPABILITY = "input-directory-v1"
 SHARED_EXECUTION_SCOPE = "loom.shared_execution"
 SOURCE_PROMOTION_CAPABILITY = "quiescent-source-promotion-v1"
 
@@ -26,7 +28,7 @@ def _readonly_root_relocations(
 ) -> tuple[str, ...]:
     """Check retained logical roots; only read-only host locations may differ.
 
-    Inputs have passed the native root loader. The same alias, challenge, access,
+    Inputs have passed the native root loader. The same alias, qualification, access,
     container target and publication policy retain the original logical storage
     identity. Callers own native quiescence; this check never authorizes a move,
     copies files or proves equivalence beyond the declared root qualification.
@@ -71,13 +73,20 @@ def location(value: object) -> dict[str, PlainData]:
 
 
 def root_bindings(value: object) -> dict[str, PlainData]:
-    """Validate private absolute bindings and bounded challenge declarations."""
+    """Decode challenged storage or explicitly read-only external directories.
+
+    Decoding performs no IO. Input directories cannot publish artifacts or serve
+    as managed storage; live qualification never creates or modifies them.
+    """
     if not isinstance(value, Mapping):
         raise QueueServiceError("shared_roots must be a protected mapping")
     result: dict[str, PlainData] = {}
     for alias, raw in value.items():
-        if (not isinstance(alias, str) or not alias or "/" in alias or not isinstance(raw, Mapping)
-            or set(raw) - {"publication"} != {"host_path", "container_path", "access", "challenge"}):
+        if (not isinstance(alias, str) or not alias or "/" in alias or not isinstance(raw, Mapping)):
+            raise QueueServiceError("protected shared root is invalid")
+        external = "qualification" in raw
+        fields = {"host_path", "container_path", "access", "qualification" if external else "challenge"}
+        if set(raw) - (set() if external else {"publication"}) != fields:
             raise QueueServiceError("protected shared root is invalid")
         if not isinstance(raw["host_path"], str) or not Path(raw["host_path"]).is_absolute():
             raise QueueServiceError("shared root host_path must be absolute")
@@ -85,6 +94,12 @@ def root_bindings(value: object) -> dict[str, PlainData]:
         if target is not None and (not isinstance(target, str) or not target.startswith("/loom/")
                                    or str(PurePosixPath(target)) != target or ".." in target.split("/")):
             raise QueueServiceError("shared root container_path must be a canonical /loom target")
+        if external:
+            if raw["qualification"] != {"kind": "input_directory"} or raw["access"] != "ro":
+                raise QueueServiceError("input_directory qualification requires read-only access")
+            result[alias] = {"host_path": raw["host_path"], "container_path": target,
+                             "access": "ro", "qualification": {"kind": "input_directory"}}
+            continue
         challenge = raw["challenge"]
         if (raw["access"] not in ("ro", "rw") or not isinstance(challenge, Mapping)
             or set(challenge) != {"path", "sha256"} or not isinstance(challenge["sha256"], str)
@@ -132,10 +147,20 @@ def resolve(root: Mapping[str, PlainData], path: str) -> Path:
 
 
 def qualifications(roots: Mapping[str, PlainData]) -> dict[str, PlainData]:
-    """Verify bounded root challenges; return portable qualification facts."""
+    """Check live storage access and return portable facts without host paths.
+
+    Input-directory facts authorize access only. They do not assert equivalent
+    contents across hosts; applications must validate their selected inputs.
+    """
     result: dict[str, PlainData] = {}
     for alias, raw in roots.items():
         root = cast(Mapping[str, PlainData], raw)
+        if "qualification" in root:
+            path = resolve(root, ".")
+            if path.resolve() != path or not os.access(path, os.R_OK | os.X_OK):
+                raise QueueServiceError("input directory must be canonical, readable and searchable")
+            result[alias] = {key: value for key, value in root.items() if key != "host_path"}
+            continue
         challenge = cast(Mapping[str, PlainData], root["challenge"])
         path = resolve(root, str(challenge["path"]))
         if not path.is_file() or path.stat().st_size > 65536:
@@ -152,11 +177,16 @@ def qualified_roots(value: object) -> dict[str, PlainData]:
         raise QueueServiceError("shared root qualifications must be a mapping")
     private = {}
     for alias, facts in value.items():
-        if not isinstance(facts, Mapping) or set(facts) - {"publication"} != {"container_path", "access", "challenge"}:
+        if not isinstance(facts, Mapping) or "host_path" in facts:
             raise QueueServiceError("shared root qualification fields are invalid")
         private[alias] = {**facts, "host_path": "/"}
     return {alias: {key: item for key, item in cast(Mapping[str, PlainData], raw).items() if key != "host_path"}
             for alias, raw in root_bindings(private).items()}
+
+
+def has_input_directories(roots: Mapping[str, PlainData]) -> bool:
+    """Whether decoded root facts require the input-directory worker contract."""
+    return any("qualification" in cast(Mapping[str, PlainData], root) for root in roots.values())
 
 
 def scope(value: object) -> dict[str, PlainData] | None:
@@ -320,6 +350,8 @@ def project_snapshot_mount(profile: object, receipt: object) -> tuple[Path, Path
         root = cast(Mapping[str, PlainData], raw)
         host = Path(str(root["host_path"]))
         if source_root.is_relative_to(host):
+            if "qualification" in root:
+                raise QueueServiceError("captured configuration requires challenged storage")
             relative = source_root.relative_to(host) / receipt.path
             source = project_path(root, relative.as_posix())
             if root["container_path"] is None:

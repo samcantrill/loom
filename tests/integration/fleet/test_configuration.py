@@ -224,11 +224,16 @@ def selection(tmp_path):
     )
 
 
+@pytest.mark.parametrize("worker_contract", [None, "resident-submitted-container-v2"])
 def test_native_export_roundtrip_cannot_bootstrap_and_preserves_old_selection(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, worker_contract
 ):
     path = inventory(tmp_path)
     original = selection(tmp_path)
+    if worker_contract is not None:
+        value = json.loads(original.read_text())
+        value["preparation"]["worker_contract"] = worker_contract
+        _write_protected(original, value)
     before = original.read_bytes()
     from loom import deployment
 
@@ -251,6 +256,8 @@ def test_native_export_roundtrip_cannot_bootstrap_and_preserves_old_selection(
     assert exported.coordinator is exported.agent is exported.binding is None
     assert exported.source == load_deployment(original).source
     assert exported.preparation_profile == "remote-profile"
+    assert exported.worker_contract == (worker_contract or "resident-submitted-container-v1")
+    assert json.loads(output.read_text())["preparation"].get("worker_contract") == worker_contract
     assert output.stat().st_mode & 0o777 == 0o600
     assert original.read_bytes() == before
     retained = output.read_bytes()

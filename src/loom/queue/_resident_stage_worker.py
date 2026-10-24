@@ -38,10 +38,10 @@ def main(argv: list[str] | None = None) -> int:
         time.sleep(0.01)
     retained = workspace.request()
     if retained.submitted_execution is not None:
-        from .submitted_execution import SUBMITTED_CONTAINER_WORKER_CONTRACT
+        from .submitted_execution import SUPPORTED_WORKER_CONTRACTS
         from .errors import QueueServiceError
 
-        if retained.submitted_execution.worker_contract != SUBMITTED_CONTAINER_WORKER_CONTRACT:
+        if retained.submitted_execution.worker_contract not in SUPPORTED_WORKER_CONTRACTS:
             raise QueueServiceError("submitted native worker contract is unsupported")
         # Consume the host's retained launch evidence before any project import.
         # Image hashing remains the supervisor's new-launch responsibility.

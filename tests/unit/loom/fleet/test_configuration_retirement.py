@@ -22,6 +22,38 @@ def test_cli_retirement_selects_no_resident_image():
     assert selected.workload_profile is None and selected.image is None
 
 
+def test_policy_publication_exports_required_worker_contract_without_rewriting_old_client(tmp_path):
+    from dataclasses import replace
+    from loom.deployment import load_deployment
+    from loom.queue.submitted_execution import INPUT_DIRECTORY_WORKER_CONTRACT
+    from tests.integration.fleet.test_configuration import selection
+    from tests.unit.loom.queue.test_submitted_container_policy import _submitted
+
+    original = selection(tmp_path)
+    original_bytes = original.read_bytes()
+    policy, _, _, _ = _submitted(tmp_path)
+    data = tmp_path / "input"
+    data.mkdir()
+    policy = replace(policy, policy_id="inputs", worker_contracts=(INPUT_DIRECTORY_WORKER_CONTRACT,),
+        shared_roots={**policy.shared_roots, "input": {
+            "host_path": str(data), "container_path": "/loom/inputs/input", "access": "ro",
+            "qualification": {"kind": "input_directory"}}})
+    coordinator = {"preparation": {"profiles": {"selected": {"container_policy_id": "inputs"}}},
+                   "container_capabilities": [policy.capability.to_dict()]}
+    plan = {"checks": {"deployment": str(original)}, "generation": "inputs", "preparation_profile": "selected",
+            "target_declarations": {"coordinator": coordinator}, "add_container_policies": True,
+            "workload_profile": None, "image": None, "image_sha256": None, "candidates": {},
+            "workload_inventory": None, "candidate_sources": {}, "coordinator_target": {}, "candidate_inputs": {}}
+    intent = {"check_selection": {}, "inputs": {}}
+    published = workload_upgrades.bind_intent(intent, plan, tmp_path)
+    selected = load_deployment(published["check_selection"]["deployment"])
+    assert selected.worker_contract == INPUT_DIRECTORY_WORKER_CONTRACT
+    assert selected.preparation_profile == "selected"
+    assert original.read_bytes() == original_bytes
+    assert load_deployment(original).worker_contract == "resident-submitted-container-v1"
+    assert workload_upgrades.bind_intent(intent, plan, tmp_path) == published
+
+
 @pytest.mark.parametrize("interruption", [None, "workload-stopped-retire", "upgrade-replace"])
 def test_stopped_promotion_reconciles_publication_before_control_replay(tmp_path, interruption):
     from loom.fleet._host import atomic
@@ -262,12 +294,40 @@ def test_retirement_resume_rechecks_peer_support_before_staging(tmp_path, monkey
         "retire_configuration": True, "release": "release",
         "hosts": {name: {"host": name, "source_release": "release", "expected_root_id": "owner"}},
     }
+    operation.operator = SimpleNamespace(observe_status=lambda: SimpleNamespace(
+        availability="available", freshness="current", owner="owner",
+        value={"capabilities": [workload_upgrades.CAPABILITY]},
+    ))
     monkeypatch.setattr(workload_upgrades.sshops, "ssh", lambda *args: {
         "installed": "release", "native_owner": {"owner": "owner", "value": {
             "ownership": "live", "capabilities": [workload_upgrades.CAPABILITY],
         }},
     })
     with pytest.raises(QueueConflictError, match="retirement capability unavailable: " + name):
+        operation.probes()
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("changed", ["availability", "freshness", "owner"])
+def test_retirement_resume_requires_current_coordinator_observation(tmp_path, monkeypatch, changed):
+    operation = object.__new__(workload_upgrades.WorkloadUpgrade)
+    operation.directory = tmp_path
+    operation.intent = {
+        "retire_configuration": True, "release": "release",
+        "hosts": {"coordinator": {"host": "coordinator", "source_release": "release",
+                                  "expected_root_id": "owner"}},
+    }
+    observation = SimpleNamespace(availability="available", freshness="current", owner="owner",
+        value={"capabilities": ["quiescent-coordinator-retirement-v1"]})
+    setattr(observation, changed, {"availability": "unavailable", "freshness": "retained",
+                                   "owner": "another-owner"}[changed])
+    operation.operator = SimpleNamespace(observe_status=lambda: observation)
+    monkeypatch.setattr(workload_upgrades.sshops, "ssh", lambda *args: {
+        "installed": "release", "native_owner": {"owner": "owner", "value": {
+            "ownership": "live", "capabilities": [workload_upgrades.CAPABILITY],
+        }},
+    })
+    with pytest.raises(QueueConflictError, match="current coordinator retirement capability observation unavailable"):
         operation.probes()
     assert not list(tmp_path.iterdir())
 

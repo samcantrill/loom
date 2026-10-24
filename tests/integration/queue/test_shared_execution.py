@@ -31,7 +31,7 @@ from tests.integration.queue.test_preparation_operations import _service, _reque
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
 
-@pytest.mark.parametrize("scenario", ["small", "scientific", "unresolved_restart", "workspace_restart", "started_restart", "completed_input_unavailable", "cancel_missing", "missing_selector"])
+@pytest.mark.parametrize("scenario", ["small", "input_directory", "scientific", "unresolved_restart", "workspace_restart", "started_restart", "completed_input_unavailable", "cancel_missing", "missing_selector"])
 def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, scenario):
     scientific = scenario == "scientific"
     _service(tmp_path)
@@ -41,10 +41,11 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, s
     second.mkdir(parents=True)
     payload = b"the same admitted immutable shared bytes"
     (first / "selected.bin").write_bytes(payload)
-    (first / "challenge").write_bytes(b"bounded-shared-challenge")
-    for name in ("selected.bin", "challenge"):
+    if scenario != "input_directory":
+        (first / "challenge").write_bytes(b"bounded-shared-challenge")
+    for name in (("selected.bin",) if scenario == "input_directory" else ("selected.bin", "challenge")):
         os.link(first / name, second / name)
-    challenge = hashlib.sha256((first / "challenge").read_bytes()).hexdigest()
+    challenge = hashlib.sha256(b"bounded-shared-challenge").hexdigest()
     control = tmp_path / "control-payloads"
     control.mkdir()
     (control / "challenge").write_bytes(b"control-challenge")
@@ -53,7 +54,8 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, s
     (reports / "challenge").write_bytes(b"report-challenge")
     def roots(path):
         return {"data": {"host_path": str(path), "container_path": "/loom/data", "access": "ro",
-                         "challenge": {"path": "challenge", "sha256": challenge}},
+                         **({"qualification": {"kind": "input_directory"}} if scenario == "input_directory"
+                            else {"challenge": {"path": "challenge", "sha256": challenge}})},
                 "control": {"host_path": str(control if path == first else Path("/proc/self/root") / control.relative_to("/")), "container_path": None, "access": "rw",
                     "challenge": {"path": "challenge", "sha256": hashlib.sha256(b"control-challenge").hexdigest()}},
                 "reports": {"host_path": str(reports if path == first else Path("/proc/self/root") / reports.relative_to("/")), "container_path": None, "access": "rw",
