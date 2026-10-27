@@ -831,7 +831,7 @@ def test_runtime_recovery_mode_preserves_empty_cohort_and_native_checks(
         assert not operator.observe_agent("worker").value["drained"]
 
 
-def broken_metadata_release(inventory, tmp_path):
+def broken_metadata_release(inventory, tmp_path, *, preparation_barrier=None):
     """Build a disposable source runtime reproducing the pre-fix wire defect."""
     import base64
     import csv
@@ -847,10 +847,24 @@ def broken_metadata_release(inventory, tmp_path):
     before = sha(wheel)
     with zipfile.ZipFile(wheel) as archive:
         files = {name: archive.read(name) for name in archive.namelist()}
-    codec = "loom/queue/_agent_session_codec.py"
-    old = b'max_collection=_MAX_BODY_BYTES)'
-    assert files[codec].count(old) == 1
-    files[codec] = files[codec].replace(old, b"max_collection=_MAX_JSON_COLLECTION)")
+    if preparation_barrier is None:
+        codec = "loom/queue/_agent_session_codec.py"
+        old = b'max_collection=_MAX_BODY_BYTES)'
+        assert files[codec].count(old) == 1
+        files[codec] = files[codec].replace(old, b"max_collection=_MAX_JSON_COLLECTION)")
+    else:
+        codec = "loom/queue/agent_sessions.py"
+        old = b'        if report.assignment_id != assignment_id:\n'
+        assert files[codec].count(old) == 1
+        fault = (
+            f'        if report.stage_name == "prepare" and Path({str(preparation_barrier)!r}).exists():\n'
+            '            raise QueueConflictError("injected preparation result communication defect")\n'
+        ).encode()
+        files[codec] = files[codec].replace(old, fault + old)
+        recovery = "loom/queue/service_upgrade.py"
+        old = b'preparations, children = _recoverable_preparations(conn, results)'
+        assert files[recovery].count(old) == 1
+        files[recovery] = files[recovery].replace(old, b'preparations, children = frozenset(), frozenset()')
     record = next(name for name in files if name.endswith(".dist-info/RECORD"))
     stream = io.StringIO()
     writer = csv.writer(stream)
@@ -875,6 +889,127 @@ def broken_metadata_release(inventory, tmp_path):
     authored["runtime_release"] = str(descriptor)
     write(inventory.path, authored)
     return load_inventory(inventory.path)
+
+
+def test_runtime_candidate_repair_recovers_cancelled_preparation(
+    site, tmp_path, monkeypatch, capsys,  # noqa: F811
+):
+    from loom.cli.main import main
+    from loom.coordinator import RunRequest
+    from loom.deployment import load_deployment
+    from loom.queue.preparation import PrepareRunRequest
+    from loom.queue.service_upgrade import inspect_coordinator_result_recovery
+
+    inventory, base, selection = site
+    target = target_bundle(inventory, tmp_path)
+    barrier = tmp_path / "refuse-preparation-result"
+    inventory = bind_environments(broken_metadata_release(inventory, tmp_path, preparation_barrier=barrier))
+    authored = read(inventory.hosts[0].config)
+    for principal in authored["agent_policy"]["principals"]:
+        if principal["role"] == "operator":
+            principal["actions"].append("resume")
+    write(inventory.hosts[0].config, authored)
+    setup = apply(inventory, operation_id="setup-preparation-recovery", issuer=base / "issuer", check_selection=selection)
+    assert setup["outcome"] == "complete", setup
+    # A second descriptor of the deficient source is an unactivated candidate.
+    candidate = tmp_path / "unactivated-candidate"
+    shutil.copytree(inventory.runtime_release.parent, candidate)
+    old_target = candidate / inventory.runtime_release.name
+    value = read(old_target)
+    value["release_id"] = "unactivated-deficient-candidate"
+    write(old_target, value)
+    deployment = load_deployment(setup["deployment"])
+    request = RunRequest(PrepareRunRequest(
+        "retained-preparation", "retained-preparation", deployment.source,
+        selection["config"], deployment.preparation_profile,
+    ), "retained-preparation")
+    barrier.touch()
+    with CoordinatorClient.from_connection_file(deployment.connection) as client:
+        client.start_run(request)
+        deadline = time.monotonic() + 60
+        while True:
+            with sqlite3.connect(base / "worker/journal.sqlite") as conn:
+                retained = conn.execute("SELECT assignment_id, grant_fence, result_json FROM assignments WHERE state = 'result_durable'").fetchall()
+            if retained:
+                break
+            assert time.monotonic() < deadline, client.observe_run("retained-preparation", wait=False)
+            time.sleep(0.1)
+        assert len(retained) == 1
+        assignment, fence, result_json = retained[0]
+        worker_result = base / "worker/assignments" / assignment / "worker-result.json"
+        original_bytes = worker_result.read_bytes()
+        cancel = client.cancel_run_operation("retained-preparation")
+        options = dict(
+            runtime_release=old_target, recover_retained_results=True, hold_admission=True,
+            deployment=Path(setup["deployment"]), connection=Path(setup["operator_connection"]),
+            config=selection["config"],
+        )
+        blocked = upgrades.upgrade(inventory, operation_id="recover-preparation", apply=True, **options)
+        deadline = time.monotonic() + 60
+        while "coordinator mutation remains active" not in blocked.get("reason", ""):
+            assert blocked["outcome"] == "waiting" and time.monotonic() < deadline, blocked
+            time.sleep(0.25)
+            blocked = upgrades.upgrade(inventory, operation_id="recover-preparation")
+        assert blocked["outcome"] == "waiting", blocked
+        assert "coordinator mutation remains active" in blocked["reason"]
+        directory = upgrades.sshops._directory(inventory, "recover-preparation")
+        original_intent = (directory / "intent.json").read_bytes()
+        assert not (directory / "irreversible.json").exists()
+        # The current checker admits only the exact successful child cohort.
+        intent = read(directory / "intent.json")
+        operation = upgrades._Upgrade(inventory, directory, intent)
+        try:
+            results = operation.host_observe("worker", "upgrade-result-recovery")["value"]["results"]
+            current = inspect_coordinator_result_recovery(
+                Path(intent["hosts"]["coordinator"]["root"]) / "coordinator", expected_root_id=intent["hosts"]["coordinator"]["expected_root_id"],
+                agent_results=results,
+            )
+            assert current.availability == "available", current.reason
+            missing = inspect_coordinator_result_recovery(
+                Path(intent["hosts"]["coordinator"]["root"]) / "coordinator", expected_root_id=current.owner, agent_results=[],
+            )
+            assert missing.availability == "unavailable"
+        finally:
+            operation.close()
+        # Lose the successor's applied replacement reply and recover by parent ID.
+        call, dropped = upgrades.sshops.ssh, []
+
+        def lose_reply(host, request):
+            reply = call(host, request)
+            if request["action"] == "upgrade-replace" and request["name"] == "worker" and not dropped:
+                dropped.append(request["request_id"])
+                raise upgrades.sshops.SshUnavailable("lost candidate repair reply")
+            return reply
+
+        monkeypatch.setattr(upgrades.sshops, "ssh", lose_reply)
+        code = main([
+            "fleet", "operation", "repair-runtime-candidate", "recover-preparation",
+            "--fleet", str(inventory.path), "--runtime-release", str(target), "--format", "json",
+        ])
+        repaired = json.loads(capsys.readouterr().out)
+        assert code in (0, 2), repaired
+        held = upgrades.upgrade(inventory, operation_id="recover-preparation")
+        deadline = time.monotonic() + 120
+        while held.get("reason_code") != "publication_pending":
+            assert held["outcome"] == "waiting" and time.monotonic() < deadline, held
+            time.sleep(0.25)
+            held = upgrades.upgrade(inventory, operation_id="recover-preparation")
+        assert held["outcome"] == "waiting" and held["reason_code"] == "publication_pending", held
+        assert len(dropped) == 1
+        assert (directory / "intent.json").read_bytes() == original_intent
+        assert client.wait_operation(cancel.operation_id, timeout_seconds=25).operation.state == "applied"
+        assert client.operation("retained-preparation").state == "cancelled"
+        assert worker_result.read_bytes() == original_bytes
+        with sqlite3.connect(base / "worker/journal.sqlite") as conn:
+            assert conn.execute("SELECT grant_fence, result_json, state FROM assignments WHERE assignment_id = ?", (assignment,)).fetchone() == (fence, result_json, "released")
+        conflict = upgrades.upgrade(inventory, operation_id="recover-preparation", action="repair-runtime-candidate", runtime_release=old_target)
+        assert conflict["outcome"] == "blocked" and "repair target changed" in conflict["reason"], conflict
+        completed = finish(inventory, "recover-preparation", action="release-admission")
+        assert completed["outcome"] == "complete", completed
+        assert completed["runtime_candidate_repair"]
+        with CoordinatorOperatorClient.from_connection_file(setup["operator_connection"]) as operator:
+            assert operator.observe_maintenance()["state"] == "open"
+            assert not operator.observe_agent("worker").value["drained"]
 
 
 def test_runtime_recovery_publishes_original_result_and_finishes_downstream(

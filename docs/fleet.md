@@ -509,7 +509,24 @@ supervisor launch identity, positive containment and successful exit, unchanged
 worker-result bytes, and completed temporary-storage cleanup. Pending polls,
 controls, diagnostic probes, live or pre-result workers, and Slurm roots refuse.
 The coordinator matches every outstanding remote assignment/reference against
-that cohort; preparation, cancellation and startup mutations also refuse.
+that cohort. A pending preparation may recover only after its child has been
+dispatched and every outstanding child assignment belongs to that successful
+cohort, before any target report or publication claim. Cancellation of that same
+preparation may remain pending; ordinary replay and cancellation still own final
+settlement. Input capture, target publication, unrelated cancellations, admission
+retries and startup mutations refuse.
+
+If this eligibility check reveals that an unactivated candidate needs a further
+runtime fix, use `loom fleet operation repair-runtime-candidate OPERATION
+--fleet FLEET --runtime-release RELEASE`. This explicitly retains one successor
+candidate under the original writer lock and closed maintenance gate. The
+original intent stays immutable; roles, native roots, source runtimes, workload
+images and check selection cannot change. The successor repeats qualification,
+captures its exact result cohort, and uses the ordinary stop/replacement/check
+sequence. It restores the original drain policy and honors the original client
+publication hold. Continue and release admission through the original operation
+ID. A different replay target, an already captured recovery cohort, or any
+service-stop/replacement intent refuses this repair. It is not a rollback.
 
 The operation retains that exact cohort before any stop. Native stop and locked
 replacement recheck it; a later new or changed result cannot join the operation.

@@ -205,14 +205,18 @@ def _retained_coordinator_operations(conn) -> bool:
     )
 
 
-def _retained_coordinator_mutations(conn) -> bool:
-    """Mutations whose owners cannot be replaced by completed-result replay."""
+def _retained_coordinator_mutations(conn, *, recoverable_preparations: frozenset[str] = frozenset()) -> bool:
+    """Retained mutations, excluding only preparations proved by recovery's owner."""
     queries = (
-        "SELECT 1 FROM preparation_operations WHERE state NOT IN ('applied', 'failed', 'cancelled', 'conflict') LIMIT 1",
-        "SELECT 1 FROM preparation_cancellations WHERE state NOT IN ('applied', 'failed', 'cancelled', 'conflict') LIMIT 1",
         "SELECT 1 FROM daemon_metadata WHERE key LIKE 'admission-retry:%' AND json_extract(value, '$.state') = 'pending' LIMIT 1",
     )
-    return any(conn.execute(query).fetchone() is not None for query in queries) or any(
+    return any(
+        row[0] not in recoverable_preparations
+        for query in (
+            "SELECT operation_id FROM preparation_operations WHERE state NOT IN ('applied', 'failed', 'cancelled', 'conflict')",
+            "SELECT target_operation_id FROM preparation_cancellations WHERE state NOT IN ('applied', 'failed', 'cancelled', 'conflict')",
+        ) for row in conn.execute(query)
+    ) or any(conn.execute(query).fetchone() is not None for query in queries) or any(
         float(json.loads(row[0])) > time.time()
         for row in conn.execute("SELECT value FROM daemon_metadata WHERE key LIKE 'startup-attachment:%'")
     )

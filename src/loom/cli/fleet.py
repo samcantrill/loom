@@ -109,7 +109,7 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
         "operation", help="inspect or continue retained setup"
     )
     operations = operation.add_subparsers(dest="operation_command", required=True)
-    for action in ("status", "resume", "abort", "retry-check", "retry-control", "repair-workload", "repair-check-selection", "defer-checks", "release-admission"):
+    for action in ("status", "resume", "abort", "retry-check", "retry-control", "repair-workload", "repair-check-selection", "repair-runtime-candidate", "defer-checks", "release-admission"):
         item = operations.add_parser(action)
         item.add_argument("operation_id")
         item.add_argument("--fleet", required=True)
@@ -126,6 +126,8 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
             item.add_argument("--operation-id", dest="new_control", required=True)
         if action == "repair-check-selection":
             item.add_argument("--deployment", type=Path, required=True)
+        if action == "repair-runtime-candidate":
+            item.add_argument("--runtime-release", type=Path, required=True)
         if action == "repair-workload":
             item.add_argument("--workload-profile", required=True)
             item.add_argument("--image", type=Path, required=True)
@@ -294,7 +296,7 @@ def handle(namespace: argparse.Namespace) -> int:
                     result = operation_status(inventory, namespace.operation_id)
                 elif intent.get("kind") in {"runtime-upgrade", "workload-upgrade", "runtime-upgrade-publication", "workload-upgrade-publication", "configuration-retirement", "configuration-retirement-publication", "container-policy-addition", "container-policy-addition-publication", "publication-budget-increase", "publication-budget-increase-publication"}:
                     from loom.fleet.upgrades import upgrade
-                    result = upgrade(inventory, operation_id=namespace.operation_id, action=namespace.operation_command, deployment=getattr(namespace, "deployment", None), failed_check=getattr(namespace, "failed_check", None), new_check=getattr(namespace, "new_check", None), failed_control=getattr(namespace, "failed_control", None), new_control=getattr(namespace, "new_control", None), workload_profile=getattr(namespace, "workload_profile", None), image=getattr(namespace, "image", None), workload_inventory=getattr(namespace, "workload_inventory", None), defer_agents=getattr(namespace, "defer_agents", None), defer_reason=getattr(namespace, "defer_reason", None), progress=progress)
+                    result = upgrade(inventory, operation_id=namespace.operation_id, action=namespace.operation_command, runtime_release=getattr(namespace, "runtime_release", None), deployment=getattr(namespace, "deployment", None), failed_check=getattr(namespace, "failed_check", None), new_check=getattr(namespace, "new_check", None), failed_control=getattr(namespace, "failed_control", None), new_control=getattr(namespace, "new_control", None), workload_profile=getattr(namespace, "workload_profile", None), image=getattr(namespace, "image", None), workload_inventory=getattr(namespace, "workload_inventory", None), defer_agents=getattr(namespace, "defer_agents", None), defer_reason=getattr(namespace, "defer_reason", None), progress=progress)
                 elif namespace.operation_command == "resume":
                     result = apply(inventory, operation_id=namespace.operation_id, resume=True)
                 else:

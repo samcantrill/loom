@@ -1079,6 +1079,9 @@ def _independent_policies(operation, requests):
 
 
 def _continue(operation):
+    if (operation.directory / "runtime-candidate-repair" / "intent.json").exists():
+        from .runtime_candidate_repair import continue_repair
+        return continue_repair(operation)
     if (operation.directory / "workload-repair" / "intent.json").exists():
         from .runtime_workload_repair import continue_repair
         return continue_repair(operation)
@@ -1112,7 +1115,10 @@ def _continue(operation):
                 raise response
         operation.probes()
         _preflight_checks(operation)
-        operation.maintenance("close", "close")
+        if "maintenance_binding" in operation.intent:
+            operation.gate()
+        else:
+            operation.maintenance("close", "close")
         if not recovery:
             operation.settled()
         phase(operation, "draining")
@@ -1411,7 +1417,7 @@ def _upgrade(
         if intent.get("kind") not in {"runtime-upgrade", "workload-upgrade", "runtime-upgrade-publication", "workload-upgrade-publication", "configuration-retirement", "configuration-retirement-publication", "container-policy-addition", "container-policy-addition-publication", "publication-budget-increase", "publication-budget-increase-publication"}:
             raise QueueConflictError("operation belongs to another kind")
         observation.kind = intent["kind"].removesuffix("-publication")
-        if runtime_release is not None and Path(runtime_release).resolve() != Path(
+        if action != "repair-runtime-candidate" and runtime_release is not None and Path(runtime_release).resolve() != Path(
             intent["target_path"]
         ):
             raise QueueConflictError("upgrade target intent changed")
@@ -1462,6 +1468,14 @@ def _upgrade(
                 _bind_deferred_checks(operation, defer_agents, defer_reason)
             if (directory / "aborted.json").exists():
                 result = {"state": "aborted"}
+            elif action == "repair-runtime-candidate":
+                from .runtime_candidate_repair import repair_candidate
+                result = repair_candidate(operation, runtime_release=runtime_release)
+            elif (directory / "runtime-candidate-repair" / "intent.json").exists():
+                from .runtime_candidate_repair import continue_repair
+                result = continue_repair(operation, action=action, failed_check=failed_check,
+                                         new_check=new_check, failed_control=failed_control,
+                                         new_control=new_control)
             elif action == "abort":
                 operation.recheck()
                 if (directory / "complete.json").exists():
@@ -1500,7 +1514,7 @@ def _upgrade(
             observation.reason = _reason_code(exc)
             result = {"state": "waiting", "reason": str(exc)}
             if getattr(exc, "code", None) == "publication_pending":
-                result.update(publication_ready=True, checks=_attempts(operation))
+                result.update(publication_ready=True, checks=getattr(operation, "continuation_checks", _attempts(operation)))
                 if "image_sha256" in intent:
                     result["image_sha256"] = intent["image_sha256"]
         except CoordinatorClientError as exc:
