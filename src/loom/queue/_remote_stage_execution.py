@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 from loom.artifacts import ArtifactRef
 from loom._sqlite_inspection import inspect_sqlite_database
 from loom.pipeline.stores.errors import ArtifactStoreError
-from loom.pipeline.stores.shared_artifacts import SHARED_PUBLICATION, binding as _artifact_shared_binding, file_identity, verify_ref
+from loom.pipeline.stores.shared_artifacts import SHARED_PUBLICATION, binding as _artifact_shared_binding, admits_budgets, file_identity, verify_ref
 from loom.io.uris import uri_to_path
 from loom.pipeline.execution.models import (
     ExecutionFailure,
@@ -2335,12 +2335,13 @@ class _ResidentAssignmentWorkspace:
 
     def retain_outputs(self) -> _RemoteExecutionReport:
         from ._preparation_report_transfer import native_role
-        from ._phase_timing import PhaseTimings
+        from ._phase_timing import PhaseTimings, observe_phases
 
         timings = PhaseTimings()
         result = self.worker_result()
         try:
-            return timings.call("output_retention", self._retain_outputs, result)
+            with observe_phases(timings.observe):
+                return timings.call("output_retention", self._retain_outputs, result)
         except _RemoteTransferLimitError:
             raise
         except (QueueConflictError, QueueServiceError, OSError, ValueError) as exc:
@@ -2791,7 +2792,7 @@ def _validate_remote_semantic_data(
                 assert reference is not None
                 roots = {} if shared is None else cast(Mapping[str, Mapping[str, PlainData]], shared["roots"])
                 root = roots.get(str(reference["root_id"]))
-                if root is None or root.get("publication") != reference["budgets"]:
+                if root is None or not admits_budgets(root.get("publication"), reference["budgets"]):
                     raise QueueServiceError("shared artifact input root or budget is not admitted")
             for child in value.values():
                 validate_references(child)

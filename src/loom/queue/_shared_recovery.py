@@ -16,9 +16,12 @@ from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
 from loom.pipeline.stores.atomic import atomic_write_bytes
+from loom.pipeline.stores.errors import ArtifactStoreError
 from loom.pipeline.stores.shared_artifacts import (
     RECEIPT,
     budgets,
+    admits_budgets,
+    check_budget,
     contained,
     encoded,
     inventory,
@@ -138,7 +141,7 @@ def validate_wire(request: Any) -> dict[str, Any] | None:
         owner = ref["identity"]
         if (
             ref["root_id"] != selection[0]
-            or ref["budgets"] != selection[1]["publication"]
+            or not admits_budgets(selection[1]["publication"], ref["budgets"])
             or owner.get("origin_run_id") != execution["origin_run_id"]
             or owner.get("stage_name") != request.stage_name
             or type(owner.get("attempt")) is not int
@@ -244,7 +247,7 @@ def current_tree(
     root = cast(Mapping[str, PlainData], roots[value["root_id"]])
     selection = selected(request)
     assert selection is not None
-    if root["access"] != "rw" or root.get("publication") != selection[1]["publication"]:
+    if root["access"] != "rw" or not admits_budgets(root.get("publication"), selection[1]["publication"]):
         raise QueueConflictError("recovery root qualification conflicts")
     tree = contained(Path(str(root["host_path"])), value["tree"], exists=False)
     if owner is not None:
@@ -273,7 +276,7 @@ def inspect(value: object, roots: Mapping[str, PlainData]) -> tuple[Path, dict[s
     """
     ref = _reference(value)
     root = roots.get(ref["root_id"])
-    if not isinstance(root, Mapping) or root.get("publication") != ref["budgets"]:
+    if not isinstance(root, Mapping) or not admits_budgets(root.get("publication"), ref["budgets"]):
         raise QueueConflictError("recovery predecessor root is not admitted")
     tree = contained(Path(str(root["host_path"])), ref["tree"])
     data = receipt_bytes(contained(tree, RECEIPT), ref["budgets"]["max_manifest_bytes"])
@@ -373,8 +376,10 @@ def seal(
             "members": members,
         }
     )
-    if len(data) > limits["max_manifest_bytes"]:
-        raise QueueConflictError("recovery manifest exceeds admitted budget")
+    try:
+        check_budget("max_manifest_bytes", limits["max_manifest_bytes"], len(data))
+    except ArtifactStoreError as exc:
+        raise QueueConflictError(str(exc)) from exc
     marker = available / RECEIPT
     existing = receipt_bytes(
         contained(available, RECEIPT), limits["max_manifest_bytes"]

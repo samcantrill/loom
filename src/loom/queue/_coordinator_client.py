@@ -166,6 +166,10 @@ class NativeCoordinatorClient:
                     from ._container_policy_addition import CAPABILITY
                     if CAPABILITY not in description.capabilities:
                         raise control_error("unsupported_capability", operation, payload, ids={"missing_capability": CAPABILITY})
+                if operation == "operator_scheduling_reload" and cast(Mapping[str, PlainData], payload["request"]).get("publication_budget_increase") is not None:
+                    from ._publication_budget_increase import CAPABILITY
+                    if CAPABILITY not in description.capabilities:
+                        raise control_error("unsupported_capability", operation, payload, ids={"missing_capability": CAPABILITY})
                 if operation == "operator_control" and "condition" in payload:
                     from .operations import CONDITIONAL_CONTROL_CAPABILITY
                     if CONDITIONAL_CONTROL_CAPABILITY not in description.capabilities:
@@ -174,6 +178,10 @@ class NativeCoordinatorClient:
                     promotion = cast(Mapping[str, PlainData], cast(Mapping[str, PlainData], payload["control"])["promotion"])
                     if promotion.get("add_container_policies"):
                         from ._container_policy_addition import CAPABILITY
+                        if CAPABILITY not in description.capabilities:
+                            raise control_error("unsupported_capability", operation, payload, ids={"missing_capability": CAPABILITY})
+                    if promotion.get("increase_publication_budgets"):
+                        from ._publication_budget_increase import CAPABILITY
                         if CAPABILITY not in description.capabilities:
                             raise control_error("unsupported_capability", operation, payload, ids={"missing_capability": CAPABILITY})
                     if promotion.get("retire_configuration") and "quiescent-configuration-retirement-v1" not in description.capabilities:

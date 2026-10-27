@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Concatenate, ParamSpec, TypeVar, cast
 from uuid import uuid4
 
 from loom.artifacts import ArtifactRef
-from loom.pipeline.stores.shared_artifacts import binding as shared_binding, verify_ref
+from loom.pipeline.stores.shared_artifacts import binding as shared_binding
 from loom.pipeline.status import StageStatus
 from loom.scheduling import (
     CapacityAtom,
@@ -80,7 +80,9 @@ _MAX_COLLECTION = 32
 _MAX_OFFER_TTL_SECONDS = 3600
 _MAX_RESOURCE_ATOM = 2**63 - 1
 _MAX_POLL_WAIT_MILLISECONDS = 5_000
-_MAX_TRANSFER_AUTHORIZATIONS = 64
+# This bounds retained history, not retries in one HTTP exchange. Long-lived
+# publications and recovery must not exhaust a one-hour lifetime allowance.
+_MAX_TRANSFER_AUTHORIZATIONS = 1_000_000
 _MAX_REMOTE_WIRE_VALUE_BYTES = 60 * 1024
 _MAX_REMOTE_EVENT_BYTES = 8 * 1024
 _SESSION_REFERENCE_KINDS = frozenset(
@@ -1608,6 +1610,21 @@ def _serialized_session_operation(
     ) -> _R:
         with service._daemon._cycle_lock:  # type: ignore[attr-defined]
             return method(service, *args, **kwargs)
+
+    return wrapped
+
+
+def _serialized_publication_operation(
+    method: Callable[Concatenate["AgentSessionService", str, str, _P], _R],
+) -> Callable[Concatenate["AgentSessionService", str, str, _P], _R]:
+    """Serialize retries per assignment, outside the global coordinator lock."""
+
+    @wraps(method)
+    def wrapped(service: "AgentSessionService", session_id: str, assignment_id: str,
+                *args: _P.args, **kwargs: _P.kwargs) -> _R:
+        _identifier(assignment_id, "assignment_id")
+        with service._daemon._publication_guards.hold(assignment_id):
+            return method(service, session_id, assignment_id, *args, **kwargs)
 
     return wrapped
 
@@ -3450,7 +3467,7 @@ class AgentSessionService:
                 raise QueueConflictError("transfer authorization revision is stale")
             if current >= _MAX_TRANSFER_AUTHORIZATIONS:
                 raise QueueConflictError(
-                    "transfer authorization renewal exceeded its bound"
+                    f"transfer authorization history exceeded its bound: limit={_MAX_TRANSFER_AUTHORIZATIONS} observed={current + 1}"
                 )
             revision = current + 1
             authorization_id = f"authorization-{uuid4()}"
@@ -3800,97 +3817,99 @@ class AgentSessionService:
             path="remote event acknowledgement",
         )
 
-    @_serialized_session_operation
+    def _result_authority(self, action: str):
+        self._daemon._require_started()
+        self._daemon._require_wait_running()
+        rule, revision = self._authorize(action)
+        return rule, (revision, self._daemon._epoch or "", self._daemon._scheduling_epoch)
+
+    def _declaration_authority(self, conn, session_id, assignment_id, *, fence,
+                               authorization_id, authorization_revision, report, encoded):
+        rule, stamp = self._result_authority("output_manifest")
+        revision, epoch, _ = stamp
+        self._require_remote_session(conn, rule, revision, session_id, epoch)
+        row = self._require_remote_assignment(conn, session_id, assignment_id)
+        self._require_transfer_authorization(conn, assignment_id, authorization_id,
+                                             authorization_revision, epoch)
+        if row["fence"] != fence or str(row["state"]) not in {
+            "GRANTED", "RUNNING", "RESULT_RETAINED", "TERMINAL",
+        }:
+            raise QueueConflictError("remote result fence is stale")
+        delivery = conn.execute(
+            "SELECT request_json FROM agent_deliveries WHERE assignment_id = ?",
+            (assignment_id,),
+        ).fetchone()
+        if delivery is None:
+            raise QueueConflictError("remote delivered request is unavailable")
+        request = _ResidentAssignmentBundle.from_remote_dict(json.loads(str(delivery["request_json"])))
+        output_mismatch = (
+            set(item.logical_name for item in report.outputs) != set(request.declared_outputs)
+            if report.status is StageStatus.SUCCEEDED else bool(report.outputs)
+        )
+        if report.stage_name != request.stage_name or report.attempt != request.attempt or output_mismatch:
+            raise QueueConflictError("remote result does not match its request")
+        from ._preparation_report_transfer import native_role
+        from ._shared_publication import selected
+
+        if report.output_kind == "preparation_report" and not native_role(request.fingerprint):
+            raise QueueConflictError("preparation transfer targets another stage role")
+        if (report.status is StageStatus.SUCCEEDED and native_role(request.fingerprint)
+            and selected(request) is None and report.output_kind != "preparation_report"):
+            raise QueueConflictError("native preparation transfer capability is missing")
+        if selected(request) is not None and report.status is StageStatus.SUCCEEDED:
+            if report.output_kind != "shared":
+                raise QueueConflictError("shared publication report capability is missing")
+            if not self._daemon.config.coordinator_shared_roots:
+                raise QueueConflictError("coordinator shared root mapping is unavailable")
+            self._remote_execution().remote_publication_fence(assignment_id, fence=fence)
+        elif any(shared_binding(item.metadata) is not None for item in report.outputs):
+            raise QueueConflictError("shared output was not admitted")
+        if row["report_json"] is not None and str(row["report_json"]) != encoded:
+            raise QueueConflictError("remote result replay conflicts")
+        session = conn.execute("SELECT agent_root_id FROM agent_sessions WHERE session_id = ?", (session_id,)).fetchone()
+        return row, request, str(session["agent_root_id"]), stamp
+
+    @_serialized_publication_operation
     def declare_outputs(
-        self,
-        session_id: str,
-        assignment_id: str,
-        *,
-        fence: str,
-        authorization_id: str,
-        authorization_revision: int,
-        report: _RemoteExecutionReport,
+        self, session_id: str, assignment_id: str, *, fence: str,
+        authorization_id: str, authorization_revision: int, report: _RemoteExecutionReport,
     ) -> Mapping[str, PlainData]:
-        rule, policy_revision = self._authorize("output_manifest")
         _identifier(fence, "fence")
         if report.assignment_id != assignment_id:
             raise QueueConflictError("remote report targets another assignment")
-        epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]
         encoded = _canonical_json(report.to_dict())
         if len(encoded.encode("utf-8")) > _MAX_REMOTE_WIRE_VALUE_BYTES:
             raise QueueServiceError("remote result manifest exceeds its bound")
         digest = hashlib.sha256(encoded.encode()).hexdigest()
-        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
-            conn.execute("BEGIN IMMEDIATE")
-            self._require_remote_session(conn, rule, policy_revision, session_id, epoch)
-            row = self._require_remote_assignment(conn, session_id, assignment_id)
-            self._require_transfer_authorization(
-                conn,
-                assignment_id,
-                authorization_id,
-                authorization_revision,
-                epoch,
-            )
-            if row["fence"] != fence or str(row["state"]) not in {
-                "GRANTED",
-                "RUNNING",
-                "RESULT_RETAINED",
-                "TERMINAL",
-            }:
-                raise QueueConflictError("remote result fence is stale")
-            delivery = conn.execute(
-                "SELECT request_json FROM agent_deliveries WHERE assignment_id = ?",
-                (assignment_id,),
-            ).fetchone()
-            if delivery is None:
-                raise QueueConflictError("remote delivered request is unavailable")
-            request = _ResidentAssignmentBundle.from_remote_dict(
-                json.loads(str(delivery["request_json"]))
-            )
-            output_mismatch = (
-                set(item.logical_name for item in report.outputs)
-                != set(request.declared_outputs)
-                if report.status is StageStatus.SUCCEEDED
-                else bool(report.outputs)
-            )
-            if (
-                report.stage_name != request.stage_name
-                or report.attempt != request.attempt
-                or output_mismatch
-            ):
-                raise QueueConflictError("remote result does not match its request")
-            from ._preparation_report_transfer import native_role
-            if report.output_kind == "preparation_report" and not native_role(request.fingerprint):
-                raise QueueConflictError("preparation transfer targets another stage role")
-            shared_outputs = None
-            from ._shared_publication import selected, publish
-            if (
-                report.status is StageStatus.SUCCEEDED
-                and native_role(request.fingerprint)
-                and selected(request) is None
-                and report.output_kind != "preparation_report"
-            ):
-                raise QueueConflictError("native preparation transfer capability is missing")
-            if selected(request) is not None and report.status is StageStatus.SUCCEEDED:
-                if report.output_kind != "shared":
-                    raise QueueConflictError("shared publication report capability is missing")
-                roots = self._daemon.config.coordinator_shared_roots
-                if not roots:
-                    raise QueueConflictError("coordinator shared root mapping is unavailable")
-                self._remote_execution().remote_publication_fence(assignment_id, fence=fence)
-                session_row = conn.execute("SELECT agent_root_id FROM agent_sessions WHERE session_id = ?", (session_id,)).fetchone()
-                shared_outputs = publish(request, report, roots,
-                    agent_id=str(session_row["agent_root_id"]), fence=fence)
-            elif any(shared_binding(item.metadata) is not None for item in report.outputs):
-                raise QueueConflictError("shared output was not admitted")
+        arguments = dict(fence=fence, authorization_id=authorization_id,
+                         authorization_revision=authorization_revision, report=report, encoded=encoded)
+        with self._daemon._cycle_lock, self._daemon._connection() as conn:
+            row, request, agent_id, stamp = self._declaration_authority(
+                conn, session_id, assignment_id, **arguments)
             if row["report_json"] is not None:
-                if str(row["report_json"]) != encoded:
-                    raise QueueConflictError("remote result replay conflicts")
-                conn.commit()
                 return freeze_plain_data(
                     {"assignment_id": assignment_id, "state": str(row["state"])},
                     path="remote output manifest",
                 )
+            roots = self._daemon.config.coordinator_shared_roots
+        from ._shared_publication import selected, prepare_publication, accept_publication
+
+        prepared = None
+        if selected(request) is not None and report.status is StageStatus.SUCCEEDED:
+            prepared = prepare_publication(request, report, roots, agent_id=agent_id, fence=fence)
+        with self._daemon._cycle_lock, self._daemon._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row, current_request, current_agent, current_stamp = self._declaration_authority(
+                conn, session_id, assignment_id, **arguments)
+            if (current_stamp != stamp or current_request != request or current_agent != agent_id
+                or self._daemon.config.coordinator_shared_roots != roots):
+                raise QueueConflictError("remote publication authority changed during verification")
+            if row["report_json"] is not None:
+                return freeze_plain_data(
+                    {"assignment_id": assignment_id, "state": str(row["state"])},
+                    path="remote output manifest",
+                )
+            shared_outputs = None if prepared is None else accept_publication(prepared)
             for item in report.outputs:
                 target = (
                     self._daemon.config.coordinator_root  # type: ignore[attr-defined]
@@ -4061,53 +4080,58 @@ class AgentSessionService:
             path="remote output chunk",
         )
 
-    @_serialized_session_operation
+    def _commit_authority(self, conn, session_id, assignment_id, fence):
+        rule, stamp = self._result_authority("result")
+        revision, epoch, _ = stamp
+        self._require_remote_session(conn, rule, revision, session_id, epoch)
+        row = self._require_remote_assignment(conn, session_id, assignment_id)
+        if row["fence"] != fence or str(row["state"]) not in {"RESULT_RETAINED", "TERMINAL", "RELEASED"}:
+            raise QueueConflictError("remote terminal result fence is stale")
+        if row["report_json"] is None:
+            raise QueueConflictError("remote terminal report is unavailable")
+        transfers = tuple(conn.execute(
+            "SELECT assignment_id, logical_name, private_path, descriptor_json, finalized FROM "
+            "remote_transfers WHERE assignment_id = ? AND direction = 'output' ORDER BY logical_name",
+            (assignment_id,),
+        ))
+        if any(not item["finalized"] for item in transfers):
+            raise QueueConflictError("remote output manifest is incomplete")
+        return row, transfers, stamp
+
+    @_serialized_publication_operation
     def commit_result(
         self, session_id: str, assignment_id: str, *, fence: str
     ) -> Mapping[str, PlainData]:
-        rule, policy_revision = self._authorize("result")
         _identifier(fence, "fence")
-        epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]
-        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
-            self._require_remote_session(conn, rule, policy_revision, session_id, epoch)
-            row = self._require_remote_assignment(conn, session_id, assignment_id)
-            if row["fence"] != fence or str(row["state"]) not in {
-                "RESULT_RETAINED",
-                "TERMINAL",
-                "RELEASED",
-            }:
-                raise QueueConflictError("remote terminal result fence is stale")
-            if row["report_json"] is None:
-                raise QueueConflictError("remote terminal report is unavailable")
-            report = _RemoteExecutionReport.from_dict(
-                json.loads(str(row["report_json"]))
-            )
-            pending = int(
-                conn.execute(
-                    "SELECT COUNT(*) FROM remote_transfers WHERE assignment_id = ? "
-                    "AND direction = 'output' AND finalized = 0",
-                    (assignment_id,),
-                ).fetchone()[0]
-            )
-            if pending:
-                raise QueueConflictError("remote output manifest is incomplete")
-            outputs = self._coordinator_output_refs(conn, assignment_id)
+        with self._daemon._cycle_lock, self._daemon._connection() as conn:
+            row, transfers, stamp = self._commit_authority(conn, session_id, assignment_id, fence)
             if str(row["state"]) in {"TERMINAL", "RELEASED"}:
                 return freeze_plain_data(
                     {"assignment_id": assignment_id, "state": str(row["state"])},
                     path="remote result commit",
                 )
-        self._remote_execution().remote_commit(
-            assignment_id, fence=fence, report=report, outputs=outputs
-        )
-        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
-            conn.execute(
-                "UPDATE remote_assignments SET state = 'TERMINAL' "
-                "WHERE assignment_id = ?",
-                (assignment_id,),
-            )
-            conn.commit()
-        self._daemon._wake_admission(str(row["run_uri"]))
+            encoded = str(row["report_json"])
+            report = _RemoteExecutionReport.from_dict(json.loads(encoded))
+        outputs = self._coordinator_output_refs(transfers)
+        with self._daemon._cycle_lock:
+            with self._daemon._connection() as conn:
+                current, current_transfers, current_stamp = self._commit_authority(
+                    conn, session_id, assignment_id, fence)
+                if (current_stamp != stamp or str(current["report_json"]) != encoded
+                    or current_transfers != transfers or current["state"] != row["state"]):
+                    raise QueueConflictError("remote commit authority changed during verification")
+            # The execution owner rechecks the current attempt's fence before
+            # recording the bounded artifact references and terminal state.
+            from ._phase_timing import phase
+            with phase("result_commit", operation_id=assignment_id):
+                self._remote_execution().remote_commit(
+                    assignment_id, fence=fence, report=report, outputs=outputs
+                )
+            with self._daemon._connection() as conn:
+                conn.execute("UPDATE remote_assignments SET state = 'TERMINAL' WHERE assignment_id = ?",
+                             (assignment_id,))
+                conn.commit()
+            self._daemon._wake_admission(str(row["run_uri"]))
         return freeze_plain_data(
             {"assignment_id": assignment_id, "state": "TERMINAL"},
             path="remote result commit",
@@ -4506,16 +4530,9 @@ class AgentSessionService:
             )
 
     @staticmethod
-    def _coordinator_output_refs(
-        conn: sqlite3.Connection, assignment_id: str
-    ) -> dict[str, ArtifactRef]:
+    def _coordinator_output_refs(transfers: Sequence[sqlite3.Row]) -> dict[str, ArtifactRef]:
         outputs: dict[str, ArtifactRef] = {}
-        for row in conn.execute(
-            "SELECT logical_name, private_path, descriptor_json FROM "
-            "remote_transfers WHERE assignment_id = ? AND direction = 'output' "
-            "AND finalized = 1 ORDER BY logical_name",
-            (assignment_id,),
-        ):
+        for row in transfers:
             descriptor = _RemoteOutputArtifact.from_dict(
                 json.loads(str(row["descriptor_json"]))
             )
@@ -4536,7 +4553,9 @@ class AgentSessionService:
                 created_at=descriptor.created_at,
                 metadata=descriptor.metadata,
             )
-            verify_ref(outputs[str(row["logical_name"])], path)
+        from ._shared_publication import verify_outputs
+
+        verify_outputs(outputs)
         return outputs
 
     def _remote_execution(self):  # type: ignore[no-untyped-def]

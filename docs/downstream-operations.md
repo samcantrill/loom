@@ -886,6 +886,16 @@ shared publication keeps its complete member inventory and receipt without
 repacking. This transport contract adds no Slurm preparation-input capability or
 physical cluster qualification.
 
+Shared publication ceilings are admission policy, not a reason to rewrite a
+previous publication. A consumer root may admit recorded member, inventory-byte,
+and payload-byte budgets that are each no greater than its current ceilings.
+The original reference and receipt stay unchanged, and integrity verification
+continues under the original recorded limits. The same rule covers historical
+recovery predecessors and their supported cleanup. Frozen assignment requests
+retain their own publication limits and execution qualifications; raising policy
+does not migrate their identity or silently enlarge their bounds. Errors name
+the exceeded budget, its limit, and the observed lower bound.
+
 After native worker containment, unusable primary or companion evidence fails
 preparation publication through the existing failed-result and assignment-release
 path. The operation settles as `preparation_child_failed`; the immutable worker

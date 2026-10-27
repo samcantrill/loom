@@ -217,3 +217,53 @@ def test_runtime_retirement_with_deleted_inputs_preserves_identity_and_publicati
             else:
                 assert after["resident_profiles"] == []
                 assert after["container_policies"][:-1] == before["container_policies"]
+
+        # Increase existing ceilings through the public CLI, keeping the same
+        # roots, policies and source aliases. Exercise lost replies again under
+        # this distinct retained operation and its publication hold.
+        from tests.integration.fleet.test_configuration import cli
+        inventory = load_inventory(inventory.path)
+        candidate = read(inventory.path)
+        expected = {}
+        limits = {"max_members": 1_000_000, "max_manifest_bytes": 536_870_912,
+                  "max_payload_bytes": 274_877_906_944}
+        for host in inventory.hosts:
+            declaration = read(host.config)
+            mappings = []
+            if host.name == "coordinator":
+                mappings.append(declaration["shared_roots"])
+                mappings.extend(item["shared_roots"] for item in declaration["container_capabilities"])
+                entry = candidate["coordinator"]
+            else:
+                mappings.extend(item["shared_roots"] for item in declaration["container_policies"])
+                entry = candidate["agents"][host.name]
+            for mapping in mappings:
+                for root in mapping.values():
+                    if "publication" in root:
+                        root["publication"] = limits
+            expected[host.name] = declaration
+            entry["config"] = str(write(host.config.with_name(host.name + "-budgets.json"), declaration))
+        candidate_path = write(tmp_path / "budget-fleet.json", candidate)
+        execution_path = write(tmp_path / "budget-check-execution.json", execution.to_dict())
+        lost.clear()
+        interruptions = {("coordinator", "workload-publish"), ("worker", "workload-recover")}
+        code, result = cli("upgrade", "--fleet", inventory.path, "--operation-id", "budgets", "--apply",
+            "--increase-publication-budgets", "--workload-inventory", candidate_path,
+            "--deployment", added_deployment, "--connection", setup["operator_connection"],
+            "--check-execution", execution_path, "--config", selection["config"], "--hold-admission")
+        assert code == (2 if result["outcome"] == "waiting" else 0), json.dumps(result)
+        deadline = time.monotonic() + 240
+        while result["outcome"] == "waiting" and not result.get("publication_ready") and time.monotonic() < deadline:
+            time.sleep(0.25)
+            result = upgrades.upgrade(inventory, operation_id="budgets")
+        assert result.get("publication_ready"), json.dumps(result)
+        assert lost == interruptions
+        with CoordinatorOperatorClient.from_connection_file(setup["operator_connection"]) as client:
+            assert client.observe_status().owner == coordinator_id
+            assert client.observe_maintenance()["state"] == "closed"
+            for name, identity in roots.items():
+                assert client.observe_agent(name).value["agent_root_id"] == identity
+        assert finish(inventory, "budgets", action="release-admission")["outcome"] == "complete"
+        assert finish(inventory, "budgets")["outcome"] == "complete"
+        for host in inventory.hosts:
+            assert read(host.config) == expected[host.name]

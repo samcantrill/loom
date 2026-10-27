@@ -1,5 +1,7 @@
 """Native recovery eligibility never equates completed work with settlement."""
 from threading import Event
+from datetime import datetime, timedelta, timezone
+import sqlite3
 
 import pytest
 
@@ -16,6 +18,56 @@ from tests.integration.queue.test_concurrent_outbound_agent import (
 )
 
 pytestmark = pytest.mark.integration
+
+
+def test_expired_authorization_history_beyond_64_recovers_over_tls(monkeypatch):
+    from loom.queue.local_daemon import LocalDaemonPrincipal, LocalDaemonRole
+
+    entered, release = Event(), Event()
+    retain = _shared_publication.retain
+    now = [datetime.now(timezone.utc).replace(microsecond=0)]
+
+    def hold(workspace, result):
+        entered.set()
+        assert release.wait(60)
+        return retain(workspace, result)
+
+    monkeypatch.setattr(_shared_publication, "retain", hold)
+    with _service(monkeypatch, shared=True, clock=lambda: now[0].isoformat().replace("+00:00", "Z")) as case:
+        try:
+            _submit(case, "expired-history")
+            assert entered.wait(20), case.failures
+            with sqlite3.connect(case.database) as conn:
+                assignment, session = conn.execute(
+                    "SELECT assignment_id, session_id FROM remote_assignments"
+                ).fetchone()
+            view = case.daemon.agent_view(
+                LocalDaemonPrincipal("principal", LocalDaemonRole.AGENT, "credential")
+            )
+            # Native authorization requests reproduce a long-lived publication.
+            # The agent will replay this same-epoch history after the barrier.
+            first = None
+            for revision in range(66):
+                grant = view.authorize_transfers(
+                    session, assignment, expected_revision=revision,
+                    operation_id=f"{assignment}:authorize:{revision + 1}",
+                )
+                if first is None:
+                    first = grant
+            assert view.authorize_transfers(
+                session, assignment, expected_revision=0,
+                operation_id=f"{assignment}:authorize:1",
+            ) == first
+            history = case.operator.observe_assignment(assignment).value["transfer_authorization"]
+            assert history["retained_count"] == history["latest_revision"] == 66
+            assert history["history_limit"] == 1_000_000
+            now[0] += timedelta(seconds=61)
+            release.set()
+            assert case.client.wait("expired-history", timeout_seconds=60).state.value == "SUCCEEDED"
+            _eventually(lambda: case.operator.observe_assignment(assignment).value["remote_state"] == "RELEASED")
+            assert case.operator.observe_assignment(assignment).value["transfer_authorization"]["latest_revision"] > 66
+        finally:
+            release.set()
 
 
 def test_retained_success_is_recoverable_but_not_settled(monkeypatch):

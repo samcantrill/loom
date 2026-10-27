@@ -182,3 +182,38 @@ def test_input_directory_cannot_back_captured_configuration(tmp_path):
     with pytest.raises(QueueServiceError, match="captured configuration requires challenged storage"):
         project_snapshot_mount(profile, binding.input_receipt)
 
+
+
+def test_overlapping_inputs_scan_once_and_revalidate_next_boundary(tmp_path, monkeypatch):
+    from loom.queue import shared_execution
+    from loom.queue._phase_timing import observe_phases
+
+    child = tmp_path / "nested"
+    child.mkdir()
+    payload = child / "values"
+    payload.write_text("input")
+    roots = root_bindings({"data": _root(tmp_path)})
+    locations = [{"kind": "loom.shared-location", "schema_version": 1,
+                  "root_id": "data", "path": path} for path in ("nested/values", ".", "nested")]
+    selected = stage_scope({"inputs": locations}, {}, {"roots": qualifications(roots)})
+    walked = []
+    original = shared_execution.os.walk
+
+    def walk(path, **kwargs):
+        walked.append(path)
+        return original(path, **kwargs)
+
+    monkeypatch.setattr(shared_execution.os, "walk", walk)
+    timings = []
+    with observe_phases(timings.append):
+        require_bindings(selected, roots)
+    assert walked == [tmp_path]
+    assert timings[0]["spans"][0]["action"] == "input_root_validation"
+    assert timings[0]["spans"][0]["outcome"] == "complete"
+    (child / "link").symlink_to(payload)
+    with pytest.raises(QueueServiceError, match="regular"):
+        require_bindings(selected, roots)
+    assert walked == [tmp_path, tmp_path]
+    payload.unlink()
+    with pytest.raises(QueueServiceError):
+        require_bindings(selected, roots)

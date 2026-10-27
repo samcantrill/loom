@@ -139,6 +139,7 @@ def preview(
     workload_profile=None,
     retire_configuration=False,
     add_container_policies=False,
+    increase_publication_budgets=False,
     image=None,
     workload_inventory=None,
     deployment=None,
@@ -153,6 +154,14 @@ def preview(
     preview never presents an uninstalled candidate as qualified.
     """
     _environment_files(inventory, env_file)
+    if increase_publication_budgets:
+        if retire_configuration or add_container_policies or runtime_release is not None or workload_profile is not None or image is not None or recover_retained_results:
+            raise QueueConfigError("publication budget increase must be separate from runtime, retirement, policy addition and image changes")
+        from .workload_upgrades import configuration_preview
+        result = configuration_preview(inventory, workload_inventory=workload_inventory,
+            deployment=deployment, connection=connection, config=config, check_execution=check_execution,
+            env_file=env_file, increase_publication_budgets=True)
+        return {**result, "hold_admission": hold_admission}
     if add_container_policies:
         if retire_configuration or runtime_release is not None or workload_profile is not None or image is not None or recover_retained_results:
             raise QueueConfigError("container policy addition must be separate from runtime, retirement and image changes")
@@ -1070,13 +1079,16 @@ def _independent_policies(operation, requests):
 
 
 def _continue(operation):
+    if (operation.directory / "runtime-candidate-repair" / "intent.json").exists():
+        from .runtime_candidate_repair import continue_repair
+        return continue_repair(operation)
     if (operation.directory / "workload-repair" / "intent.json").exists():
         from .runtime_workload_repair import continue_repair
         return continue_repair(operation)
     if operation.intent.get("runtime_retirement"):
         from .runtime_retirement import continue_upgrade
         return continue_upgrade(operation)
-    if operation.intent.get("kind") in {"workload-upgrade", "workload-upgrade-publication", "configuration-retirement", "configuration-retirement-publication", "container-policy-addition", "container-policy-addition-publication"}:
+    if operation.intent.get("kind") in {"workload-upgrade", "workload-upgrade-publication", "configuration-retirement", "configuration-retirement-publication", "container-policy-addition", "container-policy-addition-publication", "publication-budget-increase", "publication-budget-increase-publication"}:
         from .workload_upgrades import continue_upgrade
         return continue_upgrade(operation)
     if (operation.directory / "complete.json").exists():
@@ -1103,7 +1115,10 @@ def _continue(operation):
                 raise response
         operation.probes()
         _preflight_checks(operation)
-        operation.maintenance("close", "close")
+        if "maintenance_binding" in operation.intent:
+            operation.gate()
+        else:
+            operation.maintenance("close", "close")
         if not recovery:
             operation.settled()
         phase(operation, "draining")
@@ -1217,6 +1232,7 @@ def upgrade(
     workload_profile=None,
     retire_configuration=False,
     add_container_policies=False,
+    increase_publication_budgets=False,
     image=None,
     workload_inventory=None,
     deployment=None,
@@ -1275,6 +1291,7 @@ def _upgrade(
     workload_profile=None,
     retire_configuration=False,
     add_container_policies=False,
+    increase_publication_budgets=False,
     image=None,
     workload_inventory=None,
     deployment=None,
@@ -1295,7 +1312,7 @@ def _upgrade(
 ):
     """Preview/apply or continue one immutable service upgrade; never cancel work."""
     if apply:
-        observation.kind = "container-policy-addition" if add_container_policies else "configuration-retirement" if retire_configuration else ("workload-upgrade" if workload_profile is not None else "runtime-upgrade")
+        observation.kind = "publication-budget-increase" if increase_publication_budgets else "container-policy-addition" if add_container_policies else "configuration-retirement" if retire_configuration else ("workload-upgrade" if workload_profile is not None else "runtime-upgrade")
     _environment_files(inventory, env_file)
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise QueueConfigError("timeout must be positive and finite")
@@ -1311,7 +1328,9 @@ def _upgrade(
         raise QueueConfigError("configuration retirement cannot select resident image promotion or result recovery")
     if add_container_policies and (retire_configuration or runtime_release is not None or workload_profile is not None or image is not None or recover_retained_results):
         raise QueueConfigError("container policy addition must be separate from runtime, retirement and image changes")
-    if apply and not (retire_configuration or add_container_policies) and runtime_release is None and (workload_profile is None or image is None):
+    if increase_publication_budgets and (retire_configuration or add_container_policies or runtime_release is not None or workload_profile is not None or image is not None or recover_retained_results):
+        raise QueueConfigError("publication budget increase must be separate from runtime, retirement, policy addition and image changes")
+    if apply and not (retire_configuration or add_container_policies or increase_publication_budgets) and runtime_release is None and (workload_profile is None or image is None):
         raise QueueConfigError("apply requires --runtime-release or --workload-profile and --image")
     if not apply and operation_id is None:
         return preview(
@@ -1321,6 +1340,7 @@ def _upgrade(
             hold_admission=hold_admission,
             workload_profile=workload_profile, image=image, workload_inventory=workload_inventory,
             retire_configuration=retire_configuration, add_container_policies=add_container_policies,
+            increase_publication_budgets=increase_publication_budgets,
             deployment=deployment,
             connection=connection,
             config=config,
@@ -1349,6 +1369,7 @@ def _upgrade(
                 hold_admission=hold_admission,
                 workload_profile=workload_profile, image=image, workload_inventory=workload_inventory,
                 retire_configuration=retire_configuration, add_container_policies=add_container_policies,
+                increase_publication_budgets=increase_publication_budgets,
                 deployment=deployment,
                 connection=connection,
                 config=config,
@@ -1379,7 +1400,7 @@ def _upgrade(
                 "env_file": None if env_file is None else str(Path(env_file).resolve()),
                 "timeout_seconds": timeout_seconds,
             }
-            if workload_profile is not None or retire_configuration or add_container_policies:
+            if workload_profile is not None or retire_configuration or add_container_policies or increase_publication_budgets:
                 from .workload_upgrades import bind_intent
                 intent = bind_intent(intent, plan, directory)
             if runtime_release is not None:
@@ -1393,10 +1414,10 @@ def _upgrade(
             atomic(path, intent)
             prepared_plan = plan
         intent = read(path)
-        if intent.get("kind") not in {"runtime-upgrade", "workload-upgrade", "runtime-upgrade-publication", "workload-upgrade-publication", "configuration-retirement", "configuration-retirement-publication", "container-policy-addition", "container-policy-addition-publication"}:
+        if intent.get("kind") not in {"runtime-upgrade", "workload-upgrade", "runtime-upgrade-publication", "workload-upgrade-publication", "configuration-retirement", "configuration-retirement-publication", "container-policy-addition", "container-policy-addition-publication", "publication-budget-increase", "publication-budget-increase-publication"}:
             raise QueueConflictError("operation belongs to another kind")
         observation.kind = intent["kind"].removesuffix("-publication")
-        if runtime_release is not None and Path(runtime_release).resolve() != Path(
+        if action not in {"repair-runtime-candidate", "repair-runtime"} and runtime_release is not None and Path(runtime_release).resolve() != Path(
             intent["target_path"]
         ):
             raise QueueConflictError("upgrade target intent changed")
@@ -1407,6 +1428,10 @@ def _upgrade(
         ):
             raise QueueConflictError("workload inventory intent changed")
         if apply:
+            if bool(intent.get("increase_publication_budgets")) != increase_publication_budgets:
+                raise QueueConflictError("publication budget increase intent changed")
+            if increase_publication_budgets and (workload_inventory is None or intent["workload_inventory"] != str(Path(workload_inventory).resolve())):
+                raise QueueConflictError("publication budget increase candidate inventory changed")
             if bool(intent.get("add_container_policies")) != add_container_policies:
                 raise QueueConflictError("container policy addition intent changed")
             if add_container_policies and (workload_inventory is None or intent["workload_inventory"] != str(Path(workload_inventory).resolve())):
@@ -1429,7 +1454,7 @@ def _upgrade(
         if intent.get("runtime_retirement"):
             from .runtime_retirement import RuntimeRetirementUpgrade
             operation = RuntimeRetirementUpgrade(inventory, directory, intent, observation)
-        elif intent["kind"] in {"workload-upgrade", "workload-upgrade-publication", "configuration-retirement", "configuration-retirement-publication", "container-policy-addition", "container-policy-addition-publication"}:
+        elif intent["kind"] in {"workload-upgrade", "workload-upgrade-publication", "configuration-retirement", "configuration-retirement-publication", "container-policy-addition", "container-policy-addition-publication", "publication-budget-increase", "publication-budget-increase-publication"}:
             from .workload_upgrades import WorkloadUpgrade
             operation = WorkloadUpgrade(inventory, directory, intent, observation)
             operation._preview_qualification = prepared_plan
@@ -1443,6 +1468,17 @@ def _upgrade(
                 _bind_deferred_checks(operation, defer_agents, defer_reason)
             if (directory / "aborted.json").exists():
                 result = {"state": "aborted"}
+            elif action == "repair-runtime-candidate":
+                from .runtime_candidate_repair import repair_candidate
+                result = repair_candidate(operation, runtime_release=runtime_release)
+            elif (directory / "runtime-candidate-repair" / "intent.json").exists():
+                from .runtime_candidate_repair import continue_repair
+                result = continue_repair(operation, action=action, runtime_release=runtime_release, failed_check=failed_check,
+                                         new_check=new_check, failed_control=failed_control,
+                                         new_control=new_control)
+            elif action == "repair-runtime":
+                from .runtime_candidate_repair import repair_candidate
+                result = repair_candidate(operation, runtime_release=runtime_release, activated=True)
             elif action == "abort":
                 operation.recheck()
                 if (directory / "complete.json").exists():
@@ -1481,7 +1517,7 @@ def _upgrade(
             observation.reason = _reason_code(exc)
             result = {"state": "waiting", "reason": str(exc)}
             if getattr(exc, "code", None) == "publication_pending":
-                result.update(publication_ready=True, checks=_attempts(operation))
+                result.update(publication_ready=True, checks=getattr(operation, "continuation_checks", _attempts(operation)))
                 if "image_sha256" in intent:
                     result["image_sha256"] = intent["image_sha256"]
         except CoordinatorClientError as exc:

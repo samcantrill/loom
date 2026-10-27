@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from ._phase_timing import phase
+
 from collections.abc import Mapping
+from dataclasses import dataclass
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, cast
 
 from loom.artifacts import ArtifactRef
@@ -18,6 +21,8 @@ from loom.pipeline.stores.shared_artifacts import (
     RECEIPT,
     binding,
     budgets,
+    admits_budgets,
+    check_budget,
     contained,
     encoded,
     file_identity,
@@ -91,7 +96,7 @@ def staging_tree(
         raise QueueServiceError("assignment has no shared publication policy")
     alias, facts = selection
     root = cast(Mapping[str, PlainData], roots[alias])
-    if root.get("publication") != facts["publication"] or root["access"] != "rw":
+    if not admits_budgets(root.get("publication"), facts["publication"]) or root["access"] != "rw":
         raise QueueConflictError("shared publication policy conflicts")
     base = Path(str(root["host_path"]))
     tree = contained(base, staging_relative(request, agent_id), exists=False)
@@ -199,7 +204,8 @@ def retain(
         # Still verify the final primary bytes and complete receipt below.
         available = final if final.exists() else tree
         logs = _retain_execution_logs(workspace, result, available, sealed=available == final)
-        members = inventory(available, limits)
+        with phase("publication_inventory_hash", operation_id=request.assignment_id):
+            members = inventory(available, limits)
         indexed = {str(member["path"]): member for member in members}
         outputs = {}
         for name, ref in result.outputs.items():
@@ -221,7 +227,8 @@ def retain(
             from ._preparation_report_transfer import native_role
             if native_role(request.fingerprint):
                 from loom.preparation import load_preparation_report
-                load_preparation_report(ref, available / relative)
+                with phase("preparation_semantic_decode", operation_id=request.assignment_id):
+                    load_preparation_report(ref, available / relative)
             outputs[name] = relative
         receipt = {
             "schema_version": 1,
@@ -231,8 +238,7 @@ def retain(
             "outputs": outputs,
         }
         data = encoded(receipt)
-        if len(data) > limits["max_manifest_bytes"]:
-            raise QueueServiceError("shared publication exceeds manifest budget")
+        check_budget("max_manifest_bytes", limits["max_manifest_bytes"], len(data))
         receipt_path = available / RECEIPT
         if receipt_path.exists():
             prior = receipt_bytes(receipt_path, limits["max_manifest_bytes"])
@@ -285,14 +291,15 @@ def retain(
         raise QueueConflictError(str(exc)) from exc
 
 
-def publish(
+def prepare_publication(
     request: _ResidentAssignmentBundle,
     report: _RemoteExecutionReport,
     roots: Mapping[str, PlainData],
     *,
     agent_id: str,
     fence: str,
-) -> dict[str, ArtifactRef]:
+) -> PreparedPublication:
+    """Verify and sync quiescent worker bytes without coordinator locks."""
     try:
         selection = selected(request)
         if selection is None:
@@ -300,7 +307,7 @@ def publish(
         alias, facts = selection
         root = cast(Mapping[str, PlainData], roots[alias])
         limits = budgets(facts["publication"])
-        if root.get("publication") != facts["publication"]:
+        if not admits_budgets(root.get("publication"), facts["publication"]):
             raise QueueConflictError("coordinator publication policy conflicts")
         owner = identity(request, agent_id=agent_id, fence=fence)
         pub_id = publication_id(owner)
@@ -322,7 +329,8 @@ def publish(
             ):
                 raise QueueConflictError("shared output publication identity conflicts")
             if receipt is None:
-                receipt = read_receipt(available, reference, limits=limits)
+                with phase("publication_inventory_hash", operation_id=request.assignment_id):
+                    receipt = read_receipt(available, reference, limits=limits)
                 receipt_digest = reference["receipt_digest"]
             elif reference["receipt_digest"] != receipt_digest:
                 raise QueueConflictError("shared outputs select different closures")
@@ -350,7 +358,8 @@ def publish(
             if native_role(request.fingerprint):
                 from loom.preparation import load_preparation_report
                 path = available / str(reference["primary"])
-                load_preparation_report(item.local_ref(path), path)
+                with phase("preparation_semantic_decode", operation_id=request.assignment_id):
+                    load_preparation_report(item.local_ref(path), path)
             outputs[item.logical_name] = item.local_ref(
                 final / str(reference["primary"])
             )
@@ -359,30 +368,85 @@ def publish(
                 request.declared_outputs
             ):
                 raise QueueConflictError("shared output declaration is incomplete")
-            if not final.exists():
-                final.parent.mkdir(parents=True, exist_ok=True)
+            if available == staging:
                 from ._remote_stage_execution import _fsync_directory
 
-                for directory, _, files in os.walk(staging, topdown=False):
-                    for name in files:
-                        descriptor = os.open(
-                            Path(directory) / name, os.O_RDONLY | os.O_NOFOLLOW
-                        )
-                        try:
-                            os.fsync(descriptor)
-                        finally:
-                            os.close(descriptor)
-                    _fsync_directory(Path(directory))
-                # The complete nonempty directory makes an existing winner nonreplaceable.
-                os.rename(staging, final)
-                from ._remote_stage_execution import _fsync_directory
-
-                _fsync_directory(final.parent)
-                _fsync_directory(final.parent.parent)
-                _fsync_directory(staging.parent)
-        return outputs
+                with phase("publication_sync", operation_id=request.assignment_id):
+                    for directory, _, files in os.walk(staging, topdown=False):
+                        for name in files:
+                            descriptor = os.open(
+                                Path(directory) / name, os.O_RDONLY | os.O_NOFOLLOW
+                            )
+                            try:
+                                os.fsync(descriptor)
+                            finally:
+                                os.close(descriptor)
+                        _fsync_directory(Path(directory))
+        return PreparedPublication(
+            outputs, Path(str(root["host_path"])), staging, final, available,
+            None if receipt is None else _publication_binding(available),
+        )
     except (ArtifactStoreError, OSError, ValueError) as exc:
         raise QueueConflictError(str(exc)) from exc
+
+
+@dataclass(frozen=True)
+class PreparedPublication:
+    """One operation's verified tree, awaiting a fresh authority check."""
+
+    outputs: dict[str, ArtifactRef]
+    root: Path
+    staging: Path
+    final: Path
+    available: Path
+    binding: tuple[tuple[int, int, int, int], ...] | None
+
+
+def _publication_binding(tree: Path) -> tuple[tuple[int, int, int, int], ...]:
+    # The worker is quiescent. Detect replacement of the tree or its retained
+    # inventory across the verification/acceptance boundary without rehashing.
+    result = []
+    for path in (tree, contained(tree, RECEIPT)):
+        value = path.lstat()
+        result.append((value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns))
+    return tuple(result)
+
+
+def accept_publication(prepared: PreparedPublication) -> dict[str, ArtifactRef]:
+    """Publish after reauthorization; hashing and file fsync already finished."""
+    try:
+        if prepared.binding is not None:
+            contained(prepared.root, prepared.available.relative_to(prepared.root).as_posix())
+            contained(prepared.root, prepared.final.relative_to(prepared.root).as_posix(), exists=False)
+            if _publication_binding(prepared.available) != prepared.binding:
+                raise QueueConflictError("shared publication binding changed during verification")
+            if prepared.available == prepared.staging:
+                from ._remote_stage_execution import _fsync_directory
+
+                prepared.final.parent.mkdir(parents=True, exist_ok=True)
+                # The complete nonempty tree makes an existing winner
+                # nonreplaceable. Assignment serialization excludes local races.
+                os.rename(prepared.staging, prepared.final)
+                _fsync_directory(prepared.final.parent)
+                _fsync_directory(prepared.final.parent.parent)
+                _fsync_directory(prepared.staging.parent)
+        return prepared.outputs
+    except (ArtifactStoreError, OSError, ValueError) as exc:
+        raise QueueConflictError(str(exc)) from exc
+
+
+def publish(
+    request: _ResidentAssignmentBundle,
+    report: _RemoteExecutionReport,
+    roots: Mapping[str, PlainData],
+    *,
+    agent_id: str,
+    fence: str,
+) -> dict[str, ArtifactRef]:
+    """Verify and publish for callers that already own exclusive authority."""
+    return accept_publication(prepare_publication(
+        request, report, roots, agent_id=agent_id, fence=fence,
+    ))
 
 
 def resolve_input(item: _RemoteArtifact, roots: Mapping[str, PlainData]) -> Path:
@@ -396,3 +460,35 @@ def resolve_input(item: _RemoteArtifact, roots: Mapping[str, PlainData]) -> Path
         return primary
     except (ArtifactStoreError, OSError, ValueError) as exc:
         raise QueueConflictError(str(exc)) from exc
+
+
+def verify_outputs(outputs: Mapping[str, ArtifactRef]) -> None:
+    """Check each output association and hash each exact closure once per call.
+
+    No verified state survives this operation. First commit and later consumers
+    independently verify the filesystem at their respective trust boundaries.
+    """
+    verified = {}
+    for name, ref in outputs.items():
+        reference = binding(ref.metadata)
+        if reference is None:
+            continue
+        primary = uri_to_path(ref.uri)
+        tree = primary
+        for _ in PurePosixPath(str(reference["primary"])).parts:
+            tree = tree.parent
+        if contained(tree, str(reference["primary"])) != primary:
+            raise ArtifactStoreError("shared artifact primary binding conflicts")
+        key = (str(tree), encoded({k: v for k, v in reference.items() if k != "primary"}))
+        if key not in verified:
+            with phase("publication_inventory_hash"):
+                receipt = read_receipt(tree, reference)
+            verified[key] = (
+                cast(Mapping[str, PlainData], receipt["outputs"]),
+                {str(item["path"]): item for item in cast(list[Mapping[str, PlainData]], receipt["members"])},
+            )
+        associations, members = verified[key]
+        member = members.get(str(reference["primary"]))
+        if (associations.get(name) != reference["primary"] or member is None
+            or ref.checksum != "sha256:" + str(member["digest"])):
+            raise ArtifactStoreError("shared output ownership or association conflicts")

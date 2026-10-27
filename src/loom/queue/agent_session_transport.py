@@ -38,6 +38,8 @@ from ._agent_session_journal import (
 )
 
 from .gpu.occupancy import GpuOccupancyPolicy, GpuOccupancyMonitor
+from ._phase_timing import log_phases, observe_phases, phase
+from contextlib import nullcontext
 from ._managed_local import ResourceAvailabilityStatus
 
 from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
@@ -156,7 +158,7 @@ _FAILURE_REPORT_OPERATIONS = frozenset(
 )
 _HTTP_TIMEOUT_SECONDS = 10
 _ASSIGNMENT_RECONCILIATION_SECONDS = 60
-_MAX_TRANSFER_AUTHORIZATION_RENEWALS = 64
+_MAX_TRANSFER_AUTHORIZATION_RENEWALS = 1_000_000
 
 
 def _supervisor_containment_evidence(
@@ -3244,6 +3246,7 @@ class _Handler(BaseHTTPRequestHandler):
         return dict(_decode(raw))
 
     def do_POST(self) -> None:  # noqa: N802
+        self._reply_context = {}
         query_path = self.path.startswith("/v1/query/")
         query_credential = False
         payload: dict[str, object] = {}
@@ -3341,11 +3344,19 @@ class _Handler(BaseHTTPRequestHandler):
                     "retire",
                 }:
                     raise QueueServiceError("agent protocol operation is unsupported")
-                result = _dispatch(
-                    self._daemon_server.daemon_owner.agent_view(principal),
-                    operation,
-                    payload,
-                )
+                # Handler threads do not inherit the service's ContextVars.
+                # Keep diagnostic context bounded and free of request contents.
+                self._reply_context = {"operation": operation, **{
+                    key: value for key in ("assignment_id", "session_id")
+                    if isinstance(value := payload.get(key), str) and len(value) <= 256
+                }}
+                diagnostics = observe_phases(log_phases) if operation in {"output_manifest", "result"} else nullcontext()
+                with diagnostics, phase(operation, operation_id=self._reply_context.get("assignment_id")):
+                    result = _dispatch(
+                        self._daemon_server.daemon_owner.agent_view(principal),
+                        operation,
+                        payload,
+                    )
             else:
                 dispatched = True
                 result = _dispatch_application(
@@ -3463,14 +3474,26 @@ class _Handler(BaseHTTPRequestHandler):
             separators=(",", ":"),
             allow_nan=False,
         ).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        if status != 200:
-            self.send_header("Connection", "close")
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            if status != 200:
+                self.send_header("Connection", "close")
+                self.close_connection = True
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, ssl.SSLEOFError):
+            # The operation already finished. A disconnected reply cannot undo
+            # retention and must not trigger a second reply or a certificate diagnosis.
             self.close_connection = True
-        self.end_headers()
-        self.wfile.write(body)
+            result = payload.get("result")
+            log_phases({
+                "action": "http_reply_disconnected", "http_status": status,
+                "reply_delivery": "unknown",
+                "result_state": result.get("state") if isinstance(result, Mapping) else None,
+                **getattr(self, "_reply_context", {}),
+            })
 
 
 def _dispatch(

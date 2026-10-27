@@ -359,7 +359,7 @@ def test_stale_local_predecessor_and_retained_work_have_no_binding_effect(
 
 
 @pytest.mark.parametrize("owner", [("maintenance", "drain")], indirect=True)
-@pytest.mark.parametrize("mode", [None, "retire_configuration", "add_container_policies"])
+@pytest.mark.parametrize("mode", [None, "retire_configuration", "add_container_policies", "increase_publication_budgets"])
 def test_native_operator_authorization_gate_guards_and_wire_replay(owner, tmp_path, mode):  # noqa: F811
     from loom.coordinator import CoordinatorOperatorClient, CoordinatorClientError
     from loom.queue import LocalDaemonSocketServer

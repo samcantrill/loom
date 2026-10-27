@@ -16,6 +16,7 @@ from typing import cast
 from loom.fingerprints import hash_mapping
 from loom.serialization import PlainData, thaw_plain_data
 from .errors import QueueServiceError
+from ._phase_timing import phase
 
 SHARED_EXECUTION_CAPABILITY = "shared-execution-v1"
 INPUT_DIRECTORY_CAPABILITY = "input-directory-v1"
@@ -229,6 +230,7 @@ def stage_scope(config: object, factory_init: object, permitted: Mapping[str, Pl
     return {"capability": SHARED_EXECUTION_CAPABILITY, "roots": {alias: roots[alias] for alias in sorted(aliases)}, "locations": cast(PlainData, locations)}
 
 
+@phase("input_root_validation")
 def require_bindings(required: Mapping[str, PlainData], roots: Mapping[str, PlainData]) -> None:
     selected = cast(Mapping[str, PlainData], required["roots"])
     if not set(selected).issubset(roots):
@@ -236,14 +238,27 @@ def require_bindings(required: Mapping[str, PlainData], roots: Mapping[str, Plai
     observed = qualifications({alias: roots[alias] for alias in selected})
     if observed != selected:
         raise QueueServiceError("shared execution qualification conflicts")
-    for item in cast(list[Mapping[str, PlainData]], required["locations"]):
-        selected_path = resolve(cast(Mapping[str, PlainData], roots[str(item["root_id"])]), str(item["path"]))
+    # Resolve every declared location, including descendants, before pruning
+    # overlapping traversals. Reuse never survives this mutable IO boundary.
+    paths = {
+        resolve(cast(Mapping[str, PlainData], roots[str(item["root_id"])]), str(item["path"]))
+        for item in cast(list[Mapping[str, PlainData]], required["locations"])
+    }
+    covered: list[Path] = []
+
+    def unreadable(error: OSError) -> None:
+        raise QueueServiceError("shared input tree cannot be inspected") from error
+
+    for selected_path in sorted(paths, key=lambda path: (len(path.parts), str(path))):
+        if any(selected_path.is_relative_to(parent) for parent in covered):
+            continue
         if selected_path.is_dir():
-            for directory, names, files in os.walk(selected_path):
+            for directory, names, files in os.walk(selected_path, onerror=unreadable):
                 for name in names + files:
                     mode = (Path(directory) / name).lstat().st_mode
                     if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
                         raise QueueServiceError("shared input trees require regular files and directories")
+            covered.append(selected_path)
         elif not selected_path.is_file():
             raise QueueServiceError("shared input requires a regular file or directory")
 
