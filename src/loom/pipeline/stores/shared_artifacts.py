@@ -36,6 +36,29 @@ def budgets(value: object) -> dict[str, int]:
     return {key: value[key] for key in sorted(keys)}
 
 
+def admits_budgets(current: object, recorded: object) -> bool:
+    """Whether current ceilings admit a publication's unchanged recorded limits.
+
+    This checks policy admission, not artifact or request identity. Verification
+    must still use the recorded limits and exact receipt/request association.
+    """
+    if current is None:
+        return False
+    admitted, required = budgets(current), budgets(recorded)
+    return all(required[key] <= admitted[key] for key in required)
+
+
+def check_budget(name: str, limit: int, observed: int) -> None:
+    """Refuse an exceeded ceiling with its name, bound and measured lower bound."""
+    if observed > limit:
+        label = {"max_members": "member", "max_payload_bytes": "payload",
+                 "max_manifest_bytes": "manifest"}[name]
+        raise ArtifactStoreError(
+            f"shared publication exceeds {label} budget: budget={name} "
+            f"limit={limit} observed_at_least={observed}"
+        )
+
+
 def relative(value: object) -> str:
     if (
         not isinstance(value, str)
@@ -68,7 +91,9 @@ def contained(base: Path, value: str, *, exists: bool = True) -> Path:
     return current
 
 
-def file_identity(path: Path, *, max_bytes: int | None = None) -> tuple[int, str]:
+def file_identity(
+    path: Path, *, max_bytes: int | None = None, preceding_bytes: int = 0
+) -> tuple[int, str]:
     if not stat.S_ISREG(path.lstat().st_mode):
         raise ArtifactStoreError("shared publication requires regular files")
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -76,15 +101,15 @@ def file_identity(path: Path, *, max_bytes: int | None = None) -> tuple[int, str
         details = os.fstat(descriptor)
         if not stat.S_ISREG(details.st_mode):
             raise ArtifactStoreError("shared publication requires regular files")
-        if max_bytes is not None and details.st_size > max_bytes:
-            raise ArtifactStoreError("shared publication exceeds member or payload budget")
+        if max_bytes is not None:
+            check_budget("max_payload_bytes", max_bytes, preceding_bytes + details.st_size)
         digest = hashlib.sha256()
         read_bytes = 0
         with os.fdopen(descriptor, "rb", closefd=False) as stream:
             while data := stream.read(1024 * 1024):
                 read_bytes += len(data)
-                if max_bytes is not None and read_bytes > max_bytes:
-                    raise ArtifactStoreError("shared publication exceeds member or payload budget")
+                if max_bytes is not None:
+                    check_budget("max_payload_bytes", max_bytes, preceding_bytes + read_bytes)
                 digest.update(data)
         after = os.fstat(descriptor)
         if (details.st_size, details.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
@@ -102,12 +127,10 @@ def receipt_bytes(path: Path, limit: int) -> bytes:
             raise ArtifactStoreError(
                 "shared publication receipt must be a regular file"
             )
-        if details.st_size > limit:
-            raise ArtifactStoreError("shared publication exceeds manifest budget")
+        check_budget("max_manifest_bytes", limit, details.st_size)
         with os.fdopen(descriptor, "rb", closefd=False) as stream:
             data = stream.read(limit + 1)
-        if len(data) > limit:
-            raise ArtifactStoreError("shared publication exceeds manifest budget")
+        check_budget("max_manifest_bytes", limit, len(data))
         return data
     finally:
         os.close(descriptor)
@@ -168,9 +191,8 @@ def inventory(tree: Path, limits: Mapping[str, int]) -> list[dict[str, PlainData
             path = Path(directory) / name
             if path == tree / RECEIPT:
                 continue
-            if len(members) >= limits["max_members"]:
-                raise ArtifactStoreError("shared publication exceeds member or payload budget")
-            size, digest = file_identity(path, max_bytes=limits["max_payload_bytes"] - total)
+            check_budget("max_members", limits["max_members"], len(members) + 1)
+            size, digest = file_identity(path, max_bytes=limits["max_payload_bytes"], preceding_bytes=total)
             total += size
             members.append(
                 {
@@ -211,8 +233,9 @@ def inspect_receipt(
     ):
         raise ArtifactStoreError("shared publication receipt identity conflicts")
     members = receipt["members"]
-    if not isinstance(members, list) or len(members) > selected["max_members"]:
-        raise ArtifactStoreError("shared publication exceeds member budget")
+    if not isinstance(members, list):
+        raise ArtifactStoreError("shared publication member inventory is invalid")
+    check_budget("max_members", selected["max_members"], len(members))
     paths: set[str] = set()
     total = 0
     for member in members:
@@ -229,8 +252,7 @@ def inspect_receipt(
             raise ArtifactStoreError("shared publication member declaration is invalid")
         paths.add(name)
         total += size
-    if total > selected["max_payload_bytes"]:
-        raise ArtifactStoreError("shared publication exceeds payload budget")
+    check_budget("max_payload_bytes", selected["max_payload_bytes"], total)
     if any(primary not in paths for primary in receipt["outputs"].values()):
         raise ArtifactStoreError("shared publication primary member is missing")
     return receipt
@@ -255,7 +277,7 @@ def reference_path(
 ) -> Path:
     """Resolve a native reference through its protected consumer mapping."""
     root = roots.get(str(reference["root_id"]))
-    if not isinstance(root, Mapping) or root.get("publication") != reference["budgets"]:
+    if not isinstance(root, Mapping) or not admits_budgets(root.get("publication"), reference["budgets"]):
         raise ArtifactStoreError("shared consumer root or budget is not admitted")
     tree = contained(Path(str(root["host_path"])), str(reference["tree"]))
     return contained(tree, str(reference["primary"]))

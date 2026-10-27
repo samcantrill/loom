@@ -18,9 +18,9 @@ from tests.unit.loom.queue.test_remote_stage_execution import (
 )
 
 
-def _workspace(tmp_path, *, attempt=1, predecessors=(), container=False, prefix=False):
+def _workspace(tmp_path, *, attempt=1, predecessors=(), container=False, prefix=False, limits=None):
     base, profile, launch, _ = _shared_publication_workspace(
-        tmp_path, container=container, assignment_id=f"fixture-{attempt}"
+        tmp_path, container=container, assignment_id=f"fixture-{attempt}", limits=limits
     )
     if prefix:
         roots = {
@@ -197,8 +197,9 @@ def test_closed_recovery_rejects_missing_corrupt_or_changed_members(tmp_path, da
         )
 
 
+@pytest.mark.parametrize("increase_limits", [False, True])
 def test_retry_binding_resolves_other_prefix_and_mounts_only_exact_readonly_predecessor(
-    tmp_path,
+    tmp_path, increase_limits,
 ):
     workspace, profile, _ = _workspace(tmp_path)
     _write(workspace)
@@ -207,7 +208,9 @@ def test_retry_binding_resolves_other_prefix_and_mounts_only_exact_readonly_pred
     )
     assert ref is not None
     successor, alternate, _ = _workspace(
-        tmp_path, attempt=2, predecessors=[ref], prefix=True
+        tmp_path, attempt=2, predecessors=[ref], prefix=True,
+        limits={"max_members": 1_000_000, "max_payload_bytes": 274_877_906_944,
+                "max_manifest_bytes": 536_870_912} if increase_limits else None,
     )
     bound = cast(
         Any, successor.worker_request(resolve_shared=True).metadata[recovery.BINDING]

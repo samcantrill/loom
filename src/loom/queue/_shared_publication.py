@@ -18,6 +18,8 @@ from loom.pipeline.stores.shared_artifacts import (
     RECEIPT,
     binding,
     budgets,
+    admits_budgets,
+    check_budget,
     contained,
     encoded,
     file_identity,
@@ -91,7 +93,7 @@ def staging_tree(
         raise QueueServiceError("assignment has no shared publication policy")
     alias, facts = selection
     root = cast(Mapping[str, PlainData], roots[alias])
-    if root.get("publication") != facts["publication"] or root["access"] != "rw":
+    if not admits_budgets(root.get("publication"), facts["publication"]) or root["access"] != "rw":
         raise QueueConflictError("shared publication policy conflicts")
     base = Path(str(root["host_path"]))
     tree = contained(base, staging_relative(request, agent_id), exists=False)
@@ -231,8 +233,7 @@ def retain(
             "outputs": outputs,
         }
         data = encoded(receipt)
-        if len(data) > limits["max_manifest_bytes"]:
-            raise QueueServiceError("shared publication exceeds manifest budget")
+        check_budget("max_manifest_bytes", limits["max_manifest_bytes"], len(data))
         receipt_path = available / RECEIPT
         if receipt_path.exists():
             prior = receipt_bytes(receipt_path, limits["max_manifest_bytes"])
@@ -300,7 +301,7 @@ def publish(
         alias, facts = selection
         root = cast(Mapping[str, PlainData], roots[alias])
         limits = budgets(facts["publication"])
-        if root.get("publication") != facts["publication"]:
+        if not admits_budgets(root.get("publication"), facts["publication"]):
             raise QueueConflictError("coordinator publication policy conflicts")
         owner = identity(request, agent_id=agent_id, fence=fence)
         pub_id = publication_id(owner)

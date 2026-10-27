@@ -1763,9 +1763,9 @@ def test_shared_publication_replay_prefers_verified_final_over_old_empty_staging
 
 
 @pytest.mark.parametrize("limit,value,error", [
-    ("max_members", 2, "member or payload budget"),
-    ("max_payload_bytes", 1, "member or payload budget"),
-    ("max_manifest_bytes", 64, "manifest budget"),
+    ("max_members", 2, "budget=max_members limit=2 observed_at_least=3"),
+    ("max_payload_bytes", 1, "budget=max_payload_bytes limit=1 observed_at_least="),
+    ("max_manifest_bytes", 64, "budget=max_manifest_bytes limit=64 observed_at_least="),
 ])
 def test_shared_publication_budget_excess_never_publishes(tmp_path, limit, value, error):
     limits = {"max_members": 1024, "max_payload_bytes": 256 * 1024 * 1024, "max_manifest_bytes": 1024 * 1024}
@@ -1820,6 +1820,42 @@ def test_shared_input_descriptor_preserves_primary_checksum_contract(tmp_path):
     retained = ArtifactRef.from_dict({**ref.to_dict(), "checksum": "sha256:" + "0" * 64})
     with pytest.raises(QueueServiceError, match="integrity"):
         _RemoteArtifact.from_local_ref(transfer_id="candidate-input", logical_name="result", ref=retained)
+
+
+def test_remote_input_admits_historical_publication_under_increased_root_budget(tmp_path):
+    from loom.pipeline.planning.fingerprints import _artifact_identity
+    from loom.queue.shared_execution import SHARED_EXECUTION_SCOPE, qualifications, stage_scope
+    from loom.queue._shared_publication import publish, resolve_input
+
+    workspace, profile, _, _ = _shared_publication_workspace(tmp_path)
+    ref = publish(workspace.request(), workspace.retain_outputs(), profile.shared_roots,
+                  agent_id="agent-1", fence="fence-1")["result"]
+    descriptor, _ = _RemoteArtifact.from_local_ref(transfer_id="historical-input", logical_name="source", ref=ref)
+    roots = thaw_plain_data(profile.shared_roots)
+    roots["outputs"]["publication"] = {
+        "max_members": 1_000_000, "max_payload_bytes": 274_877_906_944,
+        "max_manifest_bytes": 536_870_912,
+    }
+    request = workspace.request()
+    original = StageFingerprintRecord.from_dict(request.fingerprint)
+
+    def consumer_request():
+        scope = stage_scope({}, {}, {"roots": qualifications(roots)})
+        fingerprint = StageFingerprintRecord.create(
+            algorithm=original.algorithm,
+            payload=replace(original.payload,
+                bound_inputs={"source": _artifact_identity(ref, source_stage="seed", source_output="data")},
+                fingerprint_fields={SHARED_EXECUTION_SCOPE: scope}),
+            inputs_summary=original.inputs_summary,
+        )
+        return replace(request, inputs=(descriptor,), fingerprint=fingerprint.to_dict())
+
+    received = _ResidentAssignmentBundle.from_remote_dict(consumer_request().to_dict())
+    assert received.inputs[0].metadata == ref.metadata
+    assert resolve_input(received.inputs[0], roots).read_bytes() == b'{"companion":"values.bin"}'
+    roots["outputs"]["publication"]["max_members"] = 1
+    with pytest.raises(QueueServiceError, match="input root or budget"):
+        _ResidentAssignmentBundle.from_remote_dict(consumer_request().to_dict())
 
 
 def test_execution_binding_preserves_original_identity_and_container_visibility(tmp_path):

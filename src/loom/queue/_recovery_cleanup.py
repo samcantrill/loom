@@ -256,7 +256,7 @@ def _release_response(record: Any) -> dict[str, Any]:
 def _delete_reserved_recovery(daemon: Any, record: Any) -> dict[str, Any]:
     import os
     from pathlib import Path
-    from loom.pipeline.stores.shared_artifacts import contained, RECEIPT
+    from loom.pipeline.stores.shared_artifacts import admits_budgets, contained, RECEIPT
     from loom.pipeline.cleanup.execution import execute_cleanup
     from loom.pipeline.cleanup.records import (
         CleanupTargetRef, CleanupTargetKind, CleanupManagedRoot, CleanupReport,
@@ -267,7 +267,7 @@ def _delete_reserved_recovery(daemon: Any, record: Any) -> dict[str, Any]:
     ref = recovery._reference(record["reference"])
     roots = daemon.config.coordinator_shared_roots
     root = roots[ref["root_id"]]
-    if root.get("publication") != ref["budgets"] or root.get("access") != "rw":
+    if not admits_budgets(root.get("publication"), ref["budgets"]) or root.get("access") != "rw":
         raise QueueConflictError("reserved recovery root qualification conflicts")
     tree = contained(Path(root["host_path"]), ref["tree"], exists=False)
     marker = tree / RECEIPT
