@@ -107,6 +107,7 @@ def _service(
     memory=0,
     container=None,
     publication_budgets=None,
+    clock=None,
 ):
     # Supervisor IPC has a platform path limit; all fixture-owned roots are short.
     with TemporaryDirectory(prefix="la-", dir="/tmp") as temporary:
@@ -207,7 +208,7 @@ def _service(
             assignment_payload_root_id="outputs" if shared else None,
         )
         LocalDaemon.initialize(daemon_config)
-        daemon = LocalDaemon(daemon_config)
+        daemon = LocalDaemon(daemon_config, **({} if clock is None else {"clock": clock}))
         daemon.start()
         server = LocalDaemonAgentHttpServer(
             daemon,

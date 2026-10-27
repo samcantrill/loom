@@ -109,7 +109,7 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
         "operation", help="inspect or continue retained setup"
     )
     operations = operation.add_subparsers(dest="operation_command", required=True)
-    for action in ("status", "resume", "abort", "retry-check", "retry-control", "repair-workload", "repair-check-selection", "repair-runtime-candidate", "defer-checks", "release-admission"):
+    for action in ("status", "resume", "abort", "retry-check", "retry-control", "repair-workload", "repair-check-selection", "repair-runtime-candidate", "repair-runtime", "defer-checks", "release-admission"):
         item = operations.add_parser(action)
         item.add_argument("operation_id")
         item.add_argument("--fleet", required=True)
@@ -126,7 +126,7 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
             item.add_argument("--operation-id", dest="new_control", required=True)
         if action == "repair-check-selection":
             item.add_argument("--deployment", type=Path, required=True)
-        if action == "repair-runtime-candidate":
+        if action in {"repair-runtime-candidate", "repair-runtime"}:
             item.add_argument("--runtime-release", type=Path, required=True)
         if action == "repair-workload":
             item.add_argument("--workload-profile", required=True)

@@ -80,7 +80,9 @@ _MAX_COLLECTION = 32
 _MAX_OFFER_TTL_SECONDS = 3600
 _MAX_RESOURCE_ATOM = 2**63 - 1
 _MAX_POLL_WAIT_MILLISECONDS = 5_000
-_MAX_TRANSFER_AUTHORIZATIONS = 64
+# This bounds retained history, not retries in one HTTP exchange. Long-lived
+# publications and recovery must not exhaust a one-hour lifetime allowance.
+_MAX_TRANSFER_AUTHORIZATIONS = 1_000_000
 _MAX_REMOTE_WIRE_VALUE_BYTES = 60 * 1024
 _MAX_REMOTE_EVENT_BYTES = 8 * 1024
 _SESSION_REFERENCE_KINDS = frozenset(
@@ -3465,7 +3467,7 @@ class AgentSessionService:
                 raise QueueConflictError("transfer authorization revision is stale")
             if current >= _MAX_TRANSFER_AUTHORIZATIONS:
                 raise QueueConflictError(
-                    "transfer authorization renewal exceeded its bound"
+                    f"transfer authorization history exceeded its bound: limit={_MAX_TRANSFER_AUTHORIZATIONS} observed={current + 1}"
                 )
             revision = current + 1
             authorization_id = f"authorization-{uuid4()}"

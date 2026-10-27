@@ -370,6 +370,7 @@ def _assignment_observation(
 ) -> OperatorObservation:
     """Join one coordinator assignment without exporting receipts or host paths."""
     from .errors import QueueServiceError
+    from .agent_sessions import _MAX_TRANSFER_AUTHORIZATIONS
 
     with sqlite3.connect(
         f"{daemon.config.execution_database.resolve().as_uri()}?mode=ro", uri=True
@@ -398,6 +399,10 @@ def _assignment_observation(
             "SELECT state, result_code, acknowledged FROM remote_assignment_controls WHERE assignment_id = ?",
             (assignment_id,),
         ).fetchone()
+        authorization = conn.execute(
+            "SELECT COUNT(*), MAX(revision), MAX(expires_at) FROM remote_transfer_authorizations WHERE assignment_id = ?",
+            (assignment_id,),
+        ).fetchone()
     proof = (
         None
         if remote is None or remote["provider_release_proof_json"] is None
@@ -420,6 +425,12 @@ def _assignment_observation(
             "claim_id": row["claim_id"],
             "coordinator_state": row["state"],
             "remote_state": None if remote is None else remote["state"],
+            "transfer_authorization": {
+                "retained_count": authorization[0],
+                "latest_revision": authorization[1],
+                "latest_expires_at": authorization[2],
+                "history_limit": _MAX_TRANSFER_AUTHORIZATIONS,
+            },
             "result_progress": {
                 "worker_execution": None if report is None else report["status"],
                 "result_retention": "retained" if report is not None else "pending",

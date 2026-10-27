@@ -831,7 +831,7 @@ def test_runtime_recovery_mode_preserves_empty_cohort_and_native_checks(
         assert not operator.observe_agent("worker").value["drained"]
 
 
-def broken_metadata_release(inventory, tmp_path, *, preparation_barrier=None):
+def broken_metadata_release(inventory, tmp_path, *, preparation_barrier=None, authorization_limit=None):
     """Build a disposable source runtime reproducing the pre-fix wire defect."""
     import base64
     import csv
@@ -847,7 +847,12 @@ def broken_metadata_release(inventory, tmp_path, *, preparation_barrier=None):
     before = sha(wheel)
     with zipfile.ZipFile(wheel) as archive:
         files = {name: archive.read(name) for name in archive.namelist()}
-    if preparation_barrier is None:
+    if authorization_limit is not None:
+        codec = "loom/queue/agent_sessions.py"
+        old = b'_MAX_TRANSFER_AUTHORIZATIONS = 1_000_000'
+        assert files[codec].count(old) == 1
+        files[codec] = files[codec].replace(old, f'_MAX_TRANSFER_AUTHORIZATIONS = {authorization_limit}'.encode())
+    elif preparation_barrier is None:
         codec = "loom/queue/_agent_session_codec.py"
         old = b'max_collection=_MAX_BODY_BYTES)'
         assert files[codec].count(old) == 1
@@ -865,6 +870,7 @@ def broken_metadata_release(inventory, tmp_path, *, preparation_barrier=None):
         old = b'preparations, children = _recoverable_preparations(conn, results)'
         assert files[recovery].count(old) == 1
         files[recovery] = files[recovery].replace(old, b'preparations, children = frozenset(), frozenset()')
+        files[codec] = files[codec].replace(b'_MAX_TRANSFER_AUTHORIZATIONS = 1_000_000', b'_MAX_TRANSFER_AUTHORIZATIONS = 1')
     record = next(name for name in files if name.endswith(".dist-info/RECORD"))
     stream = io.StringIO()
     writer = csv.writer(stream)
@@ -883,7 +889,7 @@ def broken_metadata_release(inventory, tmp_path, *, preparation_barrier=None):
         path = root / entry.get("manifest", entry["path"])
         path.write_text(path.read_text().replace(before, sha(wheel)))
         entry["sha256"] = sha(path)
-    value["release_id"] = "broken-output-metadata"
+    value["release_id"] = "limited-transfer-authorization" if authorization_limit is not None else "broken-output-metadata"
     write(descriptor, value)
     authored = read(inventory.path)
     authored["runtime_release"] = str(descriptor)
@@ -902,6 +908,7 @@ def test_runtime_candidate_repair_recovers_cancelled_preparation(
 
     inventory, base, selection = site
     target = target_bundle(inventory, tmp_path)
+    limited = broken_metadata_release(inventory, tmp_path / "authorization", authorization_limit=1).runtime_release
     barrier = tmp_path / "refuse-preparation-result"
     inventory = bind_environments(broken_metadata_release(inventory, tmp_path, preparation_barrier=barrier))
     authored = read(inventory.hosts[0].config)
@@ -984,10 +991,27 @@ def test_runtime_candidate_repair_recovers_cancelled_preparation(
         monkeypatch.setattr(upgrades.sshops, "ssh", lose_reply)
         code = main([
             "fleet", "operation", "repair-runtime-candidate", "recover-preparation",
-            "--fleet", str(inventory.path), "--runtime-release", str(target), "--format", "json",
+            "--fleet", str(inventory.path), "--runtime-release", str(limited), "--format", "json",
         ])
         repaired = json.loads(capsys.readouterr().out)
         assert code in (0, 2), repaired
+        recovered_runtime = upgrades.upgrade(inventory, operation_id="recover-preparation")
+        deadline = time.monotonic() + 120
+        while "retained result replay" not in recovered_runtime.get("reason", ""):
+            assert recovered_runtime["outcome"] == "waiting" and time.monotonic() < deadline, recovered_runtime
+            time.sleep(0.25)
+            recovered_runtime = upgrades.upgrade(inventory, operation_id="recover-preparation")
+        first = directory / "runtime-candidate-repair"
+        first_intent = (first / "intent.json").read_bytes()
+        assert (first / "irreversible.json").exists()
+        # A second communication defect may surface only after replacement.
+        # Keep the exact gate/cohort and perform an explicit forward repair.
+        code = main([
+            "fleet", "operation", "repair-runtime", "recover-preparation",
+            "--fleet", str(inventory.path), "--runtime-release", str(target), "--format", "json",
+        ])
+        advanced = json.loads(capsys.readouterr().out)
+        assert code in (0, 2), advanced
         held = upgrades.upgrade(inventory, operation_id="recover-preparation")
         deadline = time.monotonic() + 120
         while held.get("reason_code") != "publication_pending":
@@ -997,6 +1021,7 @@ def test_runtime_candidate_repair_recovers_cancelled_preparation(
         assert held["outcome"] == "waiting" and held["reason_code"] == "publication_pending", held
         assert len(dropped) == 1
         assert (directory / "intent.json").read_bytes() == original_intent
+        assert (first / "intent.json").read_bytes() == first_intent
         assert client.wait_operation(cancel.operation_id, timeout_seconds=25).operation.state == "applied"
         assert client.operation("retained-preparation").state == "cancelled"
         assert worker_result.read_bytes() == original_bytes

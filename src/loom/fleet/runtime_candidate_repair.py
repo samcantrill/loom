@@ -1,4 +1,4 @@
-"""Replace an unactivated recovery candidate while retaining its maintenance gate."""
+"""Repair a retained-result recovery runtime under its existing maintenance gate."""
 
 from __future__ import annotations
 
@@ -12,14 +12,14 @@ from loom.fleet.configuration import protected_directory
 from loom.queue.errors import QueueConfigError, QueueConflictError
 
 
-def repair_candidate(operation, *, runtime_release):
-    """Bind one explicit successor before any service stop or replacement.
+def repair_candidate(operation, *, runtime_release, activated=False):
+    """Bind an explicit successor before activation or after all replacements.
 
     The original intent and failed eligibility evidence remain immutable. The
     parent writer lock and native maintenance identity also own the successor.
     """
     if runtime_release is None:
-        raise QueueConfigError("repair-runtime-candidate requires --runtime-release")
+        raise QueueConfigError("runtime repair requires --runtime-release")
     target = Path(runtime_release).resolve()
     directory = operation.directory / "runtime-candidate-repair"
     path = directory / "intent.json"
@@ -31,8 +31,18 @@ def repair_candidate(operation, *, runtime_release):
             or not operation.intent.get("recover_retained_results")
             or operation.intent.get("runtime_retirement")
             or any((operation.directory / name).exists() for name in (
-                "irreversible.json", "complete.json", "aborted.json", "retained-results.json",
+                "complete.json", "aborted.json", "restoring.json",
             ))):
+        raise QueueConflictError("runtime repair requires incomplete retained-result recovery")
+    if activated:
+        if not (operation.directory / "retained-results.json").exists() or any(
+            not (operation.receipts / (name + "-upgrade-replace") / "receipt.json").exists()
+            for name in operation.intent["hosts"]
+        ):
+            raise QueueConflictError("forward runtime repair requires every prior replacement to be acknowledged")
+        if (operation.directory / "checks.json").exists():
+            raise QueueConflictError("forward runtime repair requires retained results to be the remaining blocker")
+    elif any((operation.directory / name).exists() for name in ("irreversible.json", "retained-results.json")):
         raise QueueConflictError("candidate repair requires an unactivated retained-result recovery")
     operation.recheck()
     operation.gate()
@@ -55,8 +65,17 @@ def repair_candidate(operation, *, runtime_release):
         raise QueueConflictError("candidate repair cannot change fleet declarations or hosts")
     for name, row in plan["hosts"].items():
         previous = operation.intent["hosts"][name]
-        if any(row[key] != previous[key] for key in ("expected_root_id", "source_release")):
+        source = operation.intent["release"] if activated else previous["source_release"]
+        if row["expected_root_id"] != previous["expected_root_id"] or row["source_release"] != source:
             raise QueueConflictError("candidate repair requires unchanged native roots and source runtimes")
+    if activated:
+        # The retained cohort still limits the explicit successor; this is a
+        # forward runtime repair, not admission of a new worker population.
+        expected = read(operation.directory / "retained-results.json")["results"]
+        for name in operation.intent["agents"]:
+            fact = operation.host_observe(name, "upgrade-result-recovery")
+            if fact["availability"] != "available" or any(item not in expected for item in fact["value"]["results"]):
+                raise QueueConflictError("forward runtime repair retained result cohort changed")
     operation.recheck()
     operation.gate()
     inputs = dict(operation.intent["inputs"])
@@ -68,7 +87,7 @@ def repair_candidate(operation, *, runtime_release):
         **operation.intent,
         "operation_id": identity, "target_path": str(target), "release": plan["release"],
         "hosts": plan["hosts"], "agents": plan["agents"],
-        "restore_agents": operation.intent["agents"], "inputs": inputs,
+        "restore_agents": operation.intent.get("restore_agents", operation.intent["agents"]), "inputs": inputs,
         "check_selection": plan["checks"],
         "inventory_publication": bind(operation.inventory, target, inputs[str(operation.inventory.path)]),
         "maintenance_binding": upgrades._maintenance_binding(operation.intent),
@@ -78,7 +97,7 @@ def repair_candidate(operation, *, runtime_release):
     return continue_repair(operation)
 
 
-def continue_repair(operation, *, action="resume", failed_check=None, new_check=None,
+def continue_repair(operation, *, action="resume", runtime_release=None, failed_check=None, new_check=None,
                     failed_control=None, new_control=None):
     """Resume the exact successor under its parent's existing writer lock."""
     directory = operation.directory / "runtime-candidate-repair"
@@ -87,15 +106,22 @@ def continue_repair(operation, *, action="resume", failed_check=None, new_check=
         raise QueueConflictError("runtime candidate repair parent intent conflicts")
     child = upgrades._Upgrade(operation.inventory, directory, intent, operation.observation)
     try:
-        if action == "release-admission":
-            upgrades._release_publication_hold(child)
-        elif action == "retry-check":
-            return upgrades._retry_check(child, failed_check, new_check)
-        elif action == "retry-control":
-            return upgrades._retry_control(child, failed_control, new_control)
-        elif action != "resume":
-            raise QueueConflictError("runtime candidate repair requires resume of its retained successor")
-        result = upgrades._continue(child)
+        if action == "repair-runtime":
+            result = repair_candidate(child, runtime_release=runtime_release, activated=True)
+        elif (directory / "runtime-candidate-repair" / "intent.json").exists():
+            result = continue_repair(child, action=action, failed_check=failed_check,
+                                     new_check=new_check, failed_control=failed_control,
+                                     new_control=new_control)
+        else:
+            if action == "release-admission":
+                upgrades._release_publication_hold(child)
+            elif action == "retry-check":
+                return upgrades._retry_check(child, failed_check, new_check)
+            elif action == "retry-control":
+                return upgrades._retry_control(child, failed_control, new_control)
+            elif action != "resume":
+                raise QueueConflictError("runtime candidate repair requires resume of its retained successor")
+            result = upgrades._continue(child)
     finally:
         operation.check_observations = getattr(child, "check_observations", {})
         operation.continuation_checks = upgrades._attempts(child)

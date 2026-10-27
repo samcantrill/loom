@@ -1417,7 +1417,7 @@ def _upgrade(
         if intent.get("kind") not in {"runtime-upgrade", "workload-upgrade", "runtime-upgrade-publication", "workload-upgrade-publication", "configuration-retirement", "configuration-retirement-publication", "container-policy-addition", "container-policy-addition-publication", "publication-budget-increase", "publication-budget-increase-publication"}:
             raise QueueConflictError("operation belongs to another kind")
         observation.kind = intent["kind"].removesuffix("-publication")
-        if action != "repair-runtime-candidate" and runtime_release is not None and Path(runtime_release).resolve() != Path(
+        if action not in {"repair-runtime-candidate", "repair-runtime"} and runtime_release is not None and Path(runtime_release).resolve() != Path(
             intent["target_path"]
         ):
             raise QueueConflictError("upgrade target intent changed")
@@ -1473,9 +1473,12 @@ def _upgrade(
                 result = repair_candidate(operation, runtime_release=runtime_release)
             elif (directory / "runtime-candidate-repair" / "intent.json").exists():
                 from .runtime_candidate_repair import continue_repair
-                result = continue_repair(operation, action=action, failed_check=failed_check,
+                result = continue_repair(operation, action=action, runtime_release=runtime_release, failed_check=failed_check,
                                          new_check=new_check, failed_control=failed_control,
                                          new_control=new_control)
+            elif action == "repair-runtime":
+                from .runtime_candidate_repair import repair_candidate
+                result = repair_candidate(operation, runtime_release=runtime_release, activated=True)
             elif action == "abort":
                 operation.recheck()
                 if (directory / "complete.json").exists():

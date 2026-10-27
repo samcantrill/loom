@@ -528,6 +528,16 @@ publication hold. Continue and release admission through the original operation
 ID. A different replay target, an already captured recovery cohort, or any
 service-stop/replacement intent refuses this repair. It is not a rollback.
 
+If all replacements have been acknowledged but retained-result replay exposes
+another communication defect, use `loom fleet operation repair-runtime OPERATION
+--fleet FLEET --runtime-release RELEASE`. This forward repair requires uniform
+installation of the previous target, an unchanged retained result cohort, and
+the original closed maintenance gate. It cannot change roles, roots, workload
+images or policy. Partial replacement, begun final checks/restoration, and a
+different replay target refuse. The explicit successor repeats the normal
+qualification/replacement/replay sequence and remains resumable through the
+original operation ID; prior intents and receipts remain intact.
+
 The operation retains that exact cohort before any stop. Native stop and locked
 replacement recheck it; a later new or changed result cannot join the operation.
 This is recovery eligibility, **not settlement**: claims and journals remain
@@ -547,6 +557,14 @@ transfer authorization for declarations, and assignment fences still apply;
 conflicting reports are rejected. First publication, first execution commit,
 and subsequent artifact consumption retain their integrity checks. Worker
 success, durable result retention, and execution commit are distinct facts.
+
+Transfer grants retain their one-minute lifetime and exact replay identity.
+Their per-assignment history ceiling is 1,000,000 revisions, replacing the old
+64-revision lifetime ceiling that could permanently strand a long-lived result.
+The agent can traverse expired retained grants to obtain a current grant;
+expiry, session, epoch and fence checks remain mandatory. Assignment observations
+expose `transfer_authorization` counts, latest revision/expiry and the history
+limit without exposing authorization tokens.
 
 Initial shared publication hashing, preparation decoding and recursive file
 synchronization run outside the coordinator cycle lock and write transaction.
