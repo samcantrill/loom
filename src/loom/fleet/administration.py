@@ -10,6 +10,8 @@ from collections.abc import Mapping, Sequence
 
 from loom.coordinator import CoordinatorClientError, CoordinatorOperatorClient
 from loom.queue.deployment import (
+    _mapping,
+    _string,
     _load_protected_config,
     _protected_input_path,
     inspect_role_declaration,
@@ -100,6 +102,7 @@ def observe(
     env_file: Path | None = None,
     previous_release: Path | None = None,
     profile: str | None = None,
+    preparation_profile: str | None = None,
 ) -> dict[str, Any]:
     """Return non-atomic native projections and explicitly unavailable host facts.
 
@@ -108,6 +111,23 @@ def observe(
     Status and plan do not hash release or workload images.
     """
     environments = _environment_files(inventory, env_file)
+    execution_kind = None
+    if preparation_profile is not None:
+        if profile is not None:
+            raise QueueConfigError("select a native identity or preparation alias, not both")
+        _, _, coordinator, _ = _load_protected_config(
+            inventory.select(["coordinator"])[0].config, env_file=environments["coordinator"]
+        )
+        preparation = coordinator.get("preparation")
+        if preparation is None:
+            # Legacy selections directly named an installed profile.
+            profile, execution_kind = preparation_profile, "installed"
+        else:
+            policy = _mapping(_mapping(_mapping(coordinator, "preparation"), "profiles"), preparation_profile)
+            if "container_policy_id" in policy:
+                profile, execution_kind = _string(policy, "container_policy_id"), "submitted_container"
+            else:
+                profile, execution_kind = _string(policy, "resident_profile_id"), "installed"
     selected = inventory.select(hosts)
     rows: dict[str, Any] = {}
     failed = False
@@ -127,16 +147,23 @@ def observe(
             )
             row["declaration"] = declaration.to_dict()
             if profile is not None:
-                identities = cast(
-                    Sequence[Mapping[str, Any]], declaration.value["profile_identities"]
-                )
-                matched = any(
-                    identity["profile_id"] == profile for identity in identities
-                )
+                matches = [
+                    kind
+                    for kind, collection, key in (
+                        ("installed", "profile_identities", "profile_id"),
+                        ("submitted_container", "container_execution_capabilities", "policy_id"),
+                    )
+                    if execution_kind is None or kind == execution_kind
+                    for identity in cast(Sequence[Mapping[str, Any]], declaration.value[collection])
+                    if identity[key] == profile
+                ]
+                matched = len(matches) == 1
                 row["profile"] = {
                     "profile_id": profile,
+                    "execution_kind": matches[0] if matched else execution_kind,
                     "supported_declaration": matched,
                     "qualified": False,
+                    "reason": None if matched else "unavailable_or_ambiguous_identity",
                 }
                 failed = failed or not matched
             if host.name != "coordinator":

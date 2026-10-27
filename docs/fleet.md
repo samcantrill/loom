@@ -176,6 +176,14 @@ selection. Old selections are never overwritten: choose a new versioned output
 for a new source/profile binding. Export is an explicit local write; it does not
 prove remote profile installation, qualification or authorization.
 
+Export resolves the preparation alias to its declared installed profile or
+submitted-container policy before checking the selected hosts. Declaration
+observations keep installed `profile_identities` separate from
+`container_execution_capabilities`. A bare `--profile` observation must match
+exactly one identity; an ID shared by both kinds is ambiguous. Matching a
+declaration always reports `qualified: false` until native qualification evidence
+is obtained separately.
+
 ## Deliberate infrastructure self-tests
 
 GPU qualification has two explicitly different scopes. Set the optional
@@ -513,6 +521,15 @@ admitted downstream stages. Global settlement and the usual native checks are
 still required before policy restoration and admission reopening. Resume the
 same operation after interruption. Ordinary upgrades retain their strict
 settled-work sequence.
+
+Result acknowledgements are replayable after a reply is lost or exceeds the
+client deadline. An exact retained output report is acknowledged without
+repeating publication validation, and an already terminal/released commit is
+acknowledged without re-reading its output files. Current session authority,
+transfer authorization for declarations, and assignment fences still apply;
+conflicting reports are rejected. First publication, first execution commit,
+and subsequent artifact consumption retain their integrity checks. Worker
+success, durable result retention, and execution commit are distinct facts.
 
 The stopped-role guard accepts only the current v6 supervisor journal. It
 verifies identity, host, containment and clean-shutdown evidence without

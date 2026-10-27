@@ -350,7 +350,7 @@ def handle(namespace: argparse.Namespace) -> int:
                 command="status",
                 hosts=hosts,
                 env_file=namespace.env_file,
-                profile=selection.preparation_profile,
+                preparation_profile=selection.preparation_profile,
             )
             if report["outcome"] == "failed":
                 raise QueueConfigError(

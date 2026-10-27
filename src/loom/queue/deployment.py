@@ -2606,7 +2606,7 @@ def inspect_role_declaration(
         fingerprint = spec.declaration_digest
         profiles = cast(Sequence[Mapping[str, object]], spec.declarations["resident_profiles"])
         identities = [cast(PlainData, profile["descriptor"]) for profile in profiles]
-        identities.extend(policy.capability.to_dict() for policy in _submitted_container_policies(spec.declarations))
+        container_identities = [cast(PlainData, policy.capability.to_dict()) for policy in _submitted_container_policies(spec.declarations)]
     else:
         source, _, payload, _ = _load_protected_config(path, env_file=env_file)
         _required_allowed(payload, {"schema_version", "kind", "deployment_root", "run_store_root", "machine_id", "poll_interval_seconds", "max_accepted_time_step_seconds", "local_agent", "remote_profiles", "agent_policy", "agent_server", "authority"}, {"scheduling", "slurm_profiles", "preparation", "event_sinks", "shared_roots", "assignment_payload_root_id", "container_capabilities"}, "coordinator service config")
@@ -2635,6 +2635,9 @@ def inspect_role_declaration(
             raise QueueConfigError("authority kind is unsupported")
         _slurm_profile_declarations(payload.get("slurm_profiles"))
         identities = [cast(PlainData, _profile_descriptor(_mapping_value(item, "remote profile")).to_dict()) for item in _sequence(payload, "remote_profiles")]
+        container_identities = [cast(PlainData, SubmittedContainerCapability.from_dict(item).to_dict())
+                                for item in (_sequence(payload, "container_capabilities")
+                                             if "container_capabilities" in payload else ())]
         if payload["local_agent"] is not None:
             reference = _mapping(payload, "local_agent")
             _exact(reference, {"config", "env_file"}, "local_agent")
@@ -2664,7 +2667,7 @@ def inspect_role_declaration(
                     targets(child)
         targets(normalized)
         fingerprint = _canonical_fingerprint(normalized)
-    return OperatorObservation("role-declaration", utc_timestamp(), fingerprint, "current", "available", {"role": role, "declaration_fingerprint": fingerprint, "protected_paths": "validated", "profile_identities": identities, "credentials": "redacted", "qualified": False})
+    return OperatorObservation("role-declaration", utc_timestamp(), fingerprint, "current", "available", {"role": role, "declaration_fingerprint": fingerprint, "protected_paths": "validated", "profile_identities": identities, "container_execution_capabilities": container_identities, "credentials": "redacted", "qualified": False})
 
 
 @contextmanager

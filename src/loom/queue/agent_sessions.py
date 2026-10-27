@@ -3863,6 +3863,7 @@ class AgentSessionService:
             if report.output_kind == "preparation_report" and not native_role(request.fingerprint):
                 raise QueueConflictError("preparation transfer targets another stage role")
             shared_outputs = None
+            roots = self._daemon.config.coordinator_shared_roots
             from ._shared_publication import selected, publish
             if (
                 report.status is StageStatus.SUCCEEDED
@@ -3874,13 +3875,9 @@ class AgentSessionService:
             if selected(request) is not None and report.status is StageStatus.SUCCEEDED:
                 if report.output_kind != "shared":
                     raise QueueConflictError("shared publication report capability is missing")
-                roots = self._daemon.config.coordinator_shared_roots
                 if not roots:
                     raise QueueConflictError("coordinator shared root mapping is unavailable")
                 self._remote_execution().remote_publication_fence(assignment_id, fence=fence)
-                session_row = conn.execute("SELECT agent_root_id FROM agent_sessions WHERE session_id = ?", (session_id,)).fetchone()
-                shared_outputs = publish(request, report, roots,
-                    agent_id=str(session_row["agent_root_id"]), fence=fence)
             elif any(shared_binding(item.metadata) is not None for item in report.outputs):
                 raise QueueConflictError("shared output was not admitted")
             if row["report_json"] is not None:
@@ -3891,6 +3888,12 @@ class AgentSessionService:
                     {"assignment_id": assignment_id, "state": str(row["state"])},
                     path="remote output manifest",
                 )
+            # Retention acknowledges this exact report, not a new publication.
+            # Keep current authority checks above even when the first reply was lost.
+            if selected(request) is not None and report.status is StageStatus.SUCCEEDED:
+                session_row = conn.execute("SELECT agent_root_id FROM agent_sessions WHERE session_id = ?", (session_id,)).fetchone()
+                shared_outputs = publish(request, report, roots,
+                    agent_id=str(session_row["agent_root_id"]), fence=fence)
             for item in report.outputs:
                 target = (
                     self._daemon.config.coordinator_root  # type: ignore[attr-defined]
@@ -4091,12 +4094,12 @@ class AgentSessionService:
             )
             if pending:
                 raise QueueConflictError("remote output manifest is incomplete")
-            outputs = self._coordinator_output_refs(conn, assignment_id)
             if str(row["state"]) in {"TERMINAL", "RELEASED"}:
                 return freeze_plain_data(
                     {"assignment_id": assignment_id, "state": str(row["state"])},
                     path="remote result commit",
                 )
+            outputs = self._coordinator_output_refs(conn, assignment_id)
         self._remote_execution().remote_commit(
             assignment_id, fence=fence, report=report, outputs=outputs
         )
