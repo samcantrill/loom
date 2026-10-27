@@ -729,7 +729,7 @@ def test_input_replay_and_event_sequence_are_durable_and_exact(tmp_path: Path) -
             ),
         )
         coordinator_refs = AgentSessionService._coordinator_output_refs(
-            conn, request.assignment_id
+            tuple(conn.execute("SELECT * FROM remote_transfers ORDER BY logical_name"))
         )
     assert coordinator_refs["result"].metadata == {"quality": "verified"}
     assert str(workspace.root) not in str(report.to_dict())
@@ -1600,7 +1600,7 @@ def test_owner_rejected_saved_launch_retains_identity_and_truthful_no_start_repo
     assert workspace.retain_outputs() == report
 
 
-def _shared_publication_workspace(tmp_path, *, limits=None, assignment_id="assignment-1", container=False, data=False):
+def _shared_publication_workspace(tmp_path, *, limits=None, assignment_id="assignment-1", container=False, data=False, second_output=False):
     from loom.queue.shared_execution import SHARED_EXECUTION_SCOPE, qualifications, stage_scope
     from loom.queue._shared_publication import worker_artifact_root
     root = tmp_path / "shared"
@@ -1633,6 +1633,14 @@ def _shared_publication_workspace(tmp_path, *, limits=None, assignment_id="assig
         inputs_summary=fingerprint.inputs_summary).to_dict())
     request = replace(request, resolved_runtime={**request.resolved_runtime,
         "resources": {"schema_version": 2, "entries": {}}})
+    if second_output:
+        fingerprint = StageFingerprintRecord.from_dict(request.fingerprint)
+        request = replace(request, declared_outputs=("result", "companion"),
+            fingerprint=StageFingerprintRecord.create(algorithm=fingerprint.algorithm,
+                payload=replace(fingerprint.payload, declared_outputs={
+                    **fingerprint.payload.declared_outputs,
+                    "companion": {"artifact_type": "bytes", "codec_key": None, "schema_version": 1, "metadata": {}}}),
+                inputs_summary=fingerprint.inputs_summary).to_dict())
     workspace = _ResidentAssignmentWorkspace(tmp_path / "agent", request.assignment_id)
     workspace.persist_request(request, profile)
     workspace.stage_input("input-1", b"input")
@@ -1662,8 +1670,57 @@ def _shared_publication_workspace(tmp_path, *, limits=None, assignment_id="assig
         finished_at="2020-01-01T00:00:01Z", executor_name="local",
         outputs={"result": ArtifactRef("build/result", output.as_uri(), "bytes", checksum="sha256:" + hashlib.sha256(output.read_bytes()).hexdigest())},
         executor_metadata={})
+    if second_output:
+        companion = output.parent / "values.bin"
+        result = replace(result, outputs={**result.outputs, "companion": ArtifactRef(
+            "build/companion", companion.as_uri(), "bytes",
+            checksum="sha256:" + hashlib.sha256(companion.read_bytes()).hexdigest())})
     workspace.persist_worker_result(result)
     return workspace, profile, launch, result
+
+
+def test_shared_commit_verifies_one_closure_and_every_output_association(tmp_path, monkeypatch):
+    from loom.queue import _shared_publication as publication
+    from loom.pipeline.stores.errors import ArtifactStoreError
+
+    workspace, profile, _, _ = _shared_publication_workspace(tmp_path, second_output=True)
+    report = workspace.retain_outputs()
+    outputs = publication.publish(workspace.request(), report, profile.shared_roots,
+                                  agent_id="agent-1", fence="fence-1")
+    original = publication.read_receipt
+    checked = []
+
+    def inspect(*args, **kwargs):
+        checked.append(args[0])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(publication, "read_receipt", inspect)
+    publication.verify_outputs(outputs)
+    assert len(checked) == 1
+    # Each logical association is still checked when another output already
+    # verified the same inventory. The closure itself remains byte-identical.
+    with pytest.raises(ArtifactStoreError, match="association"):
+        publication.verify_outputs({"result": outputs["result"], "companion": outputs["result"]})
+    publication.verify_outputs(outputs)
+    assert len(checked) == 3  # New operations never reuse prior filesystem proof.
+    Path(outputs["companion"].uri.removeprefix("file://")).write_bytes(b"corrupted")
+    with pytest.raises(ArtifactStoreError, match="closure integrity"):
+        publication.verify_outputs(outputs)
+
+
+def test_publication_rechecks_inventory_binding_before_acceptance(tmp_path):
+    from loom.queue import _shared_publication as publication
+    from loom.pipeline.stores.atomic import atomic_write_bytes
+    from loom.pipeline.stores.shared_artifacts import RECEIPT
+
+    workspace, profile, _, _ = _shared_publication_workspace(tmp_path)
+    prepared = publication.prepare_publication(workspace.request(), workspace.retain_outputs(),
+                                              profile.shared_roots, agent_id="agent-1", fence="fence-1")
+    receipt = prepared.available / RECEIPT
+    atomic_write_bytes(receipt, receipt.read_bytes())
+    with pytest.raises(QueueConflictError, match="binding changed"):
+        publication.accept_publication(prepared)
+    assert not prepared.final.exists()
 
 
 @pytest.mark.parametrize("member", ["/host/private", "../outside", "nested/../../outside", "file:private", "http:private", "nested\\outside"])

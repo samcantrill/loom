@@ -531,6 +531,38 @@ conflicting reports are rejected. First publication, first execution commit,
 and subsequent artifact consumption retain their integrity checks. Worker
 success, durable result retention, and execution commit are distinct facts.
 
+Initial shared publication hashing, preparation decoding and recursive file
+synchronization run outside the coordinator cycle lock and write transaction.
+One process-local guard serializes declaration and commit for each assignment.
+Acceptance rechecks current session/transfer/fence, coordinator and scheduling
+authority, the exact request, and tree/receipt binding before the bounded rename
+and journal update. Shutdown drains these operations before closing their owner.
+Each first commit verifies an exact publication closure once per operation and
+still checks every logical output's primary association and checksum. No verified
+filesystem cache persists between requests or consumers.
+
+Assignment observations include `result_progress`. Coordinator evidence separates
+reported worker status, retained report, and execution commit. It explicitly
+requires agent-local evidence for reply acknowledgement. Agent observations
+separate locally retained results from acknowledged terminal results; the state
+`result_durable` means acknowledgement is pending or retrying. The legacy
+coordinator `terminal_acknowledged` field denotes report retention, not proof that
+the agent received an HTTP response. A disconnected reply logs its operation,
+assignment/session IDs, HTTP status and result state with unknown delivery; it
+does not retry the reply or diagnose a certificate fault.
+
+Existing phase diagnostics measure input-root traversal, publication inventory
+hashing, preparation semantic decoding, synchronization and result commit.
+Publication/result HTTP handlers install the observer in their own thread.
+Input validation resolves every selected location and traverses overlapping
+directories once within that call; it checks them again at the next boundary and
+refuses unreadable trees, prohibited links and escaped or missing selections.
+Applications selecting a whole dataset still incur a whole-tree validation.
+Preparation evidence keeps its durable format and complete provenance. The loader
+uses its freshly decoded trees directly, hydrates shared evidence once, and gives
+separate returned compositions independent mutable objects. Equality retains JSON
+numeric/boolean distinctions, including `false` versus `0`.
+
 The stopped-role guard accepts only the current v6 supervisor journal. It
 verifies identity, host, containment and clean-shutdown evidence without
 rewriting the journal. Older journals are rejected before contacting their
@@ -1242,3 +1274,74 @@ Use the target preparation alias for the submitted checks, then publish the
 matching client at the held checkpoint and release admission normally. Interrupted
 publication replays the retained exact intent. Configuration retirement remains
 an explicit narrowing operation and cannot authorize additions.
+
+### Increase publication budgets
+
+Existing submitted-container fleets can increase publication ceilings separately
+from runtime upgrades, policy additions, retirement or image changes:
+
+```sh
+loom fleet upgrade --fleet /PROTECTED/fleet.yaml \
+  --increase-publication-budgets --workload-inventory /tmp/TASK/candidate-fleet.json \
+  --deployment /PROTECTED/check-client.json \
+  --connection /PROTECTED/operator.json --check-execution /PROTECTED/check-image.json \
+  --hold-admission --operation-id increase-publication-budgets --apply
+```
+
+The coordinator and every participating agent must first advertise
+`quiescent-publication-budget-increase-v1`. The candidate keeps every existing
+root, policy ID, preparation alias, source mapping, permission, challenge, path,
+runtime and resource setting unchanged. Only the three existing `publication`
+ceilings may increase; decreases and introducing new publication roots refuse.
+Update the coordinator root, each capability and each agent policy that declares
+it consistently. A mismatch refuses qualification.
+
+For example, an operator may select `max_members: 1000000`,
+`max_manifest_bytes: 536870912` and `max_payload_bytes: 274877906944` for a large
+publication. These are finite ceilings, not preallocations or a performance
+qualification. Inventory parsing still uses memory proportional to its size.
+
+The operation uses the existing closed, settled maintenance gate, drained agent
+promotion, coordinator scheduling reload, submitted qualification checks and
+client-publication hold. It retains the exact intent before activation and
+recovers through the same journals after interruption. Publish the matching
+client before releasing admission. Candidate files can be temporary: completion
+publishes into the existing protected role sources. Historical artifacts and
+recovery trees keep their recorded limits and receipt identities; larger current
+ceilings admit them without rewriting the original bounds or frozen requests.
+
+### Publication scale qualification
+
+The 2026-10-27 local qualification used the current external formatted-product
+writer with 9,062 synthetic windows, two 128-sample signals and explicit 30 Hz
+clocks. Native TLS agents published, acknowledged, committed and consumed the
+complete closure; both assignments reached `RELEASED`. The disposable shared
+root was host-local `/tmp`, so these measurements do not establish NAS latency
+or physical cross-host/container throughput.
+
+| Measurement | Observed |
+| --- | ---: |
+| Producer publication members | 90,622 |
+| Inventory bytes | 20,449,712 |
+| Payload bytes | 157,325,495 |
+| Writer elapsed / peak RSS | 495.7 s / 1,512,756 KiB |
+| First declaration inventory verification / sync | 25.6 s / 5.3 s |
+| First commit inventory verification | 21.4 s |
+| Product consumer elapsed / peak RSS | 96.7 s / 693,016 KiB |
+| Coordinator process peak RSS | 306,636 KiB |
+| Complete producer/consumer run | 787.4 s |
+
+Declaration and commit exceeded the ordinary HTTP deadline. Exact replay
+acknowledged the retained/terminal results without repeating their expensive
+verification. Disconnected replies retained assignment/session context. One
+transient work-poll conflict also recovered through the existing protocol.
+The publication includes one native wrapper; application reports/logs can add
+members. The one-million-member ceiling remains an admission limit, not a
+million-file performance qualification.
+
+A read-only comparison on the retained 69-node preparation report reduced native
+composition decoding from 19.0 s / 823,132 KiB peak RSS to 4.3 s / 493,560 KiB.
+The current five-node composition closure was 1,541,464 primary bytes plus
+14,654,153 companion bytes and loaded in 0.73 s; this excludes scientific
+preflight evidence. Complete authorship and independent hydrated views remain
+covered by serializer regression checks.

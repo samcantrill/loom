@@ -19,6 +19,7 @@ from loom.fleet import ssh_operations as sshops
 from loom.fleet import upgrades as maintenance
 from loom.queue._profile_promotion import CAPABILITY, RETIREMENT_CAPABILITY
 from loom.queue._container_policy_addition import CAPABILITY as ADDITION_CAPABILITY
+from loom.queue._publication_budget_increase import CAPABILITY as BUDGET_CAPABILITY
 from loom.queue.shared_execution import SOURCE_PROMOTION_CAPABILITY
 from loom.queue.agent_sessions import AgentControl, AgentControlKind
 from loom.queue.deployment import _load_protected_config
@@ -202,16 +203,16 @@ def preview(
     return plan
 
 
-def configuration_preview(inventory, *, workload_inventory, deployment, connection, config, check_execution, env_file, add_container_policies=False):
+def configuration_preview(inventory, *, workload_inventory, deployment, connection, config, check_execution, env_file, add_container_policies=False, increase_publication_budgets=False):
     """Qualify additive or narrowing declarations under existing maintenance."""
-    label = "container policy addition" if add_container_policies else "configuration retirement"
+    label = "publication budget increase" if increase_publication_budgets else "container policy addition" if add_container_policies else "configuration retirement"
     if workload_inventory is None or check_execution is None:
         raise QueueConfigError(label + " requires candidate inventory and submitted check execution")
     plan = maintenance.preview(inventory, runtime_release=inventory.runtime_release,
         deployment=deployment, connection=connection, config=config,
         check_execution=check_execution, env_file=env_file)
-    mode = "add_container_policies" if add_container_policies else "retire_configuration"
-    required = {ADDITION_CAPABILITY} if add_container_policies else {RETIREMENT_CAPABILITY, "quiescent-coordinator-retirement-v1"}
+    mode = "increase_publication_budgets" if increase_publication_budgets else "add_container_policies" if add_container_policies else "retire_configuration"
+    required = {BUDGET_CAPABILITY} if increase_publication_budgets else {ADDITION_CAPABILITY} if add_container_policies else {RETIREMENT_CAPABILITY, "quiescent-coordinator-retirement-v1"}
     if not required <= set(plan["source"]["value"].get("capabilities", ())):
         raise QueueConflictError("source runtime lacks " + label + " capability")
     consumers = {name: row for name, row in plan["hosts"].items() if name != "coordinator"}
@@ -219,7 +220,7 @@ def configuration_preview(inventory, *, workload_inventory, deployment, connecti
         if row["source_release"] != plan["release"]:
             raise QueueConflictError(label + " cannot change the service runtime")
     for name, row in consumers.items():
-        if (ADDITION_CAPABILITY if add_container_policies else RETIREMENT_CAPABILITY) not in row["native_owner"]["value"].get("capabilities", ()):
+        if (BUDGET_CAPABILITY if increase_publication_budgets else ADDITION_CAPABILITY if add_container_policies else RETIREMENT_CAPABILITY) not in row["native_owner"]["value"].get("capabilities", ()):
             raise QueueConflictError("agent runtime lacks " + label + " capability: " + name)
     from .workload_sources import candidates as source_candidates
 
@@ -244,7 +245,7 @@ def configuration_preview(inventory, *, workload_inventory, deployment, connecti
         "expected_declaration": digest(plan["declarations"]["coordinator"]),
         "declaration": declarations["coordinator"]})
     plan.update(**{mode: True}, workload_profile=None, image=None, image_sha256=None,
-        generation=("policy-addition-" if add_container_policies else "retirement-") + digest(declarations)[:16],
+        generation=("budget-increase-" if increase_publication_budgets else "policy-addition-" if add_container_policies else "retirement-") + digest(declarations)[:16],
         workload_inventory=str(Path(workload_inventory).resolve()), candidate_inputs=inputs,
         candidate_sources=sources, coordinator_target=target, candidates=candidates,
         target_declarations=declarations, preparation_profile=original.preparation_profile,
@@ -257,6 +258,11 @@ def configuration_preview(inventory, *, workload_inventory, deployment, connecti
                             "add agent policies", "add coordinator selections", "run submitted checks",
                             "publish clients at held checkpoint", "restore admission"]
         plan["irreversible"] = "first native policy addition intent"
+    if increase_publication_budgets:
+        plan["sequence"] = ["qualify increased publication budgets", "close and settle admission", "drain agents",
+                            "increase agent publication budgets", "increase coordinator publication budgets", "run submitted checks",
+                            "publish clients at held checkpoint", "restore admission"]
+        plan["irreversible"] = "first native publication budget increase intent"
     return plan
 
 
@@ -283,9 +289,11 @@ def bind_intent(intent, plan, directory):
         export_connection_deployment(selected, destination)
     return {
         **intent,
-        "kind": ("container-policy-addition" if plan.get("add_container_policies") else
+        "kind": ("publication-budget-increase" if plan.get("increase_publication_budgets") else
+                 "container-policy-addition" if plan.get("add_container_policies") else
                  "configuration-retirement" if plan.get("retire_configuration") else "workload-upgrade"),
         **({"add_container_policies": True} if plan.get("add_container_policies") else {}),
+        **({"increase_publication_budgets": True} if plan.get("increase_publication_budgets") else {}),
         **({"retire_configuration": True} if plan.get("retire_configuration") else {}),
         **({"runtime_retirement": True} if plan.get("runtime_retirement") else {}),
         **{
@@ -399,12 +407,12 @@ class WorkloadUpgrade(maintenance._Upgrade):
                 "release", "hosts", "declarations", "agents", "workload_profile",
                 "image", "image_sha256", "candidates", "target_declarations",
                 "workload_inventory", "candidate_sources", "coordinator_target",
-                "retire_configuration", "add_container_policies",
+                "retire_configuration", "add_container_policies", "increase_publication_budgets",
             )
         )
         if reuse_preview:
             self.recheck()
-            if not (self.intent.get("retire_configuration") or self.intent.get("add_container_policies")) and sshops._file_hash(Path(self.intent["image"])) != self.intent["image_sha256"]:
+            if not (self.intent.get("retire_configuration") or self.intent.get("add_container_policies") or self.intent.get("increase_publication_budgets")) and sshops._file_hash(Path(self.intent["image"])) != self.intent["image_sha256"]:
                 raise QueueConflictError("workload image changed after qualification")
         for name, row in self.intent["hosts"].items():
             observed = sshops.ssh(
@@ -420,6 +428,8 @@ class WorkloadUpgrade(maintenance._Upgrade):
                 raise QueueConflictError("workload native root identity changed")
             if self.intent.get("add_container_policies") and ADDITION_CAPABILITY not in native["value"].get("capabilities", ()):
                 raise QueueConflictError("running container policy addition capability unavailable: " + name)
+            if self.intent.get("increase_publication_budgets") and BUDGET_CAPABILITY not in native["value"].get("capabilities", ()):
+                raise QueueConflictError("running publication budget increase capability unavailable: " + name)
             if self.intent.get("retire_configuration"):
                 required = (
                     "quiescent-coordinator-retirement-v1"
@@ -461,7 +471,8 @@ class WorkloadUpgrade(maintenance._Upgrade):
                 target = self.host_observe(
                     name, "workload-coordinator-probe",
                     declaration=self.intent["target_declarations"][name],
-                    **({"add_container_policies": True} if self.intent.get("add_container_policies") else
+                    **({"increase_publication_budgets": True} if self.intent.get("increase_publication_budgets") else
+                       {"add_container_policies": True} if self.intent.get("add_container_policies") else
                        {"retire_configuration": True} if self.intent.get("retire_configuration") else {}),
                 )
                 if target != self.intent["coordinator_target"]:
@@ -469,7 +480,8 @@ class WorkloadUpgrade(maintenance._Upgrade):
             elif name in self.intent["candidates"]:
                 candidate = self.host_observe(
                     name, "workload-probe",
-                    **({"add_container_policies": True} if self.intent.get("add_container_policies") else
+                    **({"increase_publication_budgets": True} if self.intent.get("increase_publication_budgets") else
+                       {"add_container_policies": True} if self.intent.get("add_container_policies") else
                            {"retire_configuration": True} if self.intent.get("retire_configuration") else {
                         "workload_profile": self.intent["workload_profile"],
                         "image": self.intent["image"], "image_sha256": self.intent["image_sha256"],
@@ -553,7 +565,8 @@ class WorkloadUpgrade(maintenance._Upgrade):
                         "target_immutable": candidate["target"]["immutable"],
                         "target_active": candidate["target"]["active"],
                         "candidate_source": candidate_source,
-                        **({"add_container_policies": True} if self.intent.get("add_container_policies") else
+                        **({"increase_publication_budgets": True} if self.intent.get("increase_publication_budgets") else
+                       {"add_container_policies": True} if self.intent.get("add_container_policies") else
                            {"retire_configuration": True} if self.intent.get("retire_configuration") else {
                             "profile_id": self.intent["workload_profile"],
                             "target_profile": candidate["target"]["profile"],
@@ -617,7 +630,8 @@ def _promote_agents(operation):
     staged = operation.call_many([
         (name, "workload-stage", {
             "declaration": intent["target_declarations"][name],
-            **({"add_container_policies": True} if intent.get("add_container_policies") else
+            **({"increase_publication_budgets": True} if intent.get("increase_publication_budgets") else
+                       {"add_container_policies": True} if intent.get("add_container_policies") else
                {"retire_configuration": True} if intent.get("retire_configuration") else {
                 "image": intent["image"], "image_sha256": intent["image_sha256"],
             }),
@@ -696,8 +710,8 @@ def continue_upgrade(operation):
     maintenance.phase(operation, "replacing")
     _promote_agents(operation)
     publication = {}
-    if intent.get("retire_configuration") or intent.get("add_container_policies"):
-        kind = "container_policy_addition" if intent.get("add_container_policies") else "retirement"
+    if intent.get("retire_configuration") or intent.get("add_container_policies") or intent.get("increase_publication_budgets"):
+        kind = "publication_budget_increase" if intent.get("increase_publication_budgets") else "container_policy_addition" if intent.get("add_container_policies") else "retirement"
         retained = operation.receipts / "coordinator-workload-publish" / "intent.json"
         # Health checks advance the gate revision after publication. Every resume
         # must replay the original authorization, including a lost applied reply.

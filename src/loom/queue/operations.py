@@ -110,7 +110,7 @@ def _coordinator_observation(daemon: LocalDaemon) -> OperatorObservation:
             "configuration_revision": metadata.get("active_configuration_revision"),
             "configuration_fingerprint": daemon.config.active_configuration_fingerprint,
             "scheduling_fingerprint": metadata.get("scheduling_fingerprint"),
-            "capabilities": [OPERATOR_CAPABILITY, MAINTENANCE_CAPABILITY, SUBMITTED_CHECK_CAPABILITY, CONDITIONAL_CONTROL_CAPABILITY, "quiescent-profile-promotion-v2", "quiescent-source-promotion-v1", "quiescent-configuration-retirement-v1", "quiescent-coordinator-retirement-v1", "quiescent-container-policy-addition-v1"],
+            "capabilities": [OPERATOR_CAPABILITY, MAINTENANCE_CAPABILITY, SUBMITTED_CHECK_CAPABILITY, CONDITIONAL_CONTROL_CAPABILITY, "quiescent-profile-promotion-v2", "quiescent-source-promotion-v1", "quiescent-configuration-retirement-v1", "quiescent-coordinator-retirement-v1", "quiescent-container-policy-addition-v1", "quiescent-publication-budget-increase-v1"],
         },
     )
 
@@ -327,7 +327,7 @@ def probe_upgrade_compatibility(
                 if role == "coordinator":
                     _validate_coordinator_schema(conn)
         missing = sorted(
-            set(required_capabilities) - {OPERATOR_CAPABILITY, "daemon-control-v1", MAINTENANCE_CAPABILITY, SUBMITTED_CHECK_CAPABILITY, CONDITIONAL_CONTROL_CAPABILITY, "quiescent-profile-promotion-v2", "quiescent-source-promotion-v1", "quiescent-configuration-retirement-v1", "quiescent-coordinator-retirement-v1", "quiescent-container-policy-addition-v1"}
+            set(required_capabilities) - {OPERATOR_CAPABILITY, "daemon-control-v1", MAINTENANCE_CAPABILITY, SUBMITTED_CHECK_CAPABILITY, CONDITIONAL_CONTROL_CAPABILITY, "quiescent-profile-promotion-v2", "quiescent-source-promotion-v1", "quiescent-configuration-retirement-v1", "quiescent-coordinator-retirement-v1", "quiescent-container-policy-addition-v1", "quiescent-publication-budget-increase-v1"}
         )
         reason = (
             "unsupported_capability"
@@ -347,7 +347,7 @@ def probe_upgrade_compatibility(
                 "target_storage_version": target,
                 "compatible": supported and not missing,
                 "protocol_version": "1",
-                "capabilities": ["daemon-control-v1", OPERATOR_CAPABILITY, MAINTENANCE_CAPABILITY, SUBMITTED_CHECK_CAPABILITY, CONDITIONAL_CONTROL_CAPABILITY, "quiescent-profile-promotion-v2", "quiescent-source-promotion-v1", "quiescent-configuration-retirement-v1", "quiescent-coordinator-retirement-v1", "quiescent-container-policy-addition-v1"],
+                "capabilities": ["daemon-control-v1", OPERATOR_CAPABILITY, MAINTENANCE_CAPABILITY, SUBMITTED_CHECK_CAPABILITY, CONDITIONAL_CONTROL_CAPABILITY, "quiescent-profile-promotion-v2", "quiescent-source-promotion-v1", "quiescent-configuration-retirement-v1", "quiescent-coordinator-retirement-v1", "quiescent-container-policy-addition-v1", "quiescent-publication-budget-increase-v1"],
                 "missing_capabilities": cast(list[PlainData], missing),
                 "profile_constraints": "unchanged_bindings_require_separate_qualification",
             },
@@ -420,6 +420,13 @@ def _assignment_observation(
             "claim_id": row["claim_id"],
             "coordinator_state": row["state"],
             "remote_state": None if remote is None else remote["state"],
+            "result_progress": {
+                "worker_execution": None if report is None else report["status"],
+                "result_retention": "retained" if report is not None else "pending",
+                # Retaining a report does not prove the worker received its ACK.
+                "result_acknowledgement": "agent_local_evidence_required",
+                "execution_commit": "committed" if remote is not None and remote["state"] in {"TERMINAL", "RELEASED"} and report is not None else "pending",
+            },
             "terminal_acknowledged": remote is not None
             and remote["report_digest"] is not None,
             "release_proof": proof,
@@ -485,6 +492,7 @@ def inspect_local_assignment(
                 "assignment_not_found",
             )
         identity = json.loads(row["identity_json"])
+        result = None if row["result_json"] is None else json.loads(row["result_json"])
         with sqlite3.connect(
             f"{(root / 'supervisor' / 'supervisor.sqlite').resolve().as_uri()}?mode=ro",
             uri=True,
@@ -519,6 +527,16 @@ def inspect_local_assignment(
                 "session_id": identity["session_id"],
                 "claim_id": identity["claim_id"],
                 "state": row["state"],
+                "result_progress": {
+                    "worker_execution": None if result is None else result["status"],
+                    "local_result_retention": "retained" if result is not None else "pending",
+                    "result_acknowledgement": (
+                        "observed" if row["state"] in {"terminal_acknowledged", "providers_released", "released"}
+                        else "pending_or_retrying" if row["state"] == "result_durable"
+                        else "pending"
+                    ),
+                    "execution_commit": "coordinator_evidence_required",
+                },
                 "actual_gpu_uuids": uuids,
                 "device_proof_reason": None
                 if uuids is not None

@@ -198,7 +198,7 @@ def test_two_agents_publish_and_consume_complete_large_shared_closure(
     from loom.queue.agent_sessions import AgentSessionService
 
     publications = []
-    original_publish = publication.publish
+    original_publish = publication.prepare_publication
     publication_context = threading.local()
 
     def counted_publish(request, *args, **kwargs):
@@ -209,7 +209,7 @@ def test_two_agents_publish_and_consume_complete_large_shared_closure(
         finally:
             publication_context.active = False
 
-    monkeypatch.setattr(publication, "publish", counted_publish)
+    monkeypatch.setattr(publication, "prepare_publication", counted_publish)
     decoding = threading.Event()
     deadline_expired = threading.Event()
     retained = threading.Event()
@@ -363,9 +363,9 @@ def test_two_agents_publish_and_consume_complete_large_shared_closure(
             commits = []
             retained_commit = {}
 
-            def counted_verify(conn, assignment_id):
-                verifications.append(assignment_id)
-                return original_verify(conn, assignment_id)
+            def counted_verify(transfers):
+                verifications.append(transfers[0]["assignment_id"])
+                return original_verify(transfers)
 
             def lost_commit_ack(*args, **kwargs):
                 retained_commit.update(kwargs)

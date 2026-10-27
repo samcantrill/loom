@@ -101,3 +101,17 @@ def test_native_timing_crosses_actual_event_codec():
     payload = {"kind": "native_timing", **timings.payload()}
     _reject_path_bearing_data(payload, "remote event")
     assert _decode(json.dumps({"payload": payload}).encode())["payload"] == payload
+
+
+def test_nested_phase_collection_keeps_its_owner_bound_and_original_exception():
+    timings = phase_timing.PhaseTimings()
+    failure = RuntimeError("input validation refused")
+    with phase_timing.observe_phases(timings.observe):
+        for _ in range(70):
+            with phase_timing.phase("input_root_validation"):
+                pass
+        with pytest.raises(RuntimeError) as observed, phase_timing.phase("publication_inventory_hash"):
+            raise failure
+    assert observed.value is failure
+    assert len(timings.spans) == 64
+    assert timings.dropped == 7

@@ -2335,12 +2335,13 @@ class _ResidentAssignmentWorkspace:
 
     def retain_outputs(self) -> _RemoteExecutionReport:
         from ._preparation_report_transfer import native_role
-        from ._phase_timing import PhaseTimings
+        from ._phase_timing import PhaseTimings, observe_phases
 
         timings = PhaseTimings()
         result = self.worker_result()
         try:
-            return timings.call("output_retention", self._retain_outputs, result)
+            with observe_phases(timings.observe):
+                return timings.call("output_retention", self._retain_outputs, result)
         except _RemoteTransferLimitError:
             raise
         except (QueueConflictError, QueueServiceError, OSError, ValueError) as exc:

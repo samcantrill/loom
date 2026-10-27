@@ -37,6 +37,7 @@ from loom.fingerprints import hash_mapping
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.pipeline.runtime._resource_controls import _validated_resource_controls
 from ._process_group import OwnedProcessGroup, require_group_wait_support
+from ._phase_timing import log_phases, observe_phases, phase
 from ._submitted_container_policy import SubmittedContainerPolicy
 from .submitted_execution import SubmittedContainerCapability, SubmittedContainerExecution
 
@@ -820,7 +821,8 @@ class AgentProcessSupervisor:
         from loom.pipeline.errors import RuntimeResourceError
 
         try:
-            self._require_new_launch_inputs(launch)
+            with observe_phases(log_phases), phase("new_launch_input_qualification", operation_id=launch.assignment_id):
+                self._require_new_launch_inputs(launch)
         except (ValueError, OSError, QueueError, RuntimeResourceError) as exc:
             raise _SupervisorNoStartError(str(exc)) from exc
 

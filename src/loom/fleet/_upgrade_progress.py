@@ -12,7 +12,7 @@ ProgressSink = Callable[[dict[str, Any]], None]
 
 _ENUMS = {
     "event": {"phase", "heartbeat", "result"},
-    "kind": {"runtime-upgrade", "workload-upgrade", "configuration-retirement", "container-policy-addition", "unknown"},
+    "kind": {"runtime-upgrade", "workload-upgrade", "configuration-retirement", "container-policy-addition", "publication-budget-increase", "unknown"},
     "action": {"apply", "resume", "abort", "retry-check", "retry-control"},
     "phase": {"preparing", "closing_admission", "settling", "draining", "replacing",
               "checking", "restoring", "reopening_admission", "recovering", "finished"},
