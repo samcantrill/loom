@@ -7,7 +7,7 @@ their identity, never image bytes, host executables, mounts or runtime options.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 import stat
 from typing import cast
@@ -23,7 +23,11 @@ from .shared_execution import has_input_directories, location, qualified_roots
 
 SUBMITTED_CONTAINER_WORKER_CONTRACT = "resident-submitted-container-v1"
 INPUT_DIRECTORY_WORKER_CONTRACT = "resident-submitted-container-v2"
-SUPPORTED_WORKER_CONTRACTS = (SUBMITTED_CONTAINER_WORKER_CONTRACT, INPUT_DIRECTORY_WORKER_CONTRACT)
+SELECTED_INPUT_WORKER_CONTRACT = "resident-submitted-container-v3"
+SUPPORTED_WORKER_CONTRACTS = (
+    SUBMITTED_CONTAINER_WORKER_CONTRACT, INPUT_DIRECTORY_WORKER_CONTRACT,
+    SELECTED_INPUT_WORKER_CONTRACT,
+)
 SUBMITTED_CONTAINER_CAPABILITY = "submitted-container-execution-v1"
 SUBMITTED_EXECUTION_SCOPE = "loom.submitted_execution"
 
@@ -214,7 +218,9 @@ class SubmittedContainerCapability:
             raise QueueServiceError("container policy worker contracts are unsupported")
         object.__setattr__(self, "worker_contracts", tuple(sorted(set(contracts))))
         roots = qualified_roots(self.shared_roots)
-        if has_input_directories(roots) and INPUT_DIRECTORY_WORKER_CONTRACT not in contracts:
+        if has_input_directories(roots) and not set(contracts).intersection(
+            (INPUT_DIRECTORY_WORKER_CONTRACT, SELECTED_INPUT_WORKER_CONTRACT)
+        ):
             raise QueueServiceError("input directories require the resident-submitted-container-v2 worker contract")
         allowed = self.allowed_image_roots
         if (
@@ -242,7 +248,9 @@ class SubmittedContainerCapability:
             execution.runtime != self.runtime
             or execution.worker_contract not in self.worker_contracts
             or (has_input_directories(self.shared_roots)
-                and execution.worker_contract != INPUT_DIRECTORY_WORKER_CONTRACT)
+                and execution.worker_contract not in (
+                    INPUT_DIRECTORY_WORKER_CONTRACT, SELECTED_INPUT_WORKER_CONTRACT
+                ))
             or execution.image.location["root_id"] not in self.allowed_image_roots
             or (
                 execution.project_integration is not None
@@ -254,11 +262,13 @@ class SubmittedContainerCapability:
 
     @property
     def required_worker_contract(self) -> str:
-        """Select the least worker contract permitted by this storage policy.
+        """Select v3 for dynamic policies, otherwise the least supported contract.
 
         This is a policy requirement, not evidence of an image's implementation.
         The selected image checks support before decoding the worker request.
         """
+        if SELECTED_INPUT_WORKER_CONTRACT in self.worker_contracts:
+            return SELECTED_INPUT_WORKER_CONTRACT
         if has_input_directories(self.shared_roots):
             return INPUT_DIRECTORY_WORKER_CONTRACT
         return next(item for item in SUPPORTED_WORKER_CONTRACTS if item in self.worker_contracts)
@@ -268,7 +278,34 @@ class SubmittedContainerCapability:
         self.require_execution(execution)
         return SubmittedContainerRequirement(
             self.policy_id, self.runtime, execution.worker_contract, self.shared_roots,
-            self.fingerprint,
+            self.execution_policy_fingerprint
+            if execution.worker_contract == SELECTED_INPUT_WORKER_CONTRACT else self.fingerprint,
+            schema_version=2 if execution.worker_contract == SELECTED_INPUT_WORKER_CONTRACT else 1,
+        )
+
+    def select_roots(self, roots: Mapping[str, PlainData]) -> SubmittedContainerCapability:
+        """Narrow a v3 capability to admitted inputs and image storage.
+
+        Supplied facts must exactly match this protected catalog. Image roots
+        retain their authorization even though image bytes are mounted by the
+        runtime rather than exposed as workload directories.
+        """
+        if SELECTED_INPUT_WORKER_CONTRACT not in self.worker_contracts:
+            raise QueueServiceError("selected inputs require the v3 worker contract")
+        if any(self.shared_roots.get(alias) != facts for alias, facts in roots.items()):
+            raise QueueServiceError("selected input root is not authorized by container policy")
+        aliases = set(roots) | set(self.allowed_image_roots)
+        aliases.update(alias for alias, facts in self.shared_roots.items()
+                       if cast(Mapping[str, PlainData], facts)["container_path"] is None)
+        return replace(self, shared_roots={alias: self.shared_roots[alias] for alias in sorted(aliases)})
+
+    def permits(self, selected: SubmittedContainerCapability) -> bool:
+        """Whether a retained v3 selection is still authorized by this catalog."""
+        return (
+            SELECTED_INPUT_WORKER_CONTRACT in self.worker_contracts
+            and SELECTED_INPUT_WORKER_CONTRACT in selected.worker_contracts
+            and self.execution_policy_fingerprint == selected.execution_policy_fingerprint
+            and all(self.shared_roots.get(alias) == facts for alias, facts in selected.shared_roots.items())
         )
 
     @property
@@ -283,7 +320,10 @@ class SubmittedContainerCapability:
     def satisfies(self, requirement: SubmittedContainerRequirement) -> bool:
         return (
             self.policy_id == requirement.policy_id
-            and self.fingerprint == requirement.policy_fingerprint
+            and (
+                self.fingerprint if requirement.schema_version == 1
+                else self.execution_policy_fingerprint
+            ) == requirement.policy_fingerprint
             and self.runtime == requirement.runtime
             and requirement.worker_contract in self.worker_contracts
             and all(
@@ -295,6 +335,16 @@ class SubmittedContainerCapability:
     @property
     def fingerprint(self) -> str:
         return hash_mapping(self.to_dict()).split(":", 1)[1]
+
+    @property
+    def execution_policy_fingerprint(self) -> str:
+        """Execution restrictions independent of unrelated storage catalog entries.
+
+        Environment, runtime settings, image permissions and interface support
+        remain protected. Selected root identity is checked separately.
+        """
+        return hash_mapping({key: value for key, value in self.to_dict().items()
+                             if key != "shared_roots"}).split(":", 1)[1]
 
     def to_dict(self) -> dict[str, PlainData]:
         return {

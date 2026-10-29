@@ -122,8 +122,13 @@ class SubmittedContainerRequirement:
     worker_contract: str
     shared_root_requirements: Mapping[str, PlainData]
     policy_fingerprint: str
+    schema_version: int = 1
 
     def __post_init__(self) -> None:
+        if type(self.schema_version) is not int or self.schema_version not in (1, 2):
+            raise CoordinatorStoreError("submitted execution requirement is unsupported")
+        if self.schema_version == 2 and self.worker_contract != "resident-submitted-container-v3":
+            raise CoordinatorStoreError("selected input requirements need the v3 worker contract")
         for name in ("policy_id", "runtime", "worker_contract", "policy_fingerprint"):
             _non_empty(getattr(self, name), name)
         roots = _plain_mapping(self.shared_root_requirements, "shared_root_requirements")
@@ -134,7 +139,7 @@ class SubmittedContainerRequirement:
     def to_dict(self) -> dict[str, PlainData]:
         return {
             "kind": "submitted_container",
-            "schema_version": 1,
+            "schema_version": self.schema_version,
             "policy_id": self.policy_id,
             "runtime": self.runtime,
             "worker_contract": self.worker_contract,
@@ -152,7 +157,7 @@ class SubmittedContainerRequirement:
         if (
             mapping["kind"] != "submitted_container"
             or type(mapping["schema_version"]) is not int
-            or mapping["schema_version"] != 1
+            or mapping["schema_version"] not in (1, 2)
         ):
             raise CoordinatorStoreError("submitted execution requirement is unsupported")
         return cls(
@@ -161,6 +166,7 @@ class SubmittedContainerRequirement:
             _non_empty(mapping["worker_contract"], "worker_contract"),
             _plain_mapping(_mapping(mapping["shared_root_requirements"], "shared_root_requirements"), "shared_root_requirements"),
             _non_empty(mapping["policy_fingerprint"], "policy_fingerprint"),
+            schema_version=cast(int, mapping["schema_version"]),
         )
 
 

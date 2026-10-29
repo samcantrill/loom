@@ -18,7 +18,7 @@ from uuid import uuid4
 from loom.serialization import PlainData, thaw_plain_data
 from .errors import QueueConflictError, QueueServiceError
 from .shared_execution import location, qualifications
-from .submitted_execution import SubmittedContainerCapability
+from .submitted_execution import SELECTED_INPUT_WORKER_CONTRACT, SubmittedContainerCapability
 from ._submitted_container_policy import SubmittedContainerPolicy
 
 if TYPE_CHECKING:
@@ -82,6 +82,21 @@ def reference(value: object) -> dict[str, PlainData] | None:
 
 def _target_id(profile: ResidentProfileDescriptor | SubmittedContainerCapability) -> str:
     return profile.policy_id if isinstance(profile, SubmittedContainerCapability) else profile.profile_id
+
+
+def matches_reference(profile: ResidentProfileDescriptor | SubmittedContainerCapability,
+                      ref: Mapping[str, PlainData]) -> bool:
+    """Select protected transport storage; the decoded bundle authorizes execution.
+
+    A v3 bundle retains a narrowed catalog, so its full fingerprint need not be
+    the worker's catalog fingerprint. Resolve verifies that retained selection
+    after verifying the authenticated reference and immutable payload bytes.
+    """
+    return _target_id(profile) == ref["profile_id"] and (
+        profile.fingerprint == ref["profile_fingerprint"]
+        or isinstance(profile, SubmittedContainerCapability)
+        and SELECTED_INPUT_WORKER_CONTRACT in profile.worker_contracts
+    )
 
 
 def require_root(
@@ -239,8 +254,7 @@ def resolve(
     descriptor = profile.capability if isinstance(profile, SubmittedContainerPolicy) else profile.descriptor
     if (
         ref["session_id"] != session_id
-        or ref["profile_id"] != _target_id(descriptor)
-        or ref["profile_fingerprint"] != descriptor.fingerprint
+        or not matches_reference(descriptor, ref)
     ):
         raise QueueConflictError(
             "shared assignment reference has no exact protected profile"
@@ -284,4 +298,11 @@ def resolve(
     except (ValueError, UnicodeError) as exc:
         raise QueueServiceError("shared assignment JSON is invalid") from exc
     verify_bundle(ref, request, session_id=session_id)
+    if request.profile != descriptor:
+        if (not isinstance(descriptor, SubmittedContainerCapability)
+            or not isinstance(request.profile, SubmittedContainerCapability)
+            or request.submitted_execution is None
+            or request.submitted_execution.worker_contract != SELECTED_INPUT_WORKER_CONTRACT
+            or not descriptor.permits(request.profile)):
+            raise QueueConflictError("shared assignment selection is not authorized by protected policy")
     return request

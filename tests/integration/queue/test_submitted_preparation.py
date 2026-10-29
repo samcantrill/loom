@@ -23,9 +23,13 @@ from tests.integration.queue.test_submitted_container_agents import _fixture
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
 
-def _run(tmp_path, monkeypatch, *, stage_update=None):
+def _run(tmp_path, monkeypatch, *, stage_update=None, selected_inputs=False):
     service = _service(tmp_path)
     policy, execution, _ = _fixture(tmp_path)
+    if selected_inputs:
+        from loom.queue.submitted_execution import SELECTED_INPUT_WORKER_CONTRACT
+        execution = replace(execution, worker_contract=SELECTED_INPUT_WORKER_CONTRACT)
+        policy = replace(policy, worker_contracts=(SELECTED_INPUT_WORKER_CONTRACT,))
     if stage_update is not None:
         path = tmp_path / "projects/pipeline.yaml"
         configuration = json.loads(path.read_text())
@@ -34,8 +38,9 @@ def _run(tmp_path, monkeypatch, *, stage_update=None):
     request = PrepareRunRequest("submitted", "target", PreparationSource("shared", "projects", ".", ("pipeline.yaml",)),
                                 "pipeline.yaml", "containers", execution=execution)
     receipt = capture_shared_input(request, source_root=tmp_path / "projects", snapshot_root=tmp_path / "captures")
+    locations = [{"kind": "loom.shared-location", "schema_version": 1, "root_id": "data", "path": "."}] if selected_inputs else []
     binding = PreparationChildInput(request.operation_id, request.preparation_profile, request.config_path, receipt,
-        None, shared_scope={"capability": "shared-execution-v1", "roots": policy.capability.workload_roots, "locations": []},
+        None, shared_scope={"capability": "shared-execution-v1", "roots": policy.capability.workload_roots, "locations": locations},
         execution=execution, container_capability=policy.capability)
     assert binding.shared_scope is not None
     monkeypatch.setenv(PREPARATION_INPUT_CONTEXT_ENV, json.dumps({
@@ -49,6 +54,35 @@ def _run(tmp_path, monkeypatch, *, stage_update=None):
     outputs = PreparationStage().run(context, {})
     report = load_preparation_report(outputs["report"], store.local_path(outputs["report"]))
     return service, binding, cast(dict[str, Any], report)
+
+
+def test_selected_inputs_are_narrowed_per_action_and_retained_for_replay(tmp_path, monkeypatch):
+    service, binding, report = _run(tmp_path, monkeypatch, selected_inputs=True)
+    composed, requirements, preflight = decode_preparation_report(report, expected=binding)
+    assert preflight.status.value == "PASS"
+    # Preparation may inspect data; this stage only produces a constant and
+    # therefore needs no dataset. Host-only image and control storage remain.
+    assert "data" in binding.container_capability.shared_roots
+    requirement = requirements["produce"]
+    assert requirement.schema_version == 2
+    assert set(requirement.shared_root_requirements) == {"workloads", "control"}
+    assert binding.container_capability.satisfies(requirement)
+    stage = cast(Any, composed).resolved["pipeline"]["stages"][0]
+    _, selected = submitted_binding(stage["fingerprint"][SUBMITTED_EXECUTION_SCOPE])
+    assert selected.requirement(binding.execution) == requirement
+    child = prepare_child_run(service, binding, "selected-child", runtime_options=RunOptions(executor="local"))
+    intent = load_managed_local_intent(service.daemon, child.run_uri)
+    assert "data" in intent.execution_requirements["prepare"].shared_root_requirements
+
+
+def test_selected_input_override_fails_before_report_publication(tmp_path, monkeypatch):
+    from loom.queue.errors import QueueServiceError
+    with pytest.raises(QueueServiceError, match="outside the preparation selection"):
+        _run(tmp_path, monkeypatch, selected_inputs=True, stage_update={"config": {
+            "value": 41, "input": {"kind": "loom.shared-location", "schema_version": 1,
+                                   "root_id": "undeclared", "path": "."},
+        }})
+    assert not list((tmp_path / "artifacts").rglob("*.json"))
 
 
 def test_native_report_and_child_plan_retain_submitted_execution(tmp_path, monkeypatch):

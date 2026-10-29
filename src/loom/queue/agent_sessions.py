@@ -6037,7 +6037,16 @@ def _target_remote_delivery(
             "container_execution_capabilities" if isinstance(request.profile, SubmittedContainerCapability)
             else "resident_profiles", []
         )
-        if request.profile.to_dict() not in offered_profiles:
+        from .submitted_execution import SELECTED_INPUT_WORKER_CONTRACT
+        selected_inputs = (isinstance(request.profile, SubmittedContainerCapability)
+                           and request.submitted_execution is not None
+                           and request.submitted_execution.worker_contract == SELECTED_INPUT_WORKER_CONTRACT)
+        offered = request.profile.to_dict() in offered_profiles
+        if selected_inputs:
+            assert isinstance(request.profile, SubmittedContainerCapability)
+            offered = any(SubmittedContainerCapability.from_dict(item).permits(request.profile)
+                          for item in offered_profiles)
+        if not offered:
             raise QueueConflictError(
                 "targeted delivery resident profile is not in the current offer"
             )

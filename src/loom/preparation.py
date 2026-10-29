@@ -212,9 +212,9 @@ class PreparationStage:
             pipeline = _pipeline_from_resolved(
                 cast(Mapping[str, object], composition["resolved"])
             )
-            requirement = _binding_requirement(binding)
             requirements = {
-                name: requirement.to_dict() for name in pipeline.stage_names
+                stage.name: _binding_requirement(binding, stage).to_dict()
+                for stage in pipeline.stages
             }
         report: dict[str, PlainData] = {
             "schema_version": _report_schema(binding),
@@ -768,19 +768,21 @@ def _decode_preparation_report(
             raise QueueConflictError(
                 "preparation report invocation provenance conflicts"
             )
-        requirement = _binding_requirement(expected)
         if set(requirements) != set(pipeline.stage_names):
             raise QueueConflictError(
                 "preparation execution requirements must exactly cover stages"
             )
-        if any(item != requirement for item in requirements.values()):
+        if any(requirements[stage.name] != _binding_requirement(expected, stage)
+               for stage in pipeline.stages):
             raise PreparationInstallationMismatch(
                 "preparation execution requirements do not match the selected installation"
             )
         for stage in pipeline.stages:
             submitted = stage.fingerprint_fields.get(SUBMITTED_EXECUTION_SCOPE)
             if expected.execution is not None:
-                if not isinstance(submitted, Mapping) or not _execution_matches(submitted, expected):
+                if not isinstance(submitted, Mapping) or stable_json_bytes(submitted) != stable_json_bytes(
+                    _stage_execution_data(expected, stage.fingerprint_fields.get(SHARED_EXECUTION_SCOPE))
+                ):
                     raise QueueConflictError("prepared stage submitted execution conflicts")
                 _require_submitted_route(stage)
             elif submitted is not None:
@@ -876,11 +878,29 @@ def _execution_matches(value: Mapping[str, PlainData], binding: PreparationChild
     return stable_json_bytes({key: value.get(key) for key in selected}) == stable_json_bytes(selected)
 
 
-def _binding_requirement(binding: PreparationChildInput) -> ManagedExecutionRequirement:
+def _binding_requirement(binding: PreparationChildInput, stage: StageSpec | None = None) -> ManagedExecutionRequirement:
     if binding.execution is not None:
-        assert binding.container_capability is not None
-        return binding.container_capability.requirement(binding.execution)
+        from loom.queue.submitted_execution import submitted_binding
+
+        shared = binding.shared_scope if stage is None else stage.fingerprint_fields.get(SHARED_EXECUTION_SCOPE)
+        execution, capability = submitted_binding(_stage_execution_data(binding, shared))
+        return capability.requirement(execution)
     return _profile_requirement(ResidentProfileDescriptor.from_dict(binding.profile_descriptor))
+
+
+def _stage_execution_data(binding: PreparationChildInput, shared: object) -> dict[str, PlainData]:
+    from loom.queue.submitted_execution import SELECTED_INPUT_WORKER_CONTRACT
+
+    data = binding.execution_data()
+    if binding.execution is not None and binding.execution.worker_contract == SELECTED_INPUT_WORKER_CONTRACT:
+        assert binding.container_capability is not None
+        selected = shared_scope(shared)
+        if selected is None:
+            raise QueueServiceError("selected-input execution requires a shared scope")
+        data["container_capability"] = binding.container_capability.select_roots(
+            cast(Mapping[str, PlainData], selected["roots"])
+        ).to_dict()
+    return data
 
 
 def _require_submitted_route(stage: StageSpec) -> None:
@@ -904,7 +924,9 @@ def _bind_submitted_snapshot(
         for stage in cast(list[dict[str, PlainData]], definition["stages"]):
             stage["fingerprint"] = {
                 **cast(dict[str, PlainData], stage.get("fingerprint", {})),
-                SUBMITTED_EXECUTION_SCOPE: binding.execution_data(),
+                SUBMITTED_EXECUTION_SCOPE: _stage_execution_data(
+                    binding, cast(Mapping[str, PlainData], stage.get("fingerprint", {})).get(SHARED_EXECUTION_SCOPE)
+                ),
             }
 
 

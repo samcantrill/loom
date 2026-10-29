@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import cast
+
+from loom.serialization import PlainData
+
 from loom.fleet._host import environment, owner, role
 from loom.fleet._timing import timed
 from loom.queue.errors import QueueConflictError
@@ -16,6 +21,7 @@ def capture(request):
         PrepareRunRequest, PreparationChildInput, capture_shared_input,
         _project_target_uri,
     )
+    from loom.queue.submitted_execution import SubmittedContainerCapability
 
     if role(request) != "coordinator" or owner(request)["owner"] != request["expected_root_id"]:
         raise QueueConflictError("check preflight coordinator identity differs")
@@ -30,10 +36,9 @@ def capture(request):
         selected = PrepareRunRequest.from_dict(raw)
         if selected.run_name is None:
             raise QueueConflictError("check preflight requires a named target")
-        policy.select(selected)
-        profile = policy.profiles[selected.preparation_profile]
+        profile = cast(Mapping[str, PlainData], policy.select(selected)["profile"])
         processor = (selected.execution.project_integration if selected.execution is not None
-                     else profile.project_processor)
+                     else cast(Mapping[str, PlainData] | None, profile.get("project_processor")))
         source = policy.source_roots[selected.source.root]
         if source.shared_snapshot_root is None:
             raise QueueConflictError("check preparation requires shared capture")
@@ -55,15 +60,15 @@ def capture(request):
             preparation_profile=selected.preparation_profile,
             config_path=selected.config_path,
             input_receipt=receipt,
-            profile_descriptor=None if selected.execution is not None else profile.descriptor.to_dict(),
+            profile_descriptor=None if selected.execution is not None else cast(Mapping[str, PlainData], profile["profile_descriptor"]),
             execution=selected.execution,
-            container_capability=profile.capability if selected.execution is not None else None,
+            container_capability=SubmittedContainerCapability.from_dict(profile["container_capability"]) if selected.execution is not None else None,
             overlays=selected.overlays,
             overrides=selected.overrides,
             run_options=selected.run_options,
-            local_scope=None if selected.execution is not None else profile.local_scope,
+            local_scope=cast(Mapping[str, PlainData] | None, profile.get("local_scope")),
             project_preparation=project,
-            shared_scope=profile.shared_scope,
+            shared_scope=cast(Mapping[str, PlainData] | None, profile.get("shared_scope")),
         ).to_dict()
     return {"bindings": bindings}
 
@@ -84,19 +89,24 @@ def prepare(request):
     for check, raw in request["bindings"].items():
         binding = PreparationChildInput.from_dict(raw)
         if binding.execution is None:
+            assert binding.profile_descriptor is not None
+            descriptor = dict(binding.profile_descriptor)
             matches = [p for p in service.client.resident_profiles
-                       if p.descriptor.to_dict() == dict(binding.profile_descriptor)]
+                       if p.descriptor.to_dict() == descriptor]
             if len(matches) != 1:
                 raise QueueConflictError("candidate check profile is unavailable or ambiguous")
             launch = matches[0].launch_profile
         else:
             policies = [p for p in service.client.container_policies
-                        if p.capability == binding.container_capability]
+                        if p.capability == binding.container_capability
+                        or (binding.container_capability is not None and p.capability.permits(binding.container_capability))]
             if len(policies) != 1:
                 raise QueueConflictError("candidate check container policy is unavailable or ambiguous")
             # The bounded probe creates its own workspace; this path supplies
             # the native launch's host context, never a new dataset root.
-            launch = policies[0].launch_profile(binding.execution, workspace=service.client.agent_root)
+            assert service.client.agent_root is not None
+            launch = policies[0].launch_profile(binding.execution, workspace=service.client.agent_root,
+                                               selected_capability=binding.container_capability)
         results[check] = dict(probe_preparation(
             launch, binding, agent_id=request["agent_id"],
         ))

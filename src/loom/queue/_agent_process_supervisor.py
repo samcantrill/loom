@@ -1320,7 +1320,10 @@ class AgentProcessSupervisor:
             ), None)
             permitted = (
                 policy is not None
-                and policy.launch_profile(execution, workspace=launch.workspace_root).fingerprint
+                and policy.launch_profile(
+                    execution, workspace=launch.workspace_root,
+                    selected_capability=SubmittedContainerCapability.from_dict(launch.profile.descriptor),
+                ).fingerprint
                 == launch.profile.fingerprint
             )
         if (

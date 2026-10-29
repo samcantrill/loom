@@ -1034,6 +1034,13 @@ class _ResidentAssignmentBundle:
             raise QueueServiceError(
                 "resident work must start from a prepared worker request"
             )
+        from .submitted_execution import SELECTED_INPUT_WORKER_CONTRACT
+
+        submitted = assignment_binding(cast(StageFingerprintRecord, worker_request.fingerprint).to_dict())
+        if submitted is not None and submitted[0].worker_contract == SELECTED_INPUT_WORKER_CONTRACT:
+            if not isinstance(profile, SubmittedContainerCapability) or not profile.permits(submitted[1]):
+                raise QueueConflictError("worker does not authorize retained input selection")
+            profile = submitted[1]
         from loom.pipeline.stores.input_lineage import (
             decode_bindings,
             validate_worker_inputs,

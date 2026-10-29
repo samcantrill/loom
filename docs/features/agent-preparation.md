@@ -747,7 +747,8 @@ Those managed storage purposes retain their existing contracts.
 
 Installed resident interpreters must pass `packages.input_directories` readiness.
 Submitted policies containing these roots must permit
-`resident-submitted-container-v2` and requests must select it. Updated workers
+`resident-submitted-container-v2` or `resident-submitted-container-v3`, and requests
+must select one of those contracts. Updated workers
 also support `resident-submitted-container-v1`; legacy facts, fingerprints and
 launch commands keep their encoding. A new-contract launch checks support in
 the selected image before decoding the assignment. An older image fails with
@@ -772,6 +773,60 @@ a worker must not open that coordinator URI's host prefix. A project processor
 can inspect typed locations in its declared fixed container namespace.
 
 A workload configuration selects only its own inputs:
+
+Submitted v3 requests can select inputs dynamically from the protected root
+catalog, without creating a profile for each input combination:
+
+```python
+request = PrepareRunRequest(
+    operation_id="evaluation-01", run_name="evaluation-01",
+    source=captured_source, config_path="configs/evaluation.yaml",
+    preparation_profile="shared-inputs", execution=execution_v3,
+    input_locations=(
+        {"kind": "loom.shared-location", "schema_version": 1,
+         "root_id": "input-a", "path": "."},
+        {"kind": "loom.shared-location", "schema_version": 1,
+         "root_id": "input-b", "path": "session-1"},
+    ),
+)
+```
+
+The execution and protected policy must permit
+`resident-submitted-container-v3`. The request retains normalized, deduplicated
+locations. An explicit empty tuple selects no input roots; omission preserves
+the profile's static `shared_locations`. Input locations must select authorized
+read-only roots with container targets. Protected challenged infrastructure,
+including capture storage, is retained separately. Configuration and overrides may select descendants of the
+retained inputs but cannot widen them. The project submission adapter owns
+deriving this declaration from its configuration; Loom does not interpret
+dataset IDs, splits or application-specific configuration.
+
+Preparation inspects the union, then each action retains only its selected
+workload roots, publication roots and host-only infrastructure. A preparation
+worker needs access to the union. All selected mounts remain read-only. The
+processor receives qualified container targets in its protected `shared_scope`
+and the selected `execution`; it can resolve those inputs without discovering
+dataset-specific environment variables.
+
+V3 execution requirements use schema 2: the execution-policy fingerprint retains
+runtime, environment/mount settings, image permissions and supported interfaces,
+while selected root facts are compared independently. A worker with a larger or
+smaller unrelated input catalog can run the same retained action. Unavailable
+external input directories are omitted from v3 offers, so they do not disable
+unrelated work; selected locations are checked again at launch. Input-directory
+facts establish access permission, not content identity. Applications still
+verify manifests and scientific provenance.
+
+Legacy requirements keep schema 1 and their complete-catalog matching semantics.
+Adding a catalog entry does not widen an existing v3 request or change its
+selected scope. Older images reject the v3 worker contract before decoding or
+executing work. Deploy the updated native services and image once; subsequent
+selections among registered roots require configuration changes only. Keep
+dataset-specific path variables out of the container environment policy when
+using native root mapping, since environment changes intentionally change the
+execution-policy fingerprint.
+
+An individual action continues to use ordinary shared locations:
 
 ```yaml
 pipeline:

@@ -2477,7 +2477,7 @@ class LocalDaemonAgentHttpClient:
 
     @_cooperative
     def _resolve_delivery(self, session_id: str, raw: object) -> Generator[_Progress, Any, _ResidentAssignmentBundle]:
-        from ._shared_assignment import reference, resolve, verify_bundle
+        from ._shared_assignment import matches_reference, reference, resolve, verify_bundle
         ref = reference(raw)
         if ref is None:
             return _ResidentAssignmentBundle.from_remote_dict(thaw_plain_data(raw))
@@ -2486,7 +2486,7 @@ class LocalDaemonAgentHttpClient:
             and item.descriptor.fingerprint == ref["profile_fingerprint"]), None)
         if profile is None:
             profile = next((policy for policy in self._config.container_policies
-                if policy.policy_id == ref["profile_id"] and policy.capability.fingerprint == ref["profile_fingerprint"]), None)
+                if matches_reference(policy.capability, ref)), None)
         if profile is None:
             raise QueueConflictError("shared assignment reference has no exact protected policy")
         workspace = _ResidentAssignmentWorkspace(cast(Path, self._config.agent_root), str(ref["assignment_id"]))
@@ -2846,7 +2846,7 @@ class LocalDaemonAgentHttpClient:
     ) -> ResidentExecutionProfile | SubmittedContainerPolicy | None:
         if isinstance(descriptor, SubmittedContainerCapability):
             return next((policy for policy in self._config.container_policies
-                         if policy.capability == descriptor), None)
+                         if policy.capability == descriptor or policy.capability.permits(descriptor)), None)
         active = self._profiles.get(getattr(descriptor, "profile_id", ""))
         if active is not None and active.descriptor == descriptor:
             return active
@@ -2867,7 +2867,8 @@ class LocalDaemonAgentHttpClient:
             execution = request.submitted_execution
             if execution is None:
                 raise QueueConflictError("submitted assignment has no retained execution")
-            return selected.launch_profile(execution, workspace=workspace.root)
+            return selected.launch_profile(execution, workspace=workspace.root,
+                                           selected_capability=cast(SubmittedContainerCapability, request.profile))
         if selected is None:
             raise QueueConflictError("assignment has no exact protected execution policy")
         return selected.launch_profile

@@ -248,7 +248,7 @@ def publish_offer(
             for descriptor in offer.resident_profiles
         ):
             raise QueueConflictError("offer names an unavailable resident profile")
-        configured_capabilities = tuple(policy.capability for policy in self._config.container_policies)
+        configured_capabilities = tuple(policy.available_capability() for policy in self._config.container_policies)
         if any(item not in configured_capabilities for item in offer.container_execution_capabilities):
             raise QueueConflictError("offer names an unavailable container policy")
         capacity = self._config.execution_inventory
@@ -410,7 +410,7 @@ def refresh_resource_offer(
             item.descriptor for item in self._config.resident_profiles
         ),
         container_execution_capabilities=tuple(
-            policy.capability for policy in self._config.container_policies
+            policy.available_capability() for policy in self._config.container_policies
         ),
         gpu_devices=()
         if profile is None

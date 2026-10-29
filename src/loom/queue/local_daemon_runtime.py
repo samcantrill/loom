@@ -286,8 +286,11 @@ def _preparation_constraints(
     if stage.factory.target_path != PREPARATION_STAGE_TARGET:
         return constraints
     binding = PreparationChildInput.from_dict(stage.stage_config)
+    from .submitted_execution import SELECTED_INPUT_WORKER_CONTRACT
     selection = (
-        {"container_policy_fingerprint": binding.container_capability.fingerprint}
+        ({"container_execution_policy_fingerprint": binding.container_capability.execution_policy_fingerprint}
+         if binding.execution is not None and binding.execution.worker_contract == SELECTED_INPUT_WORKER_CONTRACT
+         else {"container_policy_fingerprint": binding.container_capability.fingerprint})
         if binding.container_capability is not None else
         {"resident_profile_fingerprint": ResidentProfileDescriptor.from_dict(binding.profile_descriptor).fingerprint}
     )
