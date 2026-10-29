@@ -987,6 +987,15 @@ its attachment from the report it has just checked. This is local reuse within
 one read, not a persistent cache: subsequent reads still detect changed artifacts
 and validate the original namespace and declaration bindings.
 
+Action resolution runs before a durable attempt-preparation intent is recorded.
+An attempt that is already prepared and waiting for capacity replays that intent;
+it does not reload its contract and reverify the same input closure on every
+scheduling pass. This prevents a fan-out of ready consumers from monopolizing
+the coordinator long enough to expire worker offers. Pending reuse verifications
+are still revisited, and a new retry receives a new resolution. Authority,
+readiness-generation and upstream-commit checks continue to invalidate stale
+work; dispatch and worker input checks still validate bytes at their boundaries.
+
 Native context also supplies `loom.execution_binding` with exactly
 `schema_version: 1`, `origin_run_id`, `origin_node_id`, positive `attempt`,
 `environment_fingerprint`, and `run_state_root`. Original identity comes from the
