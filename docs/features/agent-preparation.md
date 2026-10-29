@@ -817,6 +817,14 @@ unrelated work; selected locations are checked again at launch. Input-directory
 facts establish access permission, not content identity. Applications still
 verify manifests and scientific provenance.
 
+Native container-policy addition maintenance can extend a v3-only policy's
+authorized root catalog under the same policy ID. Existing roots, host bindings,
+execution restrictions and preparation selections must remain unchanged; adding
+a catalog entry cannot add a static preparation mount. Retained requests keep
+their original selection. Policies supporting legacy worker contracts still
+require exact catalog preservation, because their retained eligibility includes
+the complete catalog fingerprint.
+
 Legacy requirements keep schema 1 and their complete-catalog matching semantics.
 Adding a catalog entry does not widen an existing v3 request or change its
 selected scope. Older images reject the v3 worker contract before decoding or
