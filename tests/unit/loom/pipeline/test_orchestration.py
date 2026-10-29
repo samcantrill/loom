@@ -189,6 +189,11 @@ def test_reconcile_replays_exact_attempt_and_stable_stage_work(
         policy=StagePlacementPolicy(hard_constraints=(constraint,)),
     )
     initial = authority.open_run(run_uri)
+    resolved_attempts = []
+
+    def resolve_ready(stage_plan, readiness, revision):
+        resolved_attempts.append(readiness.next_attempt)
+
     first = orchestrator.reconcile(
         admission_id="admission-1",
         plan=plan,
@@ -196,6 +201,7 @@ def test_reconcile_replays_exact_attempt_and_stable_stage_work(
         placements={"train": placement},
         execution_requirements=_requirements(plan),
         ready_at=10,
+        ready_action=resolve_ready,
     )[0]
     replay_store = (
         store
@@ -211,6 +217,7 @@ def test_reconcile_replays_exact_attempt_and_stable_stage_work(
         placements={"train": placement},
         execution_requirements=_requirements(plan),
         ready_at=20,
+        ready_action=resolve_ready,
     )[0]
 
     assert replay.stage_work_id == first.stage_work_id
@@ -220,6 +227,41 @@ def test_reconcile_replays_exact_attempt_and_stable_stage_work(
     assert len(authority.open_run(run_uri).stages[0].attempts) == 1
     assert replay_store.list_stage_work() == (replay,)
     assert replay.placement.hard_constraints == (constraint,)
+    assert resolved_attempts == [1]
+
+
+def test_pending_ready_action_is_revisited_before_attempt_preparation() -> None:
+    run_uri = "file:///pending-ready-action"
+    authority = _authority(run_uri)
+    store = InMemoryStageWorkStore()
+    orchestrator = RunOrchestrator(
+        authority=authority, store=store, owner_id="coordinator"
+    )
+    plan = _plan(run_uri, _stage("train"))
+    calls = []
+
+    def resolve_ready(stage_plan, readiness, revision):
+        calls.append(readiness.next_attempt)
+        return revision if len(calls) == 1 else None
+
+    def reconcile():
+        return orchestrator.reconcile(
+            admission_id="admission-1",
+            plan=plan,
+            authority_snapshot=authority.open_run(run_uri),
+            placements={"train": _placement()},
+            execution_requirements=_requirements(plan),
+            ready_at=10,
+            ready_action=resolve_ready,
+        )
+
+    assert reconcile() == ()
+    assert store.list_stage_work() == ()
+    assert authority.open_run(run_uri).stages == ()
+    first = reconcile()
+    replay = reconcile()
+    assert first[0].attempt_id == replay[0].attempt_id
+    assert calls == [1, 1]
 
 
 @pytest.mark.parametrize("kind", ["memory", "sqlite"])
@@ -455,6 +497,11 @@ def test_retry_uses_a_new_intent_after_the_prior_attempt_was_projected() -> None
         owner_id="coordinator",
     )
     plan = _plan(run_uri, _stage("train"))
+    resolved_attempts = []
+
+    def resolve_ready(stage_plan, readiness, revision):
+        resolved_attempts.append(readiness.next_attempt)
+
     first = orchestrator.reconcile(
         admission_id="admission-1",
         plan=plan,
@@ -462,6 +509,7 @@ def test_retry_uses_a_new_intent_after_the_prior_attempt_was_projected() -> None
         placements={"train": _placement()},
         execution_requirements=_requirements(plan),
         ready_at=10,
+        ready_action=resolve_ready,
     )
     assert len(first) == 1
     assert first[0].attempt == 1
@@ -503,11 +551,13 @@ def test_retry_uses_a_new_intent_after_the_prior_attempt_was_projected() -> None
         placements={"train": _placement()},
         execution_requirements=_requirements(plan),
         ready_at=11,
+        ready_action=resolve_ready,
     )
 
     assert len(second) == 1
     assert second[0].attempt == 2
     assert {item.attempt for item in store.list_stage_work()} == {1, 2}
+    assert resolved_attempts == [1, 2]
 
 
 def test_replay_rejects_equal_revision_sequence_with_changed_token() -> None:

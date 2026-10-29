@@ -766,6 +766,14 @@ class SQLiteStageWorkStore:
 
 
 class ReadyActionHandler(Protocol):
+    """Resolve readiness before its durable attempt-preparation intent exists.
+
+    A pending resolution is revisited. Once preparation records an intent for
+    that readiness generation, reconciliation replays that decision instead of
+    repeating reuse selection while the attempt waits for capacity. Dispatch
+    remains responsible for validating its current execution inputs.
+    """
+
     def __call__(self, stage_plan: StagePlan, readiness: AttemptReadiness,
                  revision: BackendRevision) -> BackendRevision | None:
         """Return the retained revision when native selection handled readiness."""
@@ -902,7 +910,7 @@ class RunOrchestrator:
                 if controller_action is not None:
                     controller_action(stage_plan, readiness)
                 continue
-            if ready_action is not None:
+            if ready_action is not None and prior_intent is None:
                 resolved_revision = ready_action(stage_plan, readiness, current_revision)
                 if resolved_revision is not None:
                     current_revision = _advance_revision_cursor(current_revision, resolved_revision)
