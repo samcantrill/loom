@@ -114,17 +114,19 @@ def fleet(tmp_path, request):
         if request.param in {"selected-execution", "mixed-execution"}:
             from loom.queue.submitted_execution import SELECTED_INPUT_WORKER_CONTRACT
 
-            unused = site / "unselected"
-            unused.mkdir()
-            submitted_policy = replace(submitted_policy,
-                worker_contracts=((SELECTED_INPUT_WORKER_CONTRACT,) if request.param == "selected-execution"
-                                  else (*submitted_policy.worker_contracts, SELECTED_INPUT_WORKER_CONTRACT)),
-                shared_roots={**submitted_policy.shared_roots, "unselected": {
-                    "host_path": str(unused), "container_path": "/loom/unselected", "access": "ro",
-                    "qualification": {"kind": "input_directory"},
-                }})
             if request.param == "selected-execution":
+                unused = site / "unselected"
+                unused.mkdir()
+                submitted_policy = replace(submitted_policy,
+                    worker_contracts=(SELECTED_INPUT_WORKER_CONTRACT,),
+                    shared_roots={**submitted_policy.shared_roots, "unselected": {
+                        "host_path": str(unused), "container_path": "/loom/unselected", "access": "ro",
+                        "qualification": {"kind": "input_directory"},
+                    }})
                 execution = replace(execution, worker_contract=SELECTED_INPUT_WORKER_CONTRACT)
+            else:
+                submitted_policy = replace(submitted_policy,
+                    worker_contracts=(*submitted_policy.worker_contracts, SELECTED_INPUT_WORKER_CONTRACT))
         snapshots = tmp_path / "snapshots"
         snapshots.mkdir(exist_ok=True)
         (snapshots / "challenge").write_bytes(b"snapshots")
