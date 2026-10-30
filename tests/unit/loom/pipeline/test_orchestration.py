@@ -38,9 +38,11 @@ from loom.pipeline.runtime.placement import (
 from loom.pipeline.status import RunStatus
 from loom.pipeline.status import StageStatus
 from loom.pipeline.stores.authority import (
+    AuthorityStoreError,
     PreparedAttemptReceipt,
     PreparedAttemptRequest,
 )
+from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.scheduling import (
     AttributeConstraintEvaluator,
     Candidate,
@@ -324,11 +326,13 @@ def test_reconcile_preserves_a_durable_decision_until_authority_changes(
     assert store.list_stage_work()[0].scheduling_state is SchedulingProjectionState.WAIT
 
 
+@pytest.mark.parametrize("kind", ["memory", "sqlite"])
 def test_response_loss_after_authority_commit_replays_one_attempt(
-    tmp_path: Path,
+    tmp_path: Path, kind: str,
 ) -> None:
-    run_uri = "file:///lost-reply"
-    authority = _authority(run_uri)
+    run_uri = (tmp_path / "lost-reply").as_uri()
+    authority = SQLitePerRunAuthorityStore()
+    authority.create_run(run_uri, status=RunStatus.RUNNING)
 
     class LostReply:
         def __init__(self) -> None:
@@ -343,7 +347,10 @@ def test_response_loss_after_authority_commit_replays_one_attempt(
                 raise RuntimeError("reply lost")
             return receipt
 
-    store = SQLiteStageWorkStore(tmp_path / "coordinator.sqlite")
+    store = (
+        InMemoryStageWorkStore() if kind == "memory"
+        else SQLiteStageWorkStore(tmp_path / "coordinator.sqlite")
+    )
     orchestrator = RunOrchestrator(
         authority=LostReply(), store=store, owner_id="coordinator"
     )
@@ -359,7 +366,11 @@ def test_response_loss_after_authority_commit_replays_one_attempt(
             ready_at=10,
         )
 
-    result = orchestrator.reconcile(
+    original = store.find_intent(admission_id="admission-1", stage_name="train", next_attempt=1)
+    authority.allocate_stage_attempt(run_uri, "other", owner_id="worker")
+    if kind == "sqlite":
+        store = SQLiteStageWorkStore(tmp_path / "coordinator.sqlite", _allow_initialize=False)
+    result = RunOrchestrator(authority=authority, store=store, owner_id="coordinator").reconcile(
         admission_id="admission-1",
         plan=plan,
         authority_snapshot=authority.open_run(run_uri),
@@ -368,15 +379,20 @@ def test_response_loss_after_authority_commit_replays_one_attempt(
         ready_at=10,
     )
     assert len(result) == 1
-    assert len(authority.open_run(run_uri).stages[0].attempts) == 1
+    train = next(stage for stage in authority.open_run(run_uri).stages if stage.stage_name == "train")
+    assert len(train.attempts) == 1
     assert len(store.list_stage_work()) == 1
+    assert store.find_intent(admission_id="admission-1", stage_name="train", next_attempt=1) == original
 
 
-def test_intent_replays_before_first_attempt_after_authority_advances(
-    tmp_path: Path,
+@pytest.mark.parametrize("kind", ["memory", "sqlite"])
+@pytest.mark.parametrize("loss", ["before-commit", "revision-race"])
+def test_unaccepted_intent_is_renewed_after_authority_advances(
+    tmp_path: Path, kind: str, loss: str,
 ) -> None:
-    run_uri = "file:///intent-before-attempt"
-    authority = _authority(run_uri)
+    run_uri = (tmp_path / "intent-before-attempt").as_uri()
+    authority = SQLitePerRunAuthorityStore()
+    authority.create_run(run_uri, status=RunStatus.RUNNING)
 
     class LostBeforeCommit:
         def __init__(self) -> None:
@@ -387,15 +403,22 @@ def test_intent_replays_before_first_attempt_after_authority_advances(
         ) -> PreparedAttemptReceipt:
             if self.drop:
                 self.drop = False
-                raise RuntimeError("request lost before authority commit")
+                # Another worker progresses between intent persistence and CAS.
+                authority.allocate_stage_attempt(run_uri, "right", owner_id="worker")
+                if loss == "before-commit":
+                    raise RuntimeError("request lost before authority commit")
             return authority.ensure_prepared_attempt(run_uri, request)
 
-    store = SQLiteStageWorkStore(tmp_path / "coordinator.sqlite")
+    store = (
+        InMemoryStageWorkStore() if kind == "memory"
+        else SQLiteStageWorkStore(tmp_path / "coordinator.sqlite")
+    )
     orchestrator = RunOrchestrator(
         authority=LostBeforeCommit(), store=store, owner_id="coordinator"
     )
     plan = _plan(run_uri, _stage("left"), _stage("right"))
-    with pytest.raises(RuntimeError, match="before authority commit"):
+    error = RuntimeError if loss == "before-commit" else AuthorityStoreError
+    with pytest.raises(error, match="before authority commit|stale authority revision"):
         orchestrator.reconcile(
             admission_id="admission-1",
             plan=plan,
@@ -405,8 +428,11 @@ def test_intent_replays_before_first_attempt_after_authority_advances(
             ready_at=10,
         )
 
-    authority.allocate_stage_attempt(run_uri, "right", owner_id="worker")
-    result = orchestrator.reconcile(
+    original = store.find_intent(admission_id="admission-1", stage_name="left", next_attempt=1)
+    assert original is not None
+    if kind == "sqlite":
+        store = SQLiteStageWorkStore(tmp_path / "coordinator.sqlite", _allow_initialize=False)
+    result = RunOrchestrator(authority=authority, store=store, owner_id="coordinator").reconcile(
         admission_id="admission-1",
         plan=plan,
         authority_snapshot=authority.open_run(run_uri),
@@ -423,6 +449,15 @@ def test_intent_replays_before_first_attempt_after_authority_advances(
     )
     assert [attempt.attempt for attempt in left.attempts] == [1]
     assert len(store.list_stage_work()) == 1
+    renewed = store.find_intent(admission_id="admission-1", stage_name="left", next_attempt=1)
+    assert renewed is not None
+    assert renewed.request.operation_id != original.request.operation_id
+    assert renewed.request.readiness_generation == original.request.readiness_generation
+    assert renewed.ready_at == result[0].ready_at == original.ready_at == 10
+    assert authority.ensure_prepared_attempt(run_uri, renewed.request).attempt.attempt_id == "left-1"
+    with pytest.raises(CoordinatorStoreError, match="changed before replacement"):
+        store.replace_unaccepted_intent(original, renewed)
+    assert store.find_intent(admission_id="admission-1", stage_name="left", next_attempt=1) == renewed
 
 
 def test_old_receipt_replay_does_not_regress_revision_for_new_retry() -> None:
