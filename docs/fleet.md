@@ -239,6 +239,9 @@ Generic checks using `resident-submitted-container-v3` retain an explicit empty
 `input_locations` selection. They qualify infrastructure without mounting catalog
 datasets; candidate preflight and check evidence use the same narrowed capability.
 Legacy check requests retain their original static selection and encoding.
+Nonexclusive GPU probes use the exact offered host policy identity separately
+from that narrowed preparation scope. Their fixed CUDA probe mounts no dataset
+inputs; the host still validates the selected policy and image before launching.
 
 Runtime upgrades accept the same selection through `--check-execution`. The
 operation retains the decoded execution in its existing immutable check intent;
@@ -635,12 +638,22 @@ loom fleet operation retry-check upgrade-018 --fleet lab \
 loom fleet operation resume upgrade-018 --fleet lab
 ```
 
-The predecessor must be a confirmed native terminal failure with no outstanding
-native effects. The successor is appended to the same maintenance history and
+For scheduled checks, the predecessor must be a confirmed native terminal failure
+with no outstanding native effects. The successor is appended to the same maintenance history and
 receives exact operator authorization before dispatch. Prior failure evidence
 remains. Another active successor, different target/owner or unsettled prior
 attempt refuses. Only the latest explicitly selected settled pass satisfies a
 slot, and all slots must pass before the gate reopens.
+
+The same `retry-check` command supports a failed or uncertain nonexclusive GPU
+capability probe. Select its retained host `request_id` from
+`steps/<agent>-gpu-capability/intent.json` as `--failed-check`; later retries use
+the explicitly selected successor ID. This creates a distinct host request and
+preserves the original intent, result or uncertain outcome. A prior probe may
+have computed its fixed matrix product; the new bounded nonexclusive probe
+neither adopts that result nor acquires or releases scheduler claims. Successful
+probes cannot be replaced. Current maintenance ownership, unchanged inputs and
+managed-work settlement remain required. Ordinary resume never invents a retry.
 
 New upgrades prepare each selected CPU/storage/GPU probe in its candidate
 installation before closing admission. This uses the real captured source,

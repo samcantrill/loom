@@ -896,7 +896,9 @@ def _run_checks(operation):
                 from .self_tests import selected_check_profile
 
                 profile = selected_check_profile(policy, thaw_plain_data(observed.value), execution)
+                successors = _gpu_check_successors(operation, name)
                 result = operation.call(name, "gpu-capability", profile=profile,
+                    **({"_step_key": successors[-1]["step_key"]} if successors else {}),
                     **({"execution": execution.to_dict()} if execution is not None else {}))
                 operation.check_observations[name + ":gpu-capability"] = result
                 if result.get("outcome") != "passed":
@@ -1644,6 +1646,9 @@ def _retry_check(operation, failed, successor):
         raise QueueConfigError("retry-check requires --failed-check and --operation-id")
     sshops._directory(operation.inventory, successor)
     operation.recheck()
+    gpu_retry = _retry_gpu_check(operation, failed, successor)
+    if gpu_retry is not None:
+        return gpu_retry
     attempts = _attempts(operation)
     selected = [
         rows
@@ -1681,4 +1686,71 @@ def _retry_check(operation, failed, successor):
         raise QueueConflictError("successor identity already belongs to another intent")
     rows.append(_prepare_attempt(operation, name, check, successor, previous=failed))
     atomic(operation.directory / "checks.json", attempts)
+    return _continue(operation)
+
+
+def _gpu_check_successors(operation, name):
+    path = operation.receipts / (name + "-gpu-capability") / "successors.json"
+    return read(path) if path.exists() else []
+
+
+def _retry_gpu_check(operation, failed, successor):
+    """Explicitly repeat a bounded nonexclusive probe under a new host identity.
+
+    An uncertain prior probe may have computed its fixed matrix product. A new
+    probe neither adopts its result nor changes a scheduler claim. Scheduled
+    checks retain their stronger confirmed-terminal-failure retry requirement.
+    """
+    if operation.intent.get("gpu_qualification") != "nonexclusive":
+        return None
+    selected = []
+    for name in operation.intent["agents"]:
+        key = name + "-gpu-capability"
+        path = operation.receipts / key / "intent.json"
+        if not path.exists():
+            continue
+        original = read(path)
+        rows = _gpu_check_successors(operation, name)
+        identities = [original["request_id"], *(row["operation_id"] for row in rows)]
+        if failed in identities:
+            selected.append((name, key, original, rows))
+    if not selected:
+        return None
+    if len(selected) != 1:
+        raise QueueConflictError("GPU check identity is ambiguous")
+    name, key, original, rows = selected[0]
+    if rows and rows[-1]["operation_id"] == successor and rows[-1]["previous_check_id"] == failed:
+        return _continue(operation)
+    current = rows[-1]["operation_id"] if rows else original["request_id"]
+    if current != failed:
+        raise QueueConflictError("another successor already selects this GPU check")
+    step = operation.receipts / (rows[-1]["step_key"] if rows else key)
+    if not (step / "dispatch.json").exists():
+        raise QueueConflictError("GPU check has not been dispatched")
+    receipt = step / "receipt.json"
+    if receipt.exists() and read(receipt).get("outcome") == "passed":
+        raise QueueConflictError("successful GPU capability check cannot be replaced")
+    if successor == failed or any(
+        read(path).get("request_id") == successor
+        for path in operation.receipts.glob("*/intent.json")
+    ) or any(
+        row["operation_id"] == successor
+        for agent in operation.intent["agents"]
+        for row in _gpu_check_successors(operation, agent)
+    ) or any(
+        row["operation_id"] == successor
+        for values in _attempts(operation).values() for row in values
+    ):
+        raise QueueConflictError("successor identity already belongs to another intent")
+    operation.gate()
+    operation.probes()
+    operation.settled()
+    step_key = key + "-" + successor
+    if (operation.receipts / step_key).exists():
+        raise QueueConflictError("successor host step already exists")
+    atomic(operation.receipts / key / "successors.json", [*rows, {
+        "operation_id": successor,
+        "previous_check_id": failed,
+        "step_key": step_key,
+    }])
     return _continue(operation)

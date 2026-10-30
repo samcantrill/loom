@@ -1038,6 +1038,38 @@ def test_submitted_cpu_storage_checks_execute_without_resident_profile(fleet):
             assert refused["code"] == "check_identity_mismatch"
 
 
+@pytest.mark.parametrize("fleet", ["selected-execution"], indirect=True)
+def test_selected_gpu_intent_keeps_host_policy_separate_from_preparation(fleet, monkeypatch):
+    from dataclasses import replace
+    from loom.coordinator import CoordinatorOperatorClient
+    from loom.fleet import releases, ssh_operations
+    from loom.serialization import thaw_plain_data
+
+    inventory, deployment, _, remote, execution = fleet
+    inventory = replace(inventory, gpu_qualification="nonexclusive")
+    observe = CoordinatorOperatorClient.observe_agent
+
+    def with_gpu(client, name):
+        observation = observe(client, name)
+        value = thaw_plain_data(observation.value)
+        value["offer"]["gpu_devices"] = [{"device_id": "GPU-18cf22d0-ba80-55a5-f8d8-cb19fe940cd1"}]
+        return replace(observation, value=value)
+
+    monkeypatch.setattr(CoordinatorOperatorClient, "observe_agent", with_gpu)
+    monkeypatch.setattr(ssh_operations, "_selection", lambda *args: (
+        {"worker": {"host": "fixture"}}, {"worker": {}},
+    ))
+    monkeypatch.setattr(releases, "verify_release", lambda path: {})
+    intent = self_test(inventory, deployment=deployment,
+        operator_connection=inventory.path.parent / "operator.json",
+        config="pipeline.yaml", checks=("gpu",), execution=execution,
+        _prepare_id="selected-gpu-intent")
+    assert "unselected" not in intent["profile"]["shared_roots"]
+    assert intent["gpu_capability"]["profile"] == remote._config.container_policies[0].capability.to_dict()
+    assert intent["requests"]["gpu"]["preparation"]["input_locations"] == []
+    assert intent["gpu_capability"]["execution"] == execution.to_dict()
+
+
 @pytest.mark.parametrize("fleet", ["submitted-execution", "selected-execution"], indirect=True)
 def test_submitted_maintenance_checks_execute_and_replay_with_admission_closed(fleet):
     from loom.fleet.probes import probe_configuration

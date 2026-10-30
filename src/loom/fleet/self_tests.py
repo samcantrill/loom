@@ -395,12 +395,19 @@ def selected_check_profile(policy, agent, execution=None):
     if execution is not None:
         capability = SubmittedContainerCapability.from_dict(matches[0])
         capability.require_execution(execution)
-        if _check_input_locations(execution) is not None:
-            return capability.select_roots({
-                alias: facts for alias, facts in capability.workload_roots.items()
-                if "qualification" not in cast(Mapping, facts)
-            }).to_dict()
     return matches[0]
+
+
+def _preparation_check_profile(policy, agent, execution):
+    """Narrow scheduled probes without changing the host GPU policy identity."""
+    profile = selected_check_profile(policy, agent, execution)
+    if _check_input_locations(execution) is not None:
+        capability = SubmittedContainerCapability.from_dict(profile)
+        return capability.select_roots({
+            alias: facts for alias, facts in capability.workload_roots.items()
+            if "qualification" not in cast(Mapping, facts)
+        }).to_dict()
+    return profile
 
 
 def self_test(
@@ -501,7 +508,7 @@ def self_test(
         if observed.availability != "available" or observed.freshness != "current":
             raise QueueConfigError("selected agent/profile observation is unavailable")
         agent = cast(dict[str, Any], thaw_plain_data(observed.value))
-        profile = selected_check_profile(policy, agent, execution)
+        profile = _preparation_check_profile(policy, agent, execution)
         if "gpu" in checks and not (agent.get("offer") or {}).get("gpu_devices"):
             raise QueueConfigError("GPU check requires a declared GPU profile")
         requests = {}
@@ -550,7 +557,7 @@ def self_test(
                 "request_id": operation_id + "-gpu-capability",
                 "release": verify_release(inventory.runtime_release),
                 "expected_declaration": digest(declarations[str(agent_id)]),
-                "profile": profile,
+                "profile": selected_check_profile(policy, agent, execution),
                 **({"execution": execution.to_dict()} if execution is not None else {}),
             }
         if retry_of is not None:
