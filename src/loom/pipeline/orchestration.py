@@ -412,6 +412,12 @@ class CoordinatorStageWorkStore(Protocol):
         self, intent: PreparationIntent
     ) -> PreparationIntent: ...
 
+    def replace_unaccepted_intent(
+        self, previous: PreparationIntent, replacement: PreparationIntent
+    ) -> PreparationIntent:
+        """Compare-and-swap an intent proven unaccepted by the reconciler."""
+        ...
+
     def find_intent(
         self, *, admission_id: str, stage_name: str, next_attempt: int
     ) -> PreparationIntent | None: ...
@@ -463,6 +469,15 @@ class InMemoryStageWorkStore:
             and intent.request.next_attempt == next_attempt
         )
         return next(matches, None)
+
+    def replace_unaccepted_intent(
+        self, previous: PreparationIntent, replacement: PreparationIntent
+    ) -> PreparationIntent:
+        if self._intents.get(previous.request.operation_id) != previous:
+            raise CoordinatorStoreError("preparation intent changed before replacement")
+        del self._intents[previous.request.operation_id]
+        self._intents[replacement.request.operation_id] = replacement
+        return replacement
 
     def create_or_refresh(self, record: StageWorkRecord) -> StageWorkRecord:
         existing = self._work.get(record.stage_work_id)
@@ -595,6 +610,25 @@ class SQLiteStageWorkStore:
                     "preparation intent conflicts with its durable request"
                 )
             return existing
+
+    def replace_unaccepted_intent(
+        self, previous: PreparationIntent, replacement: PreparationIntent
+    ) -> PreparationIntent:
+        with self._transaction() as conn:
+            changed = conn.execute(
+                "UPDATE preparation_intents SET operation_id = ?, request_digest = ?, "
+                "intent_json = ? WHERE operation_id = ? AND intent_json = ?",
+                (
+                    replacement.request.operation_id,
+                    replacement.request.request_digest,
+                    _json_dumps(replacement.to_dict()),
+                    previous.request.operation_id,
+                    _json_dumps(previous.to_dict()),
+                ),
+            ).rowcount
+            if changed != 1:
+                raise CoordinatorStoreError("preparation intent changed before replacement")
+        return replacement
 
     def find_intent(
         self, *, admission_id: str, stage_name: str, next_attempt: int
@@ -924,6 +958,7 @@ class RunOrchestrator:
                 ready_at=ready_at,
                 ready_order=ready_order,
                 expected_revision=current_revision,
+                observed_revision=authority_snapshot.revision,
                 prior_intent=prior_intent,
                 run_priority=run_priority,
                 enqueue_sequence=enqueue_sequence,
@@ -1055,13 +1090,22 @@ class RunOrchestrator:
         ready_at: int,
         ready_order: int,
         expected_revision: BackendRevision,
+        observed_revision: BackendRevision,
         prior_intent: PreparationIntent | None,
         run_priority: int,
         enqueue_sequence: int,
     ) -> tuple[StageWorkRecord, PreparedAttemptReceipt]:
         if readiness.next_attempt is None:
             raise CoordinatorStoreError("RUN readiness omitted next attempt")
-        if prior_intent is None:
+        # A newer authoritative snapshot with the same pre-attempt state proves
+        # the old CAS request never committed and cannot commit in the future.
+        # A prepared attempt (including a lost response) must replay its receipt.
+        renew = prior_intent is not None and (
+            observed_revision.sequence > prior_intent.request.expected_revision.sequence
+            and readiness.expected_stage_status is prior_intent.request.expected_stage_status
+            and readiness.expected_attempt_id == prior_intent.request.expected_attempt_id
+        )
+        if prior_intent is None or renew:
             request = _preparation_request(
                 admission_id=admission_id,
                 readiness=readiness,
@@ -1069,7 +1113,10 @@ class RunOrchestrator:
                 owner_id=self.owner_id,
                 stage_facts=stage_facts,
             )
-            intent = PreparationIntent(request=request, ready_at=ready_at)
+            intent = PreparationIntent(
+                request=request,
+                ready_at=ready_at if prior_intent is None else prior_intent.ready_at,
+            )
         else:
             intent = prior_intent
             if (
@@ -1079,7 +1126,11 @@ class RunOrchestrator:
                 raise CoordinatorStoreError(
                     "persisted preparation intent conflicts with current readiness"
                 )
-        intent = self.store.create_or_return_intent(intent)
+        if renew:
+            assert prior_intent is not None
+            intent = self.store.replace_unaccepted_intent(prior_intent, intent)
+        else:
+            intent = self.store.create_or_return_intent(intent)
         receipt = self.authority.ensure_prepared_attempt(run_uri, intent.request)
         stage_work_id = stage_work_identity(
             admission_id,
