@@ -235,6 +235,11 @@ digest and size, contained Python, worker contract and optional project integrat
 The agent's current native offer must advertise the selected policy. Its resident
 profile list may be empty. Installed-profile checks omit this option.
 
+Generic checks using `resident-submitted-container-v3` retain an explicit empty
+`input_locations` selection. They qualify infrastructure without mounting catalog
+datasets; candidate preflight and check evidence use the same narrowed capability.
+Legacy check requests retain their original static selection and encoding.
+
 Runtime upgrades accept the same selection through `--check-execution`. The
 operation retains the decoded execution in its existing immutable check intent;
 candidate preflight, authorized jobs and nonexclusive GPU probing all use that

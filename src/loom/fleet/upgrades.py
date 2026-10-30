@@ -25,7 +25,7 @@ from loom.fleet import ssh_operations as sshops
 from loom.fleet._upgrade_progress import Observation, ProgressSink, phase, reason
 from loom.fleet._timing import bind_directory, measure, recording, timed
 from loom.fleet.releases import verify_release
-from loom.fleet.self_tests import self_test
+from loom.fleet.self_tests import self_test, _check_input_locations
 from loom.fleet.probes import probe_configuration
 from loom.queue.agent_sessions import AgentControl, AgentControlKind
 from loom.queue.deployment import load_coordinator_connection_file
@@ -759,6 +759,7 @@ def _preflight_checks(operation):
                 identity + "-preflight", identity, deployment.source,
                 selection["config"], chosen,
                 execution=_check_execution(selection),
+                input_locations=_check_input_locations(_check_execution(selection)),
                 overrides=tuple(key + "=" + json.dumps(value)
                                 for key, value in probe_configuration(check, name).items()),
             ).to_dict()

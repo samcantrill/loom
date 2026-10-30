@@ -104,13 +104,27 @@ def fleet(tmp_path, request):
         "preparation-input-v2",
     )
     submitted_policy = execution = None
-    if getattr(request, "param", None) in {"submitted", "submitted-execution"}:
+    if getattr(request, "param", None) in {"submitted", "submitted-execution", "selected-execution", "mixed-execution"}:
         from dataclasses import replace
         from tests.integration.queue.test_submitted_container_agents import _fixture
 
         site = tmp_path / "submitted"
         site.mkdir()
         submitted_policy, execution, _ = _fixture(site)
+        if request.param in {"selected-execution", "mixed-execution"}:
+            from loom.queue.submitted_execution import SELECTED_INPUT_WORKER_CONTRACT
+
+            unused = site / "unselected"
+            unused.mkdir()
+            submitted_policy = replace(submitted_policy,
+                worker_contracts=((SELECTED_INPUT_WORKER_CONTRACT,) if request.param == "selected-execution"
+                                  else (*submitted_policy.worker_contracts, SELECTED_INPUT_WORKER_CONTRACT)),
+                shared_roots={**submitted_policy.shared_roots, "unselected": {
+                    "host_path": str(unused), "container_path": "/loom/unselected", "access": "ro",
+                    "qualification": {"kind": "input_directory"},
+                }})
+            if request.param == "selected-execution":
+                execution = replace(execution, worker_contract=SELECTED_INPUT_WORKER_CONTRACT)
         snapshots = tmp_path / "snapshots"
         snapshots.mkdir(exist_ok=True)
         (snapshots / "challenge").write_bytes(b"snapshots")
@@ -120,7 +134,7 @@ def fleet(tmp_path, request):
                 "host_path": str(snapshots), "container_path": "/loom/snapshots", "access": "ro",
                 "challenge": {"path": "challenge", "sha256": hashlib.sha256(b"snapshots").hexdigest()},
             }})
-        if request.param == "submitted-execution":
+        if request.param in {"submitted-execution", "selected-execution", "mixed-execution"}:
             from examples.execution.containers.apptainer_fixture import fake_apptainer
 
             runtime = fake_apptainer()
@@ -994,7 +1008,7 @@ def test_submitted_check_retains_native_offered_policy_and_exact_request(fleet):
     assert not (inventory.path.parent / "checks/submitted-check/cpu.dispatch.json").exists()
 
 
-@pytest.mark.parametrize("fleet", ["submitted-execution"], indirect=True)
+@pytest.mark.parametrize("fleet", ["submitted-execution", "selected-execution", "mixed-execution"], indirect=True)
 def test_submitted_cpu_storage_checks_execute_without_resident_profile(fleet):
     inventory, deployment, _, remote, execution = fleet
     assert not remote._config.resident_profiles
@@ -1011,8 +1025,18 @@ def test_submitted_cpu_storage_checks_execute_without_resident_profile(fleet):
         assert assignment["released"] is True
         assert assignment["release_proof"]["claim_id"] == assignment["claim_id"]
 
+        if execution.worker_contract == "resident-submitted-container-v3":
+            assert "unselected" not in assignment["profile"]["shared_roots"]
+            intent = json.loads((inventory.path.parent / "checks" / result["operation_id"] / "intent.json").read_text())
+            assert intent["requests"][kind]["preparation"]["input_locations"] == []
+            wider = {**assignment, "profile": remote._config.container_policies[0].capability.to_dict()}
+            refused = verify_check(kind, result["checks"][kind]["report"], wider,
+                result["checks"][kind]["agent"]["value"], agent_id=intent["agent_id"],
+                session_id=intent["session_id"], profile=intent["profile"], run_uri=assignment["run_uri"])
+            assert refused["code"] == "check_identity_mismatch"
 
-@pytest.mark.parametrize("fleet", ["submitted-execution"], indirect=True)
+
+@pytest.mark.parametrize("fleet", ["submitted-execution", "selected-execution"], indirect=True)
 def test_submitted_maintenance_checks_execute_and_replay_with_admission_closed(fleet):
     from loom.fleet.probes import probe_configuration
     from loom.pipeline.resources import ResourceEntry, ResourceRequest

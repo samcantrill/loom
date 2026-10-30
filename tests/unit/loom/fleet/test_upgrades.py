@@ -192,11 +192,16 @@ def test_check_selection_repair_cli_retains_parent_and_explicit_deployment():
     assert selected.deployment == Path("/shared/current-checks.json")
 
 
-def test_container_only_preflight_retains_selected_execution(tmp_path, monkeypatch):
+@pytest.mark.parametrize("selected_inputs", [False, True])
+def test_container_only_preflight_retains_selected_execution(tmp_path, monkeypatch, selected_inputs):
+    from dataclasses import replace
+    from loom.queue.submitted_execution import SELECTED_INPUT_WORKER_CONTRACT
     from loom.queue.preparation import PreparationSource, PrepareRunRequest
     from tests.integration.queue.test_submitted_container_agents import _fixture
 
     policy, execution, _ = _fixture(tmp_path)
+    if selected_inputs:
+        execution = replace(execution, worker_contract=SELECTED_INPUT_WORKER_CONTRACT)
     declarations = {
         "worker": {"resident_profiles": [], "container_policies": [{"policy_id": policy.policy_id}]},
         "coordinator": {"preparation": {"profiles": {
@@ -229,6 +234,7 @@ def test_container_only_preflight_retains_selected_execution(tmp_path, monkeypat
         assert request.execution == execution
         assert request.preparation_profile == "submitted"
         assert request.source == deployment.source
+        assert request.input_locations == (() if selected_inputs else None)
     assert calls[1][2]["candidate_declaration"]["resident_profiles"] == []
     from loom.queue.errors import QueueConfigError
     with pytest.raises(QueueConfigError, match="ambiguous"):

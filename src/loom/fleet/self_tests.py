@@ -29,7 +29,11 @@ from loom.queue.deployment import (
 from loom.queue.errors import QueueConfigError
 from loom.queue.models import validate_queue_id
 from loom.queue.preparation import PrepareRunRequest
-from loom.queue.submitted_execution import SubmittedContainerCapability, SubmittedContainerExecution
+from loom.queue.submitted_execution import (
+    SELECTED_INPUT_WORKER_CONTRACT,
+    SubmittedContainerCapability,
+    SubmittedContainerExecution,
+)
 from loom.runs.outputs import OutputSelection
 from loom.serialization import thaw_plain_data
 
@@ -347,6 +351,15 @@ def _observe_check(
                 except (OSError, ValueError):
                     return {"outcome": "failed", "code": "storage_result_mismatch", **facts}
     facts.update(report=report, verified_artifact=thaw_plain_data(artifact))
+    profile = intent["profile"]
+    if request.preparation.execution is not None and request.preparation.execution.worker_contract == SELECTED_INPUT_WORKER_CONTRACT:
+        from loom.queue.shared_execution import stage_scope
+
+        capability = SubmittedContainerCapability.from_dict(profile)
+        # Generic probe stages have no input locations. Reuse admission's scope
+        # projection: preparation can read captures; the probe only publishes.
+        selected = stage_scope({}, {}, {"roots": capability.workload_roots, "locations": []})
+        profile = capability.select_roots(cast(Mapping, selected["roots"])).to_dict()
     result = verify_check(
         check,
         report,
@@ -354,10 +367,15 @@ def _observe_check(
         cast(dict[str, Any], thaw_plain_data(agent_observation.value)),
         agent_id=intent["agent_id"],
         session_id=intent["session_id"],
-        profile=intent["profile"],
+        profile=profile,
         run_uri=observed.admission.run_uri,
     )
     return {**result, **facts}
+
+
+def _check_input_locations(execution):
+    """Generic v3 probes use infrastructure only; legacy requests stay unchanged."""
+    return () if execution is not None and execution.worker_contract == SELECTED_INPUT_WORKER_CONTRACT else None
 
 
 def selected_check_profile(policy, agent, execution=None):
@@ -375,7 +393,13 @@ def selected_check_profile(policy, agent, execution=None):
     if len(matches) != 1:
         raise QueueConfigError("selected profile is unavailable or ambiguous")
     if execution is not None:
-        SubmittedContainerCapability.from_dict(matches[0]).require_execution(execution)
+        capability = SubmittedContainerCapability.from_dict(matches[0])
+        capability.require_execution(execution)
+        if _check_input_locations(execution) is not None:
+            return capability.select_roots({
+                alias: facts for alias, facts in capability.workload_roots.items()
+                if "qualification" not in cast(Mapping, facts)
+            }).to_dict()
     return matches[0]
 
 
@@ -492,6 +516,7 @@ def self_test(
                     config,
                     selection.preparation_profile,
                     execution=execution,
+                    input_locations=_check_input_locations(execution),
                     overrides=tuple(
                         key + "=" + json.dumps(value)
                         for key, value in composition.items()
