@@ -1728,6 +1728,13 @@ def _retry_gpu_check(operation, failed, successor):
     if not (step / "dispatch.json").exists():
         raise QueueConflictError("GPU check has not been dispatched")
     receipt = step / "receipt.json"
+    if not receipt.exists():
+        retained_request = read(step / "intent.json")
+        observed = sshops.ssh(operation.intent["hosts"][name]["host"], {
+            **retained_request, "action": "receipt",
+        })
+        if observed is not None:
+            operation._finish_call(name, step, retained_request, observed)
     if receipt.exists() and read(receipt).get("outcome") == "passed":
         raise QueueConflictError("successful GPU capability check cannot be replaced")
     if successor == failed or any(

@@ -652,8 +652,10 @@ the explicitly selected successor ID. This creates a distinct host request and
 preserves the original intent, result or uncertain outcome. A prior probe may
 have computed its fixed matrix product; the new bounded nonexclusive probe
 neither adopts that result nor acquires or releases scheduler claims. Successful
-probes cannot be replaced. Current maintenance ownership, unchanged inputs and
-managed-work settlement remain required. Ordinary resume never invents a retry.
+probes cannot be replaced, including a recovered host success after a lost reply.
+Transport failure while reading the host receipt leaves the retry unselected.
+Current maintenance ownership, unchanged inputs and managed-work settlement
+remain required. Ordinary resume never invents a retry.
 
 New upgrades prepare each selected CPU/storage/GPU probe in its candidate
 installation before closing admission. This uses the real captured source,

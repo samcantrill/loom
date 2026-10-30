@@ -99,7 +99,7 @@ def test_upgrade_uses_host_capability_and_keeps_cpu_storage_checks(tmp_path, mon
         **({"execution": execution.to_dict()} if execution is not None else {})})]
 
 
-@pytest.mark.parametrize("prior", ["unknown", "failed", "passed", "not_dispatched"])
+@pytest.mark.parametrize("prior", ["unknown", "failed", "passed", "remote_passed", "transport_unavailable", "not_dispatched"])
 def test_explicit_gpu_retry_preserves_prior_attempt_and_replays(tmp_path, monkeypatch, prior):
     original = tmp_path / "steps/worker-gpu-capability"
     original.mkdir(parents=True)
@@ -113,14 +113,30 @@ def test_explicit_gpu_retry_preserves_prior_attempt_and_replays(tmp_path, monkey
     operation = SimpleNamespace(
         directory=tmp_path, receipts=tmp_path / "steps",
         inventory=SimpleNamespace(path=tmp_path / "fleet.json"),
-        intent={"agents": {"worker": {}}, "gpu_qualification": "nonexclusive"},
+        intent={"agents": {"worker": {}}, "hosts": {"worker": {"host": "fixture"}},
+                "gpu_qualification": "nonexclusive"},
         recheck=lambda: verified.append("inputs"),
         gate=lambda: verified.append("gate"),
         probes=lambda: verified.append("owners"),
         settled=lambda: verified.append("settled"),
+        _finish_call=lambda name, step, request, response: upgrades.atomic(step / "receipt.json", response),
     )
     monkeypatch.setattr(upgrades, "_continue", lambda op: {"outcome": "continued"})
-    if prior in {"passed", "not_dispatched"}:
+    observations = []
+
+    def receipt(host, request):
+        assert host == "fixture" and request == {"request_id": "original-probe", "action": "receipt"}
+        observations.append(request)
+        if prior == "transport_unavailable":
+            raise upgrades.sshops.SshUnavailable("receipt unavailable")
+        return {"outcome": "passed"} if prior == "remote_passed" else None
+
+    monkeypatch.setattr(upgrades.sshops, "ssh", receipt)
+    if prior == "transport_unavailable":
+        with pytest.raises(upgrades.sshops.SshUnavailable, match="receipt unavailable"):
+            upgrades._retry_check(operation, "original-probe", "replacement")
+        assert not (original / "successors.json").exists()
+    elif prior in {"passed", "remote_passed", "not_dispatched"}:
         with pytest.raises(QueueConflictError, match="cannot be replaced|not been dispatched"):
             upgrades._retry_check(operation, "original-probe", "replacement")
         assert not (original / "successors.json").exists()
@@ -137,6 +153,7 @@ def test_explicit_gpu_retry_preserves_prior_attempt_and_replays(tmp_path, monkey
         with pytest.raises(QueueConflictError, match="another successor"):
             upgrades._retry_check(operation, "original-probe", "different")
     assert all(path.read_bytes() == value for path, value in before.items())
+    assert bool(observations) == (prior in {"unknown", "remote_passed", "transport_unavailable"})
 
 
 def test_gpu_retry_refuses_changed_maintenance_owner(tmp_path, monkeypatch):
@@ -151,9 +168,11 @@ def test_gpu_retry_refuses_changed_maintenance_owner(tmp_path, monkeypatch):
     operation = SimpleNamespace(
         directory=tmp_path, receipts=tmp_path / "steps",
         inventory=SimpleNamespace(path=tmp_path / "fleet.json"),
-        intent={"agents": {"worker": {}}, "gpu_qualification": "nonexclusive"},
+        intent={"agents": {"worker": {}}, "hosts": {"worker": {"host": "fixture"}},
+                "gpu_qualification": "nonexclusive"},
         recheck=lambda: None, gate=changed_owner,
     )
+    monkeypatch.setattr(upgrades.sshops, "ssh", lambda *args: None)
     with pytest.raises(QueueConflictError, match="maintenance owner changed"):
         upgrades._retry_check(operation, "original-probe", "replacement")
     assert not (original / "successors.json").exists()
