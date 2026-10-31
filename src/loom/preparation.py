@@ -17,7 +17,7 @@ import traceback
 from pathlib import Path
 from typing import Any, cast
 
-from loom._preparation_report import PREPARATION_REPORT_SCHEMA_VERSION, SUBMITTED_PREPARATION_REPORT_SCHEMA_VERSION
+from loom._preparation_report import PREPARATION_REPORT_SCHEMA_VERSION, SUBMITTED_PREPARATION_REPORT_SCHEMA_VERSION, SUPPORTED_REPORT_FORMATS
 from loom.artifacts import ArtifactRef
 from loom.diagnostics.models import (
     PreflightCheckStatus,
@@ -664,7 +664,7 @@ def _decode_preparation_report(
                         | ({"candidate", "verification"} if expected.candidate is not None else set())
                         | ({"project_contracts"} if expected.project_preparation is not None else set())
                         | ({"generations"} if expected.generations is not None else set()))
-        or report["report_format"] != "loom.preparation_report.v1"
+        or report["report_format"] not in SUPPORTED_REPORT_FORMATS
         or type(report["schema_version"]) is not int
         or report["schema_version"] != _report_schema(expected)
     ):

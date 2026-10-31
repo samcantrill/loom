@@ -1288,6 +1288,12 @@ its materialized `ArtifactRef`; the stage loads the report through
 project-owned companions relative to that report. The loader verifies and
 hydrates the native composition companion; decoding only the primary JSON does
 not establish complete preparation evidence.
+New reports use physical format `loom.preparation_report.v2`: resolved and redacted
+configuration, recipe expansions, manifest, and provenance all live in the
+checksum-bound companion. Equal requested and effective compositions share one
+entry. The primary contains references rather than repeated configuration trees.
+The public loader also reads existing v1 physical reports without rewriting them;
+its hydrated logical composition and scientific identities remain unchanged.
 This input is separate from user-authored stage ports and does not inline the
 whole report into worker metadata. Original references are bound to admitted
 bytes and worker paths use the selected host's shared-root mapping.
