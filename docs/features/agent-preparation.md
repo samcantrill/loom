@@ -1063,6 +1063,16 @@ are still revisited, and a new retry receives a new resolution. Authority,
 readiness-generation and upstream-commit checks continue to invalidate stale
 work; dispatch and worker input checks still validate bytes at their boundaries.
 
+An unrelated worker can advance the run revision between saving a preparation
+intent and submitting it to authority. If a newer authoritative snapshot still
+shows the intent's exact pre-attempt stage and attempt state, the request was
+never accepted and its old revision can no longer succeed. Reconciliation then
+atomically replaces that local intent with a request at the current revision,
+preserving its readiness generation and original ready time. An accepted request,
+including one whose response was lost, keeps its original operation identity and
+replays the authority receipt. Authority revision checks and durable formats are
+unchanged.
+
 Native context also supplies `loom.execution_binding` with exactly
 `schema_version: 1`, `origin_run_id`, `origin_node_id`, positive `attempt`,
 `environment_fingerprint`, and `run_state_root`. Original identity comes from the
