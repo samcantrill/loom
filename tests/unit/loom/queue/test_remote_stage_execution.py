@@ -2110,7 +2110,7 @@ def test_native_preparation_transfer_publishes_pair_and_restores_original_primar
     primary = Path(uri_to_path(published.uri))
     assert load_preparation_report(published, primary) == {
         **logical,
-        "report_format": "loom.preparation_report.v1",
+        "report_format": "loom.preparation_report.v2",
     }
     prior = {
         path: (path.read_bytes(), path.stat().st_mtime_ns)
