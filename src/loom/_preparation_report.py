@@ -15,10 +15,11 @@ from loom.serialization import PlainData, ensure_plain_data, stable_json_bytes
 
 PREPARATION_REPORT_SCHEMA_VERSION = 10
 SUBMITTED_PREPARATION_REPORT_SCHEMA_VERSION = 11
-REPORT_FORMAT = "loom.preparation_report.v1"
-_COMPOSITION_SCHEMA = "loom.preparation_composition.v1"
+REPORT_FORMAT = "loom.preparation_report.v2"
+SUPPORTED_REPORT_FORMATS = ("loom.preparation_report.v1", REPORT_FORMAT)
+_COMPOSITION_SCHEMA = "loom.preparation_composition.v2"
 _LOGICAL_FIELDS = {"resolved", "redacted", "recipe_manifest", "manifest", "provenance"}
-_PRIMARY_FIELDS = {"resolved", "redacted", "recipe_manifest", "evidence_ref"}
+_LEGACY_PRIMARY_FIELDS = {"resolved", "redacted", "recipe_manifest", "evidence_ref"}
 
 
 def _mapping(value: object) -> dict[str, PlainData]:
@@ -33,8 +34,12 @@ def _equal(left: PlainData, right: PlainData) -> bool:
 
 
 def _require_current_report(report: dict[str, PlainData]) -> None:
-    if (type(report.get("schema_version")) is not int
-        or report["schema_version"] not in {PREPARATION_REPORT_SCHEMA_VERSION, SUBMITTED_PREPARATION_REPORT_SCHEMA_VERSION}):
+    if type(report.get("schema_version")) is not int or report[
+        "schema_version"
+    ] not in {
+        PREPARATION_REPORT_SCHEMA_VERSION,
+        SUBMITTED_PREPARATION_REPORT_SCHEMA_VERSION,
+    }:
         raise QueueConflictError(
             "preparation report schema is unsupported; regenerate preparation"
         )
@@ -84,16 +89,21 @@ def save_composition_evidence(
                     "pointer": f"/compositions/{identifier}/manifest/metadata",
                     "fields": cast(list[PlainData], fields),
                 }
-            compositions[identifier] = {"manifest": manifest, "provenance": provenance}
-        primary[name] = {
-            key: composition[key] for key in ("resolved", "redacted", "recipe_manifest")
-        }
+            compositions[identifier] = {
+                **{
+                    key: composition[key]
+                    for key in ("resolved", "redacted", "recipe_manifest")
+                },
+                "manifest": manifest,
+                "provenance": provenance,
+            }
+        primary[name] = {}
         cast(dict[str, PlainData], primary[name])["evidence_ref"] = ResourceRef(
             uri=path.name,
             resource_type="loom.preparation_composition",
             codec_key="json.v1",
             metadata={
-                "document_schema_version": 1,
+                "document_schema_version": 2,
                 "pointer": f"/compositions/{identifier}",
             },
         ).to_dict()
@@ -101,7 +111,7 @@ def save_composition_evidence(
         path,
         {
             "schema": _COMPOSITION_SCHEMA,
-            "schema_version": 1,
+            "schema_version": 2,
             "compositions": compositions,
         },
     )
@@ -149,10 +159,12 @@ def load_report(
         )
     report = _decoded_mapping(content)
     _require_current_report(report)
-    if report.get("report_format") != REPORT_FORMAT:
+    if report.get("report_format") not in SUPPORTED_REPORT_FORMATS:
         raise QueueConflictError(
             "preparation report format is unsupported; regenerate preparation"
         )
+    legacy = report["report_format"] == "loom.preparation_report.v1"
+    version = 1 if legacy else 2
     hydrated: dict[str, dict[str, PlainData]] = {}
     companion_path: Path | None = None
     companion_checksum: str | None = None
@@ -163,7 +175,7 @@ def load_report(
                 raise QueueConflictError("preparation composition evidence is missing")
             continue
         composition = _mapping(report[name])
-        if set(composition) != _PRIMARY_FIELDS:
+        if set(composition) != (_LEGACY_PRIMARY_FIELDS if legacy else {"evidence_ref"}):
             raise QueueConflictError(
                 "preparation primary composition fields are invalid"
             )
@@ -196,7 +208,7 @@ def load_report(
         if (
             set(metadata) != {"document_schema_version", "pointer"}
             or type(metadata["document_schema_version"]) is not int
-            or metadata["document_schema_version"] != 1
+            or metadata["document_schema_version"] != version
             or not isinstance(pointer, str)
         ):
             raise QueueConflictError(
@@ -220,9 +232,12 @@ def load_report(
             companion = _decoded_mapping(companion_bytes)
             if (
                 set(companion) != {"schema", "schema_version", "compositions"}
-                or companion["schema"] != _COMPOSITION_SCHEMA
+                or companion["schema"]
+                != (
+                    "loom.preparation_composition.v1" if legacy else _COMPOSITION_SCHEMA
+                )
                 or type(companion["schema_version"]) is not int
-                or companion["schema_version"] != 1
+                or companion["schema_version"] != version
             ):
                 raise QueueConflictError(
                     "preparation composition schema is unsupported"
@@ -237,8 +252,10 @@ def load_report(
             raise QueueConflictError("preparation addressed composition is missing")
         if identifier in hydrated:
             prior = hydrated[identifier]
-            if any(not _equal(prior[key], composition[key])
-                   for key in ("resolved", "redacted", "recipe_manifest")):
+            if legacy and any(
+                not _equal(prior[key], composition[key])
+                for key in ("resolved", "redacted", "recipe_manifest")
+            ):
                 raise QueueConflictError(
                     "shared preparation composition logical meanings differ"
                 )
@@ -247,7 +264,7 @@ def load_report(
             report[name] = deepcopy(prior)
             continue
         entry = _mapping(entries[identifier])
-        if set(entry) != {"manifest", "provenance"}:
+        if set(entry) != ({"manifest", "provenance"} if legacy else _LOGICAL_FIELDS):
             raise QueueConflictError("preparation composition entry fields are invalid")
         manifest = _mapping(entry["manifest"])
         provenance = _mapping(entry["provenance"])
@@ -278,7 +295,7 @@ def load_report(
                 },
             }
         full = {
-            key: composition[key]
+            key: (composition if legacy else entry)[key]
             for key in ("resolved", "redacted", "recipe_manifest")
         }
         full.update(manifest=manifest, provenance=provenance)
