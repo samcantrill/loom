@@ -804,7 +804,11 @@ dataset IDs, splits or application-specific configuration.
 Preparation inspects the union, then each action retains only its selected
 workload roots, publication roots and host-only infrastructure. A preparation
 worker needs access to the union. All selected mounts remain read-only. The
-processor receives qualified container targets in its protected `shared_scope`
+coordinator compares stage location membership independently of mapping traversal
+order, which canonical report JSON may change. Root qualifications, access modes,
+paths and location multiplicity must still match exactly. This comparison does
+not rewrite retained fingerprints or change application-defined sequence order.
+The processor receives qualified container targets in its protected `shared_scope`
 and the selected `execution`; it can resolve those inputs without discovering
 dataset-specific environment variables.
 

@@ -96,13 +96,25 @@ def test_host_capability_binds_profile_and_refuses_uncertain_replay(tmp_path, mo
 
 
 @pytest.mark.parametrize("changed_image", [False, True])
-def test_submitted_gpu_probe_uses_exact_image_and_native_inventory(tmp_path, monkeypatch, changed_image):
+@pytest.mark.parametrize("selected_inputs", [False, True])
+def test_submitted_gpu_probe_uses_exact_image_and_native_inventory(tmp_path, monkeypatch, changed_image, selected_inputs):
     from loom.fleet import _host
     from loom.queue import deployment
     from loom.queue.agent_session_transport import AgentResourceInventory
     from tests.integration.queue.test_submitted_container_agents import _fixture, _config
 
     policy, execution, _ = _fixture(tmp_path)
+    if selected_inputs:
+        from loom.queue.submitted_execution import SELECTED_INPUT_WORKER_CONTRACT
+
+        dataset = tmp_path / "unselected"
+        dataset.mkdir()
+        policy = replace(policy, worker_contracts=(SELECTED_INPUT_WORKER_CONTRACT,),
+            shared_roots={**policy.shared_roots, "unselected": {
+                "host_path": str(dataset), "container_path": "/loom/unselected", "access": "ro",
+                "qualification": {"kind": "input_directory"},
+            }})
+        execution = replace(execution, worker_contract=SELECTED_INPUT_WORKER_CONTRACT)
     from loom.pipeline.executors.containers import ContainerMount
 
     scratch_base = tmp_path / "absent-production-scratch"
@@ -123,6 +135,7 @@ def test_submitted_gpu_probe_uses_exact_image_and_native_inventory(tmp_path, mon
     def run(_runner, command, **kwargs):
         calls.append(command)
         assert "--nv" in command.argv
+        assert not any("/loom/unselected" in argument for argument in command.argv)
         assert f"CUDA_VISIBLE_DEVICES={DEVICE}" in command.argv
         index = command.argv.index(str(image))
         assert command.argv[index + 1] == execution.python_executable

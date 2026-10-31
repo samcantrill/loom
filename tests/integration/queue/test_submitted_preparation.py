@@ -85,6 +85,34 @@ def test_selected_input_override_fails_before_report_publication(tmp_path, monke
     assert not list((tmp_path / "artifacts").rglob("*.json"))
 
 
+def test_selected_locations_survive_sorted_report_without_rewriting_retained_scope(tmp_path, monkeypatch):
+    from loom.queue.shared_execution import SHARED_EXECUTION_SCOPE
+
+    def location(path):
+        return {"kind": "loom.shared-location", "schema_version": 1,
+                "root_id": "data", "path": path}
+
+    _, binding, report = _run(tmp_path, monkeypatch, selected_inputs=True, stage_update={
+        "config": {"value": 41, "z_first": location("left"), "a_second": location("right")},
+    })
+    # The supported report writer sorts mapping keys, while preserving the
+    # location list bound by the worker before serialization.
+    stage = report["composition"]["resolved"]["pipeline"]["stages"][0]
+    retained = stage["fingerprint"][SHARED_EXECUTION_SCOPE]
+    assert retained["locations"] == [location("left"), location("right")]
+    assert list(stage["config"]) == ["a_second", "value", "z_first"]
+    before = json.dumps(report, sort_keys=True)
+    composed, _, preflight = decode_preparation_report(report, expected=binding)
+    assert preflight.status.value == "PASS"
+    assert cast(Any, composed).resolved["pipeline"]["stages"][0]["fingerprint"][SHARED_EXECUTION_SCOPE] == retained
+    assert json.dumps(report, sort_keys=True) == before
+
+    changed = deepcopy(report)
+    changed["composition"]["resolved"]["pipeline"]["stages"][0]["config"]["a_second"] = location("other")
+    with pytest.raises(QueueConflictError, match="shared selection conflicts"):
+        decode_preparation_report(changed, expected=binding)
+
+
 def test_native_report_and_child_plan_retain_submitted_execution(tmp_path, monkeypatch):
     service, binding, report = _run(tmp_path, monkeypatch)
     assert binding.execution is not None and binding.container_capability is not None

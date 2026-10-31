@@ -792,7 +792,16 @@ def _decode_preparation_report(
                 raise QueueConflictError("preparation report local placement conflicts")
             if expected.shared_scope is not None:
                 selected = stage_scope(stage.stage_config, stage.factory.init, expected.shared_scope)
-                if shared_scope(stage.fingerprint_fields.get(SHARED_EXECUTION_SCOPE)) != selected:
+                retained = shared_scope(stage.fingerprint_fields.get(SHARED_EXECUTION_SCOPE))
+                # Canonical report JSON can reorder configuration mappings.
+                # Compare location membership on detached projections, leaving
+                # retained fingerprint bytes and application sequence order intact.
+                for selection in (retained, selected):
+                    if selection is not None:
+                        selection["locations"] = sorted(
+                            cast(list[PlainData], selection["locations"]), key=stable_json_bytes
+                        )
+                if retained != selected:
                     raise QueueConflictError("prepared stage shared selection conflicts")
                 validate_workload(stage.stage_config, selected)
                 validate_workload(stage.factory.init, selected)
