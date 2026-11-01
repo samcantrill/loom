@@ -250,6 +250,45 @@ def test_cli_accepts_explicit_submitted_check_selection():
     upgrade = parser.parse_args(["fleet", "upgrade", "--fleet", "site", "--runtime-release", "/private/release.json",
                                  "--check-execution", "/private/execution.json"])
     assert upgrade.check_execution == check.execution
+    setup = parser.parse_args(["fleet", "apply", "--fleet", "site", "--operation-id", "add",
+                               "--deployment", "/private/deployment.json",
+                               "--check-execution", "/private/execution.json",
+                               "--grant-operator-access", "existing-operator"])
+    assert setup.check_execution == check.execution
+    assert setup.grant_operator_access == "existing-operator"
+
+
+def test_cli_setup_passes_exact_execution_and_explicit_operator_scope(tmp_path, monkeypatch):
+    import io
+    import json
+    from types import SimpleNamespace
+    from loom.cli.main import main
+    from loom.fleet import configuration, ssh_operations
+    from loom.queue.submitted_execution import SubmittedContainerExecution, SubmittedImage
+
+    execution = SubmittedContainerExecution("apptainer", SubmittedImage(
+        {"kind": "loom.shared-location", "schema_version": 1, "root_id": "images", "path": "exact.sif"},
+        "d" * 64, 25), "/image/python", "resident-submitted-container-v3")
+    path = tmp_path / "check.json"
+    path.write_text(json.dumps(execution.to_dict()))
+    path.chmod(0o600)
+    inventory = SimpleNamespace(path=tmp_path / "fleet.json")
+    monkeypatch.setattr(configuration, "load_inventory", lambda path: inventory)
+    calls = []
+    def setup(actual, **kwargs):
+        assert actual is inventory
+        calls.append(kwargs)
+        return {"outcome": "complete"}
+    monkeypatch.setattr(ssh_operations, "apply", setup)
+    assert main(["fleet", "apply", "--fleet", str(inventory.path), "--operation-id", "add",
+                 "--deployment", str(tmp_path / "deployment.json"), "--hosts", "worker2",
+                 "--check-execution", str(path), "--grant-operator-access", "operator",
+                 "--format", "json"], stdout=io.StringIO()) == 0
+    assert calls[0]["hosts"] == ["worker2"]
+    selected = calls[0]["check_selection"]
+    assert selected["execution"] == execution.to_dict()
+    assert selected["execution_file"] == str(path)
+    assert selected["grant_operator_access"] == "operator"
 
 
 def test_resident_promotion_cannot_substitute_submitted_qualification(monkeypatch):
