@@ -1835,7 +1835,21 @@ def _slurm_profile_composition(value: object) -> tuple[object, ...]:
             key: _construct_trusted_value(item_value, f"{label}.{key}")
             for key, item_value in mapping.items()
         }
-        kwargs["bootstrap_argv"] = ("loom", "slurm-bootstrap")
+        if kwargs.get("submitted_container_policy") is not None:
+            from ._submitted_container_policy import SubmittedContainerPolicy
+
+            kwargs["submitted_container_policy"] = SubmittedContainerPolicy.from_dict(
+                kwargs["submitted_container_policy"]
+            ).to_dict()
+        executable = kwargs.pop("bootstrap_executable", None)
+        bootstrap_config = kwargs.pop("bootstrap_config_path", None)
+        for value in (executable, bootstrap_config):
+            if value is not None and (not isinstance(value, str) or not Path(value).is_absolute()):
+                raise QueueConfigError(f"{label} bootstrap paths must be absolute")
+        kwargs["bootstrap_argv"] = (
+            executable or "loom", "slurm-bootstrap",
+            *(("--config", bootstrap_config) if bootstrap_config is not None else ()),
+        )
         try:
             profile = SlurmReadyStageProfile(**cast(Any, kwargs))
         except Exception as exc:
@@ -1877,6 +1891,10 @@ def _slurm_profile_declarations(value: object) -> tuple[Mapping[str, object], ..
         "poll_interval_seconds",
         "containment_helper",
         "result_storage",
+        "submitted_container_policy",
+        "bootstrap_executable",
+        "bootstrap_config_path",
+        "time",
     }
     declarations = []
     for index, item in enumerate(value):

@@ -16,6 +16,7 @@ from typing import Mapping, cast
 from uuid import uuid4
 
 from loom.pipeline.context import ProcessContainmentOwner
+from loom.pipeline.errors import RuntimeResourceError
 from loom.pipeline.execution.stage_worker import execute_resident_stage_worker_request
 from loom.pipeline.stores.atomic import atomic_write_bytes
 from loom.scheduling import SchedulingComponentDescriptor
@@ -86,14 +87,17 @@ class SlurmBootstrapClientConfig:
             raise QueueServiceError("SLURM bootstrap capability_file_path is invalid")
         workspace = Path(self.workspace_root).resolve()
         project = Path(self.project_root).resolve()
-        if not project.is_dir():
-            raise QueueServiceError("SLURM resident project root is unavailable")
-        workspace.mkdir(parents=True, exist_ok=True)
-        workspace.chmod(0o700)
-        if stat.S_IMODE(workspace.stat().st_mode) & 0o077:
-            raise QueueServiceError("SLURM bootstrap workspace must be private")
         object.__setattr__(self, "workspace_root", workspace)
         object.__setattr__(self, "project_root", project)
+
+    def qualify(self) -> None:
+        """Check compute-side paths at startup; declaration loading performs no writes."""
+        if not self.project_root.is_dir():
+            raise QueueServiceError("SLURM resident project root is unavailable")
+        self.workspace_root.mkdir(parents=True, exist_ok=True)
+        self.workspace_root.chmod(0o700)
+        if stat.S_IMODE(self.workspace_root.stat().st_mode) & 0o077:
+            raise QueueServiceError("SLURM bootstrap workspace must be private")
 
     @property
     def tls(self) -> AgentTlsClientConfig:
@@ -215,6 +219,7 @@ def run_slurm_bootstrap(
     job_id = os.environ.get("SLURM_JOB_ID")
     if not job_id or not job_id.isdecimal():
         raise QueueServiceError("SLURM_JOB_ID is unavailable or invalid")
+    selected.qualify()
     cluster = os.environ.get("SLURM_CLUSTER_NAME")
     incarnation = _operation_incarnation(selected.workspace_root, operation_id)
     client = LocalDaemonAgentHttpClient(selected.tls)
@@ -304,7 +309,23 @@ def run_slurm_bootstrap(
         workspace.persist_registration(registration)
         _unlink_job_private_capability(capability_path)
         workspace.persist_delivery(delivery)
+        container_policy = None
+        shared_roots = None
+        if delivery.submitted_execution is not None:
+            from ._submitted_container_policy import SubmittedContainerPolicy
+            from .submitted_execution import assignment_binding
+
+            container_policy = SubmittedContainerPolicy.from_dict(registration.get("submitted_container_policy"))
+            binding = assignment_binding(delivery.fingerprint)
+            assert binding is not None
+            launch_profile = container_policy.launch_profile(
+                binding[0], workspace=workspace.root, selected_capability=binding[1],
+            )
+            shared_roots = launch_profile.shared_roots
         for item in delivery.inputs:
+            from loom.pipeline.stores.shared_artifacts import binding as shared_binding
+            if shared_binding(item.metadata) is not None:
+                continue
             offset = 0
             while True:
                 response = prestart(
@@ -325,7 +346,10 @@ def run_slurm_bootstrap(
                 )
                 if final:
                     break
-        workspace.accept_inputs()
+        if shared_roots is None:
+            workspace.accept_inputs()
+        else:
+            workspace.accept_inputs(shared_roots=shared_roots)
         while True:
             readiness = prestart(
                 "inputs_ready",
@@ -372,17 +396,26 @@ def run_slurm_bootstrap(
                 # The current start permit was consumed before observer loss.
                 # Result relay remains separately replayable from this workspace.
                 pass
-            os.chdir(selected.project_root)
-            if str(selected.project_root) not in sys.path:
-                sys.path.insert(0, str(selected.project_root))
-            result = execute_resident_stage_worker_request(
-                worker_request=workspace.worker_request(),
-                workspace_root=workspace.root,
-                process_containment_owner=ProcessContainmentOwner.OUTER_BOUNDARY,
-            )
             try:
+                if container_policy is not None:
+                    from ._slurm_submitted_worker import run_submitted_stage
+
+                    result_identity = cast(Mapping[str, PlainData], registration["result_identity"])
+                    assignment = cast(Mapping[str, PlainData], result_identity["assignment"])
+                    result = run_submitted_stage(
+                        workspace, container_policy, agent_id=cast(str, assignment["agent_id"]), fence=fence,
+                    )
+                else:
+                    os.chdir(selected.project_root)
+                    if str(selected.project_root) not in sys.path:
+                        sys.path.insert(0, str(selected.project_root))
+                    result = execute_resident_stage_worker_request(
+                        worker_request=workspace.worker_request(),
+                        workspace_root=workspace.root,
+                        process_containment_owner=ProcessContainmentOwner.OUTER_BOUNDARY,
+                    )
                 report = workspace.retain_result(result)
-            except (QueueServiceError, QueueConflictError, OSError) as exc:
+            except (QueueServiceError, QueueConflictError, RuntimeResourceError, ValueError, OSError) as exc:
                 transport.failure(str(exc))
                 raise
         else:

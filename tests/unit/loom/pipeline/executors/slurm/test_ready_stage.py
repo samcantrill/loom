@@ -99,6 +99,23 @@ def _ready_container_options() -> dict[str, object]:
     }
 
 
+def test_submitted_policy_is_immutable_and_part_of_profile_identity() -> None:
+    profile = _profile(FakeSlurmCommandRunner())
+    declaration = {"policy_id": "selected", "environment": {"mode": "first"}}
+    selected = replace(profile, submitted_container_policy=declaration)
+    assert selected.configuration_fingerprint != profile.configuration_fingerprint
+    declaration["environment"]["mode"] = "second"
+    assert selected.submitted_container_policy["environment"]["mode"] == "first"
+    changed = replace(profile, submitted_container_policy=declaration)
+    assert changed.configuration_fingerprint != selected.configuration_fingerprint
+
+
+def test_submitted_policy_cannot_be_ignored_by_fixed_bootstrap_container() -> None:
+    profile = _profile(FakeSlurmCommandRunner(), container_options=_ready_container_options())
+    with pytest.raises(SlurmPlanningError, match="cannot combine"):
+        replace(profile, submitted_container_policy={"policy_id": "selected"})
+
+
 def _request(
     profile: SlurmReadyStageProfile,
     *,
@@ -151,13 +168,16 @@ def test_ready_stage_script_is_fixed_safe_and_deterministic() -> None:
     assert request.schema_version == 3
     assert request.container_metadata is None
     assert type(request).from_dict(request.to_dict()) == request
+    limited = replace(profile, time="02:30:00")
+    assert limited.configuration_fingerprint != profile.configuration_fingerprint
+    assert "#SBATCH --time=02:30:00" in _request(limited).script
 
     with pytest.raises(SlurmPlanningError, match="fixed Loom bootstrap"):
         SlurmReadyStageProfile(
             profile_id="training",
             partition="gpu",
             max_outstanding=1,
-            bootstrap_argv=("/tmp/loom", "slurm-bootstrap"),
+            bootstrap_argv=("/tmp/arbitrary-command", "slurm-bootstrap"),
             runner=FakeSlurmCommandRunner(),
             command_adapter_fingerprint="fake-slurm-v1",
             bootstrap_principal_id="slurm-principal",

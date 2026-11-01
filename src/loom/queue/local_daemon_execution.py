@@ -3111,7 +3111,26 @@ class LocalDaemonExecution:
             remote_inputs: list[_RemoteArtifact] = []
             input_paths: dict[str, Path] = {}
             total_bytes = 0
-            for logical_name, ref in sorted(worker_request.inputs.items()):
+            from ._remote_stage_execution import _resident_input_refs
+            from .submitted_execution import assignment_binding
+            from ._submitted_container_policy import SubmittedContainerPolicy
+            from .shared_execution import assignment_scope, require_bindings
+
+            fingerprint = cast(StageFingerprintRecord, worker_request.fingerprint).to_dict()
+            submitted = assignment_binding(fingerprint)
+            if submitted is not None:
+                if profile.submitted_container_policy is None:
+                    raise QueueConflictError("SLURM profile has no submitted container policy")
+                policy = SubmittedContainerPolicy.from_dict(profile.submitted_container_policy)
+                if policy.capability != submitted[1] and not policy.capability.permits(submitted[1]):
+                    raise QueueConflictError("SLURM profile does not authorize the submitted capability")
+                policy.capability.require_execution(submitted[0])
+                scope = assignment_scope(fingerprint)
+                if scope is None:
+                    raise QueueConflictError("submitted SLURM work requires shared execution")
+                require_bindings(scope, self.config.coordinator_shared_roots)
+            refs = _resident_input_refs(worker_request.inputs, fingerprint, worker_request.metadata)
+            for logical_name, ref in sorted(refs.items()):
                 transfer_id = (
                     "input-"
                     + hashlib.sha256(
@@ -3130,15 +3149,19 @@ class LocalDaemonExecution:
                     ref=ref,
                 )
                 from loom.pipeline.stores.shared_artifacts import binding
-                if binding(descriptor.metadata) is not None:
-                    raise QueueServiceError("shared artifact inputs require the qualified resident route")
-                total_bytes += descriptor.size_bytes
+                shared_input = binding(descriptor.metadata) is not None
+                if shared_input:
+                    if submitted is None:
+                        raise QueueServiceError("SLURM shared inputs require submitted container storage policy")
+                else:
+                    total_bytes += descriptor.size_bytes
                 if total_bytes > MAX_TRANSFER_BYTES:
                     raise QueueServiceError(
                         "SLURM assignment inputs exceed the configured bound"
                     )
                 remote_inputs.append(descriptor)
-                input_paths[transfer_id] = source
+                if not shared_input:
+                    input_paths[transfer_id] = source
             delivery = SlurmStageDelivery.from_worker_request(
                 assignment=assignment,
                 worker_request=worker_request,
@@ -5671,9 +5694,6 @@ class LocalDaemonExecution:
     def _slurm_finalize_record(self, record: SlurmStageRecord, fence: str) -> None:
         assignment_id = record.assignment.assignment_id
         incarnation = cast(str, record.bootstrap_incarnation)
-        report, outputs = self.slurm_assignments.committed_result(
-            assignment_id, incarnation, fence
-        )
         authority = self._remote_authority(record.assignment.run_uri)
         granted = authority.grant_prepared_attempt(
             record.assignment.run_uri,
@@ -5682,6 +5702,26 @@ class LocalDaemonExecution:
         )
         if granted.fencing_token != fence:
             raise QueueConflictError("SLURM terminal fence conflicts")
+        shared_outputs = None
+        if record.report is not None and record.report.output_kind == "shared":
+            from ._shared_publication import prepare_publication, accept_publication
+
+            publication = prepare_publication(
+                record.delivery, record.report, self.config.coordinator_shared_roots,
+                agent_id=record.assignment.agent_id, fence=fence,
+            )
+            # Verification may perform substantial storage IO. Reauthorize the
+            # same attempt before publishing, including a concurrent cancellation.
+            current = authority.grant_prepared_attempt(
+                record.assignment.run_uri, assignment_id=assignment_id,
+                attempt_id=record.assignment.attempt_id,
+            )
+            if current.fencing_token != fence:
+                raise QueueConflictError("SLURM publication fence conflicts")
+            shared_outputs = accept_publication(publication)
+        report, outputs = self.slurm_assignments.committed_result(
+            assignment_id, incarnation, fence, shared_outputs=shared_outputs,
+        )
         if report.status is StageStatus.SUCCEEDED:
             authority.record_output_commit(
                 record.assignment.run_uri,

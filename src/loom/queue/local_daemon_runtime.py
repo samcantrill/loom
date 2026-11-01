@@ -245,20 +245,27 @@ def _stage_placement_policy(
         raise QueueServiceError("stage placement pool must be non-empty")
     if target is not None and (not isinstance(target, str) or not target):
         raise QueueServiceError("stage placement target must be non-empty or null")
+    route = _execution_route(raw.get("execution_route"), slurm_profiles)
+    # Slurm checks the protected profile and shared bindings at dispatch and
+    # bootstrap; resident offer attributes apply only to managed-agent selection.
+    constraints = (
+        _preparation_constraints(stage, hard_evaluators)
+        if route.kind is ExecutionRouteKind.MANAGED_AGENT else ()
+    )
     return StagePlacementPolicy(
         pool_name=pool,
         target=cast(str | None, target),
         default_resources=ResourceRequest(
             entries={"cpu": ResourceEntry("cpu", 1, "count")}
         ),
-        hard_constraints=_preparation_constraints(stage, hard_evaluators),
+        hard_constraints=constraints,
         preferences=_resolved_preferences(
             stage,
             resources,
             raw.get("preferences"),
             preference_scorers=preference_scorers,
         ),
-        route=_execution_route(raw.get("execution_route"), slurm_profiles),
+        route=route,
     )
 
 

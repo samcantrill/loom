@@ -24,6 +24,8 @@ from .shared_execution import has_input_directories, location, qualified_roots
 SUBMITTED_CONTAINER_WORKER_CONTRACT = "resident-submitted-container-v1"
 INPUT_DIRECTORY_WORKER_CONTRACT = "resident-submitted-container-v2"
 SELECTED_INPUT_WORKER_CONTRACT = "resident-submitted-container-v3"
+# Installed host/image capability; physical site qualification is separate.
+SUBMITTED_SLURM_WORKER_CONTRACT = "slurm-submitted-container-v1"
 SUPPORTED_WORKER_CONTRACTS = (
     SUBMITTED_CONTAINER_WORKER_CONTRACT, INPUT_DIRECTORY_WORKER_CONTRACT,
     SELECTED_INPUT_WORKER_CONTRACT,

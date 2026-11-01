@@ -439,16 +439,22 @@ def _check_target(
 
 
 def preparation_placement(
-    config: LocalDaemonConfig, operation_id: str
+    config: LocalDaemonConfig, operation_id: str, profile_alias: str | None = None,
 ) -> Mapping[str, PlainData] | None:
-    """Return only the accepted operator selection for the fixed native child.
+    """Return the accepted operator or protected profile route for the child.
 
     Standalone preparation producers have no accepted coordinator parent. A
     retained check parent pins its internal child without changing project input
     or introducing placement fields into the worker's preparation-input codec.
     """
+    def standalone():
+        policy = config.preparation_policy
+        profile = None if policy is None or profile_alias is None else policy.profiles.get(profile_alias)
+        route = getattr(profile, "execution_route", None)
+        return None if route is None else {"execution_route": route}
+
     if not config.control_database.is_file():
-        return None
+        return standalone()
     with sqlite3.connect(
         f"{config.control_database.resolve().as_uri()}?mode=ro", uri=True
     ) as conn:
@@ -457,8 +463,10 @@ def preparation_placement(
             (operation_id,),
         ).fetchone()
     if row is None:
-        return None
-    check = json.loads(row[0]).get("maintenance_check")
-    return (
-        None if check is None else {"target": check["agent_id"], "pool": check["pool"]}
-    )
+        return standalone()
+    selected = json.loads(row[0])
+    check = selected.get("maintenance_check")
+    if check is not None:
+        return {"target": check["agent_id"], "pool": check["pool"]}
+    route = selected["profile"].get("execution_route")
+    return None if route is None else {"execution_route": route}

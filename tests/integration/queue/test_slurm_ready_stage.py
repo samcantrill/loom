@@ -1867,7 +1867,8 @@ def test_actual_native_preparation_pair_crosses_slurm_ready_helpers_and_ack_repl
     original = produced.outputs["report"]
     logical = load_preparation_report(original, uri_to_path(original.uri))
     runner = FakeSlurmCommandRunner(starting_job_id=1200)
-    profile = _profile(runner)
+    source_request = native_workspace.worker_request(resolve_shared=True)
+    profile = replace(_profile(runner), environment_fingerprint=source_request.metadata["loom.execution_binding"]["environment_fingerprint"])
     assignment = SlurmStageAssignment(
         assignment_id="native-pair",
         operation_id="native-pair-operation",

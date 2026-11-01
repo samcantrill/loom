@@ -22,9 +22,10 @@ import sqlite3
 import stat
 import tempfile
 from uuid import uuid4
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 if TYPE_CHECKING:
+    from .slurm_ready_stage import SlurmStageDelivery
     from .preparation import PreparationChildInput
     from .resident_readiness import (
         ResidentReadinessRequirements,
@@ -816,6 +817,160 @@ def _claim_from_dict(value: object) -> ResourceClaim:
     return claim
 
 
+def _preparation_worker_context(
+    request: _ResidentAssignmentBundle | SlurmStageDelivery,
+    launch_profile: ResidentWorkerLaunchProfile, workspace_root: Path,
+) -> Mapping[str, PlainData] | None:
+    """Materialize the fixed preparation child's admitted artifacts and capture."""
+    preparation = request.preparation_input
+    if preparation is None:
+        return None
+    from .preparation import SharedInputReceipt, _require_local_binding
+
+    _require_local_binding(preparation.local_scope, launch_profile)
+    from .preparation import PREPARATION_CONTEXT_SCHEMA_VERSION, _scope_data
+
+    purpose: dict[str, PlainData] = {"kind": "generic"}
+    if preparation.project_preparation is not None:
+        purpose = {"kind": "project", "binding": dict(preparation.project_preparation)}
+    context: dict[str, PlainData] = {
+        "schema_version": 7 if preparation.execution is not None else PREPARATION_CONTEXT_SCHEMA_VERSION,
+        **preparation.execution_data(),
+        "scope": _scope_data(preparation.local_scope, preparation.shared_scope),
+        "purpose": purpose,
+    }
+    candidate_report = next((item for item in request.inputs if item.logical_name == "candidate_project_report"), None)
+    if candidate_report is not None:
+        from ._shared_publication import resolve_input
+        from .shared_execution import execution_roots
+        path = resolve_input(candidate_report, execution_roots(launch_profile.shared_roots, container=launch_profile.container is not None))
+        purpose["candidate_project_report"] = candidate_report.local_ref(path).to_dict()
+    if preparation.action_verification is not None:
+        from ._shared_publication import resolve_input
+        from .shared_execution import execution_roots
+
+        artifacts = {}
+        reports = {}
+        for item in request.inputs:
+            prefix = _ACTION_PROJECT_INPUT_PREFIX if item.logical_name.startswith(_ACTION_PROJECT_INPUT_PREFIX) else _ACTION_RESULT_INPUT_PREFIX
+            if not item.logical_name.startswith(prefix):
+                continue
+            path = workspace_root / "inputs" / item.logical_name
+            if shared_binding(item.metadata) is not None:
+                path = resolve_input(item, execution_roots(launch_profile.shared_roots, container=launch_profile.container is not None))
+            destination = reports if prefix == _ACTION_PROJECT_INPUT_PREFIX else artifacts
+            destination[item.logical_name.removeprefix(prefix)] = item.local_ref(path).to_dict()
+        purpose["kind"] = "verify_result"
+        purpose["artifacts"] = artifacts
+        purpose["project_reports"] = reports
+    if not isinstance(preparation.input_receipt, SharedInputReceipt):
+        from .preparation import resolve_staged_input
+        directory = resolve_staged_input(
+            preparation.input_receipt,
+            archive_path=workspace_root / "inputs" / _PREPARATION_ARCHIVE_INPUT,
+            workspace_root=workspace_root,
+        )
+        assert directory is not None
+        context["input"] = {"kind": "staged", "directory": str(directory)}
+        return context
+    from .shared_execution import _preparation_input_roots
+    context["input"] = {"kind": "shared", "roots": _preparation_input_roots(launch_profile, preparation)}
+    return context
+
+
+def _validate_remote_interface(
+    fingerprint: Mapping[str, PlainData], metadata: Mapping[str, PlainData],
+    inputs: tuple[_RemoteArtifact, ...], declared_outputs: tuple[str, ...],
+) -> tuple[tuple[_RemoteArtifact, ...], tuple[str, ...]]:
+    """Validate the scientific interface plus its admitted auxiliary artifacts."""
+    fingerprint_record = StageFingerprintRecord.from_dict(fingerprint)
+    inputs = tuple(inputs)
+    outputs = tuple(
+        _identifier(name, "declared output") for name in declared_outputs
+    )
+    if (
+        any(not isinstance(item, _RemoteArtifact) for item in inputs)
+        or len(inputs) > 32 + len(_preparation_verification_refs(fingerprint)) + ("loom.project_report" in metadata)
+        or len({item.logical_name for item in inputs}) != len(inputs)
+    ):
+        raise QueueServiceError("resident input logical names must be unique")
+    if sum(item.size_bytes for item in inputs if shared_binding(item.metadata) is None) > MAX_TRANSFER_BYTES:
+        raise QueueServiceError(
+            "resident assignment inputs exceed the configured bound"
+        )
+    if len(outputs) > 32 or len(set(outputs)) != len(outputs):
+        raise QueueServiceError("resident output names must be unique")
+    expected_inputs = set(fingerprint_record.payload.declared_inputs)
+    from loom.pipeline._project_contracts import REPORT
+    if REPORT in metadata:
+        name = "loom_project_report"
+        if name in expected_inputs:
+            raise QueueConflictError("project report input name is reserved")
+        expected_inputs.add(name)
+        reference = ArtifactRef.from_dict(thaw_plain_data(metadata[REPORT]))
+        transferred = next((item for item in inputs if item.logical_name == name), None)
+        if transferred is None or replace(transferred.local_ref(Path("/")), uri=reference.uri) != reference:
+            raise QueueConflictError("project report input differs from its admitted reference")
+    archive = _preparation_archive(fingerprint)
+    if archive is not None:
+        if _PREPARATION_ARCHIVE_INPUT in expected_inputs:
+            raise QueueConflictError("preparation archive input name is reserved")
+        expected_inputs.add(_PREPARATION_ARCHIVE_INPUT)
+        transferred = next(
+            (item for item in inputs if item.logical_name == _PREPARATION_ARCHIVE_INPUT),
+            None,
+        )
+        if (transferred is None or transferred.artifact_id != archive.artifact_id
+            or f"sha256:{transferred.digest}" != archive.checksum):
+            raise QueueConflictError("preparation archive conflicts with its retained input")
+    for name, ref in _preparation_verification_refs(fingerprint).items():
+        if name in expected_inputs:
+            raise QueueConflictError("action verification input name is reserved")
+        expected_inputs.add(name)
+        transferred = next((item for item in inputs if item.logical_name == name), None)
+        if transferred is None:
+            raise QueueConflictError("action verification input is missing")
+        projected = replace(transferred.local_ref(Path("/")), uri=ref.uri).to_dict()
+        if projected != ref.to_dict():
+            raise QueueConflictError("action verification input differs from the original result")
+    if set(item.logical_name for item in inputs) != expected_inputs or set(outputs) != set(fingerprint_record.payload.declared_outputs):
+        raise QueueConflictError(
+            "resident stage interface conflicts with its fingerprint"
+        )
+    return inputs, outputs
+
+
+def _remote_worker_metadata(
+    worker_request: StageWorkerRequest, environment_fingerprint: str,
+) -> dict[str, PlainData]:
+    """Carry admitted project/report/execution identity across a worker boundary."""
+    safe_metadata: dict[str, PlainData] = {key: worker_request.metadata[key]
+        for key in ("loom.project_contract", "loom.project_contract_capture", "loom.project_report", "loom.execution_binding", "attempt_input_evidence")
+        if key in worker_request.metadata}
+    from loom.pipeline._project_contracts import REPORT
+    if REPORT in safe_metadata:
+        reference = ArtifactRef.from_dict(thaw_plain_data(safe_metadata[REPORT]))
+        publication = shared_binding(reference.metadata)
+        if publication is None:
+            raise QueueConflictError("remote project report requires shared publication")
+        safe_metadata[REPORT] = replace(reference, uri=(
+            f"loom-shared://{publication['root_id']}/{publication['tree']}/{publication['primary']}"
+        )).to_dict()
+    from ._execution_binding import execution_binding
+    from loom.pipeline._project_contracts import EXECUTION
+    if EXECUTION not in safe_metadata:
+        safe_metadata[EXECUTION] = execution_binding(worker_request, environment_fingerprint)
+    if "stage_resources" in worker_request.metadata:
+        safe_metadata["stage_resources"] = worker_request.metadata[
+            "stage_resources"
+        ]
+    if "resource_selection" in worker_request.metadata:
+        safe_metadata["resource_selection"] = worker_request.metadata[
+            "resource_selection"
+        ]
+    return safe_metadata
+
+
 @dataclass(frozen=True, slots=True)
 class _ResidentAssignmentBundle:
     """Shared resident request; remote transports enforce path-free semantics."""
@@ -912,60 +1067,10 @@ class _ResidentAssignmentBundle:
             raise QueueConflictError(
                 "preparation assignment does not use the selected resident profile"
             )
-        inputs = tuple(self.inputs)
-        outputs = tuple(
-            _identifier(name, "declared output") for name in self.declared_outputs
+        inputs, outputs = _validate_remote_interface(
+            fingerprint, metadata, self.inputs, self.declared_outputs,
         )
         claims = tuple(self.claims)
-        if (
-            any(not isinstance(item, _RemoteArtifact) for item in inputs)
-            or len(inputs) > 32 + len(_preparation_verification_refs(fingerprint)) + ("loom.project_report" in metadata)
-            or len({item.logical_name for item in inputs}) != len(inputs)
-        ):
-            raise QueueServiceError("resident input logical names must be unique")
-        if sum(item.size_bytes for item in inputs if shared_binding(item.metadata) is None) > MAX_TRANSFER_BYTES:
-            raise QueueServiceError(
-                "resident assignment inputs exceed the configured bound"
-            )
-        if len(outputs) > 32 or len(set(outputs)) != len(outputs):
-            raise QueueServiceError("resident output names must be unique")
-        expected_inputs = set(fingerprint_record.payload.declared_inputs)
-        from loom.pipeline._project_contracts import REPORT
-        if REPORT in metadata:
-            name = "loom_project_report"
-            if name in expected_inputs:
-                raise QueueConflictError("project report input name is reserved")
-            expected_inputs.add(name)
-            reference = ArtifactRef.from_dict(thaw_plain_data(metadata[REPORT]))
-            transferred = next((item for item in inputs if item.logical_name == name), None)
-            if transferred is None or replace(transferred.local_ref(Path("/")), uri=reference.uri) != reference:
-                raise QueueConflictError("project report input differs from its admitted reference")
-        archive = _preparation_archive(fingerprint)
-        if archive is not None:
-            if _PREPARATION_ARCHIVE_INPUT in expected_inputs:
-                raise QueueConflictError("preparation archive input name is reserved")
-            expected_inputs.add(_PREPARATION_ARCHIVE_INPUT)
-            transferred = next(
-                (item for item in inputs if item.logical_name == _PREPARATION_ARCHIVE_INPUT),
-                None,
-            )
-            if (transferred is None or transferred.artifact_id != archive.artifact_id
-                or f"sha256:{transferred.digest}" != archive.checksum):
-                raise QueueConflictError("preparation archive conflicts with its retained input")
-        for name, ref in _preparation_verification_refs(fingerprint).items():
-            if name in expected_inputs:
-                raise QueueConflictError("action verification input name is reserved")
-            expected_inputs.add(name)
-            transferred = next((item for item in inputs if item.logical_name == name), None)
-            if transferred is None:
-                raise QueueConflictError("action verification input is missing")
-            projected = replace(transferred.local_ref(Path("/")), uri=ref.uri).to_dict()
-            if projected != ref.to_dict():
-                raise QueueConflictError("action verification input differs from the original result")
-        if set(item.logical_name for item in inputs) != expected_inputs or set(outputs) != set(fingerprint_record.payload.declared_outputs):
-            raise QueueConflictError(
-                "resident stage interface conflicts with its fingerprint"
-            )
         if (
             any(not isinstance(item, ResourceClaim) for item in claims)
             or len(claims) > 8
@@ -1050,30 +1155,7 @@ class _ResidentAssignmentBundle:
             worker_request,
             decode_bindings(worker_request.metadata.get("attempt_input_bindings")),
         )
-        safe_metadata: dict[str, PlainData] = {key: worker_request.metadata[key]
-            for key in ("loom.project_contract", "loom.project_contract_capture", "loom.project_report", "loom.execution_binding", "attempt_input_evidence")
-            if key in worker_request.metadata}
-        from loom.pipeline._project_contracts import REPORT
-        if REPORT in safe_metadata:
-            reference = ArtifactRef.from_dict(thaw_plain_data(safe_metadata[REPORT]))
-            publication = shared_binding(reference.metadata)
-            if publication is None:
-                raise QueueConflictError("remote project report requires shared publication")
-            safe_metadata[REPORT] = replace(reference, uri=(
-                f"loom-shared://{publication['root_id']}/{publication['tree']}/{publication['primary']}"
-            )).to_dict()
-        from ._execution_binding import execution_binding
-        from loom.pipeline._project_contracts import EXECUTION
-        if EXECUTION not in safe_metadata:
-            safe_metadata[EXECUTION] = execution_binding(worker_request, profile.environment_fingerprint)
-        if "stage_resources" in worker_request.metadata:
-            safe_metadata["stage_resources"] = worker_request.metadata[
-                "stage_resources"
-            ]
-        if "resource_selection" in worker_request.metadata:
-            safe_metadata["resource_selection"] = worker_request.metadata[
-                "resource_selection"
-            ]
+        safe_metadata = _remote_worker_metadata(worker_request, profile.environment_fingerprint)
         return cls(
             assignment_id=assignment_id,
             stage_work_id=stage_work_id,
@@ -1947,6 +2029,13 @@ class _ResidentAssignmentWorkspace:
     def supervisor_launch_json(self) -> str | None:
         return self.read_supervisor_launch_json(self.root.parent.parent, self.assignment_id)
 
+    def publication_binding(self) -> dict[str, Any]:
+        """Return the retained process owner for the shared publication protocol."""
+        value = self.supervisor_launch_json()
+        if value is None:
+            raise QueueConflictError("shared publication requires a retained launch")
+        return json.loads(value)
+
     @staticmethod
     def require_submitted_launch(launch: object) -> None:
         """Join a new submitted launch to its durable assignment and granted fence."""
@@ -2115,52 +2204,7 @@ class _ResidentAssignmentWorkspace:
             ):
                 raise QueueConflictError("preparation input conflicts with the retained launch")
             launch_profile = launch.profile
-        from .preparation import SharedInputReceipt, _require_local_binding
-
-        _require_local_binding(preparation.local_scope, launch_profile)
-        from .preparation import PREPARATION_CONTEXT_SCHEMA_VERSION, _scope_data
-
-        purpose: dict[str, PlainData] = {"kind": "generic"}
-        if preparation.project_preparation is not None:
-            purpose = {"kind": "project", "binding": dict(preparation.project_preparation)}
-        context: dict[str, PlainData] = {
-            "schema_version": 7 if preparation.execution is not None else PREPARATION_CONTEXT_SCHEMA_VERSION,
-            **preparation.execution_data(),
-            "scope": _scope_data(preparation.local_scope, preparation.shared_scope),
-            "purpose": purpose,
-        }
-        candidate_report = next((item for item in request.inputs if item.logical_name == "candidate_project_report"), None)
-        if candidate_report is not None:
-            from ._shared_publication import resolve_input
-            from .shared_execution import execution_roots
-            path = resolve_input(candidate_report, execution_roots(launch_profile.shared_roots, container=launch_profile.container is not None))
-            purpose["candidate_project_report"] = candidate_report.local_ref(path).to_dict()
-        if preparation.action_verification is not None:
-            from ._shared_publication import resolve_input
-            from .shared_execution import execution_roots
-
-            artifacts = {}
-            reports = {}
-            for item in request.inputs:
-                prefix = _ACTION_PROJECT_INPUT_PREFIX if item.logical_name.startswith(_ACTION_PROJECT_INPUT_PREFIX) else _ACTION_RESULT_INPUT_PREFIX
-                if not item.logical_name.startswith(prefix):
-                    continue
-                path = self.input_path(item.logical_name)
-                if shared_binding(item.metadata) is not None:
-                    path = resolve_input(item, execution_roots(launch_profile.shared_roots, container=launch_profile.container is not None))
-                destination = reports if prefix == _ACTION_PROJECT_INPUT_PREFIX else artifacts
-                destination[item.logical_name.removeprefix(prefix)] = item.local_ref(path).to_dict()
-            purpose["kind"] = "verify_result"
-            purpose["artifacts"] = artifacts
-            purpose["project_reports"] = reports
-        if not isinstance(preparation.input_receipt, SharedInputReceipt):
-            directory = self._prepare_staged_input()
-            assert directory is not None
-            context["input"] = {"kind": "staged", "directory": str(directory)}
-            return context
-        from .shared_execution import _preparation_input_roots
-        context["input"] = {"kind": "shared", "roots": _preparation_input_roots(launch_profile, preparation)}
-        return context
+        return _preparation_worker_context(request, launch_profile, self.root)
 
     def _prepare_staged_input(self) -> Path | None:
         from .preparation import StagedInputReceipt, resolve_staged_input

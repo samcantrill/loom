@@ -18,6 +18,24 @@ import loom.queue.slurm_bootstrap as slurm_bootstrap
 from loom.pipeline import ProcessContainmentOwner
 
 
+def test_fixed_bootstrap_cli_loads_explicit_private_configuration(tmp_path, monkeypatch):
+    import argparse
+    from loom.cli.slurm_bootstrap import register_subparser
+
+    parser = argparse.ArgumentParser()
+    register_subparser(parser.add_subparsers())
+    path = tmp_path / "bootstrap.json"
+    path.write_text(json.dumps(_config_value(tmp_path)))
+    path.chmod(0o600)
+    observed = []
+    monkeypatch.setattr(slurm_bootstrap, "run_slurm_bootstrap", lambda **kwargs: observed.append(kwargs))
+    arguments = parser.parse_args(["slurm-bootstrap", "--config", str(path),
+                                   "--operation-id", "operation", "--request-digest", "digest"])
+    assert arguments.handler(arguments) == 0
+    assert observed[0]["config"].profile_id == "training"
+    assert observed[0]["operation_id"] == "operation"
+
+
 def _config_value(tmp_path: Path) -> dict[str, str]:
     project = tmp_path / "project"
     project.mkdir()
@@ -49,6 +67,8 @@ def test_bootstrap_config_is_private_and_pins_profile_policy(tmp_path: Path) -> 
     assert config.profile_id == "training"
     assert config.profile_configuration_fingerprint == "profile-v1"
     assert config.credential_policy_revision == "slurm-policy-1"
+    assert not config.workspace_root.exists()
+    config.qualify()
     assert config.workspace_root.is_dir()
     assert config.workspace_root.stat().st_mode & 0o077 == 0
 
@@ -186,6 +206,7 @@ def test_bootstrap_passes_outer_boundary_containment_owner(
             environment_fingerprint="environment-v1",
             executor_fingerprint="executor-v1",
             executor_name="local",
+            submitted_execution=None,
             inputs=(),
         ),
     )
