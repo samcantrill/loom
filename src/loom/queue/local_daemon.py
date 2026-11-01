@@ -4372,6 +4372,10 @@ class LocalDaemonSlurmBootstrapView:
             incarnation=incarnation,
             capability=capability,
         )
+        profile = self._execution()._slurm_profile(
+            record.assignment.profile_id,
+            record.assignment.profile_configuration_fingerprint,
+        )
         return freeze_plain_data(
             {
                 "assignment_id": record.assignment.assignment_id,
@@ -4382,15 +4386,9 @@ class LocalDaemonSlurmBootstrapView:
                 "incarnation": record.bootstrap_incarnation,
                 "delivery": record.delivery.to_dict(),
                 "result_identity": self._execution().slurm_result_identity(record),
-                "result_storage": dict(
-                    self._execution()
-                    ._slurm_profile(
-                        record.assignment.profile_id,
-                        record.assignment.profile_configuration_fingerprint,
-                    )
-                    .result_storage
-                    or {}
-                ),
+                "result_storage": dict(profile.result_storage or {}),
+                **({"submitted_container_policy": thaw_plain_data(profile.submitted_container_policy)}
+                   if record.delivery.submitted_execution is not None else {}),
             },
             path="SLURM bootstrap registration",
         )

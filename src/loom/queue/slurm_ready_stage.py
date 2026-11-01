@@ -12,7 +12,7 @@ import hmac
 import json
 from pathlib import Path
 import sqlite3
-from typing import Iterator, cast
+from typing import TYPE_CHECKING, Any, Iterator, cast
 
 from loom._sqlite_inspection import inspect_sqlite_database
 from loom.artifacts import ArtifactRef
@@ -29,11 +29,11 @@ from loom.pipeline.resources import ResourceRequest
 from loom.pipeline.runtime._resource_controls import resource_control_records
 from loom.pipeline.runtime.resource_policy import ResourcePolicy
 from loom.pipeline.status import StageStatus
+from loom.pipeline.stores.shared_artifacts import binding as shared_binding
 from loom.scheduling import SchedulingComponentDescriptor
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 
 from ._remote_stage_execution import (
-    MAX_TRANSFER_BYTES,
     TRANSFER_CHUNK_BYTES,
     _RemoteArtifact,
     _RemoteExecutionReport,
@@ -45,12 +45,19 @@ from ._remote_stage_execution import (
     _publish_staged_file,
     _read_regular_file_bytes,
     _read_regular_file_range,
+    _remote_worker_metadata,
+    _validate_remote_interface,
     _validate_remote_semantic_data,
 )
 from .errors import QueueConflictError, QueueServiceError
 
+if TYPE_CHECKING:
+    from ._agent_process_supervisor import ResidentWorkerLaunchProfile
+    from .preparation import PreparationChildInput
+    from .submitted_execution import SubmittedContainerExecution
 
-SLURM_STAGE_DELIVERY_SCHEMA_VERSION = 4
+
+SLURM_STAGE_DELIVERY_SCHEMA_VERSION = 5
 _ASSIGNMENT_TABLE = "slurm_stage_assignments"
 _OUTPUT_TABLE = "slurm_stage_outputs"
 
@@ -231,23 +238,20 @@ class SlurmStageDelivery:
         fingerprint_record = StageFingerprintRecord.from_dict(fingerprint)
         if fingerprint_record.payload.stage_name != self.stage_name:
             raise QueueConflictError("SLURM stage fingerprint identity conflicts")
-        inputs = tuple(self.inputs)
-        outputs = tuple(
-            _identifier(item, "declared output") for item in self.declared_outputs
+        inputs, outputs = _validate_remote_interface(
+            fingerprint, metadata, self.inputs, self.declared_outputs,
         )
-        if (
-            any(not isinstance(item, _RemoteArtifact) for item in inputs)
-            or len(inputs) > 32
-            or len({item.logical_name for item in inputs}) != len(inputs)
-            or sum(item.size_bytes for item in inputs) > MAX_TRANSFER_BYTES
-        ):
-            raise QueueServiceError("SLURM delivery inputs are invalid")
-        if len(outputs) > 32 or len(set(outputs)) != len(outputs):
-            raise QueueServiceError("SLURM delivery outputs are invalid")
-        if set(item.logical_name for item in inputs) != set(
-            fingerprint_record.payload.declared_inputs
-        ) or set(outputs) != set(fingerprint_record.payload.declared_outputs):
-            raise QueueConflictError("SLURM delivery interface conflicts")
+        from loom.pipeline._project_contracts import EXECUTION, validate_worker_metadata
+        from .submitted_execution import assignment_binding
+        from .shared_execution import assignment_scope
+
+        submitted = assignment_binding(fingerprint)
+        if submitted is not None and assignment_scope(fingerprint) is None:
+            raise QueueServiceError("submitted containers require shared execution scope")
+        validate_worker_metadata(metadata, node=self.stage_name, attempt=self.attempt, fingerprint=fingerprint_record)
+        expected_environment = self.environment_fingerprint if submitted is None else submitted[1].environment_fingerprint
+        if EXECUTION in metadata and cast(Mapping[str, PlainData], metadata[EXECUTION])["environment_fingerprint"] != expected_environment:
+            raise QueueConflictError("SLURM execution binding environment conflicts")
         object.__setattr__(self, "fingerprint", fingerprint)
         object.__setattr__(self, "resolved_runtime", runtime)
         object.__setattr__(self, "worker_metadata", metadata)
@@ -277,26 +281,11 @@ class SlurmStageDelivery:
             worker_request,
             decode_bindings(worker_request.metadata.get("attempt_input_bindings")),
         )
-        from ._execution_binding import execution_binding
-
-        metadata: dict[str, PlainData] = {
-            key: worker_request.metadata[key]
-            for key in (
-                "loom.project_contract",
-                "loom.project_contract_capture",
-                "attempt_input_evidence",
-            )
-            if key in worker_request.metadata
-        }
-        metadata["loom.execution_binding"] = execution_binding(
-            worker_request, environment_fingerprint
+        from .submitted_execution import assignment_binding
+        submitted = assignment_binding(cast(StageFingerprintRecord, worker_request.fingerprint).to_dict())
+        metadata = _remote_worker_metadata(
+            worker_request, environment_fingerprint if submitted is None else submitted[1].environment_fingerprint,
         )
-        if "stage_resources" in worker_request.metadata:
-            metadata["stage_resources"] = worker_request.metadata["stage_resources"]
-        if "resource_selection" in worker_request.metadata:
-            metadata["resource_selection"] = worker_request.metadata[
-                "resource_selection"
-            ]
         return cls(
             assignment_id=assignment.assignment_id,
             stage_work_id=assignment.stage_work_id,
@@ -393,9 +382,26 @@ class SlurmStageDelivery:
             declared_outputs=tuple(cast(Sequence[str], outputs)),
         )
 
-    def worker_request(self, workspace_root: Path) -> StageWorkerRequest:
+    def worker_request(
+        self, workspace_root: Path, *, shared_roots: Mapping[str, PlainData] | None = None,
+    ) -> StageWorkerRequest:
         root = Path(workspace_root).resolve()
         logs = root / "logs"
+        from ._shared_publication import resolve_input
+
+        def input_path(item: _RemoteArtifact) -> Path:
+            if shared_binding(item.metadata) is None:
+                return root / "inputs" / item.logical_name
+            if shared_roots is None:
+                raise QueueConflictError("SLURM shared input requires qualified roots")
+            return resolve_input(item, shared_roots)
+
+        fingerprint = StageFingerprintRecord.from_dict(self.fingerprint)
+        metadata = dict(self.worker_metadata)
+        from loom.pipeline._project_contracts import REPORT
+        if REPORT in metadata:
+            report = next(item for item in self.inputs if item.logical_name == "loom_project_report")
+            metadata[REPORT] = report.local_ref(input_path(report)).to_dict()
         return StageWorkerRequest(
             schema_version=STAGE_WORKER_REQUEST_SCHEMA_VERSION,
             run_uri=f"loom-slurm:{self.assignment_id}",
@@ -404,17 +410,29 @@ class SlurmStageDelivery:
             prepared_at=self.prepared_at,
             executor_name=self.executor_name,
             inputs={
-                item.logical_name: item.local_ref(root / "inputs" / item.logical_name)
+                item.logical_name: item.local_ref(input_path(item))
                 for item in self.inputs
+                if item.logical_name in fingerprint.payload.declared_inputs
             },
-            fingerprint=StageFingerprintRecord.from_dict(self.fingerprint),
+            fingerprint=fingerprint,
             stdout_path=str(logs / "stdout.log"),
             stderr_path=str(logs / "stderr.log"),
             traceback_path=str(logs / "traceback.log"),
             result_path=str(root / "worker-result.json"),
             resolved_runtime=self.resolved_runtime,
-            metadata=self.worker_metadata,
+            metadata=metadata,
         )
+
+    @property
+    def preparation_input(self) -> PreparationChildInput | None:
+        from ._remote_stage_execution import _preparation_input_from_fingerprint
+        return _preparation_input_from_fingerprint(self.fingerprint)
+
+    @property
+    def submitted_execution(self) -> SubmittedContainerExecution | None:
+        from .submitted_execution import assignment_binding
+        binding = assignment_binding(self.fingerprint)
+        return None if binding is None else binding[0]
 
 
 @dataclass(frozen=True, slots=True)
@@ -484,7 +502,10 @@ class SQLiteSlurmStageAssignments:
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise QueueServiceError(f"SLURM {name} is invalid")
         paths = {key: Path(value).resolve() for key, value in input_paths.items()}
-        expected_transfers = {item.transfer_id for item in delivery.inputs}
+        expected_transfers = {
+            item.transfer_id for item in delivery.inputs
+            if shared_binding(item.metadata) is None
+        }
         if set(paths) != expected_transfers:
             raise QueueConflictError("SLURM input path set conflicts")
         identity_json = _json(assignment.to_dict())
@@ -1070,7 +1091,7 @@ class SQLiteSlurmStageAssignments:
             ),
             None,
         )
-        if descriptor is None:
+        if descriptor is None or shared_binding(descriptor.metadata) is not None:
             raise QueueConflictError("SLURM input transfer is not authorized")
         with _connect(self.path, require_existing=True) as conn:
             conn.row_factory = sqlite3.Row
@@ -1112,6 +1133,10 @@ class SQLiteSlurmStageAssignments:
         ) != set(record.delivery.declared_outputs):
             raise QueueConflictError("SLURM result output interface conflicts")
         from ._preparation_report_transfer import native_role
+        from ._shared_publication import selected
+
+        if report.output_kind == "shared" and selected(record.delivery) is None:
+            raise QueueConflictError("SLURM shared output was not admitted")
 
         if report.output_kind == "preparation_report" and not native_role(
             record.delivery.fingerprint
@@ -1122,7 +1147,7 @@ class SQLiteSlurmStageAssignments:
         if (
             report.status is StageStatus.SUCCEEDED
             and native_role(record.delivery.fingerprint)
-            and report.output_kind != "preparation_report"
+            and report.output_kind not in {"preparation_report", "shared"}
         ):
             raise QueueConflictError(
                 "native preparation transfer capability is missing"
@@ -1249,13 +1274,20 @@ class SQLiteSlurmStageAssignments:
         return received
 
     def committed_result(
-        self, assignment_id: str, incarnation: str, fence: str
+        self, assignment_id: str, incarnation: str, fence: str,
+        *, shared_outputs: Mapping[str, ArtifactRef] | None = None,
     ) -> tuple[_RemoteExecutionReport, Mapping[str, ArtifactRef]]:
         record = self.read(assignment_id)
         if record.bootstrap_incarnation != incarnation or record.fence != fence:
             raise QueueConflictError("SLURM result authorization conflicts")
         if record.report is None:
             raise QueueConflictError("SLURM result is not declared")
+        if record.report.output_kind == "shared":
+            if shared_outputs is None or set(shared_outputs) != {
+                item.logical_name for item in record.report.outputs
+            }:
+                raise QueueConflictError("SLURM shared outputs require authoritative publication")
+            return record.report, shared_outputs
         with _connect(self.path, require_existing=True) as conn:
             conn.row_factory = sqlite3.Row
             rows = tuple(
@@ -1440,6 +1472,57 @@ class SlurmBootstrapWorkspace:
         self._delivery_path = self.root / "delivery.json"
         self._registration_path = self.root / "registration.json"
         self._retained_report_path = self.root / "retained-report.json"
+        self._execution_binding_path = self.root / "execution-binding.json"
+
+    def persist_execution_binding(
+        self, *, agent_id: str, fence: str, profile: ResidentWorkerLaunchProfile,
+    ) -> None:
+        """Retain the granted attempt's storage identity before executing it."""
+        from ._agent_process_supervisor import _profile_value
+
+        _text(agent_id, "SLURM submit agent")
+        _text(fence, "SLURM execution fence")
+        value = {
+            "agent_id": agent_id,
+            "execution_fence": fence,
+            "profile": _profile_value(profile),
+            "delivery_digest": hashlib.sha256(_json(self.delivery().to_dict()).encode()).hexdigest(),
+        }
+        encoded = (_json(value) + "\n").encode()
+        if self._execution_binding_path.exists():
+            if self._execution_binding_path.read_bytes() != encoded:
+                raise QueueConflictError("SLURM execution binding replay conflicts")
+            return
+        _atomic_regular_file(self._execution_binding_path, encoded)
+        self._execution_binding_path.chmod(0o600)
+
+    def publication_binding(self) -> dict[str, Any]:
+        if not self._execution_binding_path.is_file():
+            raise QueueConflictError("SLURM publication requires a retained execution binding")
+        return json.loads(self._execution_binding_path.read_text(encoding="utf-8"))
+
+    def shared_launch_profile(self) -> ResidentWorkerLaunchProfile:
+        """Decode the exact authorized image and roots inside the worker namespace."""
+        from ._agent_process_supervisor import _profile_from_value
+        from .shared_execution import assignment_scope, execution_roots, require_bindings
+        from .submitted_execution import assignment_binding
+
+        binding = self.publication_binding()
+        request = self.delivery()
+        profile = _profile_from_value(binding["profile"])
+        submitted = assignment_binding(request.fingerprint)
+        if (binding["delivery_digest"] != hashlib.sha256(_json(request.to_dict()).encode()).hexdigest()
+            or profile.submitted_execution != request.submitted_execution
+            or submitted is not None and dict(profile.descriptor) != submitted[1].to_dict()):
+            raise QueueConflictError("SLURM retained launch differs from its delivery")
+        scope = assignment_scope(request.fingerprint)
+        if scope is not None:
+            require_bindings(scope, execution_roots(profile.shared_roots, container=profile.container is not None))
+        return profile
+
+    def request(self) -> SlurmStageDelivery:
+        """The shared publication protocol's immutable assignment."""
+        return self.delivery()
 
     def persist_delivery(self, delivery: SlurmStageDelivery) -> None:
         if delivery.assignment_id != self.root.name:
@@ -1477,7 +1560,7 @@ class SlurmBootstrapWorkspace:
             (value for value in delivery.inputs if value.transfer_id == transfer_id),
             None,
         )
-        if item is None:
+        if item is None or shared_binding(item.metadata) is not None:
             raise QueueConflictError("SLURM input transfer is not declared")
         if (
             isinstance(offset, bool)
@@ -1506,17 +1589,23 @@ class SlurmBootstrapWorkspace:
             _publish_staged_file(part, target)
         return received
 
-    def accept_inputs(self) -> None:
+    def accept_inputs(self, *, shared_roots: Mapping[str, PlainData] | None = None) -> None:
         for item in self.delivery().inputs:
+            if shared_binding(item.metadata) is not None:
+                from ._shared_publication import resolve_input
+                if shared_roots is None:
+                    raise QueueConflictError("SLURM shared input requires qualified roots")
+                resolve_input(item, shared_roots)
+                continue
             path = self.root / "inputs" / item.logical_name
             if not _published_file_matches(
                 path, size_bytes=item.size_bytes, digest=item.digest
             ):
                 raise QueueConflictError("SLURM inputs are not durable")
 
-    def worker_request(self) -> StageWorkerRequest:
-        self.accept_inputs()
-        return self.delivery().worker_request(self.root)
+    def worker_request(self, *, shared_roots: Mapping[str, PlainData] | None = None) -> StageWorkerRequest:
+        self.accept_inputs(shared_roots=shared_roots)
+        return self.delivery().worker_request(self.root, shared_roots=shared_roots)
 
     def retain_result(self, result: StageWorkerResult) -> _RemoteExecutionReport:
         """Retain a result produced inside the acknowledged bootstrap root.
@@ -1535,10 +1624,14 @@ class SlurmBootstrapWorkspace:
         ):
             raise QueueConflictError("SLURM worker result identity conflicts")
         outputs: list[_RemoteOutputArtifact] = []
+        from ._shared_publication import selected, retain
+        shared = selected(delivery) is not None
         if result.status is StageStatus.SUCCEEDED:
             if set(result.outputs) != set(delivery.declared_outputs):
                 raise QueueConflictError("SLURM worker outputs conflict")
-            for logical_name, ref in sorted(result.outputs.items()):
+            if shared:
+                outputs = retain(self, result)
+            for logical_name, ref in (() if shared else sorted(result.outputs.items())):
                 unresolved_source = uri_to_path(ref.uri)
                 if unresolved_source.is_symlink():
                     raise QueueConflictError("SLURM preparation output is a link")
@@ -1620,7 +1713,7 @@ class SlurmBootstrapWorkspace:
             ),
             process_created=True,
             executor_metadata=result.executor_metadata,
-            output_kind="preparation_report"
+            output_kind="shared" if shared else "preparation_report"
             if any(item.preparation_report_transfer is not None for item in outputs)
             else "relay",
         )

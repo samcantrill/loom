@@ -19,6 +19,7 @@ import shutil
 from typing import Iterator, cast
 
 from loom.serialization import PlainData
+from loom.pipeline.stores.shared_artifacts import binding as shared_binding
 from ._remote_stage_execution import (
     MAX_TRANSFER_BYTES,
     TRANSFER_CHUNK_BYTES,
@@ -143,7 +144,7 @@ class SharedSlurmResult:
         encoded = _json(report.to_dict())
         if (
             len(encoded) > _REPORT_BYTES
-            or sum(p.size_bytes for p in report.outputs) > MAX_TRANSFER_BYTES
+            or sum(p.size_bytes for p in report.outputs if shared_binding(p.metadata) is None) > MAX_TRANSFER_BYTES
         ):
             self.failure("SLURM result exceeds existing report/artifact bounds")
             raise QueueServiceError(
@@ -177,6 +178,11 @@ class SharedSlurmResult:
             return
         artifacts = []
         for item in report.outputs:
+            if shared_binding(item.metadata) is not None:
+                # Shared publications remain owned by the artifact protocol.
+                # This journal retains their bound report, never copies or
+                # cleans their potentially large payload trees.
+                continue
             data = bytearray()
             while True:
                 chunk, final = output(item.transfer_id, len(data))
@@ -240,12 +246,13 @@ class SharedSlurmResult:
         report = _RemoteExecutionReport.from_dict(
             json.loads(checked(manifest["report"], _REPORT_BYTES))
         )
+        relayed = tuple(item for item in report.outputs if shared_binding(item.metadata) is None)
         if report.assignment_id != self.assignment_id or len(
             manifest["artifacts"]
-        ) != len(report.outputs):
+        ) != len(relayed):
             raise QueueConflictError("SLURM retained output declaration conflicts")
         outputs = {}
-        for item, descriptor in zip(report.outputs, manifest["artifacts"], strict=True):
+        for item, descriptor in zip(relayed, manifest["artifacts"], strict=True):
             if descriptor != {
                 "logical_name": item.logical_name,
                 "path": "outputs/" + item.transfer_id,
@@ -288,6 +295,8 @@ class SharedSlurmResult:
         }
         call({**binding, "result_operation": "report", "report": report.to_dict()})
         for item in report.outputs:
+            if shared_binding(item.metadata) is not None:
+                continue
             data = outputs[item.transfer_id]
             offset = 0
             while True:

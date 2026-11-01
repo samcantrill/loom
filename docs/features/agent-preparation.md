@@ -10,6 +10,14 @@ The coordinator host can use its Unix socket; other clients use authenticated
 HTTPS directly. A submitting client does not need a worker service. Workers
 retain their existing outbound connection to the coordinator.
 
+An HPC can run its coordinator and submit agent within the site and route the
+fixed preparation child through Slurm. A submitted preparation policy selects
+`execution_route: {kind: slurm, profile: hpc-cpu}`; each authored scientific stage
+can independently select a CPU or GPU Slurm profile. Those profiles must authorize
+the submitted container capability. Configuration capture remains a coordinator
+operation; composition and scientific input inspection run in the allocation.
+See [Slurm execution](slurm.md) for bootstrap, image and shared-artifact contracts.
+
 ## Select Inputs And An Existing Environment
 
 Write configuration with your editor or project tooling into a directory the

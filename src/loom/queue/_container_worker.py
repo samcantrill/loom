@@ -13,6 +13,7 @@ from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 if TYPE_CHECKING:
     from ._agent_process_supervisor import ResidentWorkerLaunchProfile
     from ._remote_stage_execution import _ResidentAssignmentBundle
+    from .slurm_ready_stage import SlurmStageDelivery
 
 
 def container_binding(
@@ -193,7 +194,7 @@ def build_container_worker(
 
 def qualify_shared_worker_inputs(
     profile: ResidentWorkerLaunchProfile,
-    assignment: _ResidentAssignmentBundle,
+    assignment: _ResidentAssignmentBundle | SlurmStageDelivery,
     *,
     agent_id: str | None,
 ) -> None:
@@ -204,7 +205,7 @@ def qualify_shared_worker_inputs(
     from loom.pipeline.stores.shared_artifacts import binding as shared_binding
 
     if profile.submitted_execution is not None:
-        from .submitted_execution import verify_submitted_image
+        from .submitted_execution import assignment_binding, verify_submitted_image
         from .shared_execution import qualifications
 
         execution = profile.submitted_execution
@@ -212,7 +213,8 @@ def qualify_shared_worker_inputs(
             raise ValueError("submitted launch image differs from its assignment")
         alias = str(execution.image.location["root_id"])
         root = cast(Mapping[str, PlainData], profile.shared_roots[alias])
-        if qualifications({alias: dict(root)})[alias] != assignment.profile.shared_roots[alias]:
+        submitted = assignment_binding(assignment.fingerprint)
+        if submitted is None or qualifications({alias: dict(root)})[alias] != submitted[1].shared_roots[alias]:
             raise ValueError("submitted image root qualification conflicts")
         verify_submitted_image(execution.image, profile.shared_roots)
     shared_scope = assignment_scope(assignment.fingerprint)
@@ -247,7 +249,7 @@ def project_container_worker(
     shared_scope: Mapping[str, PlainData] | None = None,
     shared_snapshot: object = None,
     agent_id: str | None = None,
-    assignment: _ResidentAssignmentBundle | None = None,
+    assignment: _ResidentAssignmentBundle | SlurmStageDelivery | None = None,
 ):
     """Project original argv and metadata without filesystem access or writes."""
     from loom.pipeline.executors.containers import (

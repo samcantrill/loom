@@ -1,4 +1,4 @@
-"""Shared payload routing within the native resident assignment protocol."""
+"""Shared payload publication for native resident and Slurm assignments."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ from ._phase_timing import phase
 from collections.abc import Mapping
 from dataclasses import dataclass
 import hashlib
-import json
 import os
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, cast
@@ -44,12 +43,16 @@ if TYPE_CHECKING:
         _RemoteOutputArtifact,
         _RemoteExecutionReport,
     )
+    from .slurm_ready_stage import SlurmStageDelivery, SlurmBootstrapWorkspace
+
+    PublicationRequest = _ResidentAssignmentBundle | SlurmStageDelivery
+    PublicationWorkspace = _ResidentAssignmentWorkspace | SlurmBootstrapWorkspace
 
 CAPABILITY = "shared-artifact-publication-v1"
 
 
 def selected(
-    request: _ResidentAssignmentBundle,
+    request: PublicationRequest,
 ) -> tuple[str, Mapping[str, PlainData]] | None:
     scope = assignment_scope(request.fingerprint)
     if scope is None:
@@ -62,7 +65,7 @@ def selected(
 
 
 def identity(
-    request: _ResidentAssignmentBundle, *, agent_id: str, fence: str
+    request: PublicationRequest, *, agent_id: str, fence: str
 ) -> dict[str, PlainData]:
     return {
         "assignment_id": request.assignment_id,
@@ -78,14 +81,14 @@ def publication_id(identity: Mapping[str, PlainData]) -> str:
     return hashlib.sha256(encoded(identity)).hexdigest()
 
 
-def staging_relative(request: _ResidentAssignmentBundle, agent_id: str) -> str:
+def staging_relative(request: PublicationRequest, agent_id: str) -> str:
     # Hash only path components whose native identities can contain punctuation.
     machine = hashlib.sha256(agent_id.encode()).hexdigest()
     return f"loom-work/{machine}/{request.assignment_id}/{request.attempt_id}/artifacts/{request.stage_name}"
 
 
 def staging_tree(
-    request: _ResidentAssignmentBundle,
+    request: PublicationRequest,
     roots: Mapping[str, PlainData],
     agent_id: str,
     *,
@@ -106,12 +109,9 @@ def staging_tree(
 
 
 def workspace_facts(
-    workspace: _ResidentAssignmentWorkspace,
+    workspace: PublicationWorkspace,
 ) -> tuple[dict[str, Any], dict[str, PlainData]]:
-    value = workspace.supervisor_launch_json()
-    if value is None:
-        raise QueueConflictError("shared publication requires a retained launch")
-    launch = json.loads(value)
+    launch = workspace.publication_binding()
     return launch, identity(
         workspace.request(),
         agent_id=launch["agent_id"],
@@ -120,7 +120,7 @@ def workspace_facts(
 
 
 def worker_artifact_root(
-    workspace: _ResidentAssignmentWorkspace, *, container: bool = False
+    workspace: PublicationWorkspace, *, container: bool = False
 ) -> Path | None:
     request = workspace.request()
     if selected(request) is None:
@@ -183,7 +183,7 @@ def _retain_execution_logs(workspace: Any, result: Any, tree: Path, *, sealed: b
 
 
 def retain(
-    workspace: _ResidentAssignmentWorkspace, result: StageWorkerResult
+    workspace: PublicationWorkspace, result: StageWorkerResult
 ) -> list[_RemoteOutputArtifact]:
     try:
         from ._remote_stage_execution import _RemoteOutputArtifact
@@ -257,14 +257,14 @@ def retain(
         for name, ref in sorted(result.outputs.items()):
             primary = outputs[name]
             member = indexed[primary]
-            reference = {
+            reference: dict[str, PlainData] = {
                 "schema_version": 1,
                 "root_id": alias,
                 "tree": final_relative,
                 "publication_id": pub_id,
                 "receipt_digest": hashlib.sha256(data).hexdigest(),
                 "primary": primary,
-                "budgets": limits,
+                "budgets": cast(PlainData, limits),
             }
             descriptors.append(
                 _RemoteOutputArtifact(
@@ -282,7 +282,7 @@ def retain(
                     created_at=ref.created_at,
                     metadata={
                         **ref.metadata, SHARED_PUBLICATION: reference,
-                        **({EXECUTION_LOGS: logs} if logs else {}),
+                        **({EXECUTION_LOGS: cast(PlainData, logs)} if logs else {}),
                     },
                 )
             )
@@ -292,7 +292,7 @@ def retain(
 
 
 def prepare_publication(
-    request: _ResidentAssignmentBundle,
+    request: PublicationRequest,
     report: _RemoteExecutionReport,
     roots: Mapping[str, PlainData],
     *,
@@ -436,7 +436,7 @@ def accept_publication(prepared: PreparedPublication) -> dict[str, ArtifactRef]:
 
 
 def publish(
-    request: _ResidentAssignmentBundle,
+    request: PublicationRequest,
     report: _RemoteExecutionReport,
     roots: Mapping[str, PlainData],
     *,

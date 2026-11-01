@@ -452,7 +452,7 @@ class CoordinatorPreparations:
             )
             selected["slurm_profiles"] = [
                 item.descriptor.to_dict() for item in self.daemon.config.slurm_profiles
-            ] if request.execution is None else []
+            ]
             selected["remote_profiles"] = [
                 item.to_dict() for item in self.daemon.config.remote_profiles
             ] if request.execution is None else []

@@ -852,7 +852,7 @@ def prepare_child_run(
         "runtime": runtime_options.to_dict(),
     }
     from loom.queue._maintenance import preparation_placement
-    placement = preparation_placement(service.daemon, binding.operation_id)
+    placement = preparation_placement(service.daemon, binding.operation_id, binding.preparation_profile)
     if placement is not None:
         child = cast(list[dict[str, PlainData]], cast(Mapping[str, PlainData], resolved["pipeline"])["stages"])[0]
         child["placement"] = dict(placement)
@@ -914,8 +914,12 @@ def _stage_execution_data(binding: PreparationChildInput, shared: object) -> dic
 
 def _require_submitted_route(stage: StageSpec) -> None:
     route = stage.placement.get("execution_route")
+    if isinstance(route, Mapping) and route.get("kind") == "slurm":
+        # The coordinator checks the named profile against the immutable
+        # submitted capability before preparing/admitting the run.
+        return
     if route is not None and route != {"kind": "managed_agent"}:
-        raise QueueConflictError("submitted containers require the managed agent route")
+        raise QueueConflictError("submitted containers require a managed agent or Slurm route")
 
 
 def _bind_submitted_snapshot(
