@@ -120,7 +120,7 @@ def _file_hash(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def _selection(inventory, hosts, env_file, *, require_resident=False):
+def _selection(inventory, hosts, env_file):
     environments = _environment_files(inventory, env_file)
     selected = inventory.select(hosts)
     names = [entry.name for entry in selected]
@@ -160,7 +160,7 @@ def _selection(inventory, hosts, env_file, *, require_resident=False):
                 "slurm_profiles"
             ):
                 raise QueueConfigError(
-                    "setup supports a pure coordinator and separate resident agents"
+                    "setup supports a pure coordinator and separate agents"
                 )
             root = (entry.config.parent / declaration["deployment_root"]).resolve()
             if declaration["agent_server"] is None:
@@ -168,9 +168,9 @@ def _selection(inventory, hosts, env_file, *, require_resident=False):
         else:
             spec = read_agent_spec(entry.config, env_file=selected_env)
             declared = cast(dict[str, Any], thaw_plain_data(spec.declarations))
-            if declared["slurm_profiles"] or (require_resident and len(declared["resident_profiles"]) != 1):
+            if declared["slurm_profiles"]:
                 raise QueueConfigError(
-                    "setup requires one native resident profile per agent"
+                    "SSH setup does not support SLURM agents"
                 )
             root = spec.agent_root
         declarations[entry.name] = declaration
@@ -207,7 +207,7 @@ def plan(inventory: Inventory, *, hosts=None, issuer=None, env_file=None):
     Only the release descriptor is hashed here. Apply verifies every immutable
     artifact before dispatch. Target-local filesystem evidence is authoritative.
     """
-    rows, declarations = _selection(inventory, hosts, env_file, require_resident=True)
+    rows, declarations = _selection(inventory, hosts, env_file)
     requested = {"descriptor_sha256": _file_hash(inventory.runtime_release)}
     for name, row in rows.items():
         try:
@@ -681,8 +681,14 @@ def apply(
     env_file=None,
     resume=False,
     check_selection=None,
-):
-    """Apply or continue the immutable selected setup; unknown replies retain IDs."""
+) -> dict[str, Any]:
+    """Apply or continue selected setup; unknown replies retain native IDs.
+
+    ``check_selection`` may include serialized submitted ``execution`` and its
+    protected ``execution_file``. Continuation reuses the retained execution and
+    checks. ``grant_operator_access`` explicitly extends one existing operator
+    credential's agent scope to the selected workers through guarded enrollment.
+    """
     _environment_files(inventory, env_file)
     directory = _directory(inventory, operation_id)
     if resume and not (directory / "intent.json").exists():
@@ -711,9 +717,13 @@ def _normalized_checks(selection):
     if selection is None:
         return None
     result = {key: value for key, value in selection.items() if value is not None}
-    for key in ("deployment", "operator_connection"):
+    for key in ("deployment", "operator_connection", "execution_file"):
         if key in result:
             result[key] = str(Path(result[key]).resolve())
+    if "execution" in result:
+        from loom.queue.submitted_execution import SubmittedContainerExecution
+
+        result["execution"] = SubmittedContainerExecution.from_dict(result["execution"]).to_dict()
     return result
 
 
@@ -727,7 +737,7 @@ def _apply_locked(
     env_file,
     resume,
     check_selection,
-):
+) -> dict[str, Any]:
     check_selection = _normalized_checks(check_selection)
     if not (directory / "intent.json").exists():
         if resume:
@@ -748,7 +758,7 @@ def _apply_locked(
             raise QueueConfigError(
                 "unbound credentials require explicit coordinator-local --issuer before setup"
             )
-        rows, declarations = _selection(inventory, hosts, env_file, require_resident=True)
+        rows, declarations = _selection(inventory, hosts, env_file)
         release = verify_release(inventory.runtime_release)
         _validate_checks(inventory, check_selection, declarations)
         check_selection = cast(dict[str, Any], check_selection)
@@ -773,29 +783,30 @@ def _apply_locked(
             intent["inputs"][check_selection["operator_connection"]] = _file_hash(
                 Path(check_selection["operator_connection"])
             )
+        if check_selection.get("execution_file"):
+            intent["inputs"][check_selection["execution_file"]] = _file_hash(
+                Path(check_selection["execution_file"])
+            )
         protected_directory(directory)
         atomic(directory / "intent.json", intent)
     else:
         intent = read(directory / "intent.json")
+        if check_selection is not None and check_selection != _normalized_checks(intent["check_selection"]):
+            raise QueueConflictError("operation ID already names different selected inputs")
         if not resume:
-            rows, declarations = _selection(inventory, hosts, env_file, require_resident=True)
+            rows, declarations = _selection(inventory, hosts, env_file)
             same_hosts = {
                 n: (r["host"], r["config"], r["root"]) for n, r in rows.items()
             } == {
                 n: (r["host"], r["config"], r["root"])
                 for n, r in intent["hosts"].items()
             }
-            same_checks = (
-                check_selection is None
-                or check_selection == _normalized_checks(intent["check_selection"])
-            )
             same_environment = same_hosts and all(
                 row["env_file"] == intent["hosts"][name]["env_file"]
                 for name, row in rows.items()
             )
             if (
                 not same_hosts
-                or not same_checks
                 or not same_environment
                 or (issuer is not None and str(issuer) != intent["issuer"])
             ):
@@ -824,7 +835,7 @@ def _apply_locked(
         result = {"state": "blocked", "reason": str(exc)}
     atomic(directory / "result.json", result)
 
-    return operation_status(inventory, operation_id)
+    return cast(dict[str, Any], operation_status(inventory, operation_id))
 
 
 def _validate_checks(inventory, selected, declarations):
@@ -868,6 +879,30 @@ def _validate_checks(inventory, selected, declarations):
         raise QueueConfigError(
             "selected probe source/profile is not declared by the coordinator"
         )
+    from loom.fleet.self_tests import selected_check_profile
+    from loom.queue._submitted_container_policy import SubmittedContainerPolicy
+    from loom.queue.submitted_execution import SubmittedContainerExecution
+
+    raw_execution = selected.get("execution")
+    execution = None if raw_execution is None else SubmittedContainerExecution.from_dict(raw_execution)
+    for name, declaration in declarations.items():
+        if name == "coordinator":
+            continue
+        if len(declaration["resident_profiles"]) > 1:
+            raise QueueConfigError("setup supports at most one resident profile per agent")
+        selected_check_profile(policy, {"offer": {
+            "profile_identities": [p["descriptor"] for p in declaration["resident_profiles"]],
+            "container_execution_capabilities": [
+                SubmittedContainerPolicy.from_dict(p).capability.to_dict()
+                for p in declaration.get("container_policies", ())
+            ],
+        }}, execution)
+    granted = selected.get("grant_operator_access")
+    if granted is not None and not any(
+        principal["credential_id"] == granted and principal["role"] == "operator"
+        for principal in coordinator["agent_policy"].get("principals", ())
+    ):
+        raise QueueConfigError("operator access requires an already-authored operator credential ID")
     if selection.connection is None:
         for kind in ("client", "operator"):
             chosen = selected.get(kind + "_credential_id")
@@ -1074,6 +1109,10 @@ def _continue(operation):
             registration=declarations[name]["registration"],
             gpu_devices=devices,
             profile=initialized["profile"],
+            **({"container_capabilities": initialized["container_capabilities"]}
+               if initialized.get("container_capabilities") else {}),
+            **({"grant_operator_access": intent["check_selection"]["grant_operator_access"]}
+               if intent["check_selection"].get("grant_operator_access") is not None else {}),
             certificate=certificate,
             certificate_fingerprint=_fingerprint(certificate),
         )
@@ -1106,6 +1145,7 @@ def _continue(operation):
                 }
             time.sleep(0.1)
     from loom.fleet.self_tests import self_test
+    from loom.queue.submitted_execution import SubmittedContainerExecution
 
     results = {}
     for name in workers:
@@ -1130,6 +1170,8 @@ def _continue(operation):
             agent_id=name,
             checks=("cpu", "storage", "gpu") if has_gpu else ("cpu", "storage"),
             operation_id=native_intents[0].parent.name if native_intents else None,
+            execution=SubmittedContainerExecution.from_dict(intent["check_selection"]["execution"])
+            if not native_intents and intent["check_selection"].get("execution") is not None else None,
         )
     state = (
         "complete"

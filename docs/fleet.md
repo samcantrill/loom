@@ -339,7 +339,7 @@ resources or reads worker-authored metadata as native allocation proof.
 
 ## SSH setup and continuation
 
-The coordinator and separate resident agents may share an SSH host. Give each
+The coordinator and separate resident or submitted-container agents may share an SSH host. Give each
 role a distinct configuration, credentials and non-overlapping native root;
 Fleet retains separate installations, locks, service ownership and operation
 receipts for those roots. Declare non-overlapping resource budgets and GPU
@@ -352,7 +352,8 @@ SSH aliases and their existing authentication/host-key policy; aliases cannot
 contain SSH options or shell syntax. Each host must already provide Python 3.12,
 uv, OpenSSL, findmnt and the selected service manager. Native state and IPC must be on a supported local
 filesystem; a directory beneath an NFS home is insufficient. Workload software,
-shared mounts and the selected resident Python or SIF profile must already exist.
+shared mounts and the selected resident Python/SIF profile or submitted image and
+container runtime must already exist.
 For tmux, the generated socket path must fit Linux's 107-byte pathname limit.
 Tmux keeps services detached from the operator connection and promises **no boot
 startup**. Systemd setup uses the managed lifetimes below; runtime/profile changes
@@ -381,6 +382,18 @@ it never launches its roles on the operator. Select the base probe config with
 `--config`. Existing fleets use an already pinned connection-only deployment
 and a separate pinned operator `--connection`.
 
+Submitted-container preparation aliases require `--check-execution FILE`, using
+the same protected execution JSON as self-test `--execution`. Setup retains the
+exact image location, digest, size, interpreter and worker contract and hashes
+the selected file. Resume uses that retained selection and the original check
+IDs; changing the execution file or role environment blocks further effects.
+Resident preparation aliases omit this option. Agents may have no resident
+profiles when their native container policies and explicit resource inventory
+are declared. Enrollment preserves resource ceilings, concurrency and selected
+GPU UUIDs. Offered container capabilities must match the coordinator's accepted
+catalog; a v3 offer may expose an authorized input subset under the native
+compatibility rules. Setup does not add new container permissions to that catalog.
+
 ```sh
 loom fleet plan --fleet lab --issuer /LOCAL/PRIVATE/issuer
 loom fleet apply --fleet lab --operation-id setup-001 \
@@ -400,7 +413,8 @@ credentials, no issuer is needed for steps that require no issuance.
 Fresh client and operator leaf identities must select already-authored native
 principals with those respective roles. Unique choices are selected directly;
 use `--client-credential-id` and `--operator-credential-id` when ambiguous. Setup
-adds only their certificate fingerprints, preserving every declared scope.
+adds their certificate fingerprints, preserving every declared scope unless
+the explicit operator scope option below is selected.
 Their private keys remain in protected operator-local files; workers generate
 and keep their own keys; the CA key stays coordinator-local. Only public CSRs and
 certificates cross SSH. Pending fresh bindings are shown honestly in plan; the
@@ -417,6 +431,19 @@ loom fleet apply --fleet lab --hosts gpu02 --operation-id add-gpu02 \
   --issuer /LOCAL/PRIVATE/issuer --deployment /PRIVATE/EXPORTED/deployment.json \
   --connection /PRIVATE/EXPORTED/operator.json --config fleet-check.yaml
 ```
+
+For a submitted-container agent, add `--check-execution /PRIVATE/check-execution.json`
+and select a deployment whose preparation alias names its container policy.
+To extend an existing remote operator's agent scope, also supply
+`--grant-operator-access CREDENTIAL_ID`. The credential must already name an
+operator principal. The same revision-guarded native enrollment reload appends
+only the selected agent IDs to that principal's scope; its actions and pools,
+ordinary clients and other principals remain unchanged. The operator must
+already have the `drain` and `resume` actions to perform those controls. Omitting
+the option preserves remote operator scopes; local-owner enrollment alone does
+not grant remote access. Existing coordinator and worker identities, running
+unselected services and retained service releases are preserved during add-host
+setup.
 
 Plan is read-only and reserves nothing. Apply verifies the exact offline bundle,
 retains protected intent and dispatch markers in `operations/<operation-id>`, and

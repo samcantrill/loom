@@ -68,6 +68,9 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     )
     apply_command.add_argument("--client-credential-id")
     apply_command.add_argument("--operator-credential-id")
+    apply_command.add_argument("--check-execution", type=Path, help="protected submitted-container execution JSON for qualification")
+    apply_command.add_argument("--grant-operator-access", metavar="CREDENTIAL_ID",
+                               help="extend this existing operator's agent scope to selected agents")
     apply_command.add_argument("--env-file", type=Path)
     apply_command.add_argument(
         "--format", dest="output_format", choices=("text", "json"), default="text"
@@ -302,6 +305,7 @@ def handle(namespace: argparse.Namespace) -> int:
                 else:
                     raise ValueError("abort/retry requires a maintenance upgrade")
             else:
+                execution = _execution(namespace.check_execution)
                 result = apply(
                     inventory,
                     operation_id=namespace.operation_id,
@@ -316,6 +320,10 @@ def handle(namespace: argparse.Namespace) -> int:
                         else str(namespace.connection.resolve()),
                         "client_credential_id": namespace.client_credential_id,
                         "operator_credential_id": namespace.operator_credential_id,
+                        "grant_operator_access": namespace.grant_operator_access,
+                        **({"execution": execution.to_dict(),
+                            "execution_file": str(namespace.check_execution.resolve())}
+                           if execution is not None else {}),
                     },
                 )
         elif command == "plan":

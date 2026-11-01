@@ -18,7 +18,7 @@ import subprocess
 import sys
 import time
 import zipfile
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -841,6 +841,275 @@ def test_preflight_reachable_refusals_are_read_only(site):
     with pytest.raises(QueueConfigError, match="SSH alias"):
         plan(load_inventory(inventory.path))
     assert not list(base.glob(".loom-fleet-*"))
+
+
+@pytest.fixture
+def submitted_site(site, endpoint, tmp_path, request):
+    """Real native services; only the container/kernel boundary is synthetic."""
+    from dataclasses import replace
+    from examples.execution.containers.apptainer_fixture import fake_apptainer
+    from tests.unit.loom.queue.test_submitted_container_policy import _submitted
+
+    inventory, base, selection = site
+    contract = getattr(request, "param", "resident-submitted-container-v3")
+    submitted = tmp_path / "submitted"
+    submitted.mkdir()
+    policy, execution, _, _ = _submitted(submitted)
+    coordinator = json.loads(inventory.hosts[0].config.read_text())
+    snapshots = tmp_path / "snapshots"
+    snapshots.mkdir(exist_ok=True)
+    (snapshots / "challenge").write_bytes(b"snapshots")
+    roots = {**policy.shared_roots, **coordinator["shared_roots"], "snapshots": {
+        "host_path": str(snapshots), "container_path": "/loom/snapshots", "access": "ro",
+        "challenge": {"path": "challenge", "sha256": sha(snapshots / "challenge")},
+    }}
+    with (endpoint / "config").open("a") as stream:
+        stream.write("\n SendEnv PYTHONPATH\n")
+    with fake_apptainer() as runtime:
+        command = Path(runtime["options"]["command"])
+        seam = command.parent / "sitecustomize.py"
+        with seam.open("a") as stream:
+            stream.write("\nfrom loom.queue import shared_execution\nfrom dataclasses import replace\n"
+                "_roots = shared_execution.execution_roots\n"
+                "shared_execution.execution_roots = lambda roots, *, container: _roots(roots, container=False)\n"
+                "_inputs = shared_execution._preparation_input_roots\n"
+                "shared_execution._preparation_input_roots = lambda profile, preparation: _inputs(replace(profile, container=None, submitted_execution=None), preparation)\n")
+        command.write_text(command.read_text().replace("os.execvpe(args[0], args, os.environ)",
+            f"os.environ['PYTHONPATH'] = {str(command.parent)!r}\nos.execvpe(args[0], args, os.environ)"))
+        policy = replace(policy, worker_contracts=(contract,), runtime_options=runtime["options"],
+                         shared_roots=roots, preparation_shared_roots={"projects": snapshots})
+        execution = replace(execution, worker_contract=contract, python_executable=sys.executable)
+        catalog = policy
+        if contract == "resident-submitted-container-v3":
+            other = tmp_path / "other-host-input"
+            other.mkdir()
+            catalog = replace(policy, shared_roots={**roots, "other-host-input": {
+                "host_path": str(other), "container_path": "/loom/other-host-input", "access": "ro",
+                "qualification": {"kind": "input_directory"},
+            }})
+        coordinator["shared_roots"] = catalog.to_dict()["shared_roots"]
+        coordinator["container_capabilities"] = [catalog.capability.to_dict()]
+        prep = dict(coordinator["preparation"]["profiles"]["existing-project"])
+        prep.pop("resident_profile_id")
+        prep["container_policy_id"] = policy.policy_id
+        coordinator["preparation"]["profiles"]["submitted"] = prep
+        operator = coordinator["agent_policy"]["principals"][1]
+        operator["agent_ids"] = ["worker"]
+        operator["actions"].append("resume")
+        write(inventory.hosts[0].config, coordinator)
+        agent_path = inventory.path.parent / "worker2.json"
+        agent = json.loads(agent_path.read_text())
+        agent["resident_profiles"] = []
+        agent["container_policies"] = [policy.to_dict()]
+        agent["registration"]["capabilities"].append("submitted-container-execution-v1")
+        agent["resources"] = {"cpu_capacity": 2, "memory_capacity_bytes": 128 * 1024 * 1024,
+                              "gpu": {"provider": "nvidia", "devices": "none"}}
+        agent["max_concurrent_assignments"] = 7
+        write(agent_path, agent)
+        first = apply(inventory, operation_id="resident", issuer=base / "issuer", check_selection=selection)
+        assert first["outcome"] == "complete", json.dumps(first)
+        from loom.deployment import export_connection_deployment, load_deployment
+
+        deployment = tmp_path / "submitted-deployment.json"
+        export_connection_deployment(replace(load_deployment(first["deployment"]),
+            preparation_profile="submitted"), deployment)
+        authored = json.loads(inventory.path.read_text())
+        authored["agents"]["worker2"] = {"host": "worker2", "config": "worker2.json"}
+        write(inventory.path, authored)
+        inventory = bind_environments(load_inventory(inventory.path))
+        execution_file = write(tmp_path / "check-execution.json", execution.to_dict())
+        selected = {"deployment": str(deployment), "operator_connection": first["operator_connection"],
+                    "config": "pipeline.yaml", "execution": execution.to_dict(),
+                    "execution_file": str(execution_file), "grant_operator_access": "operator"}
+        yield inventory, base, selected, first, policy, seam
+
+
+@pytest.mark.parametrize("submitted_site", ["resident-submitted-container-v2", "resident-submitted-container-v3"], indirect=True)
+def test_submitted_add_host_retains_execution_identity_and_scoped_access(submitted_site, monkeypatch):
+    from loom.coordinator import CoordinatorOperatorClient, RunRequest
+    from loom.fleet import ssh_operations as operations, self_tests
+    from loom.fleet._host import read
+    from loom.queue.errors import QueueConfigError, QueueConflictError
+    from loom.queue.operations import inspect_native_service
+    from loom.queue.agent_sessions import AgentControl, AgentControlKind
+    from loom.serialization import thaw_plain_data
+
+    inventory, base, selected, first, policy, _ = submitted_site
+    preview = plan(inventory, hosts=["worker2"])
+    assert set(preview["hosts"]) == {"coordinator", "worker2"}
+    assert not any("unavailable" in row or "conflict" in row for row in preview["hosts"].values())
+    before = read(inventory.hosts[0].config)
+    native_before = inspect_native_service(base / "worker").value
+    for key, match in (("execution", "explicit submitted execution"),
+                       ("grant_operator_access", "operator credential")):
+        invalid = {**selected}
+        if key == "execution":
+            del invalid[key]
+        else:
+            invalid[key] = "client"
+        with pytest.raises(QueueConfigError, match=match):
+            apply(inventory, operation_id="missing-" + key, hosts=["worker2"],
+                  issuer=base / "issuer", check_selection=invalid)
+    assert not (base / "worker2").exists()
+    assert read(inventory.hosts[0].config) == before
+    transport = operations.ssh
+    initialized = enrolled = None
+    def lost_enrollment(host, request):
+        nonlocal initialized, enrolled
+        response = transport(host, request)
+        if request["action"] == "initialize" and request["name"] == "worker2":
+            initialized = response
+        if request["action"] == "enroll" and enrolled is None:
+            enrolled = response
+            raise operations.SshUnavailable("lost enrollment reply")
+        return response
+    monkeypatch.setattr(operations, "ssh", lost_enrollment)
+    result = apply(inventory, operation_id="submitted-add", hosts=["worker2"],
+                   issuer=base / "issuer", check_selection=selected)
+    assert result["outcome"] == "waiting" and initialized and enrolled, result
+    assert initialized["profile"] is None
+    assert initialized["max_concurrent_assignments"] == 7
+    assert initialized["gpu_devices"] == []
+    assert initialized["container_capabilities"] == [policy.capability.to_dict()]
+    after = read(inventory.hosts[0].config)
+    assert after["container_capabilities"] == before["container_capabilities"]
+    assert after["agent_policy"]["principals"][0] == before["agent_policy"]["principals"][0]
+    assert after["agent_policy"]["principals"][1] == {
+        **before["agent_policy"]["principals"][1], "agent_ids": ["worker", "worker2"]}
+    retained = inventory.path.parent / "operations/submitted-add"
+    assert read(retained / "intent.json")["check_selection"]["execution"] == selected["execution"]
+    # Operator edits cannot replace the selected execution or environment after enrollment.
+    changed = {**selected, "execution": {**selected["execution"], "python_executable": "/different/python"}}
+    with pytest.raises(QueueConflictError, match="different selected inputs"):
+        apply(inventory, operation_id="submitted-add", resume=True, check_selection=changed)
+    environment = inventory.hosts[2].env_file
+    assert environment is not None
+    for path in (Path(selected["execution_file"]), environment):
+        original = path.read_bytes()
+        path.write_bytes(original + b"\n")
+        blocked = apply(inventory, operation_id="submitted-add", resume=True)
+        assert blocked["outcome"] == "blocked" and "input changed" in blocked["reason"], blocked
+        assert not (retained / "steps/worker2-start/dispatch.json").exists()
+        path.write_bytes(original)
+    dispatch = self_tests._dispatch_check
+    dispatched_id = None
+    def lost_check(client, directory, intent, kind):
+        nonlocal dispatched_id
+        value = dispatch(client, directory, intent, kind)
+        if dispatched_id is None:
+            dispatched_id = intent["operation_id"]
+            raise operations.SshUnavailable("lost check dispatch reply")
+        return value
+    monkeypatch.setattr(self_tests, "_dispatch_check", lost_check)
+    result = apply(inventory, operation_id="submitted-add", resume=True)
+    assert result["outcome"] == "waiting" and dispatched_id, result
+    native_intents = list((retained / "checks/worker2/checks").glob("*/intent.json"))
+    assert len(native_intents) == 1 and native_intents[0].parent.name == dispatched_id
+    check_intent = read(native_intents[0])
+    for raw in check_intent["requests"].values():
+        execution = RunRequest.from_dict(raw).preparation.execution
+        assert execution is not None and execution.to_dict() == selected["execution"]
+        if policy.worker_contracts == ("resident-submitted-container-v3",):
+            assert raw["preparation"]["input_locations"] == []
+            assert "other-host-input" not in check_intent["profile"]["shared_roots"]
+    result = apply(inventory, operation_id="submitted-add", resume=True)
+    assert result["outcome"] == "complete", result
+    repeated = apply(inventory, operation_id="submitted-add", resume=True)
+    assert repeated["outcome"] == "complete"
+    assert repeated["checks"]["worker2"]["operation_id"] == dispatched_id
+    assert repeated["identities"] == result["identities"]
+    assert result["identities"]["coordinator"] == first["identities"]["coordinator"]
+    native_after = inspect_native_service(base / "worker").value
+    assert native_after["root_id"] == native_before["root_id"]
+    assert native_after["expected_process"] == native_before["expected_process"]
+    for kind in ("cpu", "storage"):
+        check = result["checks"]["worker2"]["checks"][kind]
+        assert check["outcome"] == "passed" and check["assignment"]["value"]["released"] is True
+    with CoordinatorOperatorClient.from_connection_file(first["operator_connection"]) as operator:
+        agent = cast(dict[str, Any], thaw_plain_data(operator.observe_agent("worker2").value))
+        assert agent["offer"]["cpu"] == 2
+        assert agent["offer"]["memory_bytes"] == 128 * 1024 * 1024
+        for kind in (AgentControlKind.DRAIN, AgentControlKind.RESUME):
+            reply = operator.control_agent(AgentControl(
+                "new-host-" + kind.value, kind, "worker2", agent["session_id"], agent["config_revision"],
+                None, False, "disposable enrollment scope check"))
+            assert reply["mutation_outcome"] == "applied", reply
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                settled = operator.observe_control("new-host-" + kind.value)
+                if settled["state"] == "applied" and settled["acknowledged"]:
+                    break
+                assert settled["state"] != "failed", settled
+                time.sleep(0.1)
+            else:
+                pytest.fail("operator control did not settle")
+            assert operator.observe_agent("worker2").value["drained"] is (kind == AgentControlKind.DRAIN)
+
+
+def test_submitted_enrollment_preserves_selected_resource_gpu_uuids(submitted_site, monkeypatch):
+    """Synthetic discovery proves UUID selection transfer, not physical CUDA."""
+    from loom.fleet import ssh_operations as operations
+    from loom.fleet._host import read
+    from loom.queue._remote_stage_execution import GpuDeviceDescriptor
+
+    inventory, base, selected, _, _, seam = submitted_site
+    selected = {key: value for key, value in selected.items() if key != "grant_operator_access"}
+    principals = read(inventory.hosts[0].config)["agent_policy"]["principals"]
+    with seam.open("a") as stream:
+        stream.write("\nfrom loom.queue.gpu.nvidia import NvidiaSmiGpuInventoryProvider\n"
+            "from loom.queue.gpu.local import LocalGpuDevice, LocalGpuInventory\n"
+            "NvidiaSmiGpuInventoryProvider.discover = lambda self: LocalGpuInventory((\n"
+            "LocalGpuDevice('GPU-fixture-unselected', 'GPU-fixture-unselected', host_index=0, model='fixture', vram_bytes=1048576),\n"
+            "LocalGpuDevice('GPU-fixture-selected', 'GPU-fixture-selected', host_index=1, model='fixture', vram_bytes=2097152)))\n")
+    worker = inventory.hosts[2].config
+    authored = read(worker)
+    authored["resources"]["gpu"]["devices"] = "GPU-fixture-selected"
+    write(worker, authored)
+    transport = operations.ssh
+    initialized = None
+    def stop_after_enrollment(host, request):
+        nonlocal initialized
+        response = transport(host, request)
+        if request["action"] == "initialize" and request["name"] == "worker2":
+            initialized = response
+        if request["action"] == "enroll":
+            raise operations.SshUnavailable("stop before synthetic GPU qualification")
+        return response
+    monkeypatch.setattr(operations, "ssh", stop_after_enrollment)
+    result = apply(inventory, operation_id="submitted-gpu", hosts=["worker2"],
+                   issuer=base / "issuer", check_selection=selected)
+    assert result["outcome"] == "waiting" and initialized, result
+    assert initialized["max_concurrent_assignments"] == 7
+    assert initialized["profile"] is None
+    devices = initialized["gpu_devices"]
+    assert devices == [GpuDeviceDescriptor("GPU-fixture-selected", "fixture", 2097152).to_dict()]
+    accepted = read(inventory.hosts[0].config)["agent_policy"]["agents"]
+    assert [a["gpu_devices"] for a in accepted if a["agent_id"] == "worker2"] == [devices]
+    assert read(inventory.hosts[0].config)["agent_policy"]["principals"] == principals
+    assert not list((inventory.path.parent / "operations/submitted-gpu/checks").glob("*/checks/*/intent.json"))
+
+
+def test_submitted_enrollment_refuses_unaccepted_capability(submitted_site):
+    from dataclasses import replace
+    from loom.fleet._host import read
+
+    inventory, base, selected, first, policy, _ = submitted_site
+    worker = inventory.hosts[2].config
+    authored = read(worker)
+    authored["container_policies"] = [replace(policy, policy_id="not-accepted").to_dict()]
+    # The additional offered policy is a valid native role declaration, but is
+    # not part of the accepted coordinator catalog. Keep the check policy valid.
+    authored["container_policies"].append(policy.to_dict())
+    write(worker, authored)
+    before = read(inventory.hosts[0].config)
+    result = apply(inventory, operation_id="unaccepted-policy", hosts=["worker2"],
+                   issuer=base / "issuer", check_selection=selected)
+    assert result["outcome"] == "blocked" and "accepted coordinator capability" in result["reason"], result
+    assert read(inventory.hosts[0].config) == before
+    from loom.queue.operations import inspect_native_service
+
+    assert inspect_native_service(base / "c/coordinator").owner == first["identities"]["coordinator"]
+    assert not (inventory.path.parent / "operations/unaccepted-policy/steps/worker2-start/dispatch.json").exists()
 
 
 def test_unavailable_ssh_and_network_state_roots_create_nothing(site, endpoint, capsys):

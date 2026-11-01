@@ -294,10 +294,17 @@ def initialized_observation(request):
         service = load_outbound_agent_service_config(
             config(request), env_file=environment(request)
         )
-        profile = service.client.resident_profiles[0]
+        profiles = service.client.resident_profiles
         inventory = service.client.resource_inventory
-        devices = profile.gpu_devices if inventory is None else inventory.gpu_devices
-        fact["profile"] = thaw_plain_data(profile.descriptor.to_dict())
+        devices = inventory.gpu_devices if inventory is not None else (
+            profiles[0].gpu_devices if profiles else ()
+        )
+        fact["profile"] = thaw_plain_data(profiles[0].descriptor.to_dict()) if profiles else None
+        if service.client.container_policies:
+            fact["container_capabilities"] = [
+                thaw_plain_data(policy.capability.to_dict())
+                for policy in service.client.container_policies
+            ]
         fact["gpu_devices"] = [
             thaw_plain_data(device.descriptor.to_dict()) for device in devices
         ]
@@ -521,27 +528,47 @@ def enroll(request, directory):
                 raise QueueConflictError(
                     "existing enrollment differs; use explicit upgrade"
                 )
-            return {"outcome": "unchanged", "coordinator_id": observation.owner}
-        if any(
+            if request.get("grant_operator_access") is None:
+                return {"outcome": "unchanged", "coordinator_id": observation.owner}
+        elif any(
             row["credential_id"] == credential or row["principal_id"] == credential
             for row in [*policy["agents"], *policy.get("principals", [])]
         ):
             raise QueueConflictError(
                 "new agent credential conflicts with existing principal"
             )
-        if fingerprint in mappings or credential in mappings.values():
+        if not existing and (fingerprint in mappings or credential in mappings.values()):
             raise QueueConflictError(
                 "certificate mapping already belongs to another identity"
             )
         profiles = after["remote_profiles"]
-        if request["profile"] not in profiles:
+        if request["profile"] is not None and request["profile"] not in profiles:
             raise QueueConflictError(
                 "agent profile must match an accepted coordinator profile"
             )
-        policy["agents"].append(rule)
+        from loom.queue.submitted_execution import SubmittedContainerCapability
+
+        accepted = [SubmittedContainerCapability.from_dict(value)
+                    for value in after.get("container_capabilities", ())]
+        for raw in request.get("container_capabilities", ()):
+            offered = SubmittedContainerCapability.from_dict(raw)
+            if not any(candidate == offered or candidate.permits(offered) for candidate in accepted):
+                raise QueueConflictError("agent container policy must match an accepted coordinator capability")
+        if not existing:
+            policy["agents"].append(rule)
         if request["agent_id"] not in policy["local_owner"]["agent_ids"]:
             policy["local_owner"]["agent_ids"].append(request["agent_id"])
-        mappings[fingerprint] = credential
+        mappings[fingerprint] = rule["credential_id"]
+        granted = request.get("grant_operator_access")
+        if granted is not None:
+            principals = [p for p in policy.get("principals", ())
+                          if p["credential_id"] == granted and p["role"] == "operator"]
+            if len(principals) != 1:
+                raise QueueConflictError("operator access requires an already-authored operator credential ID")
+            if request["agent_id"] not in principals[0]["agent_ids"]:
+                principals[0]["agent_ids"].append(request["agent_id"])
+        if after == before:
+            return {"outcome": "unchanged", "coordinator_id": observation.owner}
         intent = {
             "before": before,
             "after": after,
