@@ -116,6 +116,27 @@ class PreparationPolicy:
             raise QueueServiceError("preparation source mode is unsupported")
         root = self.source_roots[request.source.root]
         selected = profile.to_dict()
+        if request.input_locations is not None:
+            assert isinstance(profile, SubmittedPreparationProfile)
+            from .shared_execution import scope as shared_scope
+
+            catalog = profile.capability.workload_roots
+            for item in request.input_locations:
+                facts = catalog.get(str(item["root_id"]))
+                if not isinstance(facts, Mapping) or facts["access"] != "ro":
+                    raise QueueServiceError("requested input location is not an authorized read-only root")
+            aliases = {str(item["root_id"]) for item in request.input_locations}
+            infrastructure = {alias for alias, facts in catalog.items()
+                              if "qualification" not in cast(Mapping[str, PlainData], facts)}
+            roots = {alias: catalog[alias] for alias in sorted(aliases | infrastructure)}
+            locations = [thaw_plain_data(item) for item in request.input_locations]
+            locations.extend(thaw_plain_data(item) for item in cast(list[Mapping[str, PlainData]], profile.shared_scope["locations"])
+                             if cast(Mapping[str, PlainData], catalog[str(item["root_id"])])["access"] == "rw")
+            selected["shared_scope"] = shared_scope({
+                "capability": profile.shared_scope["capability"],
+                "roots": roots, "locations": locations,
+            })
+            selected["container_capability"] = profile.capability.select_roots(roots).to_dict()
         if request.execution is not None:
             selected["project_processor"] = thaw_plain_data(request.execution.project_integration)
         return {"source_root": root.to_dict(), "profile": selected}

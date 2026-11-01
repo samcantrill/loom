@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import os
 from pathlib import Path
 import subprocess
@@ -113,19 +113,51 @@ class SubmittedContainerPolicy:
         )
         if result.returncode:
             raise QueueServiceError("container policy runtime probe failed")
-        capability = self.capability
-        if qualifications(self.shared_roots) != capability.shared_roots:
+        capability = self.available_capability()
+        selected = {alias: self.shared_roots[alias] for alias in capability.shared_roots}
+        if qualifications(selected) != capability.shared_roots:
             raise QueueServiceError("container policy shared roots changed")
         return capability
 
+    def available_capability(self) -> SubmittedContainerCapability:
+        """Advertise usable input directories without disabling unrelated work.
+
+        V3 checks input availability at the offer boundary. Missing or unreadable
+        external inputs are omitted; protected image/control/output storage still
+        must qualify at activation. Every selected input is rechecked at launch.
+        Legacy policies keep their exact catalog semantics.
+        """
+        from .submitted_execution import SELECTED_INPUT_WORKER_CONTRACT
+
+        capability = self.capability
+        if SELECTED_INPUT_WORKER_CONTRACT not in self.worker_contracts:
+            return capability
+        available = dict(capability.shared_roots)
+        for alias, facts in self.shared_roots.items():
+            if "qualification" not in cast(Mapping[str, PlainData], facts):
+                continue
+            try:
+                qualifications({alias: facts})
+            except (OSError, QueueServiceError):
+                del available[alias]
+        return replace(capability, shared_roots=available)
+
     def launch_profile(
         self, execution: SubmittedContainerExecution, *, workspace: Path,
+        selected_capability: SubmittedContainerCapability | None = None,
     ) -> ResidentWorkerLaunchProfile:
         """Pure projection for new launch and saved-launch comparison."""
         from ._agent_process_supervisor import ResidentWorkerLaunchProfile
 
         capability = self.capability
         capability.require_execution(execution)
+        roots = self.shared_roots
+        if selected_capability is not None and selected_capability != capability:
+            from .submitted_execution import SELECTED_INPUT_WORKER_CONTRACT
+            if execution.worker_contract != SELECTED_INPUT_WORKER_CONTRACT or not capability.permits(selected_capability):
+                raise QueueServiceError("selected container policy is not authorized")
+            capability = selected_capability
+            roots = {alias: self.shared_roots[alias] for alias in capability.shared_roots}
         root = cast(Mapping[str, PlainData], self.shared_roots[str(execution.image.location["root_id"])])
         image = project_path(root, str(execution.image.location["path"]))
         container = ContainerOptions(image=str(image), mounts=self.mounts)
@@ -135,7 +167,7 @@ class SubmittedContainerPolicy:
             descriptor=capability.to_dict(),
             environment=dict(self.environment),
             preparation_shared_roots=self.preparation_shared_roots,
-            shared_roots=self.shared_roots,
+            shared_roots=roots,
             temporary_mounts=self.temporary_mounts,
             container={
                 "kind": "apptainer",

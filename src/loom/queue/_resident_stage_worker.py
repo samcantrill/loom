@@ -17,7 +17,7 @@ from loom.pipeline.execution.stage_worker import (
 from loom.pipeline.stores.atomic import atomic_write_json
 
 from ._remote_stage_execution import _ResidentAssignmentWorkspace
-from ._phase_timing import PhaseTimings
+from ._phase_timing import PhaseTimings, observe_phases
 from .preparation import PREPARATION_INPUT_CONTEXT_ENV
 
 
@@ -49,9 +49,10 @@ def main(argv: list[str] | None = None) -> int:
         if profile.submitted_execution != retained.submitted_execution:
             raise QueueServiceError("contained workload differs from retained execution")
     timings = PhaseTimings()
-    request = timings.call("input_materialization", workspace.worker_request, resolve_shared=True)
-    os.environ.pop(PREPARATION_INPUT_CONTEXT_ENV, None)
-    preparation = timings.call("preparation_materialization", workspace.preparation_context)
+    with observe_phases(timings.observe):
+        request = timings.call("input_materialization", workspace.worker_request, resolve_shared=True)
+        os.environ.pop(PREPARATION_INPUT_CONTEXT_ENV, None)
+        preparation = timings.call("preparation_materialization", workspace.preparation_context)
     if preparation is not None:
         os.environ[PREPARATION_INPUT_CONTEXT_ENV] = json.dumps(preparation, sort_keys=True, separators=(",", ":"))
     resolver: Callable[[object], object] | None = None

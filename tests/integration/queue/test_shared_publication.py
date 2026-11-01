@@ -7,12 +7,16 @@ import json
 from pathlib import Path
 import sqlite3
 import sys
+import threading
 
 import pytest
 
 from loom.coordinator import CoordinatorClient
 from loom.preparation import CoordinatorPreparation
-from loom.queue import LocalDaemon, LocalDaemonAdmissionRequest, LocalDaemonSocketServer
+from loom.queue import (
+    LocalDaemon, LocalDaemonAdmissionRequest, LocalDaemonSocketServer,
+    LocalDaemonPrincipal, LocalDaemonRole,
+)
 from loom.queue.agent_sessions import AgentRegistration, AgentOffer
 from loom.queue.agent_session_transport import (
     AgentTlsClientConfig,
@@ -48,9 +52,12 @@ from tests.integration.queue.test_preparation_operations import (
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
 
-@pytest.mark.parametrize("pure_coordinator,project_context", [(False, False), (True, False), (True, True)])
+@pytest.mark.parametrize("pure_coordinator,project_context,slow_preparation", [
+    (False, False, False), (True, False, False), (True, True, False),
+    (True, True, True),
+])
 def test_two_agents_publish_and_consume_complete_large_shared_closure(
-    tmp_path, monkeypatch, pure_coordinator, project_context
+    tmp_path, monkeypatch, pure_coordinator, project_context, slow_preparation
 ):
     _service(tmp_path)
     root = tmp_path / "nas" / "outputs"
@@ -185,6 +192,68 @@ def test_two_agents_publish_and_consume_complete_large_shared_closure(
     )
     server.start()
     clients = []
+    import loom.queue._shared_publication as publication
+    import loom.queue.agent_session_transport as transport
+    import loom.preparation as preparation
+    from loom.queue.agent_sessions import AgentSessionService
+
+    publications = []
+    original_publish = publication.prepare_publication
+    publication_context = threading.local()
+
+    def counted_publish(request, *args, **kwargs):
+        publications.append(request.assignment_id)
+        publication_context.active = True
+        try:
+            return original_publish(request, *args, **kwargs)
+        finally:
+            publication_context.active = False
+
+    monkeypatch.setattr(publication, "prepare_publication", counted_publish)
+    decoding = threading.Event()
+    deadline_expired = threading.Event()
+    retained = threading.Event()
+    timed_out_requests = []
+    if slow_preparation:
+        original_decode = preparation.load_preparation_report
+        original_declare = AgentSessionService.declare_outputs
+        original_exchange = transport._exchange_agent_request
+
+        def slow_decode(*args, **kwargs):
+            if getattr(publication_context, "active", False) and not decoding.is_set():
+                decoding.set()
+                assert deadline_expired.wait(5), "client did not exceed its deadline"
+            return original_decode(*args, **kwargs)
+
+        def observe_retention(*args, **kwargs):
+            result = original_declare(*args, **kwargs)
+            if decoding.is_set():
+                retained.set()
+            return result
+
+        def deadline_exchange(config, operation, body, role, connection, keep_alive):
+            if operation != "output_manifest" or deadline_expired.is_set():
+                return original_exchange(config, operation, body, role, connection, keep_alive)
+            # Use real TLS and a real socket deadline. The server remains inside
+            # native semantic validation until this request actually times out.
+            if connection is not None:
+                connection.close()
+            connection = transport.https_connection(
+                config.url, config.server_ca_path, config.certificate_path,
+                config.private_key_path, timeout=0.2,
+            )
+            try:
+                return original_exchange(config, operation, body, role, connection, keep_alive)
+            except transport._IndeterminateAgentProtocolError:
+                assert decoding.is_set(), "deadline expired before validation started"
+                timed_out_requests.append(json.loads(body)["assignment_id"])
+                deadline_expired.set()
+                assert retained.wait(5), "server did not retain the successful result"
+                raise
+
+        monkeypatch.setattr(preparation, "load_preparation_report", slow_decode)
+        monkeypatch.setattr(AgentSessionService, "declare_outputs", observe_retention)
+        monkeypatch.setattr(transport, "_exchange_agent_request", deadline_exchange)
     try:
         sessions = []
         for profile, credential in zip(profiles, ("agent", "other"), strict=True):
@@ -236,6 +305,9 @@ def test_two_agents_publish_and_consume_complete_large_shared_closure(
                 prepared = clients[0].execute_one(sessions[0].session_id,
                     sessions[0].availability_revision, sequence=1, wait_timeout_ms=5000)
                 assert prepared["state"] == "RELEASED", prepared
+                if slow_preparation:
+                    assert len(timed_out_requests) == 1
+                    assert publications.count(timed_out_requests[0]) == 1
             operation = client.wait_operation("prepare-1", timeout_seconds=25).operation
             assert operation.state == "applied", operation
             result = _result(operation)
@@ -273,9 +345,59 @@ def test_two_agents_publish_and_consume_complete_large_shared_closure(
                     raise _IndeterminateAgentProtocolError(
                         "injected lost shared publication acknowledgement"
                     )
+                with pytest.raises(QueueConflictError):
+                    original(*args, **{**kwargs, "report": replace(
+                        kwargs["report"], finished_at="2099-01-01T00:00:00Z"
+                    )})
+                with pytest.raises(QueueConflictError):
+                    original(*args, **{**kwargs, "fence": "stale-fence"})
+                from loom.queue.agent_sessions import AgentTransferAuthorizationStaleError
+                with pytest.raises(AgentTransferAuthorizationStaleError):
+                    original(*args, **{**kwargs, "authorization_revision": kwargs["authorization_revision"] + 1})
                 return response
 
             monkeypatch.setattr(clients[0], "declare_outputs", lost_publication_ack)
+            original_commit = clients[0].commit_result
+            original_verify = AgentSessionService._coordinator_output_refs
+            verifications = []
+            commits = []
+            retained_commit = {}
+
+            def counted_verify(transfers):
+                verifications.append(transfers[0]["assignment_id"])
+                return original_verify(transfers)
+
+            def lost_commit_ack(*args, **kwargs):
+                retained_commit.update(kwargs)
+                if not commits and not pure_coordinator:
+                    # Retention is an acknowledgement, not permission to skip
+                    # integrity at the first execution commit.
+                    with sqlite3.connect(daemon.config.control_database) as conn:
+                        primary = Path(conn.execute(
+                            "SELECT private_path FROM remote_transfers WHERE assignment_id=? AND direction='output'",
+                            (args[1],),
+                        ).fetchone()[0])
+                    companion = primary.parent / "sample_ids.json"
+                    original_bytes = companion.read_bytes()
+                    companion.write_bytes(b'["damaged before first commit"]')
+                    view = daemon.agent_view(LocalDaemonPrincipal("worker-b", LocalDaemonRole.AGENT, "agent"))
+                    try:
+                        with pytest.raises(ArtifactStoreError, match="closure integrity"):
+                            view.commit_result(*args, **kwargs)
+                        with sqlite3.connect(daemon.config.control_database) as conn:
+                            assert conn.execute("SELECT state FROM remote_assignments WHERE assignment_id=?", (args[1],)).fetchone()[0] == "RESULT_RETAINED"
+                    finally:
+                        companion.write_bytes(original_bytes)
+                response = original_commit(*args, **kwargs)
+                commits.append(args[1])
+                if len(commits) == 1:
+                    raise _IndeterminateAgentProtocolError("injected lost commit acknowledgement")
+                with pytest.raises(QueueConflictError):
+                    original_commit(*args, **{**kwargs, "fence": "stale-fence"})
+                return response
+
+            monkeypatch.setattr(AgentSessionService, "_coordinator_output_refs", staticmethod(counted_verify))
+            monkeypatch.setattr(clients[0], "commit_result", lost_commit_ack)
             client.submit(LocalDaemonAdmissionRequest("target", target_uri))
             for remote in clients:
                 remote.refresh_resource_offer()
@@ -292,6 +414,16 @@ def test_two_agents_publish_and_consume_complete_large_shared_closure(
                 assert executed.get("state") == "RELEASED", (executed, daemon._service_error)
             assert client.wait("target", timeout_seconds=25).state.value == "SUCCEEDED"
             assert len(attempts) == 2 and attempts[0] == attempts[1]
+            producer_assignment = attempts[0]["assignment_id"]
+            assert publications.count(producer_assignment) == 1
+            assert commits == [producer_assignment, producer_assignment]
+            assert verifications.count(producer_assignment) == (1 if pure_coordinator else 2)
+            # Release also retains the terminal acknowledgement without IO.
+            assert clients[0].commit_result(
+                sessions[0].session_id, producer_assignment,
+                **retained_commit,
+            )["state"] == "RELEASED"
+            assert verifications.count(producer_assignment) == (1 if pure_coordinator else 2)
             store = LocalRunStore(service.daemon.run_store_root)
             producer_result = StageWorkerResult.from_dict(
                 store.read_stage_worker_result(target_uri, "produce", attempt=1)

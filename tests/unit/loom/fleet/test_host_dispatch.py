@@ -82,6 +82,30 @@ def test_batch_refuses_changed_authored_input_before_dispatch(tmp_path, monkeypa
         op.call_many([(name, 'workload-stage', {}) for name in op.intent['hosts']])
 
 
+def test_gpu_successor_uses_distinct_immutable_host_request(tmp_path, monkeypatch):
+    op = operation(tmp_path, monkeypatch)
+    dispatched = []
+
+    def transport(host, request):
+        dispatched.append(request)
+        if request['profile'] == {'old': True}:
+            raise ssh.QueueConflictError('GPU capability policy differs from admitted selection')
+        return {'outcome': 'passed'}
+
+    monkeypatch.setattr(ssh, 'ssh', transport)
+    with pytest.raises(ssh.QueueConflictError, match='differs'):
+        op.call('first', 'gpu-capability', profile={'old': True})
+    prior = op.receipts / 'first-gpu-capability/intent.json'
+    before = prior.read_bytes()
+    values = {'profile': {'current': True}, '_step_key': 'first-gpu-capability-retry'}
+    assert op.call('first', 'gpu-capability', **values) == {'outcome': 'passed'}
+    assert op.call('first', 'gpu-capability', **values) == {'outcome': 'passed'}
+    assert len(dispatched) == 2
+    assert dispatched[0]['request_id'] != dispatched[1]['request_id']
+    assert '_step_key' not in dispatched[1]
+    assert prior.read_bytes() == before
+
+
 def test_all_hosts_stage_before_promotion_preserves_native_settlement(tmp_path):
     names = ('first', 'second', 'third')
     staged = []

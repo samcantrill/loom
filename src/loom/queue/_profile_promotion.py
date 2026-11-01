@@ -41,6 +41,9 @@ def validate_promotion(value: object) -> None:
     }
     retirement = isinstance(value, Mapping) and value.get("retire_configuration") is True
     addition = isinstance(value, Mapping) and value.get("add_container_policies") is True
+    increase = isinstance(value, Mapping) and value.get("increase_publication_budgets") is True
+    if increase:
+        keys = keys - {"profile_id", "target_profile"} | {"increase_publication_budgets"}
     if addition:
         keys = keys - {"profile_id", "target_profile"} | {"add_container_policies"}
     if retirement:
@@ -54,7 +57,7 @@ def validate_promotion(value: object) -> None:
         or not Path(value["candidate_source"]).is_absolute()
     ):
         raise QueueServiceError("profile promotion candidate source is invalid")
-    for key in keys - {"expected_gate_revision", "target_profile", "retire_configuration", "add_container_policies"}:
+    for key in keys - {"expected_gate_revision", "target_profile", "retire_configuration", "add_container_policies", "increase_publication_budgets"}:
         if not isinstance(value[key], str) or not value[key] or len(value[key]) > 512:
             raise QueueServiceError("profile promotion binding is invalid")
     if (
@@ -64,9 +67,9 @@ def validate_promotion(value: object) -> None:
         raise QueueServiceError("profile promotion gate revision is invalid")
     from ._remote_stage_execution import ResidentProfileDescriptor
 
-    if retirement or addition:
-        if retirement and addition:
-            raise QueueServiceError("policy addition and retirement are mutually exclusive")
+    if retirement or addition or increase:
+        if sum((retirement, addition, increase)) > 1:
+            raise QueueServiceError("policy addition, retirement and budget increase are mutually exclusive")
         if "enable_submitted_containers" in value:
             raise QueueServiceError("configuration retirement cannot enable a new execution capability")
         return
@@ -159,7 +162,7 @@ def _validate_target(config: Any, control: Any) -> None:
     if (
         config.deployment_configuration_fingerprint != p["target_immutable"]
         or _agent_active_fingerprint(config) != p["target_active"]
-        or (not (p.get("retire_configuration") or p.get("add_container_policies")) and (
+        or (not (p.get("retire_configuration") or p.get("add_container_policies") or p.get("increase_publication_budgets")) and (
             len(config.resident_profiles) != 1
             or config.resident_profiles[0].descriptor.to_dict()
             != thaw_plain_data(p["target_profile"])
@@ -170,7 +173,7 @@ def _validate_target(config: Any, control: Any) -> None:
         )
 
 
-def validate_candidate(previous: Any, replacement: Any, profile_id: str | None, *, retire_configuration: bool = False, add_container_policies: bool = False) -> None:
+def validate_candidate(previous: Any, replacement: Any, profile_id: str | None, *, retire_configuration: bool = False, add_container_policies: bool = False, increase_publication_budgets: bool = False) -> None:
     """Check a selected native profile candidate before or during promotion.
 
     Capacity, snapshot mappings and logical storage qualifications are retained.
@@ -186,9 +189,13 @@ def validate_candidate(previous: Any, replacement: Any, profile_id: str | None, 
         for field in fields(replacement) if field.name not in allowed
     ):
         raise QueueConflictError("profile promotion cannot change unrelated role configuration")
+    if sum((retire_configuration, add_container_policies, increase_publication_budgets)) > 1:
+        raise QueueConflictError("policy addition, retirement and budget increase are mutually exclusive")
+    if increase_publication_budgets:
+        from ._publication_budget_increase import validate_agent
+        validate_agent(previous, replacement)
+        return
     if add_container_policies:
-        if retire_configuration:
-            raise QueueConflictError("policy addition and retirement are mutually exclusive")
         from ._container_policy_addition import validate_agent
         validate_agent(previous, replacement)
         return
@@ -407,7 +414,8 @@ def apply(client: Any, control: Any) -> Any:
         )
     validate_candidate(client._config, replacement, p.get("profile_id"),
                        retire_configuration=p.get("retire_configuration", False),
-                       add_container_policies=p.get("add_container_policies", False))
+                       add_container_policies=p.get("add_container_policies", False),
+                       increase_publication_budgets=p.get("increase_publication_budgets", False))
     if not client._config.container_policies and replacement.container_policies and not p.get("enable_submitted_containers"):
         raise QueueConflictError("adding container policies requires explicit session capability enablement")
     install = (

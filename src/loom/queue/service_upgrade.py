@@ -214,6 +214,40 @@ def _agent_recoverable_results(
     return results
 
 
+def _recoverable_preparations(conn, results):
+    """Prove pending preparation owners are waiting for the retained cohort.
+
+    Capture and target publication are deliberately excluded. Cancellation may
+    remain pending only for these same children; its normal reconciler still
+    owns settlement after result replay.
+    """
+    operations, children = set(), set()
+    for identity, state, claimed, child, name, encoded in conn.execute(
+        "SELECT operation_id, state, dispatch_claimed, child_admission_id, child_name, result_json "
+        "FROM preparation_operations WHERE state NOT IN ('applied', 'failed', 'cancelled', 'conflict')"
+    ):
+        result = json.loads(encoded)
+        if (state != "pending" or not claimed or child is None
+                or result.get("prepared_run") is not None
+                or result.get("report_ref") is not None
+                or result.get("preparation_admission_id") != child):
+            continue
+        admission = conn.execute(
+            "SELECT run_uri, queue_item_id FROM managed_admissions WHERE admission_id = ?", (child,)
+        ).fetchone()
+        if admission is None or admission[1] != name:
+            continue
+        assignments = list(conn.execute(
+            "SELECT assignment_id FROM remote_assignments WHERE run_uri = ? "
+            "AND state NOT IN ('RELEASED', 'FAILED', 'CANCELLED')", (admission[0],)
+        ))
+        if not assignments or any(row[0] not in results for row in assignments):
+            continue
+        operations.add(identity)
+        children.add(child)
+    return frozenset(operations), frozenset(children)
+
+
 def inspect_coordinator_result_recovery(
     root: str | Path, *, expected_root_id: str,
     agent_results: list[dict[str, PlainData]],
@@ -221,8 +255,10 @@ def inspect_coordinator_result_recovery(
     """Match retained remote assignments against host-proved successful results.
 
     Admitted DAGs may remain pending, but each in-flight remote assignment must
-    have a corresponding agent proof. Preparation, cancellation, unknown controls
-    and startup attachments still refuse. The Fleet owner supplies observations
+    have a corresponding agent proof. A dispatched preparation waiting only for
+    those results (including its cancellation) may recover. Input capture,
+    target publication, other cancellations, unknown controls and startup
+    attachments refuse. The Fleet owner supplies observations
     from its selected hosts; this function neither drains nor closes admission.
     """
     from ._service_lifetime import _retained_coordinator_mutations
@@ -254,7 +290,8 @@ def inspect_coordinator_result_recovery(
                 if row[0] not in results:
                     raise ValueError("physical assignment lacks matching agent proof")
         with _readonly_root(root) as conn:
-            if _retained_coordinator_mutations(conn):
+            preparations, children = _recoverable_preparations(conn, results)
+            if _retained_coordinator_mutations(conn, recoverable_preparations=preparations):
                 raise ValueError("coordinator mutation remains active")
             for table in ("agent_controls", "remote_assignment_controls"):
                 if conn.execute(
@@ -262,10 +299,10 @@ def inspect_coordinator_result_recovery(
                     "OR acknowledged = 0 LIMIT 1"
                 ).fetchone():
                     raise ValueError("unresolved control")
-            if conn.execute(
-                "SELECT 1 FROM managed_admissions WHERE cancellation_operation_id IS NOT NULL "
-                "AND state NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED') LIMIT 1"
-            ).fetchone():
+            if any(row[0] not in children for row in conn.execute(
+                "SELECT admission_id FROM managed_admissions WHERE cancellation_operation_id IS NOT NULL "
+                "AND state NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED')"
+            )):
                 raise ValueError("cancellation remains active")
             # Resident workers use an assignment-local run URI. The shared
             # authority identity is assignment/session/fence, not that URI.
@@ -312,7 +349,7 @@ def require_result_recovery(
         fact = inspect_agent_result_recovery(root, expected_root_id=expected_root_id)
         if fact.availability == "available":
             expected = {item["assignment_id"]: item for item in agent_results}
-            for result in fact.to_dict()["value"]["results"]:
+            for result in cast(list[dict[str, PlainData]], fact.value["results"]):
                 if expected.get(result["assignment_id"]) != result:
                     raise QueueConflictError("retained result cohort changed")
     elif role == "coordinator":

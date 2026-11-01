@@ -73,7 +73,8 @@ def qualify(request, declaration, *, check_promotion=False, original=None):
                     config(request), env_file=environment(request)
                 )
             validate_candidate(original.client, service.client, request.get("workload_profile"),
-                               **({"add_container_policies": True} if request.get("add_container_policies") else {}))
+                               add_container_policies=request.get("add_container_policies", False),
+                               increase_publication_budgets=request.get("increase_publication_budgets", False))
         return _qualified(service)
 
 
@@ -84,6 +85,9 @@ def coordinator_probe(request):
     predecessor = None
     if request.get("add_container_policies"):
         from loom.queue._container_policy_addition import validate_coordinator_declarations
+        validate_coordinator_declarations(payload(request), request["declaration"])
+    if request.get("increase_publication_budgets"):
+        from loom.queue._publication_budget_increase import validate_coordinator_declarations
         validate_coordinator_declarations(payload(request), request["declaration"])
     if request.get("retire_configuration"):
         predecessor = _coordinator_retirement_predecessor(request)
@@ -138,7 +142,7 @@ def probe(request):
     authored = payload(request)
     if request.get("retire_configuration"):
         return _retirement_probe(request, authored)
-    if request.get("add_container_policies"):
+    if request.get("add_container_policies") or request.get("increase_publication_budgets"):
         original = load_outbound_agent_service_config(config(request), env_file=environment(request))
         after = request["candidate_declaration"]
         return {"source": _qualified(original),
@@ -216,6 +220,7 @@ def publish(request, directory):
     if stopped and (request.get("retirement") is None or not request.get("expected_scheduling_epoch")):
         raise QueueConflictError("stopped retirement requires an exact maintenance and scheduling binding")
     addition = request.get("container_policy_addition")
+    increase = request.get("publication_budget_increase")
     binding = read(Path(request["admin"]) / "service.json")
     releases = (request.get("source_release"), request["release"]) if stopped else (request["release"],)
     if (any(binding.get(key) != request.get(key) for key in ("root", "config"))
@@ -234,10 +239,16 @@ def publish(request, directory):
         from loom.queue._container_policy_addition import CAPABILITY
         _, addition_client = coordinator_client(bound_request)
         _retirement_publication_ready(addition_client, addition, capability=CAPABILITY)
+    if increase is not None and (not retained.exists() or current != target):
+        from loom.fleet._host import coordinator_client
+        from loom.queue._publication_budget_increase import CAPABILITY
+        _, increase_client = coordinator_client(bound_request)
+        _retirement_publication_ready(increase_client, increase, capability=CAPABILITY)
     if retained.exists():
         intent = read(retained)
         if (intent["after"] != target or intent.get("reload", {}).get("retirement") != request.get("retirement")
             or intent.get("reload", {}).get("container_policy_addition") != addition
+            or intent.get("reload", {}).get("publication_budget_increase") != increase
             or intent.get("stopped_retirement", False) != stopped
             or (stopped and intent["reload"]["expected_scheduling_epoch"] != request["expected_scheduling_epoch"])):
             raise QueueConflictError("workload publication target or retirement binding changed")
@@ -265,6 +276,7 @@ def publish(request, directory):
                  else "Fleet selected workload profile promotion"),
                 retirement=request.get("retirement"),
                 container_policy_addition=addition,
+                publication_budget_increase=increase,
             ).to_dict()
             if not stopped and request.get("retirement") is not None:
                 _retirement_publication_ready(client, request["retirement"])
@@ -448,7 +460,7 @@ def retire_stopped(request):
 
 
 def stage(request):
-    if request.get("add_container_policies"):
+    if request.get("add_container_policies") or request.get("increase_publication_budgets"):
         target = qualify(request, request["declaration"], check_promotion=True)
     elif request.get("retire_configuration"):
         target = _retirement_probe({**request, "candidate_declaration": request["declaration"]}, payload(request))["target"]

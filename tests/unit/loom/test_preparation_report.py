@@ -12,6 +12,7 @@ from loom.fingerprints import hash_mapping
 from loom.pipeline.stores import LocalArtifactStore
 from loom.preparation import load_preparation_report
 from loom.queue.errors import QueueConflictError
+from loom.serialization import stable_json_bytes
 
 
 def _composition() -> dict[str, Any]:
@@ -85,7 +86,10 @@ def test_actual_serializer_shares_complete_equal_views_and_hydrates_all_facts(tm
     assert full == {**logical, "report_format": "loom.preparation_report.v1"}
     for name in ("composition", "requested_composition"):
         assert hash_mapping(full[name]) == hash_mapping(logical[name])
+        assert stable_json_bytes(full[name]) == stable_json_bytes(logical[name])
     full["composition"]["manifest"]["metadata"]["source_fact_records"]["false"] = True
+    assert stable_json_bytes(full["requested_composition"]) == stable_json_bytes(logical["requested_composition"])
+    assert full["composition"]["provenance"]["metadata"]["source_fact_records"]["false"] is False
     assert (
         load_preparation_report(ref, store.local_path(ref))["composition"]
         == logical["composition"]
@@ -127,6 +131,7 @@ def test_complete_distinct_views_never_share_by_selected_counts(tmp_path, change
         "projection_overlap",
         "projection_outside",
         "shared_config",
+        "shared_false_zero",
         "old_format",
     ],
 )
@@ -152,6 +157,9 @@ def test_damaged_actual_published_closure_refuses_complete_read(tmp_path, damage
         )
     elif damage == "shared_config":
         primary["requested_composition"]["resolved"]["value"] = 42
+    elif damage == "shared_false_zero":
+        primary["composition"]["resolved"]["value"] = 0
+        primary["requested_composition"]["resolved"]["value"] = False
     else:
         entry = evidence["compositions"]["c0"]
         if damage == "schema":

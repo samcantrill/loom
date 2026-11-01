@@ -294,6 +294,75 @@ def test_inventory_rejects_second_resource_policy(tmp_path):
         load_inventory(path)
 
 
+@pytest.mark.parametrize("mode", ["container", "mixed", "same_name", "missing"])
+def test_export_selects_preparation_execution_kind_without_qualification(tmp_path, monkeypatch, mode):
+    from dataclasses import replace
+    from loom.queue.deployment import inspect_role_declaration
+    from tests.unit.loom.queue.test_submitted_container_policy import _submitted
+
+    path = inventory(tmp_path)
+    original = selection(tmp_path)
+    policy_root = tmp_path / "policy"
+    policy_root.mkdir()
+    policy, _, _, _ = _submitted(policy_root)
+    if mode == "same_name":
+        policy = replace(policy, policy_id="remote-profile")
+    agent_path = tmp_path / "agent.yaml"
+    agent = json.loads(agent_path.read_text())
+    if mode == "container":
+        agent["resident_profiles"] = []
+    agent["container_policies"] = [] if mode == "missing" else [policy.to_dict()]
+    agent["resources"] = {
+        "cpu_capacity": 1, "memory_capacity_bytes": 0,
+        "gpu": {"provider": "nvidia", "devices": "none"},
+    }
+    _write_protected(agent_path, agent)
+    coordinator_path = tmp_path / "coordinator.yaml"
+    coordinator = json.loads(coordinator_path.read_text())
+    coordinator["container_capabilities"] = [policy.capability.to_dict()]
+    coordinator["preparation"] = {
+        "source_roots": {"project": {"path": str(tmp_path), "shared_snapshot_root": str(tmp_path / "snapshots")}},
+        "profiles": {
+            "selected-alias": {
+                "container_policy_id": policy.policy_id,
+                "allowed_source_roots": ["project"], "source_modes": ["shared"],
+                "runtime_options": {"executor": "local"},
+                "configuration_policy": "shared", "shared_locations": [],
+            },
+        },
+    }
+    _write_protected(coordinator_path, coordinator)
+    selection_value = json.loads(original.read_text())
+    selection_value["preparation"]["profile"] = "selected-alias"
+    _write_protected(original, selection_value)
+    before = original.read_bytes()
+    # Inspecting declarations/exporting must not discover hardware or execute a
+    # workload. The two identity collections retain their respective schemas.
+    monkeypatch.setattr(subprocess, "Popen", forbid)
+    declaration = inspect_role_declaration(agent_path, role="agent")
+    assert all("profile_id" in item and "policy_id" not in item
+               for item in declaration.value["profile_identities"])
+    assert [item["policy_id"] for item in declaration.value["container_execution_capabilities"]] == ([] if mode == "missing" else [policy.policy_id])
+    output = tmp_path / "exported.json"
+    code, result = cli("export-deployment", "--fleet", path, "--hosts", "gpu01",
+                       "--deployment", original, "--output", output)
+    if mode == "missing":
+        assert code != 0 and not output.exists(), result
+    else:
+        assert code == 0, result
+        assert load_deployment(output).preparation_profile == "selected-alias"
+    assert original.read_bytes() == before
+    _, observed = cli("status", "--fleet", path, "--hosts", "gpu01", "--profile", policy.policy_id)
+    identity = observed["hosts"]["gpu01"]["profile"]
+    assert identity["qualified"] is False
+    if mode in {"same_name", "missing"}:
+        assert not identity["supported_declaration"]
+        assert identity["reason"] == "unavailable_or_ambiguous_identity"
+    else:
+        assert identity["supported_declaration"]
+        assert identity["execution_kind"] == "submitted_container"
+
+
 # Reuse the native owner fixture and the already-qualified wire boundary.
 from tests.integration.queue import test_operator_observations as native_observations  # noqa: E402
 

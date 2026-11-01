@@ -287,6 +287,15 @@ def test_waiting_preparation_survives_detach_without_local_worker(
         assert client.operation(_request().operation_id).state == "pending"
         state = client._native_call("service_lifetime", {})
         assert state["retained"] is True
+        from loom.queue.service_upgrade import inspect_coordinator_result_recovery
+
+        recovery = inspect_coordinator_result_recovery(
+            tmp_path / "deployment/coordinator",
+            expected_root_id=outcome.observation.connection.coordinator_id,
+            agent_results=[],
+        )
+        assert recovery.availability == "unavailable"
+        assert "coordinator mutation remains active" in recovery.reason
         with sqlite3.connect(
             tmp_path / "deployment/coordinator/control.sqlite"
         ) as conn:

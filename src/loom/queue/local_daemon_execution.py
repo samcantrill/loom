@@ -145,7 +145,7 @@ from .coordinator_authority import (
     CoordinatorAuthorityFactory,
     CoordinatorAuthorityStore,
 )
-from .submitted_execution import SubmittedContainerCapability, SUBMITTED_CONTAINER_CAPABILITY
+from .submitted_execution import SELECTED_INPUT_WORKER_CONTRACT, SubmittedContainerCapability, SUBMITTED_CONTAINER_CAPABILITY
 from ._remote_stage_execution import (
     _execution_target_id,
     MAX_TRANSFER_BYTES,
@@ -4432,7 +4432,11 @@ class LocalDaemonExecution:
             )
             matching += tuple(
                 capability for capability in offer.container_execution_capabilities
-                if configured_containers.get(capability.policy_id) == capability
+                if (configured_containers.get(capability.policy_id) == capability
+                    or (SELECTED_INPUT_WORKER_CONTRACT in capability.worker_contracts
+                        and capability.policy_id in configured_containers
+                        and configured_containers[capability.policy_id].execution_policy_fingerprint
+                        == capability.execution_policy_fingerprint))
                 and SUBMITTED_CONTAINER_CAPABILITY in json.loads(str(row["capabilities_json"]))
             )
             if not matching:
@@ -4561,7 +4565,8 @@ class LocalDaemonExecution:
                 identity: dict[str, PlainData]
                 if isinstance(profile, SubmittedContainerCapability):
                     identity = {"container_policy_id": profile.policy_id,
-                                "container_policy_fingerprint": profile.fingerprint}
+                                "container_policy_fingerprint": profile.fingerprint,
+                                "container_execution_policy_fingerprint": profile.execution_policy_fingerprint}
                 else:
                     identity = {
                         "resident_profile_id": profile.profile_id,

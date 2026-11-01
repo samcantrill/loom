@@ -804,14 +804,15 @@ def test_submitted_check_authorization_is_negotiated_and_retained(tmp_path, monk
 
 
 @pytest.mark.parametrize("changed", [None, "image", "resources", "agent"])
-def test_submitted_maintenance_child_binds_exact_execution_and_placement(tmp_path, monkeypatch, changed):
+@pytest.mark.parametrize("selected_inputs", [False, True])
+def test_submitted_maintenance_child_binds_exact_execution_and_placement(tmp_path, monkeypatch, changed, selected_inputs):
     from loom.pipeline.runtime.options import RunOptions
     from loom.preparation import prepare_child_run
     from loom.queue import _maintenance
     from loom.queue.local_daemon_execution import load_managed_local_intent
     from tests.integration.queue.test_submitted_preparation import _run
 
-    selected, child_binding, _ = _run(tmp_path, monkeypatch)
+    selected, child_binding, _ = _run(tmp_path, monkeypatch, selected_inputs=selected_inputs)
     monkeypatch.setattr(_maintenance, "preparation_placement", lambda *args: {
         "target": selected.daemon.machine_id, "pool": "default",
     })

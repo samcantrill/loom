@@ -583,6 +583,11 @@ def _report_implementation(report: Mapping[str, PlainData], requirement: Any, st
     if "execution" in report:
         binding = {key: report[key] for key in ("execution", "container_capability")}
         execution, capability = submitted_binding(binding)
+        from .submitted_execution import SELECTED_INPUT_WORKER_CONTRACT
+        if execution.worker_contract == SELECTED_INPUT_WORKER_CONTRACT:
+            from .shared_execution import SHARED_EXECUTION_SCOPE
+            selected = plain_mapping(stage.fingerprint_fields[SHARED_EXECUTION_SCOPE])
+            capability = capability.select_roots(plain_mapping(selected["roots"]))
         if requirement != capability.requirement(execution) or submitted_binding(stage.fingerprint_fields.get(SUBMITTED_EXECUTION_SCOPE)) != (execution, capability):
             raise QueueConflictError("action implementation differs from admitted execution")
         if execution.project_integration != plain_mapping(report["project_preparation"])["processor"]:

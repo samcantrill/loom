@@ -206,8 +206,17 @@ def releasable_attempt(tmp_path, monkeypatch):
                                           operation_id="cleanup-1", reason="durable outputs verified"))
 
 
-def test_release_preserves_outputs_and_records_cleanup_idempotently(releasable_attempt):
+@pytest.mark.parametrize("increase_limits", [False, True])
+def test_release_preserves_outputs_and_records_cleanup_idempotently(releasable_attempt, increase_limits):
     from loom.pipeline.stores.local_artifacts import LocalArtifactStore
+    if increase_limits:
+        from loom.serialization import thaw_plain_data
+        roots = thaw_plain_data(releasable_attempt.profile.shared_roots)
+        roots["outputs"]["publication"] = {
+            "max_members": 1_000_000, "max_payload_bytes": 274_877_906_944,
+            "max_manifest_bytes": 536_870_912,
+        }
+        releasable_attempt.daemon.config.coordinator_shared_roots = roots
 
     case = releasable_attempt
     preview = cleanup.preview_recovery_cleanup(case.daemon, "run")

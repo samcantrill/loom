@@ -106,6 +106,8 @@ def _service(
     cpu=2,
     memory=0,
     container=None,
+    publication_budgets=None,
+    clock=None,
 ):
     # Supervisor IPC has a platform path limit; all fixture-owned roots are short.
     with TemporaryDirectory(prefix="la-", dir="/tmp") as temporary:
@@ -137,7 +139,7 @@ def _service(
                         "path": "challenge",
                         "sha256": hashlib.sha256(b"publication").hexdigest(),
                     },
-                    "publication": {
+                    "publication": publication_budgets or {
                         "max_members": 1024,
                         "max_payload_bytes": 1024 * 1024,
                         "max_manifest_bytes": 1024 * 1024,
@@ -188,7 +190,7 @@ def _service(
                     "operator",
                     "operator",
                     "operator",
-                    ("drain", "resume", "reload", "cancel_active"),
+                    ("drain", "resume", "reload", "cancel_active", "scheduling_reload"),
                     ("agent-a",),
                 ),
             ),
@@ -206,7 +208,7 @@ def _service(
             assignment_payload_root_id="outputs" if shared else None,
         )
         LocalDaemon.initialize(daemon_config)
-        daemon = LocalDaemon(daemon_config)
+        daemon = LocalDaemon(daemon_config, **({} if clock is None else {"clock": clock}))
         daemon.start()
         server = LocalDaemonAgentHttpServer(
             daemon,
@@ -1414,8 +1416,11 @@ def test_gpu_admission_probe_keeps_control_receipt_responsive(monkeypatch):
             unblock.set()
 
 
-@pytest.mark.parametrize("ceiling", [1, 2])
-@pytest.mark.parametrize("boundary", ["input", "output", "shared_publication"])
+@pytest.mark.parametrize("ceiling,boundary", [
+    (1, "input"), (2, "input"), (1, "output"), (2, "output"),
+    (1, "shared_publication"), (2, "shared_publication"),
+    (2, "coordinator_publication"), (2, "coordinator_commit"),
+])
 def test_serial_service_retains_cancel_while_real_transfer_is_held(
     monkeypatch, ceiling, boundary
 ):
@@ -1474,11 +1479,39 @@ def test_serial_service_retains_cancel_while_real_transfer_is_held(
             return original_retain(workspace, result)
 
         monkeypatch.setattr(_shared_publication, "retain", hold_publication)
+    if boundary in {"coordinator_publication", "coordinator_commit"}:
+        from loom.queue import _shared_publication
+        from loom.queue.agent_sessions import AgentSessionService
+
+        original_prepare = _shared_publication.prepare_publication
+        original_verify = AgentSessionService._coordinator_output_refs
+
+        def hold_verification(assignment_id):
+            if not entered.is_set():
+                held["assignment_id"] = assignment_id
+                entered.set()
+                assert unblock.wait(30)
+
+        def prepare(request, *args, **kwargs):
+            result = original_prepare(request, *args, **kwargs)
+            hold_verification(request.assignment_id)
+            return result
+
+        def verify(transfers):
+            result = original_verify(transfers)
+            hold_verification(transfers[0]["assignment_id"])
+            return result
+
+        if boundary == "coordinator_publication":
+            monkeypatch.setattr(_shared_publication, "prepare_publication", prepare)
+        else:
+            monkeypatch.setattr(AgentSessionService, "_coordinator_output_refs", staticmethod(verify))
     with _service(
-        monkeypatch, ceiling=ceiling, shared=boundary == "shared_publication"
+        monkeypatch, ceiling=ceiling, shared=boundary in {
+            "shared_publication", "coordinator_publication", "coordinator_commit"},
     ) as case:
         try:
-            _submit(case, "held", sequential=boundary == "input")
+            held_uri, held_authority = _submit(case, "held", sequential=boundary == "input")
             assert entered.wait(20), (
                 case.failures,
                 case.retries[-4:],
@@ -1486,9 +1519,26 @@ def test_serial_service_retains_cancel_while_real_transfer_is_held(
                     case.database, "SELECT state, report_json FROM remote_assignments"
                 ),
             )
+            if boundary in {"coordinator_publication", "coordinator_commit"}:
+                from loom.queue.operations import inspect_local_assignment
+                observed = case.operator.observe_assignment(held["assignment_id"]).value
+                assert observed["result_progress"]["execution_commit"] == "pending"
+                assert observed["result_progress"]["result_retention"] == (
+                    "retained" if boundary == "coordinator_commit" else "pending")
+                assert observed["result_progress"]["result_acknowledgement"] == "agent_local_evidence_required"
+                local = inspect_local_assignment(case.agent_root, held["assignment_id"]).value
+                assert local["result_progress"]["worker_execution"] == "SUCCEEDED"
+                assert local["result_progress"]["result_acknowledgement"] == "pending_or_retrying"
             later_uri, later_authority = _submit(case, "later")
             case.client.cancel("held")
             assert retained.wait(5), case.failures
+            if boundary.startswith("coordinator_"):
+                # Native cancellation and control delivery remain responsive
+                # while verification is paused, without a held write transaction.
+                assert not held_authority.list_output_commits(held_uri)
+                with sqlite3.connect(case.database, timeout=1) as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    conn.rollback()
             assert {"assignment_control", "control_wait"}.intersection(exchanged)
             assert owner_threads == {case.thread.ident}
             offers = _rows(case.database, "SELECT offer_json FROM agent_offers")
@@ -1513,6 +1563,8 @@ def test_serial_service_retains_cancel_while_real_transfer_is_held(
                 case.client.wait("held", timeout_seconds=30).state
                 is LocalDaemonAdmissionState.CANCELLED
             )
+            # Completed worker results can still be recorded while the run
+            # settles cancellation; cancellation alone is not fence revocation.
             assert (
                 case.client.wait("later", timeout_seconds=30).state
                 is LocalDaemonAdmissionState.SUCCEEDED
@@ -3416,3 +3468,72 @@ def test_recovery_population_proof_while_its_driver_is_paused(monkeypatch, bound
             )
         finally:
             resume.set()
+
+
+@pytest.mark.parametrize("boundary", ["declaration", "commit"])
+def test_publication_rechecks_scheduling_authority_after_verification(monkeypatch, boundary):
+    from dataclasses import replace
+    from loom.queue import CoordinatorSchedulingReload
+    from loom.queue import _shared_publication
+    from loom.queue.agent_sessions import AgentSessionService
+    from loom.queue.errors import QueueConflictError, QueueServiceError
+
+    entered, unblock, refused = Event(), Event(), Event()
+    original_prepare = _shared_publication.prepare_publication
+    original_verify = AgentSessionService._coordinator_output_refs
+    operation = "declare_outputs" if boundary == "declaration" else "commit_result"
+    original_operation = getattr(AgentSessionService, operation)
+    held = {}
+
+    def pause(assignment):
+        if not entered.is_set():
+            held["assignment"] = assignment
+            entered.set()
+            assert unblock.wait(30)
+
+    def prepare(request, *args, **kwargs):
+        result = original_prepare(request, *args, **kwargs)
+        pause(request.assignment_id)
+        return result
+
+    def verify(transfers):
+        result = original_verify(transfers)
+        pause(transfers[0]["assignment_id"])
+        return result
+
+    def observe(service, session, assignment, **kwargs):
+        try:
+            return original_operation(service, session, assignment, **kwargs)
+        except (QueueConflictError, QueueServiceError) as error:
+            if assignment == held.get("assignment") and unblock.is_set():
+                assert "authority changed" in str(error) or "policy is no longer current" in str(error)
+                # This failed operation must not commit the verified output.
+                assert not authority.list_output_commits(uri)
+                refused.set()
+            raise
+
+    monkeypatch.setattr(AgentSessionService, operation, observe)
+    if boundary == "declaration":
+        monkeypatch.setattr(_shared_publication, "prepare_publication", prepare)
+    else:
+        monkeypatch.setattr(AgentSessionService, "_coordinator_output_refs", staticmethod(verify))
+    with _service(monkeypatch, shared=True) as case:
+        try:
+            uri, authority = _submit(case, "policy-change")
+            assert entered.wait(20), case.failures
+            before = case.daemon.status()
+            policy = case.daemon.config.agent_policy
+            replacement = replace(case.daemon.config, agent_policy=replace(
+                policy, agents=(*policy.agents, AgentPrincipalPolicy(
+                    "new-credential", "new-principal", "new-agent", ("default",), ("python",)))))
+            case.daemon._trusted_scheduling_loader = lambda: replacement
+            assert case.operator.reload_scheduling(CoordinatorSchedulingReload(
+                "policy-change", before.scheduling_epoch, "Enroll a distinct worker"
+            ))["state"] == "applied"
+            unblock.set()
+            assert refused.wait(5), case.retries
+            # A later retry may succeed under the new scheduling authority;
+            # it cannot adopt the old verification's authority.
+            assert case.client.wait("policy-change", timeout_seconds=30).state is LocalDaemonAdmissionState.SUCCEEDED
+        finally:
+            unblock.set()

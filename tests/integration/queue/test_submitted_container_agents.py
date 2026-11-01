@@ -63,6 +63,43 @@ def _close(client):
     client.close()
 
 
+def test_selected_catalog_survives_agent_launch_and_shared_reference_delivery(tmp_path):
+    from loom.queue._remote_stage_execution import _ResidentAssignmentWorkspace
+    from loom.queue._shared_assignment import resolve
+    from loom.queue.submitted_execution import SELECTED_INPUT_WORKER_CONTRACT
+
+    policy, execution, request = _fixture(tmp_path)
+    policy = replace(policy, worker_contracts=(SELECTED_INPUT_WORKER_CONTRACT,), shared_roots={
+        **policy.shared_roots,
+        "unused": {"host_path": str(tmp_path / "not-present"), "container_path": "/loom/unused",
+                   "access": "ro", "qualification": {"kind": "input_directory"}},
+    })
+    execution = replace(execution, worker_contract=SELECTED_INPUT_WORKER_CONTRACT)
+    narrowed = replace(policy, shared_roots={alias: facts for alias, facts in policy.shared_roots.items()
+                                           if alias != "unused"})
+    request = _bound(request, execution, narrowed)
+    assert policy.qualify() == narrowed.capability
+    assert policy.available_capability().satisfies(request.profile.requirement(execution))
+    assert policy.capability.satisfies(request.profile.requirement(execution))
+    config = _config(tmp_path, policy)
+    LocalDaemonAgentHttpClient.initialize_agent_root(config)
+    client = LocalDaemonAgentHttpClient(config)
+    try:
+        workspace = _ResidentAssignmentWorkspace(config.agent_root, request.assignment_id)
+        launch = client._assignment_launch_profile(request, workspace)
+        assert launch.descriptor == request.profile.to_dict()
+        assert "unused" not in launch.shared_roots
+        ref = publish(json.dumps(request.to_dict(), sort_keys=True, separators=(",", ":")),
+                      request, root_id="control", roots=policy.shared_roots,
+                      session_id="session", issuer_epoch="epoch")
+        assert resolve(ref, policy, session_id="session") == request
+        altered = replace(policy, environment={"BACKEND": "different"})
+        with pytest.raises(QueueConflictError, match="not authorized"):
+            resolve(ref, altered, session_id="session")
+    finally:
+        _close(client)
+
+
 @pytest.mark.parametrize("installed_first", [False, True])
 def test_container_only_agent_images_share_resource_owners_and_exclusive_gpu(tmp_path, installed_first):
     policy, first, request = _fixture(tmp_path)
@@ -132,10 +169,29 @@ def test_container_only_agent_images_share_resource_owners_and_exclusive_gpu(tmp
         _close(client)
 
 
-def test_submitted_offer_matches_policy_without_installed_profile(tmp_path):
-    policy, execution, _ = _fixture(tmp_path)
+@pytest.mark.parametrize("different_catalog", [False, True])
+def test_submitted_offer_matches_policy_without_installed_profile(tmp_path, different_catalog):
+    policy, execution, request = _fixture(tmp_path)
+    if different_catalog:
+        from loom.queue.submitted_execution import SELECTED_INPUT_WORKER_CONTRACT
+        policy = replace(policy, worker_contracts=(SELECTED_INPUT_WORKER_CONTRACT,))
+        execution = replace(execution, worker_contract=SELECTED_INPUT_WORKER_CONTRACT)
+        request = _bound(request, execution, policy)
+        extra = tmp_path / "extra"
+        extra.mkdir()
+        policy = replace(policy, shared_roots={**policy.shared_roots,
+            "worker-extra": {"host_path": str(extra), "container_path": "/loom/worker-extra",
+                             "access": "ro", "qualification": {"kind": "input_directory"}},
+        })
+    coordinator_capability = policy.capability
+    if different_catalog:
+        coordinator_capability = replace(coordinator_capability, shared_roots={
+            **coordinator_capability.shared_roots,
+            "extra": {"container_path": "/loom/extra", "access": "ro",
+                      "qualification": {"kind": "input_directory"}},
+        })
     config = LocalDaemonConfig(tmp_path / "coordinator", None, tmp_path / "runs", None,
-        cpu_capacity=0, container_capabilities=(policy.capability,),
+        cpu_capacity=0, container_capabilities=(coordinator_capability,),
         shared_roots=policy.shared_roots, assignment_payload_root_id="control",
         agent_policy=AgentPolicyConfig(agents=(AgentPrincipalPolicy("credential", "principal", "agent",
             ("default",), CAPABILITIES),)))
@@ -164,6 +220,19 @@ def test_submitted_offer_matches_policy_without_installed_profile(tmp_path):
         assert candidate.attributes["container_policy_fingerprint"] == policy.capability.fingerprint
         assert "resident_project_fingerprint" not in candidate.attributes
         assert policy.capability.satisfies(policy.capability.requirement(execution))
+        if different_catalog:
+            from loom.queue.agent_sessions import _target_remote_delivery
+            payload = tmp_path / "input.bin"
+            payload.write_bytes(b"input")
+            _target_remote_delivery(daemon, session_id=session.session_id,
+                availability_revision=session.availability_revision, request=request,
+                run_uri=(tmp_path / "runs" / "selected").as_uri(),
+                input_paths={item.transfer_id: payload for item in request.inputs})
+            with daemon._connection() as connection:
+                row = connection.execute("SELECT request_json FROM agent_deliveries WHERE assignment_id = ?",
+                                         (request.assignment_id,)).fetchone()
+            assert row is not None
+            assert json.loads(row[0])["profile"] == request.profile.to_dict()
     finally:
         daemon.stop()
 
@@ -209,14 +278,23 @@ def test_container_only_service_declaration_qualifies_no_scientific_image(tmp_pa
     assert not any("pure coordinator" in check.message for check in result.checks)
 
 
-def test_container_only_agent_registers_and_refreshes_offer(tmp_path):
+@pytest.mark.parametrize("unavailable_input", [False, True])
+def test_container_only_agent_registers_and_refreshes_offer(tmp_path, unavailable_input):
     from loom.queue.agent_session_transport import AgentTlsServerConfig, LocalDaemonAgentHttpServer
     from tests.support.mutual_tls import mutual_tls_credentials, certificate_fingerprint
 
     policy, _, _ = _fixture(tmp_path)
+    if unavailable_input:
+        from loom.queue.submitted_execution import SELECTED_INPUT_WORKER_CONTRACT
+        policy = replace(policy, worker_contracts=(SELECTED_INPUT_WORKER_CONTRACT,), shared_roots={
+            **policy.shared_roots,
+            "missing": {"host_path": str(tmp_path / "unavailable"), "container_path": "/loom/missing",
+                        "access": "ro", "qualification": {"kind": "input_directory"}},
+        })
     credentials = mutual_tls_credentials(tmp_path / "tls")
     config = LocalDaemonConfig(tmp_path / "coordinator", None, tmp_path / "runs", None,
-        cpu_capacity=0, container_capabilities=(policy.capability,), shared_roots=policy.shared_roots,
+        cpu_capacity=0, container_capabilities=(policy.capability,),
+        shared_roots={alias: facts for alias, facts in policy.shared_roots.items() if alias != "missing"},
         assignment_payload_root_id="control", agent_policy=AgentPolicyConfig(agents=(
             AgentPrincipalPolicy("credential", "principal", "agent", ("default",), CAPABILITIES),)))
     LocalDaemon.initialize(config)

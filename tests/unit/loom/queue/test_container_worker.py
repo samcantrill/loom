@@ -363,3 +363,22 @@ def test_shared_preparation_binds_only_immutable_capture_at_fixed_target(tmp_pat
         preparation_only=preparation_only)
     assert any("source=" + str(capture) in arg and "target=/loom/snapshots/capture-one" in arg for arg in command.argv)
     assert all("source=" + str(root) not in arg.split(",") for arg in command.argv)
+
+
+def test_new_container_command_traverses_its_exact_assignment_inputs_once(tmp_path, monkeypatch):
+    from loom.queue import shared_execution
+    from tests.unit.loom.queue.test_remote_stage_execution import _shared_publication_workspace
+
+    workspace, profile, _, _ = _shared_publication_workspace(tmp_path, container=True, data=True)
+    selected = shared_execution.assignment_scope(workspace.request().fingerprint)
+    visits = []
+    original = shared_execution.os.walk
+
+    def walk(path, **kwargs):
+        visits.append(path)
+        return original(path, **kwargs)
+
+    monkeypatch.setattr(shared_execution.os, "walk", walk)
+    build_container_worker(profile.launch_profile, workspace=workspace.root,
+                           worker=("python3",), environment={}, shared_scope=selected, agent_id="agent-1")
+    assert visits == [tmp_path / "data"]

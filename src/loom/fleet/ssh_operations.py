@@ -344,7 +344,7 @@ def operation_status(inventory, operation_id, *, missing_ok=False):
             return None
         raise QueueConfigError("unknown administrative operation")
     intent = read(directory / "intent.json")
-    if intent.get("kind") not in {None, "runtime-upgrade", "workload-upgrade", "runtime-upgrade-publication", "workload-upgrade-publication", "configuration-retirement", "configuration-retirement-publication", "container-policy-addition", "container-policy-addition-publication"}:
+    if intent.get("kind") not in {None, "runtime-upgrade", "workload-upgrade", "runtime-upgrade-publication", "workload-upgrade-publication", "configuration-retirement", "configuration-retirement-publication", "container-policy-addition", "container-policy-addition-publication", "publication-budget-increase", "publication-budget-increase-publication"}:
         raise QueueConflictError("unsupported administrative operation kind")
     result = (
         read(directory / "result.json")
@@ -496,7 +496,7 @@ class _Operation:
         if verify_release(self.inventory.runtime_release) != self.intent["release"]:
             raise QueueConflictError("immutable service bundle changed")
 
-    def _prepare_call(self, name, action, **values):
+    def _prepare_call(self, name, action, *, _step_key=None, **values):
         self.recheck_composed()
         key = (
             name
@@ -504,6 +504,10 @@ class _Operation:
             + action
             + ("-" + values["agent_id"] if "agent_id" in values else "")
         )
+        if _step_key is not None:
+            if Path(_step_key).name != _step_key or not _step_key.startswith(name + "-" + action + "-"):
+                raise QueueConfigError("invalid host successor step identity")
+            key = _step_key
         directory = self.receipts / key
         protected_directory(directory)
         row = self.intent["hosts"][name]

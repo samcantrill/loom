@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 import json
 import sys
 from time import monotonic
-from typing import Any
+from typing import Any, cast
 
 from loom.serialization import PlainData
 
@@ -87,6 +87,13 @@ class PhaseTimings:
                 })
             else:
                 self.dropped += 1
+
+    def observe(self, value: dict[str, PlainData]) -> None:
+        """Collect nested native phase spans into this owner's bounded payload."""
+        spans = cast(list[PlainData], value["spans"])
+        remaining = max(0, 64 - len(self.spans))
+        self.spans.extend(spans[:remaining])
+        self.dropped += max(0, len(spans) - remaining) + cast(int, value["dropped_spans"])
 
     def call(self, action: str, function: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         with self.measure(action):

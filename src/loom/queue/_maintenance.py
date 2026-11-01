@@ -383,10 +383,11 @@ def _check_target(
     check: Mapping[str, Any], intent: ManagedLocalIntent, *, preparation_child: bool
 ) -> None:
     from loom.pipeline.orchestration import ExecutionRequirement
+    from .shared_execution import SHARED_EXECUTION_SCOPE
 
     from .run import RunRequest
     from .submitted_execution import (
-        SUBMITTED_EXECUTION_SCOPE, SubmittedContainerCapability, submitted_binding,
+        SELECTED_INPUT_WORKER_CONTRACT, SUBMITTED_EXECUTION_SCOPE, SubmittedContainerCapability, submitted_binding,
     )
 
     profile = check["profile"]
@@ -404,20 +405,33 @@ def _check_target(
     if len(intent.pipeline.stages) > (1 if preparation_child else check["max_stages"]):
         raise MaintenanceCheckConflict("maintenance check exceeds stage bound")
     if execution is not None:
+        assert capability is not None
         # Eligibility alone does not bind image bytes. Both preparation and
         # composed stages must retain the exact operator-authorized execution.
         for stage in intent.pipeline.stages:
+            selected_capability = capability
+            if execution.worker_contract == SELECTED_INPUT_WORKER_CONTRACT:
+                shared = cast(Mapping[str, PlainData], stage.fingerprint_fields[SHARED_EXECUTION_SCOPE])
+                selected_capability = capability.select_roots(cast(Mapping[str, PlainData], shared["roots"]))
             if submitted_binding(stage.fingerprint_fields.get(SUBMITTED_EXECUTION_SCOPE)) != (
-                execution, capability,
+                execution, selected_capability,
             ):
                 raise MaintenanceCheckConflict("maintenance check submitted execution conflicts")
     for name, placement in intent.placements.items():
+        selected_requirement = requirement
+        if execution is not None and execution.worker_contract == SELECTED_INPUT_WORKER_CONTRACT:
+            assert capability is not None
+            selected_stage = next(stage for stage in intent.pipeline.stages if stage.name == name)
+            shared = cast(Mapping[str, PlainData], selected_stage.fingerprint_fields[SHARED_EXECUTION_SCOPE])
+            selected_requirement = capability.select_roots(
+                cast(Mapping[str, PlainData], shared["roots"])
+            ).requirement(execution)
         if (
             placement.target != check["agent_id"]
             or placement.pool_name != check["pool"]
             or placement.resource_request.to_dict()
             != check["preparation_resources" if preparation_child else "resources"]
-            or intent.execution_requirements[name] != requirement
+            or intent.execution_requirements[name] != selected_requirement
         ):
             raise MaintenanceCheckConflict(
                 "maintenance check target constraints conflict"

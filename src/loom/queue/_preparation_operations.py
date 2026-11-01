@@ -705,7 +705,7 @@ class CoordinatorPreparations:
             )
         )
 
-    def _configuration(self, selected: Mapping[str, PlainData]) -> LocalDaemonConfig:
+    def _configuration(self, selected: Mapping[str, PlainData], request: PrepareRunRequest) -> LocalDaemonConfig:
         from loom.pipeline.stores.coordinator_authority import (
             coordinator_authority_identity,
         )
@@ -770,8 +770,13 @@ class CoordinatorPreparations:
             capability_data = _mapping(selected["profile"]).get("container_capability")
             capabilities = self.daemon.config.container_capabilities
             if capability_data is not None:
+                retained_capability = SubmittedContainerCapability.from_dict(capability_data)
+                from .submitted_execution import SELECTED_INPUT_WORKER_CONTRACT
+                dynamic = request.execution is not None and request.execution.worker_contract == SELECTED_INPUT_WORKER_CONTRACT
                 capabilities = tuple(
-                    item for item in capabilities if item.to_dict() == capability_data
+                    item for item in capabilities if (
+                        item.permits(retained_capability) if dynamic else item.to_dict() == capability_data
+                    )
                 )
                 if not capabilities:
                     raise PreparationConfigurationUnavailable(
@@ -826,7 +831,7 @@ class CoordinatorPreparations:
                 )
             self._store_result(_operation(operation_id, "cancelled", None, result))
             return
-        config = self._configuration(selected)
+        config = self._configuration(selected, request)
         profile = _mapping(selected["profile"])
         receipt_data = result["input_receipt"]
         if receipt_data is None:

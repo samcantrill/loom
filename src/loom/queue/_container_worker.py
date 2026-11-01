@@ -169,14 +169,18 @@ def build_container_worker(
         })
     assignment = None
     if shared_scope is not None:
-        from .shared_execution import require_bindings, snapshot_mount
+        from .shared_execution import assignment_scope, require_bindings, snapshot_mount
 
-        require_bindings(shared_scope, profile.shared_roots)
         if preparation_only:
+            require_bindings(shared_scope, profile.shared_roots)
             if shared_snapshot is None or runtime is not None:
                 raise ValueError("preparation probe requires captured input and no workload resources")
         else:
             assignment = _ResidentAssignmentWorkspace.read_request(workspace)
+            # The live launch qualifier owns this exact assignment scope. A
+            # distinct probe/mount projection still needs its own admission.
+            if shared_scope != assignment_scope(assignment.fingerprint):
+                require_bindings(shared_scope, profile.shared_roots)
             qualify_shared_worker_inputs(profile, assignment, agent_id=agent_id)
         if shared_snapshot is not None:
             snapshot_mount(profile, shared_snapshot)

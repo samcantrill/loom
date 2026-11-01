@@ -176,6 +176,11 @@ class PrepareRunRequest:
     option fields stay omitted through capture, worker checks and publication.
     An explicit ``execution`` selects immutable submitted container bytes before
     preparation; omission preserves installed-profile execution.
+    ``input_locations`` is an explicit read-only selection from the protected
+    root catalog for the v3 worker contract. Empty means no dataset inputs;
+    omission preserves the profile's static selection. Locations are normalized,
+    deduplicated and retained in intent, including across replay. Composed stages
+    may narrow this selection but cannot widen it through config or overrides.
     """
 
     operation_id: str
@@ -188,6 +193,7 @@ class PrepareRunRequest:
     run_options: Mapping[str, PlainData] = field(default_factory=dict)
     context: SubmissionContext | None = None
     execution: SubmittedContainerExecution | None = None
+    input_locations: tuple[Mapping[str, PlainData], ...] | None = None
 
     def __post_init__(self) -> None:
         from .managed_local_preparation import _validate_run_name
@@ -197,6 +203,19 @@ class PrepareRunRequest:
             self.execution, SubmittedContainerExecution
         ):
             raise QueueServiceError("preparation execution is invalid")
+        if self.input_locations is not None:
+            from .shared_execution import location
+            from .submitted_execution import SELECTED_INPUT_WORKER_CONTRACT
+
+            if self.execution is None or self.execution.worker_contract != SELECTED_INPUT_WORKER_CONTRACT:
+                raise QueueServiceError("explicit input locations require the v3 worker contract")
+            if not isinstance(self.input_locations, (tuple, list)):
+                raise QueueServiceError("input_locations must be a sequence")
+            locations = [location(item) for item in self.input_locations]
+            unique = {(str(item["root_id"]), str(item["path"])): item for item in locations}
+            object.__setattr__(self, "input_locations", tuple(
+                freeze_plain_data(unique[key]) for key in sorted(unique)
+            ))
         if self.context is not None:
             if not isinstance(self.context, SubmissionContext):
                 raise QueueServiceError("preparation context is invalid")
@@ -228,11 +247,15 @@ class PrepareRunRequest:
             **_invocation_data(self),
             **({"context": self.context.to_dict()} if self.context is not None else {}),
             **({"execution": self.execution.to_dict()} if self.execution is not None else {}),
+            **({"input_locations": [thaw_plain_data(item) for item in self.input_locations]}
+               if self.input_locations is not None else {}),
         }
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> "PrepareRunRequest":
-        if set(data) - {"overlays", "overrides", "run_options", "context", "execution"} != {
+        if "input_locations" in data and data["input_locations"] is None:
+            raise QueueServiceError("input_locations must be a sequence when present")
+        if set(data) - {"overlays", "overrides", "run_options", "context", "execution", "input_locations"} != {
             "operation_id",
             "run_name",
             "source",
@@ -255,6 +278,7 @@ class PrepareRunRequest:
             None if "execution" not in data else SubmittedContainerExecution.from_dict(
                 data["execution"]
             ),
+            cast(tuple[Mapping[str, PlainData], ...] | None, data.get("input_locations")),
         )
 
     def intent_digest(self, principal_id: str) -> str:

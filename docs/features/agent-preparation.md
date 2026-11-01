@@ -747,7 +747,8 @@ Those managed storage purposes retain their existing contracts.
 
 Installed resident interpreters must pass `packages.input_directories` readiness.
 Submitted policies containing these roots must permit
-`resident-submitted-container-v2` and requests must select it. Updated workers
+`resident-submitted-container-v2` or `resident-submitted-container-v3`, and requests
+must select one of those contracts. Updated workers
 also support `resident-submitted-container-v1`; legacy facts, fingerprints and
 launch commands keep their encoding. A new-contract launch checks support in
 the selected image before decoding the assignment. An older image fails with
@@ -772,6 +773,72 @@ a worker must not open that coordinator URI's host prefix. A project processor
 can inspect typed locations in its declared fixed container namespace.
 
 A workload configuration selects only its own inputs:
+
+Submitted v3 requests can select inputs dynamically from the protected root
+catalog, without creating a profile for each input combination:
+
+```python
+request = PrepareRunRequest(
+    operation_id="evaluation-01", run_name="evaluation-01",
+    source=captured_source, config_path="configs/evaluation.yaml",
+    preparation_profile="shared-inputs", execution=execution_v3,
+    input_locations=(
+        {"kind": "loom.shared-location", "schema_version": 1,
+         "root_id": "input-a", "path": "."},
+        {"kind": "loom.shared-location", "schema_version": 1,
+         "root_id": "input-b", "path": "session-1"},
+    ),
+)
+```
+
+The execution and protected policy must permit
+`resident-submitted-container-v3`. The request retains normalized, deduplicated
+locations. An explicit empty tuple selects no input roots; omission preserves
+the profile's static `shared_locations`. Input locations must select authorized
+read-only roots with container targets. Protected challenged infrastructure,
+including capture storage, is retained separately. Configuration and overrides may select descendants of the
+retained inputs but cannot widen them. The project submission adapter owns
+deriving this declaration from its configuration; Loom does not interpret
+dataset IDs, splits or application-specific configuration.
+
+Preparation inspects the union, then each action retains only its selected
+workload roots, publication roots and host-only infrastructure. A preparation
+worker needs access to the union. All selected mounts remain read-only. The
+coordinator compares stage location membership independently of mapping traversal
+order, which canonical report JSON may change. Root qualifications, access modes,
+paths and location multiplicity must still match exactly. This comparison does
+not rewrite retained fingerprints or change application-defined sequence order.
+The processor receives qualified container targets in its protected `shared_scope`
+and the selected `execution`; it can resolve those inputs without discovering
+dataset-specific environment variables.
+
+V3 execution requirements use schema 2: the execution-policy fingerprint retains
+runtime, environment/mount settings, image permissions and supported interfaces,
+while selected root facts are compared independently. A worker with a larger or
+smaller unrelated input catalog can run the same retained action. Unavailable
+external input directories are omitted from v3 offers, so they do not disable
+unrelated work; selected locations are checked again at launch. Input-directory
+facts establish access permission, not content identity. Applications still
+verify manifests and scientific provenance.
+
+Native container-policy addition maintenance can extend a v3-only policy's
+authorized root catalog under the same policy ID. Existing roots, host bindings,
+execution restrictions and preparation selections must remain unchanged; adding
+a catalog entry cannot add a static preparation mount. Retained requests keep
+their original selection. Policies supporting legacy worker contracts still
+require exact catalog preservation, because their retained eligibility includes
+the complete catalog fingerprint.
+
+Legacy requirements keep schema 1 and their complete-catalog matching semantics.
+Adding a catalog entry does not widen an existing v3 request or change its
+selected scope. Older images reject the v3 worker contract before decoding or
+executing work. Deploy the updated native services and image once; subsequent
+selections among registered roots require configuration changes only. Keep
+dataset-specific path variables out of the container environment policy when
+using native root mapping, since environment changes intentionally change the
+execution-policy fingerprint.
+
+An individual action continues to use ordinary shared locations:
 
 ```yaml
 pipeline:
@@ -995,6 +1062,16 @@ the coordinator long enough to expire worker offers. Pending reuse verifications
 are still revisited, and a new retry receives a new resolution. Authority,
 readiness-generation and upstream-commit checks continue to invalidate stale
 work; dispatch and worker input checks still validate bytes at their boundaries.
+
+An unrelated worker can advance the run revision between saving a preparation
+intent and submitting it to authority. If a newer authoritative snapshot still
+shows the intent's exact pre-attempt stage and attempt state, the request was
+never accepted and its old revision can no longer succeed. Reconciliation then
+atomically replaces that local intent with a request at the current revision,
+preserving its readiness generation and original ready time. An accepted request,
+including one whose response was lost, keeps its original operation identity and
+replays the authority receipt. Authority revision checks and durable formats are
+unchanged.
 
 Native context also supplies `loom.execution_binding` with exactly
 `schema_version: 1`, `origin_run_id`, `origin_node_id`, positive `attempt`,

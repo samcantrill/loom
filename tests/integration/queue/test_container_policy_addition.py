@@ -84,3 +84,66 @@ def test_policy_addition_wire_binding_is_explicit_and_excludes_retirement():
     assert "retirement" not in request.to_dict()
     with pytest.raises(QueueServiceError, match="mutually exclusive"):
         replace(request, retirement=binding)
+
+
+@pytest.mark.parametrize("change", ["extend", "host_rebind", "permissions", "legacy"])
+def test_selected_catalog_extension_preserves_retained_authority(tmp_path, change):
+    from loom.queue._container_policy_addition import validate_coordinator_declarations
+    from loom.queue._preparation_policy import SubmittedPreparationProfile
+    from loom.queue._remote_stage_execution import AgentResourceInventory
+    from loom.queue.submitted_execution import SELECTED_INPUT_WORKER_CONTRACT
+    from tests.integration.queue.test_maintenance_admission import service
+
+    policy, _, _, _ = _submitted(tmp_path)
+    if change != "legacy":
+        policy = replace(policy, worker_contracts=(SELECTED_INPUT_WORKER_CONTRACT,))
+    alias, root = next((key, value) for key, value in policy.shared_roots.items()
+                      if value["container_path"] is not None and value["access"] == "ro")
+    roots = {**policy.shared_roots, "additional": {**root, "container_path": "/loom/additional"}}
+    if change == "host_rebind":
+        roots[alias] = {**root, "host_path": str(tmp_path / "different")}
+    updated = replace(policy, shared_roots=roots,
+                      environment={"CHANGED": "1"} if change == "permissions" else policy.environment)
+    old_agent = replace(config(tmp_path), resident_profiles=(),
+        resource_inventory=AgentResourceInventory(2), container_policies=(policy,))
+    new_agent = replace(old_agent, container_policies=(updated,))
+    if change == "extend":
+        validate_candidate(old_agent, new_agent, None, add_container_policies=True)
+    else:
+        with pytest.raises(QueueConflictError):
+            validate_candidate(old_agent, new_agent, None, add_container_policies=True)
+    if change == "host_rebind":
+        return
+
+    selected = service(tmp_path, local=False)
+    preparation = selected.daemon.preparation_policy
+    installed = preparation.profiles["existing-project"]
+    profile = SubmittedPreparationProfile(policy.capability, installed.allowed_source_roots,
+        ("shared",), installed.runtime_options,
+        {"capability": "shared-execution-v1", "roots": policy.capability.workload_roots, "locations": []},
+        policy.shared_roots)
+    before = replace(selected.daemon, agent_root=None, resident_worker_launch_profile=None,
+        cpu_capacity=0, memory_capacity_bytes=0, gpu_devices=(), agent_resource_providers=(),
+        shared_roots=policy.shared_roots, container_capabilities=(policy.capability,),
+        preparation_policy=replace(preparation, profiles={"selected": profile}))
+    expanded = replace(profile, capability=updated.capability, image_roots=updated.shared_roots,
+        shared_scope={**profile.shared_scope, "roots": updated.capability.workload_roots})
+    after = replace(before, shared_roots=updated.shared_roots,
+        container_capabilities=(updated.capability,),
+        preparation_policy=replace(preparation, profiles={"selected": expanded}))
+    old = {"shared_roots": dict(policy.shared_roots), "container_capabilities": [policy.capability.to_dict()]}
+    new = {"shared_roots": dict(updated.shared_roots), "container_capabilities": [updated.capability.to_dict()]}
+    if change == "extend":
+        validate_coordinator(before, after)
+        validate_coordinator_declarations(old, new)
+        # A catalog extension cannot grant an extra static preparation mount.
+        widened = replace(expanded, shared_scope={**expanded.shared_scope, "locations": [
+            {"kind": "loom.shared-location", "schema_version": 1, "root_id": "additional", "path": "."}]})
+        with pytest.raises(QueueConflictError, match="preparation selection"):
+            validate_coordinator(before, replace(after,
+                preparation_policy=replace(after.preparation_policy, profiles={"selected": widened})))
+    else:
+        with pytest.raises(QueueConflictError):
+            validate_coordinator(before, after)
+        with pytest.raises(QueueConflictError):
+            validate_coordinator_declarations(old, new)

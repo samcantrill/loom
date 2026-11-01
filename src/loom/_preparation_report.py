@@ -64,9 +64,9 @@ def save_composition_evidence(
         )
         if identifier is None:
             identifier = f"c{len(logical)}"
-            logical.append(deepcopy(composition))
-            manifest = deepcopy(_mapping(composition["manifest"]))
-            provenance = deepcopy(_mapping(composition["provenance"]))
+            logical.append(composition)
+            manifest = dict(_mapping(composition["manifest"]))
+            provenance = dict(_mapping(composition["provenance"]))
             definition = _mapping(manifest.get("metadata", {}))
             metadata = _mapping(provenance.get("metadata", {}))
             fields = [
@@ -118,11 +118,25 @@ def _regular_bytes(path: Path) -> bytes:
     return path.read_bytes()
 
 
+def _decoded_mapping(content: bytes) -> dict[str, PlainData]:
+    # JSON decoding owns fresh dict/list trees. Validate finite numbers during
+    # decoding instead of copying the entire tree solely to normalize it.
+    import json
+    import math
+    from loom.serialization.errors import PlainDataError
+
+    def finite(value: str) -> float:
+        number = float(value)
+        if not math.isfinite(number):
+            raise PlainDataError("Invalid non-finite float in preparation evidence")
+        return number
+
+    return _mapping(json.loads(content, parse_float=finite, parse_constant=finite))
+
+
 def load_report(
     reference: ArtifactRef, report_path: str | Path
 ) -> dict[str, PlainData]:
-    import json
-
     path = Path(report_path)
     content = _regular_bytes(path)
     if (
@@ -133,7 +147,7 @@ def load_report(
         raise QueueConflictError(
             "preparation primary report identity or checksum conflicts"
         )
-    report = _mapping(ensure_plain_data(json.loads(content), path="preparation report"))
+    report = _decoded_mapping(content)
     _require_current_report(report)
     if report.get("report_format") != REPORT_FORMAT:
         raise QueueConflictError(
@@ -203,11 +217,7 @@ def load_report(
             companion_bytes = _regular_bytes(selected_path)
             if hash_bytes(companion_bytes) != ref.checksum:
                 raise QueueConflictError("preparation composition checksum conflicts")
-            companion = _mapping(
-                ensure_plain_data(
-                    json.loads(companion_bytes), path="preparation composition"
-                )
-            )
+            companion = _decoded_mapping(companion_bytes)
             if (
                 set(companion) != {"schema", "schema_version", "compositions"}
                 or companion["schema"] != _COMPOSITION_SCHEMA
@@ -225,7 +235,18 @@ def load_report(
         assert entries is not None
         if identifier not in entries:
             raise QueueConflictError("preparation addressed composition is missing")
-        entry = deepcopy(_mapping(entries[identifier]))
+        if identifier in hydrated:
+            prior = hydrated[identifier]
+            if any(not _equal(prior[key], composition[key])
+                   for key in ("resolved", "redacted", "recipe_manifest")):
+                raise QueueConflictError(
+                    "shared preparation composition logical meanings differ"
+                )
+            # Every reference was checked above. Hydrate shared evidence once,
+            # but keep each returned composition independently mutable.
+            report[name] = deepcopy(prior)
+            continue
+        entry = _mapping(entries[identifier])
         if set(entry) != {"manifest", "provenance"}:
             raise QueueConflictError("preparation composition entry fields are invalid")
         manifest = _mapping(entry["manifest"])
@@ -257,14 +278,10 @@ def load_report(
                 },
             }
         full = {
-            key: deepcopy(composition[key])
+            key: composition[key]
             for key in ("resolved", "redacted", "recipe_manifest")
         }
         full.update(manifest=manifest, provenance=provenance)
-        if identifier in hydrated and not _equal(hydrated[identifier], full):
-            raise QueueConflictError(
-                "shared preparation composition logical meanings differ"
-            )
         hydrated[identifier] = full
         report[name] = full
     return report

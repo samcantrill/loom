@@ -159,3 +159,76 @@ def test_unreadable_member_tree_is_not_a_complete_empty_closure(tmp_path, monkey
     with pytest.raises(ArtifactStoreError, match="unreadable"):
         inventory(tmp_path, {"max_members": 2, "max_payload_bytes": 1024, "max_manifest_bytes": 1024})
     assert publication_path_is_retained(tmp_path)
+
+
+def test_increased_root_ceilings_preserve_historical_reference_and_receipt(tmp_path):
+    from loom.serialization import thaw_plain_data
+    from loom.pipeline.stores.shared_artifacts import RECEIPT, binding
+    from loom.queue.errors import QueueConflictError
+
+    workspace, profile, _, _ = _shared_publication_workspace(tmp_path)
+    report = workspace.retain_outputs()
+    refs = publish(workspace.request(), report, profile.shared_roots, agent_id="agent-1", fence="fence-1")
+    ref = refs["result"]
+    recorded = binding(ref.metadata)
+    primary = Path(ref.uri.removeprefix("file://"))
+    receipt = (primary.parent / RECEIPT).read_bytes()
+    roots = thaw_plain_data(profile.shared_roots)
+    roots["outputs"]["publication"] = {
+        "max_members": 1_000_000, "max_manifest_bytes": 536_870_912,
+        "max_payload_bytes": 274_877_906_944,
+    }
+    store = LocalArtifactStore(tmp_path / "consumer", shared_roots=roots)
+    store.validate(ref)
+    assert store.local_path(ref) == primary
+    assert publish(workspace.request(), report, roots, agent_id="agent-1", fence="fence-1") == refs
+    assert binding(ref.metadata) == recorded
+    assert (primary.parent / RECEIPT).read_bytes() == receipt
+    with pytest.raises(QueueConflictError, match="identity"):
+        publish(workspace.request(), report, roots, agent_id="agent-1", fence="another-fence")
+    for key, value in recorded["budgets"].items():
+        prior = roots["outputs"]["publication"][key]
+        roots["outputs"]["publication"][key] = value - 1
+        with pytest.raises(ArtifactStoreError, match="not admitted"):
+            store = LocalArtifactStore(tmp_path / "consumer", shared_roots=roots)
+            store.validate(ref)
+        roots["outputs"]["publication"][key] = prior
+
+
+def test_increase_does_not_enlarge_frozen_publication_request(tmp_path):
+    from loom.serialization import thaw_plain_data
+    from loom.queue.errors import QueueConflictError
+
+    limits = {"max_members": 3, "max_payload_bytes": 4096, "max_manifest_bytes": 4096}
+    workspace, profile, _, result = _shared_publication_workspace(tmp_path, limits=limits)
+    report = workspace.retain_outputs()
+    roots = thaw_plain_data(profile.shared_roots)
+    roots["outputs"]["publication"]["max_members"] = 1_000_000
+    primary = Path(result.outputs["result"].uri.removeprefix("file://"))
+    (primary.parent / "late-output").write_bytes(b"unretained output")
+    with pytest.raises(QueueConflictError, match="budget=max_members limit=3 observed_at_least=4"):
+        publish(workspace.request(), report, roots, agent_id="agent-1", fence="fence-1")
+    assert not (tmp_path / "shared" / "loom-artifacts").exists()
+
+
+@pytest.mark.parametrize("budget,limit,observed", [
+    ("max_members", 1, 2), ("max_payload_bytes", 10, 11),
+])
+def test_inventory_budget_diagnostics_identify_total_bound(tmp_path, budget, limit, observed):
+    from loom.pipeline.stores.shared_artifacts import inventory
+    (tmp_path / "a").write_bytes(b"1234")
+    (tmp_path / "b").write_bytes(b"1234567")
+    limits = {"max_members": 2, "max_payload_bytes": 11, "max_manifest_bytes": 4096}
+    assert len(inventory(tmp_path, limits)) == 2
+    limits[budget] = limit
+    with pytest.raises(ArtifactStoreError, match=f"budget={budget} limit={limit} observed_at_least={observed}"):
+        inventory(tmp_path, limits)
+
+
+def test_receipt_budget_diagnostics_identify_inventory_bytes(tmp_path):
+    from loom.pipeline.stores.shared_artifacts import receipt_bytes
+    path = tmp_path / "receipt"
+    path.write_bytes(b"1234")
+    assert receipt_bytes(path, 4) == b"1234"
+    with pytest.raises(ArtifactStoreError, match="budget=max_manifest_bytes limit=3 observed_at_least=4"):
+        receipt_bytes(path, 3)
