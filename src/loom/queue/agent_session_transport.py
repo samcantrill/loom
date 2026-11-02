@@ -1909,12 +1909,25 @@ class LocalDaemonAgentHttpClient:
         return permitted
 
     @_cooperative
-    def poll_assignment_control(self, session_id: str) -> Generator[_Progress, Any, AgentAssignmentControl | None]:
+    def poll_assignment_control(
+        self, session_id: str, *, released_only: bool = False
+    ) -> Generator[_Progress, Any, AgentAssignmentControl | None]:
+        """Apply an owned control, or settle a released assignment's late receipt."""
         journal = self._require_journal()
+
+        def owned(control: AgentAssignmentControl) -> bool:
+            if released_only:
+                return (
+                    self._execution_journal is not None
+                    and self._execution_journal.find_state(control.assignment_id)
+                    is AssignmentState.RELEASED
+                )
+            return not self._service_progress or _owns_assignment(control.assignment_id)
+
         pending = journal.next_unacknowledged_assignment_control()
         if pending is not None:
             control, code, evidence = pending
-            if self._service_progress and not _owns_assignment(control.assignment_id):
+            if not owned(control):
                 return None
             if control.session_id != session_id:
                 raise QueueConflictError(
@@ -1940,7 +1953,7 @@ class LocalDaemonAgentHttpClient:
         if control.session_id != session_id:
             raise QueueConflictError("retained assignment control belongs to another session")
         self._received_cancellations.add(control.assignment_id)
-        if self._service_progress and not _owns_assignment(control.assignment_id):
+        if not owned(control):
             journal.prepare_assignment_control(control)
             return None
         prior = journal.prepare_assignment_control(control)
@@ -2046,6 +2059,10 @@ class LocalDaemonAgentHttpClient:
                     or launch.execution_fence != control.fence
                 ):
                     return "unknown", None
+                if state is AssignmentState.RELEASED:
+                    # Release already proved containment and returned claims.
+                    # A late command cannot change its committed result.
+                    return "terminal", None
                 (yield from _external("bulk", self._supervisor.request_stop_wait, launch))
                 contained = (yield from _external("bulk", self._supervisor.contain, launch))
                 self._observe_supervisor_ownership(contained)
@@ -2421,6 +2438,10 @@ class LocalDaemonAgentHttpClient:
         session = journal.active_session()
         if session is None:
             return
+        # A delayed reply can arrive after the assignment view has exited.
+        # Receipt handling owns only these durably released controls; live
+        # assignments retain their existing execution-view ownership.
+        yield from _steps(self.poll_assignment_control, session.session_id, released_only=True)
         ids = journal.received_control_ids(session.session_id)
         request: dict[str, PlainData] = {
             "session_id": session.session_id,

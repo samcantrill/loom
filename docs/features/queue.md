@@ -987,6 +987,13 @@ redelivery. Receipt of drain/reload is separate from preparation of its effects:
 an unanswered work poll must be settled before the agent fences its session.
 Controls received before application restart resume from that same journal.
 
+An assignment cancellation can arrive after its execution view has finished.
+The control receiver settles these late commands only when the local assignment
+is durably released. It validates the original fence and launch identity, records
+a terminal acknowledgement, and preserves the committed result. Lost replies
+replay the same acknowledgement after reconnect or application restart. Controls
+for assignments that still own work remain with their execution views.
+
 Control waits have a dedicated agent execution slot, separate from work polling,
 short controls/renewals and bulk IO. The HTTPS listener admits at most 32 active
 work waits and 32 control waits independently; those limits do not consume its
