@@ -2378,8 +2378,9 @@ def test_native_local_file_graph_is_bound_from_preparation_to_execution(
 
 
 @pytest.mark.parametrize("local", (False, True), ids=("portable", "local"))
+@pytest.mark.parametrize("indirect", (False, True), ids=("literal", "interpolated"))
 def test_preparation_preserves_redacted_output_declarations(
-    tmp_path: Path, local: bool,
+    tmp_path: Path, local: bool, indirect: bool,
 ) -> None:
     from loom.queue.preparation import LOCAL_PREPARATION_SCOPE
 
@@ -2390,6 +2391,11 @@ def test_preparation_preserves_redacted_output_declarations(
     stage["factory"]["_target_"] = "tests.support.pipeline_execution_stages.TokenizeStage"
     stage["config"] = {"text": "one two"}
     stage["outputs"]["tokens"] = stage["outputs"].pop("data")
+    if indirect:
+        authored["desired_placement"] = {}
+        authored["desired_fingerprint"] = {"api_token": "qualification-only-secret"}
+        stage["placement"] = "${desired_placement}"
+        stage["fingerprint"] = "${desired_fingerprint}"
     path.write_text(json.dumps(authored))
     LocalDaemon.initialize_deployment(service.daemon)
     daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
@@ -2412,7 +2418,14 @@ def test_preparation_preserves_redacted_output_declarations(
                 "artifact_type": "json", "codec_key": "json.v1",
             }
             assert redacted["outputs"]["tokens"] == "***REDACTED***"
-            if local:
+            if indirect:
+                assert redacted["placement"] == "${desired_placement}"
+                assert redacted["fingerprint"] == "${desired_fingerprint}"
+                assert "qualification-only-secret" not in json.dumps(report["composition"]["redacted"])
+                if local:
+                    assert resolved["placement"]["target"] == "coordinator"
+                    assert resolved["fingerprint"][LOCAL_PREPARATION_SCOPE]["agent_id"] == "coordinator"
+            elif local:
                 assert redacted["placement"] == resolved["placement"]
                 assert redacted["fingerprint"][LOCAL_PREPARATION_SCOPE] == resolved[
                     "fingerprint"

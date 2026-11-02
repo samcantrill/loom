@@ -496,19 +496,17 @@ def _bind_local_snapshot(
                 raise QueueConflictError("local preparation requires the managed agent route")
     if scope is None:
         return
-    # Redaction may mask valid declarations (for example an output named tokens).
-    # Annotate that diagnostic view without parsing it or restoring authored data.
+    # Diagnostic views may retain interpolation strings or redact whole mappings.
+    # Preserve those values instead of resolving them from unredacted execution data.
     for view in (snapshot,) if redacted is None else (snapshot, redacted):
         definition = cast(dict[str, PlainData], view["pipeline"])
         for stage in cast(list[dict[str, PlainData]], definition["stages"]):
-            stage["placement"] = {
-                **cast(dict[str, PlainData], stage.get("placement", {})),
-                "target": scope["agent_id"],
-            }
-            stage["fingerprint"] = {
-                **cast(dict[str, PlainData], stage.get("fingerprint", {})),
-                LOCAL_PREPARATION_SCOPE: dict(scope),
-            }
+            placement = stage.get("placement", {})
+            if isinstance(placement, Mapping):
+                stage["placement"] = {**placement, "target": scope["agent_id"]}
+            fingerprint = stage.get("fingerprint", {})
+            if isinstance(fingerprint, Mapping):
+                stage["fingerprint"] = {**fingerprint, LOCAL_PREPARATION_SCOPE: dict(scope)}
 
 
 def _compose_worker_config(
