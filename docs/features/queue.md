@@ -1304,6 +1304,10 @@ checksum-bound companion. Equal requested and effective compositions share one
 entry. The primary contains references rather than repeated configuration trees.
 The public loader also reads existing v1 physical reports without rewriting them;
 its hydrated logical composition and scientific identities remain unchanged.
+Local placement binding updates the validated execution view. Diagnostic mappings
+may receive the same binding, while unresolved interpolation strings and whole
+redaction markers remain unchanged; resolved private values are never copied
+back into diagnostic views.
 This input is separate from user-authored stage ports and does not inline the
 whole report into worker metadata. Original references are bound to admitted
 bytes and worker paths use the selected host's shared-root mapping.
