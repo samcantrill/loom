@@ -817,6 +817,11 @@ def _claim_from_dict(value: object) -> ResourceClaim:
     return claim
 
 
+def _assignment_input_path(workspace_root: Path, logical_name: str) -> Path:
+    """Locate the primary file inside one isolated assignment input directory."""
+    return workspace_root / "inputs" / _identifier(logical_name, "logical_name") / ".loom-primary.artifact"
+
+
 def _preparation_worker_context(
     request: _ResidentAssignmentBundle | SlurmStageDelivery,
     launch_profile: ResidentWorkerLaunchProfile, workspace_root: Path,
@@ -843,7 +848,9 @@ def _preparation_worker_context(
     if candidate_report is not None:
         from ._shared_publication import resolve_input
         from .shared_execution import execution_roots
-        path = resolve_input(candidate_report, execution_roots(launch_profile.shared_roots, container=launch_profile.container is not None))
+        path = _assignment_input_path(workspace_root, candidate_report.logical_name)
+        if shared_binding(candidate_report.metadata) is not None:
+            path = resolve_input(candidate_report, execution_roots(launch_profile.shared_roots, container=launch_profile.container is not None))
         purpose["candidate_project_report"] = candidate_report.local_ref(path).to_dict()
     if preparation.action_verification is not None:
         from ._shared_publication import resolve_input
@@ -855,7 +862,7 @@ def _preparation_worker_context(
             prefix = _ACTION_PROJECT_INPUT_PREFIX if item.logical_name.startswith(_ACTION_PROJECT_INPUT_PREFIX) else _ACTION_RESULT_INPUT_PREFIX
             if not item.logical_name.startswith(prefix):
                 continue
-            path = workspace_root / "inputs" / item.logical_name
+            path = _assignment_input_path(workspace_root, item.logical_name)
             if shared_binding(item.metadata) is not None:
                 path = resolve_input(item, execution_roots(launch_profile.shared_roots, container=launch_profile.container is not None))
             destination = reports if prefix == _ACTION_PROJECT_INPUT_PREFIX else artifacts
@@ -867,7 +874,7 @@ def _preparation_worker_context(
         from .preparation import resolve_staged_input
         directory = resolve_staged_input(
             preparation.input_receipt,
-            archive_path=workspace_root / "inputs" / _PREPARATION_ARCHIVE_INPUT,
+            archive_path=_assignment_input_path(workspace_root, _PREPARATION_ARCHIVE_INPUT),
             workspace_root=workspace_root,
         )
         assert directory is not None
@@ -1751,7 +1758,7 @@ class _ResidentAssignmentWorkspace:
     def input_path(self, logical_name: str) -> Path:
         """Return the assignment-owned primary path for one input payload."""
 
-        return self.input_root(logical_name) / ".loom-primary.artifact"
+        return _assignment_input_path(self.root, logical_name)
 
     def has_request(self) -> bool:
         with self._connect() as conn:

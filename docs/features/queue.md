@@ -307,7 +307,10 @@ ownership and other publication conflicts still retain work for recovery.
 
 For the protected same-host resident route, Loom preserves the regular files in
 the stage artifact directory as one atomically published local tree and stages a
-separate copy beside each primary input. This lets a declared file artifact use
+separate copy beside each primary input. Preparation verification and staged
+archive extraction resolve that same primary file within its isolated directory;
+the directory itself is never substituted for the declared file artifact.
+This lets a declared file artifact use
 relative companion files without making those companions additional declared
 outputs. It does not extend the authenticated remote relay: remote agents and
 SLURM bootstraps still transfer only the declared immutable regular files.
