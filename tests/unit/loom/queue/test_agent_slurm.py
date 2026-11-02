@@ -14,26 +14,32 @@ from loom.queue.slurm_ready_stage import SlurmStageAssignment
 from tests.unit.loom.pipeline.executors.slurm.test_ready_stage import (
     _profile as _base_profile,
     _request,
+    _TEST_HELPER,
 )
 
 
-def _profile(runner, tmp_path):
+def _profile(runner, tmp_path, *, retention_bytes=128 * 1024 * 1024):
+    from loom.pipeline.executors.slurm.ready_stage import SlurmJobPrivateFileProvider
+
     root = tmp_path / "shared-results"
     root.mkdir(exist_ok=True)
     return replace(
-        _base_profile(runner),
+        _base_profile(runner, provider=SlurmJobPrivateFileProvider(
+            fixed_path=str(tmp_path / "capability"), descriptor="fake-prolog-v1",
+            helper_argv=_TEST_HELPER,
+        )),
         result_storage={
             "agent_root": str(root),
             "compute_root": str(root),
-            "retention_bytes": 128 * 1024 * 1024,
+            "retention_bytes": retention_bytes,
         },
     )
 
 
-def _task(profile, resources=None):
-    request = _request(profile, resources=resources)
+def _task(profile, resources=None, *, key="1"):
+    request = _request(profile, resources=resources, operation_id=f"operation-{key}", stage_work_id=f"work-{key}")
     assignment = SlurmStageAssignment(
-        assignment_id="assignment-1",
+        assignment_id=f"assignment-{key}",
         operation_id=request.operation_id,
         run_uri=request.run_uri,
         stage_work_id=request.stage_work_id,
@@ -58,13 +64,16 @@ def _task(profile, resources=None):
     }
 
 
+@pytest.mark.parametrize("rollback", [False, True])
 def test_agent_reopens_exact_journal_and_replays_lost_ack_without_sbatch(
-    tmp_path: Path,
+    tmp_path: Path, rollback,
 ):
+    from loom._sqlite_policy import SQLitePolicy
+    policy = SQLitePolicy("delete", "extra", 1234) if rollback else None
     runner = FakeSlurmCommandRunner()
     profile = _profile(runner, tmp_path)
-    AgentSlurmJobs.initialize(tmp_path)
-    agent = AgentSlurmJobs(tmp_path, (profile,))
+    AgentSlurmJobs.initialize(tmp_path, sqlite_policy=policy)
+    agent = AgentSlurmJobs(tmp_path, (profile,), sqlite_policy=policy)
     task = _task(profile)
     accepted = []
 
@@ -78,7 +87,7 @@ def test_agent_reopens_exact_journal_and_replays_lost_ack_without_sbatch(
         agent.step(task, acknowledge)
     assert agent.has_retained_work()
     assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
-    reopened = AgentSlurmJobs(tmp_path, (profile,))
+    reopened = AgentSlurmJobs(tmp_path, (profile,), sqlite_policy=policy)
     replayed = []
 
     def accept(value):
@@ -92,7 +101,7 @@ def test_agent_reopens_exact_journal_and_replays_lost_ack_without_sbatch(
     assert reopened.journal.read("operation-1").state is ReadyStageState.ACCEPTED
     (tmp_path / "slurm.sqlite").unlink()
     with pytest.raises(Exception, match="missing"):
-        AgentSlurmJobs(tmp_path, (profile,))
+        AgentSlurmJobs(tmp_path, (profile,), sqlite_policy=policy)
 
 
 def test_expected_agent_operation_cannot_be_reconstructed(tmp_path: Path):
@@ -401,3 +410,124 @@ def test_interrupted_acknowledged_cleanup_replays_authority_before_retirement(
     assert operations == ["report", "commit", "commit"]
     assert not transport.path.exists()
     assert not reopened.has_retained_work()
+
+
+@pytest.mark.parametrize("uncertain", [False, True])
+def test_submit_pacing_does_not_block_observation_cancel_or_restart(tmp_path, monkeypatch, uncertain):
+    from loom.pipeline.executors.slurm.trusted_user import SlurmUserPrivateFileProvider
+    import loom.queue._agent_slurm as agent_module
+
+    clock = [100.0]
+    monkeypatch.setattr(agent_module, "monotonic", lambda: clock[0])
+    runner = FakeSlurmCommandRunner(scripted_results={
+        "sbatch": [TimeoutError("uncertain submission")],
+    } if uncertain else {})
+    profile = replace(
+        _profile(runner, tmp_path, retention_bytes=1024 ** 3), poll_interval_seconds=0.05,
+        job_private_file_provider=SlurmUserPrivateFileProvider(
+            root=tmp_path / "capabilities", descriptor="trusted-pacing-test",
+        ),
+    )
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,), submit_interval_seconds=1.0)
+    cancel = set()
+    seen = []
+
+    def acknowledge(value):
+        seen.append(value)
+        return {"sequence": value["sequence"], "cancel_requested": value["submission"]["request"]["operation_id"] in cancel}
+
+    first = _task(profile)
+    agent.step(first, acknowledge)
+    second = _task(profile, key="2")
+    agent.step(second, acknowledge)
+    assert agent.journal.read("operation-2").state is ReadyStageState.INTENT
+    assert not any(item["submission"]["state"] == "submitting" and item["submission"]["request"]["operation_id"] == "operation-2" for item in seen)
+    assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
+
+    # A due existing operation is still observed while new submission is paced.
+    clock[0] += 0.1
+    observed_before = len([call for call in runner.calls if call[0] in {"squeue", "sacct"}])
+    agent.step(first, acknowledge)
+    assert len([call for call in runner.calls if call[0] in {"squeue", "sacct"}]) > observed_before
+    assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
+
+    # Cancellation wins over the pacing wait and never calls sbatch.
+    cancel.add("operation-2")
+    agent.step(second, acknowledge)
+    assert agent.journal.read("operation-2").state is ReadyStageState.REJECTED
+    assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
+
+    third = _task(profile, key="3")
+    agent.step(third, acknowledge)
+    assert agent.journal.read("operation-3").state is ReadyStageState.INTENT
+    clock[0] = 101.0
+    agent.step(third, acknowledge)
+    assert len([call for call in runner.calls if call[0] == "sbatch"]) == 2
+    restarted = AgentSlurmJobs(tmp_path, (profile,), submit_interval_seconds=1.0)
+    restarted.step(first, acknowledge)
+    restarted.step(third, acknowledge)
+    assert len([call for call in runner.calls if call[0] == "sbatch"]) == 2
+    restarted.step(_task(profile, key="4"), acknowledge)
+    assert len([call for call in runner.calls if call[0] == "sbatch"]) == 3
+
+
+@pytest.mark.parametrize("finish", ["submit", "cancel"])
+def test_drained_intent_survives_restart_without_submitting(tmp_path, finish):
+    runner = FakeSlurmCommandRunner()
+    profile = _profile(runner, tmp_path)
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,))
+    task = _task(profile)
+    cancel = False
+
+    def acknowledge(value):
+        return {"sequence": value["sequence"], "cancel_requested": cancel}
+
+    def lose_ack(value):
+        raise OSError("lost intent acknowledgement")
+
+    with pytest.raises(OSError, match="lost intent"):
+        agent.step(task, lose_ack, allow_submission=False)
+    assert agent.has_started_or_unacknowledged_work()
+    agent.step(task, acknowledge, allow_submission=False)
+    original = agent.journal.read("operation-1")
+    assert original.state is ReadyStageState.INTENT
+    assert agent.has_retained_work()
+    assert not agent.has_started_or_unacknowledged_work()
+    reopened = AgentSlurmJobs(tmp_path, (profile,))
+    reopened.step(task, acknowledge, allow_submission=False)
+    assert reopened.journal.read("operation-1") == original
+    assert not any(call[0] == "sbatch" for call in runner.calls)
+    cancel = finish == "cancel"
+    reopened.step(task, acknowledge, allow_submission=not cancel)
+    result = reopened.journal.read("operation-1")
+    assert result.request == original.request
+    assert sum(call[0] == "sbatch" for call in runner.calls) == (0 if cancel else 1)
+    assert result.state is (ReadyStageState.REJECTED if cancel else ReadyStageState.ACCEPTED)
+    assert reopened.has_started_or_unacknowledged_work() is (not cancel)
+
+
+def test_pacing_starts_after_submitting_acknowledgement(tmp_path, monkeypatch):
+    from loom.pipeline.executors.slurm.trusted_user import SlurmUserPrivateFileProvider
+    import loom.queue._agent_slurm as agent_module
+
+    clock = [10.0]
+    monkeypatch.setattr(agent_module, "monotonic", lambda: clock[0])
+    runner = FakeSlurmCommandRunner()
+    profile = replace(_profile(runner, tmp_path, retention_bytes=1024 ** 3), job_private_file_provider=SlurmUserPrivateFileProvider(
+        root=tmp_path / "capabilities", descriptor="trusted-pacing-test",
+    ))
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,), submit_interval_seconds=1.0)
+
+    def acknowledge(value):
+        if value["submission"]["state"] == "submitting":
+            clock[0] += 5.0
+        return {"sequence": value["sequence"], "cancel_requested": False}
+
+    agent.step(_task(profile), acknowledge)
+    assert clock[0] == 15.0
+    agent.step(_task(profile, key="2"), acknowledge)
+    assert agent.journal.read("operation-2").state is ReadyStageState.INTENT
+    assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1

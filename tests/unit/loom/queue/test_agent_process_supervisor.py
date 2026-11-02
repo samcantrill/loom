@@ -20,6 +20,8 @@ from typing import Any, cast
 
 import pytest
 
+from loom import _pidfd
+
 from loom.queue._agent_process_supervisor import (
     AgentProcessSupervisor,
     AgentProcessSupervisorClient,
@@ -65,6 +67,35 @@ def _launch(
         profile=_profile(),
         environment={},
     )
+
+
+def test_missing_pidfd_support_refuses_new_container_before_launch(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from examples.execution.containers.apptainer_fixture import fake_apptainer
+
+    with fake_apptainer() as binding:
+        monkeypatch.setattr(
+            ResidentWorkerLaunch, "container_command",
+            property(lambda self: SimpleNamespace(argv=(sys.executable, "-c", "pass"), metadata={})),
+        )
+        profile = replace(_profile(), container=binding)
+        agent = tmp_path / "agent"
+        agent.mkdir()
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        supervisor = AgentProcessSupervisor.initialize(agent, agent_id="agent-A", profiles=(profile,))
+        launch = replace(_launch(supervisor, workspace), profile=profile)
+
+        def unavailable():
+            raise PermissionError("kernel pidfd operations denied")
+
+        monkeypatch.setattr(_pidfd, "require_pidfd_support", unavailable)
+        monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: pytest.fail("unsupported launch spawned"))
+        with pytest.raises(AgentProcessSupervisorError, match="working Linux pidfd"):
+            supervisor.launch(launch)
+        with supervisor._connect() as connection:
+            assert connection.execute("SELECT COUNT(*) FROM launches").fetchone()[0] == 0
+        assert not (workspace / "run.grant").exists()
 
 
 def test_saved_container_launch_and_receipt_decode_without_storage_access(
@@ -358,7 +389,7 @@ def test_real_shared_tree_qualification_does_not_block_other_ipc_control(tmp_pat
         monkeypatch.setattr(os, "walk", blocked_walk)
         monkeypatch.setattr(subprocess, "Popen", spawn)
         monkeypatch.setattr("loom.pipeline.executors.apptainer._timeout._capture_init",
-                            lambda process, group: os.pidfd_open(process.pid))
+                            lambda process, group: _pidfd.open_pidfd(process.pid))
         try:
             client._call("launch", _launch_value(launch))
             assert entered.wait(3)
@@ -413,7 +444,7 @@ def test_ipc_slow_saturation_preserves_query_stop_and_exact_starting(
     def capture(process, group):
         if held == "namespace":
             hold()
-        return os.pidfd_open(process.pid)
+        return _pidfd.open_pidfd(process.pid)
 
     def contain(group):
         if held == "contain" and group.pid in held_pids and not release.is_set():
@@ -729,7 +760,7 @@ def test_failed_launch_with_owned_child_cannot_leave_a_live_starting_receipt(
     monkeypatch.setattr(ResidentWorkerLaunch, "container_command", property(
         lambda self: SimpleNamespace(argv=(str(native.python_executable),), metadata={})
     ))
-    monkeypatch.setattr(_timeout, "_capture_init", lambda process, group: os.pidfd_open(process.pid))
+    monkeypatch.setattr(_timeout, "_capture_init", lambda process, group: _pidfd.open_pidfd(process.pid))
     write_text = Path.write_text
 
     def fail_grant(path, *args, **kwargs):
@@ -1050,7 +1081,7 @@ def test_contain_reaps_its_leader_but_waits_for_a_term_ignoring_descendant(
         while not ready.exists():
             assert monotonic() < deadline
             sleep(0.01)
-        child_fd = os.pidfd_open(int(ready.read_text()))
+        child_fd = _pidfd.open_pidfd(int(ready.read_text()))
         try:
             import select
 
@@ -1069,7 +1100,6 @@ def test_apptainer_namespace_signal_race_preserves_supervisor_ownership(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, signal_error: type[OSError]
 ) -> None:
     import select
-    import signal
     from types import SimpleNamespace
 
     from examples.execution.containers.apptainer_fixture import fake_apptainer
@@ -1103,7 +1133,7 @@ def test_apptainer_namespace_signal_race_preserves_supervisor_ownership(
         supervisor.launch(launch)
         cache = assignment_mounts(profile, workspace=workspace, agent_id="agent-A")["/loom/cache"]
         (cache / "prepared.npz").write_bytes(b"owned prepared sample")
-        send_signal = signal.pidfd_send_signal
+        send_signal = _pidfd.send_pidfd_signal
 
         def fail_after_observation(namespace: int, signum: int) -> None:
             if signal_error is ProcessLookupError:
@@ -1112,7 +1142,7 @@ def test_apptainer_namespace_signal_race_preserves_supervisor_ownership(
                 assert select.select([namespace], [], [], 2)[0]
             raise signal_error("namespace changed after observation")
 
-        monkeypatch.setattr(signal, "pidfd_send_signal", fail_after_observation)
+        monkeypatch.setattr(_pidfd, "send_pidfd_signal", fail_after_observation)
         try:
             receipt = supervisor.contain(launch)
             expected = (
@@ -1127,7 +1157,7 @@ def test_apptainer_namespace_signal_race_preserves_supervisor_ownership(
                 assert supervisor.query(launch).state is SupervisorLaunchState.RUNNING
                 assert not supervisor.quiescent()
         finally:
-            monkeypatch.setattr(signal, "pidfd_send_signal", send_signal)
+            monkeypatch.setattr(_pidfd, "send_pidfd_signal", send_signal)
             assert supervisor.contain(launch).state is SupervisorLaunchState.CONTAINED
             assert not cache.exists()
         assert supervisor.quiescent()
@@ -1588,7 +1618,7 @@ def test_accepted_launch_reply_timeout_replays_one_live_root(
         monkeypatch.setattr(client, "_EXCHANGE_TIMEOUT", 10)
         assert accepted["ok"] is True
         pid = accepted["value"]["process_id"]
-        process_fd = os.pidfd_open(pid)
+        process_fd = _pidfd.open_pidfd(pid)
         assert not select.select([process_fd], [], [], 0)[0]
         replay = client.launch(launch)
         assert replay.process_id == pid

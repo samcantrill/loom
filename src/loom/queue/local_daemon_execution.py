@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from loom._sqlite_policy import SQLitePolicy, connect_existing
+
 from . import _coordinator_run_progress as _run_progress
 from ._coordinator_run_progress import (
     LocalDaemonExecutionOutcome as LocalDaemonExecutionOutcome,
@@ -11,6 +13,7 @@ from ._coordinator_run_authority import _ScopedCoordinatorAuthority as _ScopedCo
 
 from ._action_results import action_attempt_cancelled, action_attempt_needed, attach_action_fence
 from ._recovery_retry import _RecoveryRetry
+from ._slurm_admission import SlurmAdmissionDeferred
 
 from .shared_execution import SHARED_EXECUTION_CAPABILITY, attributes as shared_attributes, qualifications
 
@@ -48,6 +51,7 @@ from loom.pipeline.reliability import (
 )
 from loom.pipeline.reliability import ReliabilityPolicy
 from loom.pipeline.executors.slurm.ready_stage import (
+    _ready_stage_requested_gpu_count as _slurm_requested_gpu_count,
     ReadyStageState,
     SlurmReadyStageProfile,
     SlurmReadyStageSubmission,
@@ -559,7 +563,9 @@ def _replacement_scheduling_identities(
     return scheduling_offer_id, scheduling_availability_revision
 
 
-def _connect_existing_sqlite(path: Path) -> sqlite3.Connection:
+def _connect_existing_sqlite(path: Path, *, sqlite_policy: SQLitePolicy | None = None) -> sqlite3.Connection:
+    if sqlite_policy is not None:
+        return connect_existing(path, policy=sqlite_policy, isolation_level="")
     return sqlite3.connect(f"{path.resolve().as_uri()}?mode=rw", uri=True)
 
 
@@ -601,23 +607,25 @@ def initialize_local_daemon_owner_stores(
     """Create the two current runtime-owner stores for a fresh daemon root."""
 
     capacity = _coordinator_capacity(config)
-    SQLiteStageWorkStore(config.execution_database)._initialize()
-    SQLiteCoordinatorAssignments(config.execution_database, capacity)._initialize()
+    SQLiteStageWorkStore(config.execution_database, sqlite_policy=config.sqlite_policy)._initialize()
+    SQLiteCoordinatorAssignments(config.execution_database, capacity, sqlite_policy=config.sqlite_policy)._initialize()
     SlurmSubmissionProjection(
-        config.execution_database, _allow_initialize=True
+        config.execution_database, _allow_initialize=True,
+        sqlite_policy=config.sqlite_policy, schema_version=config.slurm_schema_version,
     )._open_existing()
     SQLiteSlurmStageAssignments(
-        config.execution_database, config.slurm_transfer_root
+        config.execution_database, config.slurm_transfer_root,
+        sqlite_policy=config.sqlite_policy, schema_version=config.slurm_schema_version,
     )._initialize()
     _bind_owner_store(
         config.execution_database, role="coordinator", stable_id=coordinator_id
-    )
+    , sqlite_policy=config.sqlite_policy)
     if agent_id is not None:
-        SQLiteAgentJournal(config.agent_journal)._initialize()
+        SQLiteAgentJournal(config.agent_journal, sqlite_policy=config.sqlite_policy)._initialize()
         assert config.agent_root is not None
         if config.slurm_profiles:
-            AgentSlurmJobs.initialize(config.agent_root)
-        _bind_owner_store(config.agent_journal, role="local-agent", stable_id=agent_id)
+            AgentSlurmJobs.initialize(config.agent_root, sqlite_policy=config.sqlite_policy)
+        _bind_owner_store(config.agent_journal, role="local-agent", stable_id=agent_id, sqlite_policy=config.sqlite_policy)
     _initialize_owner_status_revisions(config)
 
 
@@ -653,18 +661,20 @@ def _require_local_daemon_owner_stores(
             config.execution_database,
             config.slurm_transfer_root,
             _allow_initialize=False,
+            sqlite_policy=config.sqlite_policy, schema_version=config.slurm_schema_version,
         )._open_existing()
         capacity = _coordinator_capacity(config)
         SQLiteStageWorkStore(
             config.execution_database, _allow_initialize=False
-        )._open_existing()
+        , sqlite_policy=config.sqlite_policy)._open_existing()
         SQLiteCoordinatorAssignments(
             config.execution_database, capacity, _allow_initialize=False
-        )._open_existing()
+        , sqlite_policy=config.sqlite_policy)._open_existing()
         SlurmSubmissionProjection(
-            config.execution_database, _allow_initialize=False
+            config.execution_database, _allow_initialize=False,
+            sqlite_policy=config.sqlite_policy, schema_version=config.slurm_schema_version,
         )._open_existing()
-        with _connect_existing_sqlite(config.execution_database) as conn:
+        with _connect_existing_sqlite(config.execution_database, sqlite_policy=config.sqlite_policy) as conn:
             _verify_owner_store_binding(
                 conn, role="coordinator", stable_id=coordinator_id
             )
@@ -676,7 +686,7 @@ def _require_local_daemon_owner_stores(
             }
         agent_revision = True
         if agent_id is not None:
-            with _connect_existing_sqlite(config.agent_journal) as conn:
+            with _connect_existing_sqlite(config.agent_journal, sqlite_policy=config.sqlite_policy) as conn:
                 _verify_owner_store_binding(
                     conn, role="local-agent", stable_id=agent_id
                 )
@@ -705,12 +715,12 @@ def local_daemon_owner_work_is_retained(
     if agent_id is None:
         return False
     try:
-        journal = SQLiteAgentJournal(config.agent_journal, _allow_initialize=False)
+        journal = SQLiteAgentJournal(config.agent_journal, _allow_initialize=False, sqlite_policy=config.sqlite_policy)
         coordinator = SQLiteCoordinatorAssignments(
             config.execution_database,
             _coordinator_capacity(config),
             _allow_initialize=False,
-        )
+         sqlite_policy=config.sqlite_policy)
         journal._open_existing()
         coordinator._open_existing()
         return bool(journal.retained_claim_commands()) or bool(
@@ -722,8 +732,8 @@ def local_daemon_owner_work_is_retained(
         ) from exc
 
 
-def _bind_owner_store(path: Path, *, role: str, stable_id: str) -> None:
-    with _connect_existing_sqlite(path) as conn:
+def _bind_owner_store(path: Path, *, role: str, stable_id: str, sqlite_policy: SQLitePolicy | None = None) -> None:
+    with _connect_existing_sqlite(path, sqlite_policy=sqlite_policy) as conn:
         conn.execute(
             "CREATE TABLE IF NOT EXISTS local_daemon_owner_identity "
             "(role TEXT PRIMARY KEY, stable_id TEXT NOT NULL)"
@@ -752,7 +762,7 @@ def _verify_owner_store_binding(
 
 
 def _initialize_owner_status_revisions(config: LocalDaemonConfig) -> None:
-    with sqlite3.connect(config.execution_database) as conn:
+    with config.connect_database(config.execution_database) as conn:
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS local_daemon_status_revisions (
@@ -813,7 +823,7 @@ def _initialize_owner_status_revisions(config: LocalDaemonConfig) -> None:
         )
         conn.commit()
     if config.agent_root is not None:
-        with sqlite3.connect(config.agent_journal) as conn:
+        with config.connect_database(config.agent_journal) as conn:
             conn.executescript(
                 """
             CREATE TABLE IF NOT EXISTS local_daemon_status_revision (
@@ -1167,7 +1177,7 @@ class LocalDaemonExecution:
         self.run_store = LocalRunStore(config.run_store_root)
         self.stage_work_store = SQLiteStageWorkStore(
             config.execution_database, _allow_initialize=False
-        )
+        , sqlite_policy=config.sqlite_policy)
         initial_planners = self._scheduling.active_planners()
         configured_providers = tuple(config.agent_resource_providers or ())
         self.providers = (
@@ -1179,17 +1189,19 @@ class LocalDaemonExecution:
         self.capacity = _coordinator_capacity(config)
         self.coordinator = SQLiteCoordinatorAssignments(
             config.execution_database, self.capacity, _allow_initialize=False
-        )
+        , sqlite_policy=config.sqlite_policy)
         self.slurm_submissions = SlurmSubmissionProjection(
-            config.execution_database, _allow_initialize=False
+            config.execution_database, _allow_initialize=False,
+            sqlite_policy=config.sqlite_policy, schema_version=config.slurm_schema_version,
         )
         self.slurm_assignments = SQLiteSlurmStageAssignments(
             config.execution_database,
             config.slurm_transfer_root,
             _allow_initialize=False,
+            sqlite_policy=config.sqlite_policy, schema_version=config.slurm_schema_version,
         )
         self.journal = (
-            SQLiteAgentJournal(config.agent_journal, _allow_initialize=False)
+            SQLiteAgentJournal(config.agent_journal, _allow_initialize=False, sqlite_policy=config.sqlite_policy)
             if config.agent_root is not None
             else None
         )
@@ -1200,7 +1212,9 @@ class LocalDaemonExecution:
             if profile is None or agent_id is None:
                 raise QueueServiceError("local agent binding is unavailable")
             self.supervisor = AgentProcessSupervisorClient(
-                config.agent_root, SupervisorLaunchConfiguration(agent_id, (profile,))
+                config.agent_root, SupervisorLaunchConfiguration(
+                    agent_id, (profile,), storage=config.storage,
+                )
             )
         # A new in-memory provider must never begin by advertising capacity that
         # a durable accepted/granted/running/unknown assignment might retain.
@@ -1220,8 +1234,7 @@ class LocalDaemonExecution:
             agent_root is None
             or any(
                 not _ResidentAssignmentWorkspace(
-                    agent_root, assignment_id
-                ).has_request()
+                    agent_root, assignment_id, sqlite_policy=self.config.sqlite_policy, durable_files=self.config.durable_files).has_request()
                 for assignment_id in missing
             )
         ):
@@ -1239,7 +1252,7 @@ class LocalDaemonExecution:
         self.local_profile_ready = True
         self._sync_slurm_agent_references()
         self._slurm_agent = (
-            AgentSlurmJobs(config.agent_root, config.slurm_profiles)
+            AgentSlurmJobs(config.agent_root, config.slurm_profiles, sqlite_policy=config.sqlite_policy)
             if config.agent_root is not None and config.slurm_profiles
             else None
         )
@@ -1478,8 +1491,7 @@ class LocalDaemonExecution:
         if self._recovery_retains_assignment(assignment.assignment_id):
             return False
         workspace = _ResidentAssignmentWorkspace(
-            self.config.agent_root, assignment.assignment_id
-        )
+            self.config.agent_root, assignment.assignment_id, sqlite_policy=self.config.sqlite_policy, durable_files=self.config.durable_files)
         request = workspace.request()
         if (
             request.assignment_id != assignment.assignment_id
@@ -1546,8 +1558,7 @@ class LocalDaemonExecution:
                 agent_root=self.config.agent_root,
                 supervisor=self.supervisor,
                 resident_launch_profile=self.config.resident_worker_launch_profile,
-                suspend_requested=suspend_requested,
-            )
+                suspend_requested=suspend_requested, durable_files=self.config.durable_files)
         except ManagedLocalError:
             if not self._is_exact_retained_unknown(assignment.assignment_id):
                 raise
@@ -1640,7 +1651,8 @@ class LocalDaemonExecution:
     def validate_fresh_intent(self, intent: ManagedLocalIntent) -> None:
         """Validate active scheduling and shared delivery before fresh admission."""
 
-        for placement in intent.placements.values():
+        running = {item.stage_name for item in intent.plan.stage_plans if item.action is PlanAction.RUN}
+        for stage_name, placement in intent.placements.items():
             for kind, descriptor in placement.planner_descriptors.items():
                 self._require_active_descriptor(kind, descriptor)
             for spec in placement.hard_constraints:
@@ -1668,12 +1680,19 @@ class LocalDaemonExecution:
                     raise QueueConflictError(
                         "managed runtime SLURM profile is not active"
                     )
+                admission = self.config.slurm_admission
+                if (
+                    stage_name in running
+                    and admission is not None
+                    and admission.max_reserved_gpus is not None
+                    and _slurm_requested_gpu_count(placement.resource_request) > admission.max_reserved_gpus
+                ):
+                    raise QueueConflictError("SLURM request exceeds GPU reservation budget")
         if self.config.assignment_payload_root_id is None:
             from ._shared_assignment import _AssignmentPayloadRootRequired
             from .shared_execution import SHARED_EXECUTION_SCOPE, scope
             local = self.config.resident_worker_launch_profile
             local_descriptor = None if local is None else ResidentProfileDescriptor.from_dict(local.descriptor)
-            running = {item.stage_name for item in intent.plan.stage_plans if item.action is PlanAction.RUN}
             for stage in intent.pipeline.stages:
                 if stage.name not in running:
                     continue
@@ -1840,10 +1859,11 @@ class LocalDaemonExecution:
         )
 
     def schedule_once(
-        self, admissions: Mapping[str, LocalDaemonAdmission]
+        self, admissions: Mapping[str, LocalDaemonAdmission], *,
+        waiting_outcomes: dict[str, LocalDaemonExecutionOutcome] | None = None,
     ) -> tuple[str, LocalDaemonExecutionOutcome] | None:
         """Select and durably start one assignment from the global ready window."""
-        return _run_progress.schedule_once(self, admissions)
+        return _run_progress.schedule_once(self, admissions, waiting_outcomes=waiting_outcomes)
 
     def advance(self, admission: LocalDaemonAdmission) -> LocalDaemonExecutionOutcome:
         """Compatibility wrapper for one-admission embedded callers."""
@@ -1854,11 +1874,12 @@ class LocalDaemonExecution:
             LocalDaemonAdmissionState.WAITING,
         }:
             return outcome
-        scheduled = self.schedule_once({admission.admission_id: admission})
-        return outcome if scheduled is None else scheduled[1]
+        waiting = {admission.admission_id: outcome} if outcome.state is LocalDaemonAdmissionState.WAITING else {}
+        scheduled = self.schedule_once({admission.admission_id: admission}, waiting_outcomes=waiting)
+        return waiting.get(admission.admission_id, outcome) if scheduled is None else scheduled[1]
 
     def _sync_slurm_agent_references(self) -> None:
-        with sqlite3.connect(self.config.control_database) as conn:
+        with self.config.connect_database(self.config.control_database) as conn:
             for record in self.slurm_assignments.list_unreleased():
                 assignment = record.assignment
                 conn.execute(
@@ -1872,11 +1893,14 @@ class LocalDaemonExecution:
                 )
 
     def _slurm_task(self, record: SlurmStageRecord) -> dict[str, PlainData]:
+        profile = self._slurm_profile(
+            record.assignment.profile_id, record.assignment.profile_configuration_fingerprint,
+        )
         sequence, _ = self.slurm_assignments.agent_evidence(
             record.assignment.assignment_id
         )
         recovery_proof = None
-        with sqlite3.connect(self.config.control_database) as conn:
+        with self.config.connect_database(self.config.control_database) as conn:
             requests = conn.execute(
                 "SELECT request_json FROM recovery_operations WHERE state IN ('pending', 'evidence_confirmed')"
             ).fetchall()
@@ -1916,8 +1940,18 @@ class LocalDaemonExecution:
                 "bootstrap_incarnation_id": record.bootstrap_incarnation,
                 "process_execution_id": record.process_execution_id,
                 "execution_fence": record.fence,
+                **self._slurm_history_proof(record, profile),
             },
         }
+
+    def _slurm_history_proof(
+        self, record: SlurmStageRecord, profile: SlurmReadyStageProfile,
+    ) -> dict[str, PlainData]:
+        if profile.accounting_history is None:
+            return {}
+        submission = self.slurm_submissions.find(record.assignment.operation_id)
+        identity = None if submission is None else submission.accounting_identity
+        return {"accounting_identity": None if identity is None else identity.to_dict()}
 
     def slurm_agent_tasks(
         self, agent_id: str, agent_root_id: str
@@ -2066,6 +2100,12 @@ class LocalDaemonExecution:
         self.slurm_submissions.acknowledge(submission)
         capability = submission.capability
         if capability is not None:
+            profile = self._slurm_profile(assignment.profile_id, assignment.profile_configuration_fingerprint)
+            trusted_user = profile.job_private_file_provider.delivery_kind == "user_private_file_v1"
+            capability_policy = {
+                "delivery_kind": "user_private_file_v1",
+                "expires_at": capability.expires_at,
+            } if trusted_user else {}
             self.slurm_assignments.install_capability(
                 assignment.assignment_id,
                 operation_id=assignment.operation_id,
@@ -2073,6 +2113,7 @@ class LocalDaemonExecution:
                 profile_id=assignment.profile_id,
                 profile_descriptor=assignment.profile_descriptor,
                 verifier=capability.verifier,
+                **capability_policy,
             )
             if submission.state is ReadyStageState.SUBMITTING:
                 self.slurm_assignments.mark_submission_eligible(
@@ -2082,6 +2123,7 @@ class LocalDaemonExecution:
                     profile_id=assignment.profile_id,
                     profile_descriptor=assignment.profile_descriptor,
                     verifier=capability.verifier,
+                    **capability_policy,
                 )
         if submission.state is not ReadyStageState.INTENT and not (
             submission.job_id is None and record.job_id is not None
@@ -2148,7 +2190,7 @@ class LocalDaemonExecution:
                 )
             if evidence.get("provider_released") is True:
                 self.slurm_assignments.release(assignment.assignment_id)
-                with sqlite3.connect(self.config.control_database) as conn:
+                with self.config.connect_database(self.config.control_database) as conn:
                     conn.execute(
                         "UPDATE agent_coordinator_references SET resolved=1 WHERE reference_kind='assignment' AND reference_id=?",
                         (assignment.assignment_id,),
@@ -2387,7 +2429,7 @@ class LocalDaemonExecution:
                 or submission.scheduler_state == "UNKNOWN"
             )
         if self._managed_target_is_remote(request.assignment_id):
-            with sqlite3.connect(self.config.control_database) as conn:
+            with self.config.connect_database(self.config.control_database) as conn:
                 conn.row_factory = sqlite3.Row
                 row = conn.execute(
                     "SELECT state, report_json, session_id FROM remote_assignments "
@@ -2448,8 +2490,7 @@ class LocalDaemonExecution:
         assert self.supervisor is not None
         assignment = cast(ManagedAssignment, binding[0])
         workspace = _ResidentAssignmentWorkspace(
-            self.config.agent_root, assignment.assignment_id
-        )
+            self.config.agent_root, assignment.assignment_id, sqlite_policy=self.config.sqlite_policy, durable_files=self.config.durable_files)
         raw = workspace.supervisor_launch_json()
         if raw is None:
             return "unknown", None
@@ -2690,7 +2731,7 @@ class LocalDaemonExecution:
             raise QueueConflictError("managed recovery target identity conflicts")
         assignment = matches[0][0]
         if remote:
-            with sqlite3.connect(self.config.control_database) as conn:
+            with self.config.connect_database(self.config.control_database) as conn:
                 conn.row_factory = sqlite3.Row
                 row = conn.execute(
                     "SELECT r.*, s.agent_id FROM remote_assignments r "
@@ -2729,7 +2770,7 @@ class LocalDaemonExecution:
         return binding
 
     def _managed_target_is_remote(self, assignment_id: str) -> bool:
-        with sqlite3.connect(self.config.control_database) as conn:
+        with self.config.connect_database(self.config.control_database) as conn:
             return (
                 conn.execute(
                     "SELECT 1 FROM remote_assignments WHERE assignment_id = ?",
@@ -2739,7 +2780,7 @@ class LocalDaemonExecution:
             )
 
     def _remote_process_execution_id(self, assignment_id: str) -> str | None:
-        with sqlite3.connect(self.config.execution_database) as conn:
+        with self.config.connect_database(self.config.execution_database) as conn:
             row = conn.execute(
                 "SELECT payload_json FROM coordinator_events "
                 "WHERE assignment_id = ? AND sequence = 1",
@@ -2756,7 +2797,7 @@ class LocalDaemonExecution:
         return value if isinstance(value, str) else None
 
     def _remote_result_is_complete(self, assignment_id: str) -> bool:
-        with sqlite3.connect(self.config.control_database) as conn:
+        with self.config.connect_database(self.config.control_database) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 "SELECT report_json FROM remote_assignments WHERE assignment_id = ?",
@@ -2795,7 +2836,7 @@ class LocalDaemonExecution:
             process_execution_id=request.process_execution_id,
         )
         encoded = json.dumps(control.value(), sort_keys=True, separators=(",", ":"))
-        with sqlite3.connect(self.config.control_database) as conn:
+        with self.config.connect_database(self.config.control_database) as conn:
             conn.row_factory = sqlite3.Row
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
@@ -2878,8 +2919,8 @@ class LocalDaemonExecution:
             and evidence.get("execution_fence") == request.execution_fence
         )
 
-    @staticmethod
     def _slurm_recovery_proof(
+        self,
         request: RecoverUnknownAssignment,
         record: SlurmStageRecord,
         profile: SlurmReadyStageProfile,
@@ -2898,6 +2939,7 @@ class LocalDaemonExecution:
             "bootstrap_incarnation_id": record.bootstrap_incarnation,
             "process_execution_id": request.process_execution_id,
             "execution_fence": request.execution_fence,
+            **self._slurm_history_proof(record, profile),
         }
 
     def _validate_persisted_recovery_evidence(
@@ -2947,8 +2989,7 @@ class LocalDaemonExecution:
 
             assert self.config.agent_root is not None
             raw = _ResidentAssignmentWorkspace(
-                self.config.agent_root, request.assignment_id
-            ).supervisor_launch_json()
+                self.config.agent_root, request.assignment_id, sqlite_policy=self.config.sqlite_policy, durable_files=self.config.durable_files).supervisor_launch_json()
             if raw is None:
                 raise QueueConflictError(
                     "managed recovery launch evidence is unavailable"
@@ -3179,6 +3220,11 @@ class LocalDaemonExecution:
                 issuer_epoch=self.coordinator_epoch,
                 max_parallel_stages=intent.max_parallel_stages,
                 max_profile_outstanding=profile.max_outstanding,
+                requested_gpu_count=_slurm_requested_gpu_count(record.placement.resource_request),
+                max_reserved_gpus=(
+                    None if self.config.slurm_admission is None
+                    else self.config.slurm_admission.max_reserved_gpus
+                ),
             )
             self._sync_slurm_agent_references()
             authority.bind_prepared_attempt(
@@ -3191,6 +3237,8 @@ class LocalDaemonExecution:
             )
             self._drive_local_slurm(self.slurm_assignments.read(assignment_id))
             submission = self.slurm_submissions.find(operation_id)
+        except SlurmAdmissionDeferred as exc:
+            return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.WAITING, exc.code)
         except SlurmResourceMappingError:
             return LocalDaemonExecutionOutcome(
                 LocalDaemonAdmissionState.WAITING,
@@ -3254,7 +3302,7 @@ class LocalDaemonExecution:
             if self.daemon is None
             else self.daemon._agent_policy
         )
-        with sqlite3.connect(self.config.control_database) as conn:
+        with self.config.connect_database(self.config.control_database) as conn:
             rows = conn.execute(
                 "SELECT s.agent_id, s.agent_root_id, o.offer_json FROM agent_sessions s JOIN agent_offers o ON o.session_id=s.session_id "
                 "WHERE s.state='ACTIVE' AND s.policy_revision=? AND o.current=1 AND o.coordinator_epoch=? AND o.expires_at>=? ORDER BY s.agent_id",
@@ -3398,6 +3446,15 @@ class LocalDaemonExecution:
     ) -> _CoordinatorReloadPlan:
         """Build the complete replacement epoch before any durable mutation."""
 
+        if replacement.slurm_schema_version != self.slurm_assignments.schema_version:
+            raise QueueConflictError("changing SLURM execution schema requires a stopped-owner migration")
+        admission = replacement.slurm_admission
+        if (
+            admission is not None
+            and admission.max_reserved_gpus is not None
+            and self.slurm_assignments.reserved_gpu_count() > admission.max_reserved_gpus
+        ):
+            raise QueueConflictError("SLURM GPU budget is below retained reservations")
         if (
             replacement.agent_root is not None
             and replacement.slurm_profiles
@@ -3468,7 +3525,7 @@ class LocalDaemonExecution:
             )
         )
         if retired_capacity:
-            with sqlite3.connect(self.config.execution_database) as conn:
+            with self.config.connect_database(self.config.execution_database) as conn:
                 retired_capacity = not any(
                     conn.execute(
                         "SELECT 1 FROM coordinator_assignments WHERE agent_id=? AND state!='released' LIMIT 1",
@@ -3483,7 +3540,7 @@ class LocalDaemonExecution:
                     if self.journal is None
                     else self.journal.retained_claim_commands()
                 )
-                with sqlite3.connect(self.config.execution_database) as conn:
+                with self.config.connect_database(self.config.execution_database) as conn:
                     retained_assignment = conn.execute(
                         "SELECT 1 FROM coordinator_assignments "
                         "WHERE state != 'released' LIMIT 1"
@@ -3506,7 +3563,7 @@ class LocalDaemonExecution:
                 replacement.execution_database,
                 replacement_capacity,
                 _allow_initialize=False,
-            )
+             sqlite_policy=replacement.sqlite_policy)
             try:
                 replacement_coordinator._open_existing()
             except ManagedLocalError as exc:
@@ -3724,7 +3781,7 @@ class LocalDaemonExecution:
             LocalDaemonAdmissionState.BLOCKED.value,
         )
         try:
-            with sqlite3.connect(self.config.control_database) as conn:
+            with self.config.connect_database(self.config.control_database) as conn:
                 rows = tuple(
                     conn.execute(
                         "SELECT run_uri, intent_digest FROM managed_admissions "
@@ -4146,7 +4203,7 @@ class LocalDaemonExecution:
     def _attempt_id(self, assignment_id: str) -> str:
         """Read the immutable authority attempt identity from the coordinator owner."""
 
-        with sqlite3.connect(self.coordinator.path) as conn:
+        with self.config.connect_database(self.coordinator.path) as conn:
             row = conn.execute(
                 "SELECT identity_json FROM coordinator_assignments WHERE assignment_id = ?",
                 (assignment_id,),
@@ -4178,7 +4235,7 @@ class LocalDaemonExecution:
 
         settling = False
         changed_sessions: set[str] = set()
-        with sqlite3.connect(self.config.control_database) as conn:
+        with self.config.connect_database(self.config.control_database) as conn:
             conn.row_factory = sqlite3.Row
             conn.execute("BEGIN IMMEDIATE")
             if (
@@ -4400,7 +4457,7 @@ class LocalDaemonExecution:
             profile.profile_id: profile for profile in self.config.remote_profiles
         }
         configured_containers = {item.policy_id: item for item in self.config.container_capabilities}
-        with sqlite3.connect(self.config.control_database) as conn:
+        with self.config.connect_database(self.config.control_database) as conn:
             conn.row_factory = sqlite3.Row
             rows = tuple(
                 conn.execute(
@@ -5119,8 +5176,7 @@ class LocalDaemonExecution:
                 suspend_requested=(
                     None if self.daemon is None else self.daemon._stop.is_set
                 ),
-                execution_started=started,
-            )
+                execution_started=started, durable_files=self.config.durable_files)
 
         prior = self._local_assignment_futures.get(assignment.assignment_id)
         if prior is None:
@@ -5139,7 +5195,7 @@ class LocalDaemonExecution:
         return True
 
     def _remote_delivery_retained(self, assignment_id: str) -> bool:
-        with sqlite3.connect(self.config.control_database) as conn:
+        with self.config.connect_database(self.config.control_database) as conn:
             row = conn.execute(
                 "SELECT 1 FROM remote_assignments r JOIN agent_deliveries d "
                 "ON d.assignment_id = r.assignment_id "
@@ -5514,6 +5570,11 @@ class LocalDaemonExecution:
             cluster=cluster,
             incarnation=incarnation,
             capability=capability,
+            accepted_time=(
+                self._daemon_owner()._accepted_snapshot()[0]
+                if profile.job_private_file_provider.delivery_kind == "user_private_file_v1"
+                else None
+            ),
         )
         return registered
 
@@ -5562,7 +5623,7 @@ class LocalDaemonExecution:
             raise QueueConflictError("SLURM grant requires durable inputs")
         if record.fence is not None:
             return record.fence
-        with sqlite3.connect(self.config.control_database) as conn:
+        with self.config.connect_database(self.config.control_database) as conn:
             conn.execute("BEGIN IMMEDIATE")
             if action_attempt_cancelled(conn, record.assignment.run_uri, record.assignment.attempt_id):
                 raise QueueConflictError("SLURM assignment run is cancelling")
@@ -5599,7 +5660,7 @@ class LocalDaemonExecution:
             "released",
         }:
             raise QueueConflictError("SLURM start permit fence conflicts")
-        with sqlite3.connect(self.config.control_database) as conn:
+        with self.config.connect_database(self.config.control_database) as conn:
             conn.execute("BEGIN IMMEDIATE")
             if action_attempt_cancelled(conn, record.assignment.run_uri, record.assignment.attempt_id):
                 conn.commit()
@@ -5889,7 +5950,7 @@ class LocalDaemonExecution:
             raise QueueServiceError("SLURM bootstrap principal is not authorized")
 
     def _remote_assignment_record(self, assignment_id: str) -> sqlite3.Row:
-        with sqlite3.connect(self.config.control_database) as conn:
+        with self.config.connect_database(self.config.control_database) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 "SELECT * FROM remote_assignments WHERE assignment_id = ?",
@@ -5931,15 +5992,15 @@ class LocalDaemonExecution:
         )
 
     def _action_attempt_needed(self, run_uri: str, attempt_id: str) -> bool:
-        with sqlite3.connect(self.config.control_database) as conn:
+        with self.config.connect_database(self.config.control_database) as conn:
             return action_attempt_needed(conn, run_uri, attempt_id)
 
     def _attempt_cancel_requested(self, run_uri: str, attempt_id: str) -> bool:
-        with sqlite3.connect(self.config.control_database) as conn:
+        with self.config.connect_database(self.config.control_database) as conn:
             return action_attempt_cancelled(conn, run_uri, attempt_id)
 
     def _run_cancellation_operation(self, run_uri: str) -> str | None:
-        with sqlite3.connect(self.config.control_database) as conn:
+        with self.config.connect_database(self.config.control_database) as conn:
             row = conn.execute(
                 "SELECT cancellation_operation_id FROM managed_admissions "
                 "WHERE run_uri = ?",
@@ -5960,7 +6021,7 @@ class LocalDaemonExecution:
         if not self.config.execution_database.is_file():
             return set()
         try:
-            with sqlite3.connect(self.config.execution_database) as conn:
+            with self.config.connect_database(self.config.execution_database) as conn:
                 rows = conn.execute(
                     "SELECT assignment_id FROM coordinator_assignments "
                     "WHERE state IN ("
@@ -5971,7 +6032,7 @@ class LocalDaemonExecution:
                 capacity_holding = {str(row[0]) for row in rows}
             remote_assignment_ids: set[str] = set()
             if self.config.control_database.is_file():
-                with sqlite3.connect(self.config.control_database) as conn:
+                with self.config.connect_database(self.config.control_database) as conn:
                     table = conn.execute(
                         "SELECT 1 FROM sqlite_master WHERE type = 'table' "
                         "AND name = 'remote_assignments'"
@@ -6174,7 +6235,7 @@ def build_local_daemon_owner_views(
     agent_revision: int | None = None
     admission_observed_at = clock()
     try:
-        with _connect_existing_sqlite(config.execution_database) as conn:
+        with _connect_existing_sqlite(config.execution_database, sqlite_policy=config.sqlite_policy) as conn:
             conn.execute("BEGIN")
             _verify_owner_store_binding(
                 conn, role="coordinator", stable_id=coordinator_id
@@ -6336,7 +6397,7 @@ def build_local_daemon_owner_views(
     execution_observed_at = clock()
     if config.agent_root is not None and agent_id is not None:
         try:
-            with _connect_existing_sqlite(config.agent_journal) as conn:
+            with _connect_existing_sqlite(config.agent_journal, sqlite_policy=config.sqlite_policy) as conn:
                 conn.execute("BEGIN")
                 _verify_owner_store_binding(
                     conn, role="local-agent", stable_id=agent_id

@@ -328,6 +328,9 @@ def _bind(
     # Pre-initialized native roots supply their real identity without requiring
     # an external creation binding. Recheck under the shared binding lock below.
     check_owner()
+    from loom.queue._storage_upgrade_state import require_storage_upgrade_ready
+    for name, config in configs.items():
+        require_storage_upgrade_ready(config.daemon.coordinator_root if name == "coordinator" else config.client.agent_root)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     lock_path = path.with_name(path.name + ".lock")
     descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
@@ -412,9 +415,8 @@ def _bind(
                 ids = {"agent": _open_root(root, role="local-agent")}
             if retained["ids"] is not None and retained["ids"] != ids:
                 raise QueueConflictError("bound service identity conflicts")
-            with sqlite3.connect(
-                f"{(role_root / 'control.sqlite').as_uri()}?mode=ro", uri=True
-            ) as conn:
+            from loom._sqlite_inspection import inspect_sqlite_database
+            with inspect_sqlite_database(role_root / "control.sqlite") as conn:
                 existing = conn.execute(
                     "SELECT value FROM root_metadata WHERE key = 'service_lifetime'"
                 ).fetchone()
@@ -432,7 +434,11 @@ def _bind(
                 role_lock = None
             if role_lock is not None:
                 try:
-                    with sqlite3.connect(role_root / "control.sqlite") as conn:
+                    require_storage_upgrade_ready(role_root, entering=True)
+                    from loom._sqlite_policy import connect_existing
+                    policy = config.daemon.sqlite_policy if name == "coordinator" else config.client.sqlite_policy
+                    with (sqlite3.connect(role_root / "control.sqlite") if policy is None else
+                          connect_existing(role_root / "control.sqlite", policy=policy, isolation_level="")) as conn:
                         existing = conn.execute(
                             "SELECT value FROM root_metadata WHERE key = 'service_lifetime'"
                         ).fetchone()

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from ._storage_policy import parse_storage_policy
+from ._slurm_admission import parse_slurm_admission, submit_interval
+from ._slurm_observation import parse_slurm_observation_policy
+
 from contextlib import contextmanager
-import sqlite3
 
 from .operations import OperatorObservation
 
@@ -179,6 +182,7 @@ class CoordinatorServiceConfig:
     local_agent: LocalAgentServiceConfig | None = None
     _scheduling_source: str | None = field(default=None, repr=False, compare=False)
     event_observers: Any = field(default=None, repr=False, compare=False)
+    _slurm_source: str | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,6 +240,15 @@ class AgentSpec:
     # Preserve the published fingerprint projections' authored representation.
     _payload: Mapping[str, object] = field(repr=False, compare=False)
 
+    @property
+    def storage(self):
+        return parse_storage_policy(self.declarations.get("storage"))
+
+    @property
+    def sqlite_policy(self):
+        storage = self.storage
+        return None if storage is None else storage.sqlite
+
     def __post_init__(self) -> None:
         object.__setattr__(self, "declarations", freeze_plain_data(self.declarations))
         object.__setattr__(self, "_payload", freeze_plain_data(self._payload))
@@ -269,10 +282,11 @@ def _read_coordinator_declaration(path, *, env_file=None):
             "agent_server",
             "authority",
         },
-        {"scheduling", "slurm_profiles", "preparation", "event_sinks", "shared_roots", "assignment_payload_root_id", "container_capabilities"},
+        {"scheduling", "slurm_profiles", "preparation", "event_sinks", "shared_roots", "assignment_payload_root_id", "container_capabilities", "storage", "slurm_admission"},
         "coordinator service config",
     )
     _header(payload, "loom.coordinator-service")
+    parse_storage_policy(payload.get("storage"))
     payload = _normalize_coordinator_payload(payload)
     return source, environment_path, payload
 
@@ -333,7 +347,8 @@ def load_coordinator_service_config(
 
     During reload, pass the currently installed service snapshot as ``current``.
     An unchanged scheduling declaration from the same protected source reuses
-    its existing component instances and priority resolver. Changed declarations
+    its existing component instances and priority resolver. Unchanged protected
+    Slurm declarations likewise retain the existing profile instances. Changed declarations
     are constructed normally and remain subject to the daemon's retained-identity
     checks. This does not activate the replacement or bypass the reload gate.
     """
@@ -350,7 +365,8 @@ def load_coordinator_service_config(
         payload, base, local_agent
     )
     authority_factory = _coordinator_authority_factory(
-        _mapping(payload, "authority"), base, deployment_root=root
+        _mapping(payload, "authority"), base, deployment_root=root,
+        storage=parse_storage_policy(payload.get("storage")),
     )
     coordinator_identity = _coordinator_immutable_projection(payload)
     if "state_root" in _mapping(payload, "authority"):
@@ -395,7 +411,22 @@ def load_coordinator_service_config(
         scheduling, priority_resolver = _scheduling_composition(
             payload.get("scheduling")
         )
-    slurm_profiles = _slurm_profile_composition(payload.get("slurm_profiles"))
+    slurm_source = json.dumps(
+        payload.get("slurm_profiles"),
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    if (
+        current is not None
+        and current.source_path == source
+        and current.environment_path == environment_path
+        and current.immutable_fingerprint == fingerprint
+        and current._slurm_source == slurm_source
+    ):
+        slurm_profiles = current.daemon.slurm_profiles
+    else:
+        slurm_profiles = _slurm_profile_composition(payload.get("slurm_profiles"))
     server_value = payload["agent_server"]
     server = (
         None
@@ -403,6 +434,8 @@ def load_coordinator_service_config(
         else _agent_server(_mapping_value(server_value, "agent_server"), base)
     )
     daemon = LocalDaemonConfig(
+        slurm_admission=parse_slurm_admission(payload.get("slurm_admission")),
+        storage=parse_storage_policy(payload.get("storage")),
         shared_roots=cast(Mapping[str, PlainData], payload.get("shared_roots", {})),
         assignment_payload_root_id=cast(str | None, payload.get("assignment_payload_root_id")),
         coordinator_root=root / "coordinator",
@@ -472,6 +505,7 @@ def load_coordinator_service_config(
         local_agent=local_agent,
         _scheduling_source=scheduling_source,
         event_observers=observers,
+        _slurm_source=slurm_source,
     )
 
 
@@ -523,6 +557,9 @@ def read_agent_spec(
             "slurm_profiles",
             "max_concurrent_assignments",
             "container_policies",
+            "storage",
+            "slurm_submit_interval_seconds",
+            "slurm_observation_policy",
         },
         "outbound agent service config",
     )
@@ -540,6 +577,7 @@ def read_agent_spec(
         raise QueueConfigError(
             "max_concurrent_assignments above one is unsupported with slurm_profiles"
         )
+    parse_storage_policy(payload.get("storage"))
     payload = _normalize_outbound_agent_payload(payload)
     base = source.parent
     registration = _outbound_registration(payload)
@@ -759,6 +797,9 @@ def qualify_agent_spec(
         if not callable(provider_factory):
             raise QueueConfigError("remote provider factory target is invalid")
     client = AgentTlsClientConfig(
+        slurm_submit_interval_seconds=submit_interval(payload.get("slurm_submit_interval_seconds")),
+        slurm_observation_policy=parse_slurm_observation_policy(payload.get("slurm_observation_policy")),
+        storage=parse_storage_policy(payload.get("storage")),
         max_concurrent_assignments=max_concurrent_assignments,
         url=_string(payload, "url"),
         server_ca_path=_path(payload, "server_ca_path", base),
@@ -841,6 +882,7 @@ def run_outbound_agent_service(
     trusted_config_loader: Callable[[], OutboundAgentServiceConfig] | None = None,
     lifetime: str | None = None,
     expected_coordinator_id: str | None = None,
+    start_held: bool = False,
 ) -> None:
     """Progress bounded resident assignments with independent control receipts.
 
@@ -876,7 +918,7 @@ def run_outbound_agent_service(
         _outbound_service_steps(
             config, stop=stop, trusted_config_loader=trusted_config_loader,
             lifetime=lifetime, expected_coordinator_id=expected_coordinator_id,
-            observing=observing,
+            observing=observing, start_held=start_held,
         ),
         controls(),
     )
@@ -890,6 +932,7 @@ def _outbound_service_steps(
     lifetime: str | None = None,
     expected_coordinator_id: str | None = None,
     observing: list[LocalDaemonAgentHttpClient | None],
+    start_held: bool = False,
 ):
     """Run a foreground agent, preserving supervised work on service stop.
 
@@ -951,6 +994,7 @@ def _outbound_service_steps(
         trusted_config_loader=None if trusted_config_loader is None else load_client,
         trusted_promotion_loader=load_promotion,
         prepare_role_reload=prepare_install,
+        start_held=start_held,
     )
     client._service_progress = True
     client._suspend_requested = stop.is_set
@@ -959,8 +1003,14 @@ def _outbound_service_steps(
 
     if active.client.agent_root is not None:
         try:
-            lifetime = retained_lifetime(active.client.agent_root, lifetime)
-            record_process(active.client.agent_root, stopped=False)
+            lifetime = retained_lifetime(
+                active.client.agent_root, lifetime,
+                sqlite_policy=active.client.sqlite_policy,
+            )
+            record_process(
+                active.client.agent_root, stopped=False,
+                sqlite_policy=active.client.sqlite_policy,
+            )
         except BaseException:
             client.close()
             raise
@@ -1100,6 +1150,9 @@ def _outbound_service_steps(
             while client._slurm_agent is not None and client._slurm_agent.has_retained_work():
                 if stop.is_set():
                     return
+                if client._service_control_due:
+                    client._service_control_due = False
+                    yield from _steps(client.poll_control, session.session_id)
                 yield from _steps(client.drive_slurm_jobs)
                 yield from _delay(0.05)
             if lifetime != "run" and active.client.agent_root is not None:
@@ -1108,6 +1161,7 @@ def _outbound_service_steps(
                     stopped=False,
                     coordinator_id=coordinator_id,
                     session_id=session.session_id,
+                    sqlite_policy=active.client.sqlite_policy,
                 )
             while not stop.is_set():
                 for reference, view in tuple(assignments.items()):
@@ -1145,6 +1199,7 @@ def _outbound_service_steps(
                                 stopped=True,
                                 coordinator_id=coordinator_id,
                                 session_id=session.session_id,
+                                sqlite_policy=active.client.sqlite_policy,
                             )
                         return
                     if active.client.agent_root is not None:
@@ -1153,6 +1208,7 @@ def _outbound_service_steps(
                             stopped=False,
                             coordinator_id=coordinator_id,
                             session_id=session.session_id,
+                            sqlite_policy=active.client.sqlite_policy,
                         )
                 if client._service_control_due:
                     client._service_control_due = False
@@ -1172,6 +1228,14 @@ def _outbound_service_steps(
                 if session is None:
                     raise QueueServiceError("agent session ended without retirement")
                 yield from _steps(client.drive_slurm_jobs)
+                # A scheduler step can yield while the receipt lane records a
+                # drain. Apply it before opening another assignment poll.
+                if client._service_control_due:
+                    client._service_control_due = False
+                    yield from _steps(client.poll_control, session.session_id)
+                    session = client.active_session()
+                    if session is None:
+                        raise QueueServiceError("agent session ended without retirement")
                 if client._drained or client._restart_with_retained_work or len(journal.unresolved_assignment_references()) >= active.client.max_concurrent_assignments:
                     yield from _delay(0.05)
                     continue
@@ -1230,6 +1294,7 @@ def _open_outbound_agent(
     prepare_role_reload: (
         Callable[[AgentTlsClientConfig], Callable[[], None]] | None
     ) = None,
+    start_held: bool = False,
 ) -> LocalDaemonAgentHttpClient:
     try:
         return LocalDaemonAgentHttpClient(
@@ -1237,6 +1302,7 @@ def _open_outbound_agent(
             trusted_config_loader=trusted_config_loader,
             trusted_promotion_loader=trusted_promotion_loader,
             prepare_role_reload=prepare_role_reload,
+            start_held=start_held,
         )
     except QueueServiceError as exc:
         if config.external_supervisor or str(exc) != "managed supervisor endpoint is unavailable":
@@ -1247,6 +1313,7 @@ def _open_outbound_agent(
         _read_remote_agent_root_id(config.agent_root),
         tuple(item.launch_profile for item in config.resident_profiles),
         config.container_policies,
+        storage=config.storage,
     )
     try:
         AgentProcessSupervisorService.start_empty_initialized(
@@ -1259,6 +1326,7 @@ def _open_outbound_agent(
         trusted_config_loader=trusted_config_loader,
         trusted_promotion_loader=trusted_promotion_loader,
         prepare_role_reload=prepare_role_reload,
+        start_held=start_held,
     )
 
 
@@ -1353,6 +1421,9 @@ def _normalize_coordinator_payload(
     """Normalize role-owned numeric values before identity projections."""
 
     normalized = dict(payload)
+    admission = parse_slurm_admission(payload.get("slurm_admission"))
+    if admission is not None:
+        normalized["slurm_admission"] = admission.to_dict()
     normalized["poll_interval_seconds"] = _positive_number(
         payload, "poll_interval_seconds"
     )
@@ -1453,6 +1524,12 @@ def _normalize_outbound_agent_payload(
     """Normalize outbound role values before identity projections."""
 
     normalized = dict(payload)
+    interval = submit_interval(payload.get("slurm_submit_interval_seconds"))
+    if interval is not None:
+        normalized["slurm_submit_interval_seconds"] = interval
+    observation = parse_slurm_observation_policy(payload.get("slurm_observation_policy"))
+    if observation is not None:
+        normalized["slurm_observation_policy"] = observation.to_dict()
     normalized["reconnect_seconds"] = _positive_number(payload, "reconnect_seconds")
     normalized["resident_profiles"] = [
         _normalize_resident_profile(
@@ -1642,6 +1719,7 @@ def _coordinator_authority_factory(
     base: Path,
     *,
     deployment_root: Path,
+    storage=None,
 ) -> CoordinatorAuthorityFactory:
     """Construct one explicit trusted authority factory for this role.
 
@@ -1665,10 +1743,13 @@ def _coordinator_authority_factory(
                     EmbeddedCoordinatorAuthorityFactory(
                         state_root=_path(value, "state_root", base),
                         deployment_root=deployment_root,
+                        sqlite_policy=None if storage is None else storage.sqlite,
                     ),
                 )
             except AuthorityStoreError as exc:
                 raise QueueConfigError(str(exc)) from exc
+        if storage is not None:
+            raise QueueConfigError("explicit storage requires an embedded authority state_root")
         from loom.pipeline.stores.coordinator_authority import (
             embedded_coordinator_authority,
         )
@@ -1895,6 +1976,8 @@ def _slurm_profile_declarations(value: object) -> tuple[Mapping[str, object], ..
         "bootstrap_executable",
         "bootstrap_config_path",
         "time",
+        "accounting_history",
+        "requeue",
     }
     declarations = []
     for index, item in enumerate(value):
@@ -1924,6 +2007,7 @@ def _coordinator_immutable_projection(
         }
     )
     return {
+        **({"storage": parse_storage_policy(payload["storage"]).to_dict()} if payload.get("storage") is not None else {}),
         "schema_version": payload["schema_version"],
         "kind": payload["kind"],
         "machine_id": payload["machine_id"],
@@ -1946,6 +2030,7 @@ def _outbound_immutable_projection(
             }
         )
     return {
+        **({"storage": parse_storage_policy(payload["storage"]).to_dict()} if payload.get("storage") is not None else {}),
         "schema_version": payload["schema_version"],
         "kind": payload["kind"],
         "url": payload["url"],
@@ -1969,6 +2054,7 @@ def _coordinator_active_projection(
         dict[str, object],
         _without_paths(
             {
+                **({"slurm_admission": payload["slurm_admission"]} if payload.get("slurm_admission") is not None else {}),
                 "poll_interval_seconds": payload["poll_interval_seconds"],
                 "max_accepted_time_step_seconds": payload[
                     "max_accepted_time_step_seconds"
@@ -2072,6 +2158,8 @@ def _outbound_active_projection(payload: Mapping[str, object]) -> dict[str, obje
             {
                 "registration": payload["registration"],
                 "reconnect_seconds": payload["reconnect_seconds"],
+                **({"slurm_submit_interval_seconds": payload["slurm_submit_interval_seconds"]} if payload.get("slurm_submit_interval_seconds") is not None else {}),
+                **({"slurm_observation_policy": payload["slurm_observation_policy"]} if payload.get("slurm_observation_policy") is not None else {}),
                 "resident_profiles": profiles,
                 **({"container_policy_fingerprints": [policy.fingerprint for policy in _submitted_container_policies(payload)]}
                    if payload.get("container_policies") else {}),
@@ -2627,8 +2715,9 @@ def inspect_role_declaration(
         container_identities = [cast(PlainData, policy.capability.to_dict()) for policy in _submitted_container_policies(spec.declarations)]
     else:
         source, _, payload, _ = _load_protected_config(path, env_file=env_file)
-        _required_allowed(payload, {"schema_version", "kind", "deployment_root", "run_store_root", "machine_id", "poll_interval_seconds", "max_accepted_time_step_seconds", "local_agent", "remote_profiles", "agent_policy", "agent_server", "authority"}, {"scheduling", "slurm_profiles", "preparation", "event_sinks", "shared_roots", "assignment_payload_root_id", "container_capabilities"}, "coordinator service config")
+        _required_allowed(payload, {"schema_version", "kind", "deployment_root", "run_store_root", "machine_id", "poll_interval_seconds", "max_accepted_time_step_seconds", "local_agent", "remote_profiles", "agent_policy", "agent_server", "authority"}, {"scheduling", "slurm_profiles", "preparation", "event_sinks", "shared_roots", "assignment_payload_root_id", "container_capabilities", "storage", "slurm_admission"}, "coordinator service config")
         _header(payload, "loom.coordinator-service")
+        parse_storage_policy(payload.get("storage"))
         normalized = dict(_normalize_coordinator_payload(payload))
         if payload["agent_server"] is not None:
             _agent_server(_mapping(payload, "agent_server"), source.parent)
@@ -2728,9 +2817,11 @@ def service_replacement_guard(service, expected_root_id: str, *, recovery_result
             if spec.declaration_digest != service.client.declaration_digest:
                 raise QueueConflictError("replacement declaration changed after qualification")
             immutable, active = service.immutable_fingerprint, service.active_fingerprint
+        if spec.storage is not None:
+            spec.storage.require_owner()
         journal = _RemoteAgentJournal(spec.agent_root,
             expected_configuration_fingerprint=immutable,
-            expected_active_configuration_fingerprint=active)
+            expected_active_configuration_fingerprint=active, sqlite_policy=spec.sqlite_policy)
         try:
             if binding is not None and read_agent_declaration_binding(
                 spec.agent_root, spec.declaration_digest
@@ -2772,7 +2863,7 @@ def service_replacement_guard(service, expected_root_id: str, *, recovery_result
                     role="coordinator", agent_results=recovery_results,
                 )
             else:
-                with sqlite3.connect(config.control_database) as conn:
+                with config.connect_database(config.control_database) as conn:
                     if _retained_coordinator_operations(conn):
                         raise QueueConflictError("replacement requires settled coordinator work")
             yield

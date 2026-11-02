@@ -43,6 +43,30 @@ def test_sqlite_repository_persists_items_across_restart(tmp_path: Path) -> None
     assert schema_version == str(QUEUE_DB_SCHEMA_VERSION)
 
 
+def test_explicit_rollback_policy_retains_replay_without_recreating_lost_state(tmp_path):
+    from loom._sqlite_policy import SQLitePolicy
+    from loom.queue.errors import QueueStorageError
+
+    path = tmp_path / "queue.sqlite"
+    policy = SQLitePolicy("delete", "extra", 30000)
+    repository = SQLiteQueueRepository(path, sqlite_policy=policy)
+    item = _item("item-1", "gpu-pool", "2020-01-01T00:00:00Z")
+    repository.enqueue(item)
+    reopened = SQLiteQueueRepository(path, sqlite_policy=policy)
+    assert reopened.admit(item).disposition is QueueEnqueueDisposition.SUBMISSION_REPLAY
+    with reopened._connect() as conn:
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+        assert conn.execute("PRAGMA synchronous").fetchone()[0] == 3
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 30000
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        conn.execute("SELECT 1")
+    assert SQLiteQueueRepository.open_read_only(path).read_item("item-1") == item
+    path.unlink()
+    with pytest.raises(QueueStorageError):
+        reopened.read_item("item-1")
+    assert not path.exists()
+
+
 def test_sqlite_repository_classifies_exact_replay_and_changed_id_conflict(
     tmp_path: Path,
 ) -> None:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from loom._sqlite_policy import SQLitePolicy, connect_existing, initialize_database
+
 import hashlib
 import json
 import sqlite3
@@ -529,16 +531,18 @@ class SQLiteStageWorkStore:
     """Versioned SQLite projection store with semantic, non-CRUD operations."""
 
     def __init__(
-        self, database_path: str | Path, *, _allow_initialize: bool = True
+        self, database_path: str | Path, *, _allow_initialize: bool = True,
+        sqlite_policy: SQLitePolicy | None = None
     ) -> None:
         self.path = Path(database_path)
-        self._allow_initialize = _allow_initialize
+        self._sqlite_policy = sqlite_policy
+        self._allow_initialize = _allow_initialize and sqlite_policy is None
 
     def _initialize(self) -> None:
         """Create this store's current schema at an explicit owner boundary."""
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with _sqlite_connection(self.path) as conn:
+        with _sqlite_connection(self.path, sqlite_policy=self._sqlite_policy) as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
                 exists = conn.execute(
@@ -776,7 +780,7 @@ class SQLiteStageWorkStore:
             self.path.parent.mkdir(parents=True, exist_ok=True)
         initialize = not self.path.exists()
         with _sqlite_connection(
-            self.path, require_existing=not self._allow_initialize
+            self.path, sqlite_policy=self._sqlite_policy, require_existing=not self._allow_initialize
         ) as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
@@ -793,7 +797,7 @@ class SQLiteStageWorkStore:
     @contextmanager
     def _read_connection(self) -> Iterator[sqlite3.Connection]:
         with _sqlite_connection(
-            self.path, require_existing=not self._allow_initialize
+            self.path, sqlite_policy=self._sqlite_policy, require_existing=not self._allow_initialize
         ) as conn:
             _raise_for_store_schema(conn)
             yield conn
@@ -1432,17 +1436,21 @@ def _ready_window_key(
 
 @contextmanager
 def _sqlite_connection(
-    path: Path, *, require_existing: bool = False
+    path: Path, *, require_existing: bool = False, sqlite_policy: SQLitePolicy | None = None
 ) -> Iterator[sqlite3.Connection]:
     target: str | Path = (
         f"{path.resolve().as_uri()}?mode=rw" if require_existing else path
     )
-    conn = sqlite3.connect(
-        target,
-        timeout=30.0,
-        isolation_level=None,
-        uri=require_existing,
-    )
+    if sqlite_policy is None:
+        conn = sqlite3.connect(
+            target,
+            timeout=30.0,
+            isolation_level=None,
+            uri=require_existing,
+        )
+    else:
+        connect = connect_existing if require_existing else initialize_database
+        conn = connect(path, policy=sqlite_policy, isolation_level=None)
     conn.row_factory = sqlite3.Row
     try:
         yield conn

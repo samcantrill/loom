@@ -2,25 +2,82 @@
 
 from __future__ import annotations
 
+import math
+import os
 import re
 import shutil
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, cast
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Protocol, cast
+
+if TYPE_CHECKING:
+    import subprocess
 
 from loom.serialization import PlainData, load_versioned_document
 from loom.serialization.errors import SchemaVersionError
 from loom.timestamps import parse_timestamp, utc_timestamp
 
 from .errors import (
+    SlurmCommandOutputLimitError,
     SlurmCommandUnavailableError,
     SlurmJobIdParseError,
     SlurmPlanningError,
 )
+from .history import SlurmAccountingIdentity, accounting_batch_argv, accounting_query_argv
 
 SLURM_COMMAND_RESULT_SCHEMA_VERSION = 1
 MAX_PERSISTED_COMMAND_OUTPUT_CHARS = 4096
+
+_CLIENT_ENVIRONMENT_KEYS = frozenset({
+    "PATH", "TMPDIR", "TMP", "TEMP", "LC_ALL", "LANG", "TZ", "LD_LIBRARY_PATH",
+})
+
+
+def _client_environment(value: object) -> Mapping[str, str] | None:
+    """Freeze explicit non-secret client settings without inspecting the host."""
+    if value is None:
+        return None
+    if not isinstance(value, Mapping) or "PATH" not in value:
+        raise SlurmPlanningError("client_environment requires an explicit PATH mapping")
+    selected: dict[str, str] = {}
+    for key, item in value.items():
+        if not isinstance(key, str) or key not in _CLIENT_ENVIRONMENT_KEYS:
+            raise SlurmPlanningError("client_environment contains an unsupported variable")
+        if (
+            not isinstance(item, str) or not item
+            or any(ord(char) < 32 or ord(char) == 127 for char in item)
+        ):
+            raise SlurmPlanningError(f"client_environment {key} requires nonempty literal text")
+        paths = item.split(os.pathsep) if key in {"PATH", "LD_LIBRARY_PATH"} else (
+            [item] if key in {"TMPDIR", "TMP", "TEMP"} else []
+        )
+        if any(not Path(path).is_absolute() or ".." in Path(path).parts for path in paths):
+            raise SlurmPlanningError(f"client_environment {key} requires absolute paths without '..'")
+        selected[key] = item
+    return MappingProxyType(selected)
+
+
+def ready_stage_client_environment(runner: SlurmCommandRunner) -> Mapping[str, str] | None:
+    """Read an optional client selection without changing legacy runner contracts."""
+    return _client_environment(getattr(runner, "client_environment", None))
+
+
+def _effective_client_environment(
+    selected: Mapping[str, str] | None,
+    requested: Mapping[str, str] | None,
+    *,
+    accounting: bool,
+) -> dict[str, str] | None:
+    if selected is None:
+        return None if requested is None else dict(requested)
+    if requested:
+        raise SlurmPlanningError("per-call environment cannot override client_environment")
+    environment = dict(selected)
+    if accounting:
+        environment.update(TZ="UTC", SLURM_TIME_FORMAT="%Y-%m-%dT%H:%M:%S")
+    return environment
 
 _SBATCH_PARSABLE_RE = re.compile(
     r"^(?P<job_id>[0-9]+)(?:;(?P<cluster>[A-Za-z0-9_.-]+))?$"
@@ -37,6 +94,78 @@ _COMMAND_RESULT_FIELDS = frozenset(
         "finished_at",
     }
 )
+
+
+@dataclass(frozen=True, slots=True)
+class SlurmCommandPolicy:
+    """Explicit command deadlines and conservative ready-stage submission errors.
+
+    Deadlines bound ordinary subprocess execution, not uninterruptible kernel
+    IO. A selected policy never treats an unclassified nonzero sbatch exit as
+    proof that the controller did not accept an allocation.
+    """
+
+    observation_timeout_seconds: float
+    submission_timeout_seconds: float
+    cancellation_timeout_seconds: float
+
+    def __post_init__(self) -> None:
+        for name in (
+            "observation_timeout_seconds",
+            "submission_timeout_seconds",
+            "cancellation_timeout_seconds",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise SlurmPlanningError(f"{name} must be finite and positive")
+            try:
+                normalized = float(value)
+            except OverflowError as exc:
+                raise SlurmPlanningError(f"{name} must be finite and positive") from exc
+            if not math.isfinite(normalized) or not 0 < normalized <= 3600:
+                raise SlurmPlanningError(f"{name} must be finite and in (0, 3600]")
+            object.__setattr__(self, name, normalized)
+
+    def timeout_for(self, command: str) -> float:
+        if command == "sbatch":
+            return self.submission_timeout_seconds
+        if command == "scancel":
+            return self.cancellation_timeout_seconds
+        if command in {"squeue", "sacct"}:
+            return self.observation_timeout_seconds
+        raise SlurmPlanningError("unsupported bounded scheduler command")
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "kind": "bounded-command-v1",
+            "observation_timeout_seconds": self.observation_timeout_seconds,
+            "submission_timeout_seconds": self.submission_timeout_seconds,
+            "cancellation_timeout_seconds": self.cancellation_timeout_seconds,
+        }
+
+
+def _command_policy(value: object) -> SlurmCommandPolicy | None:
+    if value is None or isinstance(value, SlurmCommandPolicy):
+        return value
+    if not isinstance(value, Mapping) or set(value) != {
+        "observation_timeout_seconds",
+        "submission_timeout_seconds",
+        "cancellation_timeout_seconds",
+    }:
+        raise SlurmPlanningError("command_policy requires all three scheduler deadlines")
+    return SlurmCommandPolicy(
+        observation_timeout_seconds=cast(float, value["observation_timeout_seconds"]),
+        submission_timeout_seconds=cast(float, value["submission_timeout_seconds"]),
+        cancellation_timeout_seconds=cast(float, value["cancellation_timeout_seconds"]),
+    )
+
+
+def ready_stage_command_policy(runner: SlurmCommandRunner) -> SlurmCommandPolicy | None:
+    """Read the optional typed policy exposed by a selected command adapter."""
+    value = getattr(runner, "command_policy", None)
+    if value is not None and not isinstance(value, SlurmCommandPolicy):
+        raise SlurmPlanningError("runner command_policy must be a SlurmCommandPolicy")
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,14 +335,43 @@ class SlurmCommandRunner(Protocol):
 
 
 class SubprocessSlurmCommandRunner:
-    """SLURM command runner backed by local subprocess calls."""
+    """SLURM commands with optional deadlines and explicit client environment.
+
+    Selected client settings replace inheritance for every scheduler command and
+    select executable lookup. Submission remains ``--export=NIL``; per-call
+    environment may only be absent or empty in this mode. Values are non-secret,
+    literal configuration bound into a ready-stage profile's identity.
+    """
+
+    def __init__(
+        self, *, command_policy: SlurmCommandPolicy | Mapping[str, object] | None = None,
+        client_environment: Mapping[str, str] | None = None,
+    ) -> None:
+        self._command_policy = _command_policy(command_policy)
+        self._client_environment = _client_environment(client_environment)
+
+    @property
+    def command_policy(self) -> SlurmCommandPolicy | None:
+        return self._command_policy
+
+    @property
+    def client_environment(self) -> Mapping[str, str] | None:
+        return self._client_environment
+
+    def _executable(self, command: str) -> str:
+        command_text = _required_text(command, "command")
+        executable = (
+            shutil.which(command_text) if self.client_environment is None
+            else shutil.which(command_text, path=self.client_environment["PATH"])
+        )
+        if executable is None:
+            raise SlurmCommandUnavailableError(
+                f"required SLURM command is not available on selected PATH: {command_text}"
+            )
+        return executable
 
     def require(self, command: str) -> None:
-        command_text = _required_text(command, "command")
-        if shutil.which(command_text) is None:
-            raise SlurmCommandUnavailableError(
-                f"required SLURM command is not available on PATH: {command_text}"
-            )
+        self._executable(command)
 
     def sbatch(
         self,
@@ -287,20 +445,34 @@ class SubprocessSlurmCommandRunner:
         argv: Sequence[str],
         *,
         environment: Mapping[str, str] | None = None,
+        _timeout_seconds: float | None = None,
     ) -> SlurmCommandResult:
         import subprocess
 
-        self.require(command)
-        started_at = utc_timestamp()
-        if environment is not None and command == "sbatch":
-            argv = [*argv[:-1], "--export=NIL", argv[-1]]
-        completed = subprocess.run(  # noqa: S603
-            list(argv),
-            check=False,
-            capture_output=True,
-            text=True,
-            env=None if environment is None else dict(environment),
+        process_environment = _effective_client_environment(
+            self.client_environment, environment, accounting=command == "sacct",
         )
+        timeout = (
+            None if _timeout_seconds is None
+            else _observation_timeout(self.command_policy, _timeout_seconds)
+        )
+        executable = self._executable(command)
+        started_at = utc_timestamp()
+        if command == "sbatch" and (environment is not None or self.client_environment is not None):
+            argv = [*argv[:-1], "--export=NIL", argv[-1]]
+        execution_argv = (
+            list(argv) if self.client_environment is None else [executable, *argv[1:]]
+        )
+        if self.command_policy is None:
+            completed = subprocess.run(  # noqa: S603
+                execution_argv, check=False, capture_output=True, text=True,
+                env=process_environment,
+            )
+        else:
+            completed = _run_bounded_command(
+                execution_argv, timeout=(self.command_policy.timeout_for(command) if timeout is None else timeout),
+                environment=process_environment,
+            )
         return SlurmCommandResult(
             command=command,
             argv=tuple(argv),
@@ -310,6 +482,71 @@ class SubprocessSlurmCommandRunner:
             started_at=started_at,
             finished_at=utc_timestamp(),
         )
+
+    def discover_named_operation(
+        self, *, job_name: str, user_id: int, cluster: str,
+        started_after: str, ended_before: str,
+    ) -> SlurmCommandResult:
+        """Query exact-name, duplicate-aware UTC accounting without comments."""
+        argv = accounting_query_argv(
+            job_name=job_name, user_id=user_id, cluster=cluster,
+            started_after=started_after, ended_before=ended_before,
+        )
+        environment = None if self.client_environment is not None else {
+            **os.environ, "TZ": "UTC", "SLURM_TIME_FORMAT": "%Y-%m-%dT%H:%M:%S",
+        }
+        return self._run("sacct", argv, environment=environment)
+
+    def discover_named_operations(
+        self, *, job_names: Sequence[str], user_id: int, cluster: str,
+        started_after: str, ended_before: str, timeout_seconds: float,
+    ) -> SlurmCommandResult:
+        """Bound a complete exact-name batch by the caller's remaining budget."""
+        argv = accounting_batch_argv(
+            job_names=job_names, user_id=user_id, cluster=cluster,
+            started_after=started_after, ended_before=ended_before,
+        )
+        environment = None if self.client_environment is not None else {
+            **os.environ, "TZ": "UTC", "SLURM_TIME_FORMAT": "%Y-%m-%dT%H:%M:%S",
+        }
+        return self._run("sacct", argv, environment=environment, _timeout_seconds=timeout_seconds)
+
+    def scancel_named_operation(self, identity: SlurmAccountingIdentity) -> SlurmCommandResult:
+        """Constrain cancellation by the retained operation name, UID and cluster."""
+        if not isinstance(identity, SlurmAccountingIdentity):
+            raise SlurmPlanningError("named cancellation requires accounting identity")
+        return self._run("scancel", [
+            "scancel", f"--clusters={identity.cluster}",
+            f"--user={identity.user_id}", f"--name={identity.job_name}", identity.job_id,
+        ])
+
+
+def _observation_timeout(policy: SlurmCommandPolicy | None, value: float) -> float:
+    if policy is None:
+        raise SlurmPlanningError("batched accounting requires a command policy")
+    if isinstance(value, bool) or not isinstance(value, (float, int)) or not 0 < value <= 3600:
+        raise SlurmPlanningError("accounting timeout must be in (0, 3600]")
+    return min(float(value), policy.observation_timeout_seconds)
+
+
+def _run_bounded_command(
+    argv: Sequence[str], *, timeout: float, environment: Mapping[str, str] | None,
+) -> subprocess.CompletedProcess[str]:
+    """Stop this command's process group before returning an uncertain timeout."""
+    from loom._bounded_process import ProcessOutputLimitError, run_bounded_process
+
+    if os.name != "posix":
+        raise SlurmPlanningError("bounded scheduler commands require POSIX process groups")
+    executable = shutil.which(argv[0])
+    if executable is None:
+        raise SlurmCommandUnavailableError("bounded scheduler executable is unavailable")
+    try:
+        return run_bounded_process(
+            argv, executable=executable, timeout=timeout, environment=environment,
+            output_limit=MAX_PERSISTED_COMMAND_OUTPUT_CHARS, text=True,
+        )
+    except ProcessOutputLimitError as exc:
+        raise SlurmCommandOutputLimitError("bounded scheduler output exceeds the evidence limit") from exc
 
 
 class FakeSlurmCommandRunner:
@@ -322,7 +559,11 @@ class FakeSlurmCommandRunner:
         | None = None,
         unavailable_commands: Sequence[str] = (),
         starting_job_id: int = 1000,
+        command_policy: SlurmCommandPolicy | Mapping[str, object] | None = None,
+        client_environment: Mapping[str, str] | None = None,
     ) -> None:
+        self.command_policy = _command_policy(command_policy)
+        self._client_environment = _client_environment(client_environment)
         self._scripted: dict[str, list[SlurmCommandResult | BaseException]] = {
             command: list(results)
             for command, results in dict(scripted_results or {}).items()
@@ -331,6 +572,13 @@ class FakeSlurmCommandRunner:
         self._next_job_id = starting_job_id
         self.calls: list[tuple[str, tuple[str, ...]]] = []
         self.environments: list[Mapping[str, str] | None] = []
+        # Effective explicit settings in calls order; legacy inheritance is None.
+        self.client_environments: list[Mapping[str, str] | None] = []
+        self.observation_timeouts: list[float] = []
+
+    @property
+    def client_environment(self) -> Mapping[str, str] | None:
+        return self._client_environment
 
     def require(self, command: str) -> None:
         command_text = _required_text(command, "command")
@@ -347,13 +595,14 @@ class FakeSlurmCommandRunner:
         comment: str | None = None,
         environment: Mapping[str, str] | None = None,
     ) -> SlurmCommandResult:
+        _effective_client_environment(self.client_environment, environment, accounting=False)
         argv = ["sbatch", "--parsable"]
         dependencies = _job_id_tuple(dependency_job_ids, field="dependency_job_ids")
         if dependencies:
             argv.append("--dependency=afterok:" + ":".join(dependencies))
         if comment is not None:
             argv.append("--comment=" + _operation_marker(comment))
-        if environment is not None:
+        if environment is not None or self.client_environment is not None:
             argv.append("--export=NIL")
         argv.append(str(script_path))
         self.environments.append(None if environment is None else dict(environment))
@@ -434,6 +683,37 @@ class FakeSlurmCommandRunner:
             SlurmCommandResult(command="sacct", argv=argv, returncode=0),
         )
 
+    def discover_named_operation(
+        self, *, job_name: str, user_id: int, cluster: str,
+        started_after: str, ended_before: str,
+    ) -> SlurmCommandResult:
+        argv = accounting_query_argv(
+            job_name=job_name, user_id=user_id, cluster=cluster,
+            started_after=started_after, ended_before=ended_before,
+        )
+        return self._result("sacct", argv, SlurmCommandResult("sacct", argv, 0))
+
+    def scancel_named_operation(self, identity: SlurmAccountingIdentity) -> SlurmCommandResult:
+        if not isinstance(identity, SlurmAccountingIdentity):
+            raise SlurmPlanningError("named cancellation requires accounting identity")
+        argv = (
+            "scancel", f"--clusters={identity.cluster}",
+            f"--user={identity.user_id}", f"--name={identity.job_name}", identity.job_id,
+        )
+        return self._result("scancel", argv, SlurmCommandResult("scancel", argv, 0))
+
+    def discover_named_operations(
+        self, *, job_names: Sequence[str], user_id: int, cluster: str,
+        started_after: str, ended_before: str, timeout_seconds: float,
+    ) -> SlurmCommandResult:
+        timeout = _observation_timeout(self.command_policy, timeout_seconds)
+        argv = accounting_batch_argv(
+            job_names=job_names, user_id=user_id, cluster=cluster,
+            started_after=started_after, ended_before=ended_before,
+        )
+        self.observation_timeouts.append(timeout)
+        return self._result("sacct", argv, SlurmCommandResult("sacct", argv, 0))
+
     def _result(
         self,
         command: str,
@@ -442,6 +722,9 @@ class FakeSlurmCommandRunner:
     ) -> SlurmCommandResult:
         self.require(command)
         self.calls.append((command, argv))
+        self.client_environments.append(_effective_client_environment(
+            self.client_environment, None, accounting=command == "sacct",
+        ))
         scripted = self._scripted.get(command)
         if scripted:
             result = scripted.pop(0)

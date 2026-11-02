@@ -347,6 +347,64 @@ def test_resident_workspace_current_reopen_preserves_retained_work(tmp_path):
     assert _workspace_bytes(workspace.root) == before
 
 
+def test_resident_workspace_retains_policy_for_worker_reopen(tmp_path):
+    from loom._sqlite_policy import SQLitePolicy
+    policy = SQLitePolicy("delete", "extra", 1234)
+    profile = _profile(tmp_path)
+    request = _request(profile)
+    workspace = _ResidentAssignmentWorkspace(
+        tmp_path, request.assignment_id, sqlite_policy=policy, durable_files="strict",
+        _allow_initialize=True,
+    )
+    workspace.persist_request(request, profile)
+    before = _workspace_bytes(workspace.root)
+    # The execution-only worker reopens the retained workspace without access
+    # to the parent's role configuration or its authority-host restriction.
+    reopened = _ResidentAssignmentWorkspace(
+        tmp_path, request.assignment_id, _allow_initialize=False,
+    )
+    assert reopened.request() == request
+    assert reopened.durable_files == "strict"
+    with reopened._connect() as conn:
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+        assert conn.execute("PRAGMA synchronous").fetchone()[0] == 3
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 1234
+    assert _workspace_bytes(workspace.root) == before
+    with pytest.raises(QueueConflictError, match="storage policy conflicts"):
+        _ResidentAssignmentWorkspace(
+            tmp_path, request.assignment_id,
+            sqlite_policy=SQLitePolicy("delete", "full"),
+        )
+
+
+def test_resident_explicit_policy_requires_initialization_and_existing_state(tmp_path):
+    import sqlite3
+    from loom._sqlite_policy import SQLitePolicy
+    policy = SQLitePolicy("delete", "extra")
+    with pytest.raises(QueueServiceError, match="workspace is missing"):
+        _ResidentAssignmentWorkspace(tmp_path, "missing", sqlite_policy=policy)
+    assert not (tmp_path / "assignments").exists()
+    workspace = _ResidentAssignmentWorkspace(
+        tmp_path, "fresh", sqlite_policy=policy, _allow_initialize=True,
+    )
+    workspace._db.unlink()
+    with pytest.raises(sqlite3.OperationalError):
+        workspace.has_request()
+    assert not workspace._db.exists()
+
+
+def test_resident_storage_policy_cannot_silently_adopt_legacy_workspace(tmp_path):
+    from loom._sqlite_policy import SQLitePolicy
+    workspace = _ResidentAssignmentWorkspace(tmp_path, "legacy")
+    before = _workspace_bytes(workspace.root)
+    with pytest.raises(QueueConflictError, match="storage policy conflicts"):
+        _ResidentAssignmentWorkspace(
+            tmp_path, "legacy", sqlite_policy=SQLitePolicy("delete", "extra"),
+            _allow_initialize=True,
+        )
+    assert _workspace_bytes(workspace.root) == before
+
+
 def test_delivered_poll_atomically_retains_an_unresolved_assignment(
     tmp_path: Path,
 ) -> None:

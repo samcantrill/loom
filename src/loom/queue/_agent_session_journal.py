@@ -1,5 +1,7 @@
 """Outbound session evidence with one owner for durable transactions."""
 from __future__ import annotations
+
+from loom._sqlite_policy import SQLitePolicy, connect_existing
 from .gpu.occupancy import GpuOccupancyPolicy
 
 from collections.abc import Mapping
@@ -85,8 +87,13 @@ class _RemoteAgentJournal:
         *,
         expected_configuration_fingerprint: str | None = None,
         expected_active_configuration_fingerprint: str | None = None,
+        sqlite_policy: SQLitePolicy | None = None,
+        start_held: bool = False,
     ) -> None:
         self._root = Path(root)
+        self._sqlite_policy = sqlite_policy
+        from ._storage_upgrade_state import require_storage_upgrade_ready
+        require_storage_upgrade_ready(self._root)
         if not self._root.is_dir():
             raise QueueServiceError("remote agent root is missing")
         details = self._root.stat()
@@ -120,6 +127,9 @@ class _RemoteAgentJournal:
                 expected_configuration_fingerprint,
                 expected_active_configuration_fingerprint,
             )
+            require_storage_upgrade_ready(self._root, entering=True)
+            if start_held:
+                self._hold_for_startup()
         except QueueError:
             self._lock.close()
             raise
@@ -129,6 +139,31 @@ class _RemoteAgentJournal:
                 "remote agent control state is unavailable"
             ) from exc
         self.root_id = metadata["stable_id"]
+
+
+    def _hold_for_startup(self) -> None:
+        """Withdraw capacity before service progress under the existing owner lock.
+
+        Each explicitly held launch establishes a new identity. Old queued
+        resumes cannot clear it, including controls not yet delivered locally.
+        Ordinary reconnect/restart preserves the identity until matching resume.
+        """
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.executemany(
+                "INSERT INTO root_metadata(key,value) VALUES (?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (("availability_state", "drained"), ("startup_hold_id", secrets.token_hex(24))),
+            )
+            conn.execute("UPDATE agent_offers_local SET state='DRAINED'")
+            conn.execute("DELETE FROM agent_offer_renewals_local")
+            conn.execute("UPDATE agent_poll_state_local SET state='FENCED' WHERE state != 'RECONCILED'")
+            conn.commit()
+
+    def startup_hold_id(self) -> str | None:
+        with self._connection() as conn:
+            row = conn.execute("SELECT value FROM root_metadata WHERE key='startup_hold_id'").fetchone()
+        return None if row is None else str(row[0])
 
 
     def _validated_metadata(
@@ -392,8 +427,10 @@ class _RemoteAgentJournal:
         return str(row[0]) == "drained"
 
     def _connection(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(
-            f"{self._path.resolve().as_uri()}?mode=rw", uri=True, timeout=30
+        conn = (
+            sqlite3.connect(f"{self._path.resolve().as_uri()}?mode=rw", uri=True, timeout=30)
+            if self._sqlite_policy is None else
+            connect_existing(self._path, policy=self._sqlite_policy, isolation_level="")
         )
         conn.row_factory = sqlite3.Row
         return conn
@@ -1132,10 +1169,16 @@ class _RemoteAgentJournal:
                     (control.operation_id, encoded, replacement_fingerprint),
                 )
             session = self.session(control.expected_session_id)
-            if session.config_revision != control.expected_config_revision:
+            hold = conn.execute("SELECT value FROM root_metadata WHERE key='startup_hold_id'").fetchone()
+            hold_id = None if hold is None else str(hold[0])
+            refused = (
+                "stale_revision" if session.config_revision != control.expected_config_revision else
+                "startup_hold" if control.kind.value == "resume" and control.startup_hold_id != hold_id else None
+            )
+            if refused is not None:
                 effect = AgentControlEffect(
                     control.operation_id,
-                    "stale_revision",
+                    refused,
                     session.config_revision,
                     session.inventory_revision,
                     session.availability_revision,
@@ -1239,8 +1282,13 @@ class _RemoteAgentJournal:
             ):
                 raise QueueConflictError("agent control delivery is not durable")
             encoded = _canonical_json(effect.value())
-            if row["effect_json"] is not None and str(row["effect_json"]) != encoded:
-                raise QueueConflictError("agent control effect conflicts")
+            if row["effect_json"] is not None:
+                if str(row["effect_json"]) != encoded:
+                    raise QueueConflictError("agent control effect conflicts")
+                # All effects committed atomically with this receipt. Replaying
+                # it must not undo a drain/hold established by a later owner.
+                conn.commit()
+                return
             session = self.session(control.expected_session_id)
             if effect.code == "applied":
                 updated = replace(
@@ -1255,11 +1303,15 @@ class _RemoteAgentJournal:
                     (_canonical_json(updated.value()), updated.session_id),
                 )
                 if control.kind.value == "resume":
+                    hold = conn.execute("SELECT value FROM root_metadata WHERE key='startup_hold_id'").fetchone()
+                    if control.startup_hold_id != (None if hold is None else str(hold[0])):
+                        raise QueueConflictError("resume startup hold identity changed")
                     conn.execute(
                         "INSERT INTO root_metadata(key, value) VALUES "
                         "('availability_state', 'active') ON CONFLICT(key) "
                         "DO UPDATE SET value = excluded.value"
                     )
+                    conn.execute("DELETE FROM root_metadata WHERE key='startup_hold_id'")
             elif (
                 effect.config_revision != session.config_revision
                 or effect.inventory_revision != session.inventory_revision
@@ -1884,6 +1936,8 @@ def _agent_active_fingerprint(config: AgentTlsClientConfig) -> str:
     return _agent_revision(
         "active",
         {
+            **({"slurm_submit_interval_seconds": config.slurm_submit_interval_seconds} if config.slurm_submit_interval_seconds is not None else {}),
+            **({"slurm_observation_policy": config.slurm_observation_policy.to_dict()} if config.slurm_observation_policy is not None else {}),
             "config": _agent_config_revision(config),
             "inventory": _agent_inventory_revision(config),
             **(

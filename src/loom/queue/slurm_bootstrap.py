@@ -12,13 +12,14 @@ from pathlib import Path
 import stat
 import sys
 import time
-from typing import Mapping, cast
+from types import MappingProxyType
+from typing import Literal, Mapping, cast
 from uuid import uuid4
 
 from loom.pipeline.context import ProcessContainmentOwner
 from loom.pipeline.errors import RuntimeResourceError
 from loom.pipeline.execution.stage_worker import execute_resident_stage_worker_request
-from loom.pipeline.stores.atomic import atomic_write_bytes
+from loom.pipeline.stores.atomic import _ensure_durable_parent, atomic_write_bytes
 from loom.scheduling import SchedulingComponentDescriptor
 from loom.serialization import PlainData, thaw_plain_data
 
@@ -54,11 +55,15 @@ class SlurmBootstrapClientConfig:
     environment_fingerprint: str
     executor_fingerprint: str
     executor_name: str
-    capability_file_path: Path
+    capability_file_path: Path | None = None
     bootstrap_deadline_seconds: float = 300.0
     reconnect_seconds: float = 1.0
+    durable_files: Literal["best_effort", "strict"] = "best_effort"
+    credential_delivery: Mapping[str, str] | None = None
 
     def __post_init__(self) -> None:
+        if not isinstance(self.durable_files, str) or self.durable_files not in {"best_effort", "strict"}:
+            raise QueueServiceError("SLURM bootstrap durable_files is invalid")
         if any(
             isinstance(value, bool) or not isinstance(value, (int, float))
             for value in (self.reconnect_seconds, self.bootstrap_deadline_seconds)
@@ -80,11 +85,25 @@ class SlurmBootstrapClientConfig:
                 raise QueueServiceError(f"SLURM bootstrap {name} is invalid")
         if self.executor_name != "local":
             raise QueueServiceError("SLURM bootstrap executor is unsupported")
-        if (
-            not isinstance(self.capability_file_path, Path)
-            or not self.capability_file_path.is_absolute()
-        ):
-            raise QueueServiceError("SLURM bootstrap capability_file_path is invalid")
+        if self.credential_delivery is None:
+            if not isinstance(self.capability_file_path, Path) or not self.capability_file_path.is_absolute():
+                raise QueueServiceError("SLURM bootstrap capability_file_path is invalid")
+        else:
+            delivery = self.credential_delivery
+            if (
+                self.capability_file_path is not None
+                or not isinstance(delivery, Mapping)
+                or set(delivery) != {"kind", "root", "descriptor"}
+                or delivery["kind"] != "user_private_file_v1"
+                or any(not isinstance(value, str) or not value for value in delivery.values())
+            ):
+                raise QueueServiceError("SLURM bootstrap credential delivery is invalid")
+            from loom.pipeline.executors.slurm.trusted_user import SlurmUserPrivateFileProvider
+
+            SlurmUserPrivateFileProvider(root=delivery["root"], descriptor=delivery["descriptor"])
+            object.__setattr__(self, "credential_delivery", MappingProxyType(dict(delivery)))
+            if self.durable_files != "strict":
+                raise QueueServiceError("trusted-user bootstrap requires strict durable_files")
         workspace = Path(self.workspace_root).resolve()
         project = Path(self.project_root).resolve()
         object.__setattr__(self, "workspace_root", workspace)
@@ -94,7 +113,10 @@ class SlurmBootstrapClientConfig:
         """Check compute-side paths at startup; declaration loading performs no writes."""
         if not self.project_root.is_dir():
             raise QueueServiceError("SLURM resident project root is unavailable")
-        self.workspace_root.mkdir(parents=True, exist_ok=True)
+        if self.durable_files == "strict":
+            _ensure_durable_parent(self.workspace_root)
+        else:
+            self.workspace_root.mkdir(parents=True, exist_ok=True)
         self.workspace_root.chmod(0o700)
         if stat.S_IMODE(self.workspace_root.stat().st_mode) & 0o077:
             raise QueueServiceError("SLURM bootstrap workspace must be private")
@@ -133,12 +155,18 @@ class SlurmBootstrapClientConfig:
             "executor_name",
             "capability_file_path",
         }
+        tagged = isinstance(value, Mapping) and "schema_version" in value
+        if tagged:
+            if type(value["schema_version"]) is not int or value["schema_version"] != 1:
+                raise QueueServiceError("SLURM bootstrap schema is unsupported")
+            expected = expected - {"capability_file_path"} | {"schema_version", "credential_delivery"}
+        string_fields = expected - {"schema_version", "credential_delivery"}
         if (
             not isinstance(value, Mapping)
-            or set(value) - {"bootstrap_deadline_seconds", "reconnect_seconds"}
+            or set(value) - {"bootstrap_deadline_seconds", "reconnect_seconds", "durable_files"}
             != expected
             or any(
-                not isinstance(value[key], str) or not value[key] for key in expected
+                not isinstance(value[key], str) or not value[key] for key in string_fields
             )
         ):
             raise QueueServiceError("SLURM bootstrap config fields are invalid")
@@ -158,11 +186,13 @@ class SlurmBootstrapClientConfig:
             environment_fingerprint=cast(str, value["environment_fingerprint"]),
             executor_fingerprint=cast(str, value["executor_fingerprint"]),
             executor_name=cast(str, value["executor_name"]),
-            capability_file_path=Path(cast(str, value["capability_file_path"])),
+            capability_file_path=None if tagged else Path(cast(str, value["capability_file_path"])),
             bootstrap_deadline_seconds=cast(
                 float, value.get("bootstrap_deadline_seconds", 300.0)
             ),
             reconnect_seconds=cast(float, value.get("reconnect_seconds", 1.0)),
+            durable_files=cast(Literal["best_effort", "strict"], value.get("durable_files", "strict" if tagged else "best_effort")),
+            credential_delivery=cast(Mapping[str, str] | None, value.get("credential_delivery")),
         )
 
 
@@ -179,12 +209,14 @@ def _before_start_retry(
     deadline: float,
     delay: float,
     diagnostic: Path,
+    durable_files: Literal["best_effort", "strict"] = "best_effort",
 ) -> Mapping[str, PlainData]:
     while True:
         if time.time() >= deadline:
             atomic_write_bytes(
                 diagnostic,
                 b'{"failure":"slurm_bootstrap_deadline_expired","offline_grant":false}',
+                durability=durable_files,
             )
             raise QueueServiceError(
                 "SLURM bootstrap deadline expired; no offline grant"
@@ -197,6 +229,7 @@ def _before_start_retry(
                 atomic_write_bytes(
                     diagnostic,
                     b'{"failure":"slurm_bootstrap_deadline_expired","offline_grant":false}',
+                    durability=durable_files,
                 )
                 raise QueueServiceError(
                     "SLURM bootstrap deadline expired; no offline grant"
@@ -221,12 +254,15 @@ def run_slurm_bootstrap(
         raise QueueServiceError("SLURM_JOB_ID is unavailable or invalid")
     selected.qualify()
     cluster = os.environ.get("SLURM_CLUSTER_NAME")
-    incarnation = _operation_incarnation(selected.workspace_root, operation_id)
+    incarnation = _operation_incarnation(
+        selected.workspace_root, operation_id, durable_files=selected.durable_files,
+    )
     client = LocalDaemonAgentHttpClient(selected.tls)
     deadline_path = selected.workspace_root / (
         "bootstrap-deadline-" + _sha256(operation_id) + ".json"
     )
-    if not deadline_path.exists():
+    retained_deadline = deadline_path.exists()
+    if not retained_deadline:
         atomic_write_bytes(
             deadline_path,
             json.dumps(
@@ -235,10 +271,13 @@ def run_slurm_bootstrap(
                     "deadline": time.time() + selected.bootstrap_deadline_seconds,
                 }
             ).encode(),
+            durability=selected.durable_files,
         )
     deadline_value = json.loads(deadline_path.read_text())
     if deadline_value.get("operation_id") != operation_id:
         raise QueueConflictError("SLURM bootstrap deadline identity conflicts")
+    if retained_deadline and selected.durable_files == "strict":
+        atomic_write_bytes(deadline_path, deadline_path.read_bytes(), durability="strict")
     deadline = float(deadline_value["deadline"])
     diagnostic = selected.workspace_root / (
         "bootstrap-failure-" + _sha256(operation_id) + ".json"
@@ -252,6 +291,7 @@ def run_slurm_bootstrap(
             deadline=deadline,
             delay=selected.reconnect_seconds,
             diagnostic=diagnostic,
+            durable_files=selected.durable_files,
         )
 
     try:
@@ -277,8 +317,19 @@ def run_slurm_bootstrap(
             or "slurm-ready-stage-bootstrap-v1" not in capabilities
         ):
             raise QueueConflictError("SLURM bootstrap profile handshake conflicts")
-        capability_path = selected.capability_file_path
-        capability = _read_job_private_capability(capability_path)
+        if selected.credential_delivery is None:
+            assert selected.capability_file_path is not None
+            capability_path = selected.capability_file_path
+            capability = _read_job_private_capability(capability_path)
+        else:
+            from loom.pipeline.executors.slurm.trusted_user import SlurmUserPrivateFileProvider
+
+            provider = SlurmUserPrivateFileProvider(
+                root=selected.credential_delivery["root"],
+                descriptor=selected.credential_delivery["descriptor"],
+            )
+            capability_path = provider.path_for(operation_id)
+            capability = provider.read_capability(operation_id=operation_id, request_digest=request_digest)
         registration = prestart(
             "register",
             {
@@ -305,9 +356,11 @@ def run_slurm_bootstrap(
             raise QueueConflictError("SLURM resident profile identity conflicts")
         storage = cast(Mapping[str, object], registration.get("result_storage"))
         transport = SharedSlurmResult(storage, assignment_id, compute=True)
-        workspace = SlurmBootstrapWorkspace(selected.workspace_root, assignment_id)
+        workspace = SlurmBootstrapWorkspace(
+            selected.workspace_root, assignment_id, durable_files=selected.durable_files,
+        )
         workspace.persist_registration(registration)
-        _unlink_job_private_capability(capability_path)
+        _unlink_job_private_capability(capability_path, durable_files=selected.durable_files)
         workspace.persist_delivery(delivery)
         container_policy = None
         shared_roots = None
@@ -433,17 +486,23 @@ def run_slurm_bootstrap(
         client.close()
 
 
-def _operation_incarnation(root: Path, operation_id: str) -> str:
+def _operation_incarnation(
+    root: Path, operation_id: str, *,
+    durable_files: Literal["best_effort", "strict"] = "best_effort",
+) -> str:
     if not operation_id or any(ord(char) < 32 for char in operation_id):
         raise QueueServiceError("SLURM operation identity is invalid")
     path = root / "operations" / _sha256(operation_id) / "incarnation"
     if path.is_file():
         value = path.read_text(encoding="utf-8").strip()
         if value:
+            if durable_files == "strict":
+                # A prior publication may have lost its directory-sync response.
+                atomic_write_bytes(path, (value + "\n").encode(), durability="strict")
             return value
         raise QueueServiceError("SLURM bootstrap incarnation is corrupt")
     value = "bootstrap-" + uuid4().hex
-    atomic_write_bytes(path, (value + "\n").encode())
+    atomic_write_bytes(path, (value + "\n").encode(), durability=durable_files)
     path.chmod(0o600)
     return value
 
@@ -470,9 +529,15 @@ def _read_job_private_capability(path: Path) -> bytes:
     return value
 
 
-def _unlink_job_private_capability(path: Path) -> None:
+def _unlink_job_private_capability(
+    path: Path, *, durable_files: Literal["best_effort", "strict"] = "best_effort",
+) -> None:
     try:
         path.unlink()
+        if durable_files == "strict":
+            from ._remote_stage_execution import _fsync_directory
+
+            _fsync_directory(path.parent)
     except OSError as exc:
         raise QueueServiceError("SLURM job-private capability unlink failed") from exc
 

@@ -119,6 +119,7 @@ def _check_loaded_role(
             raise QueueServiceError("protected role configuration is unavailable")
         if role == "coordinator":
             coordinator = cast("CoordinatorServiceConfig", service)
+            storage = coordinator.daemon.storage
             gpu_configuration = coordinator
             agent = coordinator.local_agent
             profiles = () if agent is None else (agent.profile,)
@@ -131,6 +132,7 @@ def _check_loaded_role(
             capacity = coordinator.effective_capacity
         elif role == "agent":
             outbound = cast("OutboundAgentServiceConfig", service)
+            storage = outbound.client.storage
             gpu_configuration = outbound
             profiles = outbound.client.resident_profiles
             container_policies = outbound.client.container_policies
@@ -321,7 +323,8 @@ def _check_loaded_role(
         try:
             retained = _service_configuration(Path(agent_root) / "supervisor")
             current = SupervisorLaunchConfiguration(
-                retained.agent_id, tuple(profile.launch_profile for profile in profiles), container_policies
+                retained.agent_id, tuple(profile.launch_profile for profile in profiles),
+                container_policies, storage=storage,
             )
             matches = retained.fingerprint == current.fingerprint
         except (AgentProcessSupervisorError, OSError):

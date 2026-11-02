@@ -48,6 +48,160 @@ from tests.support.stage29_composition import (
 pytestmark = pytest.mark.unit
 
 
+def _rollback_storage():
+    import socket
+    return {"owner_host": socket.gethostname(), "sqlite": {
+        "journal_mode": "delete", "synchronous": "extra", "busy_timeout_ms": 1234,
+    }, "durable_files": "strict"}
+
+
+@pytest.mark.parametrize("colocated", [False, True])
+def test_explicit_storage_binds_role_and_reaches_coordinator_databases(tmp_path, colocated):
+    from loom.queue.deployment import inspect_role_declaration
+    source = _coordinator_config(tmp_path)
+    payload = json.loads(source.read_text())
+    if not colocated:
+        payload["local_agent"] = None
+    authority = tmp_path / "authority"
+    authority.mkdir(mode=0o700)
+    payload["authority"] = {"kind": "embedded", "state_root": str(authority)}
+    _write_protected(source, payload)
+    legacy = load_coordinator_service_config(source)
+    payload["storage"] = _rollback_storage()
+    _write_protected(source, payload)
+    service = load_coordinator_service_config(source)
+    assert service.immutable_fingerprint != legacy.immutable_fingerprint
+    assert service.active_fingerprint == legacy.active_fingerprint
+    assert inspect_role_declaration(source, role="coordinator") is not None
+    LocalDaemon.initialize_deployment(service.daemon)
+    paths = [service.daemon.control_database, service.daemon.execution_database]
+    if colocated:
+        paths.extend([
+            service.daemon.agent_root / "control.sqlite", service.daemon.agent_journal,
+            service.daemon.agent_root / "supervisor/supervisor.sqlite",
+        ])
+    for path in paths:
+        with service.daemon.connect_database(path) as conn:
+            assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+            assert conn.execute("PRAGMA synchronous").fetchone()[0] == 3
+            assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 1234
+        assert not Path(str(path) + "-wal").exists()
+    if colocated:
+        # Physical resident launch remains separate; initialization is process-free.
+        return
+    daemon = LocalDaemon(service.daemon)
+    daemon.start()
+    try:
+        assert daemon.status().coordinator_id
+    finally:
+        daemon.stop()
+
+
+def test_outbound_storage_reaches_control_execution_and_supervisor(tmp_path):
+    from loom.queue._agent_process_supervisor import _service_configuration
+    source = _agent_config(tmp_path)
+    payload = json.loads(source.read_text())
+    legacy = load_outbound_agent_service_config(source)
+    payload["storage"] = _rollback_storage()
+    _write_protected(source, payload)
+    service = load_outbound_agent_service_config(source)
+    assert service.immutable_fingerprint != legacy.immutable_fingerprint
+    assert service.active_fingerprint == legacy.active_fingerprint
+    LocalDaemonAgentHttpClient.initialize_agent_root(service.client)
+    root = service.client.agent_root
+    for name in ("control.sqlite", "journal.sqlite", "supervisor/supervisor.sqlite"):
+        with service.client.connect_database(root / name) as conn:
+            assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+            assert conn.execute("PRAGMA synchronous").fetchone()[0] == 3
+            assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 1234
+    assert _service_configuration(root / "supervisor").storage == service.client.storage
+    client = _open_outbound_agent(service.client)
+    try:
+        client.shutdown_clean()
+    finally:
+        client.close()
+
+
+def test_storage_owner_mismatch_refuses_before_creating_state(tmp_path):
+    source = _coordinator_config(tmp_path)
+    payload = json.loads(source.read_text())
+    payload["local_agent"] = None
+    authority = tmp_path / "authority"
+    authority.mkdir(mode=0o700)
+    payload["authority"] = {"kind": "embedded", "state_root": str(authority)}
+    payload["storage"] = {**_rollback_storage(), "owner_host": "a-different-host"}
+    _write_protected(source, payload)
+    service = load_coordinator_service_config(source)
+    with pytest.raises(QueueServiceError, match="different physical owner"):
+        LocalDaemon.initialize_deployment(service.daemon)
+    assert not service.daemon.deployment_root.exists()
+
+
+def test_foreground_service_lifetime_uses_storage_policy(tmp_path_factory, monkeypatch):
+    from threading import Event
+    from loom.queue import _service_lifetime
+    from loom.service_runtime import serve_coordinator
+
+    tmp_path = tmp_path_factory.mktemp("ss")
+    source = _coordinator_config(tmp_path)
+    payload = json.loads(source.read_text())
+    payload["local_agent"] = None
+    authority = tmp_path / "authority"
+    authority.mkdir(mode=0o700)
+    payload["authority"] = {"kind": "embedded", "state_root": str(authority)}
+    payload["storage"] = _rollback_storage()
+    _write_protected(source, payload)
+    service = load_coordinator_service_config(source)
+    LocalDaemon.initialize_deployment(service.daemon)
+    original = _service_lifetime.connect_existing
+    opened = []
+
+    def observed(path, **options):
+        conn = original(path, **options)
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+        assert conn.execute("PRAGMA synchronous").fetchone()[0] == 3
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 1234
+        opened.append(path)
+        return conn
+
+    monkeypatch.setattr(_service_lifetime, "connect_existing", observed)
+    # Idle run lifetime covers startup, retained lifetime and clean exit writes.
+    serve_coordinator(service, stop=Event(), lifetime="run")
+    assert opened == [service.daemon.control_database] * 3
+    with service.daemon.connect_database(service.daemon.control_database) as conn:
+        metadata = dict(conn.execute("SELECT key,value FROM root_metadata"))
+    assert metadata["service_lifetime"] == "run"
+    assert json.loads(metadata["service_process"])["stopped"] is True
+
+
+@pytest.mark.parametrize("operation", ("process", "lifetime"))
+def test_storage_lifetime_write_never_recreates_missing_database(tmp_path, operation):
+    import sqlite3
+    from loom._sqlite_policy import SQLitePolicy
+    from loom.queue._service_lifetime import record_process, retained_lifetime
+
+    policy = SQLitePolicy("delete", "extra")
+    with pytest.raises(sqlite3.OperationalError):
+        if operation == "process":
+            record_process(tmp_path, stopped=False, sqlite_policy=policy)
+        else:
+            retained_lifetime(tmp_path, "run", sqlite_policy=policy)
+    assert not (tmp_path / "control.sqlite").exists()
+
+
+@pytest.mark.parametrize("field,value", [("busy_timeout_ms", True), ("journal_mode", "off")])
+def test_storage_declaration_rejects_unsupported_values(tmp_path, field, value):
+    from loom.queue.deployment import inspect_role_declaration
+    source = _coordinator_config(tmp_path)
+    payload = json.loads(source.read_text())
+    payload["storage"] = _rollback_storage()
+    payload["storage"]["sqlite"][field] = value
+    _write_protected(source, payload)
+    for read in (load_coordinator_service_config, lambda path: inspect_role_declaration(path, role="coordinator")):
+        with pytest.raises(QueueConfigError):
+            read(source)
+
+
 def test_recovery_retry_is_redacted_rate_limited_and_resets_on_progress(monkeypatch, caplog):
     from loom.queue._recovery_retry import _RecoveryRetry
     from loom.queue._agent_process_supervisor import _SupervisorCommunicationError
@@ -649,7 +803,9 @@ def test_coordinator_publication_removes_failed_staging_root(
 ) -> None:
     service = load_coordinator_service_config(_coordinator_config(tmp_path))
 
-    def reject_agent_root(cls: type[LocalDaemon], _root: Path) -> None:
+    def reject_agent_root(
+        cls: type[LocalDaemon], _root: Path, *, storage: object = None,
+    ) -> None:
         raise QueueServiceError("injected agent-root failure")
 
     monkeypatch.setattr(
@@ -1299,8 +1455,13 @@ def test_agent_listener_endpoint_is_immutable_but_credentials_are_reloadable(
     assert moved.immutable_fingerprint != overlap.immutable_fingerprint
 
 
+@pytest.mark.parametrize(("trusted_user", "bounded_commands", "accounting_history", "client_environment"), [
+    (False, False, False, False), (True, False, False, False),
+    (True, True, False, False), (True, True, True, False), (True, True, True, True),
+])
 def test_coordinator_config_constructs_complete_protected_composition(
-    tmp_path: Path,
+    tmp_path: Path, trusted_user: bool, bounded_commands: bool, accounting_history: bool,
+    client_environment: bool,
 ) -> None:
     source = _coordinator_config(tmp_path)
     payload = json.loads(source.read_text(encoding="utf-8"))
@@ -1376,6 +1537,32 @@ def test_coordinator_config_constructs_complete_protected_composition(
         }
     ]
 
+    if bounded_commands:
+        payload["slurm_profiles"][0]["runner"]["command_policy"] = {
+            "observation_timeout_seconds": 10,
+            "submission_timeout_seconds": 60,
+            "cancellation_timeout_seconds": 10,
+        }
+        payload["slurm_profiles"][0]["containment_helper"] = {
+            "_target_": "loom.pipeline.executors.slurm.ready_stage.SlurmContainmentHelper",
+            "descriptor": "site-bounded-helper", "argv": ["/site/helper"],
+            "timeout_seconds": 30, "process_policy": "bounded-v1",
+        }
+    if accounting_history:
+        payload["slurm_profiles"][0]["cluster"] = "test-cluster"
+        payload["slurm_profiles"][0]["accounting_history"] = {"user_id": 1000}
+    selected_environment = {"PATH": "/site/slurm/bin:/usr/bin", "TMPDIR": "/site/scratch/tmp", "LC_ALL": "C"}
+    if client_environment:
+        payload["slurm_profiles"][0]["runner"]["client_environment"] = selected_environment
+    if trusted_user:
+        from loom.pipeline.executors.slurm.trusted_user import SlurmUserPrivateFileProvider
+
+        declaration = payload["slurm_profiles"][0]
+        declaration.pop("container_options")
+        declaration["job_private_file_provider"] = {
+            "_target_": "loom.pipeline.executors.slurm.trusted_user.SlurmUserPrivateFileProvider",
+            "root": str(tmp_path / "credentials"), "descriptor": "trusted-test-v1",
+        }
     _write_local_agent(source, agent_payload)
     service = load_coordinator_service_config(
         _write_protected(tmp_path / "coordinator-complete.yaml", payload)
@@ -1390,10 +1577,66 @@ def test_coordinator_config_constructs_complete_protected_composition(
     assert len(service.daemon.slurm_profiles) == 1
     profile = service.daemon.slurm_profiles[0]
     assert isinstance(profile.runner, FakeSlurmCommandRunner)
-    assert isinstance(profile.job_private_file_provider, SlurmJobPrivateFileProvider)
+    assert (profile.runner.command_policy is not None) is bounded_commands
+    assert (profile.accounting_history is not None) is accounting_history
+    if accounting_history:
+        assert profile.accounting_history.user_id == 1000
+    if bounded_commands:
+        assert profile.runner.command_policy.submission_timeout_seconds == 60
+        assert profile.containment_helper.process_policy == "bounded-v1"
+        assert profile.containment_helper.timeout_seconds == 30
+    assert profile.runner.client_environment == (selected_environment if client_environment else None)
+    assert isinstance(profile.job_private_file_provider, SlurmUserPrivateFileProvider if trusted_user else SlurmJobPrivateFileProvider)
+    assert service.daemon.slurm_schema_version == (4 if trusted_user else 3)
     assert profile.bootstrap_argv == ("loom", "slurm-bootstrap")
-    assert profile.container_options is not None
-    assert profile.apptainer_options is not None
+    assert (profile.container_options is None) is trusted_user
+    assert (profile.apptainer_options is None) is trusted_user
+    from loom.queue.deployment import inspect_role_declaration
+    assert inspect_role_declaration(service.source_path, role="coordinator").availability == "available"
+
+    if accounting_history:
+        from loom.queue._slurm_observation import SlurmObservationPolicy
+
+        outbound_root = tmp_path / "outbound"
+        outbound_root.mkdir()
+        agent_source = _agent_config(outbound_root)
+        outbound = json.loads(agent_source.read_text())
+        outbound["slurm_profiles"] = payload["slurm_profiles"]
+        _write_protected(agent_source, outbound)
+        unbatched = load_outbound_agent_service_config(agent_source)
+        outbound["slurm_observation_policy"] = {
+            "failure_backoff_cap_seconds": 300, "max_jobs_per_query": 8,
+            "max_queries_per_cycle": 4, "cycle_budget_seconds": 10,
+        }
+        _write_protected(agent_source, outbound)
+        batched = load_outbound_agent_service_config(agent_source)
+        assert inspect_role_declaration(agent_source, role="agent").availability == "available"
+        assert batched.client.slurm_observation_policy == SlurmObservationPolicy(300, 8, 4, 10)
+        assert batched.immutable_fingerprint == unbatched.immutable_fingerprint
+        assert batched.active_fingerprint != unbatched.active_fingerprint
+        assert batched.client.slurm_profiles[0].configuration_fingerprint == profile.configuration_fingerprint
+
+    # A budget-only reload must preserve the exact profile, including its
+    # command runner; a changed protected runner declaration must be rebuilt.
+    payload["slurm_admission"] = {"max_reserved_gpus": 8}
+    _write_protected(service.source_path, payload)
+    budget = load_coordinator_service_config(service.source_path, current=service)
+    assert budget.daemon.slurm_profiles[0] is profile
+    payload["slurm_profiles"][0]["runner"]["unavailable_commands"] = ["sbatch"]
+    _write_protected(service.source_path, payload)
+    changed = load_coordinator_service_config(service.source_path, current=budget)
+    assert changed.daemon.slurm_profiles[0] is not profile
+    assert changed.daemon.slurm_profiles[0].configuration_fingerprint == profile.configuration_fingerprint
+    from loom.pipeline.executors.slurm.errors import SlurmCommandUnavailableError
+    with pytest.raises(SlurmCommandUnavailableError):
+        changed.daemon.slurm_profiles[0].runner.require("sbatch")
+    if client_environment:
+        payload["slurm_profiles"][0]["runner"]["client_environment"] = {
+            **selected_environment, "TMPDIR": "/site/scratch/other",
+        }
+        _write_protected(service.source_path, payload)
+        relocated = load_coordinator_service_config(service.source_path, current=changed)
+        assert relocated.daemon.slurm_profiles[0].configuration_fingerprint != profile.configuration_fingerprint
 
     from loom.queue.deployment import _slurm_profile_composition
     declaration = payload["slurm_profiles"][0]
@@ -1407,6 +1650,25 @@ def test_coordinator_config_constructs_complete_protected_composition(
     declaration["bootstrap_config_path"] = "relative-bootstrap.json"
     with pytest.raises(QueueConfigError, match="bootstrap paths must be absolute"):
         _slurm_profile_composition([declaration])
+    if bounded_commands:
+        from loom.pipeline.executors.slurm import SubprocessSlurmCommandRunner
+
+        declaration["bootstrap_config_path"] = "/site/private/bootstrap-training.json"
+        declaration["runner"]["_target_"] = "loom.pipeline.executors.slurm.SubprocessSlurmCommandRunner"
+        declaration["runner"].pop("unavailable_commands")
+        declaration["runner"]["command_policy"]["submission_timeout_seconds"] = 30
+        with_changed_timeout = _slurm_profile_composition([declaration])[0]
+        assert isinstance(with_changed_timeout.runner, SubprocessSlurmCommandRunner)
+        assert with_changed_timeout.configuration_fingerprint != configured.configuration_fingerprint
+        if client_environment:
+            assert with_changed_timeout.runner.client_environment["TMPDIR"] == "/site/scratch/other"
+            declaration["runner"]["client_environment"]["SBATCH_PARTITION"] = "unapproved"
+            with pytest.raises(QueueConfigError, match=r"runner target is invalid"):
+                _slurm_profile_composition([declaration])
+            declaration["runner"]["client_environment"].pop("SBATCH_PARTITION")
+        declaration["runner"]["command_policy"]["submission_timeout_seconds"] = 0
+        with pytest.raises(QueueConfigError, match=r"runner target is invalid"):
+            _slurm_profile_composition([declaration])
 
 
 def test_https_authority_schema_resolves_tls_and_service_scope(
@@ -1568,6 +1830,7 @@ def _gpu_probe_configuration(
     declared_torch=True,
     occupancy_observer=None,
     external_process_policy=None,
+    storage=None,
 ):
     """Real role setup with a controlled CUDA interface; no physical GPU claim."""
     observed = LocalGpuInventory(
@@ -1628,6 +1891,14 @@ def _gpu_probe_configuration(
             external_process_policy
         )
     _write_protected(agent_path, payload)
+    if storage is not None:
+        owner_payload = json.loads(source.read_text())
+        owner_payload["storage"] = storage
+        if role == "coordinator":
+            authority = tmp_path / "authority"
+            authority.mkdir(mode=0o700)
+            owner_payload["authority"] = {"kind": "embedded", "state_root": str(authority)}
+        _write_protected(source, owner_payload)
     if role == "coordinator":
         config = load_coordinator_service_config(source)
         if initialize:
@@ -1640,6 +1911,33 @@ def _gpu_probe_configuration(
         root = config.client.agent_root
     assert root is not None
     return source, root, config
+
+
+@pytest.mark.parametrize("role", ("coordinator", "agent"))
+def test_gpu_probe_reopens_explicit_storage_policy(tmp_path, monkeypatch, role):
+    from loom.queue._gpu_probe import _probe_owner
+    from loom.queue._agent_process_supervisor import _service_configuration
+
+    source, root, service = _gpu_probe_configuration(
+        tmp_path, monkeypatch, role, storage=_rollback_storage(),
+    )
+    profiles = (
+        (service.local_agent.profile,) if role == "coordinator"
+        else service.client.resident_profiles
+    )
+    with _probe_owner(service, profiles) as (_, journal, _):
+        assert journal.retained_claim_commands() == ()
+        # A normal owner connection must verify the policy, not convert the DB.
+        with journal._transaction() as conn:
+            assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+            assert conn.execute("PRAGMA synchronous").fetchone()[0] == 3
+            assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 1234
+    assert _service_configuration(root / "supervisor").storage is not None
+    report = run_role_preflight(source, role=role)
+    retained = next(
+        check for check in report.checks if check.check_id == "execution.retained_binding"
+    )
+    assert retained.status == "PASS"
 
 
 @pytest.mark.parametrize("role", ("coordinator", "agent"))
@@ -2891,3 +3189,136 @@ def test_declaration_only_coordinator_identity_refuses_colocated_execution(tmp_p
     source = _coordinator_config(tmp_path)
     with pytest.raises(QueueConfigError, match="pure coordinator"):
         read_coordinator_scheduling_fingerprint(source)
+
+
+def test_slurm_admission_is_optional_active_configuration_and_selects_shared_schema(tmp_path):
+    from loom.queue.deployment import inspect_role_declaration, read_coordinator_scheduling_fingerprint
+
+    source = _coordinator_config(tmp_path)
+    payload = json.loads(source.read_text())
+    payload["local_agent"] = None
+    _write_protected(source, payload)
+    legacy = load_coordinator_service_config(source)
+    assert legacy.daemon.slurm_admission is None
+    assert legacy.daemon.slurm_schema_version == 3
+    for value in (8, None):
+        payload["slurm_admission"] = {"max_reserved_gpus": value}
+        _write_protected(source, payload)
+        selected = load_coordinator_service_config(source)
+        assert selected.daemon.slurm_admission.max_reserved_gpus == value
+        assert selected.daemon.slurm_schema_version == 4
+        assert selected.immutable_fingerprint == legacy.immutable_fingerprint
+        assert selected.active_fingerprint != legacy.active_fingerprint
+        assert read_coordinator_scheduling_fingerprint(source) == selected.active_fingerprint
+        assert inspect_role_declaration(source, role="coordinator") is not None
+    payload["slurm_admission"] = None
+    _write_protected(source, payload)
+    unselected = load_coordinator_service_config(source)
+    assert unselected.active_fingerprint == legacy.active_fingerprint
+    assert unselected.daemon.slurm_schema_version == 3
+    assert not legacy.daemon.deployment_root.exists()
+
+
+@pytest.mark.parametrize("value", [{}, {"max_reserved_gpus": True}, {"max_reserved_gpus": 0},
+                                   {"max_reserved_gpus": -1}, {"max_reserved_gpus": 1.5},
+                                   {"max_reserved_gpus": "8"}, {"max_reserved_gpus": 8, "extra": 1}])
+def test_slurm_admission_rejected_before_target_construction(tmp_path, monkeypatch, value):
+    import loom.queue.deployment as deployment
+
+    source = _coordinator_config(tmp_path)
+    payload = json.loads(source.read_text())
+    payload["slurm_admission"] = value
+    _write_protected(source, payload)
+    monkeypatch.setattr(deployment, "_trusted_target", lambda *_args: pytest.fail("constructed a target"))
+    with pytest.raises(QueueConfigError, match="slurm_admission|max_reserved_gpus"):
+        load_coordinator_service_config(source)
+    with pytest.raises(QueueConfigError, match="slurm_admission|max_reserved_gpus"):
+        deployment.inspect_role_declaration(source, role="coordinator")
+
+
+def test_submit_pacing_is_normalized_and_part_of_active_agent_identity(tmp_path):
+    from loom.queue.deployment import read_agent_spec
+    from loom.queue._agent_session_journal import _agent_active_fingerprint
+    from dataclasses import replace
+
+    source = _agent_config(tmp_path)
+    payload = json.loads(source.read_text())
+    legacy = load_outbound_agent_service_config(source)
+    selected = []
+    for interval in (1, 1.0, 2.0):
+        payload["slurm_submit_interval_seconds"] = interval
+        _write_protected(source, payload)
+        assert read_agent_spec(source).declarations["slurm_submit_interval_seconds"] == float(interval)
+        service = load_outbound_agent_service_config(source)
+        assert service.client.slurm_submit_interval_seconds == float(interval)
+        assert service.immutable_fingerprint == legacy.immutable_fingerprint
+        assert service.active_fingerprint != legacy.active_fingerprint
+        selected.append(service)
+    assert selected[0].active_fingerprint == selected[1].active_fingerprint
+    assert selected[1].active_fingerprint != selected[2].active_fingerprint
+    base = replace(legacy.client, active_configuration_fingerprint=None, declaration_digest=None)
+    assert _agent_active_fingerprint(base) != _agent_active_fingerprint(replace(base, slurm_submit_interval_seconds=1))
+    payload["slurm_submit_interval_seconds"] = None
+    _write_protected(source, payload)
+    assert load_outbound_agent_service_config(source).active_fingerprint == legacy.active_fingerprint
+
+
+@pytest.mark.parametrize("value", [True, 0, -1, "1", float("inf"), float("nan"), 10**400])
+def test_submit_pacing_rejects_invalid_values_before_qualification(tmp_path, monkeypatch, value):
+    import loom.queue.deployment as deployment
+
+    source = _agent_config(tmp_path)
+    payload = json.loads(source.read_text())
+    payload["slurm_submit_interval_seconds"] = value
+    _write_protected(source, payload)
+    monkeypatch.setattr(deployment, "_trusted_target", lambda *_args: pytest.fail("constructed a target"))
+    with pytest.raises(QueueConfigError):
+        deployment.read_agent_spec(source)
+
+
+def test_observation_policy_is_active_only_and_preserves_omitted_identity(tmp_path):
+    from dataclasses import replace
+    from loom.queue.deployment import read_agent_spec, inspect_role_declaration
+    from loom.queue._agent_session_journal import _agent_active_fingerprint
+    from loom.queue._slurm_observation import SlurmObservationPolicy
+
+    source = _agent_config(tmp_path)
+    payload = json.loads(source.read_text())
+    legacy = load_outbound_agent_service_config(source)
+    selections = []
+    for cap in (300, 300.0, 600):
+        payload["slurm_observation_policy"] = {"failure_backoff_cap_seconds": cap}
+        _write_protected(source, payload)
+        assert read_agent_spec(source).declarations["slurm_observation_policy"] == {"failure_backoff_cap_seconds": float(cap)}
+        assert inspect_role_declaration(source, role="agent").availability == "available"
+        service = load_outbound_agent_service_config(source)
+        assert service.client.slurm_observation_policy == SlurmObservationPolicy(cap)
+        assert service.immutable_fingerprint == legacy.immutable_fingerprint
+        assert service.active_fingerprint != legacy.active_fingerprint
+        selections.append(service.active_fingerprint)
+    assert selections[0] == selections[1] != selections[2]
+    base = replace(legacy.client, active_configuration_fingerprint=None, declaration_digest=None)
+    assert _agent_active_fingerprint(base) != _agent_active_fingerprint(replace(base, slurm_observation_policy=SlurmObservationPolicy(300)))
+    payload["slurm_observation_policy"] = None
+    _write_protected(source, payload)
+    assert load_outbound_agent_service_config(source).active_fingerprint == legacy.active_fingerprint
+
+
+@pytest.mark.parametrize("value", [
+    {}, {"failure_backoff_cap_seconds": True}, {"failure_backoff_cap_seconds": 0},
+    {"failure_backoff_cap_seconds": -1}, {"failure_backoff_cap_seconds": "300"},
+    {"failure_backoff_cap_seconds": float("inf")}, {"failure_backoff_cap_seconds": float("nan")},
+    {"failure_backoff_cap_seconds": 10**400}, {"failure_backoff_cap_seconds": 3601},
+    {"failure_backoff_cap_seconds": 300, "unknown": 1},
+])
+def test_observation_policy_refuses_invalid_selection_before_qualification(tmp_path, monkeypatch, value):
+    import loom.queue.deployment as deployment
+
+    source = _agent_config(tmp_path)
+    payload = json.loads(source.read_text())
+    payload["slurm_observation_policy"] = value
+    _write_protected(source, payload)
+    monkeypatch.setattr(deployment, "_trusted_target", lambda *_args: pytest.fail("constructed a target"))
+    for read in (deployment.read_agent_spec, deployment.load_outbound_agent_service_config):
+        with pytest.raises(QueueConfigError):
+            read(source)

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from types import ModuleType
 from typing import Any, cast
 
 from loom.serialization import PlainData, json_loads, stable_json_dumps
+from loom._sqlite_policy import SQLitePolicy, connect_existing, initialize_database
 from loom.timestamps import utc_timestamp
 
 from .errors import QueueConflictError, QueueSchemaError, QueueStorageError
@@ -49,12 +51,15 @@ class SQLiteQueueRepository:
         db_path: str | Path,
         *,
         clock: Callable[[], str] = utc_timestamp,
+        sqlite_policy: SQLitePolicy | None = None,
     ) -> None:
         self.db_path = Path(db_path)
         self._clock = clock
+        self._sqlite_policy = sqlite_policy
         self._read_only = False
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as conn:
+        initial = self._connect() if sqlite_policy is None else self._policy_connection(initialize=True)
+        with initial as conn:
             _ensure_schema(conn)
 
     @classmethod
@@ -68,6 +73,7 @@ class SQLiteQueueRepository:
         repository.db_path = path
         repository._clock = utc_timestamp
         repository._read_only = True
+        repository._sqlite_policy = None
         with repository._connect() as conn:
             _verify_schema(conn)
         return repository
@@ -540,6 +546,8 @@ class SQLiteQueueRepository:
         )
 
     def _connect(self) -> Any:
+        if self._sqlite_policy is not None and not self._read_only:
+            return self._policy_connection()
         sqlite = _sqlite3()
         read_only = self._read_only
         try:
@@ -563,6 +571,22 @@ class SQLiteQueueRepository:
             return connection
         except sqlite.DatabaseError as exc:
             raise QueueStorageError(f"unable to open queue repository: {exc}") from exc
+
+    @contextmanager
+    def _policy_connection(self, *, initialize=False):
+        sqlite = _sqlite3()
+        connect = initialize_database if initialize else connect_existing
+        try:
+            connection = connect(self.db_path, policy=self._sqlite_policy, isolation_level="")
+        except sqlite.DatabaseError as exc:
+            raise QueueStorageError(f"unable to open queue repository: {exc}") from exc
+        try:
+            connection.row_factory = sqlite.Row
+            connection.execute("PRAGMA foreign_keys=ON")
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
 
 def _ensure_schema(conn: Any) -> None:

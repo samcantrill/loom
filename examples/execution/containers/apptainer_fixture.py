@@ -13,9 +13,10 @@ import tempfile
 
 @contextmanager
 def fake_apptainer():
+    from loom import _pidfd
     from loom.pipeline.executors.apptainer import _timeout
 
-    with tempfile.TemporaryDirectory(prefix="loom-fake-apptainer-", dir="/tmp") as scratch:
+    with tempfile.TemporaryDirectory(prefix="loom-fake-apptainer-", dir=os.environ.get("TMPDIR")) as scratch:
         root = Path(scratch)
         command = root / "apptainer"
         command.write_text(f"""#!{sys.executable}
@@ -44,13 +45,13 @@ os.execvpe(args[0], args, os.environ)
         # Supervisor processes use a fresh interpreter. Install the same explicit
         # fake kernel seam there; product code contains no fixture switch.
         (root / "sitecustomize.py").write_text(
-            "import os\nfrom loom.pipeline.executors.apptainer import _timeout\n"
-            "_timeout._capture_init = lambda process, group: os.pidfd_open(process.pid)\n"
+            "from loom import _pidfd\nfrom loom.pipeline.executors.apptainer import _timeout\n"
+            "_timeout._capture_init = lambda process, group: _pidfd.open_pidfd(process.pid)\n"
         )
         prior = os.environ.get("PYTHONPATH")
         os.environ["PYTHONPATH"] = str(root) + (os.pathsep + prior if prior else "")
         original = _timeout._capture_init
-        _timeout._capture_init = lambda process, group: os.pidfd_open(process.pid)
+        _timeout._capture_init = lambda process, group: _pidfd.open_pidfd(process.pid)
         try:
             yield {
                 "kind": "apptainer",

@@ -12,7 +12,7 @@ from __future__ import annotations
 from .shared_execution import assignment_scope, require_bindings, validate_workload, SHARED_EXECUTION_SCOPE
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 import base64
 import hashlib
 import json
@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 
 from loom.artifacts import ArtifactRef
 from loom._sqlite_inspection import inspect_sqlite_database
+from loom._sqlite_policy import SQLitePolicy, connect_existing, initialize_database
 from loom.pipeline.stores.errors import ArtifactStoreError
 from loom.pipeline.stores.shared_artifacts import SHARED_PUBLICATION, binding as _artifact_shared_binding, admits_budgets, file_identity, verify_ref
 from loom.io.uris import uri_to_path
@@ -1645,7 +1646,12 @@ def _require_current_workspace_path(root: Path) -> None:
         raise QueueServiceError("resident assignment workspace layout is unsupported")
 
 
-def _require_resident_workspace_schema(conn: sqlite3.Connection) -> None:
+def _require_resident_workspace_schema(
+    conn: sqlite3.Connection,
+) -> tuple[SQLitePolicy | None, str]:
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    if version not in (0, 1):
+        raise QueueServiceError("resident assignment workspace schema is unsupported")
     expected = {
         "request": {
             "singleton", "value_json", "state", "fence", "process_execution_id",
@@ -1657,6 +1663,8 @@ def _require_resident_workspace_schema(conn: sqlite3.Connection) -> None:
         },
         "events": {"sequence", "event_id", "payload_json", "acknowledged"},
     }
+    if version == 1:
+        expected["storage_policy"] = {"singleton", "value_json"}
     tables = {
         str(row[0]) for row in conn.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
@@ -1667,30 +1675,77 @@ def _require_resident_workspace_schema(conn: sqlite3.Connection) -> None:
         for table, columns in expected.items()
     ):
         raise QueueServiceError("resident assignment workspace schema is unsupported")
+    if version == 0:
+        return None, "best_effort"
+    row = conn.execute(
+        "SELECT value_json FROM storage_policy WHERE singleton = 1"
+    ).fetchone()
+    try:
+        value = json.loads(row[0]) if row is not None else None
+        if not isinstance(value, dict) or set(value) != {
+            "journal_mode", "synchronous", "busy_timeout_ms", "durable_files",
+        }:
+            raise ValueError("missing workspace policy")
+        durability = value.pop("durable_files")
+        if durability not in ("best_effort", "strict"):
+            raise ValueError("invalid workspace file durability")
+        return SQLitePolicy(**value), durability
+    except (TypeError, ValueError) as exc:
+        raise QueueServiceError("resident assignment storage policy is invalid") from exc
 
 
 class _ResidentAssignmentWorkspace:
     """Agent-owned durable request, byte, start, result, and outbox gate."""
 
-    def __init__(self, agent_root: Path, assignment_id: str) -> None:
+    def __init__(
+        self, agent_root: Path, assignment_id: str, *,
+        sqlite_policy: SQLitePolicy | None = None,
+        durable_files: str | None = None,
+        _allow_initialize: bool | None = None,
+    ) -> None:
         _identifier(assignment_id, "assignment_id")
+        if durable_files not in (None, "best_effort", "strict"):
+            raise QueueServiceError("resident assignment file durability is invalid")
         root = Path(agent_root).resolve()
         self.root = root / "assignments" / assignment_id
         _require_current_workspace_path(self.root)
         self._db = self.root / "resident.sqlite"
+        self._sqlite_policy = sqlite_policy
+        self.durable_files = durable_files or "best_effort"
         if self._db.exists():
             with inspect_sqlite_database(self._db) as conn:
-                _require_resident_workspace_schema(conn)
+                retained = _require_resident_workspace_schema(conn)
+            if sqlite_policy is not None and retained != (sqlite_policy, self.durable_files):
+                raise QueueConflictError("resident assignment storage policy conflicts")
+            self._sqlite_policy, self.durable_files = retained
             self.root.chmod(0o700)
             self._db.chmod(0o600)
             return
+        if _allow_initialize is False or (
+            sqlite_policy is not None and _allow_initialize is not True
+        ):
+            raise QueueServiceError("resident assignment workspace is missing")
         self.root.mkdir(parents=True, exist_ok=True)
         self.root.chmod(0o700)
-        with self._connect() as conn:
+        with self._connect(initialize=True) as conn:
             conn.execute("BEGIN IMMEDIATE")
             if not conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchone():
                 self._initialize(conn)
-            _require_resident_workspace_schema(conn)
+                if sqlite_policy is not None:
+                    conn.execute(
+                        "CREATE TABLE storage_policy ("
+                        "singleton INTEGER PRIMARY KEY CHECK(singleton = 1), "
+                        "value_json TEXT NOT NULL)"
+                    )
+                    conn.execute(
+                        "INSERT INTO storage_policy VALUES (1, ?)",
+                        (_canonical_json({
+                            **asdict(sqlite_policy), "durable_files": self.durable_files,
+                        }),),
+                    )
+                    conn.execute("PRAGMA user_version = 1")
+            if _require_resident_workspace_schema(conn) != (sqlite_policy, self.durable_files):
+                raise QueueConflictError("resident assignment storage policy conflicts")
         self._db.chmod(0o600)
 
     @staticmethod
@@ -1734,8 +1789,12 @@ class _ResidentAssignmentWorkspace:
             """
         )
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db)
+    def _connect(self, *, initialize: bool = False) -> sqlite3.Connection:
+        if self._sqlite_policy is None:
+            conn = sqlite3.connect(self._db)
+        else:
+            connect = initialize_database if initialize else connect_existing
+            conn = connect(self._db, policy=self._sqlite_policy, isolation_level="")
         conn.row_factory = sqlite3.Row
         return conn
 

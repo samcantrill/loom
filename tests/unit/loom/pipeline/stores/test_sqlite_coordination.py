@@ -23,6 +23,21 @@ from loom.pipeline.stores.sqlite_coordination import SQLiteWorkspaceCoordination
 pytestmark = pytest.mark.unit
 
 
+def test_explicit_policy_is_applied_to_each_coordination_writer(tmp_path):
+    from loom._sqlite_policy import SQLitePolicy
+
+    policy = SQLitePolicy("delete", "extra", 7654)
+    store = SQLiteWorkspaceCoordinationStore.for_workspace_root(tmp_path, sqlite_policy=policy)
+    workspace = WorkspaceIdentity(workspace_id="workspace-1")
+    store.create_workspace(workspace)
+    reopened = SQLiteWorkspaceCoordinationStore.for_workspace_root(tmp_path, sqlite_policy=policy)
+    assert reopened.check_schema().supported
+    with reopened._connection(initialize=False, write=True) as conn:
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+        assert conn.execute("PRAGMA synchronous").fetchone()[0] == 3
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 7654
+
+
 @dataclass(slots=True)
 class FrozenClock:
     value: str = "2020-01-01T00:00:00Z"

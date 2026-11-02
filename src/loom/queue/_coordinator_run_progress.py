@@ -183,7 +183,8 @@ def _settled_terminal_outcome(
 
 
 def schedule_once(
-    self: LocalDaemonExecution, admissions: Mapping[str, LocalDaemonAdmission]
+    self: LocalDaemonExecution, admissions: Mapping[str, LocalDaemonAdmission], *,
+    waiting_outcomes: dict[str, LocalDaemonExecutionOutcome] | None = None,
 ) -> tuple[str, LocalDaemonExecutionOutcome] | None:
     """Select and durably start one assignment from the global ready window."""
 
@@ -303,6 +304,15 @@ def schedule_once(
                     snapshot=snapshot,
                     stage_work_id=record.stage_work_id,
                 )
+                if (
+                    outcome is not None
+                    and outcome.state is LocalDaemonAdmissionState.WAITING
+                    and waiting_outcomes is not None
+                    and admission.admission_id in waiting_outcomes
+                ):
+                    # Preserve a concrete deferral without returning early and
+                    # starving other ready work. In-flight runs remain ACTIVE.
+                    waiting_outcomes[admission.admission_id] = outcome
                 if (
                     outcome is not None
                     and outcome.state is LocalDaemonAdmissionState.ACTIVE

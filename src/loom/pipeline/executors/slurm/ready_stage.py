@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+from loom._sqlite_policy import SQLitePolicy, connect_existing, initialize_database
+
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import sqlite3
+import subprocess
 from types import MappingProxyType
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from loom.pipeline.executors.apptainer import ApptainerExecOptions
 from loom.pipeline.executors.containers import (
@@ -36,17 +40,27 @@ from .commands import (
     SlurmCommandResult,
     SlurmCommandRunner,
     parse_sbatch_parsable_output,
+    ready_stage_client_environment,
+    ready_stage_command_policy,
 )
-from .errors import SlurmPlanningError, SlurmResourceMappingError
+from .errors import SlurmCommandOutputLimitError, SlurmPlanningError, SlurmResourceMappingError
+from .history import (
+    SlurmAccountingIdentity, SlurmHistoryPolicy, history_cluster,
+    operation_job_name, parse_accounting_rows, parse_history_policy,
+)
 from .container import wrap_slurm_command_with_apptainer
 from .options import SlurmCommandArgv
 from .rendering import render_gpu_allocation_environment, render_sbatch_directive
 from .resources import SlurmSbatchDirective, map_slurm_resources
 
+if TYPE_CHECKING:
+    from .trusted_user import SlurmUserPrivateFileProvider
+
 
 READY_STAGE_REQUEST_SCHEMA_VERSION = 4
 _RETAINED_NATIVE_READY_STAGE_REQUEST_SCHEMA_VERSION = 3
 READY_STAGE_SUBMISSION_SCHEMA_VERSION = 3
+_HISTORY_SUBMISSION_SCHEMA_VERSION = 4
 _HELPER_ENVELOPE_VERSION = 2
 _PROFILE_IMPLEMENTATION_FINGERPRINT = "loom.slurm.ready-stage-profile.v1"
 _OPERATION_MARKER_PREFIX = "loom-op-v1:"
@@ -80,6 +94,7 @@ class SlurmContainmentHelper:
     descriptor: str
     argv: tuple[str, ...]
     timeout_seconds: float = 5.0
+    process_policy: str | None = None
 
     def __post_init__(self) -> None:
         _safe_text(self.descriptor)
@@ -92,21 +107,35 @@ class SlurmContainmentHelper:
             or self.timeout_seconds <= 0
         ):
             raise SlurmPlanningError("SLURM containment helper timeout is invalid")
+        if self.process_policy is not None:
+            if self.process_policy != "bounded-v1":
+                raise SlurmPlanningError("SLURM containment helper process policy is unsupported")
+            if isinstance(self.timeout_seconds, bool) or not 0 < self.timeout_seconds <= 3600:
+                raise SlurmPlanningError("bounded containment helper timeout must be in (0, 3600]")
+            if not math.isfinite(self.timeout_seconds):
+                raise SlurmPlanningError("bounded containment helper timeout must be finite")
 
     def resolve(
         self, request: Mapping[str, PlainData]
     ) -> Mapping[str, PlainData] | None:
         import subprocess
+        from loom._bounded_process import ProcessOutputLimitError, run_bounded_process
 
         try:
-            completed = subprocess.run(
-                self.argv,
-                input=stable_json_dumps(dict(request)).encode("utf-8"),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                check=False,
-                timeout=float(self.timeout_seconds),
-            )
+            payload = stable_json_dumps(dict(request)).encode("utf-8")
+            if self.process_policy is None:
+                completed = subprocess.run(
+                    self.argv, input=payload, stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL, check=False, timeout=float(self.timeout_seconds),
+                )
+            else:
+                # A larger request cannot fit in a valid bounded response echo.
+                if len(payload) > 16_384:
+                    return None
+                completed = run_bounded_process(
+                    self.argv, input=payload, timeout=float(self.timeout_seconds),
+                    environment=None, output_limit=16_384,
+                )
             if completed.returncode != 0 or len(completed.stdout) > 16_384:
                 return None
             value = json.loads(completed.stdout.decode("utf-8"))
@@ -117,6 +146,7 @@ class SlurmContainmentHelper:
             )
         except (
             OSError,
+            ProcessOutputLimitError,
             subprocess.SubprocessError,
             UnicodeDecodeError,
             json.JSONDecodeError,
@@ -133,6 +163,15 @@ def resolve_slurm_containment(
     if helper is None:
         return SlurmContainmentReceipt("UNKNOWN")
     try:
+        if profile.accounting_history is not None:
+            identity = SlurmAccountingIdentity.from_dict(request.get("accounting_identity"))
+            if (
+                (identity.job_id, identity.cluster) != (request.get("job_id"), request.get("cluster_id"))
+                or identity.cluster != profile.cluster
+                or identity.user_id != profile.accounting_history.user_id
+                or identity.job_name != operation_job_name(cast(str, request.get("submission_operation_id")))
+            ):
+                return SlurmContainmentReceipt("UNKNOWN")
         value = helper.resolve(request)
         if not isinstance(value, Mapping) or set(value) != {
             "state",
@@ -167,7 +206,7 @@ def resolve_slurm_containment(
 
 @dataclass(frozen=True, slots=True)
 class JobPrivateFilePrepared:
-    """The only durable view of a site-provided allocation capability."""
+    """The verifier-only durable receipt for a prepared bootstrap capability."""
 
     receipt: str
     verifier: str
@@ -340,7 +379,7 @@ class SlurmReadyStageProfile:
 
     profile_id: str
     partition: str
-    max_outstanding: int
+    max_outstanding: int | None
     bootstrap_argv: tuple[str, ...]
     runner: SlurmCommandRunner
     command_adapter_fingerprint: str
@@ -350,7 +389,7 @@ class SlurmReadyStageProfile:
     project_fingerprint: str
     environment_fingerprint: str
     executor_fingerprint: str
-    job_private_file_provider: SlurmJobPrivateFileProvider
+    job_private_file_provider: SlurmJobPrivateFileProvider | SlurmUserPrivateFileProvider
     result_storage: Mapping[str, object] | None = None
     container_options: ContainerOptions | Mapping[str, object] | None = None
     apptainer_options: ApptainerExecOptions | Mapping[str, object] | None = None
@@ -365,8 +404,18 @@ class SlurmReadyStageProfile:
     poll_interval_seconds: float = 1.0
     containment_helper: SlurmContainmentHelper | None = field(default=None, repr=False)
     descriptor: SchedulingComponentDescriptor = field(init=False)
+    accounting_history: SlurmHistoryPolicy | None = None
+    requeue: bool | None = None
 
     def __post_init__(self) -> None:
+        if self.requeue is not None and type(self.requeue) is not bool:
+            raise SlurmPlanningError("ready-stage requeue must be a boolean or None")
+        history = parse_history_policy(self.accounting_history)
+        if history is not None:
+            history_cluster(self.cluster)
+            if ready_stage_command_policy(self.runner) is None:
+                raise SlurmPlanningError("accounting history requires bounded command_policy")
+        object.__setattr__(self, "accounting_history", history)
         for value in (
             self.profile_id,
             self.partition,
@@ -384,7 +433,7 @@ class SlurmReadyStageProfile:
         for value in (self.account, self.qos, self.cluster, self.time):
             if value is not None:
                 _safe_text(value)
-        if (
+        if self.max_outstanding is not None and (
             isinstance(self.max_outstanding, bool)
             or not isinstance(self.max_outstanding, int)
             or not 1 <= self.max_outstanding <= 10_000
@@ -402,8 +451,10 @@ class SlurmReadyStageProfile:
             raise SlurmPlanningError(
                 "ready-stage profile executor is not supported by the fixed bootstrap"
             )
-        if not isinstance(self.job_private_file_provider, SlurmJobPrivateFileProvider):
-            raise SlurmPlanningError("ready-stage profile requires job_private_file_v1")
+        from .trusted_user import SlurmUserPrivateFileProvider
+
+        if not isinstance(self.job_private_file_provider, (SlurmJobPrivateFileProvider, SlurmUserPrivateFileProvider)):
+            raise SlurmPlanningError("ready-stage profile requires a supported capability provider")
         container = (
             None
             if self.container_options is None
@@ -427,6 +478,8 @@ class SlurmReadyStageProfile:
                 "ready-stage Apptainer options require a selected container"
             )
         if container is not None:
+            if isinstance(self.job_private_file_provider, SlurmUserPrivateFileProvider):
+                raise SlurmPlanningError("trusted-user delivery requires native bootstrap; fixed bootstrap containers are unsupported")
             _validate_ready_stage_container_delivery(
                 container, self.job_private_file_provider
             )
@@ -480,6 +533,7 @@ class SlurmReadyStageProfile:
             "account": self.account,
             "qos": self.qos,
             **({"time": self.time} if self.time is not None else {}),
+            **({"requeue": self.requeue} if self.requeue is not None else {}),
             "cluster": self.cluster,
             "max_outstanding": self.max_outstanding,
             "bootstrap_argv": list(argv),
@@ -494,7 +548,11 @@ class SlurmReadyStageProfile:
             "credential_policy_revision": self.credential_policy_revision,
             "capability_delivery_kind": self.job_private_file_provider.delivery_kind,
             "capability_descriptor": self.job_private_file_provider.descriptor,
-            "capability_path": self.job_private_file_provider.fixed_path,
+            **(
+                {"capability_path": self.job_private_file_provider.fixed_path}
+                if isinstance(self.job_private_file_provider, SlurmJobPrivateFileProvider)
+                else {"capability_binding": dict(self.job_private_file_provider.binding_identity())}
+            ),
             "containment_helper_descriptor": (
                 None
                 if self.containment_helper is None
@@ -511,6 +569,18 @@ class SlurmReadyStageProfile:
                 else float(self.containment_helper.timeout_seconds)
             ),
         }
+        command_policy = ready_stage_command_policy(self.runner)
+        if self.containment_helper is not None and self.containment_helper.process_policy is not None:
+            payload["containment_helper_process_policy"] = self.containment_helper.process_policy
+        if command_policy is not None:
+            payload["command_policy"] = command_policy.to_dict()
+        client_environment = ready_stage_client_environment(self.runner)
+        if client_environment is not None:
+            payload["client_environment"] = {
+                "kind": "explicit-client-environment-v1", "variables": dict(client_environment),
+            }
+        if history is not None:
+            payload["accounting_history"] = history.to_dict()
         if storage is not None:
             payload["result_storage"] = dict(storage)
         if submitted_policy is not None:
@@ -547,6 +617,12 @@ class SlurmReadyStageProfile:
         try:
             for command in ("sbatch", "squeue", "sacct", "scancel"):
                 self.runner.require(command)
+            if self.accounting_history is not None:
+                if not all(callable(getattr(self.runner, method, None)) for method in (
+                    "discover_named_operation", "scancel_named_operation",
+                )):
+                    return "slurm_profile_operation_discovery_unavailable"
+                return None
             if not callable(self.runner.discover_live_operations) or not callable(
                 self.runner.discover_accounted_operations
             ):
@@ -760,8 +836,17 @@ def map_ready_stage(
         directives.append(SlurmSbatchDirective("qos", profile.qos, "profile"))
     if profile.time is not None:
         directives.append(SlurmSbatchDirective("time", profile.time, "profile"))
+    if profile.requeue is not None:
+        directives.append(SlurmSbatchDirective(
+            "requeue" if profile.requeue else "no-requeue", True, "profile",
+        ))
     directives.extend(resources)
     directives.append(SlurmSbatchDirective("comment", marker, "operation"))
+    if profile.accounting_history is not None:
+        directives.extend((
+            SlurmSbatchDirective("job-name", operation_job_name(operation_id), "operation"),
+            SlurmSbatchDirective("clusters", history_cluster(profile.cluster), "profile"),
+        ))
     command = SlurmCommandArgv(launcher_argv=profile.bootstrap_argv)
     container_metadata: Mapping[str, PlainData] | None = None
     container = profile.container_options
@@ -864,9 +949,10 @@ class SlurmReadyStageSubmission:
     cancel_requested: bool = False
     capability: JobPrivateFilePrepared | None = None
     schema_version: int = READY_STAGE_SUBMISSION_SCHEMA_VERSION
+    accounting_identity: SlurmAccountingIdentity | None = None
 
     def __post_init__(self) -> None:
-        if self.schema_version != READY_STAGE_SUBMISSION_SCHEMA_VERSION:
+        if self.schema_version not in {READY_STAGE_SUBMISSION_SCHEMA_VERSION, _HISTORY_SUBMISSION_SCHEMA_VERSION}:
             raise SlurmPlanningError("ready-stage submission schema is unsupported")
         if not isinstance(self.request, SlurmReadyStageRequest):
             raise SlurmPlanningError("ready-stage submission request is invalid")
@@ -886,6 +972,15 @@ class SlurmReadyStageSubmission:
             raise SlurmPlanningError("accepted ready-stage handle is missing")
         if self.state is not ReadyStageState.ACCEPTED and self.job_id is not None:
             raise SlurmPlanningError("non-accepted ready-stage has a handle")
+        if self.accounting_identity is not None:
+            identity = self.accounting_identity
+            if (
+                self.schema_version != _HISTORY_SUBMISSION_SCHEMA_VERSION
+                or not isinstance(identity, SlurmAccountingIdentity)
+                or (identity.job_id, identity.cluster) != (self.job_id, self.cluster)
+                or identity.job_name != operation_job_name(self.request.operation_id)
+            ):
+                raise SlurmPlanningError("ready-stage accounting identity conflicts")
         if not isinstance(self.start_consumed, bool) or not isinstance(
             self.cancel_requested, bool
         ):
@@ -936,7 +1031,7 @@ class SlurmReadyStageSubmission:
         object.__setattr__(self, "conflicting_handles", normalized_handles)
 
     def to_dict(self) -> dict[str, PlainData]:
-        return {
+        value: dict[str, PlainData] = {
             "schema_version": self.schema_version,
             "request": self.request.to_dict(),
             "state": self.state.value,
@@ -965,6 +1060,11 @@ class SlurmReadyStageSubmission:
                 }
             ),
         }
+        if self.schema_version == _HISTORY_SUBMISSION_SCHEMA_VERSION:
+            value["accounting_identity"] = (
+                None if self.accounting_identity is None else self.accounting_identity.to_dict()
+            )
+        return value
 
     @classmethod
     def from_dict(cls, value: object) -> "SlurmReadyStageSubmission":
@@ -985,6 +1085,8 @@ class SlurmReadyStageSubmission:
             "cancel_requested",
             "capability",
         }
+        if mapping.get("schema_version") == _HISTORY_SUBMISSION_SCHEMA_VERSION:
+            expected.add("accounting_identity")
         if set(mapping) != expected:
             raise SlurmPlanningError("ready-stage submission fields are unsupported")
         raw_handles = mapping["conflicting_handles"]
@@ -1038,15 +1140,20 @@ class SlurmReadyStageSubmission:
             cancel_requested=cast(bool, mapping["cancel_requested"]),
             capability=capability,
             schema_version=cast(int, mapping["schema_version"]),
+            accounting_identity=(
+                None if mapping.get("accounting_identity") is None else
+                SlurmAccountingIdentity.from_dict(mapping["accounting_identity"])
+            ),
         )
 
 
 class SQLiteReadyStageSubmissions:
     """The sole durable owner of one ready-stage ``sbatch`` invocation."""
 
-    def __init__(self, path: str | Path, *, _allow_initialize: bool = True) -> None:
+    def __init__(self, path: str | Path, *, _allow_initialize: bool = True, sqlite_policy: SQLitePolicy | None = None) -> None:
         self.path = Path(path)
         self._allow_initialize = _allow_initialize
+        self._sqlite_policy = sqlite_policy
         if _allow_initialize:
             self._initialize()
 
@@ -1115,6 +1222,10 @@ class SQLiteReadyStageSubmissions:
                     request=request,
                     state=ReadyStageState.INTENT,
                     created_at=utc_timestamp(),
+                    schema_version=(
+                        READY_STAGE_SUBMISSION_SCHEMA_VERSION if profile.accounting_history is None
+                        else _HISTORY_SUBMISSION_SCHEMA_VERSION
+                    ),
                 )
                 conn.execute(
                     f"INSERT INTO {_SUBMISSION_TABLE} VALUES (?, ?, ?)",
@@ -1178,6 +1289,16 @@ class SQLiteReadyStageSubmissions:
                 comment=operation_marker(request.operation_id),
                 environment={},
             )
+        except subprocess.TimeoutExpired:
+            return self._record_outcome(
+                request.operation_id,
+                ReadyStageState.UNKNOWN,
+                evidence=(
+                    "slurm_submit_timeout"
+                    if ready_stage_command_policy(profile.runner) is not None
+                    else "slurm_submit_unknown"
+                ),
+            )
         except BaseException:  # noqa: BLE001 - call outcome is intentionally unknown.
             return self._record_outcome(
                 request.operation_id,
@@ -1185,6 +1306,12 @@ class SQLiteReadyStageSubmissions:
                 evidence="slurm_submit_unknown",
             )
         if not result.ok:
+            if ready_stage_command_policy(profile.runner) is not None:
+                return self._record_outcome(
+                    request.operation_id,
+                    ReadyStageState.UNKNOWN,
+                    evidence="slurm_submit_command_failed",
+                )
             return self._record_outcome(
                 request.operation_id,
                 ReadyStageState.REJECTED,
@@ -1192,6 +1319,8 @@ class SQLiteReadyStageSubmissions:
             )
         try:
             parsed = parse_sbatch_parsable_output(result.stdout)
+            if profile.accounting_history is not None and parsed.cluster not in {None, profile.cluster}:
+                raise SlurmPlanningError("submission returned another cluster")
         except Exception:
             return self._record_outcome(
                 request.operation_id,
@@ -1219,6 +1348,15 @@ class SQLiteReadyStageSubmissions:
         self._require_profile(current.request, profile)
         if current.state not in {ReadyStageState.SUBMITTING, ReadyStageState.UNKNOWN}:
             return current
+        if profile.accounting_history is not None:
+            identity, _state, diagnostic = self._named_accounting(current, profile)
+            if identity is None:
+                return self._record_outcome(operation_id, ReadyStageState.UNKNOWN, evidence=diagnostic)
+            return self._record_outcome(
+                operation_id, ReadyStageState.ACCEPTED,
+                job_id=identity.job_id, cluster=identity.cluster,
+                evidence="slurm_operation_reconciled", accounting_identity=identity,
+            )
         marker = operation_marker(operation_id)
         try:
             live = profile.runner.discover_live_operations()
@@ -1259,6 +1397,75 @@ class SQLiteReadyStageSubmissions:
             operation_id,
             ReadyStageState.UNKNOWN,
             evidence="slurm_operation_not_found",
+        )
+
+    def _named_accounting(
+        self, current: SlurmReadyStageSubmission, profile: SlurmReadyStageProfile,
+        *, result: SlurmCommandResult | Exception | None = None, observed_at: str | None = None,
+    ) -> tuple[SlurmAccountingIdentity | None, str | None, str]:
+        policy = profile.accounting_history
+        assert policy is not None
+        try:
+            start, end = policy.window(current.created_at, observed_at or utc_timestamp())
+            selection = {
+                "job_name": operation_job_name(current.request.operation_id),
+                "user_id": policy.user_id, "cluster": history_cluster(profile.cluster),
+                "started_after": start, "ended_before": end,
+            }
+            if isinstance(result, Exception):
+                raise result
+            if result is None:
+                result = getattr(profile.runner, "discover_named_operation")(**selection)
+            if not result.ok:
+                return None, None, "slurm_history_command_failed"
+            rows = parse_accounting_rows(result.stdout, **selection)
+        except subprocess.TimeoutExpired:
+            return None, None, "slurm_history_timeout"
+        except SlurmCommandOutputLimitError:
+            return None, None, "slurm_history_output_limit"
+        except Exception:
+            return None, None, "slurm_history_unavailable"
+        if not rows:
+            return None, None, "slurm_history_not_found"
+        if len(rows) != 1:
+            return None, None, "slurm_history_ambiguous"
+        identity, state = rows[0]
+        if (
+            current.job_id is not None
+            and (current.job_id, current.cluster) != (identity.job_id, identity.cluster)
+            or current.accounting_identity is not None and current.accounting_identity != identity
+        ):
+            return None, None, "slurm_history_identity_conflict"
+        return identity, state, "slurm_history_observed"
+
+    def _apply_accounting_observation(
+        self, operation_id: str, profile: SlurmReadyStageProfile,
+        result: SlurmCommandResult | Exception, *, observed_at: str,
+    ) -> SlurmReadyStageSubmission:
+        """Apply one cycle's complete filtered response without another query."""
+        current = self.read(operation_id)
+        self._require_profile(current.request, profile)
+        if profile.accounting_history is None:
+            raise SlurmPlanningError("batch observation requires accounting history")
+        if current.state not in {ReadyStageState.ACCEPTED, ReadyStageState.SUBMITTING, ReadyStageState.UNKNOWN}:
+            return current
+        identity, state, diagnostic = self._named_accounting(
+            current, profile, result=result, observed_at=observed_at,
+        )
+        if current.state is not ReadyStageState.ACCEPTED:
+            if identity is None:
+                return self._record_outcome(operation_id, ReadyStageState.UNKNOWN, evidence=diagnostic)
+            current = self._record_outcome(
+                operation_id, ReadyStageState.ACCEPTED,
+                job_id=identity.job_id, cluster=identity.cluster,
+                evidence=diagnostic, accounting_identity=identity,
+            )
+        if current.job_id is None:
+            return current
+        return self._record_observation(
+            operation_id, expected_job_id=current.job_id,
+            scheduler_state=state, scheduler_source="sacct" if identity is not None else "unavailable",
+            observed_at=observed_at, accounting_identity=identity, evidence=diagnostic,
         )
 
     def read(self, operation_id: str) -> SlurmReadyStageSubmission:
@@ -1364,6 +1571,8 @@ class SQLiteReadyStageSubmissions:
 
         _job_id(job_id)
         resolved_cluster = cluster or profile.cluster
+        if profile.accounting_history is not None and resolved_cluster != profile.cluster:
+            raise SlurmPlanningError("SLURM bootstrap cluster conflicts with history policy")
         current = self.read(operation_id)
         self._require_profile(current.request, profile)
         return self._record_outcome(
@@ -1376,7 +1585,8 @@ class SQLiteReadyStageSubmissions:
         )
 
     def request_cancel(
-        self, operation_id: str, profile: SlurmReadyStageProfile
+        self, operation_id: str, profile: SlurmReadyStageProfile, *,
+        _after_observation: Callable[[SlurmReadyStageSubmission], None] | None = None,
     ) -> SlurmReadyStageSubmission:
         current = self.read(operation_id)
         self._require_profile(current.request, profile)
@@ -1384,8 +1594,32 @@ class SQLiteReadyStageSubmissions:
             raise SlurmPlanningError("SLURM cancel requires an exact known handle")
         if current.cancel_requested:
             return current
+        if profile.accounting_history is not None:
+            current = self.observe(operation_id, profile)
+            # The agent schedules observation independently from cancellation.
+            # Report this retained fact before a cancel diagnostic replaces it.
+            if _after_observation is not None:
+                _after_observation(current)
+            if current.scheduler_source != "sacct" or current.accounting_identity is None:
+                return self._record_cancel(
+                    operation_id, expected_job_id=cast(str, current.job_id),
+                    requested=False, evidence="slurm_cancel_identity_unavailable",
+                )
         try:
-            result = profile.runner.scancel(job_ids=(current.job_id,))
+            result = (
+                profile.runner.scancel(job_ids=(cast(str, current.job_id),))
+                if profile.accounting_history is None else
+                getattr(profile.runner, "scancel_named_operation")(current.accounting_identity)
+            )
+        except subprocess.TimeoutExpired:
+            return self._record_cancel(
+                operation_id, expected_job_id=current.job_id, requested=False,
+                evidence=(
+                    "slurm_cancel_timeout"
+                    if ready_stage_command_policy(profile.runner) is not None
+                    else "slurm_cancel_unknown"
+                ),
+            )
         except Exception:
             return self._record_cancel(
                 operation_id,
@@ -1400,6 +1634,8 @@ class SQLiteReadyStageSubmissions:
             evidence=(
                 "slurm_cancel_requested"
                 if result.ok
+                else "slurm_cancel_unknown"
+                if ready_stage_command_policy(profile.runner) is not None
                 else "slurm_cancel_request_rejected"
             ),
         )
@@ -1413,6 +1649,13 @@ class SQLiteReadyStageSubmissions:
         self._require_profile(current.request, profile)
         if current.job_id is None:
             raise SlurmPlanningError("SLURM observation requires an exact known handle")
+        if profile.accounting_history is not None:
+            identity, state, diagnostic = self._named_accounting(current, profile)
+            return self._record_observation(
+                operation_id, expected_job_id=current.job_id,
+                scheduler_state=state, scheduler_source="sacct" if identity is not None else "unavailable",
+                observed_at=utc_timestamp(), accounting_identity=identity, evidence=diagnostic,
+            )
         source = "unavailable"
         state: str | None = None
         try:
@@ -1489,6 +1732,7 @@ class SQLiteReadyStageSubmissions:
         evidence: str | None = None,
         bootstrap_association: bool = False,
         conflicting_handles: Sequence[tuple[str, str | None]] = (),
+        accounting_identity: SlurmAccountingIdentity | None = None,
     ) -> SlurmReadyStageSubmission:
         """Record one closed outcome without regressing stronger concurrent facts."""
 
@@ -1533,6 +1777,7 @@ class SQLiteReadyStageSubmissions:
                         cluster=None,
                         evidence=evidence,
                         conflicting_handles=handles,
+                        accounting_identity=None,
                     )
                 elif state is ReadyStageState.ACCEPTED:
                     if current.job_id != job_id or current.cluster != cluster:
@@ -1546,9 +1791,14 @@ class SQLiteReadyStageSubmissions:
                                 (cast(str, current.job_id), current.cluster),
                                 (cast(str, job_id), cluster),
                             ),
+                            accounting_identity=None,
                         )
                     else:
-                        return current
+                        if accounting_identity is None or current.accounting_identity == accounting_identity:
+                            return current
+                        if current.accounting_identity is not None:
+                            raise SlurmPlanningError("SLURM accounting identity changed concurrently")
+                        value = replace(current, accounting_identity=accounting_identity, evidence=evidence)
                 else:
                     # An exact accepted handle is stronger than a late unknown or
                     # rejection classification from the original call path.
@@ -1572,6 +1822,7 @@ class SQLiteReadyStageSubmissions:
                         if state is ReadyStageState.CONFLICT
                         else ()
                     ),
+                    accounting_identity=accounting_identity,
                 )
             conn.execute(
                 f"UPDATE {_SUBMISSION_TABLE} SET state = ?, value_json = ? "
@@ -1622,6 +1873,8 @@ class SQLiteReadyStageSubmissions:
         scheduler_state: str | None,
         scheduler_source: str,
         observed_at: str,
+        accounting_identity: SlurmAccountingIdentity | None = None,
+        evidence: str | None = None,
     ) -> SlurmReadyStageSubmission:
         with self._transaction() as conn:
             row = conn.execute(
@@ -1635,11 +1888,15 @@ class SQLiteReadyStageSubmissions:
                 raise SlurmPlanningError(
                     "SLURM observation handle changed concurrently"
                 )
+            if accounting_identity is not None and current.accounting_identity not in {None, accounting_identity}:
+                raise SlurmPlanningError("SLURM accounting identity changed concurrently")
             value = replace(
                 current,
                 scheduler_state=scheduler_state,
                 scheduler_source=scheduler_source,
                 scheduler_observed_at=observed_at,
+                accounting_identity=current.accounting_identity or accounting_identity,
+                evidence=current.evidence if evidence is None else evidence,
             )
             conn.execute(
                 f"UPDATE {_SUBMISSION_TABLE} SET state = ?, value_json = ? "
@@ -1649,31 +1906,44 @@ class SQLiteReadyStageSubmissions:
         return value
 
     def _connect(self, *, require_existing: bool = False) -> sqlite3.Connection:
+        if self._sqlite_policy is not None:
+            connect = connect_existing if require_existing else initialize_database
+            return connect(self.path, policy=self._sqlite_policy, isolation_level="")
         if require_existing:
             return sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=rw", uri=True)
         return sqlite3.connect(self.path)
 
     def _transaction(self) -> "_SQLiteTransaction":
-        return _SQLiteTransaction(self.path)
+        return _SQLiteTransaction(self.path, sqlite_policy=self._sqlite_policy)
 
 
 class _SQLiteTransaction:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, sqlite_policy: SQLitePolicy | None = None) -> None:
         self.path = path
+        self._sqlite_policy = sqlite_policy
         self.conn: sqlite3.Connection | None = None
 
     def __enter__(self) -> sqlite3.Connection:
-        self.conn = sqlite3.connect(self.path)
-        self.conn.execute("BEGIN IMMEDIATE")
+        self.conn = (
+            sqlite3.connect(self.path) if self._sqlite_policy is None else
+            connect_existing(self.path, policy=self._sqlite_policy, isolation_level="")
+        )
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+        except BaseException:
+            self.conn.close()
+            raise
         return self.conn
 
     def __exit__(self, exc_type, exc, traceback) -> None:
         assert self.conn is not None
-        if exc_type is None:
-            self.conn.commit()
-        else:
-            self.conn.rollback()
-        self.conn.close()
+        try:
+            if exc_type is None:
+                self.conn.commit()
+            else:
+                self.conn.rollback()
+        finally:
+            self.conn.close()
 
 
 def operation_marker(operation_id: str) -> str:

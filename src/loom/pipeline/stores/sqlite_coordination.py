@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import cast
 
 from loom._sqlite_inspection import inspect_sqlite_database
+from loom._sqlite_policy import SQLitePolicy, connect_existing, initialize_database
 from loom.serialization import PlainData
 from loom.timestamps import parse_timestamp, utc_now, utc_timestamp
 
@@ -127,9 +128,11 @@ class SQLiteWorkspaceCoordinationStore:
         database_path: str | Path,
         *,
         clock: Callable[[], datetime | str] | None = None,
+        sqlite_policy: SQLitePolicy | None = None,
     ) -> None:
         self._database_path = Path(database_path)
         self._clock = clock
+        self._sqlite_policy = sqlite_policy
 
     @classmethod
     def for_workspace_root(
@@ -137,10 +140,12 @@ class SQLiteWorkspaceCoordinationStore:
         workspace_root: str | Path,
         *,
         clock: Callable[[], datetime | str] | None = None,
+        sqlite_policy: SQLitePolicy | None = None,
     ) -> "SQLiteWorkspaceCoordinationStore":
         return cls(
             Path(workspace_root) / _COORDINATION_DIR / _COORDINATION_DB_NAME,
             clock=clock,
+            sqlite_policy=sqlite_policy,
         )
 
     def capabilities(self) -> BackendCapabilitySet:
@@ -705,17 +710,21 @@ class SQLiteWorkspaceCoordinationStore:
                     yield inspected
                     return
                 _raise_for_schema(inspected)
-        conn = sqlite3.connect(
-            self._database_path.resolve().as_uri() + ("?mode=rwc" if should_initialize else "?mode=rw"),
-            uri=True,
-            timeout=_SQLITE_TIMEOUT_SECONDS,
-            isolation_level=None,
-        )
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        if should_initialize:
-            _initialize_schema(conn)
+        if self._sqlite_policy is None:
+            conn = sqlite3.connect(
+                self._database_path.resolve().as_uri() + ("?mode=rwc" if should_initialize else "?mode=rw"),
+                uri=True,
+                timeout=_SQLITE_TIMEOUT_SECONDS,
+                isolation_level=None,
+            )
+        else:
+            connect = initialize_database if should_initialize else connect_existing
+            conn = connect(self._database_path, policy=self._sqlite_policy, isolation_level=None)
         try:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys = ON")
+            if should_initialize:
+                _initialize_schema(conn)
             yield conn
         finally:
             conn.close()

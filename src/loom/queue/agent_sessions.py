@@ -138,6 +138,7 @@ class AgentControl:
     cancel_active: bool
     reason: str
     promotion: Mapping[str, PlainData] | None = None
+    startup_hold_id: str | None = None
 
     def __post_init__(self) -> None:
         for name in (
@@ -156,6 +157,10 @@ class AgentControl:
             object.__setattr__(self, "promotion", freeze_plain_data(self.promotion))
         elif self.promotion is not None:
             raise QueueServiceError("promotion binding requires promote control")
+        if self.startup_hold_id is not None:
+            _identifier(self.startup_hold_id, "startup_hold_id")
+            if self.kind is not AgentControlKind.RESUME:
+                raise QueueServiceError("startup hold binding requires resume control")
         if self.pool is not None:
             _identifier(self.pool, "pool")
         if not isinstance(self.cancel_active, bool):
@@ -178,6 +183,7 @@ class AgentControl:
             "cancel_active": self.cancel_active,
             "reason": self.reason,
             **({"promotion": thaw_plain_data(self.promotion)} if self.promotion is not None else {}),
+            **({"startup_hold_id": self.startup_hold_id} if self.startup_hold_id is not None else {}),
         }
 
     @classmethod
@@ -192,7 +198,7 @@ class AgentControl:
             "cancel_active",
             "reason",
         }
-        if set(value) not in (fields, fields | {"promotion"}):
+        if not fields <= set(value) or set(value) - fields - {"promotion", "startup_hold_id"}:
             raise QueueServiceError("agent control fields are invalid")
         pool = value["pool"]
         if pool is not None and not isinstance(pool, str):
@@ -219,6 +225,7 @@ class AgentControl:
             cast(bool, value["cancel_active"]),
             cast(str, value["reason"]),
             cast(Mapping[str, PlainData] | None, value.get("promotion")),
+            cast(str | None, value.get("startup_hold_id")),
         )
 
 

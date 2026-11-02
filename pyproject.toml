@@ -16,6 +16,7 @@ dependencies = [
 [project.scripts]
 loom = "loom.cli.main:main"
 loom-mcp = "loom.mcp:main"
+loom-apptainer-guard = "loom._apptainer_guard:main"
 
 [project.optional-dependencies]
 fleet = [

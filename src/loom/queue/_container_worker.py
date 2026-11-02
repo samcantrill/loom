@@ -135,7 +135,7 @@ def prepare_container_worker_paths(
     prepare_assignment_storage(profile, workspace=workspace, agent_id=agent_id)
     if not profile.shared_roots:
         return
-    assignment = _ResidentAssignmentWorkspace(workspace.parent.parent, workspace.name).request()
+    assignment = _ResidentAssignmentWorkspace.read_request(workspace)
     if assignment_scope(assignment.fingerprint) is None:
         return
     if selected(assignment) is not None:

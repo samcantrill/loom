@@ -1077,6 +1077,47 @@ def test_scheduling_reload_is_local_atomic_and_durable(tmp_path: Path) -> None:
     restarted.stop()
 
 
+@pytest.mark.parametrize("selection", ["provider", "admission"])
+def test_scheduling_reload_refuses_new_execution_schema_before_mutation(tmp_path, selection):
+    from loom.pipeline.executors.slurm.commands import FakeSlurmCommandRunner
+    from loom.pipeline.executors.slurm.trusted_user import SlurmUserPrivateFileProvider
+    from tests.unit.loom.pipeline.executors.slurm.test_ready_stage import _profile
+    from loom.queue._slurm_admission import SlurmAdmissionPolicy
+
+    config = _config(tmp_path)
+    profile = _profile(FakeSlurmCommandRunner(), provider=SlurmUserPrivateFileProvider(
+        root=tmp_path / "credentials", descriptor="trusted-test-v1",
+    ))
+    replacement = (
+        replace(config, slurm_profiles=(profile,)) if selection == "provider"
+        else replace(config, slurm_admission=SlurmAdmissionPolicy(8))
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config, trusted_scheduling_loader=lambda: replacement)
+    before = daemon.start()
+    try:
+        operator = daemon.operator_view(LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR))
+        with pytest.raises(QueueConflictError, match="stopped-owner migration"):
+            daemon._execution.prepare_scheduling_reload(replacement, "candidate-epoch")
+        receipt = operator.reload_scheduling(CoordinatorSchedulingReload(
+            operation_id="reload-new-schema", expected_scheduling_epoch=before.scheduling_epoch,
+            reason="select trusted-user credentials",
+        ))
+        assert receipt["state"] == "failed"
+        assert receipt["code"] == "reload_rejected"
+        assert daemon.config is config
+        assert daemon.status().scheduling_epoch == before.scheduling_epoch
+        assert not (tmp_path / "credentials").exists()
+        with config.connect_database(config.execution_database) as conn:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+        conn.close()
+        with config.connect_database(config.control_database) as conn:
+            assert conn.execute("SELECT state FROM scheduling_reloads WHERE operation_id = 'reload-new-schema'").fetchone()[0] == "failed"
+        conn.close()
+    finally:
+        daemon.stop()
+
+
 def test_scheduling_reload_recovers_crash_after_prepared_intent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1787,6 +1828,7 @@ def test_fresh_admission_rejects_a_pre_reload_runtime_before_persistence(
     stale_intent = SimpleNamespace(
         digest="stale-intent",
         placements={"build": placement},
+        plan=SimpleNamespace(stage_plans=()),
     )
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config)

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from loom._sqlite_inspection import inspect_sqlite_database
+from loom._sqlite_policy import SQLitePolicy, connect_existing, initialize_database
 from loom.artifacts import ArtifactRef
 from loom.pipeline.cleanup.records import CleanupReport, CleanupResult
 from loom.pipeline.event_sinks import EventObserverLinkRecord, EventSinkFailureRecord
@@ -371,8 +372,10 @@ class SQLitePerRunAuthorityStore:
         clock: Callable[[], datetime | str] | None = None,
         state_root: Path | None = None,
         read_only: bool = False,
+        sqlite_policy: SQLitePolicy | None = None,
     ) -> None:
         self._read_only = read_only
+        self._sqlite_policy = sqlite_policy
         self._run_uri = run_uri
         self._clock = clock
         self._state_root = None if state_root is None else Path(state_root).resolve()
@@ -3191,16 +3194,21 @@ class SQLitePerRunAuthorityStore:
                     yield inspected
                     return
                 _raise_for_schema(inspected)
-        conn = sqlite3.connect(
-            database_path.resolve().as_uri() + ("?mode=rwc" if initialize else "?mode=rw"),
-            uri=True,
-            timeout=_SQLITE_TIMEOUT_SECONDS,
-            isolation_level=None,
-        )
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA journal_mode = WAL")
+        if self._sqlite_policy is None:
+            conn = sqlite3.connect(
+                database_path.resolve().as_uri() + ("?mode=rwc" if initialize else "?mode=rw"),
+                uri=True,
+                timeout=_SQLITE_TIMEOUT_SECONDS,
+                isolation_level=None,
+            )
+        else:
+            connect = initialize_database if initialize else connect_existing
+            conn = connect(database_path, policy=self._sqlite_policy, isolation_level=None)
         try:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys = ON")
+            if self._sqlite_policy is None:
+                conn.execute("PRAGMA journal_mode = WAL")
             yield conn
         finally:
             conn.close()

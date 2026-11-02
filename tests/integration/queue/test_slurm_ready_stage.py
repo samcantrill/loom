@@ -23,6 +23,7 @@ from loom.pipeline import PipelineSpec, ProcessContainmentOwner
 from loom.pipeline.execution.stage_worker import execute_resident_stage_worker_request
 from loom.pipeline.executors.slurm.commands import (
     FakeSlurmCommandRunner,
+    SlurmCommandPolicy,
     SlurmCommandResult,
 )
 from loom.pipeline.executors.slurm.ready_stage import (
@@ -51,6 +52,7 @@ from loom.queue import (
     RecoverUnknownAssignment,
     ResidentWorkerLaunchProfile,
     SlurmRecoveryTarget,
+    TimeRecoveryRequest,
     prepare_managed_local_runtime_record,
 )
 from loom.queue.agent_sessions import AgentPolicyConfig, TransportPrincipalPolicy
@@ -100,7 +102,7 @@ def _launch_profile() -> ResidentWorkerLaunchProfile:
 def _profile(
     runner: FakeSlurmCommandRunner,
     *,
-    max_outstanding: int = 1,
+    max_outstanding: int | None = 1,
     available: bool = True,
     containment_helper: SlurmContainmentHelper | None = None,
     capability_path: Path | None = None,
@@ -131,7 +133,7 @@ def _profile(
         environment_fingerprint="environment-v1",
         executor_fingerprint="executor-v1",
         job_private_file_provider=SlurmJobPrivateFileProvider(
-            fixed_path=str(capability_path or "/tmp/loom-integration-capability"),
+            fixed_path=str(capability_path or _RESULT_ROOT.parent / "capability"),
             descriptor="fake-prolog-v1",
             helper_argv=_TEST_HELPER,
         ),
@@ -142,16 +144,22 @@ def _profile(
     )
 
 
-def _positive_containment_helper() -> SlurmContainmentHelper:
+def _positive_containment_helper(*, accounting_identity: bool = False) -> SlurmContainmentHelper:
+    identity_check = (
+        "assert value['accounting_identity']['db_index'] == '1200'; "
+        "assert value['accounting_identity']['sluid'] == 'sFixture1200'; "
+    ) if accounting_identity else ""
     program = (
         "import json,sys; value=json.load(sys.stdin); "
+        + identity_check
+        +
         "print(json.dumps({'state':'CONTAINED','evidence_id':'proof-1',"
         "'evidence_revision':'1','echo':value}))"
     )
     return SlurmContainmentHelper("test-contained-v1", (sys.executable, "-c", program))
 
 
-def _persist_rejected_slurm_run(run_root: Path, profile: SlurmReadyStageProfile) -> str:
+def _persist_rejected_slurm_run(run_root: Path, profile: SlurmReadyStageProfile, *, resources=None) -> str:
     run_store = LocalRunStore(run_root)
     run_uri = path_to_run_uri(run_root / "rejected-stage-run")
     run_store.create_run(run_uri)
@@ -173,6 +181,8 @@ def _persist_rejected_slurm_run(run_root: Path, profile: SlurmReadyStageProfile)
             }
         ],
     }
+    if resources is not None:
+        pipeline_config["stages"][0]["resources"] = {"entries": resources.to_dict()["entries"]}
     pipeline = PipelineSpec.from_config(pipeline_config)
     plan = plan_pipeline(
         pipeline,
@@ -305,7 +315,8 @@ def test_retained_slurm_worker_is_compared_before_submission_and_delivery(
                 assert str(exc) == "managed supervisor endpoint is unavailable"
 
 
-def test_slurm_containment_requires_exact_positive_echo() -> None:
+@pytest.mark.parametrize("process_policy", [None, "bounded-v1"])
+def test_slurm_containment_requires_exact_positive_echo(process_policy) -> None:
     runner = FakeSlurmCommandRunner()
     request = {
         "assignment_id": "assignment-1",
@@ -328,7 +339,7 @@ def test_slurm_containment_requires_exact_positive_echo() -> None:
         profile,
         "containment_helper",
         SlurmContainmentHelper(
-            "test-contained-v1", (sys.executable, "-c", echo_program)
+            "test-contained-v1", (sys.executable, "-c", echo_program), process_policy=process_policy,
         ),
     )
     assert resolve_slurm_containment(profile, request).contained
@@ -340,7 +351,7 @@ def test_slurm_containment_requires_exact_positive_echo() -> None:
         profile,
         "containment_helper",
         SlurmContainmentHelper(
-            "test-contained-v1", (sys.executable, "-c", mismatch_program)
+            "test-contained-v1", (sys.executable, "-c", mismatch_program), process_policy=process_policy,
         ),
     )
     assert not resolve_slurm_containment(profile, request).contained
@@ -380,19 +391,57 @@ def _exercise_mixed_route_run(
     terminal_boundary: str | None = None,
     *,
     finish_during_outage: bool = False,
+    long_outage: bool = False,
+    accounting_history: bool = False,
+    trusted_user: bool = False,
     slurm_output_size: int | None = None,
     lose_output_ack_at: int | None = None,
     guarded_recovery: bool = False,
     native_failure: bool = False,
     container_options: Mapping[str, object] | None = None,
 ) -> None:
-    runner = FakeSlurmCommandRunner(starting_job_id=1200)
-    containment_helper = _positive_containment_helper()
+    from datetime import timedelta
+    from loom.timestamps import parse_timestamp, utc_timestamp
+
+    now = [utc_timestamp()]
+    def clock():
+        return now[0] if long_outage else utc_timestamp()
+
+    command_policy = SlurmCommandPolicy(10, 60, 10) if long_outage or accounting_history else None
+    runner = FakeSlurmCommandRunner(starting_job_id=1200, command_policy=command_policy)
+    containment_helper = _positive_containment_helper(accounting_identity=accounting_history)
+    if accounting_history:
+        containment_helper = replace(containment_helper, process_policy="bounded-v1")
+
+    def select_history(candidate):
+        if not accounting_history:
+            return candidate
+        from loom.pipeline.executors.slurm.history import SlurmHistoryPolicy
+        original = candidate.runner.discover_named_operation
+        def observe(**selection):
+            result = original(**selection)
+            submitted = utc_timestamp(parse_timestamp(selection["started_after"]) + timedelta(seconds=60))[:-1]
+            return replace(result, stdout=(
+                f"1200|{selection['job_name']}|1000|cluster-a|{submitted}|1200|sFixture1200|RUNNING\n"
+            ))
+        monkeypatch.setattr(candidate.runner, "discover_named_operation", observe)
+        return replace(candidate, accounting_history=SlurmHistoryPolicy(1000))
     profile = _profile(
         runner,
         containment_helper=containment_helper,
         container_options=container_options,
     )
+    if trusted_user:
+        from loom.pipeline.executors.slurm.trusted_user import SlurmUserPrivateFileProvider
+        profile = replace(profile, job_private_file_provider=SlurmUserPrivateFileProvider(
+            root=tmp_path / "credentials", descriptor="trusted-test-v1",
+        ))
+    profile = select_history(profile)
+
+    def capability_path(operation_id):
+        provider = profile.job_private_file_provider
+        return provider.path_for(operation_id) if trusted_user else Path(provider.fixed_path)
+
     original_compare_and_set = SQLiteReadyStageSubmissions._compare_and_set
     intent_crash_injected = False
 
@@ -496,7 +545,7 @@ def _exercise_mixed_route_run(
                 "operator-credential",
                 "operator",
                 "operator",
-                actions=("recover_unknown",),
+                actions=("recover_unknown", "recover_time") if long_outage else ("recover_unknown",),
             ),
         )
     )
@@ -509,7 +558,7 @@ def _exercise_mixed_route_run(
         slurm_profiles=(profile,),
     )
     LocalDaemon.initialize(config)
-    daemon = LocalDaemon(config)
+    daemon = LocalDaemon(config, clock=clock)
     daemon.start()
     try:
         original_sbatch = runner.sbatch
@@ -533,7 +582,7 @@ def _exercise_mixed_route_run(
                 cluster="cluster-a",
                 incarnation="bootstrap-1",
                 capability=base64.b64encode(
-                    Path(profile.job_private_file_provider.fixed_path).read_bytes()
+                    capability_path(retained.assignment.operation_id).read_bytes()
                 ).decode(),
             )
             # A fast compute bootstrap can finish inputs before sbatch responds.
@@ -606,13 +655,19 @@ def _exercise_mixed_route_run(
         # accepted operation rather than preparing or submitting it again.
         daemon.stop()
         fresh_runner = FakeSlurmCommandRunner(
-            scripted_results={"sbatch": [AssertionError("must not submit")]}
+            scripted_results={"sbatch": [AssertionError("must not submit")]},
+            command_policy=command_policy,
         )
         profile = _profile(
             fresh_runner,
             containment_helper=containment_helper,
             container_options=container_options,
         )
+        if trusted_user:
+            profile = replace(profile, job_private_file_provider=SlurmUserPrivateFileProvider(
+                root=tmp_path / "credentials", descriptor="trusted-test-v1",
+            ))
+        profile = select_history(profile)
         reopened_config = LocalDaemonConfig(
             coordinator_root=tmp_path / "daemon" / "coordinator",
             agent_root=tmp_path / "daemon" / "agent",
@@ -621,7 +676,7 @@ def _exercise_mixed_route_run(
             agent_policy=agent_policy,
             slurm_profiles=(profile,),
         )
-        daemon = LocalDaemon(reopened_config)
+        daemon = LocalDaemon(reopened_config, clock=clock)
         daemon.start()
         client = daemon.client_view(
             LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
@@ -699,11 +754,11 @@ def _exercise_mixed_route_run(
             cluster="cluster-a",
             incarnation=incarnation,
             capability=base64.b64encode(
-                Path(profile.job_private_file_provider.fixed_path).read_bytes()
+                capability_path(record.assignment.operation_id).read_bytes()
             ).decode(),
         )
         capability = base64.b64encode(
-            Path(profile.job_private_file_provider.fixed_path).read_bytes()
+            capability_path(record.assignment.operation_id).read_bytes()
         ).decode()
 
         def concurrent_registration(candidate_incarnation: str) -> object:
@@ -930,6 +985,7 @@ def _exercise_mixed_route_run(
                         "result_operation": "commit",
                     },
                 )
+            before_outage = daemon.status()
             daemon.stop()
             # This is an actual compute process. It gets no coordinator transport
             # and terminates before the submit agent/coordinator are reopened.
@@ -1020,8 +1076,33 @@ SharedSlurmResult(json.loads(sys.argv[2]), report.assignment_id, compute=True).p
             monkeypatch.setattr(
                 LocalDaemonExecution, "relay_slurm_result", lose_output_ack
             )
-            daemon = LocalDaemon(reopened_config)
+            if long_outage:
+                now[0] = utc_timestamp(parse_timestamp(now[0]) + timedelta(hours=8))
+            daemon = LocalDaemon(reopened_config, clock=clock)
             daemon.start()
+            if long_outage:
+                # The result belongs to an execution granted before both the
+                # ordinary restart and the explicit clock-recovery epoch.
+                with daemon._cycle_lock:
+                    with pytest.raises(QueueServiceError, match="degraded|step"):
+                        daemon._accepted_snapshot()
+                degraded = daemon.status()
+                assert degraded.accepted_time_health == "degraded"
+                assert not degraded.scheduling_ready
+                assert degraded.coordinator_epoch != before_outage.coordinator_epoch
+                operator = daemon.operator_view(
+                    LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+                )
+                recovery = TimeRecoveryRequest(
+                    "recover-after-outage", degraded.accepted_time_revision,
+                    degraded.coordinator_epoch, "operator verified the site clock",
+                )
+                receipt = operator.recover_time(recovery)
+                assert receipt.previous_coordinator_epoch == degraded.coordinator_epoch
+                assert receipt.coordinator_epoch != degraded.coordinator_epoch
+                assert receipt.recovered_at == now[0]
+                assert operator.recover_time(recovery) == receipt
+                assert daemon.status().accepted_time_health == "healthy"
             client = daemon.client_view(
                 LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
             )
@@ -1063,7 +1144,21 @@ SharedSlurmResult(json.loads(sys.argv[2]), report.assignment_id, compute=True).p
                 daemon._execution.slurm_assignments.read(assignment_id).state
                 == "released"
             )
+            if accounting_history:
+                submission = daemon._execution.slurm_submissions.read(record.assignment.operation_id)
+                assert submission.schema_version == 4
+                assert submission.accounting_identity.db_index == "1200"
+                assert submission.accounting_identity.sluid == "sFixture1200"
+            replayed_view = daemon.slurm_bootstrap_view(
+                LocalDaemonPrincipal(
+                    "slurm-principal", LocalDaemonRole.SLURM_BOOTSTRAP,
+                    "slurm-credential",
+                )
+            )
+            assert replayed_view.grant(assignment_id, incarnation) == fence
+            assert replayed_view.start_permit(assignment_id, incarnation, fence) is False
             assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
+            assert not [call for call in fresh_runner.calls if call[0] == "sbatch"]
             return
         worker_result = execute_resident_stage_worker_request(
             worker_request=workspace.worker_request(),
@@ -1132,7 +1227,7 @@ SharedSlurmResult(json.loads(sys.argv[2]), report.assignment_id, compute=True).p
             assert execution.slurm_assignments.list_run_unreleased(run_uri) == (
                 retained_after_close,
             )
-            assert Path(profile.job_private_file_provider.fixed_path).exists()
+            assert capability_path(record.assignment.operation_id).exists()
             assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
             assert client.wait("mixed-route", timeout_seconds=10).state is (
                 LocalDaemonAdmissionState.CANCELLED
@@ -1277,7 +1372,8 @@ SharedSlurmResult(json.loads(sys.argv[2]), report.assignment_id, compute=True).p
             original_mark_terminal(candidate_assignment_id)
 
         revoke_calls = 0
-        original_revoke = SlurmJobPrivateFileProvider.revoke
+        provider_class = type(profile.job_private_file_provider)
+        original_revoke = provider_class.revoke
 
         def revoke_with_lost_response(
             provider: SlurmJobPrivateFileProvider, prepared: object
@@ -1294,7 +1390,7 @@ SharedSlurmResult(json.loads(sys.argv[2]), report.assignment_id, compute=True).p
             mark_terminal_at_crash_boundary,
         )
         monkeypatch.setattr(
-            SlurmJobPrivateFileProvider, "revoke", revoke_with_lost_response
+            provider_class, "revoke", revoke_with_lost_response
         )
         execution._launch_lock.acquire()
         try:
@@ -1314,7 +1410,7 @@ SharedSlurmResult(json.loads(sys.argv[2]), report.assignment_id, compute=True).p
             time.sleep(0.02)
         assert revoke_calls >= 2, daemon.status()
         assert execution.slurm_assignments.read(assignment_id).state == "released"
-        assert not Path(profile.job_private_file_provider.fixed_path).exists()
+        assert not capability_path(record.assignment.operation_id).exists()
         assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
     finally:
         daemon.stop()
@@ -1336,8 +1432,8 @@ def test_selected_container_ready_run_persists_redacted_receipt_after_replay(
             "image": {"reference": "/private/analysis.sif"},
             "mounts": [
                 {
-                    "source": "/tmp/loom-integration-capability",
-                    "target": "/tmp/loom-integration-capability",
+                    "source": str(_RESULT_ROOT.parent / "capability"),
+                    "target": str(_RESULT_ROOT.parent / "capability"),
                     "mode": "rw",
                 }
             ],
@@ -1362,10 +1458,11 @@ def test_slurm_guarded_recovery_closes_from_exact_helper_and_retains_slot(
     "terminal_boundary",
     ["authority_result", "assignment_terminal"],
 )
+@pytest.mark.parametrize("trusted_user", [False, True])
 def test_terminal_slurm_result_reconciliation_releases_after_crash_boundary(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, terminal_boundary: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, terminal_boundary: str, trusted_user: bool,
 ) -> None:
-    _exercise_mixed_route_run(tmp_path, monkeypatch, terminal_boundary)
+    _exercise_mixed_route_run(tmp_path, monkeypatch, terminal_boundary, trusted_user=trusted_user)
 
 
 @pytest.mark.parametrize(
@@ -1699,11 +1796,11 @@ def test_unavailable_slurm_root_does_not_starve_independent_managed_root(
 
 @pytest.mark.parametrize(
     ("max_outstanding", "expected_submissions"),
-    ((1, 1), (2, 2)),
+    ((1, 1), (2, 2), (None, 2)),
 )
 def test_parallel_slurm_stages_honor_the_profile_outstanding_limit(
     tmp_path: Path,
-    max_outstanding: int,
+    max_outstanding: int | None,
     expected_submissions: int,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1822,10 +1919,101 @@ def test_parallel_slurm_stages_honor_the_profile_outstanding_limit(
         daemon.stop()
 
 
+@pytest.mark.parametrize("trusted_user", [False, True])
 def test_compute_process_exits_during_outage_then_agent_replays_one_commit(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, trusted_user
 ):
-    _exercise_mixed_route_run(tmp_path, monkeypatch, finish_during_outage=True)
+    _exercise_mixed_route_run(tmp_path, monkeypatch, finish_during_outage=True, trusted_user=trusted_user)
+
+
+def test_result_from_previous_epoch_survives_long_outage_time_recovery(tmp_path, monkeypatch):
+    _exercise_mixed_route_run(
+        tmp_path, monkeypatch, finish_during_outage=True,
+        trusted_user=True, long_outage=True,
+    )
+
+
+def test_accounting_identity_survives_outage_and_binds_release(tmp_path, monkeypatch):
+    _exercise_mixed_route_run(
+        tmp_path, monkeypatch, finish_during_outage=True,
+        trusted_user=True, long_outage=True, accounting_history=True,
+    )
+
+
+@pytest.mark.parametrize("expired_first_use", [False, True])
+def test_trusted_user_registration_enforces_expiry_but_preserves_consumed_replay(
+    tmp_path, monkeypatch, expired_first_use,
+):
+    from datetime import timedelta
+    from loom.timestamps import parse_timestamp, utc_timestamp
+    from loom.pipeline.executors.slurm.trusted_user import SlurmUserPrivateFileProvider
+
+    runner = FakeSlurmCommandRunner(starting_job_id=1800)
+    provider = SlurmUserPrivateFileProvider(root=tmp_path / "credentials", descriptor="trusted-test-v1", ttl_seconds=60)
+    profile = replace(_profile(runner), job_private_file_provider=provider)
+    run_root = tmp_path / "runs"
+    run_uri = _persist_rejected_slurm_run(run_root, profile)
+    config = LocalDaemonConfig(
+        coordinator_root=tmp_path / "daemon" / "coordinator",
+        agent_root=tmp_path / "daemon" / "agent",
+        run_store_root=run_root, resident_worker_launch_profile=_launch_profile(),
+        slurm_profiles=(profile,),
+    )
+    assert config.slurm_schema_version == 4
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+        client.submit(LocalDaemonAdmissionRequest("expiry-run", run_uri))
+        execution = daemon._execution
+        assert execution is not None
+        deadline = time.monotonic() + 10
+        records = ()
+        while time.monotonic() < deadline:
+            records = execution.slurm_assignments.list_run_unreleased(run_uri)
+            if records and records[0].state == "accepted":
+                break
+            time.sleep(0.02)
+        assert len(records) == 1
+        record = records[0]
+        assert record.state == "accepted", daemon.status()
+        assert record.requested_gpu_count == 0
+        assert record.capability_delivery_kind == "user_private_file_v1"
+        assert record.capability_expires_at is not None
+        with sqlite3.connect(config.execution_database) as conn:
+            assert conn.execute("PRAGMA user_version").fetchone() == (4,)
+        conn.close()
+        with sqlite3.connect(config.agent_root / "slurm.sqlite") as conn:
+            assert conn.execute("PRAGMA user_version").fetchone() == (3,)
+        conn.close()
+        view = daemon.slurm_bootstrap_view(LocalDaemonPrincipal("slurm-principal", LocalDaemonRole.SLURM_BOOTSTRAP, "slurm-credential"))
+        arguments = dict(
+            operation_id=record.assignment.operation_id,
+            request_digest=record.assignment.request_digest,
+            job_id="1800", cluster="cluster-a", incarnation="bootstrap-1",
+            capability=base64.b64encode(provider.read_capability(
+                operation_id=record.assignment.operation_id, request_digest=record.assignment.request_digest,
+            )).decode(),
+        )
+        expiry = parse_timestamp(record.capability_expires_at)
+        with daemon._cycle_lock:
+            before_registration = execution.slurm_assignments.read(record.assignment.assignment_id)
+            selected = expiry if expired_first_use else expiry - timedelta(seconds=1)
+            monkeypatch.setattr(daemon, "_clock", lambda: utc_timestamp(selected, timespec="microseconds"))
+            if expired_first_use:
+                with pytest.raises(QueueConflictError, match="first use has expired"):
+                    view.register(**arguments)
+                assert execution.slurm_assignments.read(record.assignment.assignment_id) == before_registration
+            else:
+                registration = view.register(**arguments)
+                selected = expiry + timedelta(seconds=1)
+                assert view.register(**arguments) == registration
+                with pytest.raises(QueueConflictError, match="incarnation conflicts"):
+                    view.register(**{**arguments, "incarnation": "another-bootstrap"})
+            assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
+    finally:
+        daemon.stop()
 
 
 @pytest.mark.parametrize("output_size", [0, 65536, 98304])
@@ -2067,3 +2255,145 @@ def test_actual_native_preparation_pair_crosses_slurm_ready_helpers_and_ack_repl
             assignment.assignment_id, "bootstrap-other", "fence-pair"
         )
     assert counter.read_text() == "1"
+
+
+def test_gpu_budget_survives_restart_and_reload_preserves_admitted_work(tmp_path):
+    from loom.pipeline.resources import ResourceEntry, ResourceRequest
+    from loom.pipeline.executors.slurm.trusted_user import SlurmUserPrivateFileProvider
+    from loom.queue import CoordinatorSchedulingReload
+    from loom.pipeline.planning import PlanAction
+    from loom.queue.local_daemon_execution import load_managed_local_intent
+    from loom.queue.deployment import load_coordinator_service_config
+    from tests.unit.loom.queue.test_deployment import _coordinator_config, _write_protected
+
+    def resources(quantity):
+        return ResourceRequest(entries={
+            "cpu": ResourceEntry("cpu", 1, "count"),
+            **({"gpu": ResourceEntry("gpu", quantity, "count", {"allocation_mode": "exclusive"})}
+               if quantity else {}),
+        })
+
+    runner = FakeSlurmCommandRunner()
+    profile = replace(
+        _profile(runner), max_outstanding=None,
+        job_private_file_provider=SlurmUserPrivateFileProvider(
+            root=tmp_path / "credentials", descriptor="trusted-budget-test",
+        ),
+    )
+    source = _coordinator_config(tmp_path)
+    payload = json.loads(source.read_text())
+    payload["slurm_admission"] = {"max_reserved_gpus": 8}
+    payload["agent_policy"]["principals"] = [{
+        "credential_id": "operator-certificate", "principal_id": "operator",
+        "role": "operator", "actions": ["scheduling_reload"], "agent_ids": [], "pools": [],
+    }]
+    payload["slurm_profiles"] = [{
+        key: getattr(profile, key) for key in (
+            "profile_id", "partition", "max_outstanding", "command_adapter_fingerprint",
+            "bootstrap_principal_id", "credential_reference", "coordinator_endpoint",
+            "project_fingerprint", "environment_fingerprint", "executor_fingerprint", "cluster",
+        )
+    }]
+    payload["slurm_profiles"][0].update(
+        runner={"_target_": "loom.pipeline.executors.slurm.FakeSlurmCommandRunner"},
+        result_storage=dict(profile.result_storage),
+        job_private_file_provider={
+            "_target_": "loom.pipeline.executors.slurm.trusted_user.SlurmUserPrivateFileProvider",
+            "root": str(tmp_path / "credentials"), "descriptor": "trusted-budget-test",
+        },
+    )
+    _write_protected(source, payload)
+    service = load_coordinator_service_config(source)
+    config = service.daemon
+    profile = config.slurm_profiles[0]
+    runner = profile.runner
+    runs = {
+        key: _persist_rejected_slurm_run(config.run_store_root / key, profile, resources=resources(quantity))
+        for key, quantity in (("left", 4), ("right", 4), ("waiting", 1), ("cpu", 0), ("oversize", 9))
+    }
+    replacement = config
+    LocalDaemon.initialize_deployment(config)
+    daemon = LocalDaemon(config, trusted_scheduling_loader=lambda: replacement)
+    daemon.start()
+
+    def until(predicate):
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            if predicate():
+                return
+            time.sleep(0.02)
+        pytest.fail("coordinator did not reach the expected admission outcome")
+
+    def accepted(key):
+        records = daemon._execution.slurm_assignments.list_run_unreleased(runs[key])
+        return len(records) == 1 and records[0].state == "accepted"
+
+    def reload_budget(budget, operation):
+        nonlocal replacement, service
+        payload["slurm_admission"] = {"max_reserved_gpus": budget}
+        _write_protected(source, payload)
+        candidate = load_coordinator_service_config(source, current=service)
+        replacement = candidate.daemon
+        assert replacement.slurm_profiles[0] is service.daemon.slurm_profiles[0]
+        operator = daemon.operator_view(LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR))
+        receipt = operator.reload_scheduling(CoordinatorSchedulingReload(
+            operation_id=operation, expected_scheduling_epoch=daemon.status().scheduling_epoch,
+            reason="test GPU budget reload",
+        ))
+        if receipt["state"] == "applied":
+            service = candidate
+        return receipt
+
+    try:
+        client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+        for key in ("left", "right"):
+            client.submit(LocalDaemonAdmissionRequest(key, runs[key]))
+            until(lambda: accepted(key))
+        assert daemon._execution.slurm_assignments.reserved_gpu_count() == 8
+        oversized = load_managed_local_intent(config, runs["oversize"])
+        for action in (PlanAction.SKIP, PlanAction.REUSE):
+            # Admission checks resources only for stages the planner will run.
+            plan = replace(oversized.plan, stage_plans=tuple(
+                replace(stage, action=action, base_action=action)
+                for stage in oversized.plan.stage_plans
+            ))
+            daemon._execution.validate_fresh_intent(replace(oversized, plan=plan))
+        with pytest.raises(QueueConflictError, match="exceeds GPU reservation budget"):
+            client.submit(LocalDaemonAdmissionRequest("oversize", runs["oversize"]))
+        client.submit(LocalDaemonAdmissionRequest("waiting", runs["waiting"]))
+        until(lambda: client.admission_for_queue_item("waiting").blocked_reason == "slurm_gpu_capacity_reserved")
+        client.submit(LocalDaemonAdmissionRequest("cpu", runs["cpu"]))
+        until(lambda: accepted("cpu"))
+        assert daemon._execution.slurm_assignments.reserved_gpu_count() == 8
+        assert not daemon._execution.slurm_assignments.list_run_unreleased(runs["waiting"])
+        before = {
+            key: daemon._execution.slurm_assignments.list_run_unreleased(runs[key])[0]
+            for key in ("left", "right", "cpu")
+        }
+        assert reload_budget(7, "lower-too-far")["code"] == "reload_rejected"
+        assert daemon.config is config
+        assert len([call for call in runner.calls if call[0] == "sbatch"]) == 3
+        daemon.stop()
+        payload["slurm_admission"] = {"max_reserved_gpus": 8}
+        _write_protected(source, payload)
+        replacement = config
+        daemon = LocalDaemon(config, trusted_scheduling_loader=lambda: replacement)
+        daemon.start()
+        client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+        assert daemon._execution.slurm_assignments.reserved_gpu_count() == 8
+        for key, previous in before.items():
+            current = daemon._execution.slurm_assignments.list_run_unreleased(runs[key])[0]
+            assert current.assignment == previous.assignment
+            assert current.job_id == previous.job_id
+        assert len([call for call in runner.calls if call[0] == "sbatch"]) == 3
+        assert reload_budget(9, "increase")["state"] == "applied"
+        until(lambda: accepted("waiting"))
+        assert daemon._execution.slurm_assignments.reserved_gpu_count() == 9
+        assert len([call for call in runner.calls if call[0] == "sbatch"]) == 4
+        assert client.admission_for_queue_item("waiting").state is LocalDaemonAdmissionState.ACTIVE
+        assert reload_budget(None, "disable")["state"] == "applied"
+        assert daemon.config.slurm_schema_version == 4
+        assert daemon._execution.slurm_assignments.reserved_gpu_count() == 9
+        assert len([call for call in runner.calls if call[0] == "sbatch"]) == 4
+    finally:
+        daemon.stop()
