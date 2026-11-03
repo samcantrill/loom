@@ -2192,8 +2192,9 @@ class LocalDaemonExecution:
                 from ._shared_recovery import WIRE, retain_released
 
                 # The accepted, exact containment evidence above is the sole
-                # seal trigger. Retain progress before making the slot reusable;
-                # replay completes an interrupted seal before final release.
+                # retention trigger. Record either a sealed reference or a known
+                # budget failure before making the slot reusable; replay finishes
+                # that outcome before final release.
                 if (record.fence is not None and record.state != "released"
                     and WIRE in record.delivery.worker_metadata):
                     with self._daemon_owner()._connection() as conn:

@@ -50,13 +50,24 @@ def _preview(daemon: Any, run_uri: str, conn: Any, assignment_id: str | None = N
             })
             continue
         reasons = []
-        size = 0
+        size: int | None = 0
+        failure = None
         if row["state"] != "RELEASED" or row["provider_release_proof_json"] is None:
             reasons.append("provider_not_settled")
         report = json.loads(row["report_json"]) if row["report_json"] else None
         if report is None or report["status"] != "SUCCEEDED":
             reasons.append("recovery_still_required")
-        if row["recovery_json"] is None:
+        if row["recovery_failure_json"] is not None:
+            failure = json.loads(row["recovery_failure_json"])
+            if (
+                row["recovery_json"] is not None
+                or failure["identity"]["assignment_id"] != row["assignment_id"]
+                or failure["identity"]["fence"] != row["fence"]
+            ):
+                raise QueueConflictError("recovery unavailable outcome ownership conflicts")
+            reasons.append("recovery_unavailable_budget_exceeded")
+            size = None  # No verified inventory; zero would imply an empty tree.
+        elif row["recovery_json"] is None:
             reasons.append("recovery_not_sealed")
         else:
             reference = json.loads(row["recovery_json"])
@@ -100,6 +111,7 @@ def _preview(daemon: Any, run_uri: str, conn: Any, assignment_id: str | None = N
             "eligible": not reasons, "retained_payload_bytes": size,
             "reclaimable_payload_bytes": size if not reasons else 0,
             "reasons": reasons,
+            **({"retention_failure": failure} if failure is not None else {}),
         })
     return {"run_uri": run_uri, "entries": entries}
 

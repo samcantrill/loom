@@ -9,7 +9,43 @@ import pytest
 from loom.queue import _shared_recovery as recovery
 from loom.queue import _recovery_cleanup as cleanup
 from loom.queue._coordinator_control import validate_request, decode_result
-from tests.unit.loom.queue.test_shared_recovery import _workspace, _write
+from tests.unit.loom.queue.test_shared_recovery import _workspace, _write, _retention_database
+
+
+def test_budget_unavailable_is_not_retryable_or_cleanup_eligible(tmp_path, monkeypatch):
+    limits = {"max_payload_bytes": 1, "max_members": 100, "max_manifest_bytes": 4096}
+    workspace, profile, _ = _workspace(tmp_path, limits=limits)
+    current = _write(workspace)
+    with _retention_database(tmp_path / "retention.sqlite") as conn:
+        recovery.retain_released(
+            conn, {"provider_release_proof_json": "proof", "fence": "fence-1"},
+            workspace.request(), profile.shared_roots, agent_id="agent-1",
+        )
+        conn.execute("INSERT INTO remote_assignments VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (
+            workspace.assignment_id, "run", workspace.request().stage_name, 1, "attempt-1",
+            "RELEASED", "{}", None, "fence-1", 1,
+        ))
+        conn.execute("INSERT INTO agent_deliveries VALUES (?, ?)",
+                     (workspace.assignment_id, json.dumps(workspace.request().to_dict())))
+        daemon = SimpleNamespace(
+            _execution=SimpleNamespace(slurm_assignments=None),
+            config=SimpleNamespace(coordinator_shared_roots=profile.shared_roots),
+        )
+        monkeypatch.setattr(cleanup, "_authority", lambda *args: SimpleNamespace(
+            open_run=lambda uri: SimpleNamespace(stages=[])))
+        entry, = cleanup._preview(daemon, "run", conn)["entries"]
+        assert not entry["eligible"]
+        assert entry["retained_payload_bytes"] is None
+        assert entry["reclaimable_payload_bytes"] == 0
+        assert "recovery_unavailable_budget_exceeded" in entry["reasons"]
+        assert entry["retention_failure"]["reason"]["budget"] == "max_payload_bytes"
+        successor, _, _ = _workspace(tmp_path, attempt=2)
+        from loom.queue.errors import QueueConflictError
+        with pytest.raises(QueueConflictError, match="predecessor unavailable"):
+            recovery._bind_delivery(successor.request(), conn, "run", profile.shared_roots,
+                                    agent_id="agent-1", slurm_assignments=None)
+    conn.close()
+    assert (current / "partial").read_bytes() == b"partial"
 
 
 @pytest.mark.parametrize("status", ["FAILED", "SUCCEEDED"])

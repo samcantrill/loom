@@ -16,9 +16,9 @@ from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
 from loom.pipeline.stores.atomic import atomic_write_bytes
-from loom.pipeline.stores.errors import ArtifactStoreError
 from loom.pipeline.stores.shared_artifacts import (
     RECEIPT,
+    SharedPublicationBudgetExceeded,
     budgets,
     admits_budgets,
     check_budget,
@@ -181,22 +181,25 @@ def assignment_rows(
 ) -> list[dict[str, Any]]:
     """Project both native providers into the existing recovery retention contract."""
     rows = conn.execute(
-        "SELECT r.*, d.request_json, a.result_json AS recovery_json FROM remote_assignments r "
+        "SELECT r.*, d.request_json, a.result_json AS recovery_json, "
+        "f.result_json AS recovery_failure_json FROM remote_assignments r "
         "LEFT JOIN agent_deliveries d USING(assignment_id) LEFT JOIN agent_receipts a "
         "ON a.principal_id = ? AND a.operation = 'seal' AND a.idempotency_key = r.assignment_id "
+        "LEFT JOIN agent_receipts f ON f.principal_id = ? AND f.operation = 'seal_unavailable' "
+        "AND f.idempotency_key = r.assignment_id "
         "WHERE r.run_uri = ? AND (? IS NULL OR r.stage_name = ?) "
         "ORDER BY r.stage_name, r.attempt LIMIT ?",
-        (_PRINCIPAL, run_uri, stage_name, stage_name, -1 if limit is None else limit + 1),
+        (_PRINCIPAL, _PRINCIPAL, run_uri, stage_name, stage_name, -1 if limit is None else limit + 1),
     ).fetchall()
     result = [dict(row) for row in rows]
     if slurm_assignments is not None:
         for record, evidence in slurm_assignments.recovery_records(run_uri, stage_name=stage_name, limit=limit):
             assignment = record.assignment
-            receipt = conn.execute(
-                "SELECT result_json FROM agent_receipts WHERE principal_id = ? "
-                "AND operation = 'seal' AND idempotency_key = ?",
+            receipts = {receipt["operation"]: receipt["result_json"] for receipt in conn.execute(
+                "SELECT operation, result_json FROM agent_receipts WHERE principal_id = ? "
+                "AND operation IN ('seal', 'seal_unavailable') AND idempotency_key = ?",
                 (_PRINCIPAL, assignment.assignment_id),
-            ).fetchone()
+            )}
             proof = (
                 evidence.get("release") if evidence is not None
                 and evidence.get("provider_released") is True else None
@@ -211,7 +214,8 @@ def assignment_rows(
                 "request_json": encoded(record.delivery.to_dict()).decode(),
                 "report_json": None if record.report is None else encoded(record.report.to_dict()).decode(),
                 "provider_release_proof_json": None if proof is None else encoded(proof).decode(),
-                "recovery_json": None if receipt is None else receipt["result_json"],
+                "recovery_json": receipts.get("seal"),
+                "recovery_failure_json": receipts.get("seal_unavailable"),
             })
     if limit is not None and len(result) > limit:
         raise QueueConflictError("recovery history exceeds assignment limit")
@@ -245,6 +249,8 @@ def _bind_delivery(
             continue
         if WIRE not in json.loads(row["request_json"])["worker_metadata"]:
             continue
+        if row["recovery_failure_json"] is not None:
+            raise QueueConflictError("recovery predecessor unavailable: retention budget exceeded")
         if (
             row["state"] != "RELEASED"
             or row["provider_release_proof_json"] is None
@@ -440,10 +446,7 @@ def seal(
             "members": members,
         }
     )
-    try:
-        check_budget("max_manifest_bytes", limits["max_manifest_bytes"], len(data))
-    except ArtifactStoreError as exc:
-        raise QueueConflictError(str(exc)) from exc
+    check_budget("max_manifest_bytes", limits["max_manifest_bytes"], len(data))
     marker = available / RECEIPT
     existing = receipt_bytes(
         contained(available, RECEIPT), limits["max_manifest_bytes"]
@@ -513,7 +516,69 @@ def retain_released(
         raise QueueConflictError(
             "recovery seal requires positive provider release proof"
         )
-    ref = seal(request, roots, agent_id=agent_id, fence=row["fence"])
+    value = validate_wire(request)
+    if value is None:
+        return
+    selection = selected(request)
+    assert selection is not None
+    owner = _owner(request, agent_id, row["fence"])
+    limits = budgets(selection[1]["publication"])
+    binding = {
+        "schema_version": 1, "root_id": value["root_id"], "tree": value["tree"],
+        "identity": owner, "budgets": limits,
+    }
+    prior = conn.execute(
+        "SELECT digest, result_json FROM agent_receipts WHERE principal_id = ? "
+        "AND operation = 'seal_unavailable' AND idempotency_key = ?",
+        (_PRINCIPAL, request.assignment_id),
+    ).fetchone()
+    sealed = conn.execute(
+        "SELECT result_json FROM agent_receipts WHERE principal_id = ? "
+        "AND operation = 'seal' AND idempotency_key = ?",
+        (_PRINCIPAL, request.assignment_id),
+    ).fetchone()
+    if prior is not None:
+        failure = json.loads(prior["result_json"])
+        reason = failure.get("reason", {})
+        budget = reason.get("budget")
+        if (
+            sealed is not None
+            or hashlib.sha256(prior["result_json"].encode()).hexdigest() != prior["digest"]
+            or failure != {**binding, "reason": reason}
+            or set(reason) != {"code", "budget", "limit", "observed_at_least"}
+            or reason["code"] != "budget_exceeded" or budget not in limits
+            or reason["limit"] != limits[budget]
+            or type(reason["observed_at_least"]) is not int
+            or reason["observed_at_least"] <= limits[budget]
+        ):
+            raise QueueConflictError("recovery unavailable outcome replay conflicts")
+        return
+    try:
+        ref = seal(request, roots, agent_id=agent_id, fence=row["fence"])
+    except SharedPublicationBudgetExceeded as exc:
+        # A budget failure may settle resource release, never evidence integrity.
+        # Only the original, exactly owned staging tree can become unavailable;
+        # a changed/incomplete previously sealed tree remains a hard conflict.
+        tree = current_tree(request, roots, agent_id=agent_id)
+        root = cast(Mapping[str, PlainData], roots[value["root_id"]])
+        final = contained(Path(str(root["host_path"])),
+                          f"loom-recovery-retained/{publication_id(owner)}", exists=False)
+        ownership = encoded({"schema_version": 1, "identity": owner})
+        if sealed is not None or final.exists() or receipt_bytes(
+            contained(tree, RECEIPT), len(ownership)
+        ) != ownership:
+            raise QueueConflictError("recovery unavailable outcome ownership conflicts") from exc
+        failure = {**binding, "reason": {
+            "code": "budget_exceeded", "budget": exc.budget, "limit": exc.limit,
+            "observed_at_least": exc.observed_at_least,
+        }}
+        data = encoded(failure).decode()
+        conn.execute(
+            "INSERT INTO agent_receipts(principal_id, operation, idempotency_key, digest, result_json) "
+            "VALUES (?, 'seal_unavailable', ?, ?, ?)",
+            (_PRINCIPAL, request.assignment_id, hashlib.sha256(data.encode()).hexdigest(), data),
+        )
+        return
     if ref is None:
         return
     data = encoded(ref).decode()

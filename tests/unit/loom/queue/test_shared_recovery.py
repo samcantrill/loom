@@ -3,6 +3,7 @@
 from dataclasses import replace
 import hashlib
 import json
+import sqlite3
 from pathlib import Path
 from typing import Any, cast
 
@@ -85,6 +86,97 @@ def _write(workspace):
     (current / "checkpoints" / "completed").write_bytes(b"complete")
     (current / "partial").write_bytes(b"partial")
     return current
+
+
+def _retention_database(path):
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS agent_receipts (
+            principal_id TEXT, operation TEXT, idempotency_key TEXT,
+            digest TEXT, result_json TEXT,
+            PRIMARY KEY (principal_id, operation, idempotency_key));
+        CREATE TABLE IF NOT EXISTS remote_assignments (
+            assignment_id TEXT, run_uri TEXT, stage_name TEXT, attempt INTEGER,
+            attempt_id TEXT, state TEXT, provider_release_proof_json TEXT,
+            report_json TEXT, fence TEXT, start_permitted INTEGER);
+        CREATE TABLE IF NOT EXISTS agent_deliveries (assignment_id TEXT, request_json TEXT);
+    """)
+    return conn
+
+
+@pytest.mark.parametrize("budget,limit", [
+    ("max_payload_bytes", 1), ("max_members", 1), ("max_manifest_bytes", 1024),
+    ("max_manifest_bytes", 64),
+])
+def test_budget_failure_is_durable_unavailable_not_sealed_recovery(
+    tmp_path, monkeypatch, budget, limit,
+):
+    limits = {"max_payload_bytes": 4096, "max_members": 100, "max_manifest_bytes": 4096}
+    limits[budget] = limit
+    workspace, profile, _ = _workspace(tmp_path, limits=limits)
+    current = _write(workspace)
+    for index in range(12):
+        (current / f"checkpoint-{index}").write_bytes(b"progress")
+    before = {str(p.relative_to(current)): p.read_bytes() for p in current.rglob("*") if p.is_file()}
+    database = tmp_path / "retention.sqlite"
+    row = {"provider_release_proof_json": "positive-exact-proof", "fence": "fence-1"}
+    with _retention_database(database) as conn:
+        recovery.retain_released(conn, row, workspace.request(), profile.shared_roots, agent_id="agent-1")
+        record, = conn.execute("SELECT operation, result_json, digest FROM agent_receipts").fetchall()
+        failure = json.loads(record["result_json"])
+        assert record["operation"] == "seal_unavailable"
+        assert record["digest"] == hashlib.sha256(record["result_json"].encode()).hexdigest()
+        assert failure["reason"] == {
+            "code": "budget_exceeded", "budget": budget, "limit": limit,
+            "observed_at_least": failure["reason"]["observed_at_least"],
+        }
+        assert failure["reason"]["observed_at_least"] > limit
+        assert failure["tree"] == str(current.relative_to(Path(profile.shared_roots["outputs"]["host_path"])))
+        assert failure["identity"]["fence"] == "fence-1"
+        assert failure["budgets"] == limits
+        assert "receipt_digest" not in failure
+    conn.close()
+    assert {str(p.relative_to(current)): p.read_bytes() for p in current.rglob("*") if p.is_file()} == before
+    assert publication_path_is_retained(current)
+    assert not (current.parents[4] / "loom-recovery-retained").exists()
+
+    def no_rescan(*args, **kwargs):
+        raise AssertionError("acknowledgement replay rescanned unavailable recovery")
+
+    monkeypatch.setattr(recovery, "inventory", no_rescan)
+    with _retention_database(database) as reopened:
+        recovery.retain_released(reopened, row, workspace.request(), profile.shared_roots, agent_id="agent-1")
+        assert reopened.execute("SELECT COUNT(*) FROM agent_receipts").fetchone()[0] == 1
+        with pytest.raises(QueueConflictError, match="replay conflicts"):
+            recovery.retain_released(reopened, {**row, "fence": "obsolete"}, workspace.request(),
+                                     profile.shared_roots, agent_id="agent-1")
+    reopened.close()
+
+
+@pytest.mark.parametrize("damage", ["ownership", "link", "io"])
+def test_retention_does_not_downgrade_integrity_or_io_failure(tmp_path, monkeypatch, damage):
+    from loom.pipeline.stores.errors import ArtifactStoreError
+
+    limits = {"max_payload_bytes": 1 if damage == "ownership" else 4096,
+              "max_members": 100, "max_manifest_bytes": 4096}
+    workspace, profile, _ = _workspace(tmp_path, limits=limits)
+    current = _write(workspace)
+    if damage == "link":
+        (current / "external").symlink_to(tmp_path / "outside")
+    if damage == "io":
+        def failed_read(*args, **kwargs):
+            raise OSError("storage unavailable")
+        monkeypatch.setattr(recovery, "inventory", failed_read)
+    with _retention_database(tmp_path / "retention.sqlite") as conn:
+        with pytest.raises((ArtifactStoreError, QueueConflictError, OSError)):
+            recovery.retain_released(
+                conn, {"provider_release_proof_json": "proof", "fence": "obsolete" if damage == "ownership" else "fence-1"},
+                workspace.request(), profile.shared_roots, agent_id="agent-1",
+            )
+        assert conn.execute("SELECT COUNT(*) FROM agent_receipts").fetchone()[0] == 0
+    conn.close()
+    assert (current / "partial").read_bytes() == b"partial"
 
 
 def test_container_command_replay_does_not_recreate_writable_mounts(tmp_path):

@@ -48,15 +48,25 @@ def admits_budgets(current: object, recorded: object) -> bool:
     return all(required[key] <= admitted[key] for key in required)
 
 
-def check_budget(name: str, limit: int, observed: int) -> None:
-    """Refuse an exceeded ceiling with its name, bound and measured lower bound."""
-    if observed > limit:
+class SharedPublicationBudgetExceeded(ArtifactStoreError):
+    """A measured publication ceiling failure, distinct from invalid evidence."""
+
+    def __init__(self, name: str, limit: int, observed: int) -> None:
+        self.budget = name
+        self.limit = limit
+        self.observed_at_least = observed
         label = {"max_members": "member", "max_payload_bytes": "payload",
                  "max_manifest_bytes": "manifest"}[name]
-        raise ArtifactStoreError(
+        super().__init__(
             f"shared publication exceeds {label} budget: budget={name} "
             f"limit={limit} observed_at_least={observed}"
         )
+
+
+def check_budget(name: str, limit: int, observed: int) -> None:
+    """Refuse an exceeded ceiling with its name, bound and measured lower bound."""
+    if observed > limit:
+        raise SharedPublicationBudgetExceeded(name, limit, observed)
 
 
 def relative(value: object) -> str:

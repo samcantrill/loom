@@ -4339,7 +4339,8 @@ class AgentSessionService:
             conn.commit()
         # The persisted provider proof and guarded terminal/containment checks
         # above are the sole seal trigger, including a supervisor-proven death
-        # without a worker result. Retention precedes reusable authority release.
+        # without a worker result. A sealed reference or known budget failure
+        # precedes reusable authority release.
         with self._daemon._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             retained_row = self._require_remote_assignment(conn, session_id, assignment_id)

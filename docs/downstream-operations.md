@@ -901,6 +901,22 @@ retain their own publication limits and execution qualifications; raising policy
 does not migrate their identity or silently enlarge their bounds. Errors name
 the exceeded budget, its limit, and the observed lower bound.
 
+Recovery retention runs only after positive provider containment. If the exactly
+owned, unsealed recovery tree exceeds its immutable publication budget, the
+coordinator records a durable `seal_unavailable` outcome before finishing native
+assignment release. This releases its GPU reservation without claiming a sealed
+checkpoint, successful output or successful stage. Exact acknowledgement replay
+reuses that outcome; it does not repeatedly scan the oversized payload. Files
+remain untouched in their original recovery tree. Ownership, integrity and IO
+failures still block retention/release rather than becoming budget outcomes.
+
+A successor cannot use that unavailable attempt as recovery or silently restart
+from empty progress. Recovery cleanup preview reports
+`recovery_unavailable_budget_exceeded`, the original root/tree and budget reason,
+an unknown (`null`) retained byte count, and zero reclaimable bytes. The ordinary
+cleanup operation refuses it. Investigate and preserve these files separately;
+changing a current policy ceiling does not repair the frozen attempt's contract.
+
 After native worker containment, unusable primary or companion evidence fails
 preparation publication through the existing failed-result and assignment-release
 path. The operation settles as `preparation_child_failed`; the immutable worker
