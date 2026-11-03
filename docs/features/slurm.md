@@ -255,6 +255,11 @@ Protected service reload reuses existing Slurm profile instances when their
 declarations and source binding are unchanged. Changing a budget therefore does
 not reinterpret retained profiles. Changed profile declarations are constructed
 normally and remain subject to retained-identity checks.
+Historical Slurm acceptance receipts remain available after native assignment
+release. They no longer retain the old execution profile once the corresponding
+assignment is fully `released`, including across coordinator restarts. An absent
+assignment or any earlier release state still retains that profile; a terminal
+scheduler observation alone does not authorize profile retirement.
 
 An outbound submit-agent declaration independently accepts:
 

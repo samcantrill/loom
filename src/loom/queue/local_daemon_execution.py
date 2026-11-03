@@ -3590,6 +3590,13 @@ class LocalDaemonExecution:
             )
             retained[(profile.profile_id, profile.configuration_fingerprint)] = profile
         for submission in self.slurm_submissions.list_nonterminal():
+            assignment = self.slurm_assignments.find_operation(
+                submission.request.operation_id
+            )
+            # Acceptance records survive scheduler completion and release. The
+            # assignment owner decides when their execution profile can retire.
+            if assignment is not None and assignment.state == "released":
+                continue
             profile = self._slurm_profile(
                 submission.request.profile_id,
                 submission.request.profile_descriptor.configuration_fingerprint,

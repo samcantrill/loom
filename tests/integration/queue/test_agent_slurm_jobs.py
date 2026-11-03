@@ -14,6 +14,7 @@ import pytest
 
 from loom.pipeline.executors.slurm.commands import FakeSlurmCommandRunner
 from loom.queue import (
+    CoordinatorSchedulingReload,
     LocalDaemon,
     LocalDaemonConfig,
     LocalDaemonPrincipal,
@@ -120,7 +121,7 @@ def test_outbound_service_settles_slurm_while_drained(
                     "operator",
                     "operator",
                     "operator",
-                    ("drain", "resume"),
+                    ("drain", "resume", "scheduling_reload"),
                     ("agent-a",),
                 ),
             ),
@@ -401,6 +402,40 @@ def test_outbound_service_settles_slurm_while_drained(
         # This fixture owns only the manager thread; the scheduler is simulated
         # and a SLURM-only agent must never start a resident supervisor.
         assert not (tmp_path / "agent" / "supervisor").exists()
+
+    if not restart_with_job:
+        # A Slurm acceptance receipt remains accepted after native release.
+        # Retire that profile, restart, then reload again without its old code.
+        replacement = replace(config, slurm_profiles=())
+        for generation, current in enumerate((config, replacement)):
+            daemon = LocalDaemon(
+                current, trusted_scheduling_loader=lambda: replacement
+            )
+            before = daemon.start(start_held=True)
+            try:
+                execution = daemon._execution
+                assert execution is not None
+                receipt = execution.slurm_submissions.read(record.assignment.operation_id)
+                assert receipt.state.value == "accepted"
+                released = execution.slurm_assignments.find_operation(
+                    record.assignment.operation_id
+                )
+                assert released is not None and released.state == "released"
+                result = daemon.operator_view(
+                    LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+                ).reload_scheduling(CoordinatorSchedulingReload(
+                    operation_id=f"retire-settled-slurm-profile-{generation}",
+                    expected_scheduling_epoch=before.scheduling_epoch,
+                    reason="fully released Slurm history no longer pins a profile",
+                ))
+                assert result["state"] == "applied"
+                assert execution._scheduling.active_slurm_profiles == {}
+                assert execution._scheduling.retained_slurm_profiles == {}
+                assert execution.slurm_submissions.read(
+                    record.assignment.operation_id
+                ) == receipt
+            finally:
+                daemon.stop()
 
 
 def test_two_authenticated_submit_agents_share_quota_and_recover_cancel(tmp_path: Path):

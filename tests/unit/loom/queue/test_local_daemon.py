@@ -1928,6 +1928,7 @@ def test_reload_retains_the_exact_profile_for_nonterminal_slurm_work(
             lambda: (
                 SimpleNamespace(
                     request=SimpleNamespace(
+                        operation_id="submission-without-assignment",
                         profile_id=profile.profile_id,
                         profile_descriptor=profile.descriptor,
                     )
