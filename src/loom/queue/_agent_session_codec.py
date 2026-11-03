@@ -203,7 +203,8 @@ def _exact(value: Mapping[str, object], fields: set[str]) -> None:
         raise QueueServiceError("agent protocol fields are invalid")
 
 
-def _decode(raw: bytes, *, failure_report: bool = False, control_wait: bool = False) -> Mapping[str, object]:
+def _decode(raw: bytes, *, failure_report: bool = False, control_wait: bool = False,
+            slurm_registration: bool = False) -> Mapping[str, object]:
     if len(raw) > _MAX_BODY_BYTES:
         raise QueueServiceError(
             "agent protocol body is too large (maximum 65536 bytes); "
@@ -230,6 +231,23 @@ def _decode(raw: bytes, *, failure_report: bool = False, control_wait: bool = Fa
         _bounded_json({**value, "received_operation_ids": None}, depth=0)
         return value
     result = value.get("result")
+    if slurm_registration and isinstance(result, Mapping):
+        from .slurm_ready_stage import SLURM_STAGE_DELIVERY_SCHEMA_VERSION
+
+        delivery = result.get("delivery")
+        if (isinstance(delivery, Mapping)
+            and type(delivery.get("schema_version")) is int
+            and delivery["schema_version"] == SLURM_STAGE_DELIVERY_SCHEMA_VERSION):
+            # A native delivery includes fingerprint-bound shared preparation
+            # scope. Its semantic fields retain their own finite depth budget;
+            # the HTTP and registration wrappers must not consume that budget.
+            envelope_delivery = dict(delivery)
+            for key in ("fingerprint", "resolved_runtime", "worker_metadata"):
+                _bounded_json(delivery.get(key), depth=0, plain_scalars=True)
+                envelope_delivery[key] = None
+            _bounded_json(envelope_delivery, depth=0)
+            _bounded_json({**value, "result": {**result, "delivery": None}}, depth=0)
+            return value
     if isinstance(result, Mapping) and result.get("result") == "assignment":
         request = result.get("request")
         if isinstance(request, Mapping) and type(request.get("schema_version")) is int and request["schema_version"] == RESIDENT_ASSIGNMENT_BUNDLE_SCHEMA_VERSION:

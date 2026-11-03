@@ -3199,7 +3199,11 @@ def _read_agent_reply(
             "agent protocol outcome is indeterminate"
         )
     try:
-        payload = _decode(raw)
+        payload = (
+            _decode(raw, slurm_registration=True)
+            if role == "slurm_bootstrap" and operation == "register"
+            else _decode(raw)
+        )
     except QueueError as exc:
         raise _IndeterminateAgentProtocolError(
             "agent protocol outcome is indeterminate"
