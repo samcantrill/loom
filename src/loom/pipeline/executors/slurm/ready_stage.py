@@ -406,8 +406,21 @@ class SlurmReadyStageProfile:
     descriptor: SchedulingComponentDescriptor = field(init=False)
     accounting_history: SlurmHistoryPolicy | None = None
     requeue: bool | None = None
+    batch_shell: str | None = None
+    batch_working_directory: str | None = None
+    batch_output_path: str | None = None
 
     def __post_init__(self) -> None:
+        for name in ("batch_shell", "batch_working_directory", "batch_output_path"):
+            value = getattr(self, name)
+            if value is not None:
+                try:
+                    _safe_text(value)
+                except SlurmPlanningError as exc:
+                    raise SlurmPlanningError(f"ready-stage {name} requires an absolute path without whitespace") from exc
+                if (not Path(value).is_absolute() or ".." in Path(value).parts
+                    or any(char in value for char in "\"'\\#\x7f")):
+                    raise SlurmPlanningError(f"ready-stage {name} requires an absolute literal path without traversal or quoting")
         if self.requeue is not None and type(self.requeue) is not bool:
             raise SlurmPlanningError("ready-stage requeue must be a boolean or None")
         history = parse_history_policy(self.accounting_history)
@@ -534,6 +547,11 @@ class SlurmReadyStageProfile:
             "qos": self.qos,
             **({"time": self.time} if self.time is not None else {}),
             **({"requeue": self.requeue} if self.requeue is not None else {}),
+            **{
+                name: getattr(self, name)
+                for name in ("batch_shell", "batch_working_directory", "batch_output_path")
+                if getattr(self, name) is not None
+            },
             "cluster": self.cluster,
             "max_outstanding": self.max_outstanding,
             "bootstrap_argv": list(argv),
@@ -840,6 +858,12 @@ def map_ready_stage(
         directives.append(SlurmSbatchDirective(
             "requeue" if profile.requeue else "no-requeue", True, "profile",
         ))
+    for name, value in (
+        ("chdir", profile.batch_working_directory),
+        ("output", profile.batch_output_path),
+    ):
+        if value is not None:
+            directives.append(SlurmSbatchDirective(name, value, "profile"))
     directives.extend(resources)
     directives.append(SlurmSbatchDirective("comment", marker, "operation"))
     if profile.accounting_history is not None:
@@ -894,7 +918,7 @@ def map_ready_stage(
         semantic["container_metadata"] = dict(container_metadata)
     request_digest = _digest(stable_json_dumps(semantic))
     script_lines = [
-        "#!/usr/bin/env bash",
+        "#!/usr/bin/env bash" if profile.batch_shell is None else f"#!{profile.batch_shell}",
         *(render_sbatch_directive(item) for item in directives),
         "set -euo pipefail",
         *(

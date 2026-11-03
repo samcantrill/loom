@@ -1554,6 +1554,11 @@ def test_coordinator_config_constructs_complete_protected_composition(
     selected_environment = {"PATH": "/site/slurm/bin:/usr/bin", "TMPDIR": "/site/scratch/tmp", "LC_ALL": "C"}
     if client_environment:
         payload["slurm_profiles"][0]["runner"]["client_environment"] = selected_environment
+        payload["slurm_profiles"][0].update(
+            batch_shell="/bin/bash",
+            batch_working_directory="/shared/owner/logs",
+            batch_output_path="/shared/owner/logs/slurm-%j.out",
+        )
     if trusted_user:
         from loom.pipeline.executors.slurm.trusted_user import SlurmUserPrivateFileProvider
 
@@ -1586,6 +1591,9 @@ def test_coordinator_config_constructs_complete_protected_composition(
         assert profile.containment_helper.process_policy == "bounded-v1"
         assert profile.containment_helper.timeout_seconds == 30
     assert profile.runner.client_environment == (selected_environment if client_environment else None)
+    assert profile.batch_shell == ("/bin/bash" if client_environment else None)
+    assert profile.batch_working_directory == ("/shared/owner/logs" if client_environment else None)
+    assert profile.batch_output_path == ("/shared/owner/logs/slurm-%j.out" if client_environment else None)
     assert isinstance(profile.job_private_file_provider, SlurmUserPrivateFileProvider if trusted_user else SlurmJobPrivateFileProvider)
     assert service.daemon.slurm_schema_version == (4 if trusted_user else 3)
     assert profile.bootstrap_argv == ("loom", "slurm-bootstrap")

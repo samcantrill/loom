@@ -1978,6 +1978,9 @@ def _slurm_profile_declarations(value: object) -> tuple[Mapping[str, object], ..
         "time",
         "accounting_history",
         "requeue",
+        "batch_shell",
+        "batch_working_directory",
+        "batch_output_path",
     }
     declarations = []
     for index, item in enumerate(value):

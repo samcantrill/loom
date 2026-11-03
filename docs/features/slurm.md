@@ -62,6 +62,27 @@ after node failure or an administrative requeue. A deployment whose cleanup
 policy does not support restarted allocations should select `requeue: false`
 and still retain UNKNOWN when its required cleanup evidence is unavailable.
 
+Three optional protected fields control batch entry before the bootstrap starts:
+`batch_shell` selects an absolute Bash-compatible interpreter (for example
+`/bin/bash`), `batch_working_directory` emits `#SBATCH --chdir=...`, and
+`batch_output_path` emits `#SBATCH --output=...`. Slurm merges stderr into that
+output by default; its filename substitutions such as `%j` remain available.
+These paths must be absolute literals without whitespace, control characters,
+quotes, backslashes, `#`, or `..` components. The operator must verify the
+interpreter and writable directories on compute nodes before selection; Loom
+does not create them or expand shell variables. Use an absolute interpreter
+when the allocation's initial PATH cannot resolve Bash, including restricted
+`--export=NIL` environments. A shared output path retains diagnostics even when
+bootstrap registration fails and compute home differs from submit-host home.
+
+Omitting each field (or selecting `None`) preserves its prior fingerprint and
+script behavior: `/usr/bin/env bash`, inherited submission working directory,
+and Slurm's default output path. Explicit selections enter profile identity;
+working-directory/output directives and the shell also bind the retained request
+and script. Change them only after retained work settles, through the deployment's
+supported protected-profile transition, never by rewriting a pending job's script. These options neither
+export caller environment nor change bootstrap credentials or start permits.
+
 ```python
 from loom.pipeline.executors.slurm import SlurmReadyStageProfile
 from loom.pipeline.executors.slurm.ready_stage import SlurmJobPrivateFileProvider
