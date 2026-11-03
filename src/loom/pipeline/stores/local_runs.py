@@ -922,9 +922,14 @@ class LocalRunStore:
         _require_timestamp_field(
             payload, path, "created_at", label="composition manifest document"
         )
-        manifest = _require_mapping_field(
-            payload, path, "composition_manifest", label="composition manifest document"
-        )
+        # json_loads already validates and owns this plain tree. Recopying a
+        # large composition manifest here delays every admission reconciliation.
+        manifest = payload["composition_manifest"]
+        if not isinstance(manifest, dict):
+            raise CorruptStoreDocumentError(
+                f"composition manifest document at {path} field "
+                "'composition_manifest' must be an object"
+            )
         reference = self._composition_reference_from_metadata(run_uri)
         if reference is not None:
             self._validate_composition_reference(run_uri, reference, content=content)
@@ -932,7 +937,7 @@ class LocalRunStore:
             definition = manifest.get("metadata")
             if not isinstance(definition, dict) or any(name not in definition for name in cast(list[str], fields)):
                 raise CorruptStoreDocumentError("composition projection field is missing")
-        return manifest
+        return cast(dict[str, PlainData], manifest)
 
     def _composition_reference_from_metadata(self, run_uri: str) -> PlainData:
         if not (self.local_run_dir(run_uri) / "run.json").exists():
