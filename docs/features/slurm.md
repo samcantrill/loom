@@ -643,10 +643,11 @@ native profile composition accepts the same selection without launching it.
 
 The authenticated Slurm registration reply carries a versioned stage delivery.
 Its fingerprint, resolved runtime and worker metadata each have a separate
-eight-level JSON depth budget and accept finite plain-data scalars. The HTTP
+64-level JSON depth budget and accept finite plain-data scalars. This accommodates
+nested authored factory configurations, which exceed shallow control objects. The HTTP
 and registration wrappers do not consume those semantic budgets. The complete
 reply still has the 65,536-byte limit, collections remain bounded to 64 entries,
-and control fields retain their original depth and scalar restrictions. This
+and control fields retain their original eight-level depth and scalar restrictions. This
 decoder selection applies only to the Slurm bootstrap registration response;
 the native delivery decoder still checks schema, identities and shared scope.
 An indeterminate reply must replay the same registration, never create a new

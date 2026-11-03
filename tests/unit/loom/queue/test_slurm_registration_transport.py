@@ -14,8 +14,14 @@ from tests.unit.loom.queue.test_remote_stage_execution import _profile, _request
 
 
 def _response(tmp_path):
+    # A valid authored factory graph can exceed the control protocol's depth 8.
+    # This follows the native request/delivery producer before HTTP serialization.
+    nested = {"epsilon": 0.00001}
+    for _ in range(11):
+        nested = {"factory": nested}
     request = _request(_profile(tmp_path), stage_config={
         "model": {"encoder": {"block": {"normalization": {"epsilon": 0.00001}}}},
+        "data": nested,
     })
     values = {field.name: getattr(request, field.name)
               for field in fields(SlurmStageDelivery)
@@ -56,6 +62,7 @@ def test_native_delivery_crosses_registration_reply_and_replay(tmp_path):
     assert thaw_plain_data(first) == thaw_plain_data(replay) == value["result"]
     delivery = SlurmStageDelivery.from_dict(thaw_plain_data(first["delivery"]))
     assert delivery.fingerprint["payload"]["stage_config"]["model"]["encoder"]["block"]["normalization"]["epsilon"] == 0.00001
+    assert thaw_plain_data(delivery.fingerprint) == value["result"]["delivery"]["fingerprint"]
     assert connection.paths == ["/v1/slurm_bootstrap/register"] * 2
     for role, operation in [("agent", "register"), ("slurm_bootstrap", "handshake")]:
         with pytest.raises(_IndeterminateAgentProtocolError):
@@ -65,10 +72,10 @@ def test_native_delivery_crosses_registration_reply_and_replay(tmp_path):
 def test_registration_keeps_control_and_semantic_limits(tmp_path):
     value = _response(tmp_path)
     assert _decode(json.dumps(value).encode(), slurm_registration=True) == value
-    nested = 1
-    for _ in range(9):
-        nested = {"nested": nested}
     for field in ("unexpected", "delivery"):
+        nested = 1
+        for _ in range(65 if field == "delivery" else 9):
+            nested = {"nested": nested}
         changed = json.loads(json.dumps(value))
         if field == "delivery":
             changed["result"]["delivery"]["fingerprint"]["payload"]["stage_config"] = nested
