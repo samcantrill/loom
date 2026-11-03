@@ -70,7 +70,7 @@ from loom.scheduling import (
     ResourceClaimContractDescriptor,
     SchedulingComponentDescriptor,
 )
-from loom.serialization import thaw_plain_data
+from loom.serialization import PlainData, thaw_plain_data
 
 
 def _provider_descriptors(*kinds: str) -> tuple[SchedulingComponentDescriptor, ...]:
@@ -127,6 +127,7 @@ def _request(
     *,
     stage_config: dict[str, str] | None = None,
     input_binding_state: str = "current",
+    input_metadata: Mapping[str, PlainData] | None = None,
 ) -> _ResidentAssignmentBundle:
     worker = StageWorkerRequest(
         STAGE_WORKER_REQUEST_SCHEMA_VERSION,
@@ -135,7 +136,8 @@ def _request(
         1,
         "2020-01-01T00:00:00Z",
         "local",
-        {"source": ArtifactRef("source", "file:///coordinator/private", "bytes")},
+        {"source": ArtifactRef("source", "file:///coordinator/private", "bytes",
+                               metadata=input_metadata or {})},
         StageFingerprintRecord.create(
             algorithm="sha256",
             payload=StageFingerprintPayload(
@@ -214,6 +216,7 @@ def _request(
                 len(data),
                 "seed.data",
                 "bytes",
+                metadata=input_metadata or {},
             ),
         ),
         declared_outputs=("result",),

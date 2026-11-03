@@ -650,6 +650,9 @@ reply still has the 65,536-byte limit, collections remain bounded to 64 entries,
 and control fields retain their original eight-level depth and scalar restrictions. This
 decoder selection applies only to the Slurm bootstrap registration response;
 the native delivery decoder still checks schema, identities and shared scope.
+Input artifact metadata also accepts finite plain-data scalars, such as a
+checkpoint's selection metric. Its existing envelope depth and collection
+bounds remain unchanged, and descriptor identity fields remain strict.
 An indeterminate reply must replay the same registration, never create a new
 allocation or regenerate its consumed credential.
 The bootstrap converts the transport's recursively immutable response to plain

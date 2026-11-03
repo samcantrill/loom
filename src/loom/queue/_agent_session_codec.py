@@ -250,6 +250,17 @@ def _decode(raw: bytes, *, failure_report: bool = False, control_wait: bool = Fa
                 _bounded_json(delivery.get(key), depth=0, plain_scalars=True,
                               max_depth=_MAX_SEMANTIC_JSON_DEPTH)
                 envelope_delivery[key] = None
+            inputs = delivery.get("inputs")
+            if isinstance(inputs, list):
+                envelope_inputs = []
+                for artifact in inputs:
+                    if isinstance(artifact, Mapping) and "metadata" in artifact:
+                        # Input metadata has the artifact owner's plain-data
+                        # scalar contract, including checkpoint metric values.
+                        _bounded_json(artifact["metadata"], depth=3, plain_scalars=True)
+                        artifact = {**artifact, "metadata": None}
+                    envelope_inputs.append(artifact)
+                envelope_delivery["inputs"] = envelope_inputs
             _bounded_json(envelope_delivery, depth=0)
             _bounded_json({**value, "result": {**result, "delivery": None}}, depth=0)
             return value

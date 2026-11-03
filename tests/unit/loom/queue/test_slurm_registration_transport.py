@@ -13,13 +13,13 @@ from loom.serialization import thaw_plain_data
 from tests.unit.loom.queue.test_remote_stage_execution import _profile, _request
 
 
-def _response(tmp_path):
+def _response(tmp_path, *, input_metadata=None):
     # A valid authored factory graph can exceed the control protocol's depth 8.
     # This follows the native request/delivery producer before HTTP serialization.
     nested = {"epsilon": 0.00001}
     for _ in range(11):
         nested = {"factory": nested}
-    request = _request(_profile(tmp_path), stage_config={
+    request = _request(_profile(tmp_path), input_metadata=input_metadata, stage_config={
         "model": {"encoder": {"block": {"normalization": {"epsilon": 0.00001}}}},
         "data": nested,
     })
@@ -67,6 +67,41 @@ def test_native_delivery_crosses_registration_reply_and_replay(tmp_path):
     for role, operation in [("agent", "register"), ("slurm_bootstrap", "handshake")]:
         with pytest.raises(_IndeterminateAgentProtocolError):
             _read_agent_reply(connection, operation, b"{}", role)
+
+
+def test_input_artifact_metadata_crosses_registration_reply_and_replay(tmp_path):
+    metadata = {"metric_value": 0.9882636666297913,
+                "observations": [None, True, 2, 0.25, "ready", {"ratio": 0.75}]}
+    value = _response(tmp_path, input_metadata=metadata)
+    connection = _Connection(value)
+    first = _read_agent_reply(connection, "register", b"{}", "slurm_bootstrap")
+    replay = _read_agent_reply(connection, "register", b"{}", "slurm_bootstrap")
+    assert thaw_plain_data(first) == thaw_plain_data(replay) == value["result"]
+    delivery = SlurmStageDelivery.from_dict(thaw_plain_data(first["delivery"]))
+    assert thaw_plain_data(delivery.inputs[0].metadata) == metadata
+    assert delivery.to_dict() == value["result"]["delivery"]
+
+
+def test_input_metadata_does_not_widen_descriptor_or_wire_limits(tmp_path):
+    value = _response(tmp_path)
+    descriptor = value["result"]["delivery"]["inputs"][0]
+    descriptor["size_bytes"] = 1.5
+    with pytest.raises(QueueServiceError, match="JSON value is invalid"):
+        _decode(json.dumps(value).encode(), slurm_registration=True)
+    descriptor["size_bytes"] = 5
+    for metadata, message in [
+        ({"metric_value": float("nan")}, "JSON is invalid"),
+        ({"values": list(range(65))}, "collection is too large"),
+    ]:
+        descriptor["metadata"] = metadata
+        with pytest.raises(QueueServiceError, match=message):
+            _decode(json.dumps(value).encode(), slurm_registration=True)
+    nested = 1
+    for _ in range(6):
+        nested = {"nested": nested}
+    descriptor["metadata"] = nested
+    with pytest.raises(QueueServiceError, match="deeply nested"):
+        _decode(json.dumps(value).encode(), slurm_registration=True)
 
 
 def test_registration_keeps_control_and_semantic_limits(tmp_path):
