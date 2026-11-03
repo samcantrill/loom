@@ -519,6 +519,10 @@ but preserves the initialized root for inspection; existence is not a success
 receipt. Python callers can use `loom.queue.preflight.check_loaded_agent(service)`
 to assemble these checks without reloading configuration. Later startup still
 qualifies the actual execution environment afresh.
+Slurm-only agents intentionally have no resident supervisor, so its absence does
+not fail these checks. Configured resident/container execution still requires a
+matching supervisor; retained supervisor state is also checked if the current
+declaration no longer selects resident execution.
 
 Successful qualified initialization and guarded reload bind the declaration
 digest to the native root's immutable fingerprint, active fingerprint and active

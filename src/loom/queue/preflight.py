@@ -313,7 +313,17 @@ def _check_loaded_role(
         repair="Run the project check with its selected data, cache and run configuration.",
         applicability="project check/prepare boundary",
     )
-    if agent_root is not None and Path(agent_root).exists():
+    if (
+        agent_root is not None
+        and Path(agent_root).exists()
+        and (
+            profiles
+            or container_policies
+            or (Path(agent_root) / "supervisor").exists()
+        )
+    ):
+        # Slurm-only agents intentionally have no resident supervisor. Retained
+        # supervisor state still needs comparison after a declaration changes.
         from ._agent_process_supervisor import (
             AgentProcessSupervisorError,
             SupervisorLaunchConfiguration,
