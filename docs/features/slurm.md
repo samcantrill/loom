@@ -691,7 +691,9 @@ restart the original submit agent verifies only that bound location and relays
 through the existing authenticated result/finalization path. Old session tokens
 are not required. Result identity comparison normalizes immutable protocol
 views and retained JSON to the same plain values; JSON arrays and their frozen
-tuple representation do not change identity. Every identity field still matches
+tuple representation do not change identity. Outgoing report, output and commit
+requests convert that identity recursively back to JSON values, including a
+commit replay after retained-byte cleanup. Every identity field still matches
 exactly. Partial, stale, linked or corrupt evidence cannot commit and
 remains with a bounded `delivery-failure.json` diagnostic in the transport root.
 A worker result exceeding the existing transport bounds also records a retained

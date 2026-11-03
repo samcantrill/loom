@@ -293,7 +293,7 @@ class SharedSlurmResult:
             ) from exc
         binding: dict[str, PlainData] = {
             "assignment_id": self.assignment_id,
-            "identity": dict(identity),
+            "identity": thaw_plain_data(identity),
         }
         call({**binding, "result_operation": "report", "report": report.to_dict()})
         for item in report.outputs:
@@ -337,7 +337,7 @@ class SharedSlurmResult:
         response = call(
             {
                 "assignment_id": self.assignment_id,
-                "identity": dict(identity),
+                "identity": thaw_plain_data(identity),
                 "result_operation": "commit",
             }
         )

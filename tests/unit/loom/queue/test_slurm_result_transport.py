@@ -83,8 +83,9 @@ def test_authenticated_frozen_identity_delivers_with_exact_plain_receipt(tmp_pat
     operations = []
 
     def coordinator(value):
-        # The receiving coordinator also sees a frozen authenticated payload.
-        evidence = freeze_plain_data(value)
+        # Exercise the real JSON encode/decode boundary before authenticated
+        # decoding freezes the receiving coordinator's payload again.
+        evidence = freeze_plain_data(json.loads(json.dumps(value, allow_nan=False)))
         transport_module.validate_identity(evidence["identity"], identity)
         operations.append(evidence["result_operation"])
         if evidence["result_operation"] == "output":
@@ -99,6 +100,9 @@ def test_authenticated_frozen_identity_delivers_with_exact_plain_receipt(tmp_pat
     assert owner.deliver(received, coordinator)
     assert operations == ["report", "output", "commit"]
     assert not owner.path.exists()
+    # A restart may only retain the pending commit, after byte cleanup.
+    assert owner.finish_delivery(received, coordinator)
+    assert operations[-1] == "commit"
 
 
 def test_manifest_last_partial_copy_and_lost_ack_preserve_bytes(tmp_path, monkeypatch):
