@@ -384,6 +384,7 @@ def _resolved_preferences(
         "gpu_model_order": "gpu_model",
         "resource_attribute_order": "resource_attribute",
         "packing": "packing",
+        "spreading": "spreading",
     }
     tiers = {
         "agent_order": 0,
@@ -391,6 +392,11 @@ def _resolved_preferences(
         "resource_attribute_order": 1,
         "packing": 2,
     }
+    # Opt-in spreading precedes hardware preferences. Existing declarations
+    # retain their tiers and fingerprints when spreading is absent.
+    if any(isinstance(item, Mapping) and item.get("kind") == "spreading" for item in value):
+        tiers = {kind: tier + 1 for kind, tier in tiers.items()}
+    tiers["spreading"] = 0
     for index, item in enumerate(value):
         if not isinstance(item, Mapping):
             raise QueueServiceError("stage placement preference is invalid")
@@ -416,7 +422,7 @@ def _resolved_preferences(
         data: dict[str, PlainData]
         utility_min = 0
         utility_max = 0
-        if kind == "packing":
+        if kind in {"packing", "spreading"}:
             _exact_preference_fields(item, {"kind", "fallback_after_seconds"})
             data = {}
             utility_min = -(2**63) + 1

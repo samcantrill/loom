@@ -646,6 +646,7 @@ def _default_scheduling_components() -> LocalDaemonSchedulingComponents:
         OrderedAgentPreferenceScorer,
         PackingPreferenceScorer,
         ResourceAttributePreferenceScorer,
+        SpreadingPreferenceScorer,
     )
     from loom.pipeline.runtime.scheduling_resources import GpuResourcePlanner
     from loom.scheduling import (
@@ -669,6 +670,7 @@ def _default_scheduling_components() -> LocalDaemonSchedulingComponents:
             GpuModelPreferenceScorer(),
             ResourceAttributePreferenceScorer(),
             PackingPreferenceScorer(),
+            SpreadingPreferenceScorer(),
         ),
         policy=FifoSchedulingPolicy(),
     )
@@ -5265,7 +5267,9 @@ def _validate_retired_coordinator_execution(previous, replacement):
                 raise QueueConflictError("coordinator retirement cannot rebind preparation policy")
             _validate_retired_capabilities((previous.capability,), (profile.capability,))
             old_scope, new_scope = previous.shared_scope, profile.shared_scope
-            if (any(old_scope["roots"].get(alias) != value for alias, value in new_scope["roots"].items())
+            old_roots = cast(Mapping[str, PlainData], old_scope["roots"])
+            new_roots = cast(Mapping[str, PlainData], new_scope["roots"])
+            if (any(old_roots.get(alias) != value for alias, value in new_roots.items())
                 or {**new_scope, "roots": old_scope["roots"]} != old_scope):
                 raise QueueConflictError("coordinator retirement cannot expand preparation shared scope")
             if not set(profile.image_roots) <= set(previous.image_roots):

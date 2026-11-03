@@ -226,6 +226,7 @@ def test_production_gpu_projection_preserves_multi_device_fabric_groups(
     )
     execution = _execution(config)
     candidate = execution._candidate()
+    assert candidate.attributes["outstanding_assignments"] == 0
     request = parse_resource_request(
         {
             "entries": {

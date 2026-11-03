@@ -326,6 +326,28 @@ agents requires gang/all-or-none reservation, rank/rendezvous and network
 configuration, coordinated launch, and group failure/retry semantics. No
 resource planner may hide cross-agent consumption inside provider data.
 
+Managed stages can opt into spreading across eligible hosts:
+
+```yaml
+placement:
+  preferences:
+    - kind: spreading
+    - kind: gpu_model_order
+      models: [preferred-model, fallback-model]
+```
+
+`spreading` prefers the host with fewer outstanding native assignments. It counts
+preparation, reserved, running and settling assignments until their native release;
+it does not measure CPU utilization or count external processes. GPU eligibility
+and CPU/RAM reservations still apply first. All profiles on the same agent share
+the same count. When spreading is selected, it precedes the other preference
+tiers, so GPU model order breaks equal-occupancy ties. Declarations without it
+retain their previous ordering. Placement never migrates running work, promises
+equal utilization, or overrides a hard target. Each scheduling turn observes the
+current authority counts; pending unreflected claims still withhold an agent as
+before. Third-party candidates using this scorer must supply the nonnegative
+integer `outstanding_assignments` attribute; absent evidence is indeterminate.
+
 The resolved placement reuses the existing versioned `ResourceRequest` rather
 than creating a second durable request codec:
 
