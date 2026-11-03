@@ -689,7 +689,10 @@ incarnation and submission operation, with paths, digests and byte counts. A
 compute process can exit while the coordinator is unavailable. After same-root
 restart the original submit agent verifies only that bound location and relays
 through the existing authenticated result/finalization path. Old session tokens
-are not required. Partial, stale, linked or corrupt evidence cannot commit and
+are not required. Result identity comparison normalizes immutable protocol
+views and retained JSON to the same plain values; JSON arrays and their frozen
+tuple representation do not change identity. Every identity field still matches
+exactly. Partial, stale, linked or corrupt evidence cannot commit and
 remains with a bounded `delivery-failure.json` diagnostic in the transport root.
 A worker result exceeding the existing transport bounds also records a retained
 delivery failure; it does not become success.

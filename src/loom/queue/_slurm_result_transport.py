@@ -18,7 +18,7 @@ from pathlib import Path
 import shutil
 from typing import Iterator, cast
 
-from loom.serialization import PlainData
+from loom.serialization import PlainData, thaw_plain_data
 from loom.pipeline.stores.shared_artifacts import binding as shared_binding
 from ._remote_stage_execution import (
     MAX_TRANSFER_BYTES,
@@ -44,7 +44,9 @@ def _json(value: object) -> bytes:
 
 
 def validate_identity(value: object, expected: Mapping[str, PlainData]) -> None:
-    if value != expected:
+    # Wire decoding freezes JSON arrays as tuples. Compare plain values at both
+    # transport ends without changing the retained identity or its exact fields.
+    if thaw_plain_data(value) != thaw_plain_data(expected):
         raise QueueConflictError("SLURM retained result identity conflicts")
 
 

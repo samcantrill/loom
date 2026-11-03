@@ -7,6 +7,7 @@ import json
 import pytest
 
 from loom.pipeline.status import StageStatus
+from loom.serialization import freeze_plain_data, thaw_plain_data
 from loom.queue._remote_stage_execution import (
     MAX_TRANSFER_BYTES,
     _RemoteExecutionReport,
@@ -31,6 +32,7 @@ def _fixture(tmp_path, data=b"result"):
             "agent_root_id": "agent-root",
             "attempt_id": "attempt",
             "operation_id": "operation",
+            "profile_descriptor": {"supported_data_versions": [1]},
         },
         "fence": "fence",
         "incarnation": "bootstrap",
@@ -70,6 +72,33 @@ def _fixture(tmp_path, data=b"result"):
         return value, offset + len(value) == len(data)
 
     return owner, identity, report, chunk
+
+
+def test_authenticated_frozen_identity_delivers_with_exact_plain_receipt(tmp_path):
+    owner, identity, report, chunk = _fixture(tmp_path)
+    owner.publish(identity, report, chunk)
+    received = freeze_plain_data(identity)
+    assert received != identity  # The real descriptor array becomes a tuple.
+    assert owner.read(received)[0] == report
+    operations = []
+
+    def coordinator(value):
+        # The receiving coordinator also sees a frozen authenticated payload.
+        evidence = freeze_plain_data(value)
+        transport_module.validate_identity(evidence["identity"], identity)
+        operations.append(evidence["result_operation"])
+        if evidence["result_operation"] == "output":
+            return {"received": 6}
+        return {"acknowledged": True}
+
+    changed = thaw_plain_data(received)
+    changed["assignment"]["profile_descriptor"]["supported_data_versions"] = [2]
+    with pytest.raises(QueueConflictError, match="retained result is invalid"):
+        owner.deliver(freeze_plain_data(changed), coordinator)
+    assert not operations and owner.path.exists()
+    assert owner.deliver(received, coordinator)
+    assert operations == ["report", "output", "commit"]
+    assert not owner.path.exists()
 
 
 def test_manifest_last_partial_copy_and_lost_ack_preserve_bytes(tmp_path, monkeypatch):
