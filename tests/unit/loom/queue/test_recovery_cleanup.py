@@ -40,6 +40,7 @@ def test_preview_keeps_existing_attempts_without_durable_diagnostics(tmp_path, m
     ))
     admitted = []
     daemon = SimpleNamespace(
+        _execution=SimpleNamespace(slurm_assignments=None),
         admission_for_run_uri=admitted.append,
         _connection=lambda: conn,
         config=SimpleNamespace(coordinator_shared_roots=profile.shared_roots),
@@ -195,6 +196,7 @@ def releasable_attempt(tmp_path, monkeypatch):
                                 append_cleanup_result=append_result)
     monkeypatch.setattr(cleanup, "_authority", lambda *args: authority)
     daemon = SimpleNamespace(
+        _execution=SimpleNamespace(slurm_assignments=None),
         admission_for_run_uri=lambda uri: None, _connection=connection,
         config=SimpleNamespace(coordinator_shared_roots=profile.shared_roots, control_database=database),
         _authorizer=lambda: SimpleNamespace(require_operator=lambda *args, **kwargs: checks.append((args, kwargs))),

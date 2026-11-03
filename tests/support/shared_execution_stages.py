@@ -109,7 +109,16 @@ class SharedRecoveryProducer:
         catalog = json.loads((previous / "catalog.json").read_text())
         assert (previous / catalog["checkpoint"]).read_bytes() == b"completed-progress"
         (current / "restored").write_bytes(b"restored")
-        return {"manifest": context.save_artifact("manifest", {"restored": True, "binding": binding}, artifact_type="json", codec_key="json.v1")}
+        reference = context.save_artifact("manifest", {"restored": True, "binding": binding}, artifact_type="json", codec_key="json.v1")
+        if context.stage_config.get("complete_diagnostics"):
+            from dataclasses import replace
+            from loom.queue._shared_publication import RECOVERY_COMPLETE
+
+            reference = replace(reference, metadata={
+                **reference.metadata,
+                RECOVERY_COMPLETE: {"schema_version": 1, "required_outputs": ["manifest"]},
+            })
+        return {"manifest": reference}
 
 
 def inspect_shared_context(request):

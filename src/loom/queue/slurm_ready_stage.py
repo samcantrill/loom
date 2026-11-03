@@ -6,7 +6,7 @@ from loom._sqlite_policy import SQLitePolicy, connect_existing, initialize_datab
 
 from collections.abc import Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import base64
 from datetime import datetime, timezone
 import hashlib
@@ -269,6 +269,9 @@ class SlurmStageDelivery:
         object.__setattr__(self, "worker_metadata", metadata)
         object.__setattr__(self, "inputs", inputs)
         object.__setattr__(self, "declared_outputs", outputs)
+        from ._shared_recovery import validate_wire
+
+        validate_wire(self)
 
     @classmethod
     def from_worker_request(
@@ -1167,6 +1170,26 @@ class SQLiteSlurmStageAssignments:
             )
             return tuple(self._record(row) for row in rows)
 
+    def recovery_records(
+        self, run_uri: str, *, stage_name: str | None = None, limit: int | None = None,
+    ) -> tuple[tuple[SlurmStageRecord, Mapping[str, PlainData] | None], ...]:
+        """Read bounded attempt history and its accepted provider evidence together."""
+        with _connect(self.path, sqlite_policy=self._sqlite_policy, require_existing=True) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                f"SELECT * FROM {_ASSIGNMENT_TABLE} WHERE run_uri = ? "
+                "AND (? IS NULL OR json_extract(identity_json, '$.stage_name') = ?) "
+                "ORDER BY assignment_id LIMIT ?",
+                (run_uri, stage_name, stage_name, -1 if limit is None else limit + 1),
+            ).fetchall()
+            if limit is not None and len(rows) > limit:
+                raise QueueConflictError("recovery history exceeds assignment limit")
+            return tuple(
+                (self._record(row), None if row["agent_evidence_json"] is None
+                 else json.loads(row["agent_evidence_json"]))
+                for row in rows
+            )
+
     def list_unreleased(self) -> tuple[SlurmStageRecord, ...]:
         """Return every assignment whose profile binding is still retained."""
 
@@ -1741,7 +1764,15 @@ class SlurmBootstrapWorkspace:
 
     def worker_request(self, *, shared_roots: Mapping[str, PlainData] | None = None) -> StageWorkerRequest:
         self.accept_inputs(shared_roots=shared_roots)
-        return self.delivery().worker_request(self.root, shared_roots=shared_roots)
+        request = self.delivery().worker_request(self.root, shared_roots=shared_roots)
+        from ._shared_recovery import BINDING, WIRE, worker_binding
+
+        metadata = dict(request.metadata)
+        metadata.pop(WIRE, None)
+        binding = worker_binding(self)
+        if binding is not None:
+            metadata[BINDING] = binding
+        return replace(request, metadata=metadata)
 
     def retain_result(self, result: StageWorkerResult) -> _RemoteExecutionReport:
         """Retain a result produced inside the acknowledged bootstrap root.

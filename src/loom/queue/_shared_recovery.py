@@ -159,6 +159,7 @@ def bind_delivery(
     roots: Mapping[str, PlainData],
     *,
     session_id: str,
+    slurm_assignments: Any = None,
 ) -> Any:
     selection = selected(request)
     if selection is None or request.preparation_input is not None:
@@ -168,17 +169,80 @@ def bind_delivery(
     ).fetchone()
     if session is None:
         raise QueueConflictError("recovery destination machine is unavailable")
-    predecessors = []
+    return _bind_delivery(
+        request, conn, run_uri, roots, agent_id=session["agent_root_id"],
+        slurm_assignments=slurm_assignments,
+    )
+
+
+def assignment_rows(
+    conn: Any, run_uri: str, *, slurm_assignments: Any = None,
+    stage_name: str | None = None, limit: int | None = None,
+) -> list[dict[str, Any]]:
+    """Project both native providers into the existing recovery retention contract."""
     rows = conn.execute(
         "SELECT r.*, d.request_json, a.result_json AS recovery_json FROM remote_assignments r "
-        "JOIN agent_deliveries d USING(assignment_id) LEFT JOIN agent_receipts a "
+        "LEFT JOIN agent_deliveries d USING(assignment_id) LEFT JOIN agent_receipts a "
         "ON a.principal_id = ? AND a.operation = 'seal' AND a.idempotency_key = r.assignment_id "
-        "WHERE r.run_uri = ? AND r.stage_name = ? AND r.attempt < ? "
-        "AND r.start_permitted = 1 ORDER BY r.attempt",
-        (_PRINCIPAL, run_uri, request.stage_name, request.attempt),
+        "WHERE r.run_uri = ? AND (? IS NULL OR r.stage_name = ?) "
+        "ORDER BY r.stage_name, r.attempt LIMIT ?",
+        (_PRINCIPAL, run_uri, stage_name, stage_name, -1 if limit is None else limit + 1),
     ).fetchall()
+    result = [dict(row) for row in rows]
+    if slurm_assignments is not None:
+        for record, evidence in slurm_assignments.recovery_records(run_uri, stage_name=stage_name, limit=limit):
+            assignment = record.assignment
+            receipt = conn.execute(
+                "SELECT result_json FROM agent_receipts WHERE principal_id = ? "
+                "AND operation = 'seal' AND idempotency_key = ?",
+                (_PRINCIPAL, assignment.assignment_id),
+            ).fetchone()
+            proof = (
+                evidence.get("release") if evidence is not None
+                and evidence.get("provider_released") is True else None
+            )
+            result.append({
+                "assignment_id": assignment.assignment_id,
+                "run_uri": assignment.run_uri, "stage_name": assignment.stage_name,
+                "attempt_id": assignment.attempt_id, "attempt": assignment.attempt,
+                "agent_id": assignment.agent_id,
+                "state": record.state.upper(), "fence": record.fence,
+                "start_permitted": record.start_consumed,
+                "request_json": encoded(record.delivery.to_dict()).decode(),
+                "report_json": None if record.report is None else encoded(record.report.to_dict()).decode(),
+                "provider_release_proof_json": None if proof is None else encoded(proof).decode(),
+                "recovery_json": None if receipt is None else receipt["result_json"],
+            })
+    if limit is not None and len(result) > limit:
+        raise QueueConflictError("recovery history exceeds assignment limit")
+    return sorted(result, key=lambda row: (row["stage_name"], row["attempt"]))
+
+
+def bind_slurm_delivery(
+    request: Any, conn: Any, run_uri: str, roots: Mapping[str, PlainData], *,
+    agent_id: str, slurm_assignments: Any,
+) -> Any:
+    if selected(request) is None or request.preparation_input is not None:
+        return request
+    return _bind_delivery(
+        request, conn, run_uri, roots, agent_id=agent_id,
+        slurm_assignments=slurm_assignments,
+    )
+
+
+def _bind_delivery(
+    request: Any, conn: Any, run_uri: str, roots: Mapping[str, PlainData], *,
+    agent_id: str, slurm_assignments: Any,
+) -> Any:
+    selection = selected(request)
+    assert selection is not None
+    predecessors = []
+    rows = assignment_rows(conn, run_uri, slurm_assignments=slurm_assignments, stage_name=request.stage_name)
     # Declined/revoked deliveries with no start permit cannot own progress.
     for row in rows:
+        if (row["stage_name"] != request.stage_name or row["attempt"] >= request.attempt
+            or not row["start_permitted"] or row["request_json"] is None):
+            continue
         if WIRE not in json.loads(row["request_json"])["worker_metadata"]:
             continue
         if (
@@ -214,7 +278,7 @@ def bind_delivery(
             WIRE: {
                 "schema_version": 1,
                 "root_id": selection[0],
-                "tree": current_relative(request, session["agent_root_id"]),
+                "tree": current_relative(request, agent_id),
                 "predecessors": predecessors,
             },
         },

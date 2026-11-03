@@ -123,7 +123,8 @@ def _base_worker_mounts(profile: ResidentWorkerLaunchProfile, workspace: Path, *
 
 
 def prepare_container_worker_paths(
-    profile: ResidentWorkerLaunchProfile, *, workspace: Path, agent_id: str
+    profile: ResidentWorkerLaunchProfile, *, workspace: Path, agent_id: str,
+    assignment: _ResidentAssignmentBundle | SlurmStageDelivery | None = None,
 ) -> None:
     """Create assignment-owned writable mounts only at the launch boundary."""
     from ._remote_stage_execution import _ResidentAssignmentWorkspace
@@ -135,7 +136,8 @@ def prepare_container_worker_paths(
     prepare_assignment_storage(profile, workspace=workspace, agent_id=agent_id)
     if not profile.shared_roots:
         return
-    assignment = _ResidentAssignmentWorkspace.read_request(workspace)
+    if assignment is None:
+        assignment = _ResidentAssignmentWorkspace.read_request(workspace)
     if assignment_scope(assignment.fingerprint) is None:
         return
     if selected(assignment) is not None:

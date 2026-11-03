@@ -683,6 +683,33 @@ publishing it. Downstream Slurm workers resolve the same references through thei
 qualified roots. The result journal never copies or deletes those artifact trees.
 Worker scratch space is separate and is not the durable transport.
 
+Submitted Slurm assignments with a shared-publication root also receive the
+native assignment-owned recovery binding. The delivery carries only qualified
+root/tree identities; the worker resolves the current writable directory and
+immutable predecessor directories inside its execution namespace. Preparation
+deliveries and older deliveries without that binding retain their behavior.
+Never substitute a coordinator run-state path inside a remote worker.
+
+After the agent supplies exact positive provider-release evidence, the
+coordinator seals recovery progress and retains its reference before releasing
+the assignment. An interrupted seal replays from the same retained delivery and
+fence. A subsequent explicit retry can select only earlier started, failed or
+result-less attempts that have been positively released and sealed. Resident
+and Slurm history use the same ownership and closure checks; live progress,
+changed bytes and recovery reserved for cleanup cannot be selected. Application
+code still decides which checkpoint is scientifically eligible.
+The saved worker request is reused only for the same attempt. When authority
+admits the immediate successor of a failed attempt, Slurm prepares a new worker
+request using the same guard as resident dispatch; it does not relaunch the
+earlier request or reinterpret an unrelated request as the retry.
+
+Recovery preview and operator cleanup include Slurm attempts and authorize the
+assignment's recorded agent. The existing complete-output, published-log,
+containment and dependent-attempt requirements still apply. A successful Slurm
+wrapper exit alone neither seals recovery nor authorizes its deletion. Upgrading
+this worker behavior requires a matching workload image; a host-only upgrade
+cannot add the binding to an older image's worker.
+
 The bootstrap writes relayed output files and report version 6, fsyncs them,
 and atomically publishes manifest version 1 last. The manifest binds the stable
 coordinator, original agent/root, assignment, attempt, execution fence, bootstrap

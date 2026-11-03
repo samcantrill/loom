@@ -33,16 +33,10 @@ def preview_recovery_cleanup(daemon: Any, run_uri: str) -> dict[str, Any]:
 def _preview(daemon: Any, run_uri: str, conn: Any, assignment_id: str | None = None) -> dict[str, Any]:
     snapshot = _authority(daemon, run_uri).open_run(run_uri)
     stages = {stage.stage_name: stage for stage in snapshot.stages}
-    rows = conn.execute(
-        "SELECT r.*, a.result_json AS recovery_json FROM remote_assignments r "
-        "LEFT JOIN agent_receipts a ON a.principal_id = ? "
-        "AND a.operation = 'seal' AND a.idempotency_key = r.assignment_id "
-        "WHERE r.run_uri = ? AND (? IS NULL OR r.assignment_id = ?) "
-        "ORDER BY r.stage_name, r.attempt LIMIT 1001",
-        (recovery._PRINCIPAL, run_uri, assignment_id, assignment_id),
-    ).fetchall()
-    if len(rows) > 1000:
-        raise QueueConflictError("recovery preview exceeds assignment limit")
+    all_rows = recovery.assignment_rows(
+        conn, run_uri, slurm_assignments=daemon._execution.slurm_assignments, limit=1000,
+    )
+    rows = [row for row in all_rows if assignment_id is None or row["assignment_id"] == assignment_id]
     entries = []
     for row in rows:
         released = _release_record(conn, row["assignment_id"])
@@ -81,12 +75,12 @@ def _preview(daemon: Any, run_uri: str, conn: Any, assignment_id: str | None = N
             reasons.append("outputs_not_committed")
         elif not _complete_outputs(stage.artifact_facts):
             reasons.append("complete_diagnostics_not_declared")
-        dependents = conn.execute(
-            "SELECT r.state, r.provider_release_proof_json, d.request_json "
-            "FROM remote_assignments r JOIN agent_deliveries d USING(assignment_id) "
-            "WHERE r.run_uri = ? AND r.stage_name = ? AND r.attempt > ?",
-            (run_uri, row["stage_name"], row["attempt"]),
-        ).fetchall()
+        dependents = (
+            candidate for candidate in all_rows
+            if candidate["stage_name"] == row["stage_name"]
+            and candidate["attempt"] > row["attempt"]
+            and candidate["request_json"] is not None
+        )
         for dependent in dependents:
             predecessors = json.loads(dependent["request_json"])["worker_metadata"].get(
                 recovery.WIRE, {}
@@ -178,18 +172,20 @@ def release_recovery(daemon: Any, principal: Any, *, run_uri: str, assignment_id
     request_digest = hashlib.sha256(encoded(request)).hexdigest()
     with daemon._connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        assignment = conn.execute(
-            "SELECT * FROM remote_assignments WHERE assignment_id = ? AND run_uri = ?",
-            (assignment_id, run_uri),
-        ).fetchone()
+        assignment = next((row for row in recovery.assignment_rows(
+            conn, run_uri, slurm_assignments=daemon._execution.slurm_assignments, limit=1000,
+        ) if row["assignment_id"] == assignment_id), None)
         if assignment is None:
             raise QueueConflictError("recovery assignment is not in the selected run")
         # Authorization targets the assignment's recorded machine, not a caller path.
-        session = conn.execute("SELECT agent_id FROM agent_sessions WHERE session_id = ?",
-                               (assignment["session_id"],)).fetchone()
-        if session is None:
-            raise QueueConflictError("recovery assignment machine is unavailable")
-        daemon._authorizer().require_operator(principal, "cleanup_recovery", agent_id=session["agent_id"])
+        agent_id = assignment.get("agent_id")
+        if agent_id is None:
+            session = conn.execute("SELECT agent_id FROM agent_sessions WHERE session_id = ?",
+                                   (assignment["session_id"],)).fetchone()
+            if session is None:
+                raise QueueConflictError("recovery assignment machine is unavailable")
+            agent_id = session["agent_id"]
+        daemon._authorizer().require_operator(principal, "cleanup_recovery", agent_id=agent_id)
         record = _release_record(conn, assignment_id)
         if record is not None:
             if record["request_digest"] != request_digest:

@@ -2189,6 +2189,20 @@ class LocalDaemonExecution:
                     next_state="logical_released",
                 )
             if evidence.get("provider_released") is True:
+                from ._shared_recovery import WIRE, retain_released
+
+                # The accepted, exact containment evidence above is the sole
+                # seal trigger. Retain progress before making the slot reusable;
+                # replay completes an interrupted seal before final release.
+                if (record.fence is not None and record.state != "released"
+                    and WIRE in record.delivery.worker_metadata):
+                    with self._daemon_owner()._connection() as conn:
+                        retain_released(
+                            conn, {"provider_release_proof_json": release, "fence": record.fence},
+                            record.delivery, self.config.coordinator_shared_roots,
+                            agent_id=assignment.agent_id,
+                        )
+                        conn.commit()
                 self.slurm_assignments.release(assignment.assignment_id)
                 with self.config.connect_database(self.config.control_database) as conn:
                     conn.execute(
@@ -3007,6 +3021,26 @@ class LocalDaemonExecution:
                     "persisted managed recovery evidence conflicts"
                 )
 
+    def _ready_worker_request(
+        self, record: StageWorkRecord, snapshot: AuthoritativeRunSnapshot,
+    ) -> dict[str, PlainData] | None:
+        """Reuse this attempt, or prepare the authorized successor of a failed one."""
+        raw = self.run_store.read_stage_worker_request(
+            record.run_uri, record.stage_name, attempt=None,
+        )
+        if raw is not None:
+            retained = StageWorkerRequest.from_dict(raw)
+            if retained.attempt != record.attempt:
+                prior_failed = any(
+                    attempt.attempt == retained.attempt and attempt.status is StageStatus.FAILED
+                    for stage in snapshot.stages if stage.stage_name == record.stage_name
+                    for attempt in stage.attempts
+                )
+                if not prior_failed or retained.attempt + 1 != record.attempt:
+                    raise QueueConflictError("managed retry worker request conflicts")
+                return None
+        return raw
+
     def _dispatch_slurm_ready(
         self,
         *,
@@ -3081,11 +3115,7 @@ class LocalDaemonExecution:
                 for item in intent.plan.ordered_stage_plans
                 if item.stage_name == record.stage_name
             )
-            raw_worker_request = self.run_store.read_stage_worker_request(
-                record.run_uri,
-                record.stage_name,
-                attempt=record.attempt,
-            )
+            raw_worker_request = self._ready_worker_request(record, snapshot)
             worker_request = (
                 StageWorkerRequest.from_dict(raw_worker_request)
                 if raw_worker_request is not None
@@ -3212,6 +3242,13 @@ class LocalDaemonExecution:
                 inputs=tuple(remote_inputs),
                 declared_outputs=tuple(sorted(stage.outputs)),
             )
+            from ._shared_recovery import bind_slurm_delivery
+
+            with self._daemon_owner()._connection() as conn:
+                delivery = bind_slurm_delivery(
+                    delivery, conn, assignment.run_uri, self.config.coordinator_shared_roots,
+                    agent_id=assignment.agent_id, slurm_assignments=self.slurm_assignments,
+                )
             self.slurm_assignments.reserve(
                 assignment,
                 request_json=request.to_dict(),
@@ -4958,22 +4995,7 @@ class LocalDaemonExecution:
         )
         produced = _produced_outputs(snapshot)
         runtime = _worker_runtime(intent, record.stage_name)
-        raw_worker_request = self.run_store.read_stage_worker_request(
-            record.run_uri, record.stage_name, attempt=None,
-        )
-        if raw_worker_request is not None:
-            retained_request = StageWorkerRequest.from_dict(raw_worker_request)
-            if retained_request.attempt != record.attempt:
-                prior_failed = any(
-                    attempt.attempt == retained_request.attempt
-                    and attempt.status is StageStatus.FAILED
-                    for stage_fact in snapshot.stages
-                    if stage_fact.stage_name == record.stage_name
-                    for attempt in stage_fact.attempts
-                )
-                if not prior_failed or retained_request.attempt + 1 != record.attempt:
-                    raise QueueConflictError("managed retry worker request conflicts")
-                raw_worker_request = None
+        raw_worker_request = self._ready_worker_request(record, snapshot)
         worker_request = (
             StageWorkerRequest.from_dict(raw_worker_request)
             if raw_worker_request is not None
@@ -5106,7 +5128,7 @@ class LocalDaemonExecution:
             )
             from ._shared_recovery import bind_delivery
             with self._daemon_owner()._connection() as conn:
-                delivered = bind_delivery(delivered, conn, assignment.run_uri, self._daemon_owner().config.coordinator_shared_roots, session_id=remote_target.session_id)
+                delivered = bind_delivery(delivered, conn, assignment.run_uri, self._daemon_owner().config.coordinator_shared_roots, session_id=remote_target.session_id, slurm_assignments=self.slurm_assignments)
             self.coordinator.reserve(
                 assignment,
                 claims,

@@ -57,6 +57,36 @@ def _workspace(tmp_path, *, gpu=False):
     return workspace, policy, execution, image
 
 
+def test_slurm_delivery_validates_recovery_ownership_before_worker_resolution(tmp_path):
+    from loom.queue._shared_recovery import WIRE, BINDING
+    from tests.unit.loom.queue.test_shared_recovery import _workspace as recovery_workspace
+
+    workspace, profile, _ = recovery_workspace(tmp_path)
+    request = workspace.request()
+    delivery = SlurmStageDelivery(
+        **{
+            field.name: getattr(request, field.name)
+            for field in fields(SlurmStageDelivery)
+            if hasattr(request, field.name) and field.name != "schema_version"
+        },
+        profile_id=profile.descriptor.profile_id,
+        project_fingerprint=profile.descriptor.project_fingerprint,
+        environment_fingerprint=profile.descriptor.environment_fingerprint,
+        executor_fingerprint=profile.descriptor.executor_fingerprint,
+    )
+    assert SlurmStageDelivery.from_dict(delivery.to_dict()) == delivery
+    stale = delivery.to_dict()
+    stale["worker_metadata"][WIRE]["tree"] = stale["worker_metadata"][WIRE]["tree"].replace(
+        delivery.attempt_id, "another-attempt",
+    )
+    with pytest.raises(QueueConflictError, match="ownership"):
+        SlurmStageDelivery.from_dict(stale)
+    resolved = delivery.to_dict()
+    resolved["worker_metadata"][BINDING] = {"current": {"path": str(tmp_path)}}
+    with pytest.raises(QueueServiceError, match="resolved recovery"):
+        SlurmStageDelivery.from_dict(resolved)
+
+
 @pytest.mark.parametrize("gpu", [False, True])
 def test_submitted_slurm_command_preserves_image_mounts_and_allocation(tmp_path, gpu):
     workspace, policy, execution, image = _workspace(tmp_path, gpu=gpu)
