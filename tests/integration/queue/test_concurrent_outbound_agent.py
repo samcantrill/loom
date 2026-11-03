@@ -507,6 +507,11 @@ def test_held_worker_and_short_assignment_obey_resident_ceiling(monkeypatch, cei
             _eventually(lambda: (gate / "build.started").exists())
             held = _running(case)
             assert len(held) == 1
+            if ceiling == 2:
+                _eventually(lambda: [
+                    row[0].attributes["outstanding_assignments"]
+                    for row in case.daemon._execution._remote_candidates().values()
+                ] == [1])
             short_uri, authority = _submit(case, "short")
             if ceiling == 1:
                 assert not _rows(
@@ -545,6 +550,10 @@ def test_held_worker_and_short_assignment_obey_resident_ceiling(monkeypatch, cei
                     )[0][0]
                 )
                 assert len(offer["reflected_claim_ids"]) == 1
+                _eventually(lambda: [
+                    row[0].attributes["outstanding_assignments"]
+                    for row in case.daemon._execution._remote_candidates().values()
+                ] == [1])
             _release_gate(gate)
             assert (
                 case.client.wait("long", timeout_seconds=30).state

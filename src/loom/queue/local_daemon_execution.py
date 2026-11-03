@@ -4325,7 +4325,13 @@ class LocalDaemonExecution:
                 atoms=observed.atoms,
             )
         profile = self.config.resident_worker_launch_profile
-        attributes: dict[str, PlainData] = {}
+        with sqlite3.connect(self.config.execution_database) as conn:
+            outstanding = conn.execute(
+                "SELECT COUNT(*) FROM coordinator_assignments "
+                "WHERE agent_id=? AND state!='released'",
+                (self.agent_id,),
+            ).fetchone()[0]
+        attributes: dict[str, PlainData] = {"outstanding_assignments": outstanding}
         if profile is not None:
             if profile.shared_roots:
                 try:
@@ -4612,6 +4618,7 @@ class LocalDaemonExecution:
                     attributes={
                         "agent_id": agent_id,
                         "target": agent_id,
+                        "outstanding_assignments": outstanding.get(str(row["session_id"]), 0),
                         **identity,
                         "artifact_capability": "regular-file-relay-v1",
                         **(shared_attributes({"roots": dict(profile.shared_roots)})

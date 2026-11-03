@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import cast
 
 from loom.pipeline import parse_resource_request
@@ -11,6 +12,7 @@ from loom.pipeline.runtime.scheduling_preferences import (
     OrderedAgentPreferenceScorer,
     PackingPreferenceScorer,
     ResourceAttributePreferenceScorer,
+    SpreadingPreferenceScorer,
 )
 from loom.pipeline.runtime.scheduling_resources import GpuResourcePlanner
 from loom.scheduling import (
@@ -41,6 +43,7 @@ def test_production_daemon_registers_each_concrete_preference_scorer() -> None:
         "gpu_model": GpuModelPreferenceScorer,
         "resource_attribute": ResourceAttributePreferenceScorer,
         "packing": PackingPreferenceScorer,
+        "spreading": SpreadingPreferenceScorer,
     }
 
 
@@ -437,6 +440,70 @@ def test_concrete_higher_tier_dominates_model_score_and_candidate_order() -> Non
         decision = kernel.decide(work=(work,), candidates=ordered, as_of=1)
         assert decision.selected is not None
         assert decision.selected.candidate_id == "machine-A"
+
+
+def test_spreading_precedes_gpu_order_and_preserves_cpu_admission() -> None:
+    from loom.ids import ArtifactType, StageID
+    from loom.pipeline.runtime.scheduling_resources import CpuResourcePlanner
+    from loom.pipeline.specs import OutputSpec, StageFactorySpec, StageSpec
+    from loom.queue.local_daemon_runtime import _resolved_preferences
+
+    resources = parse_resource_request({"entries": {
+        "gpu": {"kind": "gpu", "amount": 1},
+        "cpu": {"kind": "cpu", "amount": 8},
+    }})
+    stage = StageSpec(StageID("fit"), StageFactorySpec("tests.support.Stage"),
+                      {"result": OutputSpec(ArtifactType("test.result"))})
+    spreading, model = SpreadingPreferenceScorer(), GpuModelPreferenceScorer()
+    scorers = {"spreading": spreading, "gpu_model": model}
+    model_order = {"kind": "gpu_model_order", "models": ["fast", "slow"]}
+    preferences = _resolved_preferences(
+        stage, resources, [model_order, {"kind": "spreading"}],
+        preference_scorers=scorers,
+    )
+    assert {p.scorer: p.tier for p in preferences} == {"gpu_model": 1, "spreading": 0}
+    legacy = _resolved_preferences(stage, resources, [model_order], preference_scorers=scorers)
+    assert legacy[0].tier == 0
+    gpu, work = _gpu_work(*preferences)
+    cpu = CpuResourcePlanner()
+    resolved = cpu.resolve_request(scheduling_entry_view(resources.entries["cpu"]), None)
+    assert resolved.request is not None
+    work = replace(work, requests={**work.requests, "cpu": resolved.request})
+    kernel = SchedulingKernel(
+        planners={"gpu": gpu, "cpu": cpu}, policy=FifoSchedulingPolicy(),
+        preference_scorers=scorers,
+    )
+
+    def candidate(name, model, count, cpus=16):
+        return replace(
+            _single_gpu_candidate(name, model=model, extra_cpu=cpus),
+            attributes={"outstanding_assignments": count},
+        )
+
+    scenarios = (
+        # Occupancy outranks faster hardware, independent of input ordering.
+        ((candidate("fast-host", "fast", 1), candidate("idle-host", "slow", 0)), "idle-host"),
+        # Hardware preference breaks equal-occupancy ties.
+        ((candidate("fast-host", "fast", 1), candidate("idle-host", "slow", 1)), "fast-host"),
+        # Free GPUs never override an exhausted CPU scheduling budget.
+        ((candidate("fast-host", "fast", 1), candidate("idle-host", "slow", 0, 7)), "fast-host"),
+    )
+    for candidates, expected in scenarios:
+        for ordered in (candidates, tuple(reversed(candidates))):
+            decision = kernel.decide(work=(work,), candidates=ordered, as_of=1)
+            assert decision.selected is not None
+            assert decision.selected.candidate_id == expected
+
+
+def test_spreading_requires_candidate_occupancy_evidence() -> None:
+    from loom.scheduling import PreferenceEvaluationState
+
+    scorer = SpreadingPreferenceScorer()
+    spec = PreferenceSpec("spread", "spreading", utility_min=-(2**63) + 1,
+                          descriptor=scorer.descriptor)
+    _, work = _gpu_work(spec)
+    result = scorer.evaluate(work, _single_gpu_candidate("host", model="gpu"), (), spec)
+    assert result.state is PreferenceEvaluationState.INDETERMINATE
 
 
 def test_concrete_model_fallback_waits_for_the_durable_deadline() -> None:
