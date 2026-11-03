@@ -646,6 +646,10 @@ decoder selection applies only to the Slurm bootstrap registration response;
 the native delivery decoder still checks schema, identities and shared scope.
 An indeterminate reply must replay the same registration, never create a new
 allocation or regenerate its consumed credential.
+The bootstrap converts the transport's recursively immutable response to plain
+JSON data before retaining registration or publishing the result identity. This
+preserves the response values and exact replay bytes; it does not change the wire
+schema or permit a second execution.
 
 Every executable protected profile requires `result_storage`:
 

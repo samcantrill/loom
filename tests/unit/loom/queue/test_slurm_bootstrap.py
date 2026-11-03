@@ -16,6 +16,8 @@ from loom.queue.slurm_bootstrap import (
 )
 import loom.queue.slurm_bootstrap as slurm_bootstrap
 from loom.pipeline import ProcessContainmentOwner
+from loom.queue.slurm_ready_stage import SlurmBootstrapWorkspace
+from loom.serialization import freeze_plain_data
 
 
 def test_fixed_bootstrap_cli_loads_explicit_private_configuration(tmp_path, monkeypatch):
@@ -194,11 +196,11 @@ def test_bootstrap_passes_outer_boundary_containment_owner(
                 if trusted_user:
                     import base64
                     assert base64.b64decode(payload["capability"]) == expected_token
-                return {
+                return freeze_plain_data({
                     "assignment_id": "assignment-1",
-                    "delivery": {},
-                    "result_identity": {},
-                }
+                    "delivery": {"nested": {"sequence": [1, 2]}},
+                    "result_identity": {"assignment": {"assignment_id": "assignment-1"}},
+                })
             if action == "grant":
                 return {"fence": "fence-1"}
             if action == "start":
@@ -214,8 +216,18 @@ def test_bootstrap_passes_outer_boundary_containment_owner(
             self.root = tmp_path / "resident-workspace"
             self.root.mkdir()
 
-        def persist_registration(self, _registration: object) -> None:
-            pass
+        def persist_registration(self, registration: object) -> None:
+            retained = SlurmBootstrapWorkspace(
+                tmp_path / "protocol", "assignment-1", durable_files=durable_files,
+            )
+            retained.persist_registration(registration)
+            # Reopen and repeat the exact response, as after a lost acknowledgement.
+            SlurmBootstrapWorkspace(
+                tmp_path / "protocol", "assignment-1", durable_files=durable_files,
+            ).persist_registration(registration)
+            assert json.loads((retained.root / "registration.json").read_text())["delivery"] == {
+                "nested": {"sequence": [1, 2]},
+            }
 
         def persist_delivery(self, _delivery: object) -> None:
             pass
@@ -261,11 +273,18 @@ def test_bootstrap_passes_outer_boundary_containment_owner(
             inputs=(),
         ),
     )
+    def publish(identity, _report, _output):
+        # The shared result journal also writes the nested identity as JSON.
+        assert json.loads(json.dumps(identity)) == {
+            "assignment": {"assignment_id": "assignment-1"}, "fence": "fence-1",
+        }
+        actions.append("publish")
+
     monkeypatch.setattr(
         slurm_bootstrap,
         "SharedSlurmResult",
         lambda *_args, **_kwargs: SimpleNamespace(
-            publish=lambda *_args: actions.append("publish")
+            publish=publish
         ),
     )
     monkeypatch.setattr(

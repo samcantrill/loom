@@ -330,7 +330,7 @@ def run_slurm_bootstrap(
             )
             capability_path = provider.path_for(operation_id)
             capability = provider.read_capability(operation_id=operation_id, request_digest=request_digest)
-        registration = prestart(
+        registration_response = prestart(
             "register",
             {
                 "operation_id": operation_id,
@@ -341,6 +341,11 @@ def run_slurm_bootstrap(
                 "capability": _encode(capability),
             },
         )
+        # Authenticated replies are recursively frozen. Normalize the complete
+        # registration before its durable JSON and result-publication consumers.
+        registration = cast(Mapping[str, PlainData], thaw_plain_data(
+            registration_response, path="SLURM registration",
+        ))
         assignment_id = _string(registration, "assignment_id")
         delivery = SlurmStageDelivery.from_dict(
             thaw_plain_data(registration.get("delivery"), path="SLURM delivery")
