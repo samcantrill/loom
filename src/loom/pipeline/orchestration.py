@@ -430,7 +430,7 @@ class CoordinatorStageWorkStore(Protocol):
 
     def create_or_refresh(self, record: StageWorkRecord) -> StageWorkRecord: ...
 
-    def list_stage_work(self) -> tuple[StageWorkRecord, ...]: ...
+    def list_stage_work(self, *, admission_id: str | None = None) -> tuple[StageWorkRecord, ...]: ...
 
     def ready_window(
         self, *, limit: int = READY_WINDOW_LIMIT
@@ -506,8 +506,9 @@ class InMemoryStageWorkStore:
         self._work[record.stage_work_id] = refreshed
         return refreshed
 
-    def list_stage_work(self) -> tuple[StageWorkRecord, ...]:
-        return tuple(self._work[key] for key in sorted(self._work))
+    def list_stage_work(self, *, admission_id: str | None = None) -> tuple[StageWorkRecord, ...]:
+        return tuple(self._work[key] for key in sorted(self._work)
+                     if admission_id is None or self._work[key].admission_id == admission_id)
 
     def ready_window(
         self, *, limit: int = READY_WINDOW_LIMIT
@@ -734,14 +735,17 @@ class SQLiteStageWorkStore:
             )
             return refreshed
 
-    def list_stage_work(self) -> tuple[StageWorkRecord, ...]:
+    def list_stage_work(self, *, admission_id: str | None = None) -> tuple[StageWorkRecord, ...]:
         if not self.path.exists():
             if not self._allow_initialize:
                 raise CoordinatorStoreError("coordinator store is missing")
             return ()
         with self._read_connection() as conn:
             rows = conn.execute(
-                "SELECT record_json FROM stage_work ORDER BY stage_work_id"
+                "SELECT record_json FROM stage_work"
+                + (" WHERE admission_id = ?" if admission_id is not None else "")
+                + " ORDER BY stage_work_id",
+                () if admission_id is None else (admission_id,),
             ).fetchall()
         return tuple(
             StageWorkRecord.from_dict(_json_loads(cast(str, row["record_json"])))
@@ -1006,8 +1010,8 @@ class RunOrchestrator:
         run_cancelled: bool,
     ) -> None:
         stage_plans = {stage.stage_name: stage for stage in plan.stage_plans}
-        for record in self.store.list_stage_work():
-            if record.admission_id != admission_id or record.run_uri != run_uri:
+        for record in self.store.list_stage_work(admission_id=admission_id):
+            if record.run_uri != run_uri:
                 continue
             stage = stage_facts.get(record.stage_name)
             stage_plan = stage_plans.get(record.stage_name)

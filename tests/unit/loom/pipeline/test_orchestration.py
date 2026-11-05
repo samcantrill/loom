@@ -1030,3 +1030,26 @@ def test_stage_work_hard_cut_requires_durable_global_order_fields() -> None:
 
     with pytest.raises(CoordinatorStoreError, match="fields are invalid"):
         type(record).from_dict(payload)
+
+
+@pytest.mark.parametrize("kind", ["memory", "sqlite"])
+def test_stage_work_admission_filter_precedes_decoding(tmp_path: Path, kind: str) -> None:
+    store = (InMemoryStageWorkStore() if kind == "memory"
+             else SQLiteStageWorkStore(tmp_path / "filtered.sqlite"))
+    records = []
+    for admission in ("second", "first"):
+        run_uri = f"file:///{admission}"
+        authority = _authority(run_uri)
+        plan = _plan(run_uri, _stage("train"))
+        records.extend(RunOrchestrator(authority=authority, store=store, owner_id="coordinator").reconcile(
+            admission_id=admission, plan=plan, authority_snapshot=authority.open_run(run_uri),
+            placements={"train": _placement()}, execution_requirements=_requirements(plan), ready_at=10,
+        ))
+    assert store.list_stage_work() == tuple(sorted(records, key=lambda item: item.stage_work_id))
+    assert store.list_stage_work(admission_id="absent") == ()
+    if kind == "sqlite":
+        # An unrelated malformed record proves filtering happens before decoding.
+        import sqlite3
+        with sqlite3.connect(tmp_path / "filtered.sqlite") as conn:
+            conn.execute("UPDATE stage_work SET record_json = '{}' WHERE admission_id = 'second'")
+    assert store.list_stage_work(admission_id="first") == (records[1],)

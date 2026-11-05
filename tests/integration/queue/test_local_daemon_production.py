@@ -1743,25 +1743,39 @@ def test_admission_recovery_backoff_is_scoped_and_owner_progress_wakes_it(
         attempts = Counter()
         error: list[Exception] = [QueueServiceError("private unavailable input")]
 
-        def reconcile(admission):
+        def reconcile(admission, **kwargs):
             attempts[admission.run_uri] += 1
             if admission.run_uri == unhealthy_uri:
                 raise error[0]
-            return original(admission)
+            return original(admission, **kwargs)
 
         monkeypatch.setattr(execution, "reconcile_admission", reconcile)
         client = daemon.client_view(LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT))
         unhealthy = client.submit(LocalDaemonAdmissionRequest("unhealthy", unhealthy_uri))
         client.submit(LocalDaemonAdmissionRequest("healthy", healthy_uri))
-        for _ in range(8):
-            daemon.reconcile_once()
+        def drive_until(predicate):
+            from time import monotonic
+
+            deadline = monotonic() + 5
+            while not predicate():
+                observed = daemon._wake.snapshot()
+                daemon.reconcile_once()
+                if predicate():
+                    return
+                remaining = deadline - monotonic()
+                assert remaining > 0
+                daemon._wake.wait_for_change(observed, remaining)
+
+        for count in range(1, 9):
+            drive_until(lambda: attempts[unhealthy_uri] == count)
             retry = daemon._admission_retries[unhealthy_uri]
             assert retry.retry_at > clock[0]
             before = attempts.copy()
             for _ in range(5):
                 daemon.reconcile_once()
             assert attempts[unhealthy_uri] == before[unhealthy_uri]
-            assert attempts[healthy_uri] == before[healthy_uri] + 5
+            drive_until(lambda: attempts[healthy_uri] > before[healthy_uri])
+            assert attempts[unhealthy_uri] == before[unhealthy_uri]
             clock[0] = retry.retry_at
         assert attempts[unhealthy_uri] == 8
         # A notification for another run must not erase the failed owner's delay.
@@ -1770,12 +1784,12 @@ def test_admission_recovery_backoff_is_scoped_and_owner_progress_wakes_it(
         daemon.reconcile_once()
         assert attempts[unhealthy_uri] == 8
         daemon._wake_admission(unhealthy_uri)
-        daemon.reconcile_once()
+        drive_until(lambda: attempts[unhealthy_uri] == 9)
         assert attempts[unhealthy_uri] == 9
         assert daemon._admission_retries[unhealthy_uri].attempts == 1
         error[0] = QueueConflictError("authority conflict")
         daemon._wake_admission(unhealthy_uri)
-        daemon.reconcile_once()
+        drive_until(lambda: daemon._admission(unhealthy.admission_id).state is LocalDaemonAdmissionState.BLOCKED)
         assert daemon._admission(unhealthy.admission_id).state is LocalDaemonAdmissionState.BLOCKED
         assert unhealthy_uri not in daemon._admission_retries
     finally:
@@ -1802,10 +1816,11 @@ def test_admission_reconciliation_failure_does_not_stop_other_runs(
     def reconcile_admission(
         execution: LocalDaemonExecution,
         admission: LocalDaemonAdmission,
+        **kwargs,
     ) -> LocalDaemonExecutionOutcome:
         if admission.run_uri == unhealthy_uri:
             raise QueueServiceError("simulated admission-local outage")
-        return original(execution, admission)
+        return original(execution, admission, **kwargs)
 
     monkeypatch.setattr(
         LocalDaemonExecution, "reconcile_admission", reconcile_admission

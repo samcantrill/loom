@@ -103,3 +103,28 @@ class PhaseTimings:
         return {"clock": "process_monotonic", "spans": self.spans,
                 "dropped_spans": self.dropped,
                 **({"related": self.related} if self.related else {})}
+
+
+@contextmanager
+def state_lock(lock: Any) -> Iterator[None]:
+    """Measure coordinator lock wait/hold and defer all reporting until release.
+
+    Nested phase spans are collected into the same bounded diagnostic payload.
+    With reentrant locks, the outer collector also defers inner lock reporting.
+    """
+    timings = PhaseTimings()
+    observer = _observer.get()
+    try:
+        with timings.measure("coordinator_state_lock_wait"):
+            lock.acquire()
+        try:
+            with observe_phases(timings.observe), timings.measure("coordinator_state_lock_hold"):
+                yield
+        finally:
+            lock.release()
+    finally:
+        if observer is not None:
+            try:
+                observer({**timings.payload(), "operation_id": _operation.get()})
+            except Exception:
+                pass

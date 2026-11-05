@@ -1724,21 +1724,29 @@ class LocalDaemonExecution:
                 "retained daemon owner state is unavailable"
             ) from None
 
-    def _admission_context(
-        self, admission: LocalDaemonAdmission
-    ) -> tuple[ManagedLocalIntent, _ScopedCoordinatorAuthority]:
-        """Open and bind the exact retained execution context for one admission."""
+    def load_context(self, admission: LocalDaemonAdmission) -> ManagedLocalIntent:
+        """Read and validate inputs without binding or mutating execution owners."""
+        from ._phase_timing import phase
 
-        self.open_owner_stores()
-        intent = load_managed_local_intent(
-            self.config,
-            admission.run_uri,
-            slurm_profiles=self._scheduling.available_slurm_profiles(),
-        )
-        if intent.digest != admission.intent_digest:
-            raise QueueConflictError(
-                "persisted managed-local plan or runtime changed after admission"
+        with phase("execution_context_loading", operation_id=admission.authority_operation_id):
+            intent = load_managed_local_intent(
+                self.config,
+                admission.run_uri,
+                slurm_profiles=self._scheduling.available_slurm_profiles(),
             )
+            if intent.digest != admission.intent_digest:
+                raise QueueConflictError(
+                    "persisted managed-local plan or runtime changed after admission"
+                )
+            return intent
+
+    def _admission_context(
+        self, admission: LocalDaemonAdmission,
+        *, prepared_intent: ManagedLocalIntent | None = None,
+    ) -> tuple[ManagedLocalIntent, _ScopedCoordinatorAuthority]:
+        """Bind validated inputs through the retained authority operation identity."""
+        self.open_owner_stores()
+        intent = self.load_context(admission) if prepared_intent is None else prepared_intent
         authority = self._authority_store(admission.run_uri)
         receipt = authority.bind_coordinator_admission(
             admission.run_uri,
@@ -1819,10 +1827,11 @@ class LocalDaemonExecution:
         )
 
     def reconcile_admission(
-        self, admission: LocalDaemonAdmission
+        self, admission: LocalDaemonAdmission,
+        *, prepared_intent: ManagedLocalIntent | None = None,
     ) -> LocalDaemonExecutionOutcome:
         """Reconcile one run into durable ready work without selecting capacity."""
-        return _run_progress.reconcile_admission(self, admission)
+        return _run_progress.reconcile_admission(self, admission, prepared_intent=prepared_intent)
 
 
     def _settled_terminal_outcome(

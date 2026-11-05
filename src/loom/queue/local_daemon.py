@@ -1625,6 +1625,10 @@ class LocalDaemon:
         self._thread: Thread | None = None
         self._execution: LocalDaemonExecution | None = None
         self._cycle_lock = RLock()
+        self._reconcile_guard = RLock()
+        from ._context_preparation import ContextPreparations
+
+        self._contexts = ContextPreparations(self._wake.set)
         from ._agent_poll_waiters import _PollWaiters
 
         self._poll_waiters = _PollWaiters()
@@ -1642,6 +1646,11 @@ class LocalDaemon:
         from ._service_lifetime import CoordinatorLifetime
 
         self._lifetime = CoordinatorLifetime(self)
+
+    def _state_guard(self):
+        from ._phase_timing import state_lock
+
+        return state_lock(self._cycle_lock)
 
     @property
     def preparation_available(self) -> bool:
@@ -1991,6 +2000,10 @@ class LocalDaemon:
         self._admission_retries.clear()
         self._cancelled_admission_repairs = None
         self._verified_local_owner_subject = verified_local_owner_subject
+        self._contexts.close()
+        from ._context_preparation import ContextPreparations
+
+        self._contexts = ContextPreparations(self._wake.set)
         self._stop.clear()
         from ._agent_poll_waiters import _PollWaiters
 
@@ -2032,7 +2045,7 @@ class LocalDaemon:
             pass
 
     def stop(self) -> None:
-        with self._cycle_lock:
+        with self._state_guard():
             self._stop.set()
             self._poll_waiters.close()
             self._publication_guards.close()
@@ -2044,6 +2057,7 @@ class LocalDaemon:
         self._thread = None
         if thread is not None:
             thread.join()
+        self._contexts.close()
         if self._execution is not None:
             self._execution.close()
             try:
@@ -2102,7 +2116,7 @@ class LocalDaemon:
             raise QueueServiceError(
                 "SLURM bootstrap credentials must remain role-exclusive"
             )
-        with self._cycle_lock:
+        with self._state_guard():
             self._agent_policy = policy
             self._poll_waiters.notify_all()
 
@@ -2582,14 +2596,17 @@ class LocalDaemon:
         )
 
     def reconcile_once(self) -> tuple[LocalDaemonAdmission, ...]:
-        """Project every admission, then schedule one global bounded window."""
+        """Prepare bounded inputs, project completed admissions and schedule work."""
+        with self._reconcile_guard:
+            return self._reconcile_once()
 
+    def _reconcile_once(self) -> tuple[LocalDaemonAdmission, ...]:
         self._require_started()
         self._preparations.reconcile()
         for provider in self._local_resource_providers():
             if isinstance(provider, GpuResourceProvider):
                 provider.refresh_occupancy()
-        with self._cycle_lock:
+        with self._state_guard():
             self._event_observers.flush_prepared()
             # A reload may replace providers while the bounded query runs.
             # Its new provider starts unknown and is refreshed next cycle.
@@ -2617,18 +2634,41 @@ class LocalDaemon:
                         ),
                     )
                 )
+            epochs = (self._epoch, self._scheduling_epoch)
+        self._contexts.submit(
+            (admission for admission in admissions
+             if (retry := self._admission_retries.get(admission.run_uri)) is None
+             or retry.ready((admission.revision, self._scheduling_epoch))),
+            epochs, execution.load_context,
+        )
+        prepared = {item.admission.admission_id: item for item in self._contexts.completed()}
+        if prepared:
+            # A completion frees a bounded slot after submission above.
+            # Wake another turn even when all remaining IO is blocked.
+            self._wake.set()
+        with self._state_guard():
+            epochs = (self._epoch, self._scheduling_epoch)
             schedulable: dict[str, LocalDaemonAdmission] = {}
             waiting_outcomes: dict[str, LocalDaemonExecutionOutcome] = {}
             active_runs = {admission.run_uri for admission in admissions}
             for run_uri in self._admission_retries.keys() - active_runs:
                 del self._admission_retries[run_uri]
             for admission in admissions:
+                preparation = prepared.get(admission.admission_id)
+                if preparation is None:
+                    continue
+                current = self._admission(admission.admission_id)
+                if preparation.epochs != epochs or preparation.admission.revision != current.revision:
+                    self._wake.set()
+                    continue
+                admission = current
                 progress = (admission.revision, self._scheduling_epoch)
                 retry = self._admission_retries.get(admission.run_uri)
                 if retry is not None and not retry.ready(progress):
                     continue
                 try:
-                    outcome = execution.reconcile_admission(admission)
+                    intent = preparation.future.result()  # completed() only returns done futures
+                    outcome = execution.reconcile_admission(admission, prepared_intent=intent)
                 except QueueConflictError:
                     self._admission_retries.pop(admission.run_uri, None)
                     self._record_admission_health(admission.admission_id, "failed")
@@ -2727,7 +2767,7 @@ class LocalDaemon:
                 self._service_error = None
             if not self._stop.is_set():
                 now = time.monotonic()
-                with self._cycle_lock:
+                with self._state_guard():
                     delay = min(
                         (retry.retry_at - now for retry in self._admission_retries.values()
                          if retry.retry_at > now),
@@ -2741,7 +2781,7 @@ class LocalDaemon:
 
     def _wake_admission(self, run_uri: str) -> None:
         """Retry this run after committed owner progress, not another run's heartbeat."""
-        with self._cycle_lock:
+        with self._state_guard():
             self._admission_retries.pop(run_uri, None)
         self._wake.set()
 
@@ -2975,7 +3015,7 @@ class LocalDaemon:
         _public_operation_id(request.operation_id)
         self._authorizer().require_operator(principal, "scheduling_reload")
         encoded = json.dumps(request.to_dict(), sort_keys=True, separators=(",", ":"))
-        with self._cycle_lock:
+        with self._state_guard():
             replacement_fingerprint: str | None = None
             with self._connection() as conn:
                 conn.execute("BEGIN IMMEDIATE")
@@ -3142,7 +3182,7 @@ class LocalDaemon:
         execution = self._execution
         if execution is None:
             raise QueueServiceError("recovery coordinator execution is unavailable")
-        with self._cycle_lock:
+        with self._state_guard():
             with self._connection() as conn:
                 prior = conn.execute(
                     "SELECT principal_id, request_json, request_digest, recorded_at, "
@@ -3213,7 +3253,7 @@ class LocalDaemon:
         execution = self._execution
         if execution is None:
             raise QueueServiceError("replacement coordinator execution is unavailable")
-        with self._cycle_lock:
+        with self._state_guard():
             with execution.scheduling_reload_guard():
                 result = replace_agent_session(self, principal, request)
         self._wake.set()
@@ -3870,7 +3910,7 @@ class LocalDaemon:
             request.to_dict(), sort_keys=True, separators=(",", ":"), allow_nan=False
         )
         digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
-        with self._cycle_lock:
+        with self._state_guard():
             with self._connection() as conn:
                 conn.execute("BEGIN IMMEDIATE")
                 existing = conn.execute(

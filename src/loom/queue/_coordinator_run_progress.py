@@ -36,11 +36,12 @@ class LocalDaemonExecutionOutcome:
 
 
 def reconcile_admission(
-    self: LocalDaemonExecution, admission: LocalDaemonAdmission
+    self: LocalDaemonExecution, admission: LocalDaemonAdmission,
+    *, prepared_intent: ManagedLocalIntent | None = None,
 ) -> LocalDaemonExecutionOutcome:
     """Reconcile one run into durable ready work without selecting capacity."""
 
-    intent, scoped_authority = self._admission_context(admission)
+    intent, scoped_authority = self._admission_context(admission, prepared_intent=prepared_intent)
     self._cycle_contexts[admission.admission_id] = (intent, scoped_authority)
     outcome = _reconcile_admission(self, admission, intent, scoped_authority)
     if outcome.state not in {

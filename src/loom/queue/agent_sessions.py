@@ -1608,7 +1608,7 @@ def _serialized_session_operation(
     def wrapped(
         service: "AgentSessionService", *args: _P.args, **kwargs: _P.kwargs
     ) -> _R:
-        with service._daemon._cycle_lock:  # type: ignore[attr-defined]
+        with service._daemon._state_guard():  # type: ignore[attr-defined]
             return method(service, *args, **kwargs)
 
     return wrapped
@@ -1638,7 +1638,7 @@ def _serialized_offer_operation(
     def wrapped(
         service: "AgentSessionService", *args: _P.args, **kwargs: _P.kwargs
     ) -> _R:
-        with service._daemon._cycle_lock:  # type: ignore[attr-defined]
+        with service._daemon._state_guard():  # type: ignore[attr-defined]
             execution = service._daemon._execution  # type: ignore[attr-defined]
             if execution is None:
                 raise QueueServiceError("remote execution owner is unavailable")
@@ -2097,7 +2097,7 @@ class AgentSessionService:
         with daemon._poll_waiters.subscribe(session_id) as signal:
             while True:
                 observed = signal.snapshot()
-                with daemon._cycle_lock:
+                with daemon._state_guard():
                     self._require_poll_running()
                     assignment = self.next_assignment_control(session_id, received=received)
                     control = self.next_control(session_id, received=received)
@@ -3109,7 +3109,7 @@ class AgentSessionService:
         _identifier(session_id, "session_id")
         daemon = self._daemon
         with daemon._poll_waiters.subscribe(session_id) as signal:
-            with daemon._cycle_lock:
+            with daemon._state_guard():
                 self._require_poll_running()
                 principal_id, epoch, digest, replay = self._begin_work_poll(
                     session_id,
@@ -3124,7 +3124,7 @@ class AgentSessionService:
                 while True:
                     # Snapshot BEFORE the state check to cover commit-before-wait.
                     observed = signal.snapshot()
-                    with daemon._cycle_lock:
+                    with daemon._state_guard():
                         self._require_poll_running()
                         offer_recheck, delivered = self._check_work_poll(
                             principal_id=principal_id,
@@ -3883,7 +3883,7 @@ class AgentSessionService:
         digest = hashlib.sha256(encoded.encode()).hexdigest()
         arguments = dict(fence=fence, authorization_id=authorization_id,
                          authorization_revision=authorization_revision, report=report, encoded=encoded)
-        with self._daemon._cycle_lock, self._daemon._connection() as conn:
+        with self._daemon._state_guard(), self._daemon._connection() as conn:
             row, request, agent_id, stamp = self._declaration_authority(
                 conn, session_id, assignment_id, **arguments)
             if row["report_json"] is not None:
@@ -3897,7 +3897,7 @@ class AgentSessionService:
         prepared = None
         if selected(request) is not None and report.status is StageStatus.SUCCEEDED:
             prepared = prepare_publication(request, report, roots, agent_id=agent_id, fence=fence)
-        with self._daemon._cycle_lock, self._daemon._connection() as conn:
+        with self._daemon._state_guard(), self._daemon._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row, current_request, current_agent, current_stamp = self._declaration_authority(
                 conn, session_id, assignment_id, **arguments)
@@ -4103,7 +4103,7 @@ class AgentSessionService:
         self, session_id: str, assignment_id: str, *, fence: str
     ) -> Mapping[str, PlainData]:
         _identifier(fence, "fence")
-        with self._daemon._cycle_lock, self._daemon._connection() as conn:
+        with self._daemon._state_guard(), self._daemon._connection() as conn:
             row, transfers, stamp = self._commit_authority(conn, session_id, assignment_id, fence)
             if str(row["state"]) in {"TERMINAL", "RELEASED"}:
                 return freeze_plain_data(
@@ -4113,7 +4113,7 @@ class AgentSessionService:
             encoded = str(row["report_json"])
             report = _RemoteExecutionReport.from_dict(json.loads(encoded))
         outputs = self._coordinator_output_refs(transfers)
-        with self._daemon._cycle_lock:
+        with self._daemon._state_guard():
             with self._daemon._connection() as conn:
                 current, current_transfers, current_stamp = self._commit_authority(
                     conn, session_id, assignment_id, fence)
@@ -5871,7 +5871,7 @@ def _target_remote_delivery(
     shared = assignment_scope(request.fingerprint) is not None
     if not shared and len(encoded.encode("utf-8")) > _MAX_REMOTE_WIRE_VALUE_BYTES:
         raise QueueServiceError("targeted delivery request is too large")
-    with daemon._cycle_lock, daemon._connection() as conn:  # type: ignore[attr-defined]
+    with daemon._state_guard(), daemon._connection() as conn:  # type: ignore[attr-defined]
         conn.execute("BEGIN IMMEDIATE")
         session = _session_from_row(
             conn.execute(
