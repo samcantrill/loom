@@ -8338,3 +8338,61 @@ def test_shared_result_schema_preserves_existing_failure_envelope_bounds():
     assert _RemoteExecutionReport.from_dict(decoded["report"]) == report
     with pytest.raises(QueueServiceError):
         _decode(json.dumps({**value, "authorization_revision": 0.5}).encode(), failure_report=True)
+
+
+def test_native_https_bulk_saturation_preserves_control_capacity(native_control_endpoint, monkeypatch):
+    from threading import Lock
+
+    daemon, server, connection_path, credentials = native_control_endpoint
+    config = AgentTlsClientConfig(
+        f"https://localhost:{server.port}", credentials["ca"].with_suffix(".crt"),
+        credentials["agent"].with_suffix(".crt"), credentials["agent"].with_suffix(".key"),
+    )
+    client = CoordinatorClient.from_connection_file(connection_path)
+    worker = LocalDaemonAgentHttpClient(config)
+    entered, release = Event(), Event()
+    guard = Lock()
+    active = maximum = 0
+    original = agent_session_transport._dispatch
+
+    def blocked_dispatch(view, operation, payload):
+        nonlocal active, maximum
+        if operation != "output_manifest":
+            return original(view, operation, payload)
+        with guard:
+            active += 1
+            maximum = max(maximum, active)
+            if active == 4:
+                entered.set()
+        try:
+            assert release.wait(15)
+            return {"state": "prepared"}
+        finally:
+            with guard:
+                active -= 1
+
+    monkeypatch.setattr(agent_session_transport, "_dispatch", blocked_dispatch)
+    exchange = agent_session_transport._exchange_agent_request
+    try:
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futures = [pool.submit(exchange, config, "output_manifest", b"{}", "agent", None, False)
+                       for _ in range(4)]
+            try:
+                assert entered.wait(8)
+                with pytest.raises(agent_session_transport._IndeterminateAgentProtocolError, match="capacity"):
+                    exchange(config, "output_manifest", b"{}", "agent", None, False)
+                assert client.status().coordinator_id == daemon._coordinator_id
+                assert worker.handshake()["coordinator_id"] == daemon._coordinator_id
+                assert maximum == 4 and active == 4
+                # A rejected caller cannot free slots still executing on the server.
+                with pytest.raises(agent_session_transport._IndeterminateAgentProtocolError, match="capacity"):
+                    exchange(config, "output_manifest", b"{}", "agent", None, False)
+            finally:
+                release.set()
+            for future in futures:
+                future.result(10)
+        exchange(config, "output_manifest", b"{}", "agent", None, False)
+    finally:
+        release.set()
+        client.close()
+        worker.close()

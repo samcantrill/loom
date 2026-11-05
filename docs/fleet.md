@@ -605,8 +605,9 @@ Initial shared publication hashing, preparation decoding and recursive file
 synchronization run outside the coordinator cycle lock and write transaction.
 One process-local guard serializes declaration and commit for each assignment.
 Acceptance rechecks current session/transfer/fence, coordinator and scheduling
-authority, the exact request, and tree/receipt binding before the bounded rename
-and journal update. Shutdown drains these operations before closing their owner.
+authority, the exact request, and tree/receipt binding before journal adoption. Filesystem publication,
+including rename and synchronization, completes outside the control transaction;
+a stale publication remains immutable and unadopted for retained replay. Shutdown drains these operations before closing their owner.
 Each first commit verifies an exact publication closure once per operation and
 still checks every logical output's primary association and checksum. No verified
 filesystem cache persists between requests or consumers.
@@ -621,7 +622,18 @@ the agent received an HTTP response. A disconnected reply logs its operation,
 assignment/session IDs, HTTP status and result state with unknown delivery; it
 does not retry the reply or diagnose a certificate fault.
 
-Existing phase diagnostics measure input-root traversal, publication inventory
+Reconciliation uses two bounded, read-only context preparation workers. A blocked
+read retains its slot until it actually finishes; cancellation can be recorded
+while preparation is still pending. Context reuse reads and hashes current bytes
+before reusing a validated context. Epoch, admission and reservation checks fence
+stale work. Offer expiry does not release a running assignment, and the normal
+30-second offer lifetime is unchanged. Expensive HTTP handlers have bounded
+capacity separate from renewal and bounded polling.
+
+Existing phase diagnostics separate state-lock wait and hold, context loading,
+provenance validation, authority observation, result verification and scheduling
+preparation/commit. Diagnostic reporting runs after state locks are released.
+They also measure input-root traversal, publication inventory
 hashing, preparation semantic decoding, synchronization and result commit.
 Publication/result HTTP handlers install the observer in their own thread.
 Input validation resolves every selected location and traverses overlapping

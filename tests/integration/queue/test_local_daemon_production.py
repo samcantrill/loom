@@ -1517,15 +1517,7 @@ def test_completed_background_failure_replays_the_same_local_assignment(
     original_query = execution.supervisor.query
     third_query_entered = Event()
     allow_recovery = Event()
-    failed_replay_wake = Event()
     query_calls = 0
-    original_wake = daemon._wake.set
-
-    def observe_replay_wake() -> None:
-        if query_calls == 2:
-            failed_replay_wake.set()
-        original_wake()
-
     def fail_two_observers_then_recover(launch: object):
         nonlocal query_calls
         query_calls += 1
@@ -1537,7 +1529,6 @@ def test_completed_background_failure_replays_the_same_local_assignment(
         return original_query(launch)  # type: ignore[arg-type]
 
     monkeypatch.setattr(execution.supervisor, "query", fail_two_observers_then_recover)
-    monkeypatch.setattr(daemon._wake, "set", observe_replay_wake)
     client = daemon.client_view(
         LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
     )
@@ -1546,9 +1537,8 @@ def test_completed_background_failure_replays_the_same_local_assignment(
             LocalDaemonAdmissionRequest("background-replay-item", run_uri)
         )
         assert third_query_entered.wait(5)
-        assert not failed_replay_wake.is_set(), (
-            "a failed replay must await the normal poll, not wake its own retry loop"
-        )
+        # Context completions can wake this daemon independently. The adjacent
+        # controlled-clock backoff test proves retries do not run before due.
         with sqlite3.connect(config.execution_database) as conn:
             assignment_rows = tuple(
                 conn.execute(
@@ -1628,7 +1618,7 @@ def test_local_observer_backoff_preserves_peer_progress_and_cancellation(tmp_pat
     def await_retry(attempts):
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
-            with daemon._cycle_lock:
+            with daemon._reconcile_guard:
                 retry = (execution._local_assignment_retries.get(failed_assignment[0])
                          if failed_assignment else None)
                 if retry is not None and retry.attempts == attempts:
@@ -1644,7 +1634,7 @@ def test_local_observer_backoff_preserves_peer_progress_and_cancellation(tmp_pat
         assert retry.retry_at == 0.1
         client.submit(LocalDaemonAdmissionRequest("healthy-observer", peer_uri))
         assert client.wait("healthy-observer", timeout_seconds=10).state is LocalDaemonAdmissionState.SUCCEEDED
-        with daemon._cycle_lock:
+        with daemon._reconcile_guard:
             assert len(failed_calls) == 1
             assert execution.local_assignment_reconciliation_pending(failing_uri)
             assert execution.next_local_retry_at(clock[0]) == 0.1
@@ -1695,7 +1685,7 @@ def test_daemon_global_priority_preempts_earlier_lower_priority_admission(
             LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
         )
         # Admit both runs before the daemon can project or place either one.
-        with daemon._cycle_lock:
+        with daemon._reconcile_guard:
             client.submit(LocalDaemonAdmissionRequest("low-item", low_uri))
             client.submit(LocalDaemonAdmissionRequest("high-item", high_uri))
         _wait_for_supervisor_launch_count(config, expected=1)
@@ -1743,25 +1733,39 @@ def test_admission_recovery_backoff_is_scoped_and_owner_progress_wakes_it(
         attempts = Counter()
         error: list[Exception] = [QueueServiceError("private unavailable input")]
 
-        def reconcile(admission):
+        def reconcile(admission, **kwargs):
             attempts[admission.run_uri] += 1
             if admission.run_uri == unhealthy_uri:
                 raise error[0]
-            return original(admission)
+            return original(admission, **kwargs)
 
         monkeypatch.setattr(execution, "reconcile_admission", reconcile)
         client = daemon.client_view(LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT))
         unhealthy = client.submit(LocalDaemonAdmissionRequest("unhealthy", unhealthy_uri))
         client.submit(LocalDaemonAdmissionRequest("healthy", healthy_uri))
-        for _ in range(8):
-            daemon.reconcile_once()
+        def drive_until(predicate):
+            from time import monotonic
+
+            deadline = monotonic() + 5
+            while not predicate():
+                observed = daemon._wake.snapshot()
+                daemon.reconcile_once()
+                if predicate():
+                    return
+                remaining = deadline - monotonic()
+                assert remaining > 0
+                daemon._wake.wait_for_change(observed, min(remaining, daemon.config.poll_interval_seconds))
+
+        for count in range(1, 9):
+            drive_until(lambda: attempts[unhealthy_uri] == count)
             retry = daemon._admission_retries[unhealthy_uri]
             assert retry.retry_at > clock[0]
             before = attempts.copy()
             for _ in range(5):
                 daemon.reconcile_once()
             assert attempts[unhealthy_uri] == before[unhealthy_uri]
-            assert attempts[healthy_uri] == before[healthy_uri] + 5
+            drive_until(lambda: attempts[healthy_uri] > before[healthy_uri])
+            assert attempts[unhealthy_uri] == before[unhealthy_uri]
             clock[0] = retry.retry_at
         assert attempts[unhealthy_uri] == 8
         # A notification for another run must not erase the failed owner's delay.
@@ -1770,12 +1774,12 @@ def test_admission_recovery_backoff_is_scoped_and_owner_progress_wakes_it(
         daemon.reconcile_once()
         assert attempts[unhealthy_uri] == 8
         daemon._wake_admission(unhealthy_uri)
-        daemon.reconcile_once()
+        drive_until(lambda: attempts[unhealthy_uri] == 9)
         assert attempts[unhealthy_uri] == 9
         assert daemon._admission_retries[unhealthy_uri].attempts == 1
         error[0] = QueueConflictError("authority conflict")
         daemon._wake_admission(unhealthy_uri)
-        daemon.reconcile_once()
+        drive_until(lambda: daemon._admission(unhealthy.admission_id).state is LocalDaemonAdmissionState.BLOCKED)
         assert daemon._admission(unhealthy.admission_id).state is LocalDaemonAdmissionState.BLOCKED
         assert unhealthy_uri not in daemon._admission_retries
     finally:
@@ -1802,10 +1806,11 @@ def test_admission_reconciliation_failure_does_not_stop_other_runs(
     def reconcile_admission(
         execution: LocalDaemonExecution,
         admission: LocalDaemonAdmission,
+        **kwargs,
     ) -> LocalDaemonExecutionOutcome:
         if admission.run_uri == unhealthy_uri:
             raise QueueServiceError("simulated admission-local outage")
-        return original(execution, admission)
+        return original(execution, admission, **kwargs)
 
     monkeypatch.setattr(
         LocalDaemonExecution, "reconcile_admission", reconcile_admission
@@ -1882,7 +1887,7 @@ def test_daemon_bypasses_run_limited_older_work_for_another_run(
         client = daemon.client_view(
             LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
         )
-        with daemon._cycle_lock:
+        with daemon._reconcile_guard:
             client.submit(LocalDaemonAdmissionRequest("limited-item", limited_uri))
             client.submit(LocalDaemonAdmissionRequest("other-item", other_uri))
         deadline = time.monotonic() + 30

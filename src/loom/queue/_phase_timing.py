@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
 import json
+from itertools import count
 import sys
 from time import monotonic
 from typing import Any, cast
@@ -103,3 +104,58 @@ class PhaseTimings:
         return {"clock": "process_monotonic", "spans": self.spans,
                 "dropped_spans": self.dropped,
                 **({"related": self.related} if self.related else {})}
+
+
+@contextmanager
+def state_lock(lock: Any) -> Iterator[None]:
+    """Measure coordinator lock wait/hold and defer all reporting until release.
+
+    Nested phase spans are collected into the same bounded diagnostic payload.
+    With reentrant locks, the outer collector also defers inner lock reporting.
+    """
+    timings = PhaseTimings()
+    observer = _observer.get()
+    try:
+        with timings.measure("coordinator_state_lock_wait"):
+            lock.acquire()
+        try:
+            with observe_phases(timings.observe), timings.measure("coordinator_state_lock_hold"):
+                yield
+        finally:
+            lock.release()
+    finally:
+        if observer is not None:
+            try:
+                observer({**timings.payload(), "operation_id": _operation.get()})
+            except Exception:
+                pass
+
+
+_operation_samples = count()
+
+
+@contextmanager
+def reported_phases(action: str, *, operation_id: str | None = None) -> Iterator[None]:
+    """Report slow operations and one in 64 ordinary operations after completion.
+
+    Each asynchronous owner installs its own collector; it never appends to a
+    request or reconciliation collector after that parent operation has returned.
+    """
+    timings = PhaseTimings()
+    start = monotonic()
+    try:
+        with observe_phases(timings.observe), phase(action, operation_id=operation_id):
+            yield
+    finally:
+        if monotonic() - start >= 1.0 or next(_operation_samples) % 64 == 0:
+            try:
+                log_phases({**timings.payload(), "operation_id": operation_id})
+            except Exception:
+                pass
+
+
+@contextmanager
+def request_phases() -> Iterator[None]:
+    """Report bounded HTTP dispatch diagnostics after the handler returns."""
+    with reported_phases("request_dispatch"):
+        yield

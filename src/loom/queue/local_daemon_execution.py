@@ -22,6 +22,8 @@ import json
 from pathlib import Path
 import sqlite3
 from concurrent.futures import Future, ThreadPoolExecutor
+from ._validated_context_cache import ValidatedContextCache
+from ._phase_timing import phase
 from threading import Event, Lock
 from types import MappingProxyType
 from typing import Any, cast
@@ -844,157 +846,162 @@ def load_managed_local_intent(
     run_uri: str,
     *,
     slurm_profiles: Mapping[tuple[str, str], SlurmReadyStageProfile] | None = None,
+    cache: ValidatedContextCache[ManagedLocalIntent] | None = None,
 ) -> ManagedLocalIntent:
     """Load and validate the one canonical local admission intent."""
 
-    store = LocalRunStore(config.run_store_root)
-    run_path = store.local_run_dir(run_uri).resolve()
-    configured_root = config.run_store_root.resolve()
-    try:
-        run_path.relative_to(configured_root)
-    except ValueError as exc:
-        raise QueueServiceError(
-            "run_uri is outside the configured local run store"
-        ) from exc
-    store.open_run(run_uri)
-    record = load_managed_local_runtime_record(store, run_uri)
-    plan_payload = store.read_plan(run_uri)
-    if plan_payload is None:
-        raise QueueServiceError("managed-local admission requires a persisted plan")
-    plan = ExecutionPlan.from_dict(plan_payload)
-    exact_plan = ExecutionPlan.from_dict(record["plan"])
-    if plan != exact_plan or plan.run_uri != run_uri:
-        raise QueueServiceError(
-            "persisted execution plan conflicts with exact runtime record"
-        )
-    snapshot = store.read_config_snapshot(run_uri, "resolved")
-    if snapshot is None:
-        raise QueueServiceError(
-            "managed-local admission requires a resolved config snapshot"
-        )
-    decoded = json_loads(snapshot, path="config/resolved.json")
-    if (
-        hashlib.sha256(snapshot.encode("utf-8")).hexdigest()
-        != record["pipeline_digest"]
-    ):
-        raise QueueServiceError(
-            "resolved pipeline snapshot conflicts with exact runtime record"
-        )
-    if not isinstance(decoded, Mapping) or "pipeline" not in decoded:
-        raise QueueServiceError(
-            "resolved config snapshot must contain a pipeline definition"
-        )
-    pipeline = parse_pipeline_config(decoded["pipeline"])
-    if set(plan.stage_order) != set(pipeline.stage_names):
-        raise QueueServiceError(
-            "persisted plan and resolved pipeline stage identities differ"
-        )
-    unsupported_actions = {
-        stage.action
-        for stage in plan.stage_plans
-        if stage.action not in {PlanAction.RUN, PlanAction.REUSE, PlanAction.SKIP}
-    }
-    if unsupported_actions:
-        raise QueueServiceError(
-            "managed-local admission does not support plan actions: "
-            + ", ".join(sorted(action.value for action in unsupported_actions))
-        )
-    runtime_options = RunOptions.from_dict(record["runtime_options"])
-    runtime = resolve_run_runtime(runtime_options, stage_ids=pipeline.stage_names)
-    placements_payload = record["placements"]
-    if not isinstance(placements_payload, Mapping) or set(placements_payload) != set(
-        pipeline.stage_names
-    ):
-        raise QueueServiceError(
-            "exact runtime record placements conflict with pipeline"
-        )
-    placements = {
-        name: ResolvedStagePlacement.from_dict(payload)
-        for name, payload in placements_payload.items()
-    }
-    requirements_payload = record["execution_requirements"]
-    if not isinstance(requirements_payload, Mapping):
-        raise QueueServiceError(
-            "exact runtime record execution requirements are invalid"
-        )
-    try:
-        execution_requirements = {
-            name: ExecutionRequirement.from_dict(payload)
-            for name, payload in requirements_payload.items()
-        }
-    except Exception as exc:
-        raise QueueServiceError(
-            "exact runtime record execution requirements are invalid"
-        ) from exc
-    if set(execution_requirements) != set(pipeline.stage_names):
-        raise QueueServiceError(
-            "exact runtime record execution requirements conflict with pipeline"
-        )
-    from .preparation import (
-        LOCAL_PREPARATION_SCOPE,
-        _local_scope,
-        _require_local_binding,
-    )
-
-    for stage in pipeline.stages:
-        scope = _local_scope(stage.fingerprint_fields.get(LOCAL_PREPARATION_SCOPE))
-        _require_local_binding(
-            scope, config.resident_worker_launch_profile, agent_id=config.machine_id
-        )
-        if scope is not None and placements[stage.name].target != scope["agent_id"]:
-            raise QueueServiceError("local preparation retained placement conflicts")
-    allowed_targets = {config.machine_id} | {
-        rule.agent_id for rule in config.agent_policy.agents
-    }
-    available_slurm_profiles = (
-        {
-            (profile.profile_id, profile.configuration_fingerprint): profile
-            for profile in config.slurm_profiles
-        }
-        if slurm_profiles is None
-        else dict(slurm_profiles)
-    )
-    for placement in placements.values():
-        if placement.route.kind is ExecutionRouteKind.MANAGED_AGENT and (
-            placement.target is not None and placement.target not in allowed_targets
+    def decode(store: LocalRunStore) -> ManagedLocalIntent:
+        run_path = store.local_run_dir(run_uri).resolve()
+        configured_root = config.run_store_root.resolve()
+        try:
+            run_path.relative_to(configured_root)
+        except ValueError as exc:
+            raise QueueServiceError(
+                "run_uri is outside the configured local run store"
+            ) from exc
+        store.open_run(run_uri)
+        record = load_managed_local_runtime_record(store, run_uri)
+        plan_payload = store.read_plan(run_uri)
+        if plan_payload is None:
+            raise QueueServiceError("managed-local admission requires a persisted plan")
+        plan = ExecutionPlan.from_dict(plan_payload)
+        exact_plan = ExecutionPlan.from_dict(record["plan"])
+        if plan != exact_plan or plan.run_uri != run_uri:
+            raise QueueServiceError(
+                "persisted execution plan conflicts with exact runtime record"
+            )
+        snapshot = store.read_config_snapshot(run_uri, "resolved")
+        if snapshot is None:
+            raise QueueServiceError(
+                "managed-local admission requires a resolved config snapshot"
+            )
+        decoded = json_loads(snapshot, path="config/resolved.json")
+        if (
+            hashlib.sha256(snapshot.encode("utf-8")).hexdigest()
+            != record["pipeline_digest"]
         ):
             raise QueueServiceError(
-                "exact runtime record targets an unauthorized managed agent"
+                "resolved pipeline snapshot conflicts with exact runtime record"
             )
-        if placement.route.kind is ExecutionRouteKind.SLURM:
-            profile = available_slurm_profiles.get(
-                (
-                    cast(str, placement.route.profile_id),
-                    cast(
-                        str,
-                        placement.route.profile_configuration_fingerprint,
-                    ),
-                )
+        if not isinstance(decoded, Mapping) or "pipeline" not in decoded:
+            raise QueueServiceError(
+                "resolved config snapshot must contain a pipeline definition"
             )
-            if (
-                profile is None
-                or placement.route.profile_descriptor != profile.descriptor
-                or placement.route.profile_configuration_fingerprint
-                != profile.configuration_fingerprint
+        pipeline = parse_pipeline_config(decoded["pipeline"])
+        if set(plan.stage_order) != set(pipeline.stage_names):
+            raise QueueServiceError(
+                "persisted plan and resolved pipeline stage identities differ"
+            )
+        unsupported_actions = {
+            stage.action
+            for stage in plan.stage_plans
+            if stage.action not in {PlanAction.RUN, PlanAction.REUSE, PlanAction.SKIP}
+        }
+        if unsupported_actions:
+            raise QueueServiceError(
+                "managed-local admission does not support plan actions: "
+                + ", ".join(sorted(action.value for action in unsupported_actions))
+            )
+        runtime_options = RunOptions.from_dict(record["runtime_options"])
+        runtime = resolve_run_runtime(runtime_options, stage_ids=pipeline.stage_names)
+        placements_payload = record["placements"]
+        if not isinstance(placements_payload, Mapping) or set(placements_payload) != set(
+            pipeline.stage_names
+        ):
+            raise QueueServiceError(
+                "exact runtime record placements conflict with pipeline"
+            )
+        placements = {
+            name: ResolvedStagePlacement.from_dict(payload)
+            for name, payload in placements_payload.items()
+        }
+        requirements_payload = record["execution_requirements"]
+        if not isinstance(requirements_payload, Mapping):
+            raise QueueServiceError(
+                "exact runtime record execution requirements are invalid"
+            )
+        try:
+            execution_requirements = {
+                name: ExecutionRequirement.from_dict(payload)
+                for name, payload in requirements_payload.items()
+            }
+        except Exception as exc:
+            raise QueueServiceError(
+                "exact runtime record execution requirements are invalid"
+            ) from exc
+        if set(execution_requirements) != set(pipeline.stage_names):
+            raise QueueServiceError(
+                "exact runtime record execution requirements conflict with pipeline"
+            )
+        from .preparation import (
+            LOCAL_PREPARATION_SCOPE,
+            _local_scope,
+            _require_local_binding,
+        )
+
+        for stage in pipeline.stages:
+            scope = _local_scope(stage.fingerprint_fields.get(LOCAL_PREPARATION_SCOPE))
+            _require_local_binding(
+                scope, config.resident_worker_launch_profile, agent_id=config.machine_id
+            )
+            if scope is not None and placements[stage.name].target != scope["agent_id"]:
+                raise QueueServiceError("local preparation retained placement conflicts")
+        allowed_targets = {config.machine_id} | {
+            rule.agent_id for rule in config.agent_policy.agents
+        }
+        available_slurm_profiles = (
+            {
+                (profile.profile_id, profile.configuration_fingerprint): profile
+                for profile in config.slurm_profiles
+            }
+            if slurm_profiles is None
+            else dict(slurm_profiles)
+        )
+        for placement in placements.values():
+            if placement.route.kind is ExecutionRouteKind.MANAGED_AGENT and (
+                placement.target is not None and placement.target not in allowed_targets
             ):
                 raise QueueServiceError(
-                    "exact runtime record names a changed or unavailable SLURM profile"
+                    "exact runtime record targets an unauthorized managed agent"
                 )
-    if (
-        parallel_execution_options(runtime_options).max_parallel_stages
-        != record["max_parallel_stages"]
-    ):
-        raise QueueServiceError("exact runtime record concurrency conflicts")
-    return ManagedLocalIntent(
-        plan,
-        runtime,
-        placements,
-        execution_requirements,
-        pipeline,
-        str(record["digest"]),
-        cast(int, record["max_parallel_stages"]),
-        parallel_execution_options(runtime_options).continue_independent,
-    )
+            if placement.route.kind is ExecutionRouteKind.SLURM:
+                profile = available_slurm_profiles.get(
+                    (
+                        cast(str, placement.route.profile_id),
+                        cast(
+                            str,
+                            placement.route.profile_configuration_fingerprint,
+                        ),
+                    )
+                )
+                if (
+                    profile is None
+                    or placement.route.profile_descriptor != profile.descriptor
+                    or placement.route.profile_configuration_fingerprint
+                    != profile.configuration_fingerprint
+                ):
+                    raise QueueServiceError(
+                        "exact runtime record names a changed or unavailable SLURM profile"
+                    )
+        if (
+            parallel_execution_options(runtime_options).max_parallel_stages
+            != record["max_parallel_stages"]
+        ):
+            raise QueueServiceError("exact runtime record concurrency conflicts")
+        return ManagedLocalIntent(
+            plan,
+            runtime,
+            placements,
+            execution_requirements,
+            pipeline,
+            str(record["digest"]),
+            cast(int, record["max_parallel_stages"]),
+            parallel_execution_options(runtime_options).continue_independent,
+        )
+
+
+    selected = cache if cache is not None else ValidatedContextCache[ManagedLocalIntent](1)
+    return selected.load(config, run_uri, slurm_profiles=slurm_profiles, decode=decode)
 
 
 def _validate_recovery_request_identity(
@@ -1236,6 +1243,8 @@ class LocalDaemonExecution:
                 )
             provider.restore_capacity_holding(command)
         self._launch_lock = Lock()
+        self._context_cache: ValidatedContextCache[ManagedLocalIntent] = ValidatedContextCache()
+        self._cycle_context_epochs: dict[str, tuple[str | None, str | None]] = {}
         self.local_profile_ready = True
         self._sync_slurm_agent_references()
         self._slurm_agent = (
@@ -1268,6 +1277,7 @@ class LocalDaemonExecution:
         self._pending_local_assignment_reconciliation.clear()
         self._local_assignment_retries.clear()
         self._cycle_contexts.clear()
+        self._cycle_context_epochs.clear()
 
     def shutdown_clean(self) -> None:
         """Use all local authoritative owners before retiring the supervisor."""
@@ -1401,6 +1411,7 @@ class LocalDaemonExecution:
                 future.add_done_callback(wake_daemon)
             self._local_assignment_futures[assignment_id] = future
         self._cycle_contexts.clear()
+        self._cycle_context_epochs.clear()
 
     def next_local_retry_at(self, now: float) -> float | None:
         """Wake for a pending replay without rescheduling its running observer."""
@@ -1724,21 +1735,30 @@ class LocalDaemonExecution:
                 "retained daemon owner state is unavailable"
             ) from None
 
-    def _admission_context(
-        self, admission: LocalDaemonAdmission
-    ) -> tuple[ManagedLocalIntent, _ScopedCoordinatorAuthority]:
-        """Open and bind the exact retained execution context for one admission."""
+    def load_context(self, admission: LocalDaemonAdmission) -> ManagedLocalIntent:
+        """Read and validate inputs without binding or mutating execution owners."""
+        from ._phase_timing import phase
 
-        self.open_owner_stores()
-        intent = load_managed_local_intent(
-            self.config,
-            admission.run_uri,
-            slurm_profiles=self._scheduling.available_slurm_profiles(),
-        )
-        if intent.digest != admission.intent_digest:
-            raise QueueConflictError(
-                "persisted managed-local plan or runtime changed after admission"
+        with phase("execution_context_loading", operation_id=admission.authority_operation_id):
+            intent = load_managed_local_intent(
+                self.config,
+                admission.run_uri,
+                slurm_profiles=self._scheduling.available_slurm_profiles(),
+                cache=self._context_cache,
             )
+            if intent.digest != admission.intent_digest:
+                raise QueueConflictError(
+                    "persisted managed-local plan or runtime changed after admission"
+                )
+            return intent
+
+    def _admission_context(
+        self, admission: LocalDaemonAdmission,
+        *, prepared_intent: ManagedLocalIntent | None = None,
+    ) -> tuple[ManagedLocalIntent, _ScopedCoordinatorAuthority]:
+        """Bind validated inputs through the retained authority operation identity."""
+        self.open_owner_stores()
+        intent = self.load_context(admission) if prepared_intent is None else prepared_intent
         authority = self._authority_store(admission.run_uri)
         receipt = authority.bind_coordinator_admission(
             admission.run_uri,
@@ -1819,10 +1839,11 @@ class LocalDaemonExecution:
         )
 
     def reconcile_admission(
-        self, admission: LocalDaemonAdmission
+        self, admission: LocalDaemonAdmission,
+        *, prepared_intent: ManagedLocalIntent | None = None,
     ) -> LocalDaemonExecutionOutcome:
         """Reconcile one run into durable ready work without selecting capacity."""
-        return _run_progress.reconcile_admission(self, admission)
+        return _run_progress.reconcile_admission(self, admission, prepared_intent=prepared_intent)
 
 
     def _settled_terminal_outcome(
@@ -2975,6 +2996,7 @@ class LocalDaemonExecution:
         snapshot: AuthoritativeRunSnapshot,
         stage_work_id: str,
     ) -> LocalDaemonExecutionOutcome | None:
+        epochs = self._cycle_context_epochs.get(admission.admission_id)
         records = tuple(
             sorted(
                 (
@@ -3179,6 +3201,7 @@ class LocalDaemonExecution:
                 issuer_epoch=self.coordinator_epoch,
                 max_parallel_stages=intent.max_parallel_stages,
                 max_profile_outstanding=profile.max_outstanding,
+                reservation_guard=lambda: self._reservation_guard(admission.admission_id, record, epochs),
             )
             self._sync_slurm_agent_references()
             authority.bind_prepared_attempt(
@@ -3728,7 +3751,10 @@ class LocalDaemonExecution:
                 rows = tuple(
                     conn.execute(
                         "SELECT run_uri, intent_digest FROM managed_admissions "
-                        "WHERE state NOT IN (?, ?, ?, ?) ORDER BY admission_id",
+                        "WHERE state NOT IN (?, ?, ?, ?) OR admission_id IN ("
+                        "SELECT json_extract(value, '$.admission_id') FROM daemon_metadata "
+                        "WHERE key LIKE 'admission-retry:%' AND json_extract(value, '$.state') = 'pending') "
+                        "ORDER BY admission_id",
                         terminal,
                     )
                 )
@@ -4732,6 +4758,50 @@ class LocalDaemonExecution:
             return False
         return True
 
+    @contextmanager
+    def _reservation_guard(
+        self, admission_id: str, record: StageWorkRecord,
+        epochs: tuple[str | None, str | None] | None,
+        target: _RemoteCandidateTarget | None = None,
+    ) -> Iterator[None]:
+        """Pin current scheduling and cancellation only during durable reserve.
+
+        Assignment preparation and external authority effects precede/follow
+        this boundary. The control write transaction linearizes cancellation;
+        the launch guard excludes replacement inventory and configuration swap.
+        """
+        daemon = self._daemon_owner()
+        with self.scheduling_reload_guard(), daemon._state_guard(), daemon._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if (daemon._execution is not self
+                or epochs != (daemon._epoch, daemon._scheduling_epoch)
+                or action_attempt_cancelled(conn, record.run_uri, record.attempt_id)):
+                raise ManagedLocalError("assignment preparation is no longer authorized")
+            if target is not None:
+                current = conn.execute(
+                    "SELECT o.offer_id, o.expires_at, s.availability_revision, r.observed_claim_ids_json "
+                    "FROM agent_offers o JOIN agent_sessions s USING(session_id) "
+                    "LEFT JOIN session_replacements r ON r.successor_session_id = s.session_id AND r.readiness = 'ready' "
+                    "WHERE o.session_id = ? AND o.current = 1 AND s.state = 'ACTIVE' "
+                    "AND o.coordinator_epoch = ? AND s.coordinator_epoch = ?",
+                    (target.session_id, daemon._epoch, daemon._epoch),
+                ).fetchone()
+                if (current is None or str(current["expires_at"]) < daemon._accepted_time(conn)
+                    or current["availability_revision"] != target.availability_revision):
+                    raise ManagedLocalError("assignment offer changed during preparation")
+                offer_id, availability_revision = str(current["offer_id"]), str(current["availability_revision"])
+                if current["observed_claim_ids_json"] is not None:
+                    offer_id, availability_revision = _replacement_scheduling_identities(
+                        offer_id=offer_id, availability_revision=availability_revision,
+                        withheld_claim_ids=tuple(sorted(json.loads(current["observed_claim_ids_json"]))),
+                    )
+                if (offer_id, availability_revision) != (target.offer_id, target.scheduling_availability_revision):
+                    raise ManagedLocalError("assignment capacity projection changed during preparation")
+            with phase("scheduling_commit"):
+                yield
+            conn.commit()
+            daemon._scheduling_reference_revision += 1
+
     def _execute(
         self,
         *,
@@ -4745,6 +4815,7 @@ class LocalDaemonExecution:
         decision_as_of: str,
         execution_started: Callable[[], None],
     ) -> bool:
+        epochs = self._cycle_context_epochs.get(admission.admission_id)
         selected = getattr(decision, "selected")
         claims = tuple(selected.claims)
         if len({claim.resource_kind for claim in claims}) != len(claims):
@@ -4917,38 +4988,39 @@ class LocalDaemonExecution:
                 if not prior_failed or retained_request.attempt + 1 != record.attempt:
                     raise QueueConflictError("managed retry worker request conflicts")
                 raw_worker_request = None
-        worker_request = (
-            StageWorkerRequest.from_dict(raw_worker_request)
-            if raw_worker_request is not None
-            else prepare_stage_attempt(
-                stage_state=self.run_store,
-                stage_workspaces=self.run_store,
-                local_paths=self.run_store,
-                reliability=self.run_store,
-                prepared_runs=self.run_store,
-                config=self.run_store,
-                run_status=snapshot.status,
-                run_uri=record.run_uri,
-                stage=stage,
-                stage_plan=stage_plan,
-                produced_outputs=produced,
-                input_bindings=next(a.input_bindings for s in snapshot.stages for a in s.attempts if a.attempt_id == record.attempt_id),
-                authority_attempt=next(a for s in snapshot.stages for a in s.attempts if a.attempt_id == record.attempt_id),
-                fingerprint_context=intent.plan.fingerprint_context,
-                resolved_runtime=runtime,
-                metadata={
-                    "managed_output_predecessor": next(
-                        (
-                            fact.latest_commit.commit_id
-                            for fact in snapshot.stages
-                            if fact.stage_name == record.stage_name
-                            and fact.latest_commit is not None
+        with phase("scheduling_preparation"):
+            worker_request = (
+                StageWorkerRequest.from_dict(raw_worker_request)
+                if raw_worker_request is not None
+                else prepare_stage_attempt(
+                    stage_state=self.run_store,
+                    stage_workspaces=self.run_store,
+                    local_paths=self.run_store,
+                    reliability=self.run_store,
+                    prepared_runs=self.run_store,
+                    config=self.run_store,
+                    run_status=snapshot.status,
+                    run_uri=record.run_uri,
+                    stage=stage,
+                    stage_plan=stage_plan,
+                    produced_outputs=produced,
+                    input_bindings=next(a.input_bindings for s in snapshot.stages for a in s.attempts if a.attempt_id == record.attempt_id),
+                    authority_attempt=next(a for s in snapshot.stages for a in s.attempts if a.attempt_id == record.attempt_id),
+                    fingerprint_context=intent.plan.fingerprint_context,
+                    resolved_runtime=runtime,
+                    metadata={
+                        "managed_output_predecessor": next(
+                            (
+                                fact.latest_commit.commit_id
+                                for fact in snapshot.stages
+                                if fact.stage_name == record.stage_name
+                                and fact.latest_commit is not None
+                            ),
+                            None,
                         ),
-                        None,
-                    ),
-                },
+                    },
+                )
             )
-        )
         if (
             worker_request.run_uri != record.run_uri
             or worker_request.stage_name != record.stage_name
@@ -5050,12 +5122,15 @@ class LocalDaemonExecution:
             from ._shared_recovery import bind_delivery
             with self._daemon_owner()._connection() as conn:
                 delivered = bind_delivery(delivered, conn, assignment.run_uri, self._daemon_owner().config.coordinator_shared_roots, session_id=remote_target.session_id)
-            self.coordinator.reserve(
-                assignment,
-                claims,
-                max_parallel_stages=intent.max_parallel_stages,
-                decision_receipt=decision_receipt,
-            )
+            if self._attempt_cancel_requested(record.run_uri, record.attempt_id):
+                return False
+            with self._reservation_guard(admission.admission_id, record, epochs, remote_target):
+                self.coordinator.reserve(
+                    assignment,
+                    claims,
+                    max_parallel_stages=intent.max_parallel_stages,
+                    decision_receipt=decision_receipt,
+                )
             authority.bind_prepared_attempt(
                 assignment.run_uri,
                 assignment_id=assignment.assignment_id,
@@ -5091,6 +5166,8 @@ class LocalDaemonExecution:
                 return False
             execution_started()
             return True
+        if self._attempt_cancel_requested(record.run_uri, record.attempt_id):
+            return False
         accepted = Event()
         journal = self.journal
         supervisor = self.supervisor
@@ -5127,6 +5204,7 @@ class LocalDaemonExecution:
                     None if self.daemon is None else self.daemon._stop.is_set
                 ),
                 execution_started=started,
+                reservation_guard=lambda: self._reservation_guard(admission.admission_id, record, epochs),
             )
 
         prior = self._local_assignment_futures.get(assignment.assignment_id)

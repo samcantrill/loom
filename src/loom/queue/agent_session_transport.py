@@ -38,8 +38,7 @@ from ._agent_session_journal import (
 )
 
 from .gpu.occupancy import GpuOccupancyPolicy, GpuOccupancyMonitor
-from ._phase_timing import log_phases, observe_phases, phase
-from contextlib import nullcontext
+from ._phase_timing import log_phases, phase
 from ._managed_local import ResourceAvailabilityStatus
 
 from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
@@ -132,7 +131,6 @@ from ._agent_process_supervisor import (
 from .errors import QueueConflictError, QueueError, QueueServiceError
 from ._coordinator_control import (
     CONTROL_CAPABILITY,
-    WAIT_OPERATIONS,
     CoordinatorClientError,
     control_error,
     decode_wire,
@@ -2964,7 +2962,7 @@ class LocalDaemonAgentHttpClient:
         while True:
             try:
                 reply = yield from _external(
-                    "control_wait" if operation == "control_wait" else "poll" if operation == "poll" else "bulk" if operation in {"input", "output"} else "control",
+                    "control_wait" if operation == "control_wait" else "poll" if operation == "poll" else "bulk" if operation in _AGENT_BULK_OPERATIONS else "control",
                     _exchange_agent_request, self._config, operation, body, role, connection,
                     not self._service_progress,
                 )
@@ -3147,6 +3145,9 @@ def _read_agent_reply(
                 "remote transfer authorization is stale"
             )
         raise QueueConflictError("agent protocol conflict")
+    if response.status == 429 and payload.get("error") == "capacity_exhausted":
+        # No effect was admitted. Service retries keep the same operation identity.
+        raise _IndeterminateAgentProtocolError("agent request capacity is exhausted")
     if response.status >= 500:
         raise _IndeterminateAgentProtocolError(
             "agent protocol outcome is indeterminate"
@@ -3162,6 +3163,19 @@ def _read_agent_reply(
             "agent protocol outcome is indeterminate"
         )
     return freeze_plain_data(result, path="agent HTTP response")
+
+
+# The same classification owns client lane isolation and server admission.
+# These operations can read/hash artifacts or call external execution authority.
+_AGENT_BULK_OPERATIONS = frozenset({
+    "slurm_work", "authorize", "input", "accept", "start_permit", "started", "event",
+    "output_manifest", "output", "result", "release", "recovery_release_ready",
+})
+_CLIENT_SHORT_OPERATIONS = frozenset({
+    "handshake", "status", "cancel", "cancel_preparation", "cancel_run_operation",
+    "admissions", "admission_for_queue_item", "agents", "service_lifetime",
+    "startup_attach", "startup_release",
+})
 
 
 class _MutualTlsHttpServer(ThreadingHTTPServer):
@@ -3181,6 +3195,7 @@ class _MutualTlsHttpServer(ThreadingHTTPServer):
         self.inspect_run = inspect_run
         self.client_slots = BoundedSemaphore(8)
         self.client_wait_slots = BoundedSemaphore(6)
+        self.agent_bulk_slots = BoundedSemaphore(4)
         self.agent_work_wait_slots = BoundedSemaphore(32)
         self.agent_control_wait_slots = BoundedSemaphore(32)
         super().__init__(address, _Handler)
@@ -3268,6 +3283,12 @@ class _Handler(BaseHTTPRequestHandler):
         return dict(_decode(raw))
 
     def do_POST(self) -> None:  # noqa: N802
+        from ._phase_timing import request_phases
+
+        with request_phases():
+            self._dispatch_post()
+
+    def _dispatch_post(self) -> None:
         self._reply_context = {}
         query_path = self.path.startswith("/v1/query/")
         query_credential = False
@@ -3280,6 +3301,7 @@ class _Handler(BaseHTTPRequestHandler):
         authenticated = dispatched = False
         client_acquired = wait_acquired = False
         agent_wait_slot: BoundedSemaphore | None = None
+        bulk_acquired = False
         try:
             certificate = cast(ssl.SSLSocket, self.connection).getpeercert(
                 binary_form=True
@@ -3312,8 +3334,13 @@ class _Handler(BaseHTTPRequestHandler):
                 raise QueueServiceError("agent TLS credential is not authorized")
             authenticated = True
             agent_wait_slot = self._daemon_server.acquire_agent_wait(role_name, operation)
+            if role_name == "agent" and operation in _AGENT_BULK_OPERATIONS:
+                with phase("request_admission_wait"):
+                    bulk_acquired = self._daemon_server.agent_bulk_slots.acquire(blocking=False)
+                if not bulk_acquired:
+                    raise control_error("capacity_exhausted", operation, payload, boundary="coordinator")
             if role_name == "client":
-                if operation in WAIT_OPERATIONS:
+                if operation not in _CLIENT_SHORT_OPERATIONS:
                     wait_acquired = self._daemon_server.client_wait_slots.acquire(
                         blocking=False
                     )
@@ -3372,8 +3399,7 @@ class _Handler(BaseHTTPRequestHandler):
                     key: value for key in ("assignment_id", "session_id")
                     if isinstance(value := payload.get(key), str) and len(value) <= 256
                 }}
-                diagnostics = observe_phases(log_phases) if operation in {"output_manifest", "result"} else nullcontext()
-                with diagnostics, phase(operation, operation_id=self._reply_context.get("assignment_id")):
+                with phase(operation, operation_id=self._reply_context.get("assignment_id")):
                     result = _dispatch(
                         self._daemon_server.daemon_owner.agent_view(principal),
                         operation,
@@ -3410,6 +3436,10 @@ class _Handler(BaseHTTPRequestHandler):
                 {"ok": False, "error": "agent_transfer_authorization_stale"},
             )
         except CoordinatorClientError as exc:
+            if exc.code == "capacity_exhausted":
+                # Admission precedes body consumption; close this connection so
+                # unread request bytes cannot become another keepalive request.
+                self.close_connection = True
             if new_client:
                 status = {
                     "unauthorized": 403,
@@ -3422,8 +3452,8 @@ class _Handler(BaseHTTPRequestHandler):
                 self._reply(status, error_envelope(exc))
             else:
                 self._reply(
-                    409 if exc.code == "conflict" else 403,
-                    {"ok": False, "error": "agent_protocol_rejected"},
+                    429 if exc.code == "capacity_exhausted" else 409 if exc.code == "conflict" else 403,
+                    {"ok": False, "error": "capacity_exhausted" if exc.code == "capacity_exhausted" else "agent_protocol_rejected"},
                 )
         except QueueConflictError:
             self._reply(409, {"ok": False, "error": "agent_protocol_conflict"})
@@ -3464,6 +3494,8 @@ class _Handler(BaseHTTPRequestHandler):
         finally:
             if agent_wait_slot is not None:
                 agent_wait_slot.release()
+            if bulk_acquired:
+                self._daemon_server.agent_bulk_slots.release()
             if client_acquired:
                 self._daemon_server.client_slots.release()
             if wait_acquired:

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from contextlib import contextmanager
+from collections.abc import Callable, Mapping, Sequence
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 import base64
 from datetime import datetime, timezone
@@ -487,6 +487,7 @@ class SQLiteSlurmStageAssignments:
         issuer_epoch: str,
         max_parallel_stages: int,
         max_profile_outstanding: int,
+        reservation_guard: Callable[[], AbstractContextManager[None]] | None = None,
     ) -> str:
         if not isinstance(assignment, SlurmStageAssignment):
             raise QueueServiceError("SLURM assignment is invalid")
@@ -516,7 +517,7 @@ class SQLiteSlurmStageAssignments:
             sort_keys=True,
             separators=(",", ":"),
         )
-        with self._transaction() as conn:
+        with (reservation_guard() if reservation_guard is not None else nullcontext()), self._transaction() as conn:
             existing = conn.execute(
                 f"SELECT * FROM {_ASSIGNMENT_TABLE} WHERE assignment_id = ?",
                 (assignment.assignment_id,),

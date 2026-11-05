@@ -36,11 +36,14 @@ class LocalDaemonExecutionOutcome:
 
 
 def reconcile_admission(
-    self: LocalDaemonExecution, admission: LocalDaemonAdmission
+    self: LocalDaemonExecution, admission: LocalDaemonAdmission,
+    *, prepared_intent: ManagedLocalIntent | None = None,
 ) -> LocalDaemonExecutionOutcome:
     """Reconcile one run into durable ready work without selecting capacity."""
 
-    intent, scoped_authority = self._admission_context(admission)
+    if self.daemon is not None:
+        self._cycle_context_epochs.setdefault(admission.admission_id, (self.daemon._epoch, self.daemon._scheduling_epoch))
+    intent, scoped_authority = self._admission_context(admission, prepared_intent=prepared_intent)
     self._cycle_contexts[admission.admission_id] = (intent, scoped_authority)
     outcome = _reconcile_admission(self, admission, intent, scoped_authority)
     if outcome.state not in {
@@ -189,192 +192,197 @@ def schedule_once(
 
     if not admissions:
         return None
-    with self._launch_lock:
-        decision_as_of, snapshot_time = self._daemon_owner()._accepted_snapshot()
-        window = tuple(record for record in self.stage_work_store.ready_window()
-                       if not self._attempt_cancel_requested(record.run_uri, record.attempt_id))
-        if not window:
+    if self.daemon is not None:
+        epochs = (self.daemon._epoch, self.daemon._scheduling_epoch)
+        admissions = {key: value for key, value in admissions.items()
+                      if self._cycle_context_epochs.get(key) == epochs}
+        if not admissions:
             return None
-        contexts = self._cycle_contexts
-        exhausted_admissions: set[str] = set()
-        for record in window:
-            admission = admissions.get(record.admission_id)
-            if admission is None or record.placement.route.kind not in {
-                ExecutionRouteKind.MANAGED_AGENT,
-                ExecutionRouteKind.SLURM,
-            }:
-                continue
-            context = contexts.get(record.admission_id)
-            if context is None:
-                continue
-            if (
-                self.coordinator.run_active_assignment_count(admission.run_uri)
-                >= context[0].max_parallel_stages
-            ):
-                exhausted_admissions.add(record.admission_id)
-        remote_targets = self._remote_candidates()
-        local_candidate = (
-            self._candidate()
-            if self.agent_id is not None and self.local_profile_ready
+    decision_as_of, snapshot_time = self._daemon_owner()._accepted_snapshot()
+    window = tuple(record for record in self.stage_work_store.ready_window()
+                   if not self._attempt_cancel_requested(record.run_uri, record.attempt_id))
+    if not window:
+        return None
+    contexts = self._cycle_contexts
+    exhausted_admissions: set[str] = set()
+    for record in window:
+        admission = admissions.get(record.admission_id)
+        if admission is None or record.placement.route.kind not in {
+            ExecutionRouteKind.MANAGED_AGENT,
+            ExecutionRouteKind.SLURM,
+        }:
+            continue
+        context = contexts.get(record.admission_id)
+        if context is None:
+            continue
+        if (
+            self.coordinator.run_active_assignment_count(admission.run_uri)
+            >= context[0].max_parallel_stages
+        ):
+            exhausted_admissions.add(record.admission_id)
+    remote_targets = self._remote_candidates()
+    local_candidate = (
+        self._candidate()
+        if self.agent_id is not None and self.local_profile_ready
+        else None
+    )
+    excluded_work: set[str] = set()
+    attempted_slurm: set[str] = set()
+    while True:
+        managed_records = tuple(
+            record
+            for record in window
+            if record.stage_work_id not in excluded_work
+            and record.admission_id in admissions
+            and record.admission_id in contexts
+            and record.admission_id not in exhausted_admissions
+            and record.placement.route.kind is ExecutionRouteKind.MANAGED_AGENT
+        )
+        local_profile = (
+            None
+            if self.config.resident_worker_launch_profile is None
+            else ResidentProfileDescriptor.from_dict(
+                self.config.resident_worker_launch_profile.descriptor
+            )
+        )
+        candidates = tuple(
+            [
+                local_candidate
+                for _ in (0,)
+                if local_candidate is not None
+                and local_candidate.candidate_id not in remote_targets
+                and local_profile is not None
+                and any(
+                    _profile_satisfies_requirement(
+                        local_profile, record.execution_requirement
+                    )
+                    for record in managed_records
+                )
+            ]
+            + [
+                target[0]
+                for _, target in sorted(remote_targets.items())
+                if any(
+                    _profile_satisfies_requirement(
+                        target[1].profile, record.execution_requirement
+                    )
+                    for record in managed_records
+                )
+            ]
+        )
+        decision = self._scheduling.kernel(managed_records).decide(
+            work=tuple(record.to_work_item() for record in managed_records),
+            candidates=candidates,
+            as_of=snapshot_time,
+        )
+        selected_id = (
+            decision.stage_work_id
+            if decision.state is PolicyDecisionState.SELECT
             else None
         )
-        excluded_work: set[str] = set()
-        attempted_slurm: set[str] = set()
-        while True:
-            managed_records = tuple(
-                record
-                for record in window
-                if record.stage_work_id not in excluded_work
-                and record.admission_id in admissions
-                and record.admission_id in contexts
-                and record.admission_id not in exhausted_admissions
-                and record.placement.route.kind is ExecutionRouteKind.MANAGED_AGENT
-            )
-            local_profile = (
-                None
-                if self.config.resident_worker_launch_profile is None
-                else ResidentProfileDescriptor.from_dict(
-                    self.config.resident_worker_launch_profile.descriptor
-                )
-            )
-            candidates = tuple(
-                [
-                    local_candidate
-                    for _ in (0,)
-                    if local_candidate is not None
-                    and local_candidate.candidate_id not in remote_targets
-                    and local_profile is not None
-                    and any(
-                        _profile_satisfies_requirement(
-                            local_profile, record.execution_requirement
-                        )
-                        for record in managed_records
-                    )
-                ]
-                + [
-                    target[0]
-                    for _, target in sorted(remote_targets.items())
-                    if any(
-                        _profile_satisfies_requirement(
-                            target[1].profile, record.execution_requirement
-                        )
-                        for record in managed_records
-                    )
-                ]
-            )
-            decision = self._scheduling.kernel(managed_records).decide(
-                work=tuple(record.to_work_item() for record in managed_records),
-                candidates=candidates,
-                as_of=snapshot_time,
-            )
-            selected_id = (
-                decision.stage_work_id
-                if decision.state is PolicyDecisionState.SELECT
-                else None
-            )
-            selected_index = next(
-                (
-                    index
-                    for index, record in enumerate(window)
-                    if record.stage_work_id == selected_id
-                ),
-                len(window),
-            )
-            for record in window[: selected_index + 1]:
-                if (
-                    record.stage_work_id in attempted_slurm
-                    or record.admission_id not in admissions
-                    or record.admission_id not in contexts
-                    or record.admission_id in exhausted_admissions
-                    or record.placement.route.kind is not ExecutionRouteKind.SLURM
-                ):
-                    continue
-                attempted_slurm.add(record.stage_work_id)
-                admission = admissions[record.admission_id]
-                intent, authority = contexts[record.admission_id]
-                snapshot = authority.open_run(admission.run_uri)
-                if not self._failure_policy_allows_new_work(intent, snapshot):
-                    exhausted_admissions.add(record.admission_id)
-                    continue
-                outcome = self._dispatch_slurm_ready(
-                    admission=admission,
-                    intent=intent,
-                    authority=authority,
-                    snapshot=snapshot,
-                    stage_work_id=record.stage_work_id,
-                )
-                if (
-                    outcome is not None
-                    and outcome.state is LocalDaemonAdmissionState.ACTIVE
-                ):
-                    return admission.admission_id, outcome
-            if selected_id is None:
-                return None
-            record = _stage_work(self.stage_work_store, selected_id)
-            admission = admissions.get(record.admission_id)
-            if admission is None:
-                excluded_work.add(record.stage_work_id)
+        selected_index = next(
+            (
+                index
+                for index, record in enumerate(window)
+                if record.stage_work_id == selected_id
+            ),
+            len(window),
+        )
+        for record in window[: selected_index + 1]:
+            if (
+                record.stage_work_id in attempted_slurm
+                or record.admission_id not in admissions
+                or record.admission_id not in contexts
+                or record.admission_id in exhausted_admissions
+                or record.placement.route.kind is not ExecutionRouteKind.SLURM
+            ):
                 continue
+            attempted_slurm.add(record.stage_work_id)
+            admission = admissions[record.admission_id]
             intent, authority = contexts[record.admission_id]
             snapshot = authority.open_run(admission.run_uri)
             if not self._failure_policy_allows_new_work(intent, snapshot):
                 exhausted_admissions.add(record.admission_id)
                 continue
-            candidate_id = cast(str, decision.candidate_id)
-            remote_target = remote_targets.get(candidate_id)
-            local_profile = (
-                None
-                if self.config.resident_worker_launch_profile is None
-                else ResidentProfileDescriptor.from_dict(
-                    self.config.resident_worker_launch_profile.descriptor
-                )
+            outcome = self._dispatch_slurm_ready(
+                admission=admission,
+                intent=intent,
+                authority=authority,
+                snapshot=snapshot,
+                stage_work_id=record.stage_work_id,
             )
-            selected_profile = (
-                local_profile if remote_target is None else remote_target[1].profile
+            if (
+                outcome is not None
+                and outcome.state is LocalDaemonAdmissionState.ACTIVE
+            ):
+                return admission.admission_id, outcome
+        if selected_id is None:
+            return None
+        record = _stage_work(self.stage_work_store, selected_id)
+        admission = admissions.get(record.admission_id)
+        if admission is None:
+            excluded_work.add(record.stage_work_id)
+            continue
+        intent, authority = contexts[record.admission_id]
+        snapshot = authority.open_run(admission.run_uri)
+        if not self._failure_policy_allows_new_work(intent, snapshot):
+            exhausted_admissions.add(record.admission_id)
+            continue
+        candidate_id = cast(str, decision.candidate_id)
+        remote_target = remote_targets.get(candidate_id)
+        local_profile = (
+            None
+            if self.config.resident_worker_launch_profile is None
+            else ResidentProfileDescriptor.from_dict(
+                self.config.resident_worker_launch_profile.descriptor
             )
-            if selected_profile is None or not _profile_satisfies_requirement(
-                selected_profile, record.execution_requirement
-            ):
-                if remote_target is not None:
-                    del remote_targets[candidate_id]
-                else:
-                    excluded_work.add(record.stage_work_id)
-                continue
-            if remote_target is not None and not self._remote_eligible(
-                intent=intent, snapshot=snapshot, record=record
-            ):
+        )
+        selected_profile = (
+            local_profile if remote_target is None else remote_target[1].profile
+        )
+        if selected_profile is None or not _profile_satisfies_requirement(
+            selected_profile, record.execution_requirement
+        ):
+            if remote_target is not None:
                 del remote_targets[candidate_id]
-                continue
-            try:
-                started = self._execute(
-                    admission=admission,
-                    intent=intent,
-                    authority=authority,
-                    snapshot=snapshot,
-                    record=record,
-                    decision=decision,
-                    remote_targets={
-                        key: value[1] for key, value in remote_targets.items()
-                    },
-                    decision_as_of=decision_as_of,
-                    execution_started=lambda: None,
-                )
-            except ManagedLocalError as exc:
-                # The reserve operation is the final capacity and
-                # max-parallel CAS.  A concurrent run-limit loser is
-                # bypassed, while other offer/reservation failures end this
-                # turn so an unresolved offer cannot be reinterpreted.
-                if str(exc) == "run active-assignment limit reached":
-                    exhausted_admissions.add(record.admission_id)
-                    continue
-                return None
-            if not started:
+            else:
                 excluded_work.add(record.stage_work_id)
-                continue
-            return admission.admission_id, LocalDaemonExecutionOutcome(
-                LocalDaemonAdmissionState.ACTIVE,
-                "assignment was durably accepted",
+            continue
+        if remote_target is not None and not self._remote_eligible(
+            intent=intent, snapshot=snapshot, record=record
+        ):
+            del remote_targets[candidate_id]
+            continue
+        try:
+            started = self._execute(
+                admission=admission,
+                intent=intent,
+                authority=authority,
+                snapshot=snapshot,
+                record=record,
+                decision=decision,
+                remote_targets={
+                    key: value[1] for key, value in remote_targets.items()
+                },
+                decision_as_of=decision_as_of,
+                execution_started=lambda: None,
             )
+        except ManagedLocalError as exc:
+            # The reserve operation is the final capacity and
+            # max-parallel CAS.  A concurrent run-limit loser is
+            # bypassed, while other offer/reservation failures end this
+            # turn so an unresolved offer cannot be reinterpreted.
+            if str(exc) == "run active-assignment limit reached":
+                exhausted_admissions.add(record.admission_id)
+                continue
+            return None
+        if not started:
+            excluded_work.add(record.stage_work_id)
+            continue
+        return admission.admission_id, LocalDaemonExecutionOutcome(
+            LocalDaemonAdmissionState.ACTIVE,
+            "assignment was durably accepted",
+        )
 
 
 def _profile_satisfies_requirement(

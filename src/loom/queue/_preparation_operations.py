@@ -404,7 +404,7 @@ class CoordinatorPreparations:
         if run_mode == "reconcile":
             intent = hashlib.sha256(stable_json_bytes([intent, run_mode, retry_policy])).hexdigest()
         coordinator_id = self.daemon._require_started()
-        with self.daemon._cycle_lock, self.daemon._connection() as conn:
+        with self.daemon._state_guard(), self.daemon._connection() as conn:
             self.daemon._lifetime.require_accepting()
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
@@ -556,6 +556,7 @@ class CoordinatorPreparations:
             # operation in the same acceptance transaction.
             conn.execute("DELETE FROM daemon_metadata WHERE key = ?", ("startup-attachment:" + request.operation_id,))
             conn.commit()
+            self.daemon._scheduling_reference_revision += 1
         self.daemon._wake.set()
         return operation
 
@@ -715,81 +716,80 @@ class CoordinatorPreparations:
             raise PreparationConfigurationUnavailable(
                 "preparation execution owner is unavailable"
             )
-        with self.daemon._cycle_lock:
-            from .preparation import _local_scope, _require_local_binding
-
-            scope = _local_scope(_mapping(selected["profile"]).get("local_scope"))
-            try:
-                _require_local_binding(scope, self.daemon.config.resident_worker_launch_profile,
-                                       agent_id=self.daemon.config.machine_id)
-            except QueueConflictError as exc:
-                raise PreparationConfigurationUnavailable("accepted local preparation binding is unavailable") from exc
-            if (
-                coordinator_authority_identity(
-                    self.daemon.config.coordinator_authority_factory
-                )
-                != selected["authority"]
-            ):
-                raise PreparationConfigurationUnavailable(
-                    "accepted preparation authority is unavailable"
-                )
+        with self.daemon._state_guard():
+            config = self.daemon.config
             available = tuple(execution.slurm_profiles.values())
-            profiles = []
-            for descriptor in cast(list[PlainData], selected["slurm_profiles"]):
-                profile = next(
-                    (
-                        item
-                        for item in available
-                        if item.descriptor.to_dict() == descriptor
-                    ),
-                    None,
-                )
-                if profile is None:
-                    raise PreparationConfigurationUnavailable(
-                        "accepted preparation Slurm profile is unavailable"
-                    )
-                profiles.append(profile)
-            remote_profiles = []
-            for descriptor in cast(list[PlainData], selected["remote_profiles"]):
-                remote = next(
-                    (
-                        item
-                        for item in self.daemon.config.remote_profiles
-                        if item.to_dict() == descriptor
-                    ),
-                    None,
-                )
-                if remote is None:
-                    raise PreparationConfigurationUnavailable(
-                        "accepted preparation remote profile is unavailable"
-                    )
-                remote_profiles.append(remote)
-            components = execution.preparation_scheduling_components(
-                _mapping(selected["scheduling"])
+            components = execution.preparation_scheduling_components(_mapping(selected["scheduling"]))
+        from .preparation import _local_scope, _require_local_binding
+
+        scope = _local_scope(_mapping(selected["profile"]).get("local_scope"))
+        try:
+            _require_local_binding(scope, config.resident_worker_launch_profile,
+                                   agent_id=config.machine_id)
+        except QueueConflictError as exc:
+            raise PreparationConfigurationUnavailable("accepted local preparation binding is unavailable") from exc
+        if (
+            coordinator_authority_identity(
+                config.coordinator_authority_factory
             )
-            capability_data = _mapping(selected["profile"]).get("container_capability")
-            capabilities = self.daemon.config.container_capabilities
-            if capability_data is not None:
-                retained_capability = SubmittedContainerCapability.from_dict(capability_data)
-                from .submitted_execution import SELECTED_INPUT_WORKER_CONTRACT
-                dynamic = request.execution is not None and request.execution.worker_contract == SELECTED_INPUT_WORKER_CONTRACT
-                capabilities = tuple(
-                    item for item in capabilities if (
-                        item.permits(retained_capability) if dynamic else item.to_dict() == capability_data
-                    )
-                )
-                if not capabilities:
-                    raise PreparationConfigurationUnavailable(
-                        "accepted container execution policy is unavailable"
-                    )
-            return replace(
-                self.daemon.config,
-                run_store_root=Path(cast(str, selected["run_store_root"])),
-                scheduling_components=components,
-                slurm_profiles=tuple(profiles),
-                remote_profiles=tuple(remote_profiles),
-                container_capabilities=capabilities,
+            != selected["authority"]
+        ):
+            raise PreparationConfigurationUnavailable(
+                "accepted preparation authority is unavailable"
             )
+        profiles = []
+        for descriptor in cast(list[PlainData], selected["slurm_profiles"]):
+            profile = next(
+                (
+                    item
+                    for item in available
+                    if item.descriptor.to_dict() == descriptor
+                ),
+                None,
+            )
+            if profile is None:
+                raise PreparationConfigurationUnavailable(
+                    "accepted preparation Slurm profile is unavailable"
+                )
+            profiles.append(profile)
+        remote_profiles = []
+        for descriptor in cast(list[PlainData], selected["remote_profiles"]):
+            remote = next(
+                (
+                    item
+                    for item in config.remote_profiles
+                    if item.to_dict() == descriptor
+                ),
+                None,
+            )
+            if remote is None:
+                raise PreparationConfigurationUnavailable(
+                    "accepted preparation remote profile is unavailable"
+                )
+            remote_profiles.append(remote)
+        capability_data = _mapping(selected["profile"]).get("container_capability")
+        capabilities = config.container_capabilities
+        if capability_data is not None:
+            retained_capability = SubmittedContainerCapability.from_dict(capability_data)
+            from .submitted_execution import SELECTED_INPUT_WORKER_CONTRACT
+            dynamic = request.execution is not None and request.execution.worker_contract == SELECTED_INPUT_WORKER_CONTRACT
+            capabilities = tuple(
+                item for item in capabilities if (
+                    item.permits(retained_capability) if dynamic else item.to_dict() == capability_data
+                )
+            )
+            if not capabilities:
+                raise PreparationConfigurationUnavailable(
+                    "accepted container execution policy is unavailable"
+                )
+        return replace(
+            config,
+            run_store_root=Path(cast(str, selected["run_store_root"])),
+            scheduling_components=components,
+            slurm_profiles=tuple(profiles),
+            remote_profiles=tuple(remote_profiles),
+            container_capabilities=capabilities,
+        )
 
     def _advance(self, row: sqlite3.Row) -> None:
         from .local_daemon import LocalDaemonAdmissionRequest, LocalDaemonAdmissionState
@@ -1028,7 +1028,7 @@ class CoordinatorPreparations:
             )
             execution = self.daemon._execution
             assert execution is not None
-            with self.daemon._cycle_lock:
+            with self.daemon._state_guard():
                 released = (
                     execution.coordinator.run_active_assignment_count(admission.run_uri)
                     == 0
@@ -1162,110 +1162,117 @@ class CoordinatorPreparations:
         target_name = run_uri_to_path(uri).name
         reconciliation = _mapping(selected["reconciliation"])
         selected["reconciliation"] = reconciliation
-        with self.daemon._cycle_lock:
-            row = self._read(operation_id)
-            if row["cancellation_requested"]:
-                self._store_result(_with_report(operation_id, "cancelled", None, result, report.preflight))
-                return
-            if row["target_name"] is None:
-                retain_preparation_path(config.run_store_root / target_name,
-                                        coordinator_id=self.daemon._require_started(), operation_id=operation_id)
-                with self.daemon._connection() as conn:
-                    conn.execute("BEGIN IMMEDIATE")
-                    owners = conn.execute("SELECT * FROM preparation_operations WHERE target_name = ? ORDER BY rowid", (target_name,)).fetchall()
-                    owner = owners[0] if owners else None
-                    if owner is not None:
-                        previous = _mapping(json.loads(str(owner["selected_json"])))
-                        previous.pop("reconciliation", None)
-                        scope = dict(selected)
-                        scope.pop("reconciliation", None)
-                        old_request = PrepareRunRequest.from_dict(json.loads(str(owner["request_json"])))
-                        if owner["principal_id"] != row["principal_id"] or previous != scope or (old_request.source.root, old_request.source.path) != (request.source.root, request.source.path):
-                            conn.rollback()
-                            self._fail(row, "candidate_scope_conflict", conflict=True)
-                            return
-                    queue_id = target_name if owner is None else owner["queue_item_id"] or target_name
-                    reconciliation["publication_owner"] = operation_id if owner is None else str(owner["operation_id"])
-                    result["queue_item_id"] = queue_id
-                    try:
-                        self._check_run_budget(operation_id, {**result, "prepared_run": report.prospective_receipt.to_dict()})
-                    except _ResultTooLarge:
+        row = self._read(operation_id)
+        if row["cancellation_requested"]:
+            self._store_result(_with_report(operation_id, "cancelled", None, result, report.preflight))
+            return
+        if row["target_name"] is None:
+            retain_preparation_path(config.run_store_root / target_name,
+                                    coordinator_id=self.daemon._require_started(), operation_id=operation_id)
+            with self.daemon._connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                current = conn.execute("SELECT cancellation_requested, result_json FROM preparation_operations WHERE operation_id = ?", (operation_id,)).fetchone()
+                if current["cancellation_requested"]:
+                    return
+                if "cancellation_operation_id" in result:
+                    result["cancellation_operation_id"] = json.loads(current["result_json"])["cancellation_operation_id"]
+                owners = conn.execute("SELECT * FROM preparation_operations WHERE target_name = ? ORDER BY rowid", (target_name,)).fetchall()
+                owner = owners[0] if owners else None
+                if owner is not None:
+                    previous = _mapping(json.loads(str(owner["selected_json"])))
+                    previous.pop("reconciliation", None)
+                    scope = dict(selected)
+                    scope.pop("reconciliation", None)
+                    old_request = PrepareRunRequest.from_dict(json.loads(str(owner["request_json"])))
+                    if owner["principal_id"] != row["principal_id"] or previous != scope or (old_request.source.root, old_request.source.path) != (request.source.root, request.source.path):
                         conn.rollback()
-                        self._fail(row, "result_too_large")
+                        self._fail(row, "candidate_scope_conflict", conflict=True)
                         return
-                    conn.execute("UPDATE preparation_operations SET target_name = ?, queue_item_id = ?, selected_json = ?, result_json = ? WHERE operation_id = ?",
-                                 (target_name, queue_id, _json(selected), _json(result), operation_id))
-                    conn.commit()
-                row = self._read(operation_id)
-            elif row["target_name"] != target_name:
-                self._fail(row, "candidate_key_conflict", conflict=True)
-                return
-            else:
-                # Binding and cancellation receipts are retained independently of child reports.
-                retained = _mapping(json.loads(str(row["result_json"])))
-                result["queue_item_id"], result["binding"] = retained["queue_item_id"], retained["binding"]
-            owner = self._read(cast(str, reconciliation["publication_owner"]))
-            if owner["cancellation_requested"] or owner["state"] in {"failed", "cancelled", "conflict"}:
-                self._fail(row, "candidate_publication_failed", conflict=True)
-                return
-            if owner["operation_id"] != operation_id and owner["state"] != "applied":
-                return
-            try:
-                admission = self.daemon.admission_for_run_uri(uri)
-            except AdmissionNotFoundError:
-                admission = None
-            if admission is not None:
-                if admission.queue_item_id != row["queue_item_id"]:
-                    self._fail(row, "candidate_admission_conflict", conflict=True)
+                queue_id = target_name if owner is None else owner["queue_item_id"] or target_name
+                reconciliation["publication_owner"] = operation_id if owner is None else str(owner["operation_id"])
+                result["queue_item_id"] = queue_id
+                try:
+                    self._check_run_budget(operation_id, {**result, "prepared_run": report.prospective_receipt.to_dict()})
+                except _ResultTooLarge:
+                    conn.rollback()
+                    self._fail(row, "result_too_large")
                     return
-                if admission.state.value in {"CANCELLED", "CANCELLATION_REQUESTED"} or admission.cancellation_operation_id is not None:
-                    self._fail(row, "candidate_cancelled", conflict=True)
-                    return
-            path = run_uri_to_path(uri)
-            if admission is None and not path.exists() and not path.is_symlink() and owner["operation_id"] == operation_id and row["state"] == "pending":
-                # Binding was serialized with cancellation; only this owner can publish.
-                self._store_result(_with_report(operation_id, "applying", None, result, report.preflight))
+                conn.execute("UPDATE preparation_operations SET target_name = ?, queue_item_id = ?, selected_json = ?, result_json = ? WHERE operation_id = ?",
+                             (target_name, queue_id, _json(selected), _json(result), operation_id))
+                conn.commit()
+            row = self._read(operation_id)
+        elif row["target_name"] != target_name:
+            self._fail(row, "candidate_key_conflict", conflict=True)
+            return
+        else:
+            # Binding and cancellation receipts are retained independently of child reports.
+            retained = _mapping(json.loads(str(row["result_json"])))
+            result["queue_item_id"], result["binding"] = retained["queue_item_id"], retained["binding"]
+        owner = self._read(cast(str, reconciliation["publication_owner"]))
+        if owner["cancellation_requested"] or owner["state"] in {"failed", "cancelled", "conflict"}:
+            self._fail(row, "candidate_publication_failed", conflict=True)
+            return
+        if owner["operation_id"] != operation_id and owner["state"] != "applied":
+            return
+        try:
+            admission = self.daemon.admission_for_run_uri(uri)
+        except AdmissionNotFoundError:
+            admission = None
+        if admission is not None:
+            if admission.queue_item_id != row["queue_item_id"]:
+                self._fail(row, "candidate_admission_conflict", conflict=True)
+                return
+            if admission.state.value in {"CANCELLED", "CANCELLATION_REQUESTED"} or admission.cancellation_operation_id is not None:
+                self._fail(row, "candidate_cancelled", conflict=True)
+                return
+        path = run_uri_to_path(uri)
+        if admission is None and not path.exists() and not path.is_symlink() and owner["operation_id"] == operation_id and row["state"] == "pending":
+            # Only the selected owner can publish; cancellation still fences admission.
+            self._store_result(_with_report(operation_id, "applying", None, result, report.preflight))
+            publish = True
+        else:
+            publish = False
+        if not publish:
+            if owner["operation_id"] == operation_id and row["state"] == "applying" and reconciliation["candidate"] is None:
+                # The original publisher alone may reconcile a lost publication reply.
                 publish = True
             else:
-                publish = False
-            if not publish:
-                if owner["operation_id"] == operation_id and row["state"] == "applying" and reconciliation["candidate"] is None:
-                    # The original publisher alone may reconcile a lost publication reply.
-                    publish = True
-                else:
-                    try:
-                        candidate = self.callbacks.capture_candidate(config, uri, admission)
-                    except Exception:
-                        self._fail(row, "candidate_unavailable", conflict=True)
-                        return
-                    if reconciliation["failed_revision"] is None and admission is not None and admission.state.value == "FAILED":
-                        if reconciliation["retry_policy"] != "one_observed_failure":
-                            self._fail(row, "candidate_failed", conflict=True)
-                            return
-                        reconciliation["failed_revision"] = admission.revision
-                        self._save_selection(operation_id, selected)
-                    if not _same_candidate(reconciliation["candidate"], candidate):
-                        reconciliation["candidate"] = candidate
-                        reconciliation["verification_generation"] = cast(int, reconciliation["verification_generation"]) + 1
-                        generation = reconciliation["verification_generation"]
-                        child_name = PREPARATION_RUN_PREFIX + hashlib.sha256(f"{operation_id}:verify:{generation}".encode()).hexdigest()
-                        with self.daemon._connection() as conn:
-                            conn.execute("UPDATE preparation_operations SET selected_json = ?, child_name = ?, child_admission_id = NULL, dispatch_claimed = 0, state = 'pending', result_json = ? WHERE operation_id = ?",
-                                         (_json(selected), child_name, _json(result), operation_id))
-                            conn.commit()
-                        return
-                    # read_report checked a committed installed verifier against this pinned input.
-                    if reconciliation["verification_generation"] == 0:
-                        raise QueueConflictError("candidate verifier is missing")
-                    result["verification_report_ref"] = report.reference.to_dict()
-                    result["binding"] = {"run_uri": uri, "publication_operation_id": reconciliation["publication_owner"]}
-                    result["prepared_run"] = candidate["prepared_run"]
-                    result["decision"] = "retry" if reconciliation["failed_revision"] is not None else "reuse" if admission is not None and admission.state.value == "SUCCEEDED" else "observe" if admission is not None else "admit_prepared"
-                    self._store_result(_with_report(operation_id, "applying", None, result, report.preflight))
-                    self._continue_run(self._read(operation_id))
+                try:
+                    candidate = self.callbacks.capture_candidate(config, uri, admission)
+                except Exception:
+                    self._fail(row, "candidate_unavailable", conflict=True)
                     return
-        # Native publication does filesystem work outside the cycle lock. A bound
-        # cancellation suppresses subsequent admission under that same owner.
+                if reconciliation["failed_revision"] is None and admission is not None and admission.state.value == "FAILED":
+                    if reconciliation["retry_policy"] != "one_observed_failure":
+                        self._fail(row, "candidate_failed", conflict=True)
+                        return
+                    reconciliation["failed_revision"] = admission.revision
+                    self._save_selection(operation_id, selected)
+                if not _same_candidate(reconciliation["candidate"], candidate):
+                    reconciliation["candidate"] = candidate
+                    reconciliation["verification_generation"] = cast(int, reconciliation["verification_generation"]) + 1
+                    generation = reconciliation["verification_generation"]
+                    child_name = PREPARATION_RUN_PREFIX + hashlib.sha256(f"{operation_id}:verify:{generation}".encode()).hexdigest()
+                    with self.daemon._connection() as conn:
+                        conn.execute("BEGIN IMMEDIATE")
+                        current = conn.execute("SELECT result_json FROM preparation_operations WHERE operation_id = ?", (operation_id,)).fetchone()
+                        result["cancellation_operation_id"] = json.loads(current["result_json"])["cancellation_operation_id"]
+                        conn.execute("UPDATE preparation_operations SET selected_json = ?, child_name = ?, child_admission_id = NULL, dispatch_claimed = 0, state = 'pending', result_json = ? WHERE operation_id = ?",
+                                     (_json(selected), child_name, _json(result), operation_id))
+                        conn.commit()
+                    return
+                # read_report checked a committed installed verifier against this pinned input.
+                if reconciliation["verification_generation"] == 0:
+                    raise QueueConflictError("candidate verifier is missing")
+                result["verification_report_ref"] = report.reference.to_dict()
+                result["binding"] = {"run_uri": uri, "publication_operation_id": reconciliation["publication_owner"]}
+                result["prepared_run"] = candidate["prepared_run"]
+                result["decision"] = "retry" if reconciliation["failed_revision"] is not None else "reuse" if admission is not None and admission.state.value == "SUCCEEDED" else "observe" if admission is not None else "admit_prepared"
+                self._store_result(_with_report(operation_id, "applying", None, result, report.preflight))
+                self._continue_run(self._read(operation_id))
+                return
+        # Publication retains its exact identity; a cancellation accepted during
+        # IO suppresses subsequent admission in the final native transaction.
         try:
             prepared = self.callbacks.publish_target(config, replace(request, run_name=target_name), report)
         except QueueConflictError:
@@ -1421,74 +1428,72 @@ class CoordinatorPreparations:
         from .local_daemon import AdmissionNotFoundError, LocalDaemonAdmissionRequest
 
         operation_id = str(row["operation_id"])
-        # Same lock as native admission: cancellation cannot acknowledge
-        # suppression while admission is in flight, including a lost reply.
-        with self.daemon._cycle_lock:
-            row = self._read(operation_id)
-            if row["state"] in _TERMINAL:
+        # Native admission rechecks suppression inside its final transaction.
+        row = self._read(operation_id)
+        if row["state"] in _TERMINAL:
+            return
+        result = _mapping(json.loads(str(row["result_json"])))
+        prepared = _mapping(result["prepared_run"])
+        try:
+            admission = self.daemon.admission_for_queue_item(
+                str(row["queue_item_id"])
+            )
+        except AdmissionNotFoundError:
+            admission = None
+        if admission is not None:
+            if admission.run_uri != prepared["run_uri"]:
+                self._fail(row, "admission_conflict", conflict=True)
                 return
-            result = _mapping(json.loads(str(row["result_json"])))
-            prepared = _mapping(result["prepared_run"])
-            try:
-                admission = self.daemon.admission_for_queue_item(
-                    str(row["queue_item_id"])
-                )
-            except AdmissionNotFoundError:
-                admission = None
-            if admission is not None:
-                if admission.run_uri != prepared["run_uri"]:
-                    self._fail(row, "admission_conflict", conflict=True)
+            selected = _mapping(json.loads(str(row["selected_json"])))
+            reconciliation = selected.get("reconciliation")
+            if isinstance(reconciliation, Mapping) and reconciliation["failed_revision"] is not None:
+                if row["cancellation_requested"]:
+                    self._fail(row, "target_cancelled", conflict=True)
                     return
-                selected = _mapping(json.loads(str(row["selected_json"])))
-                reconciliation = selected.get("reconciliation")
-                if isinstance(reconciliation, Mapping) and reconciliation["failed_revision"] is not None:
-                    if row["cancellation_requested"]:
-                        self._fail(row, "target_cancelled", conflict=True)
-                        return
-                    try:
-                        admission = self.daemon._submit(LocalDaemonAdmissionRequest(
-                            str(row["queue_item_id"]), cast(str, prepared["run_uri"]),
-                            retry_failed_revision=cast(int, reconciliation["failed_revision"])),
-                            run_operation_id=operation_id)
-                    except QueueConflictError:
-                        self._fail(row, "retry_revision_conflict", conflict=True)
-                        return
-                with self.daemon._connection() as conn:
-                    self.retain_admission(conn, operation_id, admission)
-                    conn.commit()
-                return
-            if row["cancellation_requested"]:
-                # The preparation child has succeeded before publication can
-                # complete. Its ordinary admission owner proved release.
-                self._store_result(
-                    _with_report(
-                        operation_id,
-                        "cancelled",
-                        None,
-                        result,
-                        None
-                        if result["preflight"] is None
-                        else _mapping(result["preflight"]),
-                    )
+                try:
+                    admission = self.daemon._submit(LocalDaemonAdmissionRequest(
+                        str(row["queue_item_id"]), cast(str, prepared["run_uri"]),
+                        retry_failed_revision=cast(int, reconciliation["failed_revision"])),
+                        run_operation_id=operation_id)
+                except QueueConflictError:
+                    self._fail(row, "retry_revision_conflict", conflict=True)
+                    return
+            with self.daemon._connection() as conn:
+                self.retain_admission(conn, operation_id, admission)
+                conn.commit()
+            return
+        if row["cancellation_requested"]:
+            # The preparation child has succeeded before publication can
+            # complete. Its ordinary admission owner proved release.
+            self._store_result(
+                _with_report(
+                    operation_id,
+                    "cancelled",
+                    None,
+                    result,
+                    None
+                    if result["preflight"] is None
+                    else _mapping(result["preflight"]),
                 )
-                return
-            try:
-                self.daemon._submit(
-                    LocalDaemonAdmissionRequest(
-                        str(row["queue_item_id"]), cast(str, prepared["run_uri"])
-                    ),
-                    run_operation_id=operation_id,
-                )
-            except QueueConflictError:
-                self._fail(
-                    self._read(operation_id), "admission_conflict", conflict=True
-                )
+            )
+            return
+        try:
+            self.daemon._submit(
+                LocalDaemonAdmissionRequest(
+                    str(row["queue_item_id"]), cast(str, prepared["run_uri"])
+                ),
+                run_operation_id=operation_id,
+            )
+        except QueueConflictError:
+            self._fail(
+                self._read(operation_id), "admission_conflict", conflict=True
+            )
 
     def cancel_run(self, operation_id: str, principal_id: str) -> LocalDaemonOperation:
         from .local_daemon import _operation_projection
 
         cancel_id = _cancel_id(operation_id)
-        with self.daemon._cycle_lock, self.daemon._connection() as conn:
+        with self.daemon._state_guard(), self.daemon._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 "SELECT * FROM preparation_operations WHERE operation_id = ?",
@@ -1572,7 +1577,7 @@ class CoordinatorPreparations:
             return
         for control in rows:
             self._cancel_cursor = int(control["sequence"])
-            with self.daemon._cycle_lock:
+            with self.daemon._state_guard():
                 target = self._read(str(control["target_operation_id"]))
                 target_result = _mapping(json.loads(str(target["result_json"])))
                 result = _mapping(json.loads(str(control["result_json"])))
