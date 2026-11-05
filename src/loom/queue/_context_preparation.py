@@ -6,6 +6,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from contextvars import copy_context
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from time import monotonic
 
 if TYPE_CHECKING:
     from .local_daemon import LocalDaemonAdmission
@@ -32,19 +33,34 @@ class ContextPreparations:
         self._pending: dict[str, PendingContext] = {}
         self._last_submitted: str | None = None
         self._wake = wake
+        self._next_load: dict[str, tuple[int, tuple[str | None, str | None], float]] = {}
+        self._interval = 0.0
 
     def submit(
         self, admissions: Iterable[LocalDaemonAdmission],
         epochs: tuple[str | None, str | None],
         load: Callable[[LocalDaemonAdmission], ManagedLocalIntent],
+        *, minimum_interval: float = 0.0, invalidated: Iterable[str] = (),
     ) -> None:
+        self._interval = minimum_interval
         candidates = list(admissions)
+        active = {item.admission_id for item in candidates}
+        invalidated_runs = set(invalidated)
+        for identity in self._next_load.keys() - active:
+            del self._next_load[identity]
+        for item in candidates:
+            if item.run_uri in invalidated_runs:
+                self._next_load.pop(item.admission_id, None)
+        now = monotonic()
         cursor = next((i + 1 for i, item in enumerate(candidates)
                        if item.admission_id == self._last_submitted), 0)
         for admission in candidates[cursor:] + candidates[:cursor]:
             if len(self._pending) >= 2:
                 break
             if admission.admission_id in self._pending:
+                continue
+            previous = self._next_load.get(admission.admission_id)
+            if previous is not None and previous[:2] == (admission.revision, epochs) and now < previous[2]:
                 continue
             future = self._workers.submit(copy_context().run, load, admission)
             self._pending[admission.admission_id] = PendingContext(admission, epochs, future)
@@ -55,10 +71,21 @@ class ContextPreparations:
         completed = tuple(item for item in self._pending.values() if item.future.done())
         for item in completed:
             del self._pending[item.admission.admission_id]
+            self._next_load[item.admission.admission_id] = (
+                item.admission.revision, item.epochs, monotonic() + self._interval,
+            )
         return completed
+
+    def next_delay(self) -> float | None:
+        now = monotonic()
+        return min((value[2] - now for key, value in self._next_load.items()
+                    if key not in self._pending and value[2] > now), default=None)
+
+    def running(self) -> bool:
+        return any(not item.future.done() for item in self._pending.values())
 
     def close(self) -> None:
         # Running IO cannot safely be killed. It holds only captured inputs and
         # may finish after shutdown; no completion can authorize execution.
         self._workers.shutdown(wait=False, cancel_futures=True)
-        self._pending.clear()
+        self._next_load.clear()

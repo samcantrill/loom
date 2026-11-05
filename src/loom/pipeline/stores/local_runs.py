@@ -873,11 +873,15 @@ class LocalRunStore:
 
     def read_config_snapshot(self, run_uri: str, name: str) -> str | None:
         path = self.local_config_path(run_uri, name)
-        if not path.exists():
+        try:
+            # Preserve the text reader's universal-newline behavior used by
+            # existing runtime snapshot digests, while capturing original bytes.
+            text = self._read_document_bytes(path).decode("utf-8")
+            return text.replace("\r\n", "\n").replace("\r", "\n")
+        except FileNotFoundError:
             return None
-        if not path.is_file():
-            raise CorruptStoreDocumentError(f"Expected file at {path}")
-        return path.read_text(encoding="utf-8")
+        except IsADirectoryError as exc:
+            raise CorruptStoreDocumentError(f"Expected file at {path}") from exc
 
     def write_config_snapshot(self, run_uri: str, name: str, content: str) -> None:
         validate_run_uri(run_uri, field="run_uri")
@@ -892,7 +896,7 @@ class LocalRunStore:
         """Read retained composition facts, checking any referring metadata digest."""
         path = self.local_generated_artifact_path(run_uri, "config/composition_manifest.json")
         try:
-            content = path.read_bytes()
+            content = self._read_document_bytes(path)
         except FileNotFoundError:
             content = None
         except OSError as exc:
@@ -955,7 +959,7 @@ class LocalRunStore:
             uri="config/composition_manifest.json",
             resource_type="loom.composition_manifest",
             codec_key="json.v1",
-            checksum="sha256:" + hashlib.sha256(path.read_bytes() if content is None else content).hexdigest(),
+            checksum="sha256:" + hashlib.sha256(self._read_document_bytes(path) if content is None else content).hexdigest(),
             metadata={
                 "document_schema_version": 1,
                 "pointer": "/composition_manifest/metadata",
@@ -1774,15 +1778,21 @@ class LocalRunStore:
             )
         return record
 
+    def _read_document_bytes(self, path: Path) -> bytes:
+        """Read one document; captured readers reuse these bytes for validation."""
+        return path.read_bytes()
+
     def _read_optional_json(
         self, path: Path
     ) -> dict[str, object] | list[object] | None:
-        if not path.exists():
-            return None
-        if not path.is_file():
-            raise CorruptStoreDocumentError(f"Expected file at {path}")
         try:
-            value = json_loads(path.read_text(encoding="utf-8"), path=str(path))
+            content = self._read_document_bytes(path)
+        except FileNotFoundError:
+            return None
+        except IsADirectoryError as exc:
+            raise CorruptStoreDocumentError(f"Expected file at {path}") from exc
+        try:
+            value = json_loads(content.decode("utf-8"), path=str(path))
         except DeserializationError as exc:
             raise CorruptStoreDocumentError(f"Malformed JSON at {path}: {exc}") from exc
         if not isinstance(value, (dict, list)):

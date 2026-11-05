@@ -492,38 +492,41 @@ class ActionResultResolution:
         self, claim: Mapping[str, Any], result: Mapping[str, PlainData],
         *, timings: PhaseTimings | None = None,
     ) -> None:
-        timings = timings or PhaseTimings()
-        uri = claim["owner_run_uri"]
-        if not preparation_path_is_retained(
-            self.execution.run_store.local_run_dir(uri)
-        ):
-            raise QueueConflictError("action result retention is unavailable")
-        snapshot = timings.call("reuse_authority_read", self.execution._authority_store(uri).open_run, uri)
-        stage = next(
-            (
-                stage
-                for stage in snapshot.stages
-                if stage.stage_name == claim["owner_node"]
-            ),
-            None,
-        )
-        if (
-            stage is None
-            or stage.status is not StageStatus.SUCCEEDED
-            or stage.result_binding is not None
-            or stage.latest_commit is None
-            or stage.latest_commit.attempt_id != claim["attempt_id"]
-        ):
-            raise QueueConflictError(
-                "action candidate has no original successful producer"
+        from ._phase_timing import phase
+
+        with phase("action_result_verification"):
+            timings = timings or PhaseTimings()
+            uri = claim["owner_run_uri"]
+            if not preparation_path_is_retained(
+                self.execution.run_store.local_run_dir(uri)
+            ):
+                raise QueueConflictError("action result retention is unavailable")
+            snapshot = timings.call("reuse_authority_read", self.execution._authority_store(uri).open_run, uri)
+            stage = next(
+                (
+                    stage
+                    for stage in snapshot.stages
+                    if stage.stage_name == claim["owner_node"]
+                ),
+                None,
             )
-        if {
-            "commit": stage.latest_commit.to_dict(),
-            "artifact_facts": [fact.to_dict() for fact in stage.artifact_facts],
-        } != result:
-            raise QueueConflictError("action candidate original authority changed")
-        for fact in stage.artifact_facts:
-            timings.call("reuse_artifact_verification", self._verify_artifact, fact.artifact)
+            if (
+                stage is None
+                or stage.status is not StageStatus.SUCCEEDED
+                or stage.result_binding is not None
+                or stage.latest_commit is None
+                or stage.latest_commit.attempt_id != claim["attempt_id"]
+            ):
+                raise QueueConflictError(
+                    "action candidate has no original successful producer"
+                )
+            if {
+                "commit": stage.latest_commit.to_dict(),
+                "artifact_facts": [fact.to_dict() for fact in stage.artifact_facts],
+            } != result:
+                raise QueueConflictError("action candidate original authority changed")
+            for fact in stage.artifact_facts:
+                timings.call("reuse_artifact_verification", self._verify_artifact, fact.artifact)
 
     def _verify_artifact(self, ref: ArtifactRef) -> None:
         path = uri_to_path(ref.uri)

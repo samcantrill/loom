@@ -8,8 +8,10 @@ import ssl
 import subprocess
 
 
-def mutual_tls_credentials(tmp_path: Path) -> dict[str, Path]:
-    """Create one CA, one server, and two independently identified clients."""
+def mutual_tls_credentials(
+    tmp_path: Path, *, client_names: tuple[str, ...] = ("agent", "other", "query")
+) -> dict[str, Path]:
+    """Create a CA, two server identities, and independent named clients."""
 
     tmp_path.mkdir()
     _run(
@@ -31,9 +33,7 @@ def mutual_tls_credentials(tmp_path: Path) -> dict[str, Path]:
     for name, subject in (
         ("server", "/CN=localhost"),
         ("server-next", "/CN=localhost"),
-        ("agent", "/CN=agent"),
-        ("other", "/CN=other"),
-        ("query", "/CN=query"),
+        *((name, f"/CN={name}") for name in client_names),
     ):
         _run(
             "req",
@@ -75,7 +75,7 @@ def mutual_tls_credentials(tmp_path: Path) -> dict[str, Path]:
         )
     return {
         name: tmp_path / name
-        for name in ("ca", "server", "server-next", "agent", "other", "query")
+        for name in ("ca", "server", "server-next", *client_names)
     }
 
 

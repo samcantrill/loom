@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
 import json
+from itertools import count
 import sys
 from time import monotonic
 from typing import Any, cast
@@ -126,5 +127,24 @@ def state_lock(lock: Any) -> Iterator[None]:
         if observer is not None:
             try:
                 observer({**timings.payload(), "operation_id": _operation.get()})
+            except Exception:
+                pass
+
+
+_request_samples = count()
+
+
+@contextmanager
+def request_phases() -> Iterator[None]:
+    """Report slow HTTP requests and one in 64 ordinary requests after dispatch."""
+    timings = PhaseTimings()
+    start = monotonic()
+    try:
+        with observe_phases(timings.observe), phase("request_dispatch"):
+            yield
+    finally:
+        if monotonic() - start >= 1.0 or next(_request_samples) % 64 == 0:
+            try:
+                log_phases(timings.payload())
             except Exception:
                 pass

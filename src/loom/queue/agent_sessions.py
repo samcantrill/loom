@@ -7,6 +7,8 @@ admission, and process launch remain protected agent-local concerns.
 
 from __future__ import annotations
 
+from ._phase_timing import phase
+
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -1629,23 +1631,6 @@ def _serialized_publication_operation(
     return wrapped
 
 
-def _serialized_offer_operation(
-    method: Callable[Concatenate["AgentSessionService", _P], _R],
-) -> Callable[Concatenate["AgentSessionService", _P], _R]:
-    """Also exclude assignment creation during replacement readiness."""
-
-    @wraps(method)
-    def wrapped(
-        service: "AgentSessionService", *args: _P.args, **kwargs: _P.kwargs
-    ) -> _R:
-        with service._daemon._state_guard():  # type: ignore[attr-defined]
-            execution = service._daemon._execution  # type: ignore[attr-defined]
-            if execution is None:
-                raise QueueServiceError("remote execution owner is unavailable")
-            with execution.scheduling_reload_guard():
-                return method(service, *args, **kwargs)
-
-    return wrapped
 
 
 class AgentSessionView:
@@ -1988,7 +1973,6 @@ class AgentSessionService:
             policy.revision,
         )
 
-    @_serialized_session_operation
     def slurm_work(
         self,
         session_id: str,
@@ -1997,7 +1981,7 @@ class AgentSessionService:
         cursor: str | None = None,
     ) -> Mapping[str, PlainData]:
         rule, revision = self._authorize("poll")
-        with self._daemon._connection() as conn:
+        with self._daemon._state_guard(), self._daemon._connection() as conn:
             session = _session_from_row(
                 conn.execute(
                     "SELECT * FROM agent_sessions WHERE session_id=?", (session_id,)
@@ -2013,10 +1997,24 @@ class AgentSessionService:
         execution = self._daemon._execution
         if execution is None:
             raise QueueServiceError("SLURM assignment owner is unavailable")
-        if evidence is not None:
-            return execution.acknowledge_slurm_agent(
-                session.agent_id, session.agent_root_id, evidence
+        with self._daemon._publication_guards.hold("slurm:" + session_id):
+            if evidence is not None:
+                result = execution.acknowledge_slurm_agent(session.agent_id, session.agent_root_id, evidence)
+            else:
+                result = self._slurm_task_page(execution, session, cursor)
+        with self._daemon._state_guard(), self._daemon._connection() as conn:
+            current_rule, current_revision = self._authorize("poll")
+            current = _session_from_row(
+                conn.execute("SELECT * FROM agent_sessions WHERE session_id = ?", (session_id,)).fetchone(),
+                self._daemon._require_started(), expected_principal=current_rule.principal_id,
             )
+            self._check_current_session(current, current_rule, coordinator_epoch, current_revision)
+            if current != session:
+                raise QueueConflictError("SLURM session changed during owner observation")
+        return result
+
+    @staticmethod
+    def _slurm_task_page(execution, session: AgentSession, cursor: str | None) -> Mapping[str, PlainData]:
         tasks = sorted(
             execution.slurm_agent_tasks(session.agent_id, session.agent_root_id),
             key=lambda task: cast(
@@ -2682,12 +2680,14 @@ class AgentSessionService:
             conn.commit()
         return resumed
 
-    @_serialized_offer_operation
     def renew_offer(self, renewal: AgentOfferRenewal) -> Mapping[str, PlainData]:
         """Extend exactly the current unchanged offer once per sequence."""
-
-        rule, policy_revision = self._authorize("offer")
         digest = _digest(renewal.value())
+        with self._daemon._state_guard():
+            return self._renew_offer(renewal, digest)
+
+    def _renew_offer(self, renewal: AgentOfferRenewal, digest: str) -> Mapping[str, PlainData]:
+        rule, policy_revision = self._authorize("offer")
         with self._daemon._connection() as conn:  # type: ignore[attr-defined]
             conn.execute("BEGIN IMMEDIATE")
             session = _session_from_row(
@@ -2772,7 +2772,6 @@ class AgentSessionService:
             conn.commit()
             return freeze_plain_data(result, path="agent offer renewal receipt")
 
-    @_serialized_offer_operation
     def publish_offer(
         self,
         offer: AgentOffer,
@@ -2797,8 +2796,19 @@ class AgentSessionService:
         replacement_admission = _replacement_offer_admission(
             self._daemon, offer.session_id
         )
-        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+        with execution.scheduling_reload_guard(), self._daemon._state_guard(), self._daemon._connection() as conn:
+            rule, policy_revision = self._authorize("offer")
             conn.execute("BEGIN IMMEDIATE")
+            if replacement_admission is not None:
+                old_row = conn.execute("SELECT * FROM agent_sessions WHERE session_id = ?", (replacement_admission.old_session_id,)).fetchone()
+                old_session = _session_from_row(old_row, self._daemon._require_started(), expected_principal=str(old_row["principal_id"]))
+                current_projection = _build_replacement_projection(
+                    conn, session=old_session,
+                    execution_facts=execution.session_replacement_assignment_facts(old_session.session_id),
+                    observed_at=self._daemon._clock(),
+                )
+                if current_projection.value != replacement_admission.projection.value:
+                    raise QueueConflictError("replacement cleanup changed during offer preparation")
             session = _session_from_row(
                 conn.execute(
                     "SELECT * FROM agent_sessions WHERE session_id = ?",
@@ -3499,7 +3509,7 @@ class AgentSessionService:
             path="transfer authorization",
         )
 
-    @_serialized_session_operation
+    @_serialized_publication_operation
     def read_input_chunk(
         self,
         session_id: str,
@@ -3510,21 +3520,11 @@ class AgentSessionService:
         authorization_id: str,
         authorization_revision: int,
     ) -> Mapping[str, PlainData]:
-        rule, policy_revision = self._authorize("input")
         _identifier(transfer_id, "transfer_id")
         if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
             raise QueueServiceError("input transfer offset is invalid")
-        epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]
-        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
-            self._require_remote_session(conn, rule, policy_revision, session_id, epoch)
-            self._require_remote_assignment(conn, session_id, assignment_id)
-            self._require_transfer_authorization(
-                conn,
-                assignment_id,
-                authorization_id,
-                authorization_revision,
-                epoch,
-            )
+        with self._daemon._state_guard(), self._daemon._connection() as conn:
+            stamp = self._transfer_authority(conn, session_id, assignment_id, authorization_id, authorization_revision, "input")
             row = conn.execute(
                 "SELECT size_bytes, private_path FROM remote_transfers WHERE "
                 "assignment_id = ? AND direction = 'input' AND transfer_id = ? "
@@ -3537,9 +3537,12 @@ class AgentSessionService:
             if offset > size:
                 raise QueueConflictError("input transfer offset exceeds its size")
             path = Path(str(row["private_path"]))
-            with path.open("rb") as stream:
-                stream.seek(offset)
-                data = stream.read(TRANSFER_CHUNK_BYTES)
+        with path.open("rb") as stream:
+            stream.seek(offset)
+            data = stream.read(TRANSFER_CHUNK_BYTES)
+        with self._daemon._state_guard(), self._daemon._connection() as conn:
+            if self._transfer_authority(conn, session_id, assignment_id, authorization_id, authorization_revision, "input") != stamp:
+                raise QueueConflictError("remote input authority changed during reading")
         return freeze_plain_data(
             {
                 "transfer_id": transfer_id,
@@ -3551,90 +3554,83 @@ class AgentSessionService:
             path="remote input chunk",
         )
 
-    @_serialized_session_operation
+    @_serialized_publication_operation
     def accept_assignment(
-        self,
-        session_id: str,
-        assignment_id: str,
-        *,
-        request_digest: str,
+        self, session_id: str, assignment_id: str, *, request_digest: str,
     ) -> Mapping[str, PlainData]:
-        rule, policy_revision = self._authorize("accept")
+        """Retain the exact authority grant without holding control writes over IO."""
         _secret_digest(request_digest, "request digest")
-        epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]
-        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
-            conn.execute("BEGIN IMMEDIATE")
-            self._require_remote_session(conn, rule, policy_revision, session_id, epoch)
+
+        def capture(conn: sqlite3.Connection) -> tuple[sqlite3.Row, str]:
+            rule, revision = self._authorize("accept")
+            self._require_remote_session(conn, rule, revision, session_id, self._daemon._epoch or "")
             row = self._require_remote_assignment(conn, session_id, assignment_id)
             delivery = conn.execute(
-                "SELECT request_json, state FROM agent_deliveries "
-                "WHERE assignment_id = ? AND session_id = ?",
+                "SELECT request_json, state FROM agent_deliveries WHERE assignment_id = ? AND session_id = ?",
                 (assignment_id, session_id),
             ).fetchone()
             if delivery is None or str(delivery["state"]) != "DELIVERED":
                 raise QueueConflictError("remote assignment was not delivered")
-            if (
-                hashlib.sha256(str(delivery["request_json"]).encode()).hexdigest()
-                != request_digest
-            ):
-                raise QueueConflictError("remote durable request digest conflicts")
-            if row["fence"] is not None:
-                conn.commit()
-                return freeze_plain_data(
-                    {
-                        "assignment_id": assignment_id,
-                        "fence": str(row["fence"]),
-                        "state": str(row["state"]),
-                    },
-                    path="remote assignment grant",
-                )
-            if action_attempt_cancelled(conn, str(row["run_uri"]), str(row["attempt_id"])):
+            return row, str(delivery["request_json"])
+
+        with self._daemon._state_guard(), self._daemon._connection() as conn:
+            row, request_json = capture(conn)
+            cancelled = action_attempt_cancelled(conn, str(row["run_uri"]), str(row["attempt_id"]))
+        if hashlib.sha256(request_json.encode()).hexdigest() != request_digest:
+            raise QueueConflictError("remote durable request digest conflicts")
+        fence = row["fence"]
+        if fence is None:
+            if cancelled:
                 raise QueueConflictError("remote assignment run is cancelling")
             fence = self._remote_execution().remote_accept(assignment_id)
-            attach_action_fence(conn, str(row["run_uri"]), str(row["attempt_id"]), assignment_id, fence)
-            conn.execute(
-                "UPDATE remote_assignments SET state = 'GRANTED', fence = ? "
-                "WHERE assignment_id = ?",
-                (fence, assignment_id),
-            )
-            conn.commit()
-        return freeze_plain_data(
-            {"assignment_id": assignment_id, "fence": fence, "state": "GRANTED"},
-            path="remote assignment grant",
-        )
-
-    @_serialized_session_operation
-    def start_permit(self, session_id: str, assignment_id: str, *, fence: str) -> bool:
-        """Check the effective run barrier immediately before local launch."""
-
-        rule, policy_revision = self._authorize("start_permit")
-        _identifier(fence, "fence")
-        epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]
-        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+        with self._daemon._state_guard(), self._daemon._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            self._require_remote_session(conn, rule, policy_revision, session_id, epoch)
+            current, current_request = capture(conn)
+            if current_request != request_json or (current["fence"] is not None and current["fence"] != fence):
+                raise QueueConflictError("remote grant authority changed during observation")
+            if current["fence"] is None:
+                # A grant that raced cancellation remains authoritative. Retain
+                # its fence for cleanup; start_permit checks the current barrier.
+                attach_action_fence(conn, str(current["run_uri"]), str(current["attempt_id"]), assignment_id, fence)
+                conn.execute("UPDATE remote_assignments SET state = 'GRANTED', fence = ? WHERE assignment_id = ?",
+                             (fence, assignment_id))
+                state = "GRANTED"
+            else:
+                state = str(current["state"])
+            conn.commit()
+        return freeze_plain_data({"assignment_id": assignment_id, "fence": str(fence), "state": state},
+                                 path="remote assignment grant")
+
+    @_serialized_publication_operation
+    def start_permit(self, session_id: str, assignment_id: str, *, fence: str) -> bool:
+        """Linearize permission against cancellation after authority observation."""
+        _identifier(fence, "fence")
+
+        def check(conn: sqlite3.Connection) -> bool:
+            rule, revision = self._authorize("start_permit")
+            self._require_remote_session(conn, rule, revision, session_id, self._daemon._epoch or "")
             row = self._require_remote_assignment(conn, session_id, assignment_id)
-            if row["fence"] != fence or str(row["state"]) not in {
-                "GRANTED",
-                "RUNNING",
-            }:
+            if row["fence"] != fence or str(row["state"]) not in {"GRANTED", "RUNNING"}:
                 raise QueueConflictError("remote start permit fence is stale")
-            if action_attempt_cancelled(conn, str(row["run_uri"]), str(row["attempt_id"])):
-                conn.commit()
+            return not action_attempt_cancelled(conn, str(row["run_uri"]), str(row["attempt_id"]))
+
+        with self._daemon._state_guard(), self._daemon._connection() as conn:
+            if not check(conn):
                 return False
-            permitted = self._remote_execution().remote_start_permit(
-                assignment_id, fence=fence
-            )
+        # No global state lock or control write transaction spans authority IO.
+        permitted = self._remote_execution().remote_start_permit(assignment_id, fence=fence)
+        with self._daemon._state_guard(), self._daemon._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            permitted = check(conn) and permitted
             if permitted:
                 conn.execute(
-                    "UPDATE remote_assignments SET start_permitted = 1 "
-                    "WHERE assignment_id = ? AND fence = ?",
+                    "UPDATE remote_assignments SET start_permitted = 1 WHERE assignment_id = ? AND fence = ?",
                     (assignment_id, fence),
                 )
             conn.commit()
             return permitted
 
-    @_serialized_session_operation
+    @_serialized_publication_operation
     def decline_assignment(
         self,
         session_id: str,
@@ -3650,7 +3646,7 @@ class AgentSessionService:
         ):
             raise QueueServiceError("remote decline reason is invalid")
         epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]
-        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+        with self._daemon._state_guard(), self._daemon._connection() as conn:  # type: ignore[attr-defined]
             session = self._require_remote_session(
                 conn, rule, policy_revision, session_id, epoch
             )
@@ -3700,7 +3696,9 @@ class AgentSessionService:
             session.pools,
             session.state,
         )
-        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+        with self._daemon._state_guard(), self._daemon._connection() as conn:  # type: ignore[attr-defined]
+            rule, policy_revision = self._authorize("decline")
+            self._require_remote_session(conn, rule, policy_revision, session_id, self._daemon._epoch or "")
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(
                 "UPDATE remote_assignments SET state = 'RELEASED', "
@@ -3733,7 +3731,7 @@ class AgentSessionService:
         self._daemon._wake_admission(str(row["run_uri"]))
         return resumed
 
-    @_serialized_session_operation
+    @_serialized_publication_operation
     def confirm_started(
         self,
         session_id: str,
@@ -3746,7 +3744,7 @@ class AgentSessionService:
         _identifier(fence, "fence")
         _identifier(process_execution_id, "process_execution_id")
         epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]
-        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+        with self._daemon._state_guard(), self._daemon._connection() as conn:  # type: ignore[attr-defined]
             self._require_remote_session(conn, rule, policy_revision, session_id, epoch)
             row = self._require_remote_assignment(conn, session_id, assignment_id)
             if row["fence"] != fence or str(row["state"]) not in {
@@ -3757,10 +3755,12 @@ class AgentSessionService:
         self._remote_execution().remote_started(
             assignment_id, fence=fence, process_execution_id=process_execution_id
         )
-        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+        with self._daemon._state_guard(), self._daemon._connection() as conn:  # type: ignore[attr-defined]
+            rule, policy_revision = self._authorize("started")
+            self._require_remote_session(conn, rule, policy_revision, session_id, self._daemon._epoch or "")
             conn.execute(
                 "UPDATE remote_assignments SET state = 'RUNNING' "
-                "WHERE assignment_id = ? AND fence = ?",
+                "WHERE assignment_id = ? AND fence = ? AND state IN ('GRANTED', 'RUNNING')",
                 (assignment_id, fence),
             )
             conn.commit()
@@ -3771,7 +3771,7 @@ class AgentSessionService:
             path="remote start confirmation",
         )
 
-    @_serialized_session_operation
+    @_serialized_publication_operation
     def report_event(
         self,
         session_id: str,
@@ -3795,7 +3795,7 @@ class AgentSessionService:
         ):
             raise QueueServiceError("remote event payload exceeds its bound")
         epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]
-        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+        with self._daemon._state_guard(), self._daemon._connection() as conn:  # type: ignore[attr-defined]
             self._require_remote_session(conn, rule, policy_revision, session_id, epoch)
             row = self._require_remote_assignment(conn, session_id, assignment_id)
             if str(row["state"]) not in {
@@ -3897,6 +3897,7 @@ class AgentSessionService:
         prepared = None
         if selected(request) is not None and report.status is StageStatus.SUCCEEDED:
             prepared = prepare_publication(request, report, roots, agent_id=agent_id, fence=fence)
+        shared_outputs = None if prepared is None else accept_publication(prepared)
         with self._daemon._state_guard(), self._daemon._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row, current_request, current_agent, current_stamp = self._declaration_authority(
@@ -3909,7 +3910,6 @@ class AgentSessionService:
                     {"assignment_id": assignment_id, "state": str(row["state"])},
                     path="remote output manifest",
                 )
-            shared_outputs = None if prepared is None else accept_publication(prepared)
             for item in report.outputs:
                 target = (
                     self._daemon.config.coordinator_root  # type: ignore[attr-defined]
@@ -3958,20 +3958,19 @@ class AgentSessionService:
             path="remote output manifest",
         )
 
-    @_serialized_session_operation
+    def _transfer_authority(self, conn, session_id, assignment_id, authorization_id, authorization_revision, action):
+        rule, stamp = self._result_authority(action)
+        revision, epoch, _ = stamp
+        self._require_remote_session(conn, rule, revision, session_id, epoch)
+        self._require_remote_assignment(conn, session_id, assignment_id)
+        self._require_transfer_authorization(conn, assignment_id, authorization_id, authorization_revision, epoch)
+        return stamp
+
+    @_serialized_publication_operation
     def upload_output_chunk(
-        self,
-        session_id: str,
-        assignment_id: str,
-        transfer_id: str,
-        *,
-        offset: int,
-        data: bytes,
-        final: bool,
-        authorization_id: str,
-        authorization_revision: int,
+        self, session_id: str, assignment_id: str, transfer_id: str, *,
+        offset: int, data: bytes, final: bool, authorization_id: str, authorization_revision: int,
     ) -> Mapping[str, PlainData]:
-        rule, policy_revision = self._authorize("output")
         _identifier(transfer_id, "transfer_id")
         if (
             isinstance(offset, bool)
@@ -3982,103 +3981,35 @@ class AgentSessionService:
             or not isinstance(final, bool)
         ):
             raise QueueServiceError("remote output chunk is invalid")
-        epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]
-        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
-            conn.execute("BEGIN IMMEDIATE")
-            self._require_remote_session(conn, rule, policy_revision, session_id, epoch)
-            self._require_remote_assignment(conn, session_id, assignment_id)
-            self._require_transfer_authorization(
-                conn,
-                assignment_id,
-                authorization_id,
-                authorization_revision,
-                epoch,
-            )
+
+        def capture(conn):
+            stamp = self._transfer_authority(conn, session_id, assignment_id, authorization_id, authorization_revision, "output")
             row = conn.execute(
-                "SELECT digest, size_bytes, private_path, received_bytes, "
-                "finalized, descriptor_json FROM remote_transfers WHERE assignment_id = ? AND "
-                "direction = 'output' AND transfer_id = ?",
+                "SELECT digest, size_bytes, private_path, received_bytes, finalized, descriptor_json "
+                "FROM remote_transfers WHERE assignment_id = ? AND direction = 'output' AND transfer_id = ?",
                 (assignment_id, transfer_id),
             ).fetchone()
             if row is None:
                 raise QueueConflictError("remote output transfer is not declared")
-            descriptor = _RemoteOutputArtifact.from_dict(json.loads(str(row["descriptor_json"])))
-            target = Path(str(row["private_path"]))
-            def publish_pair():
-                if descriptor.preparation_report_transfer is not None:
-                    from ._preparation_report_transfer import publish
-                    publish(descriptor, target)
-            received = int(row["received_bytes"])
-            size = int(row["size_bytes"])
-            if bool(row["finalized"]):
-                if offset + len(data) > size:
-                    raise QueueConflictError("output replay exceeds durable content")
-                with target.open("rb") as stream:
-                    stream.seek(offset)
-                    if stream.read(len(data)) != data:
-                        raise QueueConflictError(
-                            "output replay conflicts with durable bytes"
-                        )
-                publish_pair()
-                return freeze_plain_data(
-                    {"transfer_id": transfer_id, "received_bytes": size, "final": True},
-                    path="remote output chunk",
-                )
-            if _published_file_matches(
-                target, size_bytes=size, digest=str(row["digest"])
-            ):
-                received = size
-                conn.execute(
-                    "UPDATE remote_transfers SET received_bytes = ?, finalized = 1 "
-                    "WHERE assignment_id = ? AND direction = 'output' "
-                    "AND transfer_id = ?",
-                    (received, assignment_id, transfer_id),
-                )
-                if offset + len(data) > size:
-                    raise QueueConflictError("output replay exceeds durable content")
-                if _read_regular_file_range(target, offset, len(data)) != data:
-                    raise QueueConflictError(
-                        "output replay conflicts with durable bytes"
-                    )
-                conn.commit()
-                publish_pair()
-                return freeze_plain_data(
-                    {"transfer_id": transfer_id, "received_bytes": size, "final": True},
-                    path="remote output chunk",
-                )
-            staging = target.with_name(f".{transfer_id}.part")
-            received = _append_exact_chunk(staging, offset, received, data)
-            if received > size:
-                raise QueueConflictError("remote output exceeds declared size")
-            should_finalize = final or received == size
-            if should_finalize:
-                if received != size or _file_digest(staging) != str(row["digest"]):
-                    raise QueueConflictError(
-                        "remote output bytes do not match their manifest"
-                    )
-                _publish_staged_file(staging, target)
-                publish_pair()
-                conn.execute(
-                    "UPDATE remote_transfers SET received_bytes = ?, finalized = 1 "
-                    "WHERE assignment_id = ? AND direction = 'output' "
-                    "AND transfer_id = ?",
-                    (received, assignment_id, transfer_id),
-                )
-            else:
-                conn.execute(
-                    "UPDATE remote_transfers SET received_bytes = ? WHERE "
-                    "assignment_id = ? AND direction = 'output' AND transfer_id = ?",
-                    (received, assignment_id, transfer_id),
-                )
+            return row, stamp
+
+        with self._daemon._state_guard(), self._daemon._connection() as conn:
+            row, stamp = capture(conn)
+        with phase("output_retention", operation_id=assignment_id):
+            received, should_finalize = _retain_output_chunk(row, transfer_id, offset, data, final)
+        with self._daemon._state_guard(), self._daemon._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            current, current_stamp = capture(conn)
+            if tuple(current) != tuple(row) or current_stamp != stamp:
+                raise QueueConflictError("remote transfer authority changed during retention")
+            conn.execute(
+                "UPDATE remote_transfers SET received_bytes = ?, finalized = ? WHERE assignment_id = ? "
+                "AND direction = 'output' AND transfer_id = ?",
+                (received, int(should_finalize), assignment_id, transfer_id),
+            )
             conn.commit()
-        return freeze_plain_data(
-            {
-                "transfer_id": transfer_id,
-                "received_bytes": received,
-                "final": should_finalize,
-            },
-            path="remote output chunk",
-        )
+        return freeze_plain_data({"transfer_id": transfer_id, "received_bytes": received, "final": should_finalize},
+                                 path="remote output chunk")
 
     def _commit_authority(self, conn, session_id, assignment_id, fence):
         rule, stamp = self._result_authority("result")
@@ -4120,18 +4051,22 @@ class AgentSessionService:
                 if (current_stamp != stamp or str(current["report_json"]) != encoded
                     or current_transfers != transfers or current["state"] != row["state"]):
                     raise QueueConflictError("remote commit authority changed during verification")
-            # The execution owner rechecks the current attempt's fence before
-            # recording the bounded artifact references and terminal state.
-            from ._phase_timing import phase
-            with phase("result_commit", operation_id=assignment_id):
-                self._remote_execution().remote_commit(
-                    assignment_id, fence=fence, report=report, outputs=outputs
-                )
-            with self._daemon._connection() as conn:
-                conn.execute("UPDATE remote_assignments SET state = 'TERMINAL' WHERE assignment_id = ?",
-                             (assignment_id,))
-                conn.commit()
-            self._daemon._wake_admission(str(row["run_uri"]))
+        # The execution owner rechecks the current attempt's fence before
+        # recording the bounded artifact references and terminal state.
+        from ._phase_timing import phase
+        with phase("result_commit", operation_id=assignment_id):
+            self._remote_execution().remote_commit(
+                assignment_id, fence=fence, report=report, outputs=outputs
+            )
+        with self._daemon._state_guard(), self._daemon._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            current, current_transfers, current_stamp = self._commit_authority(conn, session_id, assignment_id, fence)
+            if current_stamp != stamp or str(current["report_json"]) != encoded or current_transfers != transfers:
+                raise QueueConflictError("remote commit authority changed during authority operation")
+            conn.execute("UPDATE remote_assignments SET state = 'TERMINAL' WHERE assignment_id = ?",
+                         (assignment_id,))
+            conn.commit()
+        self._daemon._wake_admission(str(row["run_uri"]))
         return freeze_plain_data(
             {"assignment_id": assignment_id, "state": "TERMINAL"},
             path="remote result commit",
@@ -4183,7 +4118,7 @@ class AgentSessionService:
                 return recovery
         return None
 
-    @_serialized_session_operation
+    @_serialized_publication_operation
     def recovery_release_ready(
         self,
         session_id: str,
@@ -4221,7 +4156,7 @@ class AgentSessionService:
                 ready = self._same_session_recovery(conn, session, remote) is not None
             return {"ready": ready}
 
-    @_serialized_session_operation
+    @_serialized_publication_operation
     def release_assignment(
         self,
         session_id: str,
@@ -4241,7 +4176,6 @@ class AgentSessionService:
         released_claim_id: str | None = None
         proof_json = _canonical_json(provider_release_proof.redacted_value())
         with self._daemon._connection() as conn:  # type: ignore[attr-defined]
-            conn.execute("BEGIN IMMEDIATE")
             session = self._require_remote_cleanup_session(
                 conn, rule, policy_revision, session_id, epoch
             )
@@ -4323,6 +4257,14 @@ class AgentSessionService:
                     or provider_release_proof.claim_id != fact.get("claim_id")
                 ):
                     raise QueueConflictError("recovery provider release proof is stale")
+        with self._daemon._state_guard(), self._daemon._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rule, policy_revision = self._authorize("release")
+            current_session = self._require_remote_cleanup_session(
+                conn, rule, policy_revision, session_id, self._daemon._epoch or "")
+            current = self._require_remote_assignment(conn, session_id, assignment_id)
+            if (current_session != session or tuple(current) != tuple(row)):
+                raise QueueConflictError("remote release authority changed during observation")
             if retained_proof is None:
                 conn.execute(
                     "UPDATE remote_assignments SET provider_release_proof_json = ? "
@@ -4334,15 +4276,20 @@ class AgentSessionService:
         # above are the sole seal trigger, including a supervisor-proven death
         # without a worker result. Retention precedes reusable authority release.
         with self._daemon._connection() as conn:
-            conn.execute("BEGIN IMMEDIATE")
             retained_row = self._require_remote_assignment(conn, session_id, assignment_id)
             delivery = conn.execute("SELECT request_json FROM agent_deliveries WHERE assignment_id = ?", (assignment_id,)).fetchone()
-            if delivery is None:
+            if delivery is None or retained_row["provider_release_proof_json"] != proof_json:
                 raise QueueConflictError("recovery delivery ownership is unavailable")
-            from ._shared_recovery import retain_released
-            retain_released(conn, retained_row,
-                _ResidentAssignmentBundle.from_remote_dict(json.loads(delivery["request_json"])),
-                self._daemon.config.coordinator_shared_roots, agent_id=session.agent_root_id)
+            request = _ResidentAssignmentBundle.from_remote_dict(json.loads(delivery["request_json"]))
+            roots = self._daemon.config.coordinator_shared_roots
+        from ._shared_recovery import seal, retain_seal
+        sealed = seal(request, roots, agent_id=session.agent_root_id, fence=fence)
+        with self._daemon._state_guard(), self._daemon._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            current = self._require_remote_assignment(conn, session_id, assignment_id)
+            if current["provider_release_proof_json"] != proof_json or current["fence"] != fence:
+                raise QueueConflictError("recovery release proof changed during retention")
+            retain_seal(conn, request, sealed)
             conn.commit()
         if recovery is None:
             self._remote_execution().remote_release(assignment_id)
@@ -4362,8 +4309,13 @@ class AgentSessionService:
             session.pools,
             session.state,
         )
-        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+        with self._daemon._state_guard(), self._daemon._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            rule, policy_revision = self._authorize("release")
+            current_session = self._require_remote_cleanup_session(
+                conn, rule, policy_revision, session_id, self._daemon._epoch or "")
+            if current_session.state is not session.state:
+                raise QueueConflictError("remote release session changed during authority release")
             updated = conn.execute(
                 "UPDATE remote_assignments SET state = 'RELEASED', "
                 "next_availability_revision = ? WHERE assignment_id = ? "
@@ -4874,113 +4826,114 @@ def replace_agent_session(
             observed_at=daemon._clock(),  # type: ignore[attr-defined]
         )
     authority_facts = _replacement_authority_facts(daemon, candidate)
-    current_execution_facts = execution.session_replacement_assignment_facts(
-        old_session.session_id
-    )
-    with daemon._connection() as conn:  # type: ignore[attr-defined]
-        conn.execute("BEGIN IMMEDIATE")
-        raced = conn.execute(
-            "SELECT principal_id, request_json, request_digest, result_json "
-            "FROM session_replacements WHERE operation_id = ?",
-            (request.operation_id,),
-        ).fetchone()
-        if raced is not None:
-            result = _replacement_replay(
-                raced,
-                principal_id=principal.subject,
-                request_json=encoded,
-                request_digest=digest,
+    with execution.scheduling_reload_guard():
+        current_execution_facts = execution.session_replacement_assignment_facts(
+            old_session.session_id
+        )
+        with daemon._state_guard(), daemon._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            raced = conn.execute(
+                "SELECT principal_id, request_json, request_digest, result_json "
+                "FROM session_replacements WHERE operation_id = ?",
+                (request.operation_id,),
+            ).fetchone()
+            if raced is not None:
+                result = _replacement_replay(
+                    raced,
+                    principal_id=principal.subject,
+                    request_json=encoded,
+                    request_digest=digest,
+                )
+                conn.commit()
+                return result
+            current = conn.execute(
+                "SELECT * FROM agent_sessions WHERE session_id = ?",
+                (old_session.session_id,),
+            ).fetchone()
+            current_session = _session_from_row(
+                current,
+                daemon._require_started(),  # type: ignore[attr-defined]
+                expected_principal=str(old["principal_id"]),
+            )
+            if current_session != old_session:
+                raise QueueConflictError("old session changed before replacement fence")
+            conn.execute(
+                "UPDATE agent_controls SET state = 'superseded', "
+                "result_code = 'session_replaced' WHERE session_id = ? "
+                "AND state IN ('pending_delivery','applying')",
+                (old_session.session_id,),
+            )
+            projection = _build_replacement_projection(
+                conn,
+                session=old_session,
+                execution_facts=current_execution_facts,
+                observed_at=daemon._clock(),  # type: ignore[attr-defined]
+            )
+            _require_monotonic_replacement_projection(candidate.value, projection.value)
+            durable_projection = _bind_replacement_authority_facts(
+                projection, authority_facts
+            )
+            conn.execute(
+                "UPDATE agent_offers SET current = 0 WHERE session_id = ?",
+                (old_session.session_id,),
+            )
+            conn.execute(
+                "UPDATE agent_poll_state SET active = 0 WHERE session_id = ?",
+                (old_session.session_id,),
+            )
+            updated = conn.execute(
+                "UPDATE agent_sessions SET state = ? WHERE session_id = ? AND state = ?",
+                (
+                    AgentSessionState.REPLACED.value,
+                    old_session.session_id,
+                    AgentSessionState.ACTIVE.value,
+                ),
+            ).rowcount
+            if updated != 1:
+                raise QueueConflictError("old session changed before replacement fence")
+            conn.execute(
+                "INSERT INTO agent_session_tombstones(session_id, state) VALUES (?, ?)",
+                (old_session.session_id, AgentSessionState.REPLACED.value),
+            )
+            decided_at = daemon._accepted_time(conn)  # type: ignore[attr-defined]
+            result = _replacement_result(
+                request=request,
+                old_session_id=old_session.session_id,
+                successor_session_id=None,
+                state="decision",
+                readiness="withheld",
+                withholding_reason="successor_registration_required",
+                projection=durable_projection,
+            )
+            projection_json = _canonical_json(durable_projection)
+            conn.execute(
+                "INSERT INTO session_replacements("
+                "operation_id, principal_id, request_json, request_digest, agent_id, "
+                "old_session_id, successor_session_id, state, readiness, "
+                "withholding_reason, decision_projection_json, "
+                "decision_projection_digest, required_claim_ids_json, "
+                "observed_claim_ids_json, successor_observation_digest, "
+                "readiness_projection_digest, result_json, decided_at, ready_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, NULL, 'decision', 'withheld', ?, ?, ?, "
+                "?, '[]', NULL, NULL, ?, ?, NULL)",
+                (
+                    request.operation_id,
+                    principal.subject,
+                    encoded,
+                    digest,
+                    request.agent_id,
+                    old_session.session_id,
+                    "successor_registration_required",
+                    projection_json,
+                    hashlib.sha256(projection_json.encode("utf-8")).hexdigest(),
+                    json.dumps(projection.required_claim_ids, separators=(",", ":")),
+                    _canonical_json(result),
+                    decided_at,
+                ),
             )
             conn.commit()
-            return result
-        current = conn.execute(
-            "SELECT * FROM agent_sessions WHERE session_id = ?",
-            (old_session.session_id,),
-        ).fetchone()
-        current_session = _session_from_row(
-            current,
-            daemon._require_started(),  # type: ignore[attr-defined]
-            expected_principal=str(old["principal_id"]),
-        )
-        if current_session != old_session:
-            raise QueueConflictError("old session changed before replacement fence")
-        conn.execute(
-            "UPDATE agent_controls SET state = 'superseded', "
-            "result_code = 'session_replaced' WHERE session_id = ? "
-            "AND state IN ('pending_delivery','applying')",
-            (old_session.session_id,),
-        )
-        projection = _build_replacement_projection(
-            conn,
-            session=old_session,
-            execution_facts=current_execution_facts,
-            observed_at=daemon._clock(),  # type: ignore[attr-defined]
-        )
-        _require_monotonic_replacement_projection(candidate.value, projection.value)
-        durable_projection = _bind_replacement_authority_facts(
-            projection, authority_facts
-        )
-        conn.execute(
-            "UPDATE agent_offers SET current = 0 WHERE session_id = ?",
-            (old_session.session_id,),
-        )
-        conn.execute(
-            "UPDATE agent_poll_state SET active = 0 WHERE session_id = ?",
-            (old_session.session_id,),
-        )
-        updated = conn.execute(
-            "UPDATE agent_sessions SET state = ? WHERE session_id = ? AND state = ?",
-            (
-                AgentSessionState.REPLACED.value,
-                old_session.session_id,
-                AgentSessionState.ACTIVE.value,
-            ),
-        ).rowcount
-        if updated != 1:
-            raise QueueConflictError("old session changed before replacement fence")
-        conn.execute(
-            "INSERT INTO agent_session_tombstones(session_id, state) VALUES (?, ?)",
-            (old_session.session_id, AgentSessionState.REPLACED.value),
-        )
-        decided_at = daemon._accepted_time(conn)  # type: ignore[attr-defined]
-        result = _replacement_result(
-            request=request,
-            old_session_id=old_session.session_id,
-            successor_session_id=None,
-            state="decision",
-            readiness="withheld",
-            withholding_reason="successor_registration_required",
-            projection=durable_projection,
-        )
-        projection_json = _canonical_json(durable_projection)
-        conn.execute(
-            "INSERT INTO session_replacements("
-            "operation_id, principal_id, request_json, request_digest, agent_id, "
-            "old_session_id, successor_session_id, state, readiness, "
-            "withholding_reason, decision_projection_json, "
-            "decision_projection_digest, required_claim_ids_json, "
-            "observed_claim_ids_json, successor_observation_digest, "
-            "readiness_projection_digest, result_json, decided_at, ready_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, NULL, 'decision', 'withheld', ?, ?, ?, "
-            "?, '[]', NULL, NULL, ?, ?, NULL)",
-            (
-                request.operation_id,
-                principal.subject,
-                encoded,
-                digest,
-                request.agent_id,
-                old_session.session_id,
-                "successor_registration_required",
-                projection_json,
-                hashlib.sha256(projection_json.encode("utf-8")).hexdigest(),
-                json.dumps(projection.required_claim_ids, separators=(",", ":")),
-                _canonical_json(result),
-                decided_at,
-            ),
-        )
-        conn.commit()
-    daemon._poll_waiters.notify(old_session.session_id)
-    return freeze_plain_data(result, path="session replacement receipt")
+        daemon._poll_waiters.notify(old_session.session_id)
+        return freeze_plain_data(result, path="session replacement receipt")
 
 
 def _replacement_replay(
@@ -5845,6 +5798,118 @@ def initialize_agent_session_schema(
         """)
 
 
+def _retain_output_chunk(row, transfer_id, offset, data, final):
+    """Publish replayable exact bytes before recording transfer progress."""
+    descriptor = _RemoteOutputArtifact.from_dict(json.loads(str(row["descriptor_json"])))
+    target = Path(str(row["private_path"]))
+
+    def publish_pair():
+        if descriptor.preparation_report_transfer is not None:
+            from ._preparation_report_transfer import publish
+            publish(descriptor, target)
+
+    received, size = int(row["received_bytes"]), int(row["size_bytes"])
+    if bool(row["finalized"]) or _published_file_matches(target, size_bytes=size, digest=str(row["digest"])):
+        if offset + len(data) > size:
+            raise QueueConflictError("output replay exceeds durable content")
+        if _read_regular_file_range(target, offset, len(data)) != data:
+            raise QueueConflictError("output replay conflicts with durable bytes")
+        publish_pair()
+        return size, True
+    staging = target.with_name(f".{transfer_id}.part")
+    received = _append_exact_chunk(staging, offset, received, data)
+    if received > size:
+        raise QueueConflictError("remote output exceeds declared size")
+    should_finalize = final or received == size
+    if should_finalize:
+        if received != size or _file_digest(staging) != str(row["digest"]):
+            raise QueueConflictError("remote output bytes do not match their manifest")
+        _publish_staged_file(staging, target)
+        publish_pair()
+    return received, should_finalize
+
+
+def _prepare_target_delivery_inputs(config, epoch, session_id, request, input_paths, encoded, *, replay, reference_json):
+    """Capture and retain input bytes before any control write transaction."""
+    from .shared_execution import assignment_scope
+    if assignment_scope(request.fingerprint) is not None and not replay:
+        from ._shared_assignment import publish, require_root
+        root_id, roots = config.assignment_payload_root_id, config.coordinator_shared_roots
+        require_root(root_id, roots, request.profile)
+        reference_json = _canonical_json(publish(encoded, request, root_id=root_id, roots=roots,
+                                                session_id=session_id, issuer_epoch=epoch))
+    retained = []
+    for item in request.inputs:
+        if shared_binding(item.metadata) is not None:
+            from ._shared_publication import resolve_input
+            if not config.coordinator_shared_roots:
+                raise QueueConflictError("coordinator shared mapping is unavailable")
+            target = resolve_input(item, config.coordinator_shared_roots)
+        else:
+            target = config.coordinator_root / "remote-relay" / request.assignment_id / "inputs" / item.transfer_id
+            source = target if replay else Path(input_paths[item.transfer_id])
+            if source.is_symlink():
+                raise QueueServiceError("targeted remote input must be a regular file")
+            try:
+                data = _read_regular_file_bytes(source.resolve(strict=True))
+            except (OSError, QueueConflictError) as exc:
+                if replay:
+                    raise QueueConflictError("targeted delivery input bytes are unavailable") from exc
+                raise QueueServiceError("targeted remote input must be a regular file") from exc
+            if len(data) != item.size_bytes or hashlib.sha256(data).hexdigest() != item.digest:
+                raise QueueConflictError("targeted delivery input bytes conflict with durable state" if replay
+                                         else "targeted remote input changed before durable relay")
+            if not replay:
+                _atomic_regular_file(target, data)
+        retained.append((request.assignment_id, "input", item.transfer_id, item.logical_name,
+                         item.digest, item.size_bytes, str(target), item.size_bytes, 1,
+                         _canonical_json(item.to_dict())))
+    return retained, reference_json
+
+
+def _require_target_session(daemon, conn, session_id, request):
+    session = _session_from_row(
+        conn.execute(
+            "SELECT * FROM agent_sessions WHERE session_id = ?", (session_id,)
+        ).fetchone(),
+        daemon._require_started(),  # type: ignore[attr-defined]
+    )
+    if (
+        session.state is not AgentSessionState.ACTIVE
+        or session.coordinator_epoch != daemon._epoch
+    ):  # type: ignore[attr-defined]
+        raise QueueConflictError("targeted delivery session is stale")
+    from .preparation import (
+        PREPARATION_INPUT_CAPABILITY,
+        PREPARATION_STAGED_INPUT_CAPABILITY,
+        StagedInputReceipt,
+    )
+
+    from .shared_execution import SHARED_EXECUTION_CAPABILITY, assignment_scope
+    if assignment_scope(request.fingerprint) is not None and SHARED_EXECUTION_CAPABILITY not in session.capabilities:
+        raise QueueServiceError("agent session lacks shared-execution-v1")
+    preparation = request.preparation_input
+    if preparation is not None:
+        supported = (
+            PREPARATION_STAGED_INPUT_CAPABILITY in session.capabilities
+            if isinstance(preparation.input_receipt, StagedInputReceipt)
+            else bool(
+                {
+                    PREPARATION_INPUT_CAPABILITY,
+                    PREPARATION_STAGED_INPUT_CAPABILITY,
+                }.intersection(session.capabilities)
+            )
+        )
+        if not supported:
+            required = (
+                PREPARATION_STAGED_INPUT_CAPABILITY
+                if isinstance(preparation.input_receipt, StagedInputReceipt)
+                else PREPARATION_INPUT_CAPABILITY
+            )
+            raise QueueServiceError(f"agent session lacks {required}")
+    return session
+
+
 def _target_remote_delivery(
     daemon: "LocalDaemon",
     *,
@@ -5871,47 +5936,23 @@ def _target_remote_delivery(
     shared = assignment_scope(request.fingerprint) is not None
     if not shared and len(encoded.encode("utf-8")) > _MAX_REMOTE_WIRE_VALUE_BYTES:
         raise QueueServiceError("targeted delivery request is too large")
-    with daemon._state_guard(), daemon._connection() as conn:  # type: ignore[attr-defined]
+    with daemon._state_guard(), daemon._connection() as conn:
+        config, epoch = daemon.config, daemon._epoch
+        _require_target_session(daemon, conn, session_id, request)
+    with daemon._connection() as conn:
+        existing = conn.execute("SELECT reference_json FROM agent_deliveries WHERE assignment_id = ?", (request.assignment_id,)).fetchone()
+    with phase("scheduling_preparation"):
+        retained_inputs, reference_json = _prepare_target_delivery_inputs(
+            config, epoch, session_id, request, input_paths, encoded,
+            replay=existing is not None,
+            reference_json=None if existing is None else existing["reference_json"],
+        )
+    prepared_paths = {str(item[2]): Path(str(item[6])) for item in retained_inputs}
+    with daemon._state_guard(), daemon._connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        session = _session_from_row(
-            conn.execute(
-                "SELECT * FROM agent_sessions WHERE session_id = ?", (session_id,)
-            ).fetchone(),
-            daemon._require_started(),  # type: ignore[attr-defined]
-        )
-        if (
-            session.state is not AgentSessionState.ACTIVE
-            or session.coordinator_epoch != daemon._epoch
-        ):  # type: ignore[attr-defined]
-            raise QueueConflictError("targeted delivery session is stale")
-        from .preparation import (
-            PREPARATION_INPUT_CAPABILITY,
-            PREPARATION_STAGED_INPUT_CAPABILITY,
-            StagedInputReceipt,
-        )
-
-        from .shared_execution import SHARED_EXECUTION_CAPABILITY, assignment_scope
-        if assignment_scope(request.fingerprint) is not None and SHARED_EXECUTION_CAPABILITY not in session.capabilities:
-            raise QueueServiceError("agent session lacks shared-execution-v1")
-        preparation = request.preparation_input
-        if preparation is not None:
-            supported = (
-                PREPARATION_STAGED_INPUT_CAPABILITY in session.capabilities
-                if isinstance(preparation.input_receipt, StagedInputReceipt)
-                else bool(
-                    {
-                        PREPARATION_INPUT_CAPABILITY,
-                        PREPARATION_STAGED_INPUT_CAPABILITY,
-                    }.intersection(session.capabilities)
-                )
-            )
-            if not supported:
-                required = (
-                    PREPARATION_STAGED_INPUT_CAPABILITY
-                    if isinstance(preparation.input_receipt, StagedInputReceipt)
-                    else PREPARATION_INPUT_CAPABILITY
-                )
-                raise QueueServiceError(f"agent session lacks {required}")
+        if daemon.config is not config or daemon._epoch != epoch:
+            raise QueueConflictError("targeted delivery authority changed during preparation")
+        session = _require_target_session(daemon, conn, session_id, request)
         prior = conn.execute(
             "SELECT request_json, session_id, availability_revision, coordinator_epoch "
             "FROM agent_deliveries WHERE assignment_id = ?",
@@ -5962,11 +6003,7 @@ def _target_remote_delivery(
             for item in request.inputs:
                 row = transfer_rows[item.transfer_id]
                 if shared_binding(item.metadata) is not None:
-                    from ._shared_publication import resolve_input
-                    roots = daemon.config.coordinator_shared_roots
-                    if not roots:
-                        raise QueueConflictError("coordinator shared mapping is unavailable")
-                    source = resolve_input(item, roots)
+                    source = prepared_paths[item.transfer_id]
                     if str(row["private_path"]) != str(source) or str(row["descriptor_json"]) != _canonical_json(item.to_dict()) or not row["finalized"]:
                         raise QueueConflictError("shared input retention replay conflicts")
                     continue
@@ -5988,19 +6025,6 @@ def _target_remote_delivery(
                 ):
                     raise QueueConflictError(
                         "targeted delivery input retention conflicts"
-                    )
-                try:
-                    retained_data = _read_regular_file_bytes(target)
-                except QueueConflictError as exc:
-                    raise QueueConflictError(
-                        "targeted delivery input bytes are unavailable"
-                    ) from exc
-                if (
-                    len(retained_data) != item.size_bytes
-                    or hashlib.sha256(retained_data).hexdigest() != item.digest
-                ):
-                    raise QueueConflictError(
-                        "targeted delivery input bytes conflict with durable state"
                     )
             coverage = {
                 str(row["reference_class"])
@@ -6050,71 +6074,17 @@ def _target_remote_delivery(
             raise QueueConflictError(
                 "targeted delivery resident profile is not in the current offer"
             )
-        reference_json = None
+        if action_attempt_cancelled(conn, run_uri, request.attempt_id):
+            raise QueueConflictError("targeted delivery run is cancelling")
         if shared:
-            from ._shared_assignment import CAPABILITY, publish, require_root
+            from ._shared_assignment import CAPABILITY
             if CAPABILITY not in session.capabilities:
                 raise QueueServiceError("agent session lacks shared-assignment-reference-v1")
-            root_id = daemon.config.assignment_payload_root_id
-            roots = daemon.config.coordinator_shared_roots
-            require_root(root_id, roots, request.profile)
+            root_id = config.assignment_payload_root_id
             bound = conn.execute("SELECT value FROM root_metadata WHERE key = 'assignment_payload_root_id'").fetchone()
             if bound is not None and bound[0] != root_id:
                 raise QueueConflictError("assignment payload root conflicts with durable deployment binding")
             conn.execute("INSERT OR IGNORE INTO root_metadata(key, value) VALUES ('assignment_payload_root_id', ?)", (root_id,))
-            reference_json = _canonical_json(publish(encoded, request,
-                root_id=cast(str, root_id), roots=roots, session_id=session_id,
-                issuer_epoch=cast(str, daemon._epoch)))
-        retained_inputs: list[tuple[object, ...]] = []
-        for item in request.inputs:
-            if shared_binding(item.metadata) is not None:
-                from ._shared_publication import resolve_input
-                roots = daemon.config.coordinator_shared_roots
-                if not roots:
-                    raise QueueConflictError("coordinator shared mapping is unavailable")
-                source = resolve_input(item, roots)
-                retained_inputs.append((request.assignment_id, "input", item.transfer_id, item.logical_name,
-                    item.digest, item.size_bytes, str(source), item.size_bytes, 1, _canonical_json(item.to_dict())))
-                continue
-            unresolved_source = Path(input_paths[item.transfer_id])
-            if unresolved_source.is_symlink():
-                raise QueueServiceError("targeted remote input must be a regular file")
-            try:
-                source = unresolved_source.resolve(strict=True)
-                data = _read_regular_file_bytes(source)
-            except (OSError, QueueConflictError) as exc:
-                raise QueueServiceError(
-                    "targeted remote input must be a regular file"
-                ) from exc
-            if (
-                len(data) != item.size_bytes
-                or hashlib.sha256(data).hexdigest() != item.digest
-            ):
-                raise QueueConflictError(
-                    "targeted remote input changed before durable relay"
-                )
-            target = (
-                daemon.config.coordinator_root
-                / "remote-relay"
-                / request.assignment_id
-                / "inputs"
-                / item.transfer_id
-            )
-            _atomic_regular_file(target, data)
-            retained_inputs.append(
-                (
-                    request.assignment_id,
-                    "input",
-                    item.transfer_id,
-                    item.logical_name,
-                    item.digest,
-                    item.size_bytes,
-                    str(target),
-                    item.size_bytes,
-                    1,
-                    _canonical_json(item.to_dict()),
-                )
-            )
         conn.execute(
             "INSERT INTO remote_assignments(assignment_id, session_id, "
             "availability_revision, issuer_epoch, run_uri, stage_work_id, "

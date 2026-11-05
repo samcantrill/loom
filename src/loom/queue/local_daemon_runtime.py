@@ -518,7 +518,7 @@ def load_managed_local_runtime_record(
             "managed-local admission requires a fresh exact runtime record"
         )
     try:
-        data = json_loads(path.read_text(encoding="utf-8"), path=str(path))
+        data = json_loads(store._read_document_bytes(path).decode("utf-8"), path=str(path))
     except Exception as exc:
         raise QueueServiceError("managed-local runtime record is corrupt") from exc
     if (
@@ -556,17 +556,20 @@ def load_managed_local_runtime_record(
     digest = payload.pop("digest", None)
     if not isinstance(digest, str) or digest != _digest(payload):
         raise QueueServiceError("managed-local runtime record digest conflicts")
-    if "composition_manifest_ref" in payload:
-        try:
-            store._validate_composition_reference(run_uri, payload["composition_manifest_ref"])
-            store.read_composition_manifest(run_uri)
-        except Exception as exc:
-            raise QueueServiceError("managed composition reference is missing or changed") from exc
-    if "project_contracts_digest" in payload:
-        from loom.pipeline._project_contracts import prepared_contracts_digest
-        actual = prepared_contracts_digest(store, run_uri)
-        if actual is None or actual != payload["project_contracts_digest"]:
-            raise QueueServiceError("managed project report reference is missing or changed")
+    from ._phase_timing import phase
+
+    with phase("composition_provenance_validation"):
+        if "composition_manifest_ref" in payload:
+            try:
+                store._validate_composition_reference(run_uri, payload["composition_manifest_ref"])
+                store.read_composition_manifest(run_uri)
+            except Exception as exc:
+                raise QueueServiceError("managed composition reference is missing or changed") from exc
+        if "project_contracts_digest" in payload:
+            from loom.pipeline._project_contracts import prepared_contracts_digest
+            actual = prepared_contracts_digest(store, run_uri)
+            if actual is None or actual != payload["project_contracts_digest"]:
+                raise QueueServiceError("managed project report reference is missing or changed")
     plan = payload.get("plan")
     if not isinstance(plan, Mapping) or payload.get("plan_digest") != _digest(plan):
         raise QueueServiceError("managed-local runtime record plan identity conflicts")

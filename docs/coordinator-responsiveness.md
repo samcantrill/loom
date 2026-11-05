@@ -57,40 +57,89 @@ transport saturation, runtime-record/provenance, pending-verification, superviso
 lost-response and reboot-containment checks. Run changed-file Ruff, relevant
 typing and diff checks. Physical deployment qualification is separate evidence.
 
-## Current evidence and remaining work
+## Implementation and validation
 
-Startup: develop is clean; original `/nas/home/can134/work/loom` contains unrelated
-changes and is preserved. Implementation is in progress; nothing has merged or
-been deployed. Independent implementation review is pending.
+The manager worktree preserves the unrelated dirty original checkout. The change
+uses a reconciliation guard, two read-only context workers and short state/control
+transactions. Scheduling preparation and external authority effects retain their
+existing operation identities; a final reservation gate rechecks epochs,
+cancellation, current sessions, offer freshness and replacement capacity. Local
+input bundles remain durable before reservation. Reload preparation retries when
+new scheduling references invalidate its snapshot.
 
-Implemented and locally checked:
+A 16-entry process-local cache captures and hashes every document consumed by the
+original loader. A hit avoids deep decoding, but still reads fresh bytes; misses
+validate and parse exactly those captured bytes. The cache drops document bytes
+after loading. Admission-filtered stage-work queries preserve deterministic order.
 
-- Real retained-context IO reproducer: original renewal and poll operations
-  timed out while the loader was blocked. Cancellation already recorded intent.
-- Two-slot context preparation, no queued backlog, fair admission rotation,
-  completion-only consumption, revision/epoch rejection, disposable shutdown.
-- Separate reconciliation guard, extracted read-only loader and explicit prepared
-  intent handoff. Durable authority binding still uses its retained identity.
-- State-lock wait/hold diagnostics defer nested reporting until lock release.
-- Admission-filtered stage-work query and eligibility refresh, with both store
-  variants and SQLite filtering before decoding covered.
+Agent input/output IO, publication verification, result commitment, release
+retention and recovery observations no longer hold the global state lock or a
+control write transaction. Per-assignment guards serialize replay. HTTP reserves
+capacity for control requests while bounding expensive handlers; actual completion,
+not a caller timeout, frees a slot. Existing agent bulk/control/poll lanes remain
+the execution architecture. Pending verification optimization `557cb75f` was
+already present in the implementation base and remains unchanged.
 
-Evidence on the initial implementation tree: 89 responsiveness/agent-session
-checks passed (the then-current four new cases plus all 85 session cases);
-28 orchestration checks passed; 16 selected responsiveness/production-daemon
-checks passed after adding stale-preparation and saturation coverage. The latter
-selection includes backoff, unhealthy-peer isolation, pending cancellation,
-independent runs, global priority and restart joining retained supervised work.
-Commands and disposable output are under `/tmp/loom-coordinator-responsiveness`.
-Changed-file Ruff and Pyright passed (zero errors/warnings); `git diff --check`
-passed.
+Evidence (targeted selections; not a full-suite claim):
 
-Remaining implementation is substantial: remove the remaining broad state-lock
-sections around owner observation, authority, action verification and scheduling;
-retain short conditional transitions and lock ordering for renewal/publication,
-replacement/reload and start permits. Add all remaining timing boundaries and
-transport capacity protection. Implement captured-byte context caching and bound
-repeated background preparation rate as well as concurrent capacity. Complete
-ownership/race/recovery coverage, five-agent qualification and live retained-state
-upgrade/resumption, then independent review and merge. The passing context-loader
-reproducer alone does not establish responsiveness of other slow dependencies.
+- 139 reservation, remote-delivery/transfer/publication, shared-recovery and
+  responsiveness checks passed after the main lock split.
+- 103 agent-session and responsiveness checks passed after narrowing replacement
+  and offer-publication gates.
+- 35 checks passed for cancellation/reload during blocked worker preparation,
+  renewal during replacement observation, retained preparation reload and SLURM
+  reservations.
+- Seven integration checks passed for reboot containment, shared recovery and
+  retry, mixed-route SLURM execution, and exact local observer recovery.
+- Fourteen additional preparation/publication checks passed for cancellation,
+  target reuse, local-file graphs, report projection and SLURM targets.
+- Cache-specific validation: 47 checks passed across cache invalidation,
+  LocalRunStore, production context loading and preparation contracts.
+- Changed-source typing and Ruff passed. The existing transport test module has
+  14 typing errors also reproduced from base `19f6a5e5`; these are not new errors.
+- The existing malformed-pipeline report fixture fails on both base `19f6a5e5`
+  and this branch because it mutates the obsolete `composition.resolved` field.
+  Its injected producer raises KeyError before reaching the intended report
+  validation. Other affected preparation cases are selected separately.
+
+Five-agent qualification used five independent TLS identities, journals and real
+resident supervisors on this host, with five 33,078,463-byte composition manifests.
+Two blocked context reads occupied both preparation slots for 31.5 seconds. Four
+agents continued renewal; the fifth deliberately stopped renewal to prove that
+expiry cannot release its running assignment. Cancellation of both blocked
+admissions completed while their underlying reads still occupied the slots.
+
+| Measurement | Result |
+| --- | --- |
+| Normal renewal p99 (177 samples) | 0.764 s |
+| Delayed-work renewal p99 (823 samples) | 0.050 s |
+| Two cancellation acceptances | 0.016 s |
+| Peak RSS growth during delay | 2,056,192 bytes |
+| Final RSS growth from delay baseline | 8,511,488 bytes |
+| Preparation operations pending during saturation | Exactly 2 |
+| Scientific job launches and authoritative commits | Exactly 1 per job |
+
+Lost renewal replies replayed the same receipt without extending expiry again.
+A lost commit reply followed by agent-application restart resumed the same
+supervisor and durable assignment; every job retained exactly one launch and
+one authoritative attempt/commit. This qualifies coordinator responsiveness on
+this machine, not fleet GPU, reboot or network failure behavior. The ordinary
+30-second offer lifetime was preserved.
+
+Reproduce the load qualification with the locked Python 3.12 development
+environment and `pytest -q -s tests/integration/queue/test_coordinator_responsiveness.py`.
+Use a short unique `/tmp` basetemp: native Unix socket paths have a length limit.
+Disposable test artifacts and logs are task-owned under `/tmp`; no deployment may
+depend on them.
+
+## Delivery state
+
+Final affected-consumer selection passed 276 checks, including the source-owner
+unit suites, cache, orchestration, SLURM integration and both TLS saturation
+regressions. Independent review is pending. Nothing
+has merged or been deployed. After those gates, merge to `develop` and synchronize
+the clean control checkout. Build a durable release in the configured fleet
+release location, perform its retained-state upgrade, and resume the existing
+OMIT MMPD and PURE operations without changing native roots or submission IDs.
+Record the final PR, installed release, retained operation identities and outcome
+here; qualification artifacts remain disposable.

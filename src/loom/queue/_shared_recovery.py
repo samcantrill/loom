@@ -450,6 +450,11 @@ def retain_released(
             "recovery seal requires positive provider release proof"
         )
     ref = seal(request, roots, agent_id=agent_id, fence=row["fence"])
+    retain_seal(conn, request, ref)
+
+
+def retain_seal(conn: Any, request: Any, ref: Mapping[str, Any] | None) -> None:
+    """Retain an already sealed reference in the caller's short transaction."""
     if ref is None:
         return
     data = encoded(ref).decode()
