@@ -18,6 +18,19 @@ the submitted container capability. Configuration capture remains a coordinator
 operation; composition and scientific input inspection run in the allocation.
 See [Slurm execution](slurm.md) for bootstrap, image and shared-artifact contracts.
 
+## Executable And Diagnostic Configuration
+
+Preparation binds local placement, shared roots and submitted-container execution
+against the resolved pipeline. Diagnostic configuration is a separate view: it
+can retain references such as `pipeline: ${matrix.pipeline}`, interpolated stage
+lists or entries, and redacted fingerprints. Binding preserves these opaque
+values rather than expanding them from private execution data. Literal diagnostic
+stage mappings retain their original positions and receive binding annotations
+only where the corresponding fields are absent or literal mappings. Missing
+pipeline or stage structure is never reconstructed from the resolved graph.
+Executable validation and protected-scope checks are unchanged; diagnostic
+annotations are not execution authority.
+
 ## Select Inputs And An Existing Environment
 
 Write configuration with your editor or project tooling into a directory the

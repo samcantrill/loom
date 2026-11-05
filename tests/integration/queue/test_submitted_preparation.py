@@ -23,7 +23,7 @@ from tests.integration.queue.test_submitted_container_agents import _fixture
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
 
-def _run(tmp_path, monkeypatch, *, stage_update=None, selected_inputs=False, slurm=False):
+def _run(tmp_path, monkeypatch, *, stage_update=None, selected_inputs=False, slurm=False, configuration_update=None):
     service = _service(tmp_path)
     policy, execution, _ = _fixture(tmp_path)
     if selected_inputs:
@@ -53,6 +53,11 @@ def _run(tmp_path, monkeypatch, *, stage_update=None, selected_inputs=False, slu
         path = tmp_path / "projects/pipeline.yaml"
         configuration = json.loads(path.read_text())
         configuration["pipeline"]["stages"][0].update(stage_update)
+        path.write_text(json.dumps(configuration))
+    if configuration_update is not None:
+        path = tmp_path / "projects/pipeline.yaml"
+        configuration = json.loads(path.read_text())
+        configuration_update(configuration)
         path.write_text(json.dumps(configuration))
     request = PrepareRunRequest("submitted", "target", PreparationSource("shared", "projects", ".", ("pipeline.yaml",)),
                                 "pipeline.yaml", "containers", execution=execution)
@@ -199,3 +204,52 @@ def test_submitted_slurm_preparation_preserves_route_and_requires_matching_polic
     with pytest.raises(QueueServiceError, match="container policy does not satisfy"):
         prepare_managed_run(wrong, composed, "wrong-slurm-workload", execution_requirements=requirements)
     assert not (service.daemon.run_store_root / "wrong-slurm-workload").exists()
+
+
+@pytest.mark.parametrize("selected_inputs", [False, True])
+@pytest.mark.parametrize("shape", ["pipeline", "stages", "stage", "fingerprint", "literal"])
+def test_submitted_preparation_preserves_diagnostic_interpolations(tmp_path, monkeypatch, selected_inputs, shape):
+    from loom.queue.shared_execution import SHARED_EXECUTION_SCOPE
+
+    def configure(config):
+        pipeline = config["pipeline"]
+        stage = pipeline["stages"][0]
+        stage["fingerprint"] = {"api_token": "private-fixture-value"}
+        if shape == "pipeline":
+            config["matrix"] = {"pipeline": pipeline}
+            config["pipeline"] = "${matrix.pipeline}"
+        elif shape == "stages":
+            config["matrix"] = {"stages": pipeline["stages"]}
+            pipeline["stages"] = "${matrix.stages}"
+        elif shape == "stage":
+            config["matrix"] = {"stage": stage}
+            pipeline["stages"] = ["${matrix.stage}"]
+        elif shape == "fingerprint":
+            config["secret_fingerprint"] = stage["fingerprint"]
+            stage["fingerprint"] = "${secret_fingerprint}"
+
+    _, binding, report = _run(tmp_path, monkeypatch, selected_inputs=selected_inputs,
+                              configuration_update=configure)
+    composed, requirements, preflight = decode_preparation_report(report, expected=binding)
+    assert preflight.status.value == "PASS"
+    resolved = cast(Any, composed).resolved["pipeline"]["stages"][0]
+    assert resolved["fingerprint"]["api_token"] == "private-fixture-value"
+    assert SHARED_EXECUTION_SCOPE in resolved["fingerprint"]
+    execution, capability = submitted_binding(resolved["fingerprint"][SUBMITTED_EXECUTION_SCOPE])
+    assert execution == binding.execution
+    assert capability.requirement(execution) == requirements["produce"]
+    diagnostic = report["composition"]["redacted"]
+    assert "private-fixture-value" not in json.dumps(diagnostic)
+    if shape == "pipeline":
+        assert diagnostic["pipeline"] == "${matrix.pipeline}"
+    elif shape == "stages":
+        assert diagnostic["pipeline"]["stages"] == "${matrix.stages}"
+    elif shape == "stage":
+        assert diagnostic["pipeline"]["stages"] == ["${matrix.stage}"]
+    elif shape == "fingerprint":
+        assert diagnostic["pipeline"]["stages"][0]["fingerprint"] == "${secret_fingerprint}"
+    else:
+        fingerprint = diagnostic["pipeline"]["stages"][0]["fingerprint"]
+        assert fingerprint["api_token"] == "***REDACTED***"
+        assert fingerprint[SHARED_EXECUTION_SCOPE] == resolved["fingerprint"][SHARED_EXECUTION_SCOPE]
+        assert fingerprint[SUBMITTED_EXECUTION_SCOPE] == resolved["fingerprint"][SUBMITTED_EXECUTION_SCOPE]
