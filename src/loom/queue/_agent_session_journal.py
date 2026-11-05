@@ -618,6 +618,55 @@ class _RemoteAgentJournal:
                 )
             conn.commit()
 
+    def poll_recovery_receipt(self, operation_id, selection):
+        """Read an exact completed operator repair without replaying transport."""
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT request_json, result_json FROM agent_mutation_intents "
+                "WHERE operation = 'poll_recovery' AND operation_id = ?",
+                (operation_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        retained = json.loads(row["request_json"])
+        if retained["selection"] != selection:
+            raise QueueConflictError("poll recovery operation selection changed")
+        return json.loads(row["result_json"])
+
+    def settle_rejected_poll(self, operation_id, selection, pending, proof):
+        """Atomically retain terminal no-delivery proof and settle its rejected variant."""
+        request = {"selection": selection, "pending": pending}
+        receipt = {"state": "reconciled", "operation_id": operation_id,
+                   "agent_root_id": self.root_id, "sequence": pending["sequence"],
+                   "session_id": pending["session_id"], "proof": proof}
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT request_digest, state, result_json FROM agent_poll_state_local "
+                "WHERE session_id = ? AND sequence = ?",
+                (pending["session_id"], pending["sequence"]),
+            ).fetchone()
+            if (row is None or row["request_digest"] != _canonical_digest(pending)
+                    or row["state"] not in {"PENDING", "FENCED"}
+                    or row["result_json"] is not None):
+                raise QueueConflictError("pending poll changed during recovery")
+            # RECONCILED consumes the sequence without claiming that the rejected
+            # request itself returned the predecessor's receipt.
+            conn.execute(
+                "UPDATE agent_poll_state_local SET state = 'RECONCILED' "
+                "WHERE session_id = ? AND sequence = ?",
+                (pending["session_id"], pending["sequence"]),
+            )
+            conn.execute(
+                "INSERT INTO agent_mutation_intents "
+                "(operation, operation_id, digest, request_json, result_json) "
+                "VALUES ('poll_recovery', ?, ?, ?, ?)",
+                (operation_id, _canonical_digest(request), _canonical_json(request),
+                 _canonical_json(receipt)),
+            )
+            conn.commit()
+        return receipt
+
     def persist_reconciled_session(self, session: AgentSession) -> None:
         if (
             session.agent_root_id != self.root_id

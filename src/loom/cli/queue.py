@@ -98,6 +98,16 @@ def register_subparser(
     reboot.add_argument("--operation-id", required=True)
     _add_output_options(reboot)
     reboot.set_defaults(handler=handle_agent_recover_reboot)
+    poll_recovery = queue_subparsers.add_parser(
+        "agent-recover-poll", help="reconcile a stopped agent's proven no-delivery poll conflict"
+    )
+    _add_role_config_arguments(poll_recovery)
+    poll_recovery.add_argument("--operation-id", required=True)
+    poll_recovery.add_argument("--sequence", type=int, required=True)
+    poll_recovery.add_argument("--committed-availability-revision", required=True)
+    poll_recovery.add_argument("--wait-timeout-ms", type=int, required=True)
+    _add_output_options(poll_recovery)
+    poll_recovery.set_defaults(handler=handle_agent_recover_poll)
     supervisor = queue_subparsers.add_parser(
         "agent-supervisor-serve", help="serve the initialized native supervisor independently"
     )
@@ -452,6 +462,22 @@ def handle_agent_recover_reboot(namespace: argparse.Namespace) -> int:
         )
         result = LocalDaemonAgentHttpClient.recover_reboot(
             service.client, namespace.operation_id
+        )
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result)
+
+
+def handle_agent_recover_poll(namespace: argparse.Namespace) -> int:
+    from loom.queue._poll_recovery import recover_wait_poll
+    from loom.queue.deployment import load_outbound_agent_service_config
+
+    try:
+        service = load_outbound_agent_service_config(namespace.config, env_file=namespace.env_file)
+        result = recover_wait_poll(
+            service.client, operation_id=namespace.operation_id, sequence=namespace.sequence,
+            committed_revision=namespace.committed_availability_revision,
+            wait_timeout_ms=namespace.wait_timeout_ms,
         )
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
@@ -1033,6 +1059,7 @@ __all__ = [
     "LOCAL_DAEMON_SCHEMA_VERSION",
     "handle_agent_init",
     "handle_agent_recover_reboot",
+    "handle_agent_recover_poll",
     "handle_agent_check",
     "handle_agent_serve",
     "handle_daemon_cancel",
