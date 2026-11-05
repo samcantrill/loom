@@ -2144,6 +2144,7 @@ def test_restart_recovers_rejected_next_poll_without_losing_queued_work(monkeypa
         _submit(case, "queued-through-rejection")
         if restart_coordinator:
             case.daemon.stop()
+            _eventually(lambda: not case.daemon._contexts.running())
             case.daemon.start()
         resume_poll_offset = len(polls)
         case.stop.clear()

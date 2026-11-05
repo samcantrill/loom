@@ -664,6 +664,29 @@ support only abandoned-epoch recovery need a deliberate coordinator restart or
 a compatible runtime; retirement never performs that restart itself.
 
 
+For an inspected same-sequence capacity-revision conflict, a stopped agent can
+reconcile only a coordinator-confirmed terminal **wait** (no assignment):
+
+```sh
+loom queue agent-recover-poll /protected/agent.json --env-file /protected/machine.env \
+  --operation-id repair-poll-001 --sequence 123 \
+  --committed-availability-revision availability-from-coordinator \
+  --wait-timeout-ms 5000 --format json
+```
+
+Use the actual retained sequence, timeout and coordinator revision; these values
+are not defaults. The command holds the native agent ownership lock, checks the
+coordinator identity, and requests the exact original receipt over authenticated
+transport. It refuses active, unavailable, assignment-bearing or conflicting
+receipts. It does not poll for work, start a supervisor, release claims, or
+rewrite the coordinator's receipt. The local sequence becomes reconciled rather
+than treating the rejected request as accepted; its completed repair receipt is
+committed in the same transaction. Repeat the same operation ID and arguments
+after a lost reply. Ordinary replay identity checks remain unchanged. Restart
+through the existing service manager and qualify fresh capacity before admitting
+work. This repairs the inspected state; it does not establish why it diverged.
+
+
 ### Agent-owned Slurm submission
 
 Install the complete protected ready-stage profile under the outbound agent's
