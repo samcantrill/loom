@@ -293,14 +293,13 @@ def inspect_coordinator_result_recovery(
                     raise ValueError("physical assignment lacks matching agent proof")
         with _readonly_root(root) as conn:
             preparations, children = _recoverable_preparations(conn, results)
-            if _retained_coordinator_mutations(conn, recoverable_preparations=preparations):
-                raise ValueError("coordinator mutation remains active")
             for table in ("agent_controls", "remote_assignment_controls"):
                 if conn.execute(
                     f"SELECT 1 FROM {table} WHERE state IN ('pending_delivery','applying') "
                     "OR acknowledged = 0 LIMIT 1"
                 ).fetchone():
                     raise ValueError("unresolved control")
+            cancellations = set(children)
             for admission_id, run_uri in conn.execute(
                 "SELECT admission_id, run_uri FROM managed_admissions WHERE cancellation_operation_id IS NOT NULL "
                 "AND state NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED')"
@@ -318,6 +317,23 @@ def inspect_coordinator_result_recovery(
                     for identity, state, code, acknowledged in assignments
                 ):
                     raise ValueError("cancellation remains active outside contained result cohort")
+                cancellations.add(admission_id)
+            # A bound run's public cancellation is a separate retained owner.
+            # Exempt only an already-applied run operation for the same proved
+            # admission; pending preparation/capture/publication still refuses.
+            cancellation_owners = frozenset(
+                operation_id for operation_id, admission_id, encoded in conn.execute(
+                    "SELECT p.operation_id, a.admission_id, p.result_json "
+                    "FROM preparation_operations p JOIN managed_admissions a "
+                    "ON a.queue_item_id = p.queue_item_id WHERE p.kind = 'run' "
+                    "AND p.state = 'applied' AND p.cancellation_requested = 1"
+                )
+                if admission_id in cancellations and json.loads(encoded).get("binding", True) is not None
+            )
+            if _retained_coordinator_mutations(
+                conn, recoverable_preparations=preparations | cancellation_owners,
+            ):
+                raise ValueError("coordinator mutation remains active")
             # Resident workers use an assignment-local run URI. The shared
             # authority identity is assignment/session/fence, not that URI.
             names = ("assignment_id", "session_id", "fence", "stage_name", "attempt")

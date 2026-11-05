@@ -550,7 +550,9 @@ cohort, before any target report or publication claim. Cancellation of that same
 preparation may remain pending. Cancellation of an ordinary admission may also
 recover when every outstanding assignment belongs to the proved successful
 cohort and each has an acknowledged `contained` cancellation receipt. Ordinary
-replay and cancellation still own final settlement. A missing result, unacknowledged
+replay and cancellation still own final settlement. Its public cancellation
+record may remain pending only when its already-applied run operation is bound
+to that same proved admission. A missing result, unacknowledged
 containment, or an unrelated cancellation refuses recovery.
 Input capture, target publication, admission
 retries and startup mutations refuse.

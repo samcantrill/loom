@@ -186,7 +186,9 @@ timeout, verification cache, new durable state or weaker payload validation.
 Deployment also needs a narrow extension of retained-result recovery: an ordinary
 cancelled admission can qualify only if every outstanding assignment belongs to
 the exact host-proved successful-result cohort and has an acknowledged native
-containment receipt. This supersedes the original blanket exclusion of ordinary
+containment receipt. The public cancellation record must refer to an
+already-applied run operation bound to that same admission; it cannot admit a
+pending preparation or target publication. This supersedes the original blanket exclusion of ordinary
 cancellations for this demonstrated case. Live workers, unproved/missing results,
 unresolved controls, unrelated cancellation, new cohort members, Slurm, capture
 and target publication remain excluded. Recovery preserves journals and results;
@@ -198,4 +200,9 @@ and affected native runtime-upgrade recovery cases. Tests advance the accepted
 clock beyond grant expiry during real TLS publication, prove a later expired
 request still refuses, and exercise cancellation after real worker success with
 native containment before result retention. Expand only for a failed check or
-another affected ownership boundary. Validation and independent review are pending.
+another affected ownership boundary. Fifteen selected checks passed, and normal
+result replay through actual replacement passed after narrowing an outdated
+metadata fault-injection fixture. The public cancelled-run replacement case
+exposed its separate parent cancellation owner; the bound-admission correction
+and affected recovery checks are in progress. Independent review passed on
+`e7030dca`; the correction requires targeted confirmation before merge.
