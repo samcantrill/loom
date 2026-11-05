@@ -55,21 +55,24 @@ def test_conflicting_poll_requires_terminal_wait_and_preserves_history(monkeypat
                 recover_wait_poll(case.config.client, **args)
         finally:
             owner.close()
+        # Submitted-container hosts carry explicit inventory. Recovery's
+        # authentication client must not inherit any execution selection.
+        repair_config = replace(case.config.client, resource_inventory=case.config.client.execution_inventory)
         before = _rows(case.agent_root / "control.sqlite", "SELECT * FROM agent_poll_state_local")
         with pytest.raises(QueueConflictError):
-            recover_wait_poll(case.config.client, **{**args, "committed_revision": "wrong-revision"})
+            recover_wait_poll(repair_config, **{**args, "committed_revision": "wrong-revision"})
         assert _rows(case.agent_root / "control.sqlite", "SELECT * FROM agent_poll_state_local") == before
         if outcome == "assignment":
             with pytest.raises(QueueConflictError, match="no-delivery"):
-                recover_wait_poll(case.config.client, **args)
+                recover_wait_poll(repair_config, **args)
             assert _rows(case.agent_root / "control.sqlite", "SELECT * FROM agent_poll_state_local") == before
             return
-        result = recover_wait_poll(case.config.client, **args)
+        result = recover_wait_poll(repair_config, **args)
         assert result["state"] == "reconciled"
         assert result["proof"] == {**receipt, "state": "committed"}
-        assert recover_wait_poll(case.config.client, **args) == result
+        assert recover_wait_poll(repair_config, **args) == result
         with pytest.raises(QueueConflictError, match="selection changed"):
-            recover_wait_poll(case.config.client, **{**args, "sequence": sequence + 1})
+            recover_wait_poll(repair_config, **{**args, "sequence": sequence + 1})
         owner = LocalDaemonAgentHttpClient(case.config.client)
         try:
             assert owner._require_journal().pending_poll() is None
