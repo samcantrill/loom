@@ -1,7 +1,6 @@
 """Explicit stopped-agent recovery of a proven no-delivery poll conflict."""
 from __future__ import annotations
 
-from dataclasses import replace
 from typing import cast
 
 from ._agent_session_journal import _RemoteAgentJournal
@@ -15,7 +14,7 @@ def recover_wait_poll(config, *, operation_id, sequence, committed_revision, wai
     the local transaction. No work is polled, no claims are released, and no
     supervisor is started. The completed receipt supports lost-reply replay.
     """
-    from .agent_session_transport import LocalDaemonAgentHttpClient
+    from .agent_session_transport import AgentTlsClientConfig, LocalDaemonAgentHttpClient
 
     if (not isinstance(operation_id, str) or not operation_id.strip()
             or not isinstance(committed_revision, str) or not committed_revision.strip()
@@ -42,8 +41,9 @@ def recover_wait_poll(config, *, operation_id, sequence, committed_revision, wai
             raise QueueConflictError("poll recovery requires the selected conflicting sequence")
         session = journal.session(cast(str, pending["session_id"]))
         # A transport-only client cannot initialize or own execution roots.
-        transport = replace(config, agent_root=None, resident_profiles=(),
-                            container_policies=(), slurm_profiles=())
+        transport = AgentTlsClientConfig(
+            config.url, config.server_ca_path, config.certificate_path, config.private_key_path,
+        )
         client = LocalDaemonAgentHttpClient(transport)
         try:
             handshake = client.handshake()
