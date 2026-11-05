@@ -3886,7 +3886,7 @@ class AgentSessionService:
                          authorization_revision=authorization_revision, report=report, encoded=encoded)
         with self._daemon._state_guard(), self._daemon._connection() as conn:
             row, request, agent_id, stamp = self._declaration_authority(
-                conn, session_id, assignment_id, **arguments)
+                conn, session_id, assignment_id, authorization_admitted=False, **arguments)
             if row["report_json"] is not None:
                 return freeze_plain_data(
                     {"assignment_id": assignment_id, "state": str(row["state"])},
