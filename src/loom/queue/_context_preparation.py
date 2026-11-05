@@ -62,7 +62,7 @@ class ContextPreparations:
             previous = self._next_load.get(admission.admission_id)
             if previous is not None and previous[:2] == (admission.revision, epochs) and now < previous[2]:
                 continue
-            future = self._workers.submit(copy_context().run, load, admission)
+            future = self._workers.submit(copy_context().run, _load_context, load, admission)
             self._pending[admission.admission_id] = PendingContext(admission, epochs, future)
             self._last_submitted = admission.admission_id
             future.add_done_callback(lambda _future: self._wake())
@@ -89,3 +89,13 @@ class ContextPreparations:
         # may finish after shutdown; no completion can authorize execution.
         self._workers.shutdown(wait=False, cancel_futures=True)
         self._next_load.clear()
+
+
+def _load_context(
+    load: Callable[[LocalDaemonAdmission], ManagedLocalIntent],
+    admission: LocalDaemonAdmission,
+) -> ManagedLocalIntent:
+    from ._phase_timing import reported_phases
+
+    with reported_phases("context_preparation", operation_id=admission.authority_operation_id):
+        return load(admission)

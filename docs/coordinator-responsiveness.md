@@ -1,7 +1,7 @@
 # Coordinator responsiveness implementation
 
 Worktree: `/nas/home/can134/work/loom-worktrees/coordinator-responsiveness`.
-Branch: `codex/coordinator-responsiveness`, based on `develop` at `19f6a5e5`.
+Branch: `codex/coordinator-responsiveness`, based on `develop` at `19f6a5e5`, with `b8db3e6b` integrated before landing.
 This is a focused maintenance change, not a numbered roadmap stage.
 
 ## Accepted scope
@@ -95,6 +95,11 @@ Evidence (targeted selections; not a full-suite claim):
   target reuse, local-file graphs, report projection and SLURM targets.
 - Cache-specific validation: 47 checks passed across cache invalidation,
   LocalRunStore, production context loading and preparation contracts.
+- Independent review identified a shared-publication fence still inside the state
+  lock and missing background timing collectors. Both were corrected; 133 selected
+  checks passed, including cancellation during blocked publication authority and
+  rejection/replay across concurrent scheduling reload. Background context and
+  scheduling spans reach the existing bounded diagnostic sink.
 - Changed-source typing and Ruff passed. The existing transport test module has
   14 typing errors also reproduced from base `19f6a5e5`; these are not new errors.
 - The existing malformed-pipeline report fixture fails on both base `19f6a5e5`

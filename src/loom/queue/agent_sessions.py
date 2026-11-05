@@ -3861,7 +3861,6 @@ class AgentSessionService:
                 raise QueueConflictError("shared publication report capability is missing")
             if not self._daemon.config.coordinator_shared_roots:
                 raise QueueConflictError("coordinator shared root mapping is unavailable")
-            self._remote_execution().remote_publication_fence(assignment_id, fence=fence)
         elif any(shared_binding(item.metadata) is not None for item in report.outputs):
             raise QueueConflictError("shared output was not admitted")
         if row["report_json"] is not None and str(row["report_json"]) != encoded:
@@ -3896,6 +3895,7 @@ class AgentSessionService:
 
         prepared = None
         if selected(request) is not None and report.status is StageStatus.SUCCEEDED:
+            self._remote_execution().remote_publication_fence(assignment_id, fence=fence)
             prepared = prepare_publication(request, report, roots, agent_id=agent_id, fence=fence)
         shared_outputs = None if prepared is None else accept_publication(prepared)
         with self._daemon._state_guard(), self._daemon._connection() as conn:

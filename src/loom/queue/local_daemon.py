@@ -2778,10 +2778,13 @@ class LocalDaemon:
         )
 
     def _serve(self) -> None:
+        from ._phase_timing import reported_phases
+
         while not self._stop.is_set():
             observed = self._wake.snapshot()
             try:
-                self.reconcile_once()
+                with reported_phases("reconciliation"):
+                    self.reconcile_once()
             except Exception:  # keep the durable owner alive and diagnosable
                 self._service_error = "reconciliation_unavailable"
             else:

@@ -3479,7 +3479,7 @@ def test_recovery_population_proof_while_its_driver_is_paused(monkeypatch, bound
             resume.set()
 
 
-@pytest.mark.parametrize("boundary", ["declaration", "commit"])
+@pytest.mark.parametrize("boundary", ["authority", "declaration", "commit"])
 def test_publication_rechecks_scheduling_authority_after_verification(monkeypatch, boundary):
     from dataclasses import replace
     from loom.queue import CoordinatorSchedulingReload
@@ -3490,7 +3490,7 @@ def test_publication_rechecks_scheduling_authority_after_verification(monkeypatc
     entered, unblock, refused = Event(), Event(), Event()
     original_prepare = _shared_publication.prepare_publication
     original_verify = AgentSessionService._coordinator_output_refs
-    operation = "declare_outputs" if boundary == "declaration" else "commit_result"
+    operation = "declare_outputs" if boundary in {"authority", "declaration"} else "commit_result"
     original_operation = getattr(AgentSessionService, operation)
     held = {}
 
@@ -3522,7 +3522,16 @@ def test_publication_rechecks_scheduling_authority_after_verification(monkeypatc
             raise
 
     monkeypatch.setattr(AgentSessionService, operation, observe)
-    if boundary == "declaration":
+    if boundary == "authority":
+        from loom.queue.local_daemon_execution import LocalDaemonExecution
+        original_fence = LocalDaemonExecution.remote_publication_fence
+
+        def fence(execution, assignment_id, **kwargs):
+            original_fence(execution, assignment_id, **kwargs)
+            pause(assignment_id)
+
+        monkeypatch.setattr(LocalDaemonExecution, "remote_publication_fence", fence)
+    elif boundary == "declaration":
         monkeypatch.setattr(_shared_publication, "prepare_publication", prepare)
     else:
         monkeypatch.setattr(AgentSessionService, "_coordinator_output_refs", staticmethod(verify))
@@ -3546,3 +3555,37 @@ def test_publication_rechecks_scheduling_authority_after_verification(monkeypatc
             assert case.client.wait("policy-change", timeout_seconds=30).state is LocalDaemonAdmissionState.SUCCEEDED
         finally:
             unblock.set()
+
+
+def test_shared_publication_authority_keeps_cancellation_responsive(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from itertools import repeat
+    from loom.queue import _phase_timing
+    from loom.queue.local_daemon_execution import LocalDaemonExecution
+
+    entered, unblock = Event(), Event()
+    original = LocalDaemonExecution.remote_publication_fence
+    diagnostics = []
+    monkeypatch.setattr(_phase_timing, "log_phases", diagnostics.append)
+    monkeypatch.setattr(_phase_timing, "_operation_samples", repeat(0))
+
+    def slow_authority(execution, assignment_id, **kwargs):
+        entered.set()
+        assert unblock.wait(30)
+        return original(execution, assignment_id, **kwargs)
+
+    monkeypatch.setattr(LocalDaemonExecution, "remote_publication_fence", slow_authority)
+    with _service(monkeypatch, shared=True) as case, ThreadPoolExecutor(max_workers=1) as pool:
+        try:
+            _submit(case, "cancel-publication")
+            assert entered.wait(20), case.failures
+            cancellation = pool.submit(case.client.cancel, "cancel-publication").result(2)
+            assert cancellation.cancellation_operation_id
+            assert not unblock.is_set()
+            actions = {span["action"] for item in diagnostics for span in item["spans"]}
+            assert {"reconciliation", "context_preparation", "execution_context_loading",
+                    "composition_provenance_validation", "scheduling_preparation",
+                    "scheduling_commit"} <= actions
+        finally:
+            unblock.set()
+        assert case.client.wait("cancel-publication", timeout_seconds=30).state is LocalDaemonAdmissionState.CANCELLED

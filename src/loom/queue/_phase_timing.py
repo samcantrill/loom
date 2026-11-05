@@ -131,20 +131,31 @@ def state_lock(lock: Any) -> Iterator[None]:
                 pass
 
 
-_request_samples = count()
+_operation_samples = count()
+
+
+@contextmanager
+def reported_phases(action: str, *, operation_id: str | None = None) -> Iterator[None]:
+    """Report slow operations and one in 64 ordinary operations after completion.
+
+    Each asynchronous owner installs its own collector; it never appends to a
+    request or reconciliation collector after that parent operation has returned.
+    """
+    timings = PhaseTimings()
+    start = monotonic()
+    try:
+        with observe_phases(timings.observe), phase(action, operation_id=operation_id):
+            yield
+    finally:
+        if monotonic() - start >= 1.0 or next(_operation_samples) % 64 == 0:
+            try:
+                log_phases({**timings.payload(), "operation_id": operation_id})
+            except Exception:
+                pass
 
 
 @contextmanager
 def request_phases() -> Iterator[None]:
-    """Report slow HTTP requests and one in 64 ordinary requests after dispatch."""
-    timings = PhaseTimings()
-    start = monotonic()
-    try:
-        with observe_phases(timings.observe), phase("request_dispatch"):
-            yield
-    finally:
-        if monotonic() - start >= 1.0 or next(_request_samples) % 64 == 0:
-            try:
-                log_phases(timings.payload())
-            except Exception:
-                pass
+    """Report bounded HTTP dispatch diagnostics after the handler returns."""
+    with reported_phases("request_dispatch"):
+        yield
