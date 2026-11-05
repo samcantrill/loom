@@ -204,5 +204,15 @@ another affected ownership boundary. Fifteen selected checks passed, and normal
 result replay through actual replacement passed after narrowing an outdated
 metadata fault-injection fixture. The public cancelled-run replacement case
 exposed its separate parent cancellation owner; the bound-admission correction
-and affected recovery checks are in progress. Independent review passed on
-`e7030dca`; the correction requires targeted confirmation before merge.
+passed all seven affected recovery checks on `a427ca3a`, including public
+cancelled-run replacement and cancelled-preparation candidate repair. Together
+with the unaffected earlier results, all 17 selected cases pass. Changed-source
+Pyright, changed-file Ruff and diff checks pass. Independent review passed on
+`e7030dca` and confirmed the bound-admission correction on `a427ca3a`.
+
+Immutable `loom-a427ca3a` was built from that reviewed source and passed offline
+installation checks. Its descriptor SHA-256 is
+`928b29ee72c24a4f8c00d169d0d262d14ae93315654a03873a799fdbe38693ce`.
+It supersedes the unactivated `loom-50079b52` candidate. The prepared native
+`responsiveness-release-recovery-20261105` operation selects this bundle and the
+verified image; deployment remains pending until the follow-up merges.
