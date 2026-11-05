@@ -579,6 +579,24 @@ different replay target refuse. The explicit successor repeats the normal
 qualification/replacement/replay sequence and remains resumable through the
 original operation ID; prior intents and receipts remain intact.
 
+If the already-bound agent declaration excludes a failed GPU but the coordinator
+still expects its former inventory, use `loom fleet operation repair-gpu-policy
+OPERATION --fleet FLEET --agent-id AGENT`. The active runtime successor must have
+acknowledged every replacement; admission must remain closed and settled, with
+no authorized or begun qualification checks. This action accepts only the
+agent's bound explicit NVIDIA UUID allowlist as a nonempty strict subset of its
+coordinator rule. It cannot add devices, change retained device descriptions,
+identities, credentials, permissions, or other configuration. Both the host and
+coordinator must support `quiescent-agent-gpu-policy-contraction-v1`.
+
+The host retains the before/after declaration and a conditional scheduling
+reload. The coordinator checks the exact maintenance owner, intent, revision and
+settlement again at activation. Existing source-publication receipts reconcile
+lost replies; original upgrade intents remain immutable. Continue the original
+upgrade after repair, including when it has a runtime successor. This repair
+does not change the agent's selection, mask unknown GPU occupancy, establish
+hardware health, or bypass the ordinary CPU/storage/GPU qualification checks.
+
 The operation retains that exact cohort before any stop. Native stop and locked
 replacement recheck it; a later new or changed result cannot join the operation.
 This is recovery eligibility, **not settlement**: claims and journals remain
