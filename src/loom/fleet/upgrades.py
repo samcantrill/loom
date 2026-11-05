@@ -477,10 +477,21 @@ class _Upgrade(sshops._Operation):
                 **row,
                 "action": action,
                 "release": self.intent["release"],
-                "expected_declaration": digest(self.intent["declarations"][name]),
+                "expected_declaration": digest(self.accepted_declaration(name)),
                 **values,
             },
         )
+
+    def accepted_declaration(self, name):
+        path = Path(self.intent["hosts"][name]["config"])
+        updates_path = self.directory / "accepted-inputs.json"
+        updates = read(updates_path) if updates_path.exists() else {}
+        if str(path) not in updates:
+            return self.intent["declarations"][name]
+        if sshops._file_hash(path) != updates[str(path)]:
+            raise QueueConflictError("accepted role publication changed")
+        environment = self.intent["hosts"][name]["env_file"]
+        return sshops._load_protected_config(path, env_file=None if environment is None else Path(environment))[2]
 
     def probes(self):
         requests, retained = {}, {}
@@ -493,7 +504,7 @@ class _Upgrade(sshops._Operation):
             else:
                 request.update(
                     action="upgrade-probe",
-                    expected_declaration=digest(self.intent["declarations"][name]),
+                    expected_declaration=digest(self.accepted_declaration(name)),
                     required_capabilities=list(REQUIRED_CAPABILITIES),
                     descriptor_name=Path(self.intent["target_path"]).name,
                     images=None,
@@ -1252,6 +1263,7 @@ def upgrade(
     new_control=None,
     defer_agents=None,
     defer_reason=None,
+    repair_agent_id=None,
     progress: ProgressSink | None = None,
 ):
     """Preview/apply or continue an immutable upgrade without cancelling work.
@@ -1311,6 +1323,7 @@ def _upgrade(
     new_control=None,
     defer_agents=None,
     defer_reason=None,
+    repair_agent_id=None,
     observation,
 ):
     """Preview/apply or continue one immutable service upgrade; never cancel work."""
@@ -1471,6 +1484,9 @@ def _upgrade(
                 _bind_deferred_checks(operation, defer_agents, defer_reason)
             if (directory / "aborted.json").exists():
                 result = {"state": "aborted"}
+            elif action == "repair-gpu-policy":
+                from .gpu_policy_repair import repair
+                result = repair(operation, agent_id=repair_agent_id)
             elif action == "repair-runtime-candidate":
                 from .runtime_candidate_repair import repair_candidate
                 result = repair_candidate(operation, runtime_release=runtime_release)

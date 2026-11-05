@@ -117,7 +117,12 @@ class LocalDaemonAdmissionState(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class CoordinatorSchedulingReload:
-    """Inert request to read and install protected coordinator-local config."""
+    """Inert request to read and install protected coordinator-local config.
+
+    Policy transition modes carry the exact maintenance owner, intent digest
+    and gate revision. ``gpu_policy_contraction`` permits only nonempty GPU
+    inventory subsets while preserving identities and other configuration.
+    """
 
     operation_id: str
     expected_scheduling_epoch: str
@@ -125,6 +130,7 @@ class CoordinatorSchedulingReload:
     retirement: Mapping[str, PlainData] | None = None
     container_policy_addition: Mapping[str, PlainData] | None = None
     publication_budget_increase: Mapping[str, PlainData] | None = None
+    gpu_policy_contraction: Mapping[str, PlainData] | None = None
 
     def __post_init__(self) -> None:
         for value, name in (
@@ -142,10 +148,10 @@ class CoordinatorSchedulingReload:
                 "scheduling reload reason must be 1..512 characters"
             )
 
-        modes = (self.retirement, self.container_policy_addition, self.publication_budget_increase)
+        modes = (self.retirement, self.container_policy_addition, self.publication_budget_increase, self.gpu_policy_contraction)
         if sum(value is not None for value in modes) > 1:
-            raise QueueServiceError("policy addition, retirement and budget increase are mutually exclusive")
-        for name in ("retirement", "container_policy_addition", "publication_budget_increase"):
+            raise QueueServiceError("coordinator policy transition modes are mutually exclusive")
+        for name in ("retirement", "container_policy_addition", "publication_budget_increase", "gpu_policy_contraction"):
             value = getattr(self, name)
             if value is None:
                 continue
@@ -168,6 +174,8 @@ class CoordinatorSchedulingReload:
                if self.container_policy_addition is not None else {}),
             **({"publication_budget_increase": thaw_plain_data(self.publication_budget_increase)}
                if self.publication_budget_increase is not None else {}),
+            **({"gpu_policy_contraction": thaw_plain_data(self.gpu_policy_contraction)}
+               if self.gpu_policy_contraction is not None else {}),
         }
 
     @classmethod
@@ -176,7 +184,8 @@ class CoordinatorSchedulingReload:
             data,
             {"operation_id", "expected_scheduling_epoch", "reason"} | ({"retirement"} if "retirement" in data else set())
             | ({"container_policy_addition"} if "container_policy_addition" in data else set())
-            | ({"publication_budget_increase"} if "publication_budget_increase" in data else set()),
+            | ({"publication_budget_increase"} if "publication_budget_increase" in data else set())
+            | ({"gpu_policy_contraction"} if "gpu_policy_contraction" in data else set()),
             "coordinator scheduling reload",
         )
         return cls(
@@ -188,6 +197,7 @@ class CoordinatorSchedulingReload:
             retirement=cast(Mapping[str, PlainData] | None, data.get("retirement")),
             container_policy_addition=cast(Mapping[str, PlainData] | None, data.get("container_policy_addition")),
             publication_budget_increase=cast(Mapping[str, PlainData] | None, data.get("publication_budget_increase")),
+            gpu_policy_contraction=cast(Mapping[str, PlainData] | None, data.get("gpu_policy_contraction")),
         )
 
 
@@ -3086,7 +3096,8 @@ class LocalDaemon:
                 replacement = loader()
                 self._validate_scheduling_replacement(replacement, retirement=request.retirement,
                                                       container_policy_addition=request.container_policy_addition,
-                                                      publication_budget_increase=request.publication_budget_increase)
+                                                      publication_budget_increase=request.publication_budget_increase,
+                                                      gpu_policy_contraction=request.gpu_policy_contraction)
                 candidate_fingerprint = _scheduling_fingerprint(replacement)
                 if (
                     replacement_fingerprint is not None
@@ -3142,6 +3153,9 @@ class LocalDaemon:
                         continue
                     if self._execution is not execution or request.expected_scheduling_epoch != self._scheduling_epoch:
                         raise QueueConflictError("scheduling reload epoch changed during preparation")
+                    if request.gpu_policy_contraction is not None:
+                        from ._agent_gpu_policy import validate_coordinator
+                        validate_coordinator(self, replacement, request.gpu_policy_contraction)
                     if replacement_fingerprint is None:
                         self._record_scheduling_reload_intent(
                             operation_id=request.operation_id,
@@ -3650,7 +3664,7 @@ class LocalDaemon:
             "active_configuration_revision": str(next_revision),
         }
 
-    def _validate_scheduling_replacement(self, replacement: LocalDaemonConfig, *, retirement=None, container_policy_addition=None, publication_budget_increase=None) -> None:
+    def _validate_scheduling_replacement(self, replacement: LocalDaemonConfig, *, retirement=None, container_policy_addition=None, publication_budget_increase=None, gpu_policy_contraction=None) -> None:
         if not isinstance(replacement, LocalDaemonConfig):
             raise QueueServiceError("trusted scheduling configuration is invalid")
         if (
@@ -3681,6 +3695,10 @@ class LocalDaemon:
         replacement_roots = replacement.coordinator_shared_roots
         from .shared_execution import _readonly_root_relocations
 
+        if gpu_policy_contraction is not None:
+            from ._agent_gpu_policy import validate_coordinator
+            validate_coordinator(self, replacement, gpu_policy_contraction)
+            return
         if publication_budget_increase is not None:
             self._validate_coordinator_retirement(replacement, publication_budget_increase, budget_increase=True)
             return
