@@ -3824,13 +3824,15 @@ class AgentSessionService:
         return rule, (revision, self._daemon._epoch or "", self._daemon._scheduling_epoch)
 
     def _declaration_authority(self, conn, session_id, assignment_id, *, fence,
-                               authorization_id, authorization_revision, report, encoded):
+                               authorization_id, authorization_revision, report, encoded,
+                               authorization_admitted=False):
         rule, stamp = self._result_authority("output_manifest")
         revision, epoch, _ = stamp
         self._require_remote_session(conn, rule, revision, session_id, epoch)
         row = self._require_remote_assignment(conn, session_id, assignment_id)
         self._require_transfer_authorization(conn, assignment_id, authorization_id,
-                                             authorization_revision, epoch)
+                                             authorization_revision, epoch,
+                                             check_expiry=not authorization_admitted)
         if row["fence"] != fence or str(row["state"]) not in {
             "GRANTED", "RUNNING", "RESULT_RETAINED", "TERMINAL",
         }:
@@ -3900,8 +3902,11 @@ class AgentSessionService:
         shared_outputs = None if prepared is None else accept_publication(prepared)
         with self._daemon._state_guard(), self._daemon._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            # Expiry bounds admission of an RPC, not the duration of its verified
+            # filesystem work. Recheck its epoch, session, fence and policy;
+            # every later RPC still needs a currently unexpired authorization.
             row, current_request, current_agent, current_stamp = self._declaration_authority(
-                conn, session_id, assignment_id, **arguments)
+                conn, session_id, assignment_id, authorization_admitted=True, **arguments)
             if (current_stamp != stamp or current_request != request or current_agent != agent_id
                 or self._daemon.config.coordinator_shared_roots != roots):
                 raise QueueConflictError("remote publication authority changed during verification")
@@ -4464,6 +4469,8 @@ class AgentSessionService:
         authorization_id: str,
         revision: int,
         epoch: str,
+        *,
+        check_expiry: bool = True,
     ) -> None:
         _identifier(authorization_id, "authorization_id")
         row = conn.execute(
@@ -4475,7 +4482,7 @@ class AgentSessionService:
         if (
             row is None
             or str(row["coordinator_epoch"]) != epoch
-            or str(row["expires_at"]) < self._daemon._accepted_time(conn)  # type: ignore[attr-defined]
+            or (check_expiry and str(row["expires_at"]) < self._daemon._accepted_time(conn))  # type: ignore[attr-defined]
         ):
             raise AgentTransferAuthorizationStaleError(
                 "remote transfer authorization is stale"

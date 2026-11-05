@@ -20,6 +20,49 @@ from tests.integration.queue.test_concurrent_outbound_agent import (
 pytestmark = pytest.mark.integration
 
 
+def test_admitted_publication_finishes_after_authorization_expiry(monkeypatch):
+    from loom.queue.local_daemon import LocalDaemonPrincipal, LocalDaemonRole
+    from loom.queue.agent_sessions import AgentTransferAuthorizationStaleError
+    from loom.queue._remote_stage_execution import _RemoteExecutionReport
+    import json
+
+    prepare = _shared_publication.prepare_publication
+    now = [datetime.now(timezone.utc).replace(microsecond=0)]
+    verified = []
+
+    def slow_prepare(request, *args, **kwargs):
+        result = prepare(request, *args, **kwargs)
+        verified.append(request.assignment_id)
+        now[0] += timedelta(seconds=61)
+        return result
+
+    monkeypatch.setattr(_shared_publication, "prepare_publication", slow_prepare)
+    with _service(monkeypatch, shared=True, clock=lambda: now[0].isoformat().replace("+00:00", "Z")) as case:
+        uri, authority = _submit(case, "slow-publication")
+        assert case.client.wait("slow-publication", timeout_seconds=30).state.value == "SUCCEEDED"
+        assert len(verified) == 1
+        assert len(authority.list_output_commits(uri)) == 1
+        with sqlite3.connect(case.database) as conn:
+            assignment, session, fence, encoded = conn.execute(
+                "SELECT assignment_id, session_id, fence, report_json FROM remote_assignments"
+            ).fetchone()
+            authorization, revision = conn.execute(
+                "SELECT authorization_id, revision FROM remote_transfer_authorizations "
+                "WHERE assignment_id = ? ORDER BY revision DESC LIMIT 1", (assignment,)
+            ).fetchone()
+        view = case.daemon.agent_view(
+            LocalDaemonPrincipal("principal", LocalDaemonRole.AGENT, "credential")
+        )
+        # Completion does not extend the grant or authorize another RPC.
+        with pytest.raises(AgentTransferAuthorizationStaleError):
+            view.declare_outputs(
+                session, assignment, fence=fence, authorization_id=authorization,
+                authorization_revision=revision,
+                report=_RemoteExecutionReport.from_dict(json.loads(encoded)),
+            )
+        _eventually(lambda: case.operator.observe_assignment(assignment).value["remote_state"] == "RELEASED")
+
+
 def test_expired_authorization_history_beyond_64_recovers_over_tls(monkeypatch):
     from loom.queue.local_daemon import LocalDaemonPrincipal, LocalDaemonRole
 
@@ -70,9 +113,29 @@ def test_expired_authorization_history_beyond_64_recovers_over_tls(monkeypatch):
             release.set()
 
 
-def test_retained_success_is_recoverable_but_not_settled(monkeypatch):
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_retained_success_is_recoverable_but_not_settled(monkeypatch, cancelled):
     entered, release = Event(), Event()
     retain = _shared_publication.retain
+    before_result, resume_completion = Event(), Event()
+
+    if cancelled:
+        from loom.queue import _agent_assignment
+        from loom.queue._agent_progress import _delay, _steps
+
+        complete = _agent_assignment._complete_remote_result_and_release
+
+        def cancel_before_completion(client, session, *args, **kwargs):
+            before_result.set()
+            while not resume_completion.is_set():
+                yield from _delay(0.01)
+            # Deliver the real cancellation after worker success but before
+            # result retention, reproducing the fleet's contained late result.
+            while (yield from _steps(client.poll_assignment_control, session.session_id)) is None:
+                yield from _delay(0.01)
+            return (yield from complete(client, session, *args, **kwargs))
+
+        monkeypatch.setattr(_agent_assignment, "_complete_remote_result_and_release", cancel_before_completion)
 
     def hold(workspace, result):
         entered.set()
@@ -83,7 +146,19 @@ def test_retained_success_is_recoverable_but_not_settled(monkeypatch):
     with _service(monkeypatch, shared=True) as case:
         try:
             _submit(case, "recover-result")
+            if cancelled:
+                assert before_result.wait(20), case.failures
+                case.client.cancel("recover-result")
+                resume_completion.set()
             assert entered.wait(20), case.failures
+            if cancelled:
+                def contained():
+                    with sqlite3.connect(case.database) as conn:
+                        return conn.execute(
+                            "SELECT 1 FROM remote_assignment_controls WHERE "
+                            "state = 'applied' AND result_code = 'contained' AND acknowledged = 1"
+                        ).fetchone()
+                _eventually(contained)
             identity = _read_remote_agent_root_id(case.agent_root)
             observation = inspect_agent_result_recovery(
                 case.agent_root, expected_root_id=identity,
@@ -130,8 +205,11 @@ def test_retained_success_is_recoverable_but_not_settled(monkeypatch):
             finally:
                 path.write_bytes(original)
             release.set()
-            assert case.client.wait("recover-result", timeout_seconds=30).state.value == "SUCCEEDED"
+            assert case.client.wait("recover-result", timeout_seconds=30).state.value == (
+                "CANCELLED" if cancelled else "SUCCEEDED"
+            )
         finally:
+            resume_completion.set()
             release.set()
 
 

@@ -256,7 +256,9 @@ def inspect_coordinator_result_recovery(
 
     Admitted DAGs may remain pending, but each in-flight remote assignment must
     have a corresponding agent proof. A dispatched preparation waiting only for
-    those results (including its cancellation) may recover. Input capture,
+    those results (including its cancellation) may recover. An ordinary cancelled
+    admission may recover only when every remaining assignment belongs to that
+    same proved cohort and has acknowledged native containment. Input capture,
     target publication, other cancellations, unknown controls and startup
     attachments refuse. The Fleet owner supplies observations
     from its selected hosts; this function neither drains nor closes admission.
@@ -299,11 +301,23 @@ def inspect_coordinator_result_recovery(
                     "OR acknowledged = 0 LIMIT 1"
                 ).fetchone():
                     raise ValueError("unresolved control")
-            if any(row[0] not in children for row in conn.execute(
-                "SELECT admission_id FROM managed_admissions WHERE cancellation_operation_id IS NOT NULL "
+            for admission_id, run_uri in conn.execute(
+                "SELECT admission_id, run_uri FROM managed_admissions WHERE cancellation_operation_id IS NOT NULL "
                 "AND state NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED')"
-            )):
-                raise ValueError("cancellation remains active")
+            ):
+                if admission_id in children:
+                    continue
+                assignments = list(conn.execute(
+                    "SELECT a.assignment_id, c.state, c.result_code, c.acknowledged "
+                    "FROM remote_assignments a LEFT JOIN remote_assignment_controls c "
+                    "ON c.assignment_id = a.assignment_id WHERE a.run_uri = ? "
+                    "AND a.state NOT IN ('RELEASED', 'FAILED', 'CANCELLED')", (run_uri,)
+                ))
+                if not assignments or any(
+                    identity not in results or state != "applied" or code != "contained" or acknowledged != 1
+                    for identity, state, code, acknowledged in assignments
+                ):
+                    raise ValueError("cancellation remains active outside contained result cohort")
             # Resident workers use an assignment-local run URI. The shared
             # authority identity is assignment/session/fence, not that URI.
             names = ("assignment_id", "session_id", "fence", "stage_name", "attempt")
