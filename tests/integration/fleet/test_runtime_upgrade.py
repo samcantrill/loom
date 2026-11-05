@@ -854,9 +854,14 @@ def broken_metadata_release(inventory, tmp_path, *, preparation_barrier=None, au
         files[codec] = files[codec].replace(old, f'_MAX_TRANSFER_AUTHORIZATIONS = {authorization_limit}'.encode())
     elif preparation_barrier is None:
         codec = "loom/queue/_agent_session_codec.py"
-        old = b'max_collection=_MAX_BODY_BYTES)'
+        old = (
+            b'_bounded_json(output["metadata"], depth=4, plain_scalars=True,\n'
+            b'                                  max_collection=_MAX_BODY_BYTES)'
+        )
         assert files[codec].count(old) == 1
-        files[codec] = files[codec].replace(old, b"max_collection=_MAX_JSON_COLLECTION)")
+        files[codec] = files[codec].replace(
+            old, old.replace(b"_MAX_BODY_BYTES", b"_MAX_JSON_COLLECTION")
+        )
     else:
         codec = "loom/queue/agent_sessions.py"
         old = b'        if report.assignment_id != assignment_id:\n'
@@ -1037,8 +1042,9 @@ def test_runtime_candidate_repair_recovers_cancelled_preparation(
             assert not operator.observe_agent("worker").value["drained"]
 
 
+@pytest.mark.parametrize("cancelled", [False, True])
 def test_runtime_recovery_publishes_original_result_and_finishes_downstream(
-    site, tmp_path, monkeypatch,  # noqa: F811
+    site, tmp_path, monkeypatch, cancelled,  # noqa: F811
 ):
     from loom.coordinator import RunRequest
     from loom.deployment import load_deployment
@@ -1077,7 +1083,9 @@ def test_runtime_recovery_publishes_original_result_and_finishes_downstream(
         while True:
             with sqlite3.connect(base / "worker/journal.sqlite") as conn:
                 retained = conn.execute(
-                    "SELECT assignment_id, grant_fence, result_json FROM assignments WHERE state = 'result_durable'"
+                    "SELECT assignment_id, grant_fence, result_json FROM assignments "
+                    "WHERE state = 'result_durable' AND json_extract(result_json, '$.stage_name') = ?",
+                    (producer["name"],),
                 ).fetchall()
             if retained:
                 break
@@ -1087,6 +1095,7 @@ def test_runtime_recovery_publishes_original_result_and_finishes_downstream(
         assignment, fence, result_json = retained[0]
         worker_result = base / "worker/assignments" / assignment / "worker-result.json"
         original_bytes = worker_result.read_bytes()
+        cancellation = client.cancel_run_operation("retained-measurement") if cancelled else None
         source.write_text(json.dumps({"pipeline": {"name": "checks", "stages": [
             {**producer, "factory": {"_target_": "tests.support.pipeline_execution_stages.JsonProducerStage"}}
         ]}, "runtime": {"executor": "local"}}))
@@ -1110,7 +1119,9 @@ def test_runtime_recovery_publishes_original_result_and_finishes_downstream(
         assert result["outcome"] == "complete", result
         assert len(dropped) == 1
         observation = client.observe_run("retained-measurement", wait=False)
-        assert observation.admission.state.value == "SUCCEEDED", observation
+        assert observation.admission.state.value == ("CANCELLED" if cancelled else "SUCCEEDED"), observation
+        if cancellation is not None:
+            assert client.wait_operation(cancellation.operation_id, timeout_seconds=20).operation.state == "applied"
         assert worker_result.read_bytes() == original_bytes
         with sqlite3.connect(base / "worker/journal.sqlite") as conn:
             assert conn.execute(

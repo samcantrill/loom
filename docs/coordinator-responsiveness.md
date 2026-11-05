@@ -1,7 +1,9 @@
 # Coordinator responsiveness implementation
 
 Worktree: `/nas/home/can134/work/loom-worktrees/coordinator-responsiveness`.
-Branch: `codex/coordinator-responsiveness`, based on `develop` at `19f6a5e5`, with `b8db3e6b` integrated before landing.
+Merged responsiveness change: `codex/coordinator-responsiveness`, based on
+`develop` at `19f6a5e5`, with `b8db3e6b` integrated before landing.
+Follow-up branch: `codex/slow-publication-recovery`, based on merged `c65af543`.
 This is a focused maintenance change, not a numbered roadmap stage.
 
 ## Accepted scope
@@ -154,21 +156,63 @@ descriptor is `/nas/home/can134/.local/share/rphys/submitted-workloads/releases/
 The source commit is the reviewed implementation head above; subsequent closeout
 changes only documentation.
 
-Deployment remains blocked. The supported retained-result upgrade preview refused
-with `source agent unavailable: calypso`. Read-only native evidence also shows
-six pending preparations outside its recovery cohort. The two outstanding remote
-assignments on Shazza and Fenix have successful agent-local durable results, but
-those results do not belong to the six pending preparation children. The existing
-recovery contract intentionally rejects this state. No upgrade apply, forced
-restart, database mutation, cancellation or replacement submission was performed.
-The fleet still selects release `loom-19f6a5e50e24`.
+The user subsequently authorized cancellation of eight unfinished scientific
+requests and three diagnostics, retaining valid completed stages for reuse.
+Ten settled; Shazza retains one successful, contained prediction result under
+the cancelled PURE-to-UBFC admission. Experiment chats will own resubmission.
+The fleet still selects `loom-19f6a5e50e24`; all five agents are drained.
 
-Preserve and resume these exact retained operations once the supported upgrade
-conditions are met:
+The image built from merged rphys `bbd352d3` and Loom `c65af543` passed installed
+source, manifest, lock and dependency-origin checks. Its immutable digest is
+`298354528e5913f94cab04548fe993391208bfd8e99b7155c3138d4585228ce1`.
+The guarded `responsiveness-release-20261105` operation owns closed admission;
+its driver is detached before service replacement while the follow-up is tested.
 
-- `omit-windowed-mmpd-20261105-c55e5a1c2`
-- `omit-windowed-pure-intra-test-20261105-c55e5a1c2`
+### Follow-up: slow publication and cancelled-result recovery
 
-Both remain pending with their original preparation admissions and submission
-records. A broader recovery path for pending preparations requires an explicit
-contract decision; this responsiveness change does not silently widen it.
+Live native evidence identified a second defect: Shazza's 174,848-member,
+559,717,123-byte output closure took 2,002 seconds to hash and 940 seconds to
+sync. The output declaration then rechecked its 60-second transfer grant and
+rejected it as expired. Grant revisions 2 and 3 expired at 04:53:42 and 05:42:53
+UTC on November 5. An unchanged retry repeats work that cannot meet the grant
+lifetime. This is separate from coordinator lock responsiveness.
+
+The bounded correction defines transfer expiry as a request-admission deadline.
+An admitted declaration may complete verification after expiry; the commit
+boundary still rechecks session, epoch, policy, fence and publication identity.
+Future RPCs, including replay, still need an unexpired grant. There is no larger
+timeout, verification cache, new durable state or weaker payload validation.
+
+Deployment also needs a narrow extension of retained-result recovery: an ordinary
+cancelled admission can qualify only if every outstanding assignment belongs to
+the exact host-proved successful-result cohort and has an acknowledged native
+containment receipt. The public cancellation record must refer to an
+already-applied run operation bound to that same admission; it cannot admit a
+pending preparation or target publication. This supersedes the original blanket exclusion of ordinary
+cancellations for this demonstrated case. Live workers, unproved/missing results,
+unresolved controls, unrelated cancellation, new cohort members, Slurm, capture
+and target publication remain excluded. Recovery preserves journals and results;
+normal replay and cancellation must settle before admission reopens.
+
+Validation selects `test_result_runtime_recovery.py`, the three concurrent
+publication/reload boundary cases, shared-publication replay/integrity cases,
+and affected native runtime-upgrade recovery cases. Tests advance the accepted
+clock beyond grant expiry during real TLS publication, prove a later expired
+request still refuses, and exercise cancellation after real worker success with
+native containment before result retention. Expand only for a failed check or
+another affected ownership boundary. Fifteen selected checks passed, and normal
+result replay through actual replacement passed after narrowing an outdated
+metadata fault-injection fixture. The public cancelled-run replacement case
+exposed its separate parent cancellation owner; the bound-admission correction
+passed all seven affected recovery checks on `a427ca3a`, including public
+cancelled-run replacement and cancelled-preparation candidate repair. Together
+with the unaffected earlier results, all 17 selected cases pass. Changed-source
+Pyright, changed-file Ruff and diff checks pass. Independent review passed on
+`e7030dca` and confirmed the bound-admission correction on `a427ca3a`.
+
+Immutable `loom-a427ca3a` was built from that reviewed source and passed offline
+installation checks. Its descriptor SHA-256 is
+`928b29ee72c24a4f8c00d169d0d262d14ae93315654a03873a799fdbe38693ce`.
+It supersedes the unactivated `loom-50079b52` candidate. The prepared native
+`responsiveness-release-recovery-20261105` operation selects this bundle and the
+verified image; deployment remains pending until the follow-up merges.

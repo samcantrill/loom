@@ -547,8 +547,14 @@ The coordinator matches every outstanding remote assignment/reference against
 that cohort. A pending preparation may recover only after its child has been
 dispatched and every outstanding child assignment belongs to that successful
 cohort, before any target report or publication claim. Cancellation of that same
-preparation may remain pending; ordinary replay and cancellation still own final
-settlement. Input capture, target publication, unrelated cancellations, admission
+preparation may remain pending. Cancellation of an ordinary admission may also
+recover when every outstanding assignment belongs to the proved successful
+cohort and each has an acknowledged `contained` cancellation receipt. Ordinary
+replay and cancellation still own final settlement. Its public cancellation
+record may remain pending only when its already-applied run operation is bound
+to that same proved admission. A missing result, unacknowledged
+containment, or an unrelated cancellation refuses recovery.
+Input capture, target publication, admission
 retries and startup mutations refuse.
 
 If this eligibility check reveals that an unactivated candidate needs a further
@@ -593,7 +599,12 @@ conflicting reports are rejected. First publication, first execution commit,
 and subsequent artifact consumption retain their integrity checks. Worker
 success, durable result retention, and execution commit are distinct facts.
 
-Transfer grants retain their one-minute lifetime and exact replay identity.
+Transfer grants retain their one-minute lifetime for admitting requests and exact
+replay identity. A publication admitted before expiry may finish integrity
+verification and file synchronization after expiry; expiry alone does not undo
+that admitted operation. Before recording its result, the coordinator still
+rechecks the grant's epoch, session, assignment fence, policy and captured
+publication identity. A new or replayed request must pass the expiry check again.
 Their per-assignment history ceiling is 1,000,000 revisions, replacing the old
 64-revision lifetime ceiling that could permanently strand a long-lived result.
 The agent can traverse expired retained grants to obtain a current grant;
