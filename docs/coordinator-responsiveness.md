@@ -108,7 +108,7 @@ Evidence (targeted selections; not a full-suite claim):
   validation. Other affected preparation cases are selected separately.
 
 Five-agent qualification used five independent TLS identities, journals and real
-resident supervisors on this host, with five 33,078,463-byte composition manifests.
+resident supervisors on this host, with five 33,078,464-byte composition manifests.
 Two blocked context reads occupied both preparation slots for 31.5 seconds. Four
 agents continued renewal; the fifth deliberately stopped renewal to prove that
 expiry cannot release its running assignment. Cancellation of both blocked
@@ -116,18 +116,19 @@ admissions completed while their underlying reads still occupied the slots.
 
 | Measurement | Result |
 | --- | --- |
-| Normal renewal p99 (177 samples) | 0.764 s |
-| Delayed-work renewal p99 (823 samples) | 0.050 s |
-| Two cancellation acceptances | 0.016 s |
-| Peak RSS growth during delay | 2,056,192 bytes |
-| Final RSS growth from delay baseline | 8,511,488 bytes |
+| Normal renewal p99 (162 samples) | 0.603 s |
+| Delayed-work renewal p99 (831 samples) | 0.035 s |
+| Two cancellation acceptances | 0.028 s |
+| Peak RSS growth during delay | 2,453,504 bytes |
+| Final RSS growth from delay baseline | 8,753,152 bytes |
 | Preparation operations pending during saturation | Exactly 2 |
 | Scientific job launches and authoritative commits | Exactly 1 per job |
 
 Lost renewal replies replayed the same receipt without extending expiry again.
 A lost commit reply followed by agent-application restart resumed the same
 supervisor and durable assignment; every job retained exactly one launch and
-one authoritative attempt/commit. This qualifies coordinator responsiveness on
+one authoritative attempt/commit. The final qualification includes enabled
+background timing reporting. This qualifies coordinator responsiveness on
 this machine, not fleet GPU, reboot or network failure behavior. The ordinary
 30-second offer lifetime was preserved.
 
@@ -139,12 +140,35 @@ depend on them.
 
 ## Delivery state
 
-Final affected-consumer selection passed 276 checks, including the source-owner
-unit suites, cache, orchestration, SLURM integration and both TLS saturation
-regressions. Independent review is pending. Nothing
-has merged or been deployed. After those gates, merge to `develop` and synchronize
-the clean control checkout. Build a durable release in the configured fleet
-release location, perform its retained-state upgrade, and resume the existing
-OMIT MMPD and PURE operations without changing native roots or submission IDs.
-Record the final PR, installed release, retained operation identities and outcome
-here; qualification artifacts remain disposable.
+Final affected-consumer selection passed 276 checks. After independent review,
+133 correction checks passed, and the five-agent qualification passed again with
+background diagnostics enabled. Integration with `develop`'s diagnostic-binding
+fix `b8db3e6b` passed 14 preparation/publication cases and 18 diagnostic composition
+cases. The known obsolete malformed-report fixture remains a baseline failure.
+Independent review passed on implementation head `50079b5225240b874697bb41071baa3022acfeba`.
+[PR #462](https://github.com/samcantrill/loom/pull/462) owns the change and merge status.
+
+Immutable release `loom-50079b52` was built in the configured durable release
+location and passed offline installation/dependency/import verification. Its
+descriptor is `/nas/home/can134/.local/share/rphys/submitted-workloads/releases/loom-50079b52/release.json`.
+The source commit is the reviewed implementation head above; subsequent closeout
+changes only documentation.
+
+Deployment remains blocked. The supported retained-result upgrade preview refused
+with `source agent unavailable: calypso`. Read-only native evidence also shows
+six pending preparations outside its recovery cohort. The two outstanding remote
+assignments on Shazza and Fenix have successful agent-local durable results, but
+those results do not belong to the six pending preparation children. The existing
+recovery contract intentionally rejects this state. No upgrade apply, forced
+restart, database mutation, cancellation or replacement submission was performed.
+The fleet still selects release `loom-19f6a5e50e24`.
+
+Preserve and resume these exact retained operations once the supported upgrade
+conditions are met:
+
+- `omit-windowed-mmpd-20261105-c55e5a1c2`
+- `omit-windowed-pure-intra-test-20261105-c55e5a1c2`
+
+Both remain pending with their original preparation admissions and submission
+records. A broader recovery path for pending preparations requires an explicit
+contract decision; this responsiveness change does not silently widen it.
