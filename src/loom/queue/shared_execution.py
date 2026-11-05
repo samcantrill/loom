@@ -16,6 +16,7 @@ from typing import cast
 from loom.fingerprints import hash_mapping
 from loom.serialization import PlainData, thaw_plain_data
 from .errors import QueueServiceError
+from ._diagnostic_snapshot import annotate_mapping, diagnostic_stages
 from ._phase_timing import phase
 
 SHARED_EXECUTION_CAPABILITY = "shared-execution-v1"
@@ -318,6 +319,7 @@ def bind_snapshot(snapshot: dict[str, PlainData], permitted: Mapping[str, PlainD
     """Retain each stage's selected roots independently of the preparation union."""
     pipeline = cast(Mapping[str, PlainData], snapshot["pipeline"])
     stages = cast(list[dict[str, PlainData]], pipeline["stages"])
+    diagnostics = dict(diagnostic_stages(redacted))
     for index, stage in enumerate(stages):
         factory = cast(Mapping[str, PlainData], stage["factory"])
         selected = stage_scope(stage.get("config", {}), factory.get("init", {}), permitted)
@@ -327,10 +329,8 @@ def bind_snapshot(snapshot: dict[str, PlainData], permitted: Mapping[str, PlainD
         if SHARED_EXECUTION_SCOPE in fingerprint:
             raise QueueServiceError("authored configuration cannot select shared execution scope")
         stage["fingerprint"] = {**fingerprint, SHARED_EXECUTION_SCOPE: selected}
-        if redacted is not None:
-            view = cast(Mapping[str, PlainData], redacted["pipeline"])
-            diagnostic = cast(list[dict[str, PlainData]], view["stages"])[index]
-            diagnostic["fingerprint"] = {**cast(Mapping[str, PlainData], diagnostic.get("fingerprint", {})), SHARED_EXECUTION_SCOPE: selected}
+        if index in diagnostics:
+            annotate_mapping(diagnostics[index], "fingerprint", {SHARED_EXECUTION_SCOPE: selected})
 
 
 def assignment_scope(fingerprint: Mapping[str, PlainData]) -> dict[str, PlainData] | None:

@@ -40,6 +40,7 @@ from loom.pipeline.runtime import merge_config_run_options
 from loom.pipeline.status import StageStatus
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore
 from loom.pipeline.stores.errors import ArtifactChecksumMismatchError, ArtifactStoreError
+from loom.queue._diagnostic_snapshot import annotate_mapping, diagnostic_stages
 from loom.queue._preparation_operations import (
     PreparationInstallationMismatch,
     PreparationReport,
@@ -496,17 +497,13 @@ def _bind_local_snapshot(
                 raise QueueConflictError("local preparation requires the managed agent route")
     if scope is None:
         return
-    # Diagnostic views may retain interpolation strings or redact whole mappings.
-    # Preserve those values instead of resolving them from unredacted execution data.
-    for view in (snapshot,) if redacted is None else (snapshot, redacted):
-        definition = cast(dict[str, PlainData], view["pipeline"])
-        for stage in cast(list[dict[str, PlainData]], definition["stages"]):
-            placement = stage.get("placement", {})
-            if isinstance(placement, Mapping):
-                stage["placement"] = {**placement, "target": scope["agent_id"]}
-            fingerprint = stage.get("fingerprint", {})
-            if isinstance(fingerprint, Mapping):
-                stage["fingerprint"] = {**fingerprint, LOCAL_PREPARATION_SCOPE: dict(scope)}
+    definition = cast(dict[str, PlainData], snapshot["pipeline"])
+    for stage in cast(list[dict[str, PlainData]], definition["stages"]):
+        stage["placement"] = {**cast(dict[str, PlainData], stage.get("placement", {})), "target": scope["agent_id"]}
+        stage["fingerprint"] = {**cast(dict[str, PlainData], stage.get("fingerprint", {})), LOCAL_PREPARATION_SCOPE: dict(scope)}
+    for _, stage in diagnostic_stages(redacted):
+        annotate_mapping(stage, "placement", {"target": scope["agent_id"]})
+        annotate_mapping(stage, "fingerprint", {LOCAL_PREPARATION_SCOPE: dict(scope)})
 
 
 def _compose_worker_config(
@@ -930,15 +927,19 @@ def _bind_submitted_snapshot(
         _require_submitted_route(stage)
         if SUBMITTED_EXECUTION_SCOPE in stage.fingerprint_fields:
             raise QueueConflictError("authored configuration cannot select submitted execution")
-    for view in (snapshot,) if redacted is None else (snapshot, redacted):
-        definition = cast(dict[str, PlainData], view["pipeline"])
-        for stage in cast(list[dict[str, PlainData]], definition["stages"]):
-            stage["fingerprint"] = {
-                **cast(dict[str, PlainData], stage.get("fingerprint", {})),
-                SUBMITTED_EXECUTION_SCOPE: _stage_execution_data(
-                    binding, cast(Mapping[str, PlainData], stage.get("fingerprint", {})).get(SHARED_EXECUTION_SCOPE)
-                ),
-            }
+    definition = cast(dict[str, PlainData], snapshot["pipeline"])
+    diagnostics = dict(diagnostic_stages(redacted))
+    for index, stage in enumerate(cast(list[dict[str, PlainData]], definition["stages"])):
+        fingerprint = cast(dict[str, PlainData], stage.get("fingerprint", {}))
+        selected = _stage_execution_data(binding, fingerprint.get(SHARED_EXECUTION_SCOPE))
+        stage["fingerprint"] = {**fingerprint, SUBMITTED_EXECUTION_SCOPE: selected}
+        diagnostic = diagnostics.get(index)
+        if diagnostic is not None:
+            # Annotate only when the shared facts are already visible. Never
+            # reconstruct a redacted scope from the executable graph.
+            visible = diagnostic.get("fingerprint", {})
+            if isinstance(visible, dict) and visible.get(SHARED_EXECUTION_SCOPE) == fingerprint.get(SHARED_EXECUTION_SCOPE):
+                annotate_mapping(diagnostic, "fingerprint", {SUBMITTED_EXECUTION_SCOPE: selected})
 
 
 def _profile_requirement(profile: ResidentProfileDescriptor) -> ExecutionRequirement:

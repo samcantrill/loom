@@ -2379,8 +2379,9 @@ def test_native_local_file_graph_is_bound_from_preparation_to_execution(
 
 @pytest.mark.parametrize("local", (False, True), ids=("portable", "local"))
 @pytest.mark.parametrize("indirect", (False, True), ids=("literal", "interpolated"))
+@pytest.mark.parametrize("pipeline_reference", (False, True))
 def test_preparation_preserves_redacted_output_declarations(
-    tmp_path: Path, local: bool, indirect: bool,
+    tmp_path: Path, local: bool, indirect: bool, pipeline_reference: bool,
 ) -> None:
     from loom.queue.preparation import LOCAL_PREPARATION_SCOPE
 
@@ -2396,6 +2397,9 @@ def test_preparation_preserves_redacted_output_declarations(
         authored["desired_fingerprint"] = {"api_token": "qualification-only-secret"}
         stage["placement"] = "${desired_placement}"
         stage["fingerprint"] = "${desired_fingerprint}"
+    if pipeline_reference:
+        authored["matrix"] = {"pipeline": authored["pipeline"]}
+        authored["pipeline"] = "${matrix.pipeline}"
     path.write_text(json.dumps(authored))
     LocalDaemon.initialize_deployment(service.daemon)
     daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
@@ -2413,7 +2417,12 @@ def test_preparation_preserves_redacted_output_declarations(
             report = load_report(store.local_artifact_root(child.run_uri), ArtifactRef.from_dict(dict(result["report_ref"])))
             assert isinstance(report, dict)
             resolved = report["composition"]["resolved"]["pipeline"]["stages"][0]
-            redacted = report["composition"]["redacted"]["pipeline"]["stages"][0]
+            diagnostic = report["composition"]["redacted"]
+            if pipeline_reference:
+                assert diagnostic["pipeline"] == "${matrix.pipeline}"
+                redacted = diagnostic["matrix"]["pipeline"]["stages"][0]
+            else:
+                redacted = diagnostic["pipeline"]["stages"][0]
             assert resolved["outputs"]["tokens"] == {
                 "artifact_type": "json", "codec_key": "json.v1",
             }
@@ -2425,7 +2434,7 @@ def test_preparation_preserves_redacted_output_declarations(
                 if local:
                     assert resolved["placement"]["target"] == "coordinator"
                     assert resolved["fingerprint"][LOCAL_PREPARATION_SCOPE]["agent_id"] == "coordinator"
-            elif local:
+            elif local and not pipeline_reference:
                 assert redacted["placement"] == resolved["placement"]
                 assert redacted["fingerprint"][LOCAL_PREPARATION_SCOPE] == resolved[
                     "fingerprint"
