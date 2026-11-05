@@ -959,3 +959,49 @@ def test_policy_addition_preserves_native_owner_and_recovers_container_only_targ
         assert promotion.apply(c, control).code == "applied"
     finally:
         close(c)
+
+
+@pytest.mark.parametrize("held_owner", [None, "agent", "supervisor"])
+def test_startup_recovers_hot_sqlite_journal_under_native_locks(tmp_path, held_owner):
+    import subprocess
+
+    from loom.queue.errors import QueueServiceError
+    from loom.queue.local_daemon import _acquire_lock
+
+    selected = config(tmp_path)
+    LocalDaemonAgentHttpClient.initialize_agent_root(selected)
+    root = selected.agent_root
+    database = root / "control.sqlite"
+    with sqlite3.connect(database) as conn:
+        before = conn.execute("SELECT * FROM root_metadata ORDER BY key").fetchall()
+        conn.execute("CREATE TABLE crash_payload (value BLOB)")
+        conn.executemany("INSERT INTO crash_payload VALUES (?)", [(bytes(4096),)] * 200)
+    script = """
+import os, sqlite3, sys
+conn = sqlite3.connect(sys.argv[1])
+conn.execute('PRAGMA cache_size=1')
+conn.execute('BEGIN IMMEDIATE')
+conn.execute("UPDATE root_metadata SET value='uncommitted'")
+conn.execute('UPDATE crash_payload SET value=randomblob(4096)')
+os._exit(0)
+"""
+    subprocess.run([sys.executable, "-c", script, str(database)], check=True)
+
+    def assert_hot():
+        with pytest.raises(sqlite3.OperationalError) as error:
+            with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as conn:
+                conn.execute("SELECT * FROM root_metadata").fetchall()
+        assert error.value.sqlite_errorcode == sqlite3.SQLITE_READONLY_ROLLBACK
+
+    assert_hot()
+    if held_owner is not None:
+        lock = _acquire_lock(root) if held_owner == "agent" else promotion._supervisor_lock(root)
+        with lock:
+            with pytest.raises((QueueServiceError, QueueConflictError)):
+                promotion.recover(selected)
+            assert_hot()
+    assert promotion.recover(selected) is selected
+    with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as conn:
+        assert conn.execute("SELECT * FROM root_metadata ORDER BY key").fetchall() == before
+        assert conn.execute("SELECT DISTINCT value FROM crash_payload").fetchall() == [(bytes(4096),)]
+    assert promotion.recover(selected) is selected

@@ -695,18 +695,25 @@ def recover(config: Any) -> Any:
     database = root / "control.sqlite"
     if not database.is_file():
         return config
-    with sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True) as conn:
-        row = conn.execute(
-            "SELECT value FROM root_metadata WHERE key=?", (_PENDING,)
-        ).fetchone()
-    if row is None:
-        return config
+    try:
+        with sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True) as conn:
+            row = conn.execute(
+                "SELECT value FROM root_metadata WHERE key=?", (_PENDING,)
+            ).fetchone()
+    except sqlite3.OperationalError as error:
+        if error.sqlite_errorcode != sqlite3.SQLITE_READONLY_ROLLBACK:
+            raise
+        # An interrupted SQLite transaction needs rollback before even a read.
+        # Only the native ownership locks below authorize that recovery write.
+    else:
+        if row is None:
+            return config
     from ._agent_session_journal import _RemoteAgentJournal
     from .local_daemon import _acquire_lock, _open_root
 
     with _acquire_lock(root), _supervisor_lock(root):
         root_id = _open_root(root, role="local-agent")
-        with sqlite3.connect(database) as conn:
+        with sqlite3.connect(database.resolve().as_uri() + "?mode=rw", uri=True) as conn:
             row = conn.execute(
                 "SELECT value FROM root_metadata WHERE key=?", (_PENDING,)
             ).fetchone()

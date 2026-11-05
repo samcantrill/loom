@@ -902,3 +902,10 @@ path. The operation settles as `preparation_child_failed`; the immutable worker
 result and checksum-bound source bytes remain diagnostic evidence. This differs
 from `invalid_preparation_report` when committed evidence is subsequently refused
 at coordinator inspection. Neither failure publishes the target run.
+
+
+Agent startup recovers an interrupted SQLite rollback journal under the native
+agent and supervisor ownership locks before inspecting pending profile promotion.
+This permits startup after a host reboot without deleting journals or changing
+retained identities. Recovery refuses an existing owner; unrelated SQLite errors
+remain failures. Read-only observation alone does not authorize recovery writes.
