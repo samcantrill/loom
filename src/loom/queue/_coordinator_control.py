@@ -52,6 +52,7 @@ from ._preparation_operations import PreparationChildReserved, PreparationNotAcc
 
 
 from ._agent_gpu_policy import CAPABILITY as GPU_POLICY_CONTRACTION_CAPABILITY
+from ._agent_gpu_policy import EXPANSION_CAPABILITY as GPU_POLICY_EXPANSION_CAPABILITY
 from .operations import OPERATOR_CAPABILITY, CONDITIONAL_CONTROL_CAPABILITY, OperatorObservation
 from ._maintenance import MaintenanceInProgress, MAINTENANCE_CAPABILITY, SUBMITTED_CHECK_CAPABILITY
 
@@ -1011,7 +1012,7 @@ def _connection_description(daemon: LocalDaemon, status: DaemonStatus, transport
             CONTROL_CAPABILITY,
             OPERATOR_CAPABILITY,
             CONDITIONAL_CONTROL_CAPABILITY,
-            "quiescent-profile-promotion-v2", "quiescent-source-promotion-v1", "quiescent-configuration-retirement-v1", "quiescent-coordinator-retirement-v1", "quiescent-container-policy-addition-v1", "quiescent-publication-budget-increase-v1", GPU_POLICY_CONTRACTION_CAPABILITY,
+            "quiescent-profile-promotion-v2", "quiescent-source-promotion-v1", "quiescent-configuration-retirement-v1", "quiescent-coordinator-retirement-v1", "quiescent-container-policy-addition-v1", "quiescent-publication-budget-increase-v1", GPU_POLICY_CONTRACTION_CAPABILITY, GPU_POLICY_EXPANSION_CAPABILITY,
             MAINTENANCE_CAPABILITY,
             SUBMITTED_CHECK_CAPABILITY,
             "run-context-v1",

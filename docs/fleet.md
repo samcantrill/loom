@@ -1468,3 +1468,22 @@ The current five-node composition closure was 1,541,464 primary bytes plus
 14,654,153 companion bytes and loaded in 0.73 s; this excludes scientific
 preflight evidence. Complete authorship and independent hydrated views remain
 covered by serializer regression checks.
+
+### Restoring a recovered GPU
+
+A recovered device must pass a UUID-bound computation in the selected workload
+image before it is restored to scheduling. Hardware visibility alone is not
+qualification. The native `CoordinatorSchedulingReload.gpu_policy_expansion`
+binding authorizes a strict GPU inventory superset under exact settled
+maintenance (owner, intent digest and gate revision), with no authorized checks.
+It preserves existing device descriptors, agent identities and all other policy
+fields. Both preflight and commit recheck maintenance. Clients negotiate
+`quiescent-agent-gpu-policy-expansion-v1` before sending the mutation.
+
+Close admission and settle work, then drain the affected agent. Publish the
+protected coordinator policy and apply the bound scheduling reload. Publish the
+agent UUID selection and use its conditional native reload to refresh the offer;
+keep admission closed until the full inventory matches and workload GPU checks
+pass. Reopening admission is a separate operator action. This does not weaken
+`repair-gpu-policy`, which remains contraction-only, or qualify device health
+by itself. Never edit native databases or manufacture session receipts.

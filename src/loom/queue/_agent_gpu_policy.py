@@ -1,4 +1,4 @@
-"""The policy-only boundary for removing unavailable agent GPUs."""
+"""Guarded policy-only transitions for agent GPU inventories."""
 
 from dataclasses import fields, replace
 from typing import TYPE_CHECKING
@@ -7,6 +7,7 @@ if TYPE_CHECKING:
     from .agent_sessions import AgentPolicyConfig
 
 CAPABILITY = "quiescent-agent-gpu-policy-contraction-v1"
+EXPANSION_CAPABILITY = "quiescent-agent-gpu-policy-expansion-v1"
 
 
 def contracts_gpu_inventory(before: "AgentPolicyConfig", after: "AgentPolicyConfig") -> bool:
@@ -33,7 +34,7 @@ def contracts_gpu_inventory(before: "AgentPolicyConfig", after: "AgentPolicyConf
     return changed
 
 
-def validate_coordinator(daemon, replacement, binding):
+def validate_coordinator(daemon, replacement, binding, *, expansion=False):
     """Validate the exact maintenance owner while scheduling holds its lock."""
     from ._maintenance import observe
     from .errors import QueueConflictError
@@ -43,11 +44,14 @@ def validate_coordinator(daemon, replacement, binding):
         or gate["maintenance_id"] != binding["maintenance_id"]
         or gate["intent_digest"] != binding["maintenance_intent_digest"]
         or gate["revision"] != binding["expected_gate_revision"]):
-        raise QueueConflictError("GPU policy contraction requires exact settled maintenance")
+        raise QueueConflictError("GPU policy transition requires exact settled maintenance")
     previous = daemon.config
     mutable = {"agent_policy", "active_configuration_fingerprint"}
     if any(getattr(previous, field.name) != getattr(replacement, field.name)
            for field in fields(previous) if field.name not in mutable):
-        raise QueueConflictError("GPU policy contraction cannot change unrelated configuration")
-    if not contracts_gpu_inventory(previous.agent_policy, replacement.agent_policy):
-        raise QueueConflictError("GPU policy contraction requires a nonempty strict subset with unchanged identities and permissions")
+        raise QueueConflictError("GPU policy transition cannot change unrelated configuration")
+    before, after = previous.agent_policy, replacement.agent_policy
+    valid = contracts_gpu_inventory(after, before) if expansion else contracts_gpu_inventory(before, after)
+    if not valid:
+        direction = "superset" if expansion else "subset"
+        raise QueueConflictError(f"GPU policy transition requires a nonempty strict {direction} with unchanged identities and permissions")
