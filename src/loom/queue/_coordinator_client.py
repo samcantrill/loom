@@ -174,6 +174,10 @@ class NativeCoordinatorClient:
                     from ._agent_gpu_policy import CAPABILITY
                     if CAPABILITY not in description.capabilities:
                         raise control_error("unsupported_capability", operation, payload, ids={"missing_capability": CAPABILITY})
+                if operation == "operator_scheduling_reload" and cast(Mapping[str, PlainData], payload["request"]).get("gpu_policy_expansion") is not None:
+                    from ._agent_gpu_policy import EXPANSION_CAPABILITY
+                    if EXPANSION_CAPABILITY not in description.capabilities:
+                        raise control_error("unsupported_capability", operation, payload, ids={"missing_capability": EXPANSION_CAPABILITY})
                 if operation == "operator_control" and "condition" in payload:
                     from .operations import CONDITIONAL_CONTROL_CAPABILITY
                     if CONDITIONAL_CONTROL_CAPABILITY not in description.capabilities:
