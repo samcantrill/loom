@@ -190,7 +190,7 @@ def _service(
                     "operator",
                     "operator",
                     "operator",
-                    ("drain", "resume", "reload", "cancel_active", "scheduling_reload"),
+                    ("drain", "resume", "reload", "cancel_active", "scheduling_reload", "recover_time"),
                     ("agent-a",),
                 ),
             ),
@@ -3590,3 +3590,53 @@ def test_shared_publication_authority_keeps_cancellation_responsive(monkeypatch)
         finally:
             unblock.set()
         assert case.client.wait("cancel-publication", timeout_seconds=30).state is LocalDaemonAdmissionState.CANCELLED
+
+
+
+def test_clock_recovery_publishes_retained_result_without_reexecution(monkeypatch, caplog):
+    from dataclasses import replace
+    from loom.queue import QueueConflictError, TimeRecoveryRequest
+
+    now = ["2026-08-29T00:00:00Z"]
+    with _service(monkeypatch, memory=2 * 1024**3, clock=lambda: now[0]) as case:
+        gate, uri, _ = _submit_gated(case, "clock-recovery")
+        try:
+            _eventually(lambda: (gate / "build.started").exists())
+            assignment = _eventually(lambda: _rows(
+                case.database,
+                "SELECT assignment_id FROM remote_assignments WHERE run_uri = ?",
+                (uri,),
+            ))[0][0]
+            # Expire the original transfer grant while the same worker is alive.
+            now[0] = "2026-08-29T00:02:01Z"
+            case.daemon._accepted_snapshot()
+            now[0] = "2026-08-29T00:02:00Z"
+            assert case.daemon._sample_clock_health() is False
+            degraded = case.daemon.status()
+            assert degraded.accepted_time_diagnostic == "clock_regressed"
+            _release_gate(gate)
+            resident = case.agent_root / "assignments" / assignment / "resident.sqlite"
+            _eventually(lambda: _rows(
+                resident, "SELECT json_extract(result_json, '$.status') FROM request"
+            ) == [("SUCCEEDED",)])
+            _eventually(lambda: '"retry_requires": "operator_time_recovery"' in caplog.text)
+            assert _rows(case.database,
+                         "SELECT state FROM remote_assignments WHERE assignment_id = ?",
+                         (assignment,)) == [("RUNNING",)]
+            now[0] = "2026-08-29T00:02:02Z"
+            request = TimeRecoveryRequest("clock-recovery", degraded.accepted_time_revision,
+                                          degraded.coordinator_epoch, "Verified test clock")
+            for stale in [replace(request, expected_time_revision=request.expected_time_revision + 1),
+                          replace(request, expected_coordinator_epoch="stale-epoch")]:
+                with pytest.raises(QueueConflictError, match="stale"):
+                    case.operator.recover_time(stale)
+            case.operator.recover_time(request)
+            assert case.client.wait("clock-recovery", timeout_seconds=60).state is LocalDaemonAdmissionState.SUCCEEDED
+            _eventually(lambda: _rows(case.database,
+                         "SELECT state FROM remote_assignments WHERE assignment_id = ?",
+                         (assignment,)) == [("RELEASED",)])
+            assert _rows(case.agent_root / "supervisor/supervisor.sqlite",
+                         "SELECT COUNT(*) FROM launches") == [(1,)]
+            assert case.daemon.status().accepted_time_health == "healthy"
+        finally:
+            _release_gate(gate)

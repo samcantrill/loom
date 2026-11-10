@@ -331,6 +331,24 @@ expiry, fallback, receipt, and freshness. Detected local regression or an out-
 of-policy jump makes time health degraded, pauses new scheduling, and withholds
 retained capacity until clock/session reconciliation; it never extends an old
 offer by trusting a rolled-back clock.
+Clock sampling and the high-water comparison/update run inside the same
+immediate SQLite write transaction, held through commit or rollback. This also
+applies to work-poll and transfer-authorization checks; filesystem and network
+work remain outside the transaction. Concurrent callers therefore sample time
+in writer order, rather than mistaking an earlier overlapping observation for a
+clock regression. Equal timestamps remain valid, and failed transactions do not
+advance the high-water unless they durably record a genuine clock fault.
+
+A clock guard logs the sampled timestamp, previous high-water, diagnostic and
+time revision. Agent retry diagnostics preserve `accepted_time_degraded`, its
+specific clock diagnostic and revision, and `operator_time_recovery` as the
+required recovery action. They do not expose arbitrary exception text or request
+contents. Recovery remains a guarded operator action; retries do not clear a
+clock fault automatically. Retained worker results can publish after recovery
+without repeating computation. If a renewed transfer authorization belongs to a
+new coordinator epoch, the agent reconciles its retained session to that epoch
+before continuing publication, rather than repeatedly renewing against an old
+local epoch.
 A production command-scoped composition opens and retains those same kinds of
 role roots; “embedded” changes process lifetime only. It connects to a compatible
 active owner when configured/reachable or acquires the role locks itself. A held
