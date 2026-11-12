@@ -31,6 +31,7 @@ from ._agent_session_codec import (
     _decode as _decode,
     _decode_run_inspection_response as _decode_run_inspection_response,
     _MAX_BODY_BYTES,
+    _MAX_SLURM_REGISTRATION_BYTES,
     _MAX_QUERY_RESPONSE_BYTES,
 )
 from ._agent_session_journal import (
@@ -3181,6 +3182,8 @@ def _exchange_agent_request(
 def _read_agent_reply(
     connection: http.client.HTTPSConnection, operation: str, body: bytes, role: str
 ) -> Mapping[str, PlainData]:
+    slurm_registration = role == "slurm_bootstrap" and operation == "register"
+    maximum = _MAX_SLURM_REGISTRATION_BYTES if slurm_registration else _MAX_BODY_BYTES
     try:
         connection.request(
             "POST",
@@ -3189,19 +3192,19 @@ def _read_agent_reply(
             headers={"Content-Type": "application/json"},
         )
         response = connection.getresponse()
-        raw = response.read(_MAX_BODY_BYTES + 1)
+        raw = response.read(maximum + 1)
     except (OSError, ssl.SSLError, http.client.HTTPException) as exc:
         raise _IndeterminateAgentProtocolError(
             "agent protocol outcome is indeterminate"
         ) from exc
-    if len(raw) > _MAX_BODY_BYTES:
+    if len(raw) > maximum:
         raise _IndeterminateAgentProtocolError(
             "agent protocol outcome is indeterminate"
         )
     try:
         payload = (
             _decode(raw, slurm_registration=True)
-            if role == "slurm_bootstrap" and operation == "register"
+            if slurm_registration
             else _decode(raw)
         )
     except QueueError as exc:

@@ -13,16 +13,20 @@ from loom.serialization import thaw_plain_data
 from tests.unit.loom.queue.test_remote_stage_execution import _profile, _request
 
 
-def _response(tmp_path, *, input_metadata=None):
+def _response(tmp_path, *, input_metadata=None, fingerprint_schema=2, stage_config=None):
     # A valid authored factory graph can exceed the control protocol's depth 8.
     # This follows the native request/delivery producer before HTTP serialization.
     nested = {"epsilon": 0.00001}
     for _ in range(11):
         nested = {"factory": nested}
-    request = _request(_profile(tmp_path), input_metadata=input_metadata, stage_config={
-        "model": {"encoder": {"block": {"normalization": {"epsilon": 0.00001}}}},
-        "data": nested,
-    })
+    request = _request(
+        _profile(tmp_path), input_metadata=input_metadata,
+        fingerprint_schema=fingerprint_schema,
+        stage_config=stage_config if stage_config is not None else {
+            "model": {"encoder": {"block": {"normalization": {"epsilon": 0.00001}}}},
+            "data": nested,
+        },
+    )
     values = {field.name: getattr(request, field.name)
               for field in fields(SlurmStageDelivery)
               if field.name != "schema_version" and hasattr(request, field.name)}
@@ -34,6 +38,41 @@ def _response(tmp_path, *, input_metadata=None):
     )
     return {"ok": True, "result": {"assignment_id": delivery.assignment_id,
                                   "delivery": delivery.to_dict()}}
+
+
+def test_ordered_delivery_exceeding_control_budget_crosses_http_and_replays(tmp_path):
+    from loom.pipeline.planning.models import StageFingerprintRecord
+
+    config = {"reconstruction": {f"item-{i}": "x" * 1100 for i in range(60)},
+              "detrending": {}, "sequence": [3, 1, 3]}
+    value = _response(tmp_path, fingerprint_schema=3, stage_config=config)
+    assert 65536 < len(json.dumps(value).encode()) < 262144
+    connection = _Connection(value)
+    for _ in range(2):
+        reply = _read_agent_reply(connection, "register", b"{}", "slurm_bootstrap")
+        delivery = SlurmStageDelivery.from_dict(thaw_plain_data(reply["delivery"]))
+        restored = StageFingerprintRecord.from_dict(delivery.fingerprint).payload.stage_config
+        assert list(restored) == ["reconstruction", "detrending", "sequence"]
+        assert list(restored["sequence"]) == config["sequence"]
+    for role, operation in [("agent", "register"), ("slurm_bootstrap", "handshake")]:
+        with pytest.raises(_IndeterminateAgentProtocolError):
+            _read_agent_reply(connection, operation, b"{}", role)
+
+
+def test_registration_reply_keeps_a_finite_transport_budget(tmp_path):
+    value = _response(tmp_path, fingerprint_schema=3,
+                      stage_config={"content": "x" * 262144})
+    with pytest.raises(QueueServiceError, match="body is too large"):
+        _decode(json.dumps(value).encode(), slurm_registration=True)
+    with pytest.raises(_IndeterminateAgentProtocolError):
+        _read_agent_reply(_Connection(value), "register", b"{}", "slurm_bootstrap")
+
+
+def test_large_unknown_registration_is_not_treated_as_a_delivery(tmp_path):
+    value = _response(tmp_path, fingerprint_schema=3, stage_config={"content": "x" * 70000})
+    value["result"]["delivery"]["schema_version"] = 99
+    with pytest.raises(QueueServiceError, match="body is too large"):
+        _decode(json.dumps(value).encode(), slurm_registration=True)
 
 
 class _Response(io.BytesIO):

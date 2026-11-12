@@ -24,6 +24,10 @@ from ._remote_stage_execution import (
 
 _MAX_BODY_BYTES = 65_536
 
+# Ordered configuration envelopes expand native scientific deliveries. This
+# budget belongs only to the typed Slurm registration reply, not control traffic.
+_MAX_SLURM_REGISTRATION_BYTES = 262_144
+
 _MAX_QUERY_RESPONSE_BYTES = 1_048_576
 
 _MAX_JSON_DEPTH = 8
@@ -209,9 +213,10 @@ def _exact(value: Mapping[str, object], fields: set[str]) -> None:
 
 def _decode(raw: bytes, *, failure_report: bool = False, control_wait: bool = False,
             slurm_registration: bool = False) -> Mapping[str, object]:
-    if len(raw) > _MAX_BODY_BYTES:
+    maximum = _MAX_SLURM_REGISTRATION_BYTES if slurm_registration else _MAX_BODY_BYTES
+    if len(raw) > maximum:
         raise QueueServiceError(
-            "agent protocol body is too large (maximum 65536 bytes); "
+            f"agent protocol body is too large (maximum {maximum} bytes); "
             "reduce the report or message size"
         )
     try:
@@ -262,8 +267,13 @@ def _decode(raw: bytes, *, failure_report: bool = False, control_wait: bool = Fa
                     envelope_inputs.append(artifact)
                 envelope_delivery["inputs"] = envelope_inputs
             _bounded_json(envelope_delivery, depth=0)
+            envelope = {**value, "result": {**result, "delivery": envelope_delivery}}
+            if len(json.dumps(envelope, separators=(",", ":")).encode()) > _MAX_BODY_BYTES:
+                raise QueueServiceError("agent protocol control body is too large")
             _bounded_json({**value, "result": {**result, "delivery": None}}, depth=0)
             return value
+    if len(raw) > _MAX_BODY_BYTES:
+        raise QueueServiceError("agent protocol body is too large (maximum 65536 bytes)")
     if isinstance(result, Mapping) and result.get("result") == "assignment":
         request = result.get("request")
         if isinstance(request, Mapping) and type(request.get("schema_version")) is int and request["schema_version"] == RESIDENT_ASSIGNMENT_BUNDLE_SCHEMA_VERSION:
