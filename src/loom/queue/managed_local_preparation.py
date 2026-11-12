@@ -29,7 +29,8 @@ from loom.pipeline.stores.coordinator_authority import (
     coordinator_authority_identity,
     publish_prepared_run,
 )
-from loom.serialization import PlainData, json_dumps_pretty
+from loom.serialization import PlainData
+from loom.serialization.configuration import configuration_json
 from loom.pipeline.stores.authority import AuthorityStoreError
 from loom.pipeline.stores.authority_protocol import AuthorityProtocolErrorCategory
 
@@ -428,9 +429,9 @@ def _persist_composed_config(
         or not hasattr(provenance, "to_dict")
     ):
         raise QueueServiceError("managed-local composed config evidence is unavailable")
-    store.write_config_snapshot(run_uri, "resolved", json_dumps_pretty(resolved))
+    store.write_config_snapshot(run_uri, "resolved", configuration_json(resolved))
     store.write_config_snapshot(
-        run_uri, "resolved_redacted", json_dumps_pretty(redacted)
+        run_uri, "resolved_redacted", configuration_json(redacted)
     )
     store.write_composition_manifest(
         run_uri, _plain_mapping(cast(Any, manifest).to_dict())
@@ -501,9 +502,9 @@ def _replay_matches(
         or not hasattr(provenance, "to_dict")
     ):
         raise QueueServiceError("managed-local composed config evidence is unavailable")
-    if store.read_config_snapshot(run_uri, "resolved") != json_dumps_pretty(resolved):
+    if store.read_config_snapshot(run_uri, "resolved") != configuration_json(resolved):
         raise QueueServiceError("managed-local resolved config conflicts")
-    if store.read_config_snapshot(run_uri, "resolved_redacted") != json_dumps_pretty(
+    if store.read_config_snapshot(run_uri, "resolved_redacted") != configuration_json(
         redacted
     ):
         raise QueueServiceError("managed-local redacted config conflicts")

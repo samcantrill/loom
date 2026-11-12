@@ -127,6 +127,7 @@ def _request(
     *,
     stage_config: dict[str, str] | None = None,
     input_binding_state: str = "current",
+    fingerprint_schema: int = 2,
     input_metadata: Mapping[str, PlainData] | None = None,
 ) -> _ResidentAssignmentBundle:
     worker = StageWorkerRequest(
@@ -141,9 +142,9 @@ def _request(
         StageFingerprintRecord.create(
             algorithm="sha256",
             payload=StageFingerprintPayload(
-                schema_version=2,
+                schema_version=fingerprint_schema,
                 policy_name="loom.stage.semantic",
-                policy_version=2,
+                policy_version=fingerprint_schema,
                 stage_name="build",
                 factory_target="pkg.Stage",
                 factory_init={},
@@ -458,10 +459,12 @@ def test_delivered_poll_atomically_retains_an_unresolved_assignment(
     assert poll_state == ("DELIVERED",)
 
 
-def test_remote_semantic_request_rejects_path_bearing_fields(tmp_path: Path) -> None:
+@pytest.mark.parametrize("fingerprint_schema", [2, 3])
+def test_remote_semantic_request_rejects_path_bearing_fields(tmp_path: Path, fingerprint_schema) -> None:
     request = _request(
         _profile(tmp_path),
         stage_config={"cache_path": "/coordinator/private"},
+        fingerprint_schema=fingerprint_schema,
     )
     assert _ResidentAssignmentBundle.from_dict(request.to_dict()) == request
     with pytest.raises(QueueServiceError, match="path-bearing"):
@@ -485,11 +488,12 @@ def test_remote_semantic_request_rejects_path_bearing_fields(tmp_path: Path) -> 
         replace(portable_request.inputs[0], metadata={"index": {"path": "relative.json"}})
 
 
+@pytest.mark.parametrize("fingerprint_schema", [2, 3])
 def test_only_fixed_preparation_input_can_cross_the_semantic_path_guard(
-    tmp_path: Path,
+    tmp_path: Path, fingerprint_schema,
 ) -> None:
     profile = _profile(tmp_path)
-    request = _request(profile)
+    request = _request(profile, fingerprint_schema=fingerprint_schema)
     binding = PreparationChildInput(
         "prepare-1",
         "existing",
@@ -2171,7 +2175,7 @@ def test_native_preparation_transfer_publishes_pair_and_restores_original_primar
     primary = Path(uri_to_path(published.uri))
     assert load_preparation_report(published, primary) == {
         **logical,
-        "report_format": "loom.preparation_report.v1",
+        "report_format": "loom.preparation_report.v2",
     }
     prior = {
         path: (path.read_bytes(), path.stat().st_mtime_ns)

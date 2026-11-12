@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+from loom.serialization.configuration import read_configuration_json
+
 from collections.abc import Mapping
-import json
 from typing import Any, cast
 
 from loom.artifacts import ArtifactRef, ArtifactValidationError
 from loom.fingerprints import hash_mapping, validate_digest
 from loom.pipeline.stores.run_store import RunPreparedRunStore, RunConfigStore, LocalRunStorePaths
-from loom.serialization import PlainData, ensure_plain_data
+from loom.serialization import PlainData, ensure_plain_data, thaw_plain_data
+from weave.ordered import encode_ordered_config, ordered_config_fingerprint
 
 CONTRACT = "loom.project_contract"
 CONTRACTS = "loom.project_contracts"
@@ -118,9 +120,17 @@ def envelope(
     capture: str,
     node: str,
     original: Mapping[str, PlainData],
+    schema_version: int = 2,
 ) -> dict[str, PlainData]:
+    if schema_version not in (1, 2):
+        raise ValueError("native project contract schema is unsupported")
+    original = dict(original)
+    if schema_version == 2:
+        for key in ("factory_init", "stage_config"):
+            if key in original:
+                original[key] = encode_ordered_config(thaw_plain_data(original[key]))
     fields: dict[str, PlainData] = {
-        "schema_version": 1,
+        "schema_version": schema_version,
         "namespace": namespace,
         **node_result(result),
     }
@@ -148,7 +158,7 @@ def _check_envelope(data: dict[str, PlainData]) -> None:
         set(data)
         != {"schema_version", "namespace", "semantic_key", "payload", "binding_digest"}
         or type(data["schema_version"]) is not int
-        or data["schema_version"] != 1
+        or data["schema_version"] not in (1, 2)
     ):
         raise ValueError("native project contract version or fields are unsupported")
     if not isinstance(data["namespace"], str) or not data["namespace"]:
@@ -213,7 +223,7 @@ def load_contract_report(
         raise ValueError("retained report installation namespace conflicts")
     composition = _plain_mapping_view(report["composition"])
     resolved = config.read_config_snapshot(run_uri, "resolved")
-    if resolved is None or composition["resolved"] != json.loads(resolved):
+    if resolved is None or ordered_config_fingerprint(composition["resolved"]) != ordered_config_fingerprint(read_configuration_json(resolved)):
         raise ValueError("retained report captured declaration conflicts")
     contracts = _plain_mapping_view(report["project_contracts"])
     for value in contracts.values():
@@ -259,6 +269,7 @@ def _worker_contract_metadata(
         capture=capture,
         node=stage.name,
         original=declaration(stage),
+        schema_version=cast(int, attached["schema_version"]),
     )
     if attached != expected:
         raise ValueError("retained project node binding conflicts")
@@ -280,7 +291,10 @@ def validate_worker_metadata(
         attached = validate_envelope(metadata[CONTRACT])
         capture = metadata[CAPTURE]
         _native_digest(capture)
-        payload = fingerprint.payload.to_dict()
+        payload = {
+            key: thaw_plain_data(getattr(fingerprint.payload, key))
+            for key in ("factory_target", "factory_init", "stage_config", "declared_inputs", "declared_outputs")
+        }
         original = {
             key: payload[key]
             for key in (
@@ -297,6 +311,7 @@ def validate_worker_metadata(
             capture=cast(str, capture),
             node=node,
             original=original,
+            schema_version=cast(int, attached["schema_version"]),
         ):
             raise ValueError("worker project declaration binding conflicts")
     if EXECUTION in metadata:

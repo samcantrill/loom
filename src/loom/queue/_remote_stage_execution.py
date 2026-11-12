@@ -2797,8 +2797,7 @@ class _ResidentAssignmentWorkspace:
 def _assignment_local_scope(request: _ResidentAssignmentBundle) -> Mapping[str, PlainData] | None:
     from .preparation import LOCAL_PREPARATION_SCOPE, _local_scope
 
-    payload = cast(Mapping[str, PlainData], request.fingerprint["payload"])
-    fields = cast(Mapping[str, PlainData], payload["fingerprint_fields"])
+    fields = StageFingerprintRecord.from_dict(request.fingerprint).payload.fingerprint_fields
     scope = _local_scope(fields.get(LOCAL_PREPARATION_SCOPE))
     preparation = request.preparation_input
     if preparation is not None and scope != preparation.local_scope:
@@ -2852,49 +2851,39 @@ def _validate_remote_semantic_data(
     from loom.fingerprints import hash_mapping
     from .preparation import LOCAL_PREPARATION_SCOPE, _local_scope
 
-    payload = cast(Mapping[str, PlainData], fingerprint["payload"])
-    fields = cast(Mapping[str, PlainData], payload["fingerprint_fields"])
+    decoded = StageFingerprintRecord.from_dict(fingerprint).payload
+    fields = dict(decoded.fingerprint_fields)
     submitted = assignment_binding(fingerprint)
-    if submitted is not None:
-        # Only this typed container-internal field may carry an absolute Python
-        # path. Its decoder admits no host paths, mounts or executable authority.
-        payload = dict(payload)
-        payload["fingerprint_fields"] = {
-            **fields,
-            SUBMITTED_EXECUTION_SCOPE: {
-                "binding_digest": hash_mapping(fields[SUBMITTED_EXECUTION_SCOPE]),
-            },
-        }
-        fingerprint = {**fingerprint, "payload": payload}
     preparation = _preparation_input_from_fingerprint(fingerprint)
+    shared = assignment_scope(fingerprint)
+    # Path guards inspect decoded configuration, including mapping keys.
+    # This projection is inspection-only; retained bytes and identity stay encoded.
+    payload = {
+        **cast(Mapping[str, PlainData], fingerprint["payload"]),
+        "factory_init": thaw_plain_data(decoded.factory_init),
+        "stage_config": thaw_plain_data(decoded.stage_config),
+        "fingerprint_fields": fields,
+    }
+    fingerprint = {**fingerprint, "payload": payload}
+    if submitted is not None:
+        fields[SUBMITTED_EXECUTION_SCOPE] = {
+            "binding_digest": hash_mapping(fields[SUBMITTED_EXECUTION_SCOPE]),
+        }
     if (_local_scope(fields.get(LOCAL_PREPARATION_SCOPE)) is not None
         or (preparation is not None and preparation.local_scope is not None)):
         raise QueueServiceError("remote transport cannot export unresolved local preparation bindings")
     if preparation is not None:
-        # The fixed stage's only location-bearing data is a validated finite
-        # preparation reference. Every other semantic field keeps the same guard.
-        payload = cast(Mapping[str, PlainData], fingerprint["payload"])
-        fingerprint = {
-            **fingerprint,
-            "payload": {
-                **payload,
-                "stage_config": {
-                    "preparation_input_digest": hash_mapping(preparation.to_dict())
-                },
-            },
+        # The fixed stage's location-bearing data is a validated finite reference.
+        payload["stage_config"] = {
+            "preparation_input_digest": hash_mapping(preparation.to_dict())
         }
-    shared = assignment_scope(fingerprint) if preparation is None else preparation.shared_scope
     if shared is not None:
-        payload = dict(cast(Mapping[str, PlainData], fingerprint["payload"]))
-        fields = dict(cast(Mapping[str, PlainData], payload["fingerprint_fields"]))
         fields.pop(SHARED_EXECUTION_SCOPE, None)
         if preparation is None:
             validate_workload(payload["stage_config"], shared)
             validate_workload(payload["factory_init"], shared)
             payload["stage_config"] = {}
             payload["factory_init"] = {}
-        payload["fingerprint_fields"] = fields
-        fingerprint = {**fingerprint, "payload": payload}
     def validate_references(value: object) -> None:
         if isinstance(value, Mapping):
             if SHARED_PUBLICATION in value:
@@ -2993,7 +2982,8 @@ def _preparation_input_from_fingerprint(
         or payload.get("factory_target") != PREPARATION_STAGE_TARGET
     ):
         return None
-    return PreparationChildInput.from_dict(payload.get("stage_config"))
+    decoded = StageFingerprintRecord.from_dict(fingerprint).payload
+    return PreparationChildInput.from_dict(decoded.stage_config)
 
 
 def _canonical_json(value: Mapping[str, PlainData]) -> str:

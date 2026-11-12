@@ -20,13 +20,15 @@ from loom.serialization import (
     thaw_plain_data,
 )
 from loom.serialization.errors import PlainDataError
+from weave.ordered import encode_ordered_config, decode_ordered_config
+from weave.errors import ConfigError
 
 from .errors import PlanSerializationError, PlanningValidationError
 
 PLAN_SCHEMA_VERSION = 1
-STAGE_FINGERPRINT_SCHEMA_VERSION = 2
+STAGE_FINGERPRINT_SCHEMA_VERSION = 3
 STAGE_FINGERPRINT_POLICY_NAME = "loom.stage.semantic"
-STAGE_FINGERPRINT_POLICY_VERSION = 2
+STAGE_FINGERPRINT_POLICY_VERSION = 3
 DEFAULT_FINGERPRINT_ALGORITHM = "sha256"
 
 
@@ -414,12 +416,15 @@ class StageFingerprintPayload:
     extra: Mapping[str, PlainData]
 
     def __post_init__(self) -> None:
-        require_schema_version(
-            self.schema_version,
-            field="StageFingerprintPayload.schema_version",
-            current=STAGE_FINGERPRINT_SCHEMA_VERSION,
-            error_type=PlanSerializationError,
-        )
+        # Version 2 remains readable with its original bytes/hash semantics.
+        # Never infer authored order or upgrade a retained legacy fingerprint.
+        if self.schema_version != 2:
+            require_schema_version(
+                self.schema_version,
+                field="StageFingerprintPayload.schema_version",
+                current=STAGE_FINGERPRINT_SCHEMA_VERSION,
+                error_type=PlanSerializationError,
+            )
         object.__setattr__(
             self, "policy_name", require_str(self.policy_name, "policy_name")
         )
@@ -476,17 +481,19 @@ class StageFingerprintPayload:
         return self.to_dict()
 
     def to_dict(self) -> dict[str, PlainData]:
+        def configuration(value: object) -> PlainData:
+            plain = thaw_plain_data(value)
+            return encode_ordered_config(plain) if self.schema_version == 3 else plain
+
         return {
             "schema_version": self.schema_version,
             "policy_name": self.policy_name,
             "policy_version": self.policy_version,
             "stage_name": self.stage_name,
             "factory_target": self.factory_target,
-            "factory_init": thaw_plain_data(self.factory_init, path="factory_init"),
-            "stage_config": thaw_plain_data(self.stage_config, path="stage_config"),
-            "fingerprint_fields": thaw_plain_data(
-                self.fingerprint_fields, path="fingerprint_fields"
-            ),
+            "factory_init": configuration(self.factory_init),
+            "stage_config": configuration(self.stage_config),
+            "fingerprint_fields": configuration(self.fingerprint_fields),
             "declared_inputs": thaw_plain_data(
                 self.declared_inputs, path="declared_inputs"
             ),
@@ -524,17 +531,25 @@ class StageFingerprintPayload:
         }
         reject_unknown(mapping, allowed, "StageFingerprintPayload")
         require_fields(mapping, allowed, "StageFingerprintPayload")
+
+        def configuration(name: str) -> Mapping[str, PlainData]:
+            value = mapping[name]
+            if mapping["schema_version"] == 3:
+                try:
+                    value = decode_ordered_config(thaw_plain_data(value))
+                except ConfigError as exc:
+                    raise PlanSerializationError(f"Invalid ordered {name}: {exc}") from exc
+            return plain_mapping(value, name)
+
         return cls(
             schema_version=positive_int(mapping["schema_version"], "schema_version"),
             policy_name=require_str(mapping["policy_name"], "policy_name"),
             policy_version=positive_int(mapping["policy_version"], "policy_version"),
             stage_name=require_str(mapping["stage_name"], "stage_name"),
             factory_target=require_str(mapping["factory_target"], "factory_target"),
-            factory_init=plain_mapping(mapping["factory_init"], "factory_init"),
-            stage_config=plain_mapping(mapping["stage_config"], "stage_config"),
-            fingerprint_fields=plain_mapping(
-                mapping["fingerprint_fields"], "fingerprint_fields"
-            ),
+            factory_init=configuration("factory_init"),
+            stage_config=configuration("stage_config"),
+            fingerprint_fields=configuration("fingerprint_fields"),
             declared_inputs=str_mapping(mapping["declared_inputs"], "declared_inputs"),
             bound_inputs=nested_plain_mapping(mapping["bound_inputs"], "bound_inputs"),
             declared_outputs=nested_plain_mapping(
@@ -583,12 +598,15 @@ class StageFingerprintRecord:
         )
 
     def __post_init__(self) -> None:
-        require_schema_version(
-            self.schema_version,
-            field="StageFingerprintRecord.schema_version",
-            current=STAGE_FINGERPRINT_SCHEMA_VERSION,
-            error_type=PlanSerializationError,
-        )
+        # Version 2 remains readable with its original bytes/hash semantics.
+        # Never infer authored order or upgrade a retained legacy fingerprint.
+        if self.schema_version != 2:
+            require_schema_version(
+                self.schema_version,
+                field="StageFingerprintRecord.schema_version",
+                current=STAGE_FINGERPRINT_SCHEMA_VERSION,
+                error_type=PlanSerializationError,
+            )
         object.__setattr__(self, "algorithm", require_str(self.algorithm, "algorithm"))
         object.__setattr__(
             self, "policy_name", require_str(self.policy_name, "policy_name")
@@ -605,6 +623,8 @@ class StageFingerprintRecord:
         object.__setattr__(
             self, "inputs_summary", plain_mapping(self.inputs_summary, "inputs_summary")
         )
+        if self.schema_version != self.payload.schema_version:
+            raise PlanSerializationError("StageFingerprintRecord schema does not match its payload")
         if self.policy_name != self.payload.policy_name:
             raise PlanSerializationError(
                 "StageFingerprintRecord.policy_name does not match its payload"

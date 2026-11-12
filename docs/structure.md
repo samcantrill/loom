@@ -611,6 +611,19 @@ interpolation, expands named recipes, validates stable boundaries, instantiates
 `_target_` object graphs, records config provenance, and redacts secrets for
 safe persisted output.
 
+Authored mapping and sequence order is semantic configuration data. Configuration
+snapshots use Weave's `weave.ordered-config.v1` encoding, whose arrays retain
+mapping entry order through canonical JSON. Preparation report v2 references a
+compact composition companion v2 that stores each complete equal configuration
+once, including resolved/redacted views and recipe evidence. Stage fingerprint
+payload v3 encodes configuration-bearing fields; consumers decode
+within the receiving process and re-encode before further transport. Preparation
+candidate v2 carries an encoded `configuration`; project verifiers decode that
+field for inspection while computing candidate digests over the unchanged wire
+candidate. Legacy snapshots and fingerprints retain their recorded meaning;
+readers cannot infer authored order that older serializers discarded. This
+contract does not impose sequential scheduling on independent DAG stages.
+
 Expected modules:
 
 ```text

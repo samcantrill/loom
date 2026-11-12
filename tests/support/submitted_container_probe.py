@@ -43,7 +43,11 @@ def inspect(request):
             {key: request[key] for key in ("execution", "container_capability")}
         )
         implementation = submitted_implementation(expected, capability)
-        for stage in candidate["configuration"]["pipeline"]["stages"]:
+        from weave.ordered import decode_ordered_config
+
+        assert candidate["schema_version"] == 2
+        configuration = decode_ordered_config(candidate["configuration"])
+        for stage in configuration["pipeline"]["stages"]:
             assert submitted_implementation(*submitted_binding(
                 stage["fingerprint"]["loom.submitted_execution"]
             )) == implementation

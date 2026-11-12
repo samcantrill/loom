@@ -334,12 +334,14 @@ def bind_snapshot(snapshot: dict[str, PlainData], permitted: Mapping[str, PlainD
 
 
 def assignment_scope(fingerprint: Mapping[str, PlainData]) -> dict[str, PlainData] | None:
-    payload = cast(Mapping[str, PlainData], fingerprint["payload"])
-    fields = cast(Mapping[str, PlainData], payload["fingerprint_fields"])
+    from loom.pipeline.planning import StageFingerprintRecord
+
+    payload = StageFingerprintRecord.from_dict(fingerprint).payload
+    fields = payload.fingerprint_fields
     selected = scope(fields.get(SHARED_EXECUTION_SCOPE))
     from .preparation import PREPARATION_STAGE_TARGET, PreparationChildInput
-    if payload["factory_target"] == PREPARATION_STAGE_TARGET:
-        binding = PreparationChildInput.from_dict(payload["stage_config"])
+    if payload.factory_target == PREPARATION_STAGE_TARGET:
+        binding = PreparationChildInput.from_dict(payload.stage_config)
         if binding.shared_scope != selected:
             raise QueueServiceError("preparation shared scope conflicts with assignment")
     return selected

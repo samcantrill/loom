@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from loom.serialization.configuration import read_configuration_json
 import multiprocessing
 from multiprocessing.connection import Connection
 from collections.abc import Callable
@@ -228,7 +229,7 @@ def test_checked_stateful_recipe_is_published_and_replayed_without_recomposition
     }
     snapshot = store.read_config_snapshot(receipt.run_uri, "resolved")
     assert snapshot is not None
-    resolved = json.loads(snapshot)
+    resolved = read_configuration_json(snapshot)
     assert resolved["pipeline"]["stages"][0]["config"] == {"value": 41}
     run_dir = store.local_run_dir(receipt.run_uri)
     before = {
@@ -452,7 +453,7 @@ def test_composed_preparation_uses_trusted_inputs_without_a_local_agent(
     }
     resolved_snapshot = store.read_config_snapshot(receipt.run_uri, "resolved")
     assert resolved_snapshot is not None
-    assert json.loads(resolved_snapshot)["pipeline"]["stages"][0]["config"]["value"] == 42
+    assert read_configuration_json(resolved_snapshot)["pipeline"]["stages"][0]["config"]["value"] == 42
     assert (
         prepare_managed_run(
             service,

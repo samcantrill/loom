@@ -7,6 +7,9 @@ or call the composer on the coordinator.
 
 from __future__ import annotations
 
+from loom.serialization.configuration import read_configuration_json
+from weave.ordered import encode_ordered_config
+
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from copy import deepcopy
@@ -242,11 +245,16 @@ class PreparationStage:
             report["project_contracts"] = _report_contracts(report) if project_result is not None else None
         from loom._preparation_report import save_composition_evidence
 
-        return {
-            "report": context.save_artifact(
-                "report", save_composition_evidence(report, context.local_output_path("report", suffix=".composition.json")), artifact_type="json", codec_key="json.v1"
-            )
-        }
+        from loom.pipeline.stores.atomic import atomic_write_bytes
+
+        primary = save_composition_evidence(
+            report, context.local_output_path("report", suffix=".composition.json")
+        )
+        path = context.local_output_path("report", suffix=".json")
+        atomic_write_bytes(path, stable_json_bytes(primary))
+        return {"report": context.register_local_artifact(
+            "report", path, artifact_type="json", codec_key="json.v1"
+        )}
 
 
 def _run_action_verification(binding: PreparationChildInput, artifact_access: object = None, project_reports: object = None) -> dict[str, PlainData]:
@@ -466,7 +474,9 @@ def _validate_project_result(
         raise QueueConflictError("reconciled preparation requires a complete key")
     from loom.pipeline._project_contracts import node_result
 
-    if stable_json_bytes(original) != stable_json_bytes(checked):
+    if (stable_json_bytes(original) != stable_json_bytes(checked)
+        or any(encode_ordered_config(original[key]) != encode_ordered_config(checked[key])
+               for key in ("resolved", "redacted", "recipe_manifest"))):
         raise QueueConflictError("project preparation changed the captured composition")
     pipeline = _pipeline_from_resolved(cast(Mapping[str, object], original["resolved"]))
     contracts = _plain_mapping(result["stage_contracts"])
@@ -501,14 +511,16 @@ def _bind_local_snapshot(
     for view in (snapshot,) if redacted is None else (snapshot, redacted):
         definition = cast(dict[str, PlainData], view["pipeline"])
         for stage in cast(list[dict[str, PlainData]], definition["stages"]):
-            stage["placement"] = {
-                **cast(dict[str, PlainData], stage.get("placement", {})),
-                "target": scope["agent_id"],
-            }
-            stage["fingerprint"] = {
-                **cast(dict[str, PlainData], stage.get("fingerprint", {})),
-                LOCAL_PREPARATION_SCOPE: dict(scope),
-            }
+            # Diagnostic views may retain unresolved interpolation/redaction
+            # scalars. Preserve those instead of copying executable values back.
+            placement = stage.get("placement", {})
+            if isinstance(placement, Mapping):
+                stage["placement"] = {**placement, "target": scope["agent_id"]}
+            fingerprint = stage.get("fingerprint", {})
+            if isinstance(fingerprint, Mapping):
+                stage["fingerprint"] = {
+                    **fingerprint, LOCAL_PREPARATION_SCOPE: dict(scope),
+                }
 
 
 def _compose_worker_config(
@@ -664,7 +676,7 @@ def _decode_preparation_report(
                         | ({"candidate", "verification"} if expected.candidate is not None else set())
                         | ({"project_contracts"} if expected.project_preparation is not None else set())
                         | ({"generations"} if expected.generations is not None else set()))
-        or report["report_format"] != "loom.preparation_report.v1"
+        or report["report_format"] not in {"loom.preparation_report.v1", "loom.preparation_report.v2"}
         or type(report["schema_version"]) is not int
         or report["schema_version"] != _report_schema(expected)
     ):
@@ -1166,9 +1178,9 @@ class CoordinatorPreparation:
                 project_reference = {"project_report": reference}
         return {
             **({"project_contracts": contract_report["project_contracts"]} if contract_report is not None else {}),
-            "schema_version": 1, "run_uri": run_uri,
+            "schema_version": 2, "run_uri": run_uri,
             "admission": None if admission is None else admission.to_dict(),
-            "authority": snapshot.to_dict(), "configuration": json.loads(resolved),
+            "authority": snapshot.to_dict(), "configuration": encode_ordered_config(read_configuration_json(resolved)),
             "native_intent": record, "intent_digest": intent.digest,
             "artifact_binding": {"access": "read_only", "root": str(store.local_artifact_root(run_uri)), **project_reference},
             "prepared_run": {"run_uri": run_uri, "plan_digest": record["plan_digest"],

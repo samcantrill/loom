@@ -489,3 +489,29 @@ def test_action_implementation_joins_the_report_image_to_its_admitted_node(tmp_p
     changed = replace(execution, image=replace(execution.image, sha256="b" * 64))
     with pytest.raises(QueueConflictError, match="implementation differs"):
         _report_implementation({**report, "execution": changed.to_dict()}, requirement, stage)
+
+
+@pytest.mark.parametrize("schema_version", [2, 3])
+def test_assignment_image_binding_survives_fingerprint_transport(tmp_path, schema_version):
+    import json
+
+    from loom.pipeline.planning import StageFingerprintRecord
+    from loom.queue.submitted_execution import SUBMITTED_EXECUTION_SCOPE, assignment_binding
+    from tests.unit.loom.queue.test_remote_stage_execution import _profile, _request as resident_request
+
+    original = StageFingerprintRecord.from_dict(resident_request(_profile(tmp_path)).fingerprint)
+    execution, capability = _execution(), _capability(tmp_path)
+    binding = {"execution": execution.to_dict(), "container_capability": capability.to_dict()}
+    record = StageFingerprintRecord.create(
+        algorithm=original.algorithm,
+        payload=replace(
+            original.payload,
+            schema_version=schema_version,
+            policy_version=schema_version,
+            fingerprint_fields={SUBMITTED_EXECUTION_SCOPE: binding},
+        ),
+        inputs_summary=original.inputs_summary,
+    )
+    wire = json.loads(json.dumps(record.to_dict(), sort_keys=True))
+    assert assignment_binding(wire) == (execution, capability)
+    assert StageFingerprintRecord.from_dict(wire).fingerprint == record.fingerprint

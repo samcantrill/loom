@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from loom.serialization.configuration import read_configuration_json
+
 from loom._sqlite_policy import SQLitePolicy, connect_existing
 
 from . import _coordinator_run_progress as _run_progress
@@ -139,7 +141,6 @@ from loom.serialization import (
     PlainData,
     ensure_plain_data,
     freeze_plain_data,
-    json_loads,
     thaw_plain_data,
 )
 from loom.timestamps import utc_timestamp
@@ -882,7 +883,7 @@ def load_managed_local_intent(
         raise QueueServiceError(
             "managed-local admission requires a resolved config snapshot"
         )
-    decoded = json_loads(snapshot, path="config/resolved.json")
+    decoded = read_configuration_json(snapshot, path="config/resolved.json")
     if (
         hashlib.sha256(snapshot.encode("utf-8")).hexdigest()
         != record["pipeline_digest"]
@@ -6151,7 +6152,7 @@ def _run_result_owner_view(
         resolved_snapshot = store.read_config_snapshot(admission.run_uri, "resolved")
         if resolved_snapshot is None:
             raise QueueServiceError("run-store resolved pipeline is unavailable")
-        resolved = json_loads(resolved_snapshot, path="config/resolved.json")
+        resolved = read_configuration_json(resolved_snapshot, path="config/resolved.json")
         if not isinstance(resolved, Mapping) or "pipeline" not in resolved:
             raise QueueServiceError("run-store resolved pipeline is invalid")
         pipeline = parse_pipeline_config(resolved["pipeline"])
