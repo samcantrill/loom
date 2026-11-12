@@ -49,6 +49,7 @@ import fcntl
 import hashlib
 import http.client
 import json
+import logging
 from pathlib import Path
 import secrets
 import shutil
@@ -914,6 +915,7 @@ class LocalDaemonAgentHttpClient:
                 self._restart_with_retained_work = self._has_retained_agent_work()
                 self._service_recovery_admission = self._restart_with_retained_work
                 self._ownership_observation_generation = 0
+                self._supervisor_diagnostics: dict[str, tuple[str, float]] = {}
                 self._joined_starts: set[str] = set()
             except ManagedLocalError as exc:
                 raise QueueServiceError(
@@ -1579,6 +1581,27 @@ class LocalDaemonAgentHttpClient:
         )
 
     def _observe_supervisor_ownership(self, receipt: SupervisorReceipt) -> None:
+        assignment_id = receipt.launch.assignment_id
+        reason = receipt.launch_reason
+        if receipt.state is SupervisorLaunchState.UNKNOWN:
+            reason = reason or "supervisor_ownership_unknown"
+        if reason is None:
+            self._supervisor_diagnostics.pop(assignment_id, None)
+        else:
+            previous = self._supervisor_diagnostics.get(assignment_id)
+            now = monotonic()
+            if previous is None or previous[0] != reason or now - previous[1] >= 30:
+                logging.getLogger(__name__).warning("agent supervisor observation: %s", json.dumps({
+                    "assignment_id": assignment_id,
+                    "operation_id": receipt.launch.launch_operation_id,
+                    "launch_state": receipt.state.value,
+                    "launch_reason": reason,
+                    "startup_elapsed_seconds": receipt.startup_elapsed_seconds,
+                    **({"admission_allowed": False,
+                        "admission_reason": "supervisor_ownership_unknown"}
+                       if receipt.state is SupervisorLaunchState.UNKNOWN else {}),
+                }, sort_keys=True))
+                self._supervisor_diagnostics[assignment_id] = (reason, now)
         if receipt.state is SupervisorLaunchState.UNKNOWN:
             # Observation application is manager-owned, but can interleave with
             # another assignment's asynchronous admission query without a write.
@@ -1792,8 +1815,8 @@ class LocalDaemonAgentHttpClient:
                 continue
             try:
                 launch = _launch_from_value(json.loads(encoded_launch))
-                (yield from _external("bulk", supervisor.request_stop_wait, launch))
-                receipt = (yield from _external("bulk", supervisor.contain, launch))
+                (yield from _steps(supervisor.request_stop_wait, launch))
+                receipt = (yield from _steps(supervisor.contain, launch))
                 self._observe_supervisor_ownership(receipt)
             except (AgentProcessSupervisorError, QueueError, ValueError):
                 all_contained = False
@@ -2063,8 +2086,8 @@ class LocalDaemonAgentHttpClient:
                     # Release already proved containment and returned claims.
                     # A late command cannot change its committed result.
                     return "terminal", None
-                (yield from _external("bulk", self._supervisor.request_stop_wait, launch))
-                contained = (yield from _external("bulk", self._supervisor.contain, launch))
+                (yield from _steps(self._supervisor.request_stop_wait, launch))
+                contained = (yield from _steps(self._supervisor.contain, launch))
                 self._observe_supervisor_ownership(contained)
             except (AgentProcessSupervisorError, QueueError, ValueError):
                 return "unknown", None
@@ -2319,7 +2342,7 @@ class LocalDaemonAgentHttpClient:
                 encoded = workspace.supervisor_launch_json()
                 if encoded is None or self._supervisor is None:
                     raise QueueConflictError("contained result has no supervisor evidence")
-                receipt = (yield from _external("bulk", self._supervisor.query_wait, _launch_from_value(json.loads(encoded))))
+                receipt = (yield from _steps(self._supervisor.query_wait, _launch_from_value(json.loads(encoded))))
                 self._observe_supervisor_ownership(receipt)
                 if not receipt.qualified_success:
                     result = _managed_root_failed_worker_result(

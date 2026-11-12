@@ -8,13 +8,15 @@ private queue application infrastructure; pipeline execution never imports it.
 
 from __future__ import annotations
 
+from collections.abc import Generator
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 import fcntl
 import hashlib
 import io
 import json
+import math
 import os
 from pathlib import Path
 from multiprocessing import AuthenticationError
@@ -26,10 +28,9 @@ import stat
 import subprocess
 import sys
 import tempfile
-import time
 from threading import BoundedSemaphore, Event, RLock, Thread
 from time import monotonic, sleep
-from typing import Mapping, cast
+from typing import Any, Mapping, cast
 from uuid import uuid4
 
 from loom._sqlite_inspection import inspect_sqlite_database
@@ -37,6 +38,7 @@ from loom.fingerprints import hash_mapping
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.pipeline.runtime._resource_controls import _validated_resource_controls
 from ._process_group import OwnedProcessGroup, require_group_wait_support
+from ._agent_progress import _Progress, _cooperative, _delay, _external, _steps
 from ._phase_timing import log_phases, observe_phases, phase
 from ._submitted_container_policy import SubmittedContainerPolicy
 from .submitted_execution import SubmittedContainerCapability, SubmittedContainerExecution
@@ -371,6 +373,8 @@ class SupervisorReceipt:
     backend_successful: bool = False
     temporary_storage_pending: bool = False
     temporary_storage_error: str | None = None
+    launch_reason: str | None = None
+    startup_elapsed_seconds: float | None = None
 
     @property
     def started(self) -> bool:
@@ -453,8 +457,14 @@ class AgentProcessSupervisor:
         self._agent_id = self._configuration.agent_id
         self._children: dict[str, OwnedProcessGroup] = {}
         self._namespace_inits: dict[str, int] = {}
+        self._pending_namespaces: dict[str, subprocess.Popen[bytes]] = {}
+        self._stop_requested: set[str] = set()
+        self._containment_success: dict[str, bool] = {}
+        self._startup_started_at: dict[str, float] = {}
+        self._gate_failures: set[str] = set()
         self._operation_lock = RLock()
         self._assignment_locks: dict[str, RLock] = {}
+        self._gate_locks: dict[str, RLock] = {}
         self._path = self.root / "supervisor.sqlite"
         if initialize:
             self._initialize()
@@ -695,6 +705,10 @@ class AgentProcessSupervisor:
         with self._operation_lock:
             return self._assignment_locks.setdefault(launch.assignment_id, RLock())
 
+    def _gate_lock(self, launch: ResidentWorkerLaunch) -> RLock:
+        with self._operation_lock:
+            return self._gate_locks.setdefault(launch.assignment_id, RLock())
+
     def _launch(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
         self._validate_launch(launch)
         if launch.backend_kind == "docker":
@@ -781,25 +795,15 @@ class AgentProcessSupervisor:
                 conn.commit()
             raise AgentProcessSupervisorError("resident root was not created") from exc
         self._children[launch.launch_operation_id] = OwnedProcessGroup(child)
+        self._startup_started_at[launch.launch_operation_id] = monotonic()
         if launch.backend_kind == "apptainer":
-            from loom.pipeline.executors.apptainer._timeout import _capture_init
-
-            deadline = time.monotonic() + 2
-            while time.monotonic() < deadline:
-                init = _capture_init(child, child.pid)
-                if init is not None:
-                    self._namespace_inits[launch.launch_operation_id] = init
-                    gate.write_text("granted\n", encoding="utf-8")
-                    break
-                if self._children[launch.launch_operation_id].root_status() is not None:
-                    break
-                time.sleep(0.01)
+            self._pending_namespaces[launch.launch_operation_id] = child
         with self._connect() as conn:
             conn.execute(
                 "UPDATE launches SET state = ?, pid = ?, revision = revision + 1 WHERE operation_id = ?",
                 (
                     (
-                        SupervisorLaunchState.UNKNOWN.value
+                        SupervisorLaunchState.STARTING.value
                         if launch.backend_kind == "apptainer"
                         and launch.launch_operation_id not in self._namespace_inits
                         else SupervisorLaunchState.RUNNING.value
@@ -813,7 +817,42 @@ class AgentProcessSupervisor:
                 (launch.launch_operation_id,),
             ).fetchone()
             conn.commit()
-        return self._receipt(launch, row)
+        return self.query(launch)
+
+    def _advance_namespace(self, launch: ResidentWorkerLaunch) -> None:
+        """Observe one handshake using only this owner's original process handle."""
+        process = self._pending_namespaces.get(launch.launch_operation_id)
+        if process is None:
+            return
+        owned = self._children.get(launch.launch_operation_id)
+        if owned is None or not owned.ownership_retained():
+            self._pending_namespaces.pop(launch.launch_operation_id)
+            return
+        if launch.launch_operation_id in self._namespace_inits:
+            return
+        from loom.pipeline.executors.apptainer._timeout import _capture_init
+
+        namespace = _capture_init(process, process.pid)
+        if namespace is None:
+            return
+        self._namespace_inits[launch.launch_operation_id] = namespace
+        # Stop acceptance and gate publication share one ordering boundary.
+        with self._gate_lock(launch):
+            if launch.launch_operation_id in self._stop_requested:
+                return
+            # A failed gate is an interrupted transition, not a pending probe.
+            self._pending_namespaces.pop(launch.launch_operation_id)
+            try:
+                (launch.workspace_root / "run.grant").write_text("granted\n", encoding="utf-8")
+            except OSError:
+                self._gate_failures.add(launch.launch_operation_id)
+                raise
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE launches SET state = 'running', revision = revision + 1 "
+                "WHERE operation_id = ?", (launch.launch_operation_id,),
+            )
+            conn.commit()
 
     def _qualify_new_launch(self, launch: ResidentWorkerLaunch) -> None:
         """Inspect input storage only before this owner accepts a new launch."""
@@ -868,10 +907,16 @@ class AgentProcessSupervisor:
                 raise AgentProcessSupervisorError(
                     "launch query conflicts with durable identity"
                 )
-            if row["state"] == "starting":
-                # The assignment lock excludes a live launch here. An aborted
-                # launch can retain a child without completing namespace/grant
-                # evidence; that stale row is not an in-progress operation.
+            if launch.launch_operation_id in self._pending_namespaces:
+                self._advance_namespace(launch)
+                row = conn.execute(
+                    "SELECT * FROM launches WHERE operation_id = ?",
+                    (launch.launch_operation_id,),
+                ).fetchone()
+            if (row["state"] == "starting"
+                and launch.launch_operation_id not in self._pending_namespaces):
+                # An interrupted transition without a live handshake is not
+                # evidence of pending startup; persisted PIDs cannot be adopted.
                 conn.execute(
                     "UPDATE launches SET state = 'unknown', revision = revision + 1 "
                     "WHERE operation_id = ?", (launch.launch_operation_id,),
@@ -928,6 +973,16 @@ class AgentProcessSupervisor:
             return self._contain(launch)
 
     def _contain(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
+        self._validate_launch(launch)
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT digest FROM launches WHERE operation_id = ?",
+                (launch.launch_operation_id,),
+            ).fetchone()
+        if row is not None and row["digest"] != launch.spec_digest:
+            raise AgentProcessSupervisorError("containment conflicts with durable identity")
+        with self._gate_lock(launch):
+            self._stop_requested.add(launch.launch_operation_id)
         if launch.backend_kind == "docker":
             return self._docker_reconcile(launch, contain=True)
         receipt = self.query(launch)
@@ -948,16 +1003,24 @@ class AgentProcessSupervisor:
             return receipt
         if child is None:
             return receipt
-        successful_exit = child.successful_exit()
+        successful_exit = self._containment_success.get(launch.launch_operation_id)
+        if successful_exit is None:
+            successful_exit = child.successful_exit()
         namespace = self._namespace_inits.get(launch.launch_operation_id)
         if launch.backend_kind == "apptainer":
             from loom.pipeline.executors.apptainer._timeout import _ready
 
             if namespace is None:
-                return SupervisorReceipt(
-                    SupervisorLaunchState.UNKNOWN, launch, receipt.supervisor_revision
+                return replace(
+                    receipt,
+                    state=(SupervisorLaunchState.STARTING
+                           if receipt.state is SupervisorLaunchState.STARTING
+                           and child.ownership_retained()
+                           else SupervisorLaunchState.UNKNOWN),
                 )
-            successful_exit = successful_exit and _ready(namespace)
+            if launch.launch_operation_id not in self._containment_success:
+                successful_exit = successful_exit and _ready(namespace)
+            self._containment_success.setdefault(launch.launch_operation_id, successful_exit)
             if not _ready(namespace):
                 import signal
 
@@ -972,6 +1035,9 @@ class AgentProcessSupervisor:
                         launch,
                         receipt.supervisor_revision,
                     )
+        # Qualification precedes cleanup signals. A later observation must not
+        # reinterpret our own cleanup as evidence that the worker failed.
+        self._containment_success.setdefault(launch.launch_operation_id, successful_exit)
         try:
             contained = child.contain()
         except OSError:
@@ -983,9 +1049,16 @@ class AgentProcessSupervisor:
             if contained:
                 os.close(namespace)
                 self._namespace_inits.pop(launch.launch_operation_id, None)
+                self._pending_namespaces.pop(launch.launch_operation_id, None)
         if not contained:
-            return SupervisorReceipt(
-                SupervisorLaunchState.UNKNOWN, launch, receipt.supervisor_revision
+            owned = child.ownership_retained()
+            return replace(
+                receipt,
+                state=(SupervisorLaunchState.STARTING if owned
+                       else SupervisorLaunchState.UNKNOWN),
+                launch_reason=("containment_pending" if owned
+                               else "supervisor_ownership_unknown"),
+                startup_elapsed_seconds=None,
             )
         result = launch.workspace_root / "worker-result.json"
         with self._connect() as conn:
@@ -1364,8 +1437,21 @@ class AgentProcessSupervisor:
             ):
                 raise AgentProcessSupervisorError("supervisor launch generation mismatch")
 
-    @staticmethod
-    def _receipt(launch: ResidentWorkerLaunch, row: sqlite3.Row) -> SupervisorReceipt:
+    def _receipt(self, launch: ResidentWorkerLaunch, row: sqlite3.Row) -> SupervisorReceipt:
+        operation = launch.launch_operation_id
+        reason = None
+        elapsed = None
+        if row["state"] in {"starting", "unknown"}:
+            if operation in self._gate_failures:
+                reason = "execution_gate_unavailable"
+            elif operation in self._pending_namespaces:
+                reason = ("startup_stop_pending" if operation in self._stop_requested
+                          else "namespace_not_ready")
+                elapsed = max(0.0, monotonic() - self._startup_started_at[operation])
+            elif row["state"] == "unknown":
+                reason = "supervisor_ownership_unknown"
+            else:
+                reason = "launch_dispatch_pending"
         return SupervisorReceipt(
             SupervisorLaunchState.NOT_ACCEPTED if row["start_error"] is not None else SupervisorLaunchState(str(row["state"])),
             launch,
@@ -1376,6 +1462,8 @@ class AgentProcessSupervisor:
             bool(row["successful_exit"]),
             temporary_storage_pending=bool(row["temporary_storage_pending"]),
             temporary_storage_error=row["temporary_storage_error"],
+            launch_reason=reason,
+            startup_elapsed_seconds=elapsed,
         )
 
 
@@ -1555,6 +1643,9 @@ def _receipt_value(receipt: SupervisorReceipt) -> dict[str, object]:
         "successful_exit": receipt.successful_exit,
         "backend_id": receipt.backend_id,
         "backend_successful": receipt.backend_successful,
+        **({"launch_reason": receipt.launch_reason,
+            "startup_elapsed_seconds": receipt.startup_elapsed_seconds}
+           if receipt.launch_reason is not None else {}),
         **({"temporary_storage_pending": receipt.temporary_storage_pending,
             "temporary_storage_error": receipt.temporary_storage_error}
            if receipt.launch.profile.temporary_mounts else {}),
@@ -1564,7 +1655,7 @@ def _receipt_value(receipt: SupervisorReceipt) -> dict[str, object]:
 def _receipt_from_value(value: object) -> SupervisorReceipt:
     if (
         not isinstance(value, Mapping)
-        or set(value) - {"temporary_storage_pending", "temporary_storage_error"}
+        or set(value) - {"temporary_storage_pending", "temporary_storage_error", "launch_reason", "startup_elapsed_seconds"}
         != {
             "state",
             "launch",
@@ -1578,6 +1669,12 @@ def _receipt_from_value(value: object) -> SupervisorReceipt:
         }
         or not isinstance(value.get("successful_exit"), bool)
         or not isinstance(value.get("backend_successful"), bool)
+        or (value.get("launch_reason") is not None and not isinstance(value["launch_reason"], str))
+        or (value.get("startup_elapsed_seconds") is not None and (
+            type(value["startup_elapsed_seconds"]) not in {float, int}
+            or not math.isfinite(value["startup_elapsed_seconds"])
+            or value["startup_elapsed_seconds"] < 0
+        ))
         or type(value.get("temporary_storage_pending", False)) is not bool
         or (value.get("temporary_storage_error") is not None and not isinstance(value["temporary_storage_error"], str))
     ):
@@ -1594,6 +1691,8 @@ def _receipt_from_value(value: object) -> SupervisorReceipt:
         cast(bool, value["backend_successful"]),
         value.get("temporary_storage_pending", False),
         value.get("temporary_storage_error"),
+        value.get("launch_reason"),
+        value.get("startup_elapsed_seconds"),
     )
 
 
@@ -1735,6 +1834,10 @@ class AgentProcessSupervisorClient(_SupervisorControlClient):
     def launch(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
         return self._join("launch", launch)
 
+    def launch_once(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
+        """Submit or observe one exact launch without joining delayed startup."""
+        return _receipt_from_value(self._call("launch", _launch_value(launch)))
+
     def reject_unstarted_assignment(self, assignment_id: str) -> bool:
         value = self._call("reject_unstarted_assignment", {
             "assignment_id": assignment_id,
@@ -1748,41 +1851,45 @@ class AgentProcessSupervisorClient(_SupervisorControlClient):
     def query(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
         return _receipt_from_value(self._call("query", _launch_value(launch)))
 
-    def query_wait(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
+    @_cooperative
+    def query_wait(self, launch: ResidentWorkerLaunch) -> Generator[_Progress, Any, SupervisorReceipt]:
         """Join a pending observation for synchronous execution/recovery callers."""
-        return self._join("query", launch)
+        return (yield from _steps(self._join, "query", launch))
 
     def request_stop(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
         return _receipt_from_value(self._call("request_stop", _launch_value(launch)))
 
-    def request_stop_wait(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
+    @_cooperative
+    def request_stop_wait(self, launch: ResidentWorkerLaunch) -> Generator[_Progress, Any, SupervisorReceipt]:
         """Join stop dispatch for synchronous callers, without claiming containment."""
-        return self._join("request_stop", launch)
+        return (yield from _steps(self._join, "request_stop", launch))
 
-    def contain(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
-        return self._join("contain", launch)
+    @_cooperative
+    def contain(self, launch: ResidentWorkerLaunch) -> Generator[_Progress, Any, SupervisorReceipt]:
+        return (yield from _steps(self._join, "contain", launch))
 
-    def _join(self, operation: str, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
+    @_cooperative
+    def _join(self, operation: str, launch: ResidentWorkerLaunch) -> Generator[_Progress, Any, SupervisorReceipt]:
         # Each exchange is bounded; only the synchronous caller joins a slow
         # effect. The service's reserved request handlers never wait for it.
         while True:
             try:
                 if operation == "query":
-                    receipt = self.query(launch)
+                    receipt = yield from _external("control", self.query, launch)
                 elif operation == "request_stop":
-                    receipt = self.request_stop(launch)
+                    receipt = yield from _external("control", self.request_stop, launch)
                 else:
-                    receipt = _receipt_from_value(self._call(operation, _launch_value(launch)))
+                    receipt = _receipt_from_value((yield from _external("bulk", self._call, operation, _launch_value(launch))))
             except AgentProcessSupervisorError as exc:
                 if str(exc) != _PENDING_OBSERVATION:
                     raise
-                sleep(0.05)
+                yield from _delay(0.05)
                 continue
             if receipt.state is not SupervisorLaunchState.STARTING and not (
                 operation == "launch" and receipt.state is SupervisorLaunchState.NOT_ACCEPTED
             ):
                 return receipt
-            sleep(0.05)
+            yield from _delay(0.05)
 
     def shutdown_for_test(self) -> None:
         self._shutdown()
@@ -1826,6 +1933,8 @@ class AgentProcessSupervisorService:
     """Fresh-root initialization and independent service entry point."""
 
     _CONFIG_NAME = "service-config.json"
+    _startup_lock = RLock()
+    _starting_services: dict[Path, subprocess.Popen[bytes]] = {}
 
     @classmethod
     def initialize_process_free(
@@ -1922,28 +2031,43 @@ class AgentProcessSupervisorService:
         agent_root: Path, configuration: SupervisorLaunchConfiguration
     ) -> AgentProcessSupervisorClient:
         root = Path(agent_root).resolve() / "supervisor"
-        process = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "loom.queue._agent_process_supervisor",
-                "--serve",
-                str(root),
-            ],
-            cwd=str(Path.cwd()),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-        # The service is intentionally detached from application lifetime, but
-        # while this parent remains alive it must still reap a cleanly stopped
-        # child rather than accumulating supervisor zombies.
-        Thread(
-            target=process.wait,
-            name=f"loom-supervisor-reaper-{process.pid}",
-            daemon=True,
-        ).start()
+        try:
+            return AgentProcessSupervisorClient(agent_root, configuration)
+        except AgentProcessSupervisorError as exc:
+            if str(exc) != "managed supervisor endpoint is unavailable":
+                raise
+        # A local observation timeout does not discard the child we created.
+        # Another application still has to pass the native service lock; this
+        # map never reconstructs ownership from a stored numeric PID.
+        with AgentProcessSupervisorService._startup_lock:
+            process = AgentProcessSupervisorService._starting_services.get(root)
+            if process is None or process.poll() is not None:
+                process = subprocess.Popen(
+                    [
+                        sys.executable,
+                        "-m",
+                        "loom.queue._agent_process_supervisor",
+                        "--serve",
+                        str(root),
+                    ],
+                    cwd=str(Path.cwd()),
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+                AgentProcessSupervisorService._starting_services[root] = process
+
+                def reap(child: subprocess.Popen[bytes]) -> None:
+                    child.wait()
+                    with AgentProcessSupervisorService._startup_lock:
+                        if AgentProcessSupervisorService._starting_services.get(root) is child:
+                            AgentProcessSupervisorService._starting_services.pop(root)
+
+                Thread(
+                    target=reap, args=(process,),
+                    name=f"loom-supervisor-reaper-{process.pid}", daemon=True,
+                ).start()
         deadline = monotonic() + 5
         while True:
             try:
@@ -2147,6 +2271,16 @@ class _SupervisorDispatch:
             entry = self.operations.get(launch.launch_operation_id)
             if entry is not None and entry.launch.spec_digest != launch.spec_digest:
                 raise AgentProcessSupervisorError("launch operation conflicts with durable identity")
+            if operation in {"request_stop", "contain"}:
+                gate_lock = self.supervisor._gate_lock(launch)
+                if not gate_lock.acquire(blocking=False):
+                    # Gate publication already won this assignment's ordering
+                    # boundary. Do not block unrelated IPC on its filesystem IO.
+                    raise AgentProcessSupervisorError(_PENDING_OBSERVATION)
+                try:
+                    self.supervisor._stop_requested.add(launch.launch_operation_id)
+                finally:
+                    gate_lock.release()
             if entry is not None and operation in entry.results:
                 result = entry.results.pop(operation)
                 if isinstance(result, Exception):
@@ -2227,7 +2361,10 @@ class _SupervisorDispatch:
                     else:
                         result = self.supervisor.query(launch)
                         child = self.supervisor._children.get(launch.launch_operation_id)
-                        if child is not None:
+                        if child is not None and (
+                            launch.launch_operation_id not in self.supervisor._pending_namespaces
+                            or launch.launch_operation_id in self.supervisor._namespace_inits
+                        ):
                             child.terminate()
             elif operation == "launch":
                 result = self.supervisor.launch(launch)

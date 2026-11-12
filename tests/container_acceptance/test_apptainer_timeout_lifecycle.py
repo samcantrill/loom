@@ -299,3 +299,82 @@ def test_real_resident_query_then_contain_settles_namespace(
     finally:
         _cleanup(handles)
         supervisor.contain(launch)
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_resident_delayed_namespace_and_normal_peer(
+    runtime: tuple[str, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    cancel: bool,
+) -> None:
+    """A real delayed runtime keeps one root and never grants an accepted stop."""
+    import shlex
+    from loom.pipeline.executors.apptainer import ApptainerExecCommand
+    from loom.queue._agent_process_supervisor import (
+        AgentProcessSupervisor, ResidentWorkerLaunch, SupervisorLaunchState,
+    )
+    from tests.unit.loom.queue.test_agent_process_supervisor import (
+        _named_launch, _sleeping_profile,
+    )
+
+    wrapper = tmp_path / "delayed-runtime"
+    wrapper.write_text(f"#!/bin/sh\nsleep 3\nexec {shlex.quote(runtime[0])} \"$@\"\n")
+    wrapper.chmod(0o700)
+    native = _sleeping_profile(tmp_path)
+    profile = replace(native, descriptor={"profile_id": "delayed-container"}, container={
+        "kind": "apptainer", "container": {"image": {"reference": runtime[1]}},
+        "options": {"command": str(wrapper)},
+        "python_executable": "/opt/rphys/venv/bin/python", "daemon_endpoint": None,
+    })
+
+    def command(launch):
+        built = build_apptainer_exec_command(
+            container_options=ContainerOptions(image=runtime[1], mounts=(
+                ContainerMount(source=str(launch.workspace_root), target="/fixture", mode="rw"),
+            )),
+            apptainer_options=ApptainerExecOptions(command=str(wrapper)),
+            worker_command=("sh", "-c", "while [ ! -f /fixture/run.grant ]; do sleep 0.05; done; "
+                            "printf ready > /fixture/ready; sleep 60"),
+        )
+        return ApptainerExecCommand.from_argv(_timeout.namespace_argv(built.argv))
+
+    monkeypatch.setattr(ResidentWorkerLaunch, "container_command", property(command))
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    owner = AgentProcessSupervisor.initialize(agent, agent_id="agent-A", profiles=(native, profile))
+    delayed = replace(_named_launch(owner, tmp_path, profile, "delayed"),
+                      environment={key: os.environ[key] for key in ("HOME", "PATH")})
+    peer = _named_launch(owner, tmp_path, native, "peer")
+    started = monotonic()
+    assert owner.launch(delayed).state is SupervisorLaunchState.STARTING
+    child = owner._children[delayed.launch_operation_id]
+    try:
+        assert owner.launch(peer).state is SupervisorLaunchState.RUNNING
+        if cancel:
+            assert owner.contain(delayed).state is SupervisorLaunchState.STARTING
+        while monotonic() - started < 2.2:
+            assert owner.query(delayed).state is SupervisorLaunchState.STARTING
+            assert not (delayed.workspace_root / "run.grant").exists()
+            sleep(0.05)
+        deadline = monotonic() + 20
+        while delayed.launch_operation_id not in owner._namespace_inits:
+            assert monotonic() < deadline, owner.query(delayed)
+            owner.query(delayed)
+            sleep(0.05)
+        assert owner._children[delayed.launch_operation_id] is child
+        if cancel:
+            assert owner.contain(delayed).state is SupervisorLaunchState.CONTAINED
+            assert not (delayed.workspace_root / "run.grant").exists()
+            assert not (delayed.workspace_root / "ready").exists()
+        else:
+            assert owner.query(delayed).state is SupervisorLaunchState.RUNNING
+            while not (delayed.workspace_root / "ready").exists():
+                assert monotonic() < deadline
+                sleep(0.05)
+        assert owner.query(peer).state is SupervisorLaunchState.RUNNING
+    finally:
+        owner.contain(peer)
+        receipt = owner.contain(delayed)
+        if receipt.state is not SupervisorLaunchState.CONTAINED:
+            # This fixture owns the original child even if runtime setup failed.
+            child.contain()
+        assert receipt.state is SupervisorLaunchState.CONTAINED

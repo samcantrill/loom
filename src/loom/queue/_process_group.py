@@ -59,6 +59,16 @@ class OwnedProcessGroup:
                 )
             return self.returncode
 
+    def ownership_retained(self) -> bool:
+        """Whether this owner still holds its creation/cleanup continuity.
+
+        This is not containment evidence. Cleanup may still be pending after
+        its observation budget expires, with the same root and group retained.
+        """
+        with self._lock:
+            self.root_status()
+            return not self._ownership_lost
+
     def terminate(self) -> None:
         with self._lock:
             if self._term_deadline is None and not self._kill_sent:
