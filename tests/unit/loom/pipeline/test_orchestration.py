@@ -1030,3 +1030,130 @@ def test_stage_work_hard_cut_requires_durable_global_order_fields() -> None:
 
     with pytest.raises(CoordinatorStoreError, match="fields are invalid"):
         type(record).from_dict(payload)
+
+
+@pytest.mark.parametrize("kind", ["memory", "sqlite"])
+def test_ready_keyset_continues_past_blocked_prefix_and_disappearing_cursor(tmp_path, kind):
+    store = InMemoryStageWorkStore() if kind == "memory" else SQLiteStageWorkStore(tmp_path / "scan.sqlite")
+    run_uri = "file:///scan"
+    authority = _authority(run_uri)
+    stages = tuple(_stage(f"stage-{index:03d}") for index in range(258))
+    plan = _plan(run_uri, *stages)
+    RunOrchestrator(authority=authority, store=store, owner_id="coordinator").reconcile(
+        admission_id="admission", plan=plan, authority_snapshot=authority.open_run(run_uri),
+        placements={stage.stage_name: _placement() for stage in stages},
+        execution_requirements=_requirements(plan), ready_at=10, run_priority=9, enqueue_sequence=3,
+    )
+    first = store.ready_window()
+    assert len(first) == 256
+    # Leave the blocked prefix READY, including all rows before the cursor.
+    later = store.ready_window(after=first[-1])
+    assert [row.stage_name for row in later] == ["stage-256", "stage-257"]
+    store.create_or_refresh(replace(first[-1], scheduling_state=SchedulingProjectionState.DECIDED))
+    if kind == "sqlite":
+        store = SQLiteStageWorkStore(tmp_path / "scan.sqlite")
+    assert store.ready_window(after=first[-1]) == later
+    assert store.ready_window(after=later[-1]) == ()
+    assert store.ready_window()[0] == first[0]
+
+
+@pytest.mark.parametrize("kind", ["memory", "sqlite"])
+def test_ready_rotation_preserves_priority_and_authored_order(tmp_path, kind):
+    store = InMemoryStageWorkStore() if kind == "memory" else SQLiteStageWorkStore(tmp_path / "fair.sqlite")
+    for name, sequence, priority in (("older", 1, 0), ("newer", 2, 0), ("urgent", 3, 5)):
+        run_uri = f"file:///{name}"
+        authority = _authority(run_uri)
+        stages = (_stage("z-authored-first"), _stage("a-authored-second"))
+        plan = _plan(run_uri, *stages)
+        RunOrchestrator(authority=authority, store=store, owner_id="coordinator").reconcile(
+            admission_id=name, plan=plan, authority_snapshot=authority.open_run(run_uri),
+            placements={stage.stage_name: _placement() for stage in stages},
+            execution_requirements=_requirements(plan), ready_at=10,
+            run_priority=priority, enqueue_sequence=sequence,
+        )
+    rows = store.ready_window(rotate_after=1)
+    assert [row.admission_id for row in rows] == ["urgent", "urgent", "newer", "newer", "older", "older"]
+    assert [row.stage_name for row in rows[:2]] == ["z-authored-first", "a-authored-second"]
+    first = store.ready_window(limit=3, rotate_after=1)
+    assert first + store.ready_window(after=first[-1], rotate_after=1) == rows
+    # Rotation is transient policy, not rewritten durable work identity.
+    if kind == "sqlite":
+        store = SQLiteStageWorkStore(tmp_path / "fair.sqlite")
+    assert [row.admission_id for row in store.ready_window()][2:] == ["older", "older", "newer", "newer"]
+
+
+@pytest.mark.parametrize("kind", ["memory", "sqlite"])
+def test_ready_sweep_boundary_defers_arrivals_then_revisits_priority_head(tmp_path, kind):
+    store = InMemoryStageWorkStore() if kind == "memory" else SQLiteStageWorkStore(tmp_path / "finite.sqlite")
+
+    def admit(name, sequence, priority, ready_at):
+        run_uri = f"file:///{name}"
+        authority = _authority(run_uri)
+        stages = (_stage("z-first"), _stage("a-second"))
+        plan = _plan(run_uri, *stages)
+        RunOrchestrator(authority=authority, store=store, owner_id="coordinator").reconcile(
+            admission_id=name, plan=plan, authority_snapshot=authority.open_run(run_uri),
+            placements={stage.stage_name: _placement() for stage in stages},
+            execution_requirements=_requirements(plan), ready_at=ready_at,
+            run_priority=priority, enqueue_sequence=sequence,
+        )
+
+    admit("original", 1, 0, 10)
+    boundary = {"ready_through": 10, "enqueue_through": 2}
+    first = store.ready_window(limit=1, **boundary)
+    # Same-second new admission: only the enqueue boundary excludes it.
+    admit("urgent-new-admission", 3, 5, 10)
+    # Existing admission becoming ready later: only the time boundary excludes it.
+    admit("urgent-new-stage", 2, 6, 11)
+    rest = store.ready_window(after=first[-1], **boundary)
+    assert [(row.admission_id, row.stage_name) for row in rest] == [("original", "a-second")]
+    assert store.ready_window(after=rest[-1], **boundary) == ()
+    # Next sweep (and a restarted process) returns to current priority order.
+    if kind == "sqlite":
+        store = SQLiteStageWorkStore(tmp_path / "finite.sqlite")
+    assert store.ready_window()[0].admission_id == "urgent-new-stage"
+    assert [row.admission_id for row in store.ready_window(ready_through=11, enqueue_through=3)] == [
+        "urgent-new-stage", "urgent-new-stage", "urgent-new-admission", "urgent-new-admission",
+        "original", "original",
+    ]
+
+
+@pytest.mark.parametrize("kind", ["memory", "sqlite"])
+def test_gpu_opportunity_crosses_cpu_prefix_without_reordering_priority_or_run(tmp_path, kind):
+    from loom.pipeline.resources import ResourceEntry
+    from loom.pipeline.runtime.scheduling_resources import GpuResourcePlanner
+
+    store = InMemoryStageWorkStore() if kind == "memory" else SQLiteStageWorkStore(tmp_path / "gpu.sqlite")
+
+    def admit(name, sequence, stages, gpu_names=(), priority=0):
+        run_uri = f"file:///{name}"
+        authority = _authority(run_uri)
+        plan = _plan(run_uri, *stages)
+        gpu_placement = resolve_stage_placement(
+            authored=ResourceRequest({"gpu": ResourceEntry("gpu", 1, "count", {"allocation_mode": "exclusive"})}),
+            runtime=None, policy=StagePlacementPolicy(), planners={"gpu": GpuResourcePlanner()},
+        )
+        RunOrchestrator(authority=authority, store=store, owner_id="coordinator").reconcile(
+            admission_id=name, plan=plan, authority_snapshot=authority.open_run(run_uri),
+            placements={stage.stage_name: gpu_placement if stage.stage_name in gpu_names else _placement() for stage in stages},
+            execution_requirements=_requirements(plan), ready_at=10,
+            run_priority=priority, enqueue_sequence=sequence,
+        )
+
+    admit("cpu-backlog", 1, tuple(_stage(f"score-{i:03d}") for i in range(258)))
+    admit("mixed", 2, (_stage("z-cpu-first"), _stage("a-gpu-second")), ("a-gpu-second",))
+    admit("fit", 3, (_stage("fit"),), ("fit",))
+    assert len(store.ready_window()) == 256
+    assert all(row.admission_id == "cpu-backlog" for row in store.ready_window())
+    assert [row.admission_id for row in store.ready_window(gpu_heads_only=True)] == ["fit"]
+    # Completing the earlier mixed-run stage exposes its GPU head in authored order.
+    earlier = next(row for row in store.list_stage_work() if row.stage_name == "z-cpu-first")
+    store.create_or_refresh(replace(earlier, scheduling_state=SchedulingProjectionState.DECIDED))
+    gpu_rows = store.ready_window(gpu_heads_only=True, rotate_after=2)
+    assert [row.admission_id for row in gpu_rows] == ["fit", "mixed"]
+    assert store.ready_window(gpu_heads_only=True, rotate_after=2, after=gpu_rows[0]) == (gpu_rows[1],)
+    admit("urgent-cpu", 4, (_stage("urgent"),), priority=5)
+    assert store.ready_window(gpu_heads_only=True) == ()
+    if kind == "sqlite":
+        store = SQLiteStageWorkStore(tmp_path / "gpu.sqlite")
+    assert store.ready_window()[0].admission_id == "urgent-cpu"

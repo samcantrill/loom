@@ -167,6 +167,7 @@ class AgentSlurmJobs:
         self._retry_failures: dict[tuple[str, str], int] = {}
         self._batch_order: dict[str, int] = {}
         self._batch_sequence = 0
+        self._replay_after: str | None = None
         self._batch_limits: dict[tuple[str, str], int] = {}
 
     def _retry_due(self, kind: str, operation_id: str) -> bool:
@@ -346,14 +347,22 @@ class AgentSlurmJobs:
     def replay_pending(
         self, acknowledge: Callable[[Mapping[str, PlainData]], Mapping[str, PlainData]]
     ) -> None:
-        """Replay even a final receipt whose assignment has already been released."""
+        """Replay a bounded page, including final receipts for released assignments.
+
+        Advance the transient scan before transport: a failing acknowledgement
+        stays durable but cannot hide all later receipts on every iteration.
+        """
         with self._lock:
             with self._connect() as conn:
                 rows = conn.execute(
-                    "SELECT evidence_json FROM agent_slurm_operations WHERE acknowledged=0 AND evidence_json IS NOT NULL"
+                    "SELECT operation_id, evidence_json FROM agent_slurm_operations "
+                    "WHERE acknowledged=0 AND evidence_json IS NOT NULL "
+                    "AND (? IS NULL OR operation_id > ?) ORDER BY operation_id LIMIT 32",
+                    (self._replay_after, self._replay_after),
                 ).fetchall()
             for row in rows:
-                pending = json.loads(str(row[0]))
+                self._replay_after = str(row[0])
+                pending = json.loads(str(row[1]))
                 self._publish(
                     SlurmStageAssignment.from_dict(pending["assignment"]),
                     SlurmReadyStageSubmission.from_dict(pending["submission"]),
@@ -362,6 +371,8 @@ class AgentSlurmJobs:
                     recovery_evidence=pending.get("recovery_evidence"),
                     provider_released=pending.get("provider_released", False),
                 )
+            if len(rows) < 32:
+                self._replay_after = None
 
     def _before_submit(
         self, assignment: SlurmStageAssignment, value: SlurmReadyStageSubmission,

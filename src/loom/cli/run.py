@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from loom.cli.errors import ExitCode
 from loom.cli.formatting import format_json_envelope
-from loom.cli.options import OutputFormat, RunCliOptions, SelectorCliOptions
+from loom.cli.options import OutputFormat, RunCliOptions, SelectorCliOptions, parse_parallel_limit
 from loom.serialization import PlainData
 
 RUN_RESULT_SCHEMA_VERSION = "loom.cli.run.v3"
@@ -42,7 +42,7 @@ def register_subparser(
     parser.add_argument("--detach", action="store_true")
     parser.add_argument("--timeout-seconds", type=float)
     parser.add_argument("--profile")
-    parser.add_argument("--max-parallel-stages", type=int)
+    parser.add_argument("--max-parallel-stages", type=parse_parallel_limit, default=argparse.SUPPRESS)
     parser.add_argument(
         "--failure-policy", choices=["stop-on-first-failure", "continue-independent"]
     )
@@ -97,9 +97,9 @@ def handle(namespace: argparse.Namespace) -> int:
                 tuple(namespace.override or ()),
                 cast(
                     dict[str, PlainData],
-                    RunCliOptions.from_namespace(namespace).to_runtime_source(
+                    selection.resolve_run_options(RunCliOptions.from_namespace(namespace).to_runtime_source(
                         selectors=SelectorCliOptions.from_namespace(namespace)
-                    ),
+                    )),
                 ),
                 context=context,
             ),

@@ -195,6 +195,79 @@ from .slurm_ready_stage import (
 )
 
 
+class _SlurmPublicationRequired(Exception):
+    """Shared-output verification awaiting fresh authority before acceptance."""
+
+    def __init__(self, execution, record, fence):
+        super().__init__("SLURM output verification remains pending")
+        self.execution, self.record, self.fence = execution, record, fence
+        self.roots = freeze_plain_data(execution.config.coordinator_shared_roots)
+        self.prepared = None
+
+    def prepare(self):
+        from ._shared_publication import prepare_publication
+
+        self.prepared = prepare_publication(
+            self.record.delivery, self.record.report, self.roots,
+            agent_id=self.record.assignment.agent_id, fence=self.fence,
+        )
+
+    def prepare_guarded(self):
+        with self.execution._daemon_owner()._publication_guards.hold(self.record.assignment.assignment_id):
+            self.prepare()
+
+    def validates(self, execution, record, fence):
+        return (
+            self.prepared is not None and self.execution is execution
+            and self.fence == fence and self.record.assignment == record.assignment
+            and self.record.delivery == record.delivery and self.record.report == record.report
+            and self.record.bootstrap_incarnation == record.bootstrap_incarnation
+            and self.record.fence == record.fence
+            and self.roots == freeze_plain_data(execution.config.coordinator_shared_roots)
+        )
+
+
+class _SlurmRetentionRequired(Exception):
+    """Validated release continuation; never a wire acknowledgement."""
+
+    def __init__(self, execution: LocalDaemonExecution, record: SlurmStageRecord, evidence: Mapping[str, PlainData]):
+        super().__init__("SLURM recovery retention remains pending")
+        self.execution = execution
+        self.record = record
+        self.evidence = cast(Mapping[str, PlainData], freeze_plain_data(evidence, path="SLURM release evidence"))
+        self.roots = cast(Mapping[str, PlainData], freeze_plain_data(execution.config.coordinator_shared_roots, path="SLURM release roots"))
+        self.completed = False
+
+    def retain(self) -> None:
+        from ._shared_recovery import retain_released
+
+        from ._phase_timing import phase
+        with phase("slurm.recovery_retention", operation_id=self.record.assignment.operation_id), self.execution._daemon_owner()._connection() as conn:
+            retain_released(
+                conn,
+                {"provider_release_proof_json": self.evidence["release"], "fence": self.record.fence},
+                self.record.delivery, self.roots,
+                agent_id=self.record.assignment.agent_id,
+            )
+            conn.commit()
+        self.completed = True
+
+    def retain_guarded(self) -> None:
+        with self.execution._daemon_owner()._publication_guards.hold(self.record.assignment.assignment_id):
+            self.retain()
+
+    def validates(self, execution: LocalDaemonExecution, record: SlurmStageRecord,
+                  evidence: Mapping[str, PlainData]) -> bool:
+        return (
+            self.completed and self.execution is execution
+            and self.record.assignment == record.assignment
+            and self.record.fence == record.fence
+            and self.record.delivery == record.delivery
+            and self.evidence == freeze_plain_data(evidence, path="SLURM release evidence")
+            and self.roots == freeze_plain_data(execution.config.coordinator_shared_roots, path="SLURM release roots")
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class ManagedLocalIntent:
     plan: ExecutionPlan
@@ -203,7 +276,7 @@ class ManagedLocalIntent:
     execution_requirements: Mapping[str, ManagedExecutionRequirement]
     pipeline: PipelineSpec
     digest: str
-    max_parallel_stages: int
+    max_parallel_stages: int | None
     continue_independent: bool = False
 
 
@@ -1003,7 +1076,7 @@ def load_managed_local_intent(
         execution_requirements,
         pipeline,
         str(record["digest"]),
-        cast(int, record["max_parallel_stages"]),
+        cast(int | None, record["max_parallel_stages"]),
         parallel_execution_options(runtime_options).continue_independent,
     )
 
@@ -1267,9 +1340,21 @@ class LocalDaemonExecution:
             max_workers=max(2, config.cpu_capacity),
             thread_name_prefix="loom-local-assignment",
         )
+        # Retention must progress even when every resident observer is occupied.
+        self._slurm_storage_workers = ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="loom-slurm-storage",
+        )
         self._local_assignment_futures: dict[str, Future[None]] = {}
+        self._slurm_storage_futures: dict[str, tuple[Future[None], _SlurmRetentionRequired | _SlurmPublicationRequired]] = {}
         self._pending_local_assignment_reconciliation: dict[str, str] = {}
         self._local_assignment_retries: dict[str, _RecoveryRetry] = {}
+        self._ready_scan_after: StageWorkRecord | None = None
+        self._ready_scan_boundary: tuple[int, int] | None = None
+        self._last_dispatch_enqueue: int | None = None
+        self._prefer_gpu_dispatch = True
+        self._gpu_scan_after: StageWorkRecord | None = None
+        self._gpu_scan_boundary: tuple[int, int] | None = None
+        self._last_gpu_dispatch_enqueue: int | None = None
         self._cycle_contexts: dict[
             str, tuple[ManagedLocalIntent, _ScopedCoordinatorAuthority]
         ] = {}
@@ -1278,7 +1363,9 @@ class LocalDaemonExecution:
         """Stop only assignment observers after their durable owners settle."""
 
         self._local_assignment_workers.shutdown(wait=True)
+        self._slurm_storage_workers.shutdown(wait=True)
         self._local_assignment_futures.clear()
+        self._slurm_storage_futures.clear()
         self._pending_local_assignment_reconciliation.clear()
         self._local_assignment_retries.clear()
         self._cycle_contexts.clear()
@@ -1954,22 +2041,38 @@ class LocalDaemonExecution:
         identity = None if submission is None else submission.accounting_identity
         return {"accounting_identity": None if identity is None else identity.to_dict()}
 
-    def slurm_agent_tasks(
-        self, agent_id: str, agent_root_id: str
-    ) -> tuple[dict[str, PlainData], ...]:
-        return tuple(
-            self._slurm_task(record)
-            for record in self.slurm_assignments.list_unreleased()
-            if (record.assignment.agent_id, record.assignment.agent_root_id)
-            == (agent_id, agent_root_id)
-            and (
-                not self._recovery_retains_assignment(record.assignment.assignment_id)
-                or self._slurm_task(record)["recovery_request"] is not None
+    def slurm_agent_task_page(
+        self, agent_id: str, agent_root_id: str, *, cursor: str | None = None,
+    ) -> dict[str, PlainData]:
+        """Pack one bounded page against the actual control response envelope."""
+        from ._agent_session_codec import _MAX_BODY_BYTES
+        from ._agent_session_journal import _canonical_json
+
+        rows = self.slurm_assignments.agent_page(agent_id, agent_root_id, after=cursor)
+        tasks: list[PlainData] = []
+        scanned = cursor
+        last_safe: dict[str, PlainData] = {"tasks": [], "next_cursor": cursor}
+        for index, record in enumerate(rows[:32]):
+            task = self._slurm_task(record)
+            withheld = (
+                self._recovery_retains_assignment(record.assignment.assignment_id)
+                and task["recovery_request"] is None
             )
-        )
+            next_cursor = record.assignment.assignment_id if index + 1 < len(rows) else None
+            candidate: dict[str, PlainData] = {"tasks": list(tasks) if withheld else [*tasks, task], "next_cursor": next_cursor}
+            if len(_canonical_json({"ok": True, "result": candidate}).encode("utf-8")) > _MAX_BODY_BYTES:
+                if not tasks:
+                    raise QueueServiceError("SLURM task exceeds control response budget")
+                return last_safe
+            last_safe = candidate
+            if not withheld:
+                tasks.append(task)
+            scanned = record.assignment.assignment_id
+        return {"tasks": tasks, "next_cursor": scanned if len(rows) > 32 else None}
 
     def relay_slurm_result(
-        self, agent_id: str, agent_root_id: str, evidence: Mapping[str, PlainData]
+        self, agent_id: str, agent_root_id: str, evidence: Mapping[str, PlainData],
+        *, _defer_publication: bool = False, _publication: _SlurmPublicationRequired | None = None,
     ) -> Mapping[str, PlainData]:
         from ._slurm_result_transport import validate_identity
         from ._remote_stage_execution import _decode_chunk
@@ -2017,7 +2120,7 @@ class LocalDaemonExecution:
             )
             return {"received": received}
         if operation == "commit":
-            self._slurm_finalize_record(record, record.fence)
+            self._slurm_finalize_record(record, record.fence, _defer_publication=_defer_publication, _publication=_publication)
             return {"acknowledged": True}
         raise QueueServiceError("SLURM result operation is invalid")
 
@@ -2030,14 +2133,19 @@ class LocalDaemonExecution:
         }
 
     def acknowledge_slurm_agent(
-        self, agent_id: str, agent_root_id: str, evidence: Mapping[str, PlainData]
+        self, agent_id: str, agent_root_id: str, evidence: Mapping[str, PlainData],
+        *, _defer_retention: bool = False, _retained: _SlurmRetentionRequired | None = None,
+        _defer_publication: bool = False, _publication: _SlurmPublicationRequired | None = None,
     ) -> Mapping[str, PlainData]:
         if "result_operation" in evidence:
             if self._recovery_retains_assignment(str(evidence.get("assignment_id"))):
                 raise QueueConflictError(
                     "ordinary SLURM result is frozen by guarded recovery"
                 )
-            return self.relay_slurm_result(agent_id, agent_root_id, evidence)
+            return self.relay_slurm_result(
+                agent_id, agent_root_id, evidence,
+                _defer_publication=_defer_publication, _publication=_publication,
+            )
         if (
             set(evidence)
             != {
@@ -2190,21 +2298,21 @@ class LocalDaemonExecution:
                     next_state="logical_released",
                 )
             if evidence.get("provider_released") is True:
-                from ._shared_recovery import WIRE, retain_released
+                from ._shared_recovery import WIRE
 
-                # The accepted, exact containment evidence above is the sole
-                # retention trigger. Record either a sealed reference or a known
-                # budget failure before making the slot reusable; replay finishes
-                # that outcome before final release.
+                # Keep the GPU reservation until exact containment AND durable
+                # retention exist. The HTTP owner may perform the slow seal
+                # outside its global lock, then replay every ownership check.
                 if (record.fence is not None and record.state != "released"
                     and WIRE in record.delivery.worker_metadata):
-                    with self._daemon_owner()._connection() as conn:
-                        retain_released(
-                            conn, {"provider_release_proof_json": release, "fence": record.fence},
-                            record.delivery, self.config.coordinator_shared_roots,
-                            agent_id=assignment.agent_id,
-                        )
-                        conn.commit()
+                    if _retained is not None:
+                        if not _retained.validates(self, record, evidence):
+                            raise QueueConflictError("SLURM recovery retention context changed")
+                    else:
+                        retention = _SlurmRetentionRequired(self, record, evidence)
+                        if _defer_retention:
+                            raise retention
+                        retention.retain()
                 self.slurm_assignments.release(assignment.assignment_id)
                 with self.config.connect_database(self.config.control_database) as conn:
                     conn.execute(
@@ -2219,12 +2327,40 @@ class LocalDaemonExecution:
     def _drive_local_slurm(self, record: SlurmStageRecord) -> None:
         if self._slurm_agent is None or record.assignment.agent_id != self.agent_id:
             return
-        self._slurm_agent.step(
-            self._slurm_task(record),
-            lambda evidence: self.acknowledge_slurm_agent(
-                record.assignment.agent_id, record.assignment.agent_root_id, evidence
-            ),
-        )
+        identity = record.assignment.assignment_id
+        pending = self._slurm_storage_futures.get(identity)
+        retained = None
+        if pending is not None:
+            future, retained = pending
+            if not future.done():
+                return
+            # Completed tokens are disposable. A single replay can finish
+            # publication and then request recovery retention for this assignment.
+            del self._slurm_storage_futures[identity]
+            future.result()
+        try:
+            self._slurm_agent.step(
+                self._slurm_task(record),
+                lambda evidence: self.acknowledge_slurm_agent(
+                    record.assignment.agent_id, record.assignment.agent_root_id, evidence,
+                    _defer_retention=True,
+                    _retained=retained if isinstance(retained, _SlurmRetentionRequired) else None,
+                    _defer_publication=True,
+                    _publication=retained if isinstance(retained, _SlurmPublicationRequired) else None,
+                ),
+            )
+        except (_SlurmRetentionRequired, _SlurmPublicationRequired) as continuation:
+            # Embedded Slurm has no HTTP request thread to yield the cycle lock.
+            # Its durable unacknowledged receipt is retried after bounded worker
+            # verification/retention completes; no acknowledgement is released early.
+            if identity not in self._slurm_storage_futures and len(self._slurm_storage_futures) < 32:
+                future = self._slurm_storage_workers.submit(
+                    continuation.prepare_guarded if isinstance(continuation, _SlurmPublicationRequired)
+                    else continuation.retain_guarded,
+                )
+                self._slurm_storage_futures[identity] = (future, continuation)
+                future.add_done_callback(lambda _: self._daemon_owner()._wake.set())
+            return
 
     def _release_slurm_assignment(self, assignment_id: str) -> None:
         record = self.slurm_assignments.read(assignment_id)
@@ -3052,26 +3188,14 @@ class LocalDaemonExecution:
         snapshot: AuthoritativeRunSnapshot,
         stage_work_id: str,
     ) -> LocalDaemonExecutionOutcome | None:
-        records = tuple(
-            sorted(
-                (
-                    record
-                    for record in self.stage_work_store.list_stage_work()
-                    if record.admission_id == admission.admission_id
-                    and record.stage_work_id == stage_work_id
-                    and record.scheduling_state is SchedulingProjectionState.READY
-                    and record.placement.route.kind is ExecutionRouteKind.SLURM
-                ),
-                key=lambda item: (
-                    item.ready_at,
-                    item.ready_order,
-                    item.stage_work_id,
-                ),
-            )
-        )
-        if not records:
+        record = self.stage_work_store.find_stage_work(stage_work_id)
+        if (
+            record is None
+            or record.admission_id != admission.admission_id
+            or record.scheduling_state is not SchedulingProjectionState.READY
+            or record.placement.route.kind is not ExecutionRouteKind.SLURM
+        ):
             return None
-        record = records[0]
         profile = self._slurm_profile(
             cast(str, record.placement.route.profile_id),
             cast(
@@ -5778,12 +5902,16 @@ class LocalDaemonExecution:
         incarnation: str,
         fence: str,
     ) -> None:
-        record = self._slurm_authorized_record(
-            principal_id, credential_id, assignment_id, incarnation
-        )
-        self._slurm_finalize_record(record, fence)
+        with self._daemon_owner()._publication_guards.hold(assignment_id):
+            record = self._slurm_authorized_record(
+                principal_id, credential_id, assignment_id, incarnation
+            )
+            self._slurm_finalize_record(record, fence)
 
-    def _slurm_finalize_record(self, record: SlurmStageRecord, fence: str) -> None:
+    def _slurm_finalize_record(
+        self, record: SlurmStageRecord, fence: str, *,
+        _defer_publication: bool = False, _publication: _SlurmPublicationRequired | None = None,
+    ) -> None:
         assignment_id = record.assignment.assignment_id
         incarnation = cast(str, record.bootstrap_incarnation)
         authority = self._remote_authority(record.assignment.run_uri)
@@ -5798,10 +5926,17 @@ class LocalDaemonExecution:
         if record.report is not None and record.report.output_kind == "shared":
             from ._shared_publication import prepare_publication, accept_publication
 
-            publication = prepare_publication(
-                record.delivery, record.report, self.config.coordinator_shared_roots,
-                agent_id=record.assignment.agent_id, fence=fence,
-            )
+            if _publication is not None:
+                if not _publication.validates(self, record, fence):
+                    raise QueueConflictError("SLURM publication context changed during verification")
+                publication = _publication.prepared
+            elif _defer_publication:
+                raise _SlurmPublicationRequired(self, record, fence)
+            else:
+                publication = prepare_publication(
+                    record.delivery, record.report, self.config.coordinator_shared_roots,
+                    agent_id=record.assignment.agent_id, fence=fence,
+                )
             # Verification may perform substantial storage IO. Reauthorize the
             # same attempt before publishing, including a concurrent cancellation.
             current = authority.grant_prepared_attempt(

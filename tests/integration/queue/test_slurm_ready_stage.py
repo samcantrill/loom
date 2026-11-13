@@ -1030,8 +1030,8 @@ SharedSlurmResult(json.loads(sys.argv[2]), report.assignment_id, compute=True).p
             original_finalize = LocalDaemonExecution._slurm_finalize_record
             original_relay = LocalDaemonExecution.relay_slurm_result
 
-            def lose_output_ack(owner, agent_id, agent_root_id, evidence):
-                response = original_relay(owner, agent_id, agent_root_id, evidence)
+            def lose_output_ack(owner, agent_id, agent_root_id, evidence, **verification):
+                response = original_relay(owner, agent_id, agent_root_id, evidence, **verification)
                 if evidence.get("result_operation") == "output":
                     output_acknowledgements.append(
                         (evidence["offset"], response["received"])
@@ -1053,10 +1053,10 @@ SharedSlurmResult(json.loads(sys.argv[2]), report.assignment_id, compute=True).p
                         )
                 return response
 
-            def lose_first_ack(owner, candidate, candidate_fence):
+            def lose_first_ack(owner, candidate, candidate_fence, **verification):
                 if lose_output_ack_at is not None:
                     assert output_ack_lost.is_set()
-                original_finalize(owner, candidate, candidate_fence)
+                original_finalize(owner, candidate, candidate_fence, **verification)
                 committed = next(
                     stage.latest_commit
                     for stage in owner._remote_authority(run_uri)
@@ -1696,8 +1696,9 @@ def test_definite_slurm_rejection_restarts_after_every_release_arrow(
         replacement.stop()
 
 
+@pytest.mark.parametrize("blocked_count", [1, 257])
 def test_unavailable_slurm_root_does_not_starve_independent_managed_root(
-    tmp_path: Path,
+    tmp_path: Path, blocked_count: int,
 ) -> None:
     runner = FakeSlurmCommandRunner()
     profile = _profile(runner, available=False)
@@ -1729,6 +1730,10 @@ def test_unavailable_slurm_root_does_not_starve_independent_managed_root(
             },
         ],
     }
+    blocked = pipeline_config["stages"][0]
+    pipeline_config["stages"] = [
+        {**blocked, "name": f"blocked_train_{index:03d}"} for index in range(blocked_count)
+    ] + pipeline_config["stages"][1:]
     pipeline = PipelineSpec.from_config(pipeline_config)
     plan = plan_pipeline(
         pipeline,
@@ -1774,7 +1779,7 @@ def test_unavailable_slurm_root_does_not_starve_independent_managed_root(
             LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
         )
         client.submit(LocalDaemonAdmissionRequest("independent-roots", run_uri))
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + 45
         snapshot = authority.open_run(run_uri)
         while time.monotonic() < deadline:
             snapshot = authority.open_run(run_uri)
@@ -1784,7 +1789,7 @@ def test_unavailable_slurm_root_does_not_starve_independent_managed_root(
             time.sleep(0.02)
         states = {stage.stage_name: stage.status for stage in snapshot.stages}
         assert states == {
-            "blocked_train": StageStatus.PENDING,
+            **{f"blocked_train_{index:03d}": StageStatus.PENDING for index in range(blocked_count)},
             "managed_root": StageStatus.SUCCEEDED,
         }
         assert not [call for call in runner.calls if call[0] == "sbatch"]
@@ -1794,12 +1799,14 @@ def test_unavailable_slurm_root_does_not_starve_independent_managed_root(
         daemon.stop()
 
 
+@pytest.mark.parametrize("parallel_limit", [2, None])
 @pytest.mark.parametrize(
     ("max_outstanding", "expected_submissions"),
     ((1, 1), (2, 2), (None, 2)),
 )
 def test_parallel_slurm_stages_honor_the_profile_outstanding_limit(
     tmp_path: Path,
+    parallel_limit: int | None,
     max_outstanding: int | None,
     expected_submissions: int,
     monkeypatch: pytest.MonkeyPatch,
@@ -1869,7 +1876,7 @@ def test_parallel_slurm_stages_honor_the_profile_outstanding_limit(
         plan=plan,
         pipeline=pipeline,
         execution_requirements=_execution_requirements(pipeline),
-        options={"execution": {"settings": {"max_parallel_stages": 2}}},
+        options={"execution": {"settings": {"max_parallel_stages": parallel_limit}}},
         slurm_profiles=(profile,),
     )
     authority = SQLitePerRunAuthorityStore(run_uri)
@@ -2309,7 +2316,7 @@ def test_gpu_budget_survives_restart_and_reload_preserves_admitted_work(tmp_path
     runner = profile.runner
     runs = {
         key: _persist_rejected_slurm_run(config.run_store_root / key, profile, resources=resources(quantity))
-        for key, quantity in (("left", 4), ("right", 4), ("waiting", 1), ("cpu", 0), ("oversize", 9))
+        for key, quantity in (("cpu-early", 0), ("left", 4), ("right", 4), ("waiting", 1), ("cpu", 0), ("oversize", 9))
     }
     replacement = config
     LocalDaemon.initialize_deployment(config)
@@ -2346,9 +2353,14 @@ def test_gpu_budget_survives_restart_and_reload_preserves_admitted_work(tmp_path
 
     try:
         client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+        # A retained CPU assignment from another experiment must not block GPU
+        # admission. Keep it active throughout GPU saturation and restart.
+        client.submit(LocalDaemonAdmissionRequest("cpu-early", runs["cpu-early"]))
+        until(lambda: accepted("cpu-early"))
         for key in ("left", "right"):
             client.submit(LocalDaemonAdmissionRequest(key, runs[key]))
             until(lambda: accepted(key))
+        assert accepted("cpu-early")
         assert daemon._execution.slurm_assignments.reserved_gpu_count() == 8
         oversized = load_managed_local_intent(config, runs["oversize"])
         for action in (PlanAction.SKIP, PlanAction.REUSE):
@@ -2368,11 +2380,11 @@ def test_gpu_budget_survives_restart_and_reload_preserves_admitted_work(tmp_path
         assert not daemon._execution.slurm_assignments.list_run_unreleased(runs["waiting"])
         before = {
             key: daemon._execution.slurm_assignments.list_run_unreleased(runs[key])[0]
-            for key in ("left", "right", "cpu")
+            for key in ("cpu-early", "left", "right", "cpu")
         }
         assert reload_budget(7, "lower-too-far")["code"] == "reload_rejected"
         assert daemon.config is config
-        assert len([call for call in runner.calls if call[0] == "sbatch"]) == 3
+        assert len([call for call in runner.calls if call[0] == "sbatch"]) == 4
         daemon.stop()
         payload["slurm_admission"] = {"max_reserved_gpus": 8}
         _write_protected(source, payload)
@@ -2385,15 +2397,15 @@ def test_gpu_budget_survives_restart_and_reload_preserves_admitted_work(tmp_path
             current = daemon._execution.slurm_assignments.list_run_unreleased(runs[key])[0]
             assert current.assignment == previous.assignment
             assert current.job_id == previous.job_id
-        assert len([call for call in runner.calls if call[0] == "sbatch"]) == 3
+        assert len([call for call in runner.calls if call[0] == "sbatch"]) == 4
         assert reload_budget(9, "increase")["state"] == "applied"
         until(lambda: accepted("waiting"))
         assert daemon._execution.slurm_assignments.reserved_gpu_count() == 9
-        assert len([call for call in runner.calls if call[0] == "sbatch"]) == 4
+        assert len([call for call in runner.calls if call[0] == "sbatch"]) == 5
         assert client.admission_for_queue_item("waiting").state is LocalDaemonAdmissionState.ACTIVE
         assert reload_budget(None, "disable")["state"] == "applied"
         assert daemon.config.slurm_schema_version == 4
         assert daemon._execution.slurm_assignments.reserved_gpu_count() == 9
-        assert len([call for call in runner.calls if call[0] == "sbatch"]) == 4
+        assert len([call for call in runner.calls if call[0] == "sbatch"]) == 5
     finally:
         daemon.stop()

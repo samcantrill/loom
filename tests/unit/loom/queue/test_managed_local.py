@@ -528,6 +528,14 @@ def test_coordinator_reserves_atoms_and_run_slot_in_one_transaction(tmp_path) ->
             max_parallel_stages=1,
             decision_receipt=_decision_receipt(competing, command.claim),
         )
+    # Removing the run ceiling never removes resident resource ownership.
+    with pytest.raises(ManagedLocalError, match="capacity atom"):
+        coordinator.reserve(
+            competing,
+            (command.claim,),
+            max_parallel_stages=None,
+            decision_receipt=_decision_receipt(competing, command.claim),
+        )
     assert (
         coordinator.advance(
             command.assignment.assignment_id, expected="reserved", next_state="bound"

@@ -2364,10 +2364,12 @@ class SQLiteCoordinatorAssignments:
         assignment: ManagedAssignment,
         claims: Sequence[ResourceClaim],
         *,
-        max_parallel_stages: int,
+        max_parallel_stages: int | None,
         decision_receipt: Mapping[str, PlainData],
     ) -> str:
-        if max_parallel_stages < 1:
+        if max_parallel_stages is not None and (
+            type(max_parallel_stages) is not int or max_parallel_stages < 1
+        ):
             raise ManagedLocalError("max_parallel_stages must be positive")
         claims = tuple(claims)
         receipt = _validate_decision_receipt(
@@ -2469,7 +2471,7 @@ class SQLiteCoordinatorAssignments:
                 assignment.run_uri,
                 has_slurm_assignments=has_slurm_assignments,
             )
-            if active >= max_parallel_stages:
+            if max_parallel_stages is not None and active >= max_parallel_stages:
                 raise ManagedLocalError("run active-assignment limit reached")
             offer_row = conn.execute(
                 "SELECT snapshot_json, snapshot_revision, consumed, is_current "
@@ -3475,7 +3477,7 @@ def run_managed_local_assignment(
     claims: Sequence[ResourceClaim],
     providers: Mapping[str, AgentResourceProvider],
     run_store: LocalRunStore,
-    max_parallel_stages: int,
+    max_parallel_stages: int | None,
     decision_receipt: Mapping[str, PlainData],
     agent_root: Path,
     supervisor: AgentProcessSupervisorClient,

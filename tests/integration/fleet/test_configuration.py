@@ -641,3 +641,40 @@ def test_workload_inventory_reaches_preview_and_apply(tmp_path, monkeypatch, mod
     assert code == 0 and len(observed) == 1
     assert observed[0]["workload_inventory"] == candidate
     assert observed[0]["image"] == image
+
+
+@pytest.mark.parametrize("limit", [None, 4])
+def test_deployment_concurrency_defaults_export_and_explicit_precedence(tmp_path, limit):
+    original = selection(tmp_path)
+    value = json.loads(original.read_text())
+    value["run_defaults"] = {"execution": {"settings": {"max_parallel_stages": limit}}}
+    _write_protected(original, value)
+    selected = load_deployment(original)
+    assert selected.resolve_run_options() == value["run_defaults"]
+    from loom.pipeline.runtime import merge_config_run_options, parallel_execution_options
+    recipe = {"runtime": {"execution": {"settings": {"max_parallel_stages": 7}}}}
+    resolved = merge_config_run_options(recipe, explicit=selected.resolve_run_options())
+    assert parallel_execution_options(resolved).max_parallel_stages == limit
+    assert recipe["runtime"]["execution"]["settings"]["max_parallel_stages"] == 7
+    override = {"execution": {"settings": {"max_parallel_stages": 2}}}
+    assert selected.resolve_run_options(override) == override
+    assert selected.resolve_run_options({"execution": {"settings": {"max_parallel_stages": None}}})["execution"]["settings"]["max_parallel_stages"] is None
+    assert selected.run_defaults == value["run_defaults"]
+    exported = export_connection_deployment(selected, tmp_path / "policy-client.json")
+    assert load_deployment(exported).run_defaults == selected.run_defaults
+
+
+@pytest.mark.parametrize("defaults", [
+    {"run_uri": "file:///other"},
+    {"execution": {"settings": {"max_parallel_stages": True}}},
+    {"execution": {"settings": {"max_parallel_stages": 0}}},
+    {"execution": {"settings": {"failure_policy": "continue_independent"}}},
+    {"execution": None},
+])
+def test_deployment_rejects_invalid_or_unrelated_run_defaults(tmp_path, defaults):
+    original = selection(tmp_path)
+    value = json.loads(original.read_text())
+    value["run_defaults"] = defaults
+    _write_protected(original, value)
+    with pytest.raises(QueueConfigError, match="run_defaults"):
+        load_deployment(original)

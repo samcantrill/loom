@@ -206,3 +206,32 @@ def test_profile_and_run_limits_have_separate_diagnostics(tmp_path):
         fixture.store.reserve(second, **{**arguments, "max_parallel_stages": 1})
     assert error.value.code == "run_active_assignment_limit"
     assert fixture.store.reserved_gpu_count() == 1
+
+
+def test_unlimited_run_still_enforces_shared_gpu_budget_after_restart(tmp_path):
+    fixture = ReservationFixture(tmp_path)
+    run_uri = "file:///unlimited-run"
+    for index in range(10):
+        assignment, arguments = fixture.candidate(str(index), 1 if index < 8 else 0, run_uri=run_uri)
+        arguments["max_parallel_stages"] = None
+        assert fixture.store.reserve(assignment, **arguments) == "reserved"
+    assignment, arguments = fixture.candidate("ninth-gpu", 1, run_uri=run_uri)
+    arguments["max_parallel_stages"] = None
+    with pytest.raises(SlurmAdmissionDeferred, match="GPU"):
+        fixture.reopen().reserve(assignment, **arguments)
+
+
+def test_agent_task_page_filters_owner_before_limit_and_survives_restart(tmp_path):
+    fixture = ReservationFixture(tmp_path)
+    from dataclasses import replace
+    for index in range(6):
+        assignment, arguments = fixture.candidate(f"task-{index}", 0)
+        assignment = replace(assignment, agent_id="other" if index % 2 else "selected")
+        fixture.store.reserve(assignment, **arguments)
+    selected_root = assignment.agent_root_id
+    first = fixture.store.agent_page("selected", selected_root, limit=2)
+    assert [row.assignment.assignment_id for row in first] == ["task-0", "task-2"]
+    remaining = fixture.store.agent_page("selected", selected_root, after="task-2", limit=2)
+    assert [row.assignment.assignment_id for row in remaining] == ["task-4"]
+    assert fixture.store.agent_page("selected", "wrong-root") == ()
+    assert fixture.reopen().agent_page("selected", selected_root, after="task-2", limit=2) == remaining

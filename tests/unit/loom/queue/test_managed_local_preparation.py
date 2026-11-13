@@ -796,7 +796,7 @@ def test_configuration_reference_replay_preserves_all_files_and_authorship(
     assert _run_files(root) == before
 
 
-@pytest.mark.parametrize("version", [3, 4, 5, 6, True, 7.0, "7", 8])
+@pytest.mark.parametrize("version", [3, 4, 5, 6, True, 7.0, "7", 9])
 def test_retired_runtime_intent_refuses_without_repair(tmp_path: Path, version) -> None:
     from loom.queue.local_daemon_runtime import load_managed_local_runtime_record
 
@@ -872,3 +872,21 @@ def test_referenced_authorship_keeps_secrets_out_of_display_and_offline_evidence
     assert "private-fixture-value" not in json.dumps(safe)
     assert "***REDACTED***" in json.dumps(safe)
     assert "composition_manifest_ref" not in (store.read_runtime_metadata(receipt.run_uri) or {})
+
+
+def test_unlimited_runtime_intent_is_versioned_and_replayed_exactly(tmp_path: Path) -> None:
+    from loom.queue.local_daemon_runtime import load_managed_local_runtime_record
+
+    coordinator = _coordinator_config(tmp_path)
+    pipeline = _pipeline_config(tmp_path)
+    config = json.loads(pipeline.read_text())
+    config["runtime"]["execution"] = {"settings": {"max_parallel_stages": None}}
+    pipeline.write_text(json.dumps(config))
+    receipt = prepare_managed_local_run(coordinator, pipeline, "unlimited")
+    store = LocalRunStore(tmp_path / "runs")
+    record = load_managed_local_runtime_record(store, receipt.run_uri)
+    assert record["schema_version"] == 8
+    assert record["max_parallel_stages"] is None
+    before = _run_files(store.local_run_dir(receipt.run_uri))
+    assert prepare_managed_local_run(coordinator, pipeline, "unlimited") == receipt
+    assert _run_files(store.local_run_dir(receipt.run_uri)) == before

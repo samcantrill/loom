@@ -204,7 +204,10 @@ def _runtime_payload(
     if composition_ref is not None:
         store.read_composition_manifest(run_uri)
     return {
-        "schema_version": _SCHEMA_VERSION,
+        "schema_version": (
+            8 if parallel_execution_options(normalized).max_parallel_stages is None
+            else _SCHEMA_VERSION
+        ),
         **({"composition_manifest_ref": composition_ref} if composition_ref is not None else {}),
         **({"project_contracts_digest": contracts_digest} if contracts_digest is not None else {}),
         "run_uri": run_uri,
@@ -518,7 +521,7 @@ def load_managed_local_runtime_record(
     if (
         not isinstance(data, Mapping)
         or type(data.get("schema_version")) is not int
-        or data["schema_version"] != _SCHEMA_VERSION
+        or data["schema_version"] not in {_SCHEMA_VERSION, 8}
     ):
         raise QueueServiceError(
             "managed-local runtime record schema is unsupported; finish or cancel "
@@ -583,7 +586,7 @@ def load_managed_local_runtime_record(
             "managed-local runtime record execution requirements are invalid"
         ) from exc
     max_parallel_stages = payload.get("max_parallel_stages")
-    if (
+    if not (data["schema_version"] == 8 and max_parallel_stages is None) and (
         isinstance(max_parallel_stages, bool)
         or not isinstance(max_parallel_stages, int)
         or max_parallel_stages < 1

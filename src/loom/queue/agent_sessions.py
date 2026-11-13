@@ -1995,13 +1995,55 @@ class AgentSessionService:
             policy.revision,
         )
 
-    @_serialized_session_operation
     def slurm_work(
         self,
         session_id: str,
         coordinator_epoch: str,
         evidence: Mapping[str, PlainData] | None = None,
         cursor: str | None = None,
+    ) -> Mapping[str, PlainData]:
+        from .local_daemon_execution import _SlurmRetentionRequired, _SlurmPublicationRequired
+
+        publication = evidence is not None and evidence.get("result_operation") == "commit"
+        release = evidence is not None and evidence.get("provider_released") is True
+        if publication or release:
+            if publication:
+                assignment_id = evidence.get("assignment_id")
+            else:
+                assignment = evidence.get("assignment")
+                if not isinstance(assignment, Mapping):
+                    raise QueueServiceError("SLURM release assignment is invalid")
+                assignment_id = assignment.get("assignment_id")
+            _identifier(assignment_id, "assignment_id")
+            with self._daemon._publication_guards.hold(cast(str, assignment_id)):
+                pending = None
+                with self._daemon._cycle_lock:
+                    try:
+                        return self._slurm_work_locked(
+                            session_id, coordinator_epoch, evidence, cursor,
+                            **({"_defer_publication": True} if publication else {"_defer_retention": True}),
+                        )
+                    except (_SlurmRetentionRequired, _SlurmPublicationRequired) as continuation:
+                        pending = continuation
+                # No global lock or write transaction spans recursive verification.
+                # The assignment guard serializes publication and release retries.
+                if isinstance(pending, _SlurmPublicationRequired):
+                    pending.prepare()
+                    completed = {"_publication": pending}
+                else:
+                    pending.retain()
+                    completed = {"_retained": pending}
+                with self._daemon._cycle_lock:
+                    return self._slurm_work_locked(
+                        session_id, coordinator_epoch, evidence, cursor, **completed,
+                    )
+        with self._daemon._cycle_lock:
+            return self._slurm_work_locked(session_id, coordinator_epoch, evidence, cursor)
+
+    def _slurm_work_locked(
+        self, session_id: str, coordinator_epoch: str,
+        evidence: Mapping[str, PlainData] | None, cursor: str | None,
+        **retention,
     ) -> Mapping[str, PlainData]:
         rule, revision = self._authorize("poll")
         with self._daemon._connection() as conn:
@@ -2022,33 +2064,11 @@ class AgentSessionService:
             raise QueueServiceError("SLURM assignment owner is unavailable")
         if evidence is not None:
             return execution.acknowledge_slurm_agent(
-                session.agent_id, session.agent_root_id, evidence
+                session.agent_id, session.agent_root_id, evidence, **retention,
             )
-        tasks = sorted(
-            execution.slurm_agent_tasks(session.agent_id, session.agent_root_id),
-            key=lambda task: cast(
-                str, cast(Mapping[str, PlainData], task["assignment"])["assignment_id"]
-            ),
+        return execution.slurm_agent_task_page(
+            session.agent_id, session.agent_root_id, cursor=cursor,
         )
-        if cursor is not None:
-            tasks = [
-                task
-                for task in tasks
-                if cast(
-                    str,
-                    cast(Mapping[str, PlainData], task["assignment"])["assignment_id"],
-                )
-                > cursor
-            ]
-        selected = tasks[:1]
-        return {
-            "tasks": cast(PlainData, selected),
-            "next_cursor": None
-            if len(tasks) <= 1
-            else cast(Mapping[str, PlainData], selected[0]["assignment"])[
-                "assignment_id"
-            ],
-        }
 
     def handshake(self) -> Mapping[str, PlainData]:
         self._authorize("handshake")

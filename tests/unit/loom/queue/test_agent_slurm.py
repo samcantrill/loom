@@ -531,3 +531,60 @@ def test_pacing_starts_after_submitting_acknowledgement(tmp_path, monkeypatch):
     agent.step(_task(profile, key="2"), acknowledge)
     assert agent.journal.read("operation-2").state is ReadyStageState.INTENT
     assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
+
+
+def test_failed_pending_ack_does_not_hide_later_receipts_or_submit_again(tmp_path):
+    runner = FakeSlurmCommandRunner()
+    profile = _profile(runner, tmp_path, retention_bytes=512 * 1024 * 1024)
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,))
+
+    def unavailable(value):
+        raise OSError("ack unavailable")
+
+    for key in ("1", "2", "3"):
+        with pytest.raises(OSError, match="ack unavailable"):
+            agent.step(_task(profile, key=key), unavailable, allow_submission=False)
+    delivered = []
+
+    def selective(value):
+        identity = value["assignment"]["operation_id"]
+        delivered.append(identity)
+        if identity == "operation-1":
+            raise OSError("first receipt unavailable")
+        return {"sequence": value["sequence"], "cancel_requested": False}
+
+    with pytest.raises(OSError, match="first receipt"):
+        agent.replay_pending(selective)
+    agent.replay_pending(selective)
+    assert delivered == ["operation-1", "operation-2", "operation-3"]
+    with pytest.raises(OSError, match="first receipt"):
+        agent.replay_pending(selective)
+    assert not any(call[0] == "sbatch" for call in runner.calls)
+
+
+def test_pending_ack_replay_visits_at_most_32_receipts_per_iteration(tmp_path):
+    runner = FakeSlurmCommandRunner()
+    profile = _profile(runner, tmp_path, retention_bytes=8 * 1024**3)
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,))
+
+    def unavailable(value):
+        raise OSError("retain pending evidence")
+
+    for index in range(35):
+        with pytest.raises(OSError, match="retain pending"):
+            agent.step(_task(profile, key=f"{index:03d}"), unavailable, allow_submission=False)
+    received = []
+
+    def acknowledge(value):
+        received.append(value["assignment"]["operation_id"])
+        return {"sequence": value["sequence"], "cancel_requested": False}
+
+    agent.replay_pending(acknowledge)
+    assert received == [f"operation-{index:03d}" for index in range(32)]
+    agent.replay_pending(acknowledge)
+    assert received == [f"operation-{index:03d}" for index in range(35)]
+    AgentSlurmJobs(tmp_path, (profile,)).replay_pending(acknowledge)
+    assert len(received) == 35
+    assert not any(call[0] == "sbatch" for call in runner.calls)

@@ -521,7 +521,7 @@ class SQLiteSlurmStageAssignments:
         delivery: SlurmStageDelivery,
         input_paths: Mapping[str, Path],
         issuer_epoch: str,
-        max_parallel_stages: int,
+        max_parallel_stages: int | None,
         max_profile_outstanding: int | None,
         requested_gpu_count: int | None = None,
         max_reserved_gpus: int | None = None,
@@ -545,7 +545,7 @@ class SQLiteSlurmStageAssignments:
             (max_parallel_stages, "run slot limit"),
             (max_profile_outstanding, "profile slot limit"),
         ):
-            if name == "profile slot limit" and value is None:
+            if value is None:
                 continue
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise QueueServiceError(f"SLURM {name} is invalid")
@@ -633,7 +633,7 @@ class SQLiteSlurmStageAssignments:
                     (assignment.run_uri,),
                 ).fetchone()[0]
             )
-            if managed_count + slurm_count >= max_parallel_stages:
+            if max_parallel_stages is not None and managed_count + slurm_count >= max_parallel_stages:
                 raise SlurmAdmissionDeferred(
                     "run_active_assignment_limit", "run active-assignment limit reached",
                 )
@@ -1201,6 +1201,23 @@ class SQLiteSlurmStageAssignments:
                     "WHERE state != 'released' ORDER BY assignment_id"
                 )
             )
+            return tuple(self._record(row) for row in rows)
+
+    def agent_page(
+        self, agent_id: str, agent_root_id: str, *, after: str | None = None, limit: int = 33,
+    ) -> tuple[SlurmStageRecord, ...]:
+        """Bound materialization to one agent's keyset page, including lookahead."""
+        if type(limit) is not int or not 1 <= limit <= 33:
+            raise QueueServiceError("SLURM task page limit is invalid")
+        with _connect(self.path, sqlite_policy=self._sqlite_policy, require_existing=True) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                f"SELECT * FROM {_ASSIGNMENT_TABLE} WHERE state != 'released' "
+                "AND json_extract(identity_json, '$.agent_id') = ? "
+                "AND json_extract(identity_json, '$.agent_root_id') = ? "
+                "AND (? IS NULL OR assignment_id > ?) ORDER BY assignment_id LIMIT ?",
+                (agent_id, agent_root_id, after, after, limit),
+            ).fetchall()
             return tuple(self._record(row) for row in rows)
 
     def read_input_chunk(

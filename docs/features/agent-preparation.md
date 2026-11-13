@@ -1465,7 +1465,12 @@ before deploying this incompatible contract and preparing fresh assignments.
 
 ### Current retained execution intent
 
-Managed execution retains one schema-7 intent record. The record always binds
+Managed execution retains a schema-7 intent record for bounded stage concurrency.
+An explicit `execution.settings.max_parallel_stages: null` removes the per-run
+ceiling and writes schema 8; current readers accept both versions without
+rewriting saved intent. Omission preserves the legacy ceiling of one. Resource
+claims, Slurm profile limits and the shared GPU reservation budget still apply.
+The record always binds
 its plan, resolved pipeline, runtime options, placements, selected installation
 requirements and concurrency. `composition_manifest_ref` appears when retained
 composition authorship is available; `project_contracts_digest` appears for
@@ -1643,3 +1648,138 @@ root, delivery mode and preparation profile remain fixed; requested includes may
 only narrow the selected include closure, and config/overlay paths must stay in
 that narrowed closure. Installed-profile requests still require the exact
 deployment source. Coordinator source policies remain the authorization owner.
+
+
+### Deployment stage-concurrency defaults
+
+A protected `loom.deployment` selection accepts a sparse `run_defaults` block:
+
+```yaml
+run_defaults:
+  execution:
+    settings:
+      max_parallel_stages: null
+```
+
+Only the per-run stage ceiling is accepted in this block. A positive integer
+sets a ceiling; null removes it. Explicit invocation options override deployment
+defaults, which override recipe runtime settings; when all omit the setting the
+legacy default is one. Profile limits, resident resource claims and the aggregate
+Slurm GPU budget remain independent constraints.
+
+`loom run --max-parallel-stages unlimited` selects null explicitly; omission uses
+the selected defaults. API constructors call
+`load_deployment(path).resolve_run_options(explicit_options)` and retain that
+mapping in `PrepareRunRequest.run_options` before dispatch. `loom.run()` accepts
+exact intent and never rereads defaults into a saved request. Connection-only
+export preserves the selected defaults. Deployment defaults do not change the
+scientific configuration or dependency/operation order.
+
+
+### Ready-queue traversal
+
+Managed and Slurm dispatch share bounded keyset traversal of ready work. Each
+scheduling turn visits at most four ordinary pages of 256 records, continuing on a later
+cycle if the prefix remains blocked. Cursor keys contain the full ordering key,
+so releasing an earlier row does not shift an offset and skip work. Completing
+a sweep or restarting the coordinator returns to the priority head. Each sweep
+captures the accepted ready timestamp and largest eligible admission sequence;
+later stages and admissions cannot extend it indefinitely. The admission bound
+also excludes new admissions sharing the captured timestamp's whole second.
+Successful dispatch resets the boundary together with the cursor. No saved work
+identity is rewritten to advance the scan.
+
+Within a priority, admission order rotates after a successful durable dispatch.
+Deferrals do not advance that rotation. Each admission retains its stage-ready
+order, and resident resource feasibility remains the scheduling kernel's job.
+The scan cursor and rotation are transient optimizations; restart begins with
+original admission order and the existing durable reservations still enforce
+capacity. New ready work before a cursor is considered on the next sweep.
+
+Alternating successful dispatch turns also offer one bounded page of GPU work
+before ordinary traversal. This query finds GPU requests beyond a CPU backlog
+in SQL, but selects only the first authored READY stage of each admission at the
+highest current READY priority. It cannot skip an earlier CPU stage in that run
+or overtake higher-priority work. The GPU scan has its own finite boundary,
+continuation and successful-dispatch rotation: CPU dispatches cannot reset a
+blocked GPU prefix. Failed GPU admission falls back to ordinary traversal in
+the same turn, so a full GPU reservation budget does not stop CPU progress.
+All selections still pass through the existing route, cancellation, resource
+feasibility and transactional reservation owners. This policy does not promise
+starvation freedom for large multi-GPU requests against smaller GPU requests.
+
+
+### Slurm agent control pages
+
+The authenticated task endpoint reads at most 33 matching assignment records
+(32 plus lookahead) for the requesting agent/root and constructs at most 32 task
+payloads. It packs the actual JSON success envelope within the existing 64 KiB
+control budget. A byte-limited page returns the last safely traversed cursor;
+an oversized individual task fails explicitly rather than disappearing.
+Recovery-withheld records advance the scan without delivering an unauthorized
+task. Released rows may disappear without shifting keyset pagination.
+
+The agent processes one received page per driver iteration. Consequently the
+existing accounting batch policy applies once per iteration, including its
+query-count/time budget; no inner loop multiplies that budget across pages.
+Restart resets the cursor and replays retained operation evidence. Submission
+pacing, exact operation identities and containment requirements are unchanged.
+
+Pending Slurm acknowledgement replay is also keyset-paged, at 32 receipts per
+iteration. The transient cursor advances before transport; a failed receipt
+remains durable and is revisited on the next sweep, while later receipts can
+progress. Exceptions still report delivery failure and never acknowledge or
+resubmit an operation speculatively. Restart begins a fresh replay sweep.
+
+
+### Recovery sealing and release concurrency
+
+A Slurm provider-release acknowledgement first validates the exact assignment,
+execution fence and containment proof and durably records its pending outcome.
+Recovery inventory, hashing, fsync and rename then execute under an
+assignment-specific publication guard outside the global coordinator lock.
+Before capacity is released, the owner rechecks the current authenticated session,
+assignment, evidence, recovery guard and captured storage bindings. A changed
+context refuses final release; a completed filesystem operation alone is not an
+acknowledgement. Existing durable retention receipts finish interrupted replay.
+
+Shared Slurm output commits use the same assignment guard. Output inventory,
+hashing and recursive file sync run outside the global lock. Before accepting
+the verified tree, the relay reauthenticates the submit-agent session and checks
+guarded recovery, the current assignment, report, incarnation, fence and captured
+storage roots. The authority then rechecks the execution grant and publication
+binding before rename/output commit. A changed context refuses acceptance;
+replay verifies an already renamed tree using the existing publication receipt.
+Direct compute-result commits share the assignment guard with relayed commits.
+
+The embedded Slurm driver uses these continuations with a bounded queue of at
+most 32 pending publication-verification or retention operations on a dedicated two-thread pool. This pool
+does not share occupied resident execution observers. It retries the
+retained evidence after completion. A completed publication can enqueue retention
+for the same assignment during that replay. No reservation is freed while sealing is
+pending or failed. A restart resumes from the existing evidence and retention
+receipts; in-memory continuations are never authority.
+
+
+### Bounded admission reconciliation
+
+A coordinator cycle reconciles at most 32 nonterminal admissions and returns
+that visited batch from `reconcile_once()`. Public status/inspection still covers
+all runs. A sweep fixes
+its admission-sequence high-water mark; arrivals during that sweep cannot extend
+it indefinitely. Continuation uses priority, enqueue sequence and admission ID,
+so deleted rows do not shift offsets. New or reprioritized work is reconsidered
+at the next sweep; restart begins at the priority head. A finished sweep returns
+to the normal service polling interval rather than continuously self-waking.
+
+Already projected READY work is not restricted to the current reconciliation
+batch. Dispatch reloads exact retained intent for an eligible ACTIVE/WAITING run
+when needed, checks cancellation and current authority, and retains the existing
+transactional reservation checks. This keeps reconciliation throughput separate
+from GPU dispatch opportunities. The current implementation still reads active
+admission metadata for the global eligibility view; the bound applies to heavy
+run reconciliation, not total metadata cardinality.
+
+Slow coordinator cycles (at least one second) emit bounded local phase timings
+to the existing service stderr log, including admission reconciliation. The
+existing diagnostic collector caps its span list; no remote reporting is added.

@@ -1669,6 +1669,8 @@ class LocalDaemon:
         self._publication_guards = PublicationGuards()
         self._service_error: str | None = None
         self._admission_retries: dict[str, _RecoveryRetry] = {}
+        from ._admission_scan import AdmissionScan
+        self._admission_scan = AdmissionScan()
         self._cancelled_admission_repairs: deque[str] | None = None
         self._agent_policy = config.agent_policy
         self._verified_local_owner_subject: str | None = None
@@ -2633,7 +2635,26 @@ class LocalDaemon:
         )
 
     def reconcile_once(self) -> tuple[LocalDaemonAdmission, ...]:
-        """Project every admission, then schedule one global bounded window."""
+        """Advance a finite admission batch and report bounded slow-cycle timings."""
+        from ._phase_timing import PhaseTimings, log_phases, observe_phases
+
+        timing = PhaseTimings()
+        started = time.monotonic()
+        try:
+            with observe_phases(timing.observe), timing.measure("coordinator.reconcile_cycle"):
+                return self._reconcile_once()
+        finally:
+            # One local diagnostic for slow cycles; no metrics service or network.
+            # Timing failures cannot replace durable lifecycle outcomes.
+            try:
+                if time.monotonic() - started >= 1:
+                    log_phases(timing.payload())
+            except Exception:
+                pass
+
+    def _reconcile_once(self) -> tuple[LocalDaemonAdmission, ...]:
+        """Reconcile at most 32 runs, then dispatch from global durable READY work."""
+        from ._phase_timing import phase
 
         self._require_started()
         self._preparations.reconcile()
@@ -2668,18 +2689,31 @@ class LocalDaemon:
                         ),
                     )
                 )
-            schedulable: dict[str, LocalDaemonAdmission] = {}
+            # Already projected READY work remains eligible while reconciliation
+            # advances a bounded batch of other runs. Dispatch reopens exact
+            # retained intent and current authority before reserving anything.
+            schedulable: dict[str, LocalDaemonAdmission] = {
+                row.admission_id: row for row in admissions
+                if row.state in {LocalDaemonAdmissionState.ACTIVE, LocalDaemonAdmissionState.WAITING}
+                and row.cancellation_operation_id is None
+                and row.run_uri not in self._admission_retries
+            }
+            batch = self._admission_scan.take(admissions)
+            if self._admission_scan.after is not None:
+                self._wake.set()
             waiting_outcomes: dict[str, LocalDaemonExecutionOutcome] = {}
             active_runs = {admission.run_uri for admission in admissions}
             for run_uri in self._admission_retries.keys() - active_runs:
                 del self._admission_retries[run_uri]
-            for admission in admissions:
+            for admission in batch:
+                schedulable.pop(admission.admission_id, None)
                 progress = (admission.revision, self._scheduling_epoch)
                 retry = self._admission_retries.get(admission.run_uri)
                 if retry is not None and not retry.ready(progress):
                     continue
                 try:
-                    outcome = execution.reconcile_admission(admission)
+                    with phase("coordinator.reconcile_admission", operation_id=admission.admission_id):
+                        outcome = execution.reconcile_admission(admission)
                 except QueueConflictError:
                     self._admission_retries.pop(admission.run_uri, None)
                     self._record_admission_health(admission.admission_id, "failed")
@@ -2764,7 +2798,7 @@ class LocalDaemon:
             # Reconciliation is an internal operation; retain its bounded
             # nonterminal work result without rebuilding public detail/status.
             return tuple(
-                self._admission(admission.admission_id) for admission in admissions
+                self._admission(admission.admission_id) for admission in batch
             )
 
     def _serve(self) -> None:

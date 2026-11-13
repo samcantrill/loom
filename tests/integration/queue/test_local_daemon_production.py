@@ -1663,9 +1663,13 @@ def test_local_observer_backoff_preserves_peer_progress_and_cancellation(tmp_pat
         daemon.stop()
 
 
+@pytest.mark.parametrize("batch_limit", [1, 32])
 def test_daemon_global_priority_preempts_earlier_lower_priority_admission(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch, batch_limit,
 ) -> None:
+    from loom.queue._admission_scan import AdmissionScan
+    take = AdmissionScan.take
+    monkeypatch.setattr(AdmissionScan, "take", lambda self, admissions: take(self, admissions, limit=batch_limit))
     run_root = tmp_path / "runs"
     low_uri = _persist_sleep_run(
         run_root,

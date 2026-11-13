@@ -270,6 +270,17 @@ def test_outbound_service_settles_slurm_while_drained(
                 # restart drained. Observation/release must still progress.
                 client.submit(LocalDaemonAdmissionRequest("held", held_uri))
                 held = eventually(lambda: execution.slurm_assignments.list_run_unreleased(held_uri))[0]
+                session = agent.active_session()
+                page = agent._call("slurm_work", {
+                    "session_id": session.session_id,
+                    "coordinator_epoch": session.coordinator_epoch,
+                    "cursor": None, "evidence": None,
+                })
+                assert len(page["tasks"]) == 2
+                assert page["next_cursor"] is None
+                assert held.assignment.assignment_id in {
+                    task["assignment"]["assignment_id"] for task in page["tasks"]
+                }
                 if start_held:
                     # This queued command has never reached the agent. A held
                     # restart must not interpret its later delivery as permission.
