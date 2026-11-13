@@ -6169,6 +6169,30 @@ def test_lost_registration_response_replays_into_remote_agent_journal(
             ).fetchone()[0]
         assert current_epoch in str(stored)
 
+        # Legacy authorization replay could persist a backward reconciliation.
+        # A definitive rejection plus a fresh epoch observation retires it;
+        # transport uncertainty must retain the exact intent for another replay.
+        with pytest.raises(QueueConflictError):
+            client.reconcile(
+                resumed.session_id, repaired.coordinator_epoch,
+                idempotency_key="legacy-backward-reconcile",
+            )
+        retained = client._require_journal().pending_reconciliations()
+        assert len(retained) == 1
+
+        def unavailable(operation, value, *, role="agent"):
+            raise QueueServiceError("agent protocol outcome is indeterminate")
+
+        monkeypatch.setattr(client, "_call", unavailable)
+        with pytest.raises(QueueServiceError, match="indeterminate"):
+            client._replay_pending_reconciliation()
+        assert client._require_journal().pending_reconciliations() == retained
+        monkeypatch.setattr(client, "_call", original)
+        client._replay_pending_reconciliation()
+        assert client._require_journal().pending_reconciliations() == ()
+        assert client.active_session() == resumed
+        monkeypatch.setattr(client, "_call", lose_response)
+
         replacement_root = _remote_agent_root(tmp_path, "replacement-owner")
         replacement = LocalDaemonAgentHttpClient(
             AgentTlsClientConfig(
