@@ -161,6 +161,15 @@ def _agent_observation(daemon: LocalDaemon, agent_id: str) -> OperatorObservatio
         **agent.to_dict(),
         "agent_root_id": session["agent_root_id"],
         "connected": connected,
+        # Legacy connected is an offer/session observation, not a network probe.
+        "connected_basis": "session_and_capacity_offer",
+        "offer_freshness": (
+            "missing" if row is None else
+            "expired" if row["expires_at"] < now else
+            "superseded" if not row["current"] or offer is None
+            or offer.availability_revision != agent.availability_revision else
+            "fresh"
+        ),
         "drained": drained,
         "control": None
         if control is None or control_value is None

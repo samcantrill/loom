@@ -63,7 +63,8 @@ def test_admitted_publication_finishes_after_authorization_expiry(monkeypatch):
         _eventually(lambda: case.operator.observe_assignment(assignment).value["remote_state"] == "RELEASED")
 
 
-def test_expired_authorization_history_beyond_64_recovers_over_tls(monkeypatch):
+@pytest.mark.parametrize("restart_coordinator", [False, True])
+def test_expired_authorization_history_beyond_64_recovers_over_tls(monkeypatch, restart_coordinator):
     from loom.queue.local_daemon import LocalDaemonPrincipal, LocalDaemonRole
 
     entered, release = Event(), Event()
@@ -104,6 +105,23 @@ def test_expired_authorization_history_beyond_64_recovers_over_tls(monkeypatch):
             history = case.operator.observe_assignment(assignment).value["transfer_authorization"]
             assert history["retained_count"] == history["latest_revision"] == 66
             assert history["history_limit"] == 1_000_000
+            if restart_coordinator:
+                # Receipts survive coordinator restarts. Completion must join
+                # the current epoch while replaying grants from revision zero.
+                from loom.queue.errors import QueueServiceError
+
+                case.daemon.stop()
+
+                def restart():
+                    try:
+                        case.daemon.start()
+                    except QueueServiceError as exc:
+                        if str(exc) != "retained-input preparation is still stopping":
+                            raise
+                        return False
+                    return True
+
+                _eventually(restart)
             now[0] += timedelta(seconds=61)
             release.set()
             assert case.client.wait("expired-history", timeout_seconds=60).state.value == "SUCCEEDED"

@@ -13,7 +13,7 @@ from time import monotonic, sleep
 
 import pytest
 
-from loom.coordinator import CoordinatorOperatorClient
+from loom.coordinator import CoordinatorClientError, CoordinatorOperatorClient
 from loom.queue._coordinator_transport import HttpsControlTransport
 from loom.pipeline.status import StageStatus
 from loom.pipeline.stores import LocalRunStore
@@ -30,6 +30,8 @@ from loom.queue.agent_session_transport import (
     LocalDaemonAgentHttpServer,
 )
 from loom.queue.agent_sessions import (
+    AgentControl,
+    AgentControlKind,
     AgentOffer,
     AgentPolicyConfig,
     AgentPrincipalPolicy,
@@ -62,14 +64,18 @@ from tests.integration.queue.test_agent_session_transport import (
 
 
 @pytest.mark.parametrize(
-    "restart_coordinator,unqualified_result",
-    [(False, False), (True, False), (False, True)],
+    "restart_coordinator,unqualified_result,namespace_marker,missing_started_ack",
+    [(False, False, False, False), (True, False, False, False),
+     (False, True, False, False), (False, True, True, False),
+     (False, True, True, True)],
 )
 def test_reboot_containment_closes_and_releases_same_session(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     restart_coordinator: bool,
     unqualified_result: bool,
+    namespace_marker: bool,
+    missing_started_ack: bool,
 ) -> None:
     credentials = _credentials(tmp_path / "tls")
     descriptor = ResidentProfileDescriptor(
@@ -95,7 +101,7 @@ def test_reboot_containment_closes_and_releases_same_session(
                 "operator-credential",
                 "operator",
                 "operator",
-                actions=("recover_unknown", "replace_session"),
+                actions=("recover_unknown", "replace_session", "drain", "resume"),
                 agent_ids=("agent-a",),
             ),
         ),
@@ -159,6 +165,13 @@ def test_reboot_containment_closes_and_releases_same_session(
         expected_coordinator_id=daemon.status().coordinator_id,
     )
     release_agent = Event()
+    start_confirmation = Event()
+    if missing_started_ack:
+        def interrupt_before_confirmation(*args, **kwargs):
+            start_confirmation.set()
+            raise _ManagedApplicationSuspended("controlled loss before start acknowledgement")
+
+        monkeypatch.setattr(agent, "confirm_started", interrupt_before_confirmation)
     worker = None
     workers: ThreadPoolExecutor | None = None
     try:
@@ -208,16 +221,16 @@ def test_reboot_containment_closes_and_releases_same_session(
         deadline = monotonic() + 10
         assignment_row = None
         while monotonic() < deadline:
-            if worker.done():
+            if worker.done() and not missing_started_ack:
                 worker.result()
             with sqlite3.connect(config.control_database) as conn:
                 conn.row_factory = sqlite3.Row
                 assignment_row = conn.execute(
                     "SELECT * FROM remote_assignments WHERE run_uri = ? "
-                    "AND state = 'RUNNING'",
-                    (run_uri,),
+                    "AND state = ?",
+                    (run_uri, "GRANTED" if missing_started_ack else "RUNNING"),
                 ).fetchone()
-            if assignment_row is not None:
+            if assignment_row is not None and (not missing_started_ack or start_confirmation.is_set()):
                 break
             sleep(0.02)
         assert assignment_row is not None
@@ -225,7 +238,7 @@ def test_reboot_containment_closes_and_releases_same_session(
         fence = str(assignment_row["fence"])
         snapshot = authority.open_run(run_uri)
         stage = next(item for item in snapshot.stages if item.stage_name == "slow")
-        assert stage.status is StageStatus.RUNNING
+        assert stage.status is (StageStatus.SUBMITTED if missing_started_ack else StageStatus.RUNNING)
         attempt = next(
             item
             for item in stage.attempts
@@ -246,6 +259,26 @@ def test_reboot_containment_closes_and_releases_same_session(
             consider_retry=True,
             reason="remote containment integration proof",
         )
+        if missing_started_ack:
+            with sqlite3.connect(config.execution_database) as conn:
+                assert conn.execute(
+                    "SELECT COUNT(*) FROM coordinator_events WHERE assignment_id = ?",
+                    (assignment_id,),
+                ).fetchone()[0] == 0
+            operator.control_agent(AgentControl(
+                "recovery-drain", AgentControlKind.DRAIN, session.agent_id,
+                session.session_id, session.config_revision, None, False,
+                "contain the retained startup assignment",
+            ))
+            assert agent.poll_control(session.session_id) is not None
+            with sqlite3.connect(config.control_database) as conn:
+                assert conn.execute(
+                    "SELECT COUNT(*) FROM agent_offers WHERE session_id = ? AND current = 1",
+                    (session.session_id,),
+                ).fetchone()[0] == 0
+            # Drain is not itself expiry or containment evidence.
+            with pytest.raises(CoordinatorClientError, match="conflict"):
+                operator.recover_unknown(request)
         # Suspend only this application. End the exact test-owned process group
         # and supervisor before replacing the kernel observation at its owner.
         release_agent.set()
@@ -302,6 +335,13 @@ def test_reboot_containment_closes_and_releases_same_session(
         )
         agent = LocalDaemonAgentHttpClient(remote_config)
         assert agent.agent_root_id == root_id
+        if namespace_marker:
+            # Kernel containment is established by this fixture above. Exercise
+            # the distinct exact-launch marker consumed after namespace recovery;
+            # real namespace proof/receipt production has its own OS acceptance.
+            assert agent._supervisor is not None
+            agent._supervisor.reboot_generations = ()
+            agent._supervisor.operator_contained_launches = (launch.launch_operation_id,)
         active_session = agent.active_session()
         assert active_session is not None
         assert active_session.session_id == session.session_id
@@ -314,6 +354,11 @@ def test_reboot_containment_closes_and_releases_same_session(
         assert execution_journal is not None
         assert len(execution_journal.retained_claim_commands()) == 1
         coordinator_now[0] = "2030-01-01T00:00:31+00:00"
+        if missing_started_ack:
+            with pytest.raises(CoordinatorClientError, match="conflict"):
+                operator.recover_unknown(replace(request, process_execution_id="wrong-root"))
+            with sqlite3.connect(config.control_database) as conn:
+                assert conn.execute("SELECT COUNT(*) FROM recovery_operations").fetchone()[0] == 0
         assert operator.recover_unknown(request)["state"] == "pending"
         original_call = agent._call
         lost = []
@@ -349,6 +394,13 @@ def test_reboot_containment_closes_and_releases_same_session(
         active_session = agent.active_session()
         assert active_session is not None
         assert active_session.session_id == session.session_id
+        if missing_started_ack:
+            operator.control_agent(AgentControl(
+                "recovery-resume", AgentControlKind.RESUME, session.agent_id,
+                session.session_id, session.config_revision, None, False,
+                "recovery completed",
+            ))
+            assert agent.poll_control(session.session_id) is not None
         # Match agent-serve: retained cleanup precedes session reconciliation,
         # and only the reconciled epoch can advertise fresh capacity.
         handshake = agent.handshake()

@@ -98,6 +98,17 @@ def register_subparser(
     reboot.add_argument("--operation-id", required=True)
     _add_output_options(reboot)
     reboot.set_defaults(handler=handle_agent_recover_reboot)
+    namespace_recovery = queue_subparsers.add_parser(
+        "agent-recover-namespace", help="contain one stranded PID namespace on a stopped agent"
+    )
+    _add_role_config_arguments(namespace_recovery)
+    for option in ("operation-id", "assignment-id", "boot-id"):
+        namespace_recovery.add_argument("--" + option, required=True)
+    for role in ("supervisor", "launcher", "namespace"):
+        namespace_recovery.add_argument(f"--{role}-pid", type=int, required=True)
+        namespace_recovery.add_argument(f"--{role}-start-ticks", type=int, required=True)
+    _add_output_options(namespace_recovery)
+    namespace_recovery.set_defaults(handler=handle_agent_recover_namespace)
     poll_recovery = queue_subparsers.add_parser(
         "agent-recover-poll", help="reconcile a stopped agent's proven no-delivery poll conflict"
     )
@@ -462,6 +473,24 @@ def handle_agent_recover_reboot(namespace: argparse.Namespace) -> int:
         )
         result = LocalDaemonAgentHttpClient.recover_reboot(
             service.client, namespace.operation_id
+        )
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    return _emit_daemon_payload(namespace, result)
+
+
+def handle_agent_recover_namespace(namespace: argparse.Namespace) -> int:
+    from loom.queue._namespace_recovery import ProcessIdentity, recover_namespace
+    from loom.queue.deployment import load_outbound_agent_service_config
+
+    try:
+        service = load_outbound_agent_service_config(namespace.config, env_file=namespace.env_file)
+        result = recover_namespace(
+            service.client, operation_id=namespace.operation_id,
+            assignment_id=namespace.assignment_id, boot_id=namespace.boot_id,
+            supervisor=ProcessIdentity(namespace.supervisor_pid, namespace.supervisor_start_ticks),
+            launcher=ProcessIdentity(namespace.launcher_pid, namespace.launcher_start_ticks),
+            namespace=ProcessIdentity(namespace.namespace_pid, namespace.namespace_start_ticks),
         )
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
@@ -1059,6 +1088,7 @@ __all__ = [
     "LOCAL_DAEMON_SCHEMA_VERSION",
     "handle_agent_init",
     "handle_agent_recover_reboot",
+    "handle_agent_recover_namespace",
     "handle_agent_recover_poll",
     "handle_agent_check",
     "handle_agent_serve",

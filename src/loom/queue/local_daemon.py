@@ -69,7 +69,7 @@ from ._managed_local import AgentResourceProvider
 from ._remote_stage_execution import GpuDeviceDescriptor, ResidentProfileDescriptor
 from ._preparation_policy import PreparationPolicy
 from .submitted_execution import SubmittedContainerCapability
-from .errors import QueueConflictError, QueueServiceError, QueueStorageError
+from .errors import QueueConflictError, QueueServiceError, QueueStorageError, _AcceptedTimeError
 from ._service_signals import _ChangeConnection, _ServiceSignal
 from ._recovery_retry import _RecoveryRetry
 
@@ -1931,6 +1931,7 @@ class LocalDaemon:
             self._agent_id = agent_id
             epoch = f"coordinator-epoch-{uuid4()}"
             with self._connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
                 try:
                     started_at = self._accepted_time(conn)
                 except QueueServiceError:
@@ -3936,6 +3937,7 @@ class LocalDaemon:
         if health not in {"healthy", "failed", "unavailable"}:
             raise QueueServiceError("admission reconciliation health is invalid")
         with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             try:
                 observed_at = self._accepted_time(conn)
             except QueueServiceError:
@@ -3971,6 +3973,7 @@ class LocalDaemon:
 
     def _sample_clock_health(self) -> bool:
         with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             try:
                 self._accepted_time(conn)
             except QueueServiceError:
@@ -4158,6 +4161,12 @@ class LocalDaemon:
             conn.close()
 
     def _accepted_time(self, conn: sqlite3.Connection) -> str:
+        """Advance accepted time inside the caller's immediate write transaction.
+
+        Acquire the writer reservation before sampling the clock and retain it
+        through commit or rollback. A genuine clock fault commits degraded health
+        before raising, so caller rollback cannot erase the safety guard.
+        """
         now = self._clock()
         parse_timestamp(now)
         state = {
@@ -4165,20 +4174,26 @@ class LocalDaemon:
             for row in conn.execute(
                 "SELECT key, value FROM daemon_metadata WHERE key IN "
                 "('accepted_time_high_water', 'accepted_time_health', "
-                "'accepted_time_diagnostic')"
+                "'accepted_time_diagnostic', 'accepted_time_revision')"
             )
         }
         if state.get("accepted_time_health") == "degraded":
-            raise QueueServiceError(
-                "coordinator accepted-time is degraded; operator recovery is required"
+            raise _AcceptedTimeError(
+                state.get("accepted_time_diagnostic", "clock_regressed"),
+                int(state.get("accepted_time_revision", "0")),
             )
         previous = state.get("accepted_time_high_water")
         if previous is not None and parse_timestamp(now) < parse_timestamp(previous):
             self._degrade_time(conn, "clock_regressed")
             conn.commit()
             self._poll_waiters.notify_all()
-            raise QueueServiceError(
-                "coordinator accepted-time regressed; scheduling is degraded"
+            _LOGGER.warning("coordinator clock guard: %s", json.dumps({
+                "diagnostic": "clock_regressed", "sampled_at": now,
+                "previous_high_water": previous,
+                "time_revision": int(state.get("accepted_time_revision", "0")) + 1,
+            }, sort_keys=True))
+            raise _AcceptedTimeError(
+                "clock_regressed", int(state.get("accepted_time_revision", "0")) + 1,
             )
         if (
             previous is not None
@@ -4188,8 +4203,13 @@ class LocalDaemon:
             self._degrade_time(conn, "clock_step_exceeds_policy")
             conn.commit()
             self._poll_waiters.notify_all()
-            raise QueueServiceError(
-                "coordinator accepted-time step exceeds protected policy; scheduling is degraded"
+            _LOGGER.warning("coordinator clock guard: %s", json.dumps({
+                "diagnostic": "clock_step_exceeds_policy", "sampled_at": now,
+                "previous_high_water": previous,
+                "time_revision": int(state.get("accepted_time_revision", "0")) + 1,
+            }, sort_keys=True))
+            raise _AcceptedTimeError(
+                "clock_step_exceeds_policy", int(state.get("accepted_time_revision", "0")) + 1,
             )
         accepted = now
         conn.execute(
@@ -4225,6 +4245,7 @@ class LocalDaemon:
         """Return one monotonic accepted timestamp and whole-second snapshot time."""
 
         with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             accepted = self._accepted_time(conn)
             conn.commit()
         return accepted, int(parse_timestamp(accepted).timestamp())

@@ -190,7 +190,7 @@ def _service(
                     "operator",
                     "operator",
                     "operator",
-                    ("drain", "resume", "reload", "cancel_active", "scheduling_reload"),
+                    ("drain", "resume", "reload", "cancel_active", "scheduling_reload", "recover_time"),
                     ("agent-a",),
                 ),
             ),
@@ -683,7 +683,7 @@ def test_restart_admits_short_work_before_known_worker_exits(
 def test_restart_accepts_live_starting_operation_before_process_exists(monkeypatch):
     entered, unblock, crashed = Event(), Event(), Event()
     original_spawn = subprocess.Popen
-    original_launch = AgentProcessSupervisorClient.launch
+    original_launch = AgentProcessSupervisorClient.launch_once
     owned = []
 
     def spawn(*args, **kwargs):
@@ -706,7 +706,7 @@ def test_restart_accepts_live_starting_operation_before_process_exists(monkeypat
         monkeypatch, ceiling=2, memory=2 * 1024**3, threaded_supervisor=True
     ) as case:
         monkeypatch.setattr(supervisor_module.subprocess, "Popen", spawn)
-        monkeypatch.setattr(AgentProcessSupervisorClient, "launch", launch)
+        monkeypatch.setattr(AgentProcessSupervisorClient, "launch_once", launch)
         try:
             _submit(case, "starting")
             assert crashed.wait(20)
@@ -865,7 +865,7 @@ def test_restart_does_not_admit_with_unavailable_request_or_changed_config(
                     backup.replace(path)
 
 
-def test_restart_observes_known_b_while_unknown_a_blocks_fresh_admission(monkeypatch):
+def test_restart_observes_known_b_while_unknown_a_blocks_fresh_admission(monkeypatch, caplog):
     from dataclasses import replace
 
     unknown = Event()
@@ -929,6 +929,15 @@ def test_restart_observes_known_b_while_unknown_a_blocks_fresh_admission(monkeyp
             assert [row for row in _running(case) if row[0] in blocked_id] == [
                 row for row in original if row[0] in blocked_id
             ]
+            diagnostics = [json.loads(record.message.split(": ", 1)[1])
+                           for record in caplog.records
+                           if record.message.startswith("agent supervisor observation: ")]
+            held = [item for item in diagnostics if item["assignment_id"] in blocked_id]
+            assert held
+            assert all(item["admission_allowed"] is False for item in held)
+            assert all(item["admission_reason"] == "supervisor_ownership_unknown" for item in held)
+            assert all(item["launch_state"] == "unknown" for item in held)
+            assert all("connected" not in item for item in held)
             unknown.clear()
             _release_gate(a)
             assert (
@@ -2868,13 +2877,13 @@ def test_container_option_rejection_releases_claims_while_peer_progresses(monkey
         },
     )
     launches = []
-    original_launch = AgentProcessSupervisorClient.launch
+    original_launch = AgentProcessSupervisorClient.launch_once
 
     def capture_launch(client, launch):
         launches.append(launch)
         return original_launch(client, launch)
 
-    monkeypatch.setattr(AgentProcessSupervisorClient, "launch", capture_launch)
+    monkeypatch.setattr(AgentProcessSupervisorClient, "launch_once", capture_launch)
     with fake_apptainer() as binding:
         binding["options"]["rocm"] = True
         with _service(
@@ -3176,7 +3185,7 @@ def test_restart_recovers_every_retained_assignment_at_crash_boundaries(
     owners = {
         "delivery": (_RemoteAgentJournal, "complete_poll"),
         "prepare": (SQLiteAgentJournal, "prepare_composite"),
-        "launch": (AgentProcessSupervisorClient, "launch"),
+        "launch": (AgentProcessSupervisorClient, "launch_once"),
         "publication": (transport._ResidentAssignmentWorkspace, "retain_outputs"),
         "commit": (LocalDaemonAgentHttpClient, "commit_result"),
         "provider_release": (LocalDaemonAgentHttpClient, "_release_provider_claims"),
@@ -3590,3 +3599,105 @@ def test_shared_publication_authority_keeps_cancellation_responsive(monkeypatch)
         finally:
             unblock.set()
         assert case.client.wait("cancel-publication", timeout_seconds=30).state is LocalDaemonAdmissionState.CANCELLED
+
+
+
+def test_clock_recovery_publishes_retained_result_without_reexecution(monkeypatch, caplog):
+    from dataclasses import replace
+    from loom.queue import QueueConflictError, TimeRecoveryRequest
+
+    now = ["2026-08-29T00:00:00Z"]
+    with _service(monkeypatch, memory=2 * 1024**3, clock=lambda: now[0]) as case:
+        gate, uri, _ = _submit_gated(case, "clock-recovery")
+        try:
+            _eventually(lambda: (gate / "build.started").exists())
+            assignment = _eventually(lambda: _rows(
+                case.database,
+                "SELECT assignment_id FROM remote_assignments WHERE run_uri = ?",
+                (uri,),
+            ))[0][0]
+            # Expire the original transfer grant while the same worker is alive.
+            now[0] = "2026-08-29T00:02:01Z"
+            case.daemon._accepted_snapshot()
+            now[0] = "2026-08-29T00:02:00Z"
+            assert case.daemon._sample_clock_health() is False
+            degraded = case.daemon.status()
+            assert degraded.accepted_time_diagnostic == "clock_regressed"
+            _release_gate(gate)
+            resident = case.agent_root / "assignments" / assignment / "resident.sqlite"
+            _eventually(lambda: _rows(
+                resident, "SELECT json_extract(result_json, '$.status') FROM request"
+            ) == [("SUCCEEDED",)])
+            _eventually(lambda: '"retry_requires": "operator_time_recovery"' in caplog.text)
+            assert _rows(case.database,
+                         "SELECT state FROM remote_assignments WHERE assignment_id = ?",
+                         (assignment,)) == [("RUNNING",)]
+            now[0] = "2026-08-29T00:02:02Z"
+            request = TimeRecoveryRequest("clock-recovery", degraded.accepted_time_revision,
+                                          degraded.coordinator_epoch, "Verified test clock")
+            for stale in [replace(request, expected_time_revision=request.expected_time_revision + 1),
+                          replace(request, expected_coordinator_epoch="stale-epoch")]:
+                with pytest.raises(QueueConflictError, match="stale"):
+                    case.operator.recover_time(stale)
+            case.operator.recover_time(request)
+            assert case.client.wait("clock-recovery", timeout_seconds=60).state is LocalDaemonAdmissionState.SUCCEEDED
+            _eventually(lambda: _rows(case.database,
+                         "SELECT state FROM remote_assignments WHERE assignment_id = ?",
+                         (assignment,)) == [("RELEASED",)])
+            assert _rows(case.agent_root / "supervisor/supervisor.sqlite",
+                         "SELECT COUNT(*) FROM launches") == [(1,)]
+            assert case.daemon.status().accepted_time_health == "healthy"
+        finally:
+            _release_gate(gate)
+
+
+def test_accept_conflict_recovers_cancellation_after_observation_budget(monkeypatch):
+    from loom.queue._agent_progress import _cooperative, _steps
+
+    held, accept_release, control_release = Event(), Event(), Event()
+    armed = Event()
+    dispatch = transport._dispatch
+    poll_control = LocalDaemonAgentHttpClient.poll_assignment_control
+
+    def exchange(view, operation, value):
+        if armed.is_set() and operation == "accept" and not held.is_set():
+            held.set()
+            assert accept_release.wait(20)
+        return dispatch(view, operation, value)
+
+    @_cooperative
+    def late_control(client, session_id, **kwargs):
+        if held.is_set() and not control_release.is_set():
+            return None
+        return (yield from _steps(poll_control, client, session_id, **kwargs))
+
+    monkeypatch.setattr(transport, "_dispatch", exchange)
+    monkeypatch.setattr(LocalDaemonAgentHttpClient, "poll_assignment_control", late_control)
+    with _service(monkeypatch, ceiling=2, memory=2 * 1024**3) as case:
+        peer, _, _ = _submit_gated(case, "peer")
+        try:
+            _eventually(lambda: (peer / "build.started").exists())
+            original = _running(case)
+            armed.set()
+            _submit(case, "late-cancel")
+            assert held.wait(20)
+            case.client.cancel("late-cancel")
+            accept_release.set()
+            # Wait for the actual bounded attempt to end, not an assumed delay.
+            _eventually(lambda: any(name == "_execute_delivered_assignment"
+                                   for name, _ in case.retries))
+            assert _running(case) == original
+            assert _rows(case.agent_root / "supervisor/supervisor.sqlite",
+                         "SELECT COUNT(*) FROM launches") == [(1,)]
+            control_release.set()
+            assert case.client.wait("late-cancel", timeout_seconds=30).state is LocalDaemonAdmissionState.CANCELLED
+            _eventually(lambda: _rows(case.database,
+                "SELECT COUNT(*) FROM remote_assignments WHERE state IN ('DECLINED', 'RELEASED')")[0][0] == 1)
+            _release_gate(peer)
+            assert case.client.wait("peer", timeout_seconds=30).state is LocalDaemonAdmissionState.SUCCEEDED
+            assert _rows(case.agent_root / "supervisor/supervisor.sqlite",
+                         "SELECT COUNT(*) FROM launches") == [(1,)]
+        finally:
+            accept_release.set()
+            control_release.set()
+            _release_gate(peer)

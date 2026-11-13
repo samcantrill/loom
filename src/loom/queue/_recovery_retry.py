@@ -7,6 +7,8 @@ import math
 from random import uniform
 from time import monotonic
 
+from .errors import _AcceptedTimeError
+
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -54,6 +56,7 @@ class _RecoveryRetry:
                 label = "agent transport recovery pending"
             _LOGGER.warning("%s: %s", label, json.dumps({
                 **context, "operation_id": operation_id, "step": step,
+                **(cause.details() if isinstance(cause, _AcceptedTimeError) else {}),
                 "cause_type": type(cause).__name__, "possibly_dispatched": dispatched,
                 "retry_count": self.attempts, "retry_delay_seconds": delay,
                 "next_retry_monotonic": self.retry_at,

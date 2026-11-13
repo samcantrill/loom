@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import replace
+from datetime import timedelta
 import json
 import os
 import socket
@@ -144,13 +145,21 @@ def test_observation_matrix_preserves_roots_and_control_state(owner, monkeypatch
     if case == "drained":
         operator.control_agent(drain(session))
     if case == "stale":
-        monkeypatch.setattr(daemon, "_clock", lambda: "2099-01-01T00:00:00Z")
+        from loom.timestamps import parse_timestamp
+        expired_at = (parse_timestamp(daemon._clock()) + timedelta(seconds=61)).isoformat()
+        monkeypatch.setattr(daemon, "_clock", lambda: expired_at)
+        # Advance accepted time within policy before taking the read-only snapshot.
+        daemon.status()
     before = dump(daemon.config.control_database)
     files = set(daemon.config.coordinator_root.rglob("*"))
     value = operator.observe_agent(session.agent_id)
     assert value.owner == daemon.status().coordinator_id
     assert value.value["agent_root_id"] == "remote-root"
     assert value.value["connected"] == (case != "stale")
+    assert value.value["connected_basis"] == "session_and_capacity_offer"
+    assert value.value["offer_freshness"] == (
+        "expired" if case == "stale" else "superseded" if case == "drained" else "fresh"
+    )
     assert value.value["drained"] == (case == "drained")
     if case == "occupancy":
         assert value.value["available"] is True  # CPU remains available.

@@ -7,6 +7,8 @@ or session selector from the HTTP path as transport identity.
 
 from __future__ import annotations
 
+from .errors import _AcceptedTimeError
+
 from . import _agent_session_protocol as _session_protocol
 from . import _agent_assignment as _assignment_progress
 from ._agent_session_protocol import _raise_if_application_suspended
@@ -47,6 +49,7 @@ import fcntl
 import hashlib
 import http.client
 import json
+import logging
 from pathlib import Path
 import secrets
 import shutil
@@ -912,6 +915,7 @@ class LocalDaemonAgentHttpClient:
                 self._restart_with_retained_work = self._has_retained_agent_work()
                 self._service_recovery_admission = self._restart_with_retained_work
                 self._ownership_observation_generation = 0
+                self._supervisor_diagnostics: dict[str, tuple[str, float]] = {}
                 self._joined_starts: set[str] = set()
             except ManagedLocalError as exc:
                 raise QueueServiceError(
@@ -1577,6 +1581,27 @@ class LocalDaemonAgentHttpClient:
         )
 
     def _observe_supervisor_ownership(self, receipt: SupervisorReceipt) -> None:
+        assignment_id = receipt.launch.assignment_id
+        reason = receipt.launch_reason
+        if receipt.state is SupervisorLaunchState.UNKNOWN:
+            reason = reason or "supervisor_ownership_unknown"
+        if reason is None:
+            self._supervisor_diagnostics.pop(assignment_id, None)
+        else:
+            previous = self._supervisor_diagnostics.get(assignment_id)
+            now = monotonic()
+            if previous is None or previous[0] != reason or now - previous[1] >= 30:
+                logging.getLogger(__name__).warning("agent supervisor observation: %s", json.dumps({
+                    "assignment_id": assignment_id,
+                    "operation_id": receipt.launch.launch_operation_id,
+                    "launch_state": receipt.state.value,
+                    "launch_reason": reason,
+                    "startup_elapsed_seconds": receipt.startup_elapsed_seconds,
+                    **({"admission_allowed": False,
+                        "admission_reason": "supervisor_ownership_unknown"}
+                       if receipt.state is SupervisorLaunchState.UNKNOWN else {}),
+                }, sort_keys=True))
+                self._supervisor_diagnostics[assignment_id] = (reason, now)
         if receipt.state is SupervisorLaunchState.UNKNOWN:
             # Observation application is manager-owned, but can interleave with
             # another assignment's asynchronous admission query without a write.
@@ -1790,8 +1815,8 @@ class LocalDaemonAgentHttpClient:
                 continue
             try:
                 launch = _launch_from_value(json.loads(encoded_launch))
-                (yield from _external("bulk", supervisor.request_stop_wait, launch))
-                receipt = (yield from _external("bulk", supervisor.contain, launch))
+                (yield from _steps(supervisor.request_stop_wait, launch))
+                receipt = (yield from _steps(supervisor.contain, launch))
                 self._observe_supervisor_ownership(receipt)
             except (AgentProcessSupervisorError, QueueError, ValueError):
                 all_contained = False
@@ -2061,8 +2086,8 @@ class LocalDaemonAgentHttpClient:
                     # Release already proved containment and returned claims.
                     # A late command cannot change its committed result.
                     return "terminal", None
-                (yield from _external("bulk", self._supervisor.request_stop_wait, launch))
-                contained = (yield from _external("bulk", self._supervisor.contain, launch))
+                (yield from _steps(self._supervisor.request_stop_wait, launch))
+                contained = (yield from _steps(self._supervisor.contain, launch))
                 self._observe_supervisor_ownership(contained)
             except (AgentProcessSupervisorError, QueueError, ValueError):
                 return "unknown", None
@@ -2317,7 +2342,7 @@ class LocalDaemonAgentHttpClient:
                 encoded = workspace.supervisor_launch_json()
                 if encoded is None or self._supervisor is None:
                     raise QueueConflictError("contained result has no supervisor evidence")
-                receipt = (yield from _external("bulk", self._supervisor.query_wait, _launch_from_value(json.loads(encoded))))
+                receipt = (yield from _steps(self._supervisor.query_wait, _launch_from_value(json.loads(encoded))))
                 self._observe_supervisor_ownership(receipt)
                 if not receipt.qualified_success:
                     result = _managed_root_failed_worker_result(
@@ -2640,6 +2665,19 @@ class LocalDaemonAgentHttpClient:
                 == self._require_journal().session(session_id).coordinator_epoch
             ):
                 return result
+            # An exact replay can return a grant from an earlier coordinator
+            # incarnation. Only a fresh handshake can select the current epoch;
+            # consume historical revisions without reconciling backwards.
+            current = yield from _steps(self.handshake)
+            current_epoch = current.get("coordinator_epoch")
+            if not isinstance(current_epoch, str):
+                raise QueueConflictError("coordinator epoch evidence is invalid")
+            if current_epoch != self._require_journal().session(session_id).coordinator_epoch:
+                self._epoch_reconciliation_pending = True
+                yield from _steps(self.reconcile,
+                    session_id, current_epoch,
+                    idempotency_key=f"{assignment_id}:reconcile:{current_epoch}",
+                )
 
     @_cooperative
     def _authorized_transfer_call(
@@ -3131,6 +3169,17 @@ def _read_agent_reply(
         raise _IndeterminateAgentProtocolError(
             "agent protocol outcome is indeterminate"
         ) from exc
+    if response.status == 400 and payload.get("error") == "accepted_time_degraded":
+        details = payload.get("details")
+        if isinstance(details, Mapping):
+            diagnostic = details.get("diagnostic")
+            revision = details.get("time_revision")
+            if (isinstance(diagnostic, str)
+                and diagnostic in {"clock_regressed", "clock_step_exceeds_policy"}
+                and isinstance(revision, int) and not isinstance(revision, bool)
+                and revision >= 0):
+                raise _AcceptedTimeError(str(diagnostic), revision)
+        raise QueueServiceError("invalid accepted-time diagnostic")
     if response.status == 409:
         if payload.get("error") == "agent_poll_active":
             raise AgentPollActiveError("work poll is already active")
@@ -3457,22 +3506,12 @@ class _Handler(BaseHTTPRequestHandler):
                 )
         except QueueConflictError:
             self._reply(409, {"ok": False, "error": "agent_protocol_conflict"})
-        except QueueError:
-            if new_client:
-                code = "invalid_request" if authenticated else "unauthorized"
-                error = control_error(
-                    code,
-                    operation,
-                    payload,
-                    boundary="client_protocol" if authenticated else "authentication",
-                    dispatched=dispatched,
-                )
-                self._reply(400 if authenticated else 403, error_envelope(error))
-            elif query_path or query_credential:
-                code = "invalid_request" if query_credential else "unauthorized"
-                self._reply_query_failure(code, 400 if query_credential else 403)
-            else:
-                self._reply(403, {"ok": False, "error": "agent_protocol_rejected"})
+        except QueueError as exc:
+            self._reply_queue_failure(
+                exc, new_client=new_client, query_path=query_path,
+                query_credential=query_credential, authenticated=authenticated,
+                operation=operation, payload=payload, dispatched=dispatched,
+            )
         except Exception:
             if new_client:
                 self._reply(
@@ -3514,6 +3553,48 @@ class _Handler(BaseHTTPRequestHandler):
             self._reply_query_failure("unavailable", 503)
             return
         self._reply(status, payload)
+
+    def _reply_queue_failure(
+        self, failure: QueueError, *, new_client: bool, query_path: bool, query_credential: bool,
+        authenticated: bool, operation: str, payload: Mapping[str, object],
+        dispatched: bool,
+    ) -> None:
+        if isinstance(failure, _AcceptedTimeError):
+            self._reply_clock_failure(
+                failure, new_client=new_client, query=query_path or query_credential,
+                operation=operation, payload=payload, dispatched=dispatched,
+            )
+            return
+        if new_client:
+            code = "invalid_request" if authenticated else "unauthorized"
+            error = control_error(
+                code,
+                operation,
+                payload,
+                boundary="client_protocol" if authenticated else "authentication",
+                dispatched=dispatched,
+            )
+            self._reply(400 if authenticated else 403, error_envelope(error))
+        elif query_path or query_credential:
+            code = "invalid_request" if query_credential else "unauthorized"
+            self._reply_query_failure(code, 400 if query_credential else 403)
+        else:
+            self._reply(403, {"ok": False, "error": "agent_protocol_rejected"})
+
+    def _reply_clock_failure(
+        self, error: _AcceptedTimeError, *, new_client: bool, query: bool,
+        operation: str, payload: Mapping[str, object], dispatched: bool,
+    ) -> None:
+        if new_client:
+            self._reply(503, error_envelope(control_error(
+                "unavailable", operation, payload,
+                boundary="coordinator", dispatched=dispatched,
+            )))
+        elif query:
+            self._reply_query_failure("unavailable", 503)
+        else:
+            self._reply(400, {"ok": False, "error": "accepted_time_degraded",
+                              "details": error.details()})
 
     def _reply_query_failure(self, code: str, status: int) -> None:
         self._reply(

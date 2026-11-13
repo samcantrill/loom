@@ -254,7 +254,14 @@ def _execute_delivered_assignment(
             from ._agent_process_supervisor import _SupervisorNoStartError
 
             try:
-                receipt = (yield from _external("bulk", supervisor.launch, launch))
+                receipt = (yield from _external("bulk", supervisor.launch_once, launch))
+                while receipt.state is SupervisorLaunchState.NOT_ACCEPTED or (
+                    receipt.state is SupervisorLaunchState.STARTING and not receipt.started
+                ):
+                    _raise_if_application_suspended(suspend_requested)
+                    yield from _steps(self.poll_assignment_control, session_id)
+                    yield from _delay(0.05)
+                    receipt = (yield from _external("bulk", supervisor.launch_once, launch))
             except _SupervisorNoStartError as exc:
                 if not (yield from _external("control", supervisor.reject_unstarted_assignment,
                                             request.assignment_id)):
@@ -634,13 +641,14 @@ def _resume_retained_assignments(
             )
             continue
         launch = _launch_from_value(json.loads(launch_json))
-        receipt = (yield from _external("bulk", supervisor.query_wait, launch))
+        receipt = (yield from _external("control", supervisor.query, launch))
         self._observe_supervisor_ownership(receipt)
         if (
-            launch.continuity_epoch in supervisor.reboot_generations
+            (launch.continuity_epoch in supervisor.reboot_generations
+             or launch.launch_operation_id in supervisor.operator_contained_launches)
             and receipt.exit_code is None
         ):
-            # A reboot proves containment, never a scientific terminal result.
+            # Local recovery proves containment, never a scientific terminal result.
             # Keep capacity withheld until the operator's guarded close wins.
             (yield from _steps(self._assignment_call,
                 session_id,
@@ -679,7 +687,7 @@ def _resume_retained_assignments(
             from ._agent_process_supervisor import _SupervisorNoStartError
 
             try:
-                receipt = (yield from _external("bulk", supervisor.launch, launch))
+                receipt = (yield from _external("bulk", supervisor.launch_once, launch))
             except _SupervisorNoStartError as exc:
                 if not (yield from _external("control", supervisor.reject_unstarted_assignment,
                                             assignment_id)):
@@ -799,7 +807,7 @@ def _settle_supervised_worker_result(
                     allow_nan=False,
                 ).encode(),
             )
-    contained = (yield from _external("bulk", supervisor.contain, launch))
+    contained = (yield from _steps(supervisor.contain, launch))
     self._observe_supervisor_ownership(contained)
     if contained.state is not SupervisorLaunchState.CONTAINED:
         return False
@@ -904,7 +912,7 @@ def _complete_remote_result_and_release(
             )
             if self._supervisor is None:
                 raise QueueConflictError("remote completion lost its supervisor")
-            evidence = (yield from _external("bulk", self._supervisor.query_wait, launch))
+            evidence = (yield from _steps(self._supervisor.query_wait, launch))
             self._observe_supervisor_ownership(evidence)
             if evidence.state is not SupervisorLaunchState.CONTAINED:
                 raise QueueConflictError("remote completion lacks containment")

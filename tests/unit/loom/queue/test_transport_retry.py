@@ -98,3 +98,28 @@ def test_synchronous_caller_keeps_unknown_outcome_without_automatic_retry(client
     with pytest.raises(_IndeterminateAgentProtocolError) as caught:
         progress.throw(failure)
     assert caught.value is failure
+
+
+def test_clock_health_diagnostic_survives_agent_reply_and_retry_log(caplog):
+    import json
+    from types import SimpleNamespace
+
+    from loom.queue.agent_session_transport import _read_agent_reply
+    from loom.queue.errors import _AcceptedTimeError
+    from loom.queue._recovery_retry import _RecoveryRetry
+
+    payload = {
+        "ok": False, "error": "accepted_time_degraded",
+        "details": {"diagnostic": "clock_regressed", "time_revision": 7},
+    }
+    response = SimpleNamespace(status=400, read=lambda limit: json.dumps(payload).encode())
+    connection = SimpleNamespace(request=lambda *a, **kw: None, getresponse=lambda: response)
+    with pytest.raises(_AcceptedTimeError) as caught:
+        _read_agent_reply(connection, "authorize", b"{}", "agent")
+    retry = _RecoveryRetry()
+    retry.failed(caught.value, operation_id="authorize-2", state="RESULT", assignment_id="A")
+    logged = json.loads(caplog.records[-1].message.split(": ", 1)[1])
+    assert logged["code"] == "accepted_time_degraded"
+    assert logged["diagnostic"] == "clock_regressed"
+    assert logged["time_revision"] == 7
+    assert logged["retry_requires"] == "operator_time_recovery"

@@ -44,6 +44,32 @@ absolute runtime command and installed absolute SIF reference, and a null
 `daemon_endpoint`. Its foreground PID-namespace init is observed through the
 existing namespace owner; missing namespace evidence cannot release capacity.
 
+Resident Apptainer startup is resumable. Each supervisor observation probes the
+namespace once; a continuously owned launcher whose namespace is not yet visible
+remains `STARTING` without a total startup deadline. Repeated launch/query calls
+retain the same root. The worker's execution gate opens only after the namespace
+init has been verified. A stop accepted by the supervisor before gate publication
+keeps that gate closed; later namespace discovery is used for containment only.
+Service waits yield through cooperative progress rather than occupying external
+worker threads. Short IPC and cleanup observation budgets do not determine the
+outcome of an accepted operation.
+
+A reaped/lost creation-owned root, a failed execution-gate write, or supervisor
+continuity loss remains conservative uncertainty. A stored PID is never adopted.
+Root exit without namespace proof cannot establish descendant containment. Claims
+remain held until containment is positively proved. Pre-cleanup success evidence
+is retained across incomplete cleanup observations, so the supervisor's own
+signals do not retrospectively turn successful execution into worker failure.
+
+Private supervisor receipts expose `launch_reason` and, during a pending namespace
+handshake, `startup_elapsed_seconds` from that supervisor's monotonic clock.
+Reasons distinguish namespace readiness, accepted startup stop, unavailable gate,
+pending containment, and unknown ownership. Agent logs report these observations on reason changes or
+after 30 seconds; unknown ownership explicitly reports its admission hold.
+These observations do not infer transport health. Upgrade the resident supervisor
+and agent together after settlement; replacing files cannot transfer a live
+supervisor's process handles. The workload worker contract is unchanged.
+
 The worker workspace is mounted read/write at the identical absolute path;
 installed project and configured shared preparation roots are read-only mounts.
 Conflicting mounts are rejected. Existing container command builders own resource

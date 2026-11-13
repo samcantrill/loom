@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import contextmanager
 from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor
 import fcntl
@@ -12,7 +13,7 @@ from pathlib import Path
 from shutil import copyfile
 import sqlite3
 import sys
-from threading import Event, Lock
+from threading import Event, Lock, current_thread
 import time
 from types import SimpleNamespace
 from typing import Any, cast
@@ -1010,7 +1011,9 @@ def test_forward_clock_jump_degrades_without_advancing_and_requires_recovery(
         daemon.stop()
 
 
-def test_regressed_clock_cannot_be_recovered_by_assertion(tmp_path: Path) -> None:
+def test_regressed_clock_cannot_be_recovered_by_assertion(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
     now = ["2026-08-29T00:00:10Z"]
     config = _config(tmp_path)
     LocalDaemon.initialize(config)
@@ -1025,6 +1028,13 @@ def test_regressed_clock_cannot_be_recovered_by_assertion(tmp_path: Path) -> Non
             with pytest.raises(QueueServiceError, match="regressed|degraded"):
                 daemon._accepted_snapshot()  # noqa: SLF001
         degraded = daemon.status()
+        guard = next(record for record in caplog.records if record.message.startswith("coordinator clock guard: "))
+        assert json.loads(guard.message.split(": ", 1)[1]) == {
+            "diagnostic": "clock_regressed",
+            "previous_high_water": "2026-08-29T00:00:10Z",
+            "sampled_at": "2026-08-29T00:00:00Z",
+            "time_revision": degraded.accepted_time_revision,
+        }
         with pytest.raises(QueueConflictError, match="still below"):
             operator.recover_time(
                 TimeRecoveryRequest(
@@ -2573,3 +2583,68 @@ def test_gpu_monitoring_follows_execution_owners_across_reload(
         assert observed_policies[-1] == next_policy
     finally:
         daemon.stop()
+
+
+@pytest.mark.parametrize("second_operation", ["_accepted_snapshot", "_sample_clock_health"])
+def test_accepted_time_serializes_sampling_through_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, second_operation: str,
+) -> None:
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    first_sampled, release_first, second_begin = Event(), Event(), Event()
+    samples: list[str] = []
+
+    def clock() -> str:
+        value = f"2026-08-29T00:00:0{len(samples) + 1}Z"
+        samples.append(value)
+        if len(samples) == 1:
+            first_sampled.set()
+            assert release_first.wait(10)
+        return value
+
+    daemon = LocalDaemon(config, clock=clock)
+    connection = daemon._connection  # noqa: SLF001
+
+    @contextmanager
+    def observed_connection():
+        with connection() as conn:
+            def trace(sql: str) -> None:
+                if current_thread().name.startswith("second") and sql == "BEGIN IMMEDIATE":
+                    second_begin.set()
+            conn.set_trace_callback(trace)
+            yield conn
+
+    monkeypatch.setattr(daemon, "_connection", observed_connection)
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="first") as first_pool:
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="second") as second_pool:
+            first = first_pool.submit(daemon._accepted_snapshot)  # noqa: SLF001
+            try:
+                assert first_sampled.wait(10)
+                second = second_pool.submit(getattr(daemon, second_operation))
+                assert second_begin.wait(10)
+                assert samples == ["2026-08-29T00:00:01Z"]
+            finally:
+                release_first.set()
+            assert first.result(timeout=10)[0] == "2026-08-29T00:00:01Z"
+            result = second.result(timeout=10)
+            assert result is True if second_operation == "_sample_clock_health" else result[0] == "2026-08-29T00:00:02Z"
+    assert samples == ["2026-08-29T00:00:01Z", "2026-08-29T00:00:02Z"]
+    with sqlite3.connect(config.control_database) as conn:
+        state = dict(conn.execute("SELECT key, value FROM daemon_metadata"))
+    assert state["accepted_time_high_water"] == samples[-1]
+    assert state.get("accepted_time_health") != "degraded"
+
+
+def test_accepted_time_equal_samples_and_transaction_rollback(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    now = ["2026-08-29T00:00:01Z"]
+    daemon = LocalDaemon(config, clock=lambda: now[0])
+    assert daemon._accepted_snapshot() == daemon._accepted_snapshot()  # noqa: SLF001
+    now[0] = "2026-08-29T00:00:02Z"
+    with daemon._connection() as conn:  # noqa: SLF001
+        conn.execute("BEGIN IMMEDIATE")
+        assert daemon._accepted_time(conn) == now[0]  # noqa: SLF001
+        conn.rollback()
+    with sqlite3.connect(config.control_database) as conn:
+        assert conn.execute("SELECT value FROM daemon_metadata WHERE key = 'accepted_time_high_water'").fetchone()[0] == "2026-08-29T00:00:01Z"

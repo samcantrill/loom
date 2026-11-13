@@ -3293,6 +3293,7 @@ class AgentSessionService:
     ) -> tuple[float, Mapping[str, PlainData] | None]:
         rule, policy_revision = self._authorize("poll")
         with self._daemon._connection() as conn:  # type: ignore[attr-defined]
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 "SELECT active, result_json FROM agent_poll_state "
                 "WHERE principal_id = ? AND session_id = ? "
@@ -3313,6 +3314,7 @@ class AgentSessionService:
             offer_recheck = self._require_current_offer(
                 conn, session_id, availability_revision
             )
+            conn.commit()
         delivered = self._take_targeted_delivery(
             principal_id=principal_id,
             session_id=session_id,
@@ -3524,6 +3526,7 @@ class AgentSessionService:
         if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
             raise QueueServiceError("input transfer offset is invalid")
         with self._daemon._state_guard(), self._daemon._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             stamp = self._transfer_authority(conn, session_id, assignment_id, authorization_id, authorization_revision, "input")
             row = conn.execute(
                 "SELECT size_bytes, private_path FROM remote_transfers WHERE "
@@ -3537,12 +3540,15 @@ class AgentSessionService:
             if offset > size:
                 raise QueueConflictError("input transfer offset exceeds its size")
             path = Path(str(row["private_path"]))
+            conn.commit()
         with path.open("rb") as stream:
             stream.seek(offset)
             data = stream.read(TRANSFER_CHUNK_BYTES)
         with self._daemon._state_guard(), self._daemon._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             if self._transfer_authority(conn, session_id, assignment_id, authorization_id, authorization_revision, "input") != stamp:
                 raise QueueConflictError("remote input authority changed during reading")
+            conn.commit()
         return freeze_plain_data(
             {
                 "transfer_id": transfer_id,
@@ -3885,14 +3891,17 @@ class AgentSessionService:
         arguments = dict(fence=fence, authorization_id=authorization_id,
                          authorization_revision=authorization_revision, report=report, encoded=encoded)
         with self._daemon._state_guard(), self._daemon._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             row, request, agent_id, stamp = self._declaration_authority(
                 conn, session_id, assignment_id, authorization_admitted=False, **arguments)
             if row["report_json"] is not None:
+                conn.commit()
                 return freeze_plain_data(
                     {"assignment_id": assignment_id, "state": str(row["state"])},
                     path="remote output manifest",
                 )
             roots = self._daemon.config.coordinator_shared_roots
+            conn.commit()
         from ._shared_publication import selected, prepare_publication, accept_publication
 
         prepared = None
@@ -3911,6 +3920,7 @@ class AgentSessionService:
                 or self._daemon.config.coordinator_shared_roots != roots):
                 raise QueueConflictError("remote publication authority changed during verification")
             if row["report_json"] is not None:
+                conn.commit()
                 return freeze_plain_data(
                     {"assignment_id": assignment_id, "state": str(row["state"])},
                     path="remote output manifest",
@@ -3999,7 +4009,9 @@ class AgentSessionService:
             return row, stamp
 
         with self._daemon._state_guard(), self._daemon._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             row, stamp = capture(conn)
+            conn.commit()
         with phase("output_retention", operation_id=assignment_id):
             received, should_finalize = _retain_output_chunk(row, transfer_id, offset, data, final)
         with self._daemon._state_guard(), self._daemon._connection() as conn:

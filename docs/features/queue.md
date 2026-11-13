@@ -331,6 +331,24 @@ expiry, fallback, receipt, and freshness. Detected local regression or an out-
 of-policy jump makes time health degraded, pauses new scheduling, and withholds
 retained capacity until clock/session reconciliation; it never extends an old
 offer by trusting a rolled-back clock.
+Clock sampling and the high-water comparison/update run inside the same
+immediate SQLite write transaction, held through commit or rollback. This also
+applies to work-poll and transfer-authorization checks; filesystem and network
+work remain outside the transaction. Concurrent callers therefore sample time
+in writer order, rather than mistaking an earlier overlapping observation for a
+clock regression. Equal timestamps remain valid, and failed transactions do not
+advance the high-water unless they durably record a genuine clock fault.
+
+A clock guard logs the sampled timestamp, previous high-water, diagnostic and
+time revision. Agent retry diagnostics preserve `accepted_time_degraded`, its
+specific clock diagnostic and revision, and `operator_time_recovery` as the
+required recovery action. They do not expose arbitrary exception text or request
+contents. Recovery remains a guarded operator action; retries do not clear a
+clock fault automatically. Retained worker results can publish after recovery
+without repeating computation. If a renewed transfer authorization belongs to a
+new coordinator epoch, the agent reconciles its retained session to that epoch
+before continuing publication, rather than repeatedly renewing against an old
+local epoch.
 A production command-scoped composition opens and retains those same kinds of
 role roots; “embedded” changes process lifetime only. It connects to a compatible
 active owner when configured/reachable or acquires the role locks itself. A held
@@ -1151,7 +1169,55 @@ This route does not cover SLURM, remote Docker engines, cloned VM snapshots,
 state copied between hosts or hostile host attestation. Controlled-boot tests
 exercise native settlement; actual host reboot qualification is separate.
 
+### Targeted recovery of a stranded PID namespace
+
+`agent-recover-namespace` is an explicit local cancellation-only operation for
+an Apptainer launch whose original supervisor is still alive but cannot contain
+its namespace. It does not adopt a process for execution. Stop the outbound
+agent first and keep its protected root, configuration and journals intact.
+The operator selects the exact assignment, current Linux boot ID, and fresh
+host PID/start-time-in-clock-ticks pairs for the supervisor, launcher and
+namespace init. Obtain birth ticks from field 22 of `/proc/PID/stat`, parsing
+the parenthesized command correctly; PID numbers alone are insufficient.
+
+```sh
+loom queue agent-recover-namespace /private/agent.yaml \
+  --env-file /private/agent.env --operation-id namespace-recovery-001 \
+  --assignment-id ASSIGNMENT --boot-id BOOT_UUID \
+  --supervisor-pid PID --supervisor-start-ticks TICKS \
+  --launcher-pid PID --launcher-start-ticks TICKS \
+  --namespace-pid PID --namespace-start-ticks TICKS --format json
+```
+
+The command holds the agent lock, authenticates the original supervisor and
+requires exactly one unresolved launch. It pins Linux pidfds, quiesces the
+supervisor and launcher, verifies their exclusive child lineage and the init's
+namespace PID 1, then terminates only that namespace, launcher and supervisor.
+It never signals a shared cgroup or a numeric process group. Completed kernel
+observations and exclusive supervisor ownership precede an atomic native
+containment receipt and clean replacement boundary. Preflight failures resume
+any processes stopped by the command. A destructive attempt interrupted before
+receipt publication remains unresolved; do not clear its pending receipt or
+infer containment from missing PIDs. Boot recovery remains available if the
+original boundary can no longer be proved.
+
+Replay a completed operation with identical arguments after a lost response.
+The command starts no service, releases no claim and records no scientific
+success. Restart with an agent and supervisor version supporting this receipt;
+the agent retains reservations until `daemon-recover-unknown` closes the exact
+attempt and ordinary provider release completes. Unrelated live launches on the
+same supervisor cause refusal, rather than silently expanding the kill scope.
+For a remote GRANTED assignment without a start acknowledgement, recovery binds
+the agent's deterministic `<assignment_id>:root` execution identity and still
+requires exact agent-owned containment evidence. Draining clears current offers;
+recovery checks expiry across retained session offers rather than requiring one
+to remain current. Drain alone never proves expiry or containment.
+
 ### Maintenance admission
+
+Transfer-authorization receipts are replayed exactly across coordinator restarts.
+A historical receipt's epoch is not current liveness evidence: agents consume
+its revision and use a fresh handshake when epoch reconciliation is needed.
 
 The `maintenance-admission-v1` capability provides a durable native admission
 barrier. An operator needs the explicit `maintenance` action in its protected
