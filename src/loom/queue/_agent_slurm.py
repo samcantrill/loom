@@ -169,6 +169,57 @@ class AgentSlurmJobs:
         self._batch_sequence = 0
         self._replay_after: str | None = None
         self._batch_limits: dict[tuple[str, str], int] = {}
+        self._reconciliation_binding: tuple[str, str] | None = None
+        self._reconciled_operations: dict[str, tuple[object, object, bool]] = {}
+
+    def begin_reconciliation(self, binding: tuple[str, str]) -> None:
+        """Scope transient task confirmation to one authenticated session epoch."""
+        with self._lock:
+            if binding != self._reconciliation_binding:
+                self._reconciliation_binding = binding
+                self._reconciled_operations.clear()
+
+    def has_unreconciled_work(self, binding: tuple[str, str]) -> bool:
+        """Known live jobs may resume; uncertain effects must first reconcile.
+
+        This is an admission check, not a release/retirement proof. The current
+        coordinator must have redelivered each exact retained task, and the
+        local submission and outbox must agree under the configured profile.
+        """
+        with self._lock:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    "SELECT operation_id, assignment_json, evidence_json, released, acknowledged "
+                    "FROM agent_slurm_operations WHERE released=0 OR acknowledged=0"
+                ).fetchall()
+            for operation_id, encoded, evidence, released, acknowledged in rows:
+                if not acknowledged:
+                    return True
+                if released:
+                    continue
+                if binding != self._reconciliation_binding or operation_id not in self._reconciled_operations:
+                    return True
+                assignment = SlurmStageAssignment.from_dict(json.loads(encoded))
+                profile = self.profiles.get((assignment.profile_id, assignment.profile_configuration_fingerprint))
+                submission = self.journal.find(operation_id)
+                if (
+                    profile is None or profile.descriptor != assignment.profile_descriptor
+                    or submission is None or submission.request.digest != assignment.request_digest
+                    or submission.state not in {ReadyStageState.INTENT, ReadyStageState.ACCEPTED}
+                    or submission.state is ReadyStageState.ACCEPTED and submission.job_id is None
+                ):
+                    return True
+                if self._reconciled_operations[operation_id] != (submission.job_id, submission.cluster, False):
+                    return True
+                if evidence is None:
+                    return True
+                retained = json.loads(evidence)
+                if (
+                    retained.get("release") is not None
+                    or SlurmReadyStageSubmission.from_dict(retained["submission"]) != submission
+                ):
+                    return True
+            return False
 
     def _retry_due(self, kind: str, operation_id: str) -> bool:
         return self.observation_policy is None or monotonic() >= self._retry_at.get((kind, operation_id), 0)
@@ -337,6 +388,7 @@ class AgentSlurmJobs:
                 (int(provider_released), assignment.operation_id, sequence),
             )
         if provider_released:
+            self._reconciled_operations.pop(assignment.operation_id, None)
             self._next_poll.pop(assignment.operation_id, None)
             self._batch_order.pop(assignment.operation_id, None)
             for kind in ("observation", "cancel", "containment"):
@@ -536,6 +588,10 @@ class AgentSlurmJobs:
                 )
             elif str(row[0]) != encoded_assignment:
                 raise QueueConflictError("agent SLURM assignment replay conflicts")
+        if self._reconciliation_binding is not None:
+            self._reconciled_operations[assignment.operation_id] = (
+                task.get("job_id"), task.get("cluster"), task.get("release_requested") is True,
+            )
         if row is not None and row[2] is not None and not row[3]:
             pending = json.loads(str(row[2]))
             self._publish(
@@ -552,6 +608,7 @@ class AgentSlurmJobs:
                 (request.operation_id,),
             ).fetchone()
         if retained is not None and retained[0]:
+            self._reconciled_operations.pop(assignment.operation_id, None)
             return
         if self.observation_policy is not None and retained is not None and retained[1] is not None and retained[2]:
             last = json.loads(str(retained[1]))

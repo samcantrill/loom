@@ -373,9 +373,17 @@ Draining an outbound agent holds unsubmitted INTENT operations without calling
 replay and release, including during startup recovery. Cancellation of a held
 intent closes it as a definite non-submission. Resume may proceed when the only
 retained work consists of acknowledged, unsubmitted intents under unchanged
-bindings; missing journals, uncertain calls, active jobs and unacknowledged
-effects still block it. Those intents remain retained work for reload and
-retirement, and keep their original assignment and request on resume.
+bindings. The outbound service can also resume with known queued/running jobs
+after the authenticated current session/epoch has redelivered their exact tasks,
+their retained job handles and protected profiles agree, and their effects are
+acknowledged. Startup publishes its session after this ownership reconciliation;
+it does not wait for these allocations to exit. A startup hold still requires an
+explicit resume naming that hold. Missing journals, uncertain submissions,
+unacknowledged effects and incomplete release still block admission recovery.
+Task confirmations are transient and must be reacquired after process/session/
+epoch changes; they never release a GPU reservation. All these jobs remain
+retained work for reload and retirement and keep their original assignments and
+requests. Direct clients retain the stricter started-work resume restriction.
 
 The profile, not authored stage data, supplies allowlisted account/partition/
 QoS, resource/directive mappings, submission limits, resident bootstrap

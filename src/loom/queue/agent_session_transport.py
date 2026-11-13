@@ -1486,10 +1486,16 @@ class LocalDaemonAgentHttpClient:
                 config_revision = session.config_revision
                 inventory_revision = session.inventory_revision
             if control.kind.value == "resume":
-                if _has_retained_agent_work(
-                    self._journal, self._execution_journal, self._slurm_agent,
-                    allow_unsubmitted_slurm=True,
-                ):
+                if self._service_progress:
+                    retained = self._slurm_recovery_pending() or _has_retained_agent_work(
+                        self._journal, self._execution_journal, None,
+                    )
+                else:
+                    retained = _has_retained_agent_work(
+                        self._journal, self._execution_journal, self._slurm_agent,
+                        allow_unsubmitted_slurm=True,
+                    )
+                if retained:
                     return self._unchanged_control_effect(
                         control, session, "retained_work"
                     )
@@ -1645,6 +1651,14 @@ class LocalDaemonAgentHttpClient:
             self._journal, self._execution_journal, self._slurm_agent
         )
 
+    def _slurm_recovery_pending(self) -> bool:
+        if self._slurm_agent is None or not self._slurm_agent.has_retained_work():
+            return False
+        session = self.active_session()
+        if session is None or self._epoch_reconciliation_pending:
+            return True
+        return self._slurm_agent.has_unreconciled_work((session.session_id, session.coordinator_epoch))
+
     def _observe_supervisor_ownership(self, receipt: SupervisorReceipt) -> None:
         if receipt.state is SupervisorLaunchState.UNKNOWN:
             # Observation application is manager-owned, but can interleave with
@@ -1700,10 +1714,12 @@ class LocalDaemonAgentHttpClient:
         self._restart_with_retained_work = True
         if self._drained or self._epoch_reconciliation_pending:
             return False
-        if self._slurm_agent is not None and self._slurm_agent.has_retained_work():
+        if self._slurm_recovery_pending():
             return False
         if not (self._config.resident_profiles or self._config.container_policies):
-            self._restart_with_retained_work = self._has_retained_agent_work()
+            self._restart_with_retained_work = _has_retained_agent_work(
+                self._journal, self._execution_journal, None,
+            )
             return not self._restart_with_retained_work
         execution = self._execution_journal
         supervisor = self._supervisor
@@ -2402,6 +2418,7 @@ class LocalDaemonAgentHttpClient:
         session = self.active_session()
         if session is None:
             return
+        self._slurm_agent.begin_reconciliation((session.session_id, session.coordinator_epoch))
         binding = {
             "session_id": session.session_id,
             "coordinator_epoch": session.coordinator_epoch,

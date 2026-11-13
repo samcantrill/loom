@@ -508,6 +508,70 @@ def test_drained_intent_survives_restart_without_submitting(tmp_path, finish):
     assert reopened.has_started_or_unacknowledged_work() is (not cancel)
 
 
+def test_live_job_resume_requires_current_epoch_task_and_acknowledged_handle(tmp_path):
+    runner = FakeSlurmCommandRunner()
+    profile = _profile(runner, tmp_path)
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,))
+    task = _task(profile)
+    binding = ("session-1", "epoch-1")
+    agent.begin_reconciliation(binding)
+
+    def acknowledge(value):
+        return {"sequence": value["sequence"], "cancel_requested": False}
+
+    def lose_ack(value):
+        if value["submission"]["state"] == "accepted":
+            raise OSError("lost accepted acknowledgement")
+        return acknowledge(value)
+
+    with pytest.raises(OSError, match="lost accepted"):
+        agent.step(task, lose_ack)
+    assert agent.has_unreconciled_work(binding)
+    saved = agent.journal.read("operation-1")
+    confirmed = {**task, "job_id": saved.job_id, "cluster": saved.cluster}
+    agent.replay_pending(acknowledge)
+    # An acknowledged handle still needs current task confirmation.
+    assert agent.has_unreconciled_work(binding)
+    agent.step(confirmed, acknowledge)
+    assert not agent.has_unreconciled_work(binding)
+    assert agent.has_retained_work() and agent.has_started_or_unacknowledged_work()
+    assert agent.has_unreconciled_work(("session-1", "epoch-2"))
+    agent.begin_reconciliation(("session-1", "epoch-2"))
+    assert agent.has_unreconciled_work(("session-1", "epoch-2"))
+    agent.step(confirmed, acknowledge)
+    assert not agent.has_unreconciled_work(("session-1", "epoch-2"))
+    agent.step({**confirmed, "job_id": "different-job"}, acknowledge)
+    assert agent.has_unreconciled_work(("session-1", "epoch-2"))
+    agent.step(confirmed, acknowledge)
+    agent.profiles.clear()
+    assert agent.has_unreconciled_work(("session-1", "epoch-2"))
+    reopened = AgentSlurmJobs(tmp_path, (profile,))
+    reopened.begin_reconciliation(binding)
+    assert reopened.has_unreconciled_work(binding)
+    reopened.step(confirmed, acknowledge)
+    assert not reopened.has_unreconciled_work(binding)
+    assert reopened.journal.read("operation-1").job_id == saved.job_id
+    assert sum(call[0] == "sbatch" for call in runner.calls) == 1
+    # A crash/yield between the scheduler effect and its outbox publication
+    # must not reuse the acknowledgement of the preceding observation.
+    reopened.journal.request_cancel("operation-1", profile)
+    assert reopened.has_unreconciled_work(binding)
+
+
+def test_uncertain_submission_cannot_qualify_live_job_resume(tmp_path):
+    runner = FakeSlurmCommandRunner(scripted_results={"sbatch": [TimeoutError("lost response")]})
+    profile = _profile(runner, tmp_path)
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,))
+    binding = ("session-1", "epoch-1")
+    agent.begin_reconciliation(binding)
+    agent.step(_task(profile), lambda value: {"sequence": value["sequence"], "cancel_requested": False})
+    assert agent.journal.read("operation-1").state is ReadyStageState.UNKNOWN
+    assert agent.has_unreconciled_work(binding)
+    assert agent.has_retained_work()
+
+
 def test_pacing_starts_after_submitting_acknowledgement(tmp_path, monkeypatch):
     from loom.pipeline.executors.slurm.trusted_user import SlurmUserPrivateFileProvider
     import loom.queue._agent_slurm as agent_module

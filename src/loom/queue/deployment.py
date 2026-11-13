@@ -1144,10 +1144,10 @@ def _outbound_service_steps(
                         "reconcile", session.session_id, coordinator_epoch
                     ),
                 ))
-            # External jobs retain ownership too, but use the existing serial
-            # scheduler driver, not resident assignment views. Reconcile first
-            # and settle them before admitting fresh work after restart.
-            while client._slurm_agent is not None and client._slurm_agent.has_retained_work():
+            # External jobs retain ownership too. Reconcile their exact tasks
+            # and acknowledged effects before admission, without joining the
+            # lifetime of known queued/running scheduler allocations.
+            while client._slurm_recovery_pending():
                 if stop.is_set():
                     return
                 if client._service_control_due:

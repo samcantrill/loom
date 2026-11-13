@@ -52,12 +52,14 @@ from tests.integration.queue.test_slurm_ready_stage import (
 pytestmark = pytest.mark.integration
 
 
-@pytest.mark.parametrize(("restart_with_job", "observation_policy", "batching", "start_held"), [
-    (False, False, False, False), (True, False, False, False), (True, True, False, False),
-    (True, True, True, False), (True, False, False, True),
+@pytest.mark.parametrize(("restart_with_job", "observation_policy", "batching", "start_held", "resume_before_completion"), [
+    (False, False, False, False, False), (True, False, False, False, False), (True, True, False, False, False),
+    (True, True, True, False, False), (True, False, False, True, False),
+    (True, True, True, True, True),
 ])
 def test_outbound_service_settles_slurm_while_drained(
     tmp_path: Path, monkeypatch, restart_with_job: bool, observation_policy: bool, batching: bool, start_held: bool,
+    resume_before_completion: bool,
 ):
     from loom.queue._slurm_admission import SlurmAdmissionPolicy
     from loom.queue._slurm_observation import SlurmObservationPolicy
@@ -127,9 +129,17 @@ def test_outbound_service_settles_slurm_while_drained(
             ),
         ),
     )
-    run_uri = _persist_rejected_slurm_run(config.run_store_root / "one", profile)
+    resources = None
+    if resume_before_completion:
+        from loom.pipeline.resources import ResourceEntry, ResourceRequest
+
+        resources = ResourceRequest(entries={
+            "cpu": ResourceEntry("cpu", 1, "count"),
+            "gpu": ResourceEntry("gpu", 1, "count", {"allocation_mode": "exclusive"}),
+        })
+    run_uri = _persist_rejected_slurm_run(config.run_store_root / "one", profile, resources=resources)
     held_uri = (
-        _persist_rejected_slurm_run(config.run_store_root / "held", profile)
+        _persist_rejected_slurm_run(config.run_store_root / "held", profile, resources=resources)
         if restart_with_job else None
     )
     LocalDaemon.initialize(config)
@@ -349,6 +359,19 @@ def test_outbound_service_settles_slurm_while_drained(
         assert "slurm_assignment_or_release" in coordinator_settlement.value["wait_reasons"]
         if not restart_with_job:
             eventually(drained_progress.is_set)
+        if resume_before_completion:
+            from loom.queue.operations import inspect_native_service
+
+            owner = eventually(lambda: (
+                value if (value := inspect_native_service(agent_config.agent_root)).value.get("session_id") == session_id
+                else None
+            ))
+            control(AgentControlKind.RESUME, "resume-live", session_id, hold=owner.value["startup_hold_id"])
+            eventually(lambda: execution.slurm_submissions.read(held.assignment.operation_id).job_id is not None)
+            assert execution.slurm_submissions.read(record.assignment.operation_id).job_id == job_id
+            assert execution.slurm_assignments.list_run_unreleased(run_uri)
+            assert sum(call[0] == "sbatch" for call in runner.calls) == 2
+            assert execution.slurm_assignments.reserved_gpu_count() == 2
         client.cancel("job")
         eventually(lambda: not execution.slurm_assignments.list_run_unreleased(run_uri))
 
@@ -367,14 +390,14 @@ def test_outbound_service_settles_slurm_while_drained(
             execution.slurm_submissions.read(record.assignment.operation_id).job_id
             == job_id
         )
-        assert sum(call[0] == "sbatch" for call in runner.calls) == 1
+        assert sum(call[0] == "sbatch" for call in runner.calls) == (2 if resume_before_completion else 1)
         assert any(call[0] == "scancel" and job_id in call[1] for call in runner.calls)
         if restart_with_job:
             held_before = execution.slurm_submissions.read(held.assignment.operation_id)
-            assert held_before.state.value == "intent"
+            assert held_before.state.value == ("accepted" if resume_before_completion else "intent")
             from loom.queue.operations import inspect_native_service
             hold = inspect_native_service(agent_config.agent_root).value.get("startup_hold_id")
-            assert bool(hold) == start_held
+            assert bool(hold) == (start_held and not resume_before_completion)
             control(AgentControlKind.RESUME, "resume-held", session_id, hold=hold)
             held_after = eventually(lambda: (
                 value if (value := execution.slurm_submissions.read(held.assignment.operation_id)).job_id is not None
