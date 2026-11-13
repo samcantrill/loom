@@ -671,6 +671,15 @@ class AgentProcessSupervisor:
             )
         )
 
+    def operator_contained_launches(self) -> tuple[str, ...]:
+        """Exact launches contained by the stopped-agent namespace recovery owner."""
+        with self._connect() as conn:
+            if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='namespace_recoveries'").fetchone():
+                return ()
+            return tuple(row[0] for row in conn.execute(
+                "SELECT launch_operation_id FROM namespace_recoveries WHERE result IS NOT NULL"
+            ))
+
     def reject_unstarted_assignment(self, assignment_id: str) -> bool:
         """Atomically forbid future launches against positive no-start evidence.
 
@@ -1746,6 +1755,7 @@ class _SupervisorControlClient:
         self.supervisor_id = _required_string(status, "supervisor_id")
         self.continuity_epoch = _required_string(status, "continuity_epoch")
         self.reboot_generations = tuple(cast(list[str], status.get("reboot_generations", [])))
+        self.operator_contained_launches = tuple(cast(list[str], status.get("operator_contained_launches", [])))
 
     def status(self) -> Mapping[str, object]:
         value = self._call("status", None)
@@ -2524,6 +2534,7 @@ def _serve(
                         "configuration_fingerprint": configuration.fingerprint,
                         "service_process_id": os.getpid(),
                         "reboot_generations": supervisor.reboot_generations(),
+                        "operator_contained_launches": supervisor.operator_contained_launches(),
                     }
                 elif operation == "reject_unstarted_assignment":
                     value = request["value"]

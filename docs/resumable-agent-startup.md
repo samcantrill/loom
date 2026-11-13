@@ -102,7 +102,28 @@ those same errors (plus the relocated baseline file's relative-import error).
 No new source/test errors were introduced by the reviewed changes. Whole-lane
 `make validate-pr` is deliberately not substituted for the task's targeted gate.
 
-## Remaining work and validation
+## Targeted namespace recovery (authorized follow-up)
+
+Apollo has one unresolved launch and 20 contained historical launches. Its PID
+namespace is isolated, while its cgroup is shared with SSH. The user authorized
+implementing a targeted alternative to host reboot. `agent-recover-namespace`
+adds a cancellation-only local authority boundary: exact boot/birth identities,
+authenticated original owner, stopped-agent lock, quiesced spawners, exclusive
+lineage, pidfd termination, then positive completion and an atomic receipt.
+Ordinary startup still cannot adopt stored PIDs. Pending interrupted proof holds
+claims; a completed exact-launch marker requires guarded coordinator recovery.
+
+Focused evidence: six unit/CLI checks and two real-Singularity cases pass
+(successful recovery/replacement/replay with a surviving peer; interruption after
+namespace exit retaining uncertainty). The existing guarded-close integration
+passes with the exact-launch marker, an unqualified success file and a lost
+release reply; it settles CANCELLED and releases the original session's claims.
+Source/test Ruff and Pyright pass; existing boot-recovery integration also passes.
+Remaining gates: locked bundle publication, live
+stopped-agent preflight/recovery, and guarded coordinator close. No production
+process has been signaled by this implementation yet.
+
+## Remaining rollout work
 
 - Finish release build/publication after the targeted gate below. Agents and
   supervisors must be upgraded together after settlement; the workload worker

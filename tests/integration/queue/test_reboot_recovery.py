@@ -62,14 +62,15 @@ from tests.integration.queue.test_agent_session_transport import (
 
 
 @pytest.mark.parametrize(
-    "restart_coordinator,unqualified_result",
-    [(False, False), (True, False), (False, True)],
+    "restart_coordinator,unqualified_result,namespace_marker",
+    [(False, False, False), (True, False, False), (False, True, False), (False, True, True)],
 )
 def test_reboot_containment_closes_and_releases_same_session(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     restart_coordinator: bool,
     unqualified_result: bool,
+    namespace_marker: bool,
 ) -> None:
     credentials = _credentials(tmp_path / "tls")
     descriptor = ResidentProfileDescriptor(
@@ -302,6 +303,13 @@ def test_reboot_containment_closes_and_releases_same_session(
         )
         agent = LocalDaemonAgentHttpClient(remote_config)
         assert agent.agent_root_id == root_id
+        if namespace_marker:
+            # Kernel containment is established by this fixture above. Exercise
+            # the distinct exact-launch marker consumed after namespace recovery;
+            # real namespace proof/receipt production has its own OS acceptance.
+            assert agent._supervisor is not None
+            agent._supervisor.reboot_generations = ()
+            agent._supervisor.operator_contained_launches = (launch.launch_operation_id,)
         active_session = agent.active_session()
         assert active_session is not None
         assert active_session.session_id == session.session_id

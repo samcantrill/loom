@@ -644,10 +644,11 @@ def _resume_retained_assignments(
         receipt = (yield from _external("control", supervisor.query, launch))
         self._observe_supervisor_ownership(receipt)
         if (
-            launch.continuity_epoch in supervisor.reboot_generations
+            (launch.continuity_epoch in supervisor.reboot_generations
+             or launch.launch_operation_id in supervisor.operator_contained_launches)
             and receipt.exit_code is None
         ):
-            # A reboot proves containment, never a scientific terminal result.
+            # Local recovery proves containment, never a scientific terminal result.
             # Keep capacity withheld until the operator's guarded close wins.
             (yield from _steps(self._assignment_call,
                 session_id,

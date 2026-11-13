@@ -1169,6 +1169,45 @@ This route does not cover SLURM, remote Docker engines, cloned VM snapshots,
 state copied between hosts or hostile host attestation. Controlled-boot tests
 exercise native settlement; actual host reboot qualification is separate.
 
+### Targeted recovery of a stranded PID namespace
+
+`agent-recover-namespace` is an explicit local cancellation-only operation for
+an Apptainer launch whose original supervisor is still alive but cannot contain
+its namespace. It does not adopt a process for execution. Stop the outbound
+agent first and keep its protected root, configuration and journals intact.
+The operator selects the exact assignment, current Linux boot ID, and fresh
+host PID/start-time-in-clock-ticks pairs for the supervisor, launcher and
+namespace init. Obtain birth ticks from field 22 of `/proc/PID/stat`, parsing
+the parenthesized command correctly; PID numbers alone are insufficient.
+
+```sh
+loom queue agent-recover-namespace /private/agent.yaml \
+  --env-file /private/agent.env --operation-id namespace-recovery-001 \
+  --assignment-id ASSIGNMENT --boot-id BOOT_UUID \
+  --supervisor-pid PID --supervisor-start-ticks TICKS \
+  --launcher-pid PID --launcher-start-ticks TICKS \
+  --namespace-pid PID --namespace-start-ticks TICKS --format json
+```
+
+The command holds the agent lock, authenticates the original supervisor and
+requires exactly one unresolved launch. It pins Linux pidfds, quiesces the
+supervisor and launcher, verifies their exclusive child lineage and the init's
+namespace PID 1, then terminates only that namespace, launcher and supervisor.
+It never signals a shared cgroup or a numeric process group. Completed kernel
+observations and exclusive supervisor ownership precede an atomic native
+containment receipt and clean replacement boundary. Preflight failures resume
+any processes stopped by the command. A destructive attempt interrupted before
+receipt publication remains unresolved; do not clear its pending receipt or
+infer containment from missing PIDs. Boot recovery remains available if the
+original boundary can no longer be proved.
+
+Replay a completed operation with identical arguments after a lost response.
+The command starts no service, releases no claim and records no scientific
+success. Restart with an agent and supervisor version supporting this receipt;
+the agent retains reservations until `daemon-recover-unknown` closes the exact
+attempt and ordinary provider release completes. Unrelated live launches on the
+same supervisor cause refusal, rather than silently expanding the kill scope.
+
 ### Maintenance admission
 
 The `maintenance-admission-v1` capability provides a durable native admission
