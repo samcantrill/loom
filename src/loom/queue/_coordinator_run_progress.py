@@ -19,6 +19,7 @@ from ._managed_local import ManagedLocalError
 from ._remote_stage_execution import ResidentProfileDescriptor
 from .errors import QueueConflictError, QueueServiceError
 from .local_daemon import LocalDaemonAdmissionState
+from ._phase_timing import phase
 
 if TYPE_CHECKING:
     from loom.pipeline.orchestration import ManagedExecutionRequirement, SQLiteStageWorkStore, StageWorkRecord
@@ -40,7 +41,8 @@ def reconcile_admission(
 ) -> LocalDaemonExecutionOutcome:
     """Reconcile one run into durable ready work without selecting capacity."""
 
-    intent, scoped_authority = self._admission_context(admission)
+    with phase("coordinator.admission_context"):
+        intent, scoped_authority = self._admission_context(admission)
     self._cycle_contexts[admission.admission_id] = (intent, scoped_authority)
     outcome = _reconcile_admission(self, admission, intent, scoped_authority)
     if outcome.state not in {
@@ -51,9 +53,10 @@ def reconcile_admission(
         return outcome
     if self._action_resolution is not None:
         self._action_resolution.reconcile_producers(admission.run_uri)
-    slurm_in_flight, slurm_diagnostic = self._reconcile_slurm_run(
-        admission.run_uri, scoped_authority
-    )
+    with phase("coordinator.reconcile_slurm_run"):
+        slurm_in_flight, slurm_diagnostic = self._reconcile_slurm_run(
+            admission.run_uri, scoped_authority
+        )
     return _settled_terminal_outcome(self,
         admission.run_uri,
         outcome,
@@ -70,7 +73,8 @@ def _reconcile_admission(
 ) -> LocalDaemonExecutionOutcome:
     action_resolver = self._action_resolution
     if action_resolver is not None:
-        action_resolver.reconcile_producers(admission.run_uri)
+        with phase("coordinator.reconcile_producers"):
+            action_resolver.reconcile_producers(admission.run_uri)
     cancelling = admission.cancellation_operation_id is not None or self.cancellation_operation(admission.admission_id) is not None
     if cancelling:
         outcome = self._cancel(admission, scoped_authority, intent.plan.stage_order)
@@ -87,9 +91,10 @@ def _reconcile_admission(
     )
     _decision_as_of, snapshot_time = self._daemon_owner()._accepted_snapshot()
     snapshot = scoped_authority.open_run(admission.run_uri)
-    slurm_in_flight, slurm_diagnostic = self._reconcile_slurm_run(
-        admission.run_uri, scoped_authority
-    )
+    with phase("coordinator.reconcile_slurm_run"):
+        slurm_in_flight, slurm_diagnostic = self._reconcile_slurm_run(
+            admission.run_uri, scoped_authority
+        )
     snapshot = scoped_authority.open_run(admission.run_uri)
     terminal = None if cancelling else self._terminal_outcome(
         admission,
@@ -105,30 +110,32 @@ def _reconcile_admission(
             return None if action_resolver is not None and action_resolver.store.producer_needed(admission.run_uri, stage_plan.stage_name) else revision
         return None if action_resolver is None else action_resolver.resolve(admission, intent, scoped_authority, stage_plan, readiness, revision)
 
-    orchestrator.reconcile(
-        admission_id=admission.admission_id,
-        plan=intent.plan,
-        authority_snapshot=snapshot,
-        placements=placements,
-        execution_requirements=intent.execution_requirements,
-        ready_action=resolve_ready,
-        ready_at=snapshot_time,
-        run_priority=admission.run_priority,
-        enqueue_sequence=admission.enqueue_sequence,
-        controller_action=None if cancelling else lambda stage_plan, readiness: (
-            self._apply_controller_action(
-                scoped_authority,
-                admission.run_uri,
-                stage_plan,
-                readiness,
-                admission=admission,
-            )
-        ),
-    )
+    with phase("coordinator.orchestrate_ready"):
+        orchestrator.reconcile(
+            admission_id=admission.admission_id,
+            plan=intent.plan,
+            authority_snapshot=snapshot,
+            placements=placements,
+            execution_requirements=intent.execution_requirements,
+            ready_action=resolve_ready,
+            ready_at=snapshot_time,
+            run_priority=admission.run_priority,
+            enqueue_sequence=admission.enqueue_sequence,
+            controller_action=None if cancelling else lambda stage_plan, readiness: (
+                self._apply_controller_action(
+                    scoped_authority,
+                    admission.run_uri,
+                    stage_plan,
+                    readiness,
+                    admission=admission,
+                )
+            ),
+        )
     snapshot = scoped_authority.open_run(admission.run_uri)
-    slurm_in_flight, slurm_diagnostic = self._reconcile_slurm_run(
-        admission.run_uri, scoped_authority
-    )
+    with phase("coordinator.reconcile_slurm_run"):
+        slurm_in_flight, slurm_diagnostic = self._reconcile_slurm_run(
+            admission.run_uri, scoped_authority
+        )
     snapshot = scoped_authority.open_run(admission.run_uri)
     terminal = None if cancelling else self._terminal_outcome(
         admission,
