@@ -315,6 +315,78 @@ def test_retained_slurm_worker_is_compared_before_submission_and_delivery(
                 assert str(exc) == "managed supervisor endpoint is unavailable"
 
 
+def test_slurm_offer_recovery_defers_preparation_and_rechecks_after_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import loom.pipeline._project_contracts as contracts
+    from loom.queue.local_daemon_execution import LocalDaemonExecution
+
+    runner = FakeSlurmCommandRunner()
+    profile = _profile(runner)
+    run_root = tmp_path / "runs"
+    run_uri = _persist_rejected_slurm_run(run_root, profile)
+    config = LocalDaemonConfig(
+        coordinator_root=tmp_path / "coordinator",
+        agent_root=tmp_path / "agent",
+        run_store_root=run_root,
+        resident_worker_launch_profile=_launch_profile(),
+        slurm_profiles=(profile,),
+    )
+    available = Event()
+    deferred = Event()
+    validated = Event()
+    original_select = LocalDaemonExecution._select_slurm_agent
+    original_validate = contracts.validate_admitted_worker
+    withdraw_on_validation = [True]
+
+    def select(execution, selected):
+        if not available.is_set():
+            deferred.set()
+            raise SlurmPlanningError("slurm_profile_unavailable")
+        return original_select(execution, selected)
+
+    def validate(*args, **kwargs):
+        result = original_validate(*args, **kwargs)
+        if withdraw_on_validation[0]:
+            withdraw_on_validation[0] = False
+            available.clear()
+        validated.set()
+        return result
+
+    monkeypatch.setattr(LocalDaemonExecution, "_select_slurm_agent", select)
+    monkeypatch.setattr(contracts, "validate_admitted_worker", validate)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        daemon.client_view(
+            LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
+        ).submit(LocalDaemonAdmissionRequest("offer-recovery", run_uri))
+        assert deferred.wait(5)
+        store = LocalRunStore(run_root)
+        assert store.read_stage_worker_request(run_uri, "train", attempt=None) is None
+        assert not validated.is_set()
+        deferred.clear()
+        available.set()
+        assert validated.wait(5)
+        assert deferred.wait(5), "offer must be checked again after validation"
+        assert not [call for call in runner.calls if call[0] == "sbatch"]
+        assert daemon._execution is not None
+        assert not daemon._execution.slurm_assignments.list_run_unreleased(run_uri)
+        execution = daemon._execution
+        available.set()
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if any(call[0] == "sbatch" for call in runner.calls):
+                break
+            time.sleep(0.02)
+        daemon.stop()
+        assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
+        assert len(execution.slurm_assignments.list_run_unreleased(run_uri)) == 1
+    finally:
+        daemon.stop()
+
+
 @pytest.mark.parametrize("process_policy", [None, "bounded-v1"])
 def test_slurm_containment_requires_exact_positive_echo(process_policy) -> None:
     runner = FakeSlurmCommandRunner()

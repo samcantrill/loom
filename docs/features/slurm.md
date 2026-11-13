@@ -362,6 +362,12 @@ overhead. Assignment state, execution fences, reports and release evidence are
 still read afresh. Changed bytes, eviction and process restart require validation
 again; the cache does not authorize submission or release.
 
+Dispatch checks for an available submit agent before preparing or validating a
+ready worker. Missing or expired offers defer that work, avoiding repeated
+preparation-report IO while the agent reconnects. The coordinator checks agent
+availability again after worker validation and before reservation; the early
+check does not authorize submission or bypass the worker contract.
+
 Draining an outbound agent holds unsubmitted INTENT operations without calling
 `sbatch`. Existing jobs still progress through observation, cancellation, result
 replay and release, including during startup recovery. Cancellation of a held

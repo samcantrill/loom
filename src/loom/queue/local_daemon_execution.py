@@ -3232,6 +3232,10 @@ class LocalDaemonExecution:
             ).hexdigest()
         )
         try:
+            # An expired offer must not trigger preparation/report IO while the
+            # agent is trying to reconnect through this same coordinator. This
+            # is only a preflight; select again below after worker validation.
+            self._select_slurm_agent(profile)
             if profile.result_storage is None:
                 raise QueueServiceError(
                     "SLURM requires qualified durable result storage"
