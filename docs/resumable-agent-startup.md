@@ -1,9 +1,9 @@
 # Resumable agent startup implementation
 
-Status: fleet rollout in progress. PR #469 is merged at `3cba5f31`;
-the rollout follow-up uses branch `codex/loom-rollout-20261113`. This is an incident correction,
-not a numbered roadmap phase. Apollo's targeted containment and guarded release
-have completed; permanent fleet rollout remains in progress.
+Status: complete. Runtime activation, qualification and administrative restoration
+are verified; scientific admission remains closed. PRs #469 and #470 are merged, with deployed runtime revision
+`d4daab963b6739e2dcc9971f8e5c54fee014744d`. This is an incident correction,
+not a numbered roadmap phase. Scientific work remains stopped.
 
 ## Accepted scope
 
@@ -11,8 +11,8 @@ Implement the user-approved startup/delayed-communication plan: finite namespace
 observations with creation-owned handles; exact replay; finite cooperative service
 calls; cancellation before grant; retained containment evidence; truthful offer and
 admission diagnostics; nearby timeout regressions; supported recovery, fleet
-upgrade, delayed and normal peer qualification, UBFC recovery and POS canary checks
-before the full scientific matrix. Preserve genuine unknown-owner admission holds,
+upgrade, and delayed and normal peer infrastructure qualification. The user
+cancelled scientific recovery, canaries and matrix submission from the active scope. Preserve genuine unknown-owner admission holds,
 credential expiry, bounded physical-effect slots, and scientific outputs.
 
 ## Current evidence
@@ -41,12 +41,12 @@ Validation checkpoint:
   instead of jumping decades and accidentally testing clock degradation.
 - Changed-source Pyright: zero errors/warnings. Changed-file Ruff and diff checks pass.
 
-Use the isolated environment `/tmp/loom-startup-validation-ZOHywI/venv` for further
-validation. It is installed editable against this worktree with locked config,
-fleet and MCP extras. The first integration attempt used the main checkout's
-interpreter, whose protected child environment imports that other checkout; those
-four failures are superseded by the isolated-environment passing run. Do not use
-`PYTHONPATH=src` plus the main checkout interpreter for worker integration tests.
+Validation used an isolated Python 3.12 environment installed editable against
+this worktree with locked config, fleet and MCP extras. The first integration
+attempt used the main checkout's interpreter, whose protected child environment
+imports that other checkout; those four failures are superseded by the isolated
+environment's passing run. Do not use `PYTHONPATH=src` plus the main checkout
+interpreter for worker integration tests.
 
 Service recovery now uses finite queries. Containment and stop joins use existing
 cooperative progress, yielding their delays instead of retaining an external
@@ -171,22 +171,16 @@ Complete physical settlement before replacing services. UBFC retry, scientific
 canary completion and full-matrix submission are removed from the active scope;
 leave scientific admission closed after bounded infrastructure qualification.
 
-- Finish release build/publication after the targeted gate below. Agents and
-  supervisors must be upgraded together after settlement; the workload worker
-  contract has not changed.
-- Run only checks affected by further edits. The repository's unparameterized
-  `make validate-pr` runs whole lanes; the task's explicit focused-validation rule
-  takes precedence. Record the targeted gate and build evidence for the release.
-- All four original Apollo process identities are gone; the Linux boot is
-  unchanged. Guarded close, release, service restoration and permission revocation
-  are complete. The fleet still selects its original runtime release.
-- Upgrade through the fleet lifecycle after settlement and qualify the deployed
-  release with bounded infrastructure checks. Keep scientific work stopped.
+The permanent coordinator, all twelve agents and all twelve supervisors now run
+`loom-d4daab96`. All 24 CPU/storage checks and all twelve nonexclusive GPU
+capability checks pass. The original Apollo process identities are gone and its
+boot identity is unchanged; guarded close/release and permission revocation are
+complete. Calypso's result and retained claims have settled. The upgrade restored all twelve drained policies, revoked all temporary check
+permissions and completed with the original maintenance gate closed and settled.
 
 No total startup deadline is introduced. Genuine failed ownership remains UNKNOWN.
-Runtime rollout and scientific acceptance remain
-unverified; no claim of completion is made.
-
+Infrastructure qualification does not establish POS scientific acceptance, which
+is deliberately outside the active scope.
 
 ### Obsolete pending reconciliation discovered during rollout
 
@@ -205,3 +199,31 @@ retains it through uncertainty, retires it after confirmed rejection, and verifi
 the current session is unchanged. That test and the coordinator-restart
 authorization-history regression pass (2 checks); changed-file Ruff, diff checks
 and source Pyright pass. No full-suite claim is made.
+
+
+## Verified deployment closeout — November 13, 2026
+
+Operation `loom-startup-fixes-20261113` completed through its retained successor
+`runtime-candidate-3f5cb342ceb53c85f1caac75`. The fleet inventory selects immutable
+release `loom-d4daab96`, descriptor SHA-256
+`bb28f60266963edd827e2e33b418fb5eeb39589d46306e2b822581dfdcdf0617`.
+The release and its build receipt live under
+`/nas/home/can134/.local/share/rphys/submitted-workloads/releases/loom-d4daab96`.
+
+Direct host verification confirms all thirteen native service roles and all
+twelve authenticated supervisors execute that installed release. Original native
+root/session identities and host boot identities are preserved; all thirteen
+roles report settled. The coordinator and accepted-time clock are healthy, with
+zero active admissions, waiting admissions and running assignments. The final
+MMPD admission is CANCELLED. All twelve agents are drained with acknowledged
+controls. Gate `stop-pos-for-loom-fixes-20261113` is closed and settled with no
+remaining check permissions. Native completion and qualification receipts remain
+in the protected fleet operation directory; temporary recovery tooling is not a
+runtime dependency.
+
+All 24 CPU/storage reports were verified and all twelve nonexclusive GPU
+capability checks passed. Three report downloads needed another observation;
+no check job was resubmitted. Policy restoration required successive exact
+continuations because the existing restore loop dispatches controls sequentially.
+No machine reboot, workload-image rebuild or scientific resubmission was needed.
+Scientific validation remains cancelled until a new user instruction.
