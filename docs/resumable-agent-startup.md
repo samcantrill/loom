@@ -145,6 +145,12 @@ permanent fleet upgrade. No host reboot or workload-image rebuild was needed.
 
 ## Remaining rollout work
 
+The user cancelled current and future scientific work on November 13. Maintenance
+gate `stop-pos-for-loom-fixes-20261113` is closed, and MMPD cancellation was accepted.
+Complete physical settlement before replacing services. UBFC retry, scientific
+canary completion and full-matrix submission are removed from the active scope;
+leave scientific admission closed after bounded infrastructure qualification.
+
 - Finish release build/publication after the targeted gate below. Agents and
   supervisors must be upgraded together after settlement; the workload worker
   contract has not changed.
@@ -154,9 +160,8 @@ permanent fleet upgrade. No host reboot or workload-image rebuild was needed.
 - All four original Apollo process identities are gone; the Linux boot is
   unchanged. Guarded close, release, service restoration and permission revocation
   are complete. The fleet still selects its original runtime release.
-- Upgrade through the fleet lifecycle after settlement, qualify the deployed
-  release, recover UBFC preserving valid outputs, and finish profiling/scientific
-  canary acceptance before submitting the full scientific matrix.
+- Upgrade through the fleet lifecycle after settlement and qualify the deployed
+  release with bounded infrastructure checks. Keep scientific work stopped.
 
 No total startup deadline is introduced. Genuine failed ownership remains UNKNOWN.
 Runtime rollout and scientific acceptance remain
