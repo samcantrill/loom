@@ -559,6 +559,39 @@ def test_live_job_resume_requires_current_epoch_task_and_acknowledged_handle(tmp
     assert reopened.has_unreconciled_work(binding)
 
 
+def test_known_job_awaiting_containment_does_not_block_recovery_admission(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import loom.queue._agent_slurm as owner
+
+    runner = FakeSlurmCommandRunner()
+    profile = _profile(runner, tmp_path)
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,))
+    binding = ("session-1", "epoch-1")
+    agent.begin_reconciliation(binding)
+    task = _task(profile)
+    acknowledgements = []
+
+    def acknowledge(value):
+        acknowledgements.append(value)
+        return {"sequence": value["sequence"], "cancel_requested": False}
+
+    agent.step(task, acknowledge)
+    saved = agent.journal.read("operation-1")
+    monkeypatch.setattr(owner, "resolve_slurm_containment", lambda *_: SimpleNamespace(contained=False, state="UNKNOWN"))
+    agent.step({**task, "job_id": saved.job_id, "cluster": saved.cluster,
+                "release_requested": True, "containment_request": {}}, acknowledge)
+    assert not agent.has_unreconciled_work(binding)
+    # Admission is not containment: keep the exact operation and its capability
+    # until the ordinary positive release protocol completes.
+    assert agent.has_retained_work()
+    assert agent.has_started_or_unacknowledged_work()
+    assert agent.journal.read("operation-1").job_id == saved.job_id
+    assert all(value["release"] is None and not value["provider_released"] for value in acknowledgements)
+    assert sum(call[0] == "sbatch" for call in runner.calls) == 1
+    assert agent.has_unreconciled_work(("session-1", "epoch-2"))
+
+
 def test_uncertain_submission_cannot_qualify_live_job_resume(tmp_path):
     runner = FakeSlurmCommandRunner(scripted_results={"sbatch": [TimeoutError("lost response")]})
     profile = _profile(runner, tmp_path)

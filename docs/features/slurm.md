@@ -379,7 +379,11 @@ their retained job handles and protected profiles agree, and their effects are
 acknowledged. Startup publishes its session after this ownership reconciliation;
 it does not wait for these allocations to exit. A startup hold still requires an
 explicit resume naming that hold. Missing journals, uncertain submissions,
-unacknowledged effects and incomplete release still block admission recovery.
+unacknowledged effects and an acknowledged release still awaiting local provider
+retirement block admission recovery. A known job awaiting a containment proof
+does not block unrelated admission: its exact current task and acknowledged
+submission establish ownership, while its reservation remains held until the
+ordinary release protocol completes.
 Task confirmations are transient and must be reacquired after process/session/
 epoch changes; they never release a GPU reservation. All these jobs remain
 retained work for reload and retirement and keep their original assignments and

@@ -209,7 +209,12 @@ class AgentSlurmJobs:
                     or submission.state is ReadyStageState.ACCEPTED and submission.job_id is None
                 ):
                     return True
-                if self._reconciled_operations[operation_id] != (submission.job_id, submission.cluster, False):
+                # A current coordinator may already be waiting for this known
+                # job's containment proof. That does not make its ownership
+                # uncertain or consume any additional local agent capacity.
+                # Keep its reservation and release protocol, but allow other
+                # work while the exact acknowledged handle awaits containment.
+                if self._reconciled_operations[operation_id][:2] != (submission.job_id, submission.cluster):
                     return True
                 if evidence is None:
                     return True
