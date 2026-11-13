@@ -2,7 +2,8 @@
 
 Status: in progress. Branch `codex/resumable-agent-startup`, based on deployed
 revision `77088c3b01bcc3afd6f6789e662310832ffd46f7`. This is an incident correction,
-not a numbered roadmap phase. No deployment or live assignment mutation yet.
+not a numbered roadmap phase. Apollo's targeted containment has completed;
+coordinator recovery and fleet rollout remain in progress.
 
 ## Accepted scope
 
@@ -119,9 +120,21 @@ namespace exit retaining uncertainty). The existing guarded-close integration
 passes with the exact-launch marker, an unqualified success file and a lost
 release reply; it settles CANCELLED and releases the original session's claims.
 Source/test Ruff and Pyright pass; existing boot-recovery integration also passes.
-Remaining gates: locked bundle publication, live
-stopped-agent preflight/recovery, and guarded coordinator close. No production
-process has been signaled by this implementation yet.
+The locked bundle for `26c919cd` was published and installed as a candidate on
+Apollo. Native recovery `apollo-namespace-recovery-20261113` contained the original
+namespace, launcher and supervisor without reboot; successful exit is false.
+The user's protected scheduling reload authorized `recover_unknown` at revision
+15. Claims remain reserved until guarded close and ordinary release finish.
+
+Live admission exposed two additional recovery gaps: a GRANTED launch may have no
+process-start event, and drain clears the current-offer bit. Recovery now uses
+the existing deterministic root identity only for that pre-acknowledgement state,
+and requires all retained session offers to have expired even after drain.
+The exact agent-owned containment evidence remains mandatory. A focused HTTPS
+integration reproduces missing acknowledgement plus drain, rejects a fresh offer
+and wrong root, closes CANCELLED, and releases the same session after a lost
+release response. This and the existing reboot case pass; changed source/test
+Ruff and Pyright pass. Coordinator deployment of this correction is pending.
 
 ## Remaining rollout work
 
@@ -131,15 +144,13 @@ process has been signaled by this implementation yet.
 - Run only checks affected by further edits. The repository's unparameterized
   `make validate-pr` runs whole lanes; the task's explicit focused-validation rule
   takes precedence. Record the targeted gate and build evidence for the release.
-- Inspect supported live recovery and fleet lifecycle paths. Read-only Apollo
-  inspection still shows its original supervisor 1689457, root 1982595, namespace
-  init 1982815, and gated worker 1982839 alive. The old owner cannot gain new live
-  code/handles from replacing files. Retain claims until supported containment or
-  boot recovery proves settlement; no live mutations have occurred.
+- Complete guarded coordinator recovery using the native containment receipt;
+  restore Apollo's managed service and revoke the temporary operator permission.
+  All four original process identities are gone; the Linux boot is unchanged.
 - Upgrade through the fleet lifecycle after settlement, qualify the deployed
   release, recover UBFC preserving valid outputs, and finish profiling/scientific
   canary acceptance before submitting the full scientific matrix.
 
-No new persistent schema or total startup deadline is planned. Genuine failed
-ownership remains UNKNOWN. Runtime rollout and scientific acceptance remain
+No total startup deadline is introduced. Genuine failed ownership remains UNKNOWN.
+Runtime rollout and scientific acceptance remain
 unverified; no claim of completion is made.

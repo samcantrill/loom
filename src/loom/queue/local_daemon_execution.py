@@ -2425,8 +2425,8 @@ class LocalDaemonExecution:
                 ) not in {"GRANTED", "RUNNING"}:
                     return False
                 offer = conn.execute(
-                    "SELECT expires_at FROM agent_offers "
-                    "WHERE session_id = ? AND current = 1",
+                    "SELECT MAX(expires_at) AS expires_at FROM agent_offers "
+                    "WHERE session_id = ?",
                     (str(row["session_id"]),),
                 ).fetchone()
             observed_at = (
@@ -2434,7 +2434,13 @@ class LocalDaemonExecution:
                 if self.daemon is None
                 else self._daemon_owner()._clock()  # noqa: SLF001
             )
-            return offer is not None and str(offer["expires_at"]) < observed_at
+            # Draining invalidates current offers without erasing their expiry.
+            # Require every retained offer to have expired before recovery.
+            return (
+                offer is not None
+                and offer["expires_at"] is not None
+                and str(offer["expires_at"]) < observed_at
+            )
         return self._is_exact_retained_unknown(request.assignment_id)
 
     def resolve_recovery_evidence(
@@ -2719,6 +2725,12 @@ class LocalDaemonExecution:
                     "WHERE r.assignment_id = ?",
                     (request.assignment_id,),
                 ).fetchone()
+            process_execution_id = self._remote_process_execution_id(request.assignment_id)
+            if process_execution_id is None and row is not None and row["state"] == "GRANTED":
+                # The agent may lose startup acknowledgement before publishing
+                # its first event. Its root execution identity is deterministic;
+                # closing still requires the exact target-owned containment proof.
+                process_execution_id = f"{request.assignment_id}:root"
             if (
                 row is None
                 or str(row["agent_id"]) != target.agent_id
@@ -2729,8 +2741,7 @@ class LocalDaemonExecution:
                 or str(row["stage_name"]) != request.stage_name
                 or int(row["attempt"]) != request.attempt
                 or str(row["attempt_id"]) != assignment.attempt_id
-                or self._remote_process_execution_id(request.assignment_id)
-                != request.process_execution_id
+                or process_execution_id != request.process_execution_id
             ):
                 raise QueueConflictError("managed recovery target identity conflicts")
         elif (

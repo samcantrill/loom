@@ -1207,6 +1207,11 @@ success. Restart with an agent and supervisor version supporting this receipt;
 the agent retains reservations until `daemon-recover-unknown` closes the exact
 attempt and ordinary provider release completes. Unrelated live launches on the
 same supervisor cause refusal, rather than silently expanding the kill scope.
+For a remote GRANTED assignment without a start acknowledgement, recovery binds
+the agent's deterministic `<assignment_id>:root` execution identity and still
+requires exact agent-owned containment evidence. Draining clears current offers;
+recovery checks expiry across retained session offers rather than requiring one
+to remain current. Drain alone never proves expiry or containment.
 
 ### Maintenance admission
 
