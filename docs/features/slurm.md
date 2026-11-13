@@ -354,6 +354,14 @@ unattributable rows cannot become a false empty observation. Fairness, batch
 sizes and retry timers are transient; durable operation and outbox state survive
 restart. Omitted batching fields preserve cap-only encoding and behavior.
 
+Repeated assignment reads reuse validation of immutable delivery documents by
+their complete stored JSON contents. The process-local cache holds at most 128
+documents of at most 256 KiB each; larger documents are validated without
+caching. This bounds retained source text to 32 MiB, excluding decoded-object
+overhead. Assignment state, execution fences, reports and release evidence are
+still read afresh. Changed bytes, eviction and process restart require validation
+again; the cache does not authorize submission or release.
+
 Draining an outbound agent holds unsubmitted INTENT operations without calling
 `sbatch`. Existing jobs still progress through observation, cancellation, result
 replay and release, including during startup recovery. Cancellation of a held

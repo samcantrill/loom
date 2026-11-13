@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 import base64
 from datetime import datetime, timezone
+from functools import lru_cache
 import hashlib
 import hmac
 import json
@@ -1594,9 +1595,7 @@ class SQLiteSlurmStageAssignments:
             assignment=SlurmStageAssignment.from_dict(
                 json.loads(str(row["identity_json"]))
             ),
-            delivery=SlurmStageDelivery.from_dict(
-                json.loads(str(row["delivery_json"]))
-            ),
+            delivery=_retained_delivery(str(row["delivery_json"])),
             request=cast(Mapping[str, PlainData], json.loads(str(row["request_json"]))),
             state=str(row["state"]),
             issuer_epoch=str(row["issuer_epoch"]),
@@ -1615,6 +1614,21 @@ class SQLiteSlurmStageAssignments:
             capability_delivery_kind=row["capability_delivery_kind"] if "capability_delivery_kind" in row.keys() else None,
             capability_expires_at=row["capability_expires_at"] if "capability_expires_at" in row.keys() else None,
         )
+
+
+@lru_cache(maxsize=128)
+def _cached_retained_delivery(encoded: str) -> SlurmStageDelivery:
+    return SlurmStageDelivery.from_dict(json.loads(encoded))
+
+
+def _retained_delivery(encoded: str) -> SlurmStageDelivery:
+    # Delivery and nested values are immutable. Key by the complete bytes read
+    # from SQLite, never by assignment ID or a mutable record revision. Only
+    # successful validation is cached; live state and release proofs are not.
+    # Bound retained source documents to 32 MiB, excluding decoded-object overhead.
+    if len(encoded.encode("utf-8")) > 256 * 1024:
+        return SlurmStageDelivery.from_dict(json.loads(encoded))
+    return _cached_retained_delivery(encoded)
 
 
 class SlurmBootstrapWorkspace:

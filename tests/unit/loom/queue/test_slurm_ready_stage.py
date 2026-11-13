@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import subprocess
 import sys
@@ -9,6 +10,64 @@ import pytest
 
 from loom.queue.errors import QueueServiceError
 from loom.queue.slurm_ready_stage import SQLiteSlurmStageAssignments
+
+
+def test_repeated_delivery_reads_preserve_live_state_and_revalidate_changed_bytes(tmp_path, monkeypatch):
+    from tests.unit.loom.queue.test_slurm_admission import ReservationFixture
+
+    from loom.queue import slurm_ready_stage as module
+
+    fixture = ReservationFixture(tmp_path)
+    assignment, arguments = fixture.candidate("delivery-cache", 1)
+    fixture.store.reserve(assignment, **arguments)
+    module._cached_retained_delivery.cache_clear()
+    original = module.SlurmStageDelivery.from_dict
+    validations = []
+
+    def validate(cls, value):
+        validations.append(value["schema_version"])
+        return original(value)
+
+    monkeypatch.setattr(module.SlurmStageDelivery, "from_dict", classmethod(validate))
+    first = fixture.store.read(assignment.assignment_id)
+    fixture.store.advance(assignment.assignment_id, expected="reserved", next_state="bound")
+    second = fixture.reopen().read(assignment.assignment_id)
+    assert first.state == "reserved" and second.state == "bound"
+    assert first.delivery is second.delivery
+    assert len(validations) == 1
+    with pytest.raises(TypeError):
+        second.delivery.resolved_runtime["stage_id"] = "changed"
+    with pytest.raises(TypeError):
+        second.delivery.fingerprint["payload"]["stage_name"] = "changed"
+
+    # A changed persisted representation must not reuse an earlier validated
+    # value for the same assignment, nor cache a failed validation.
+    changed = second.delivery.to_dict()
+    changed["schema_version"] = -1
+    with sqlite3.connect(fixture.path) as conn:
+        conn.execute("UPDATE slurm_stage_assignments SET delivery_json=? WHERE assignment_id=?",
+                     (json.dumps(changed), assignment.assignment_id))
+    for _ in range(2):
+        with pytest.raises(QueueServiceError, match="schema is unsupported"):
+            fixture.store.read(assignment.assignment_id)
+    assert len(validations) == 3
+
+
+def test_large_retained_delivery_is_validated_without_caching(tmp_path, monkeypatch):
+    from tests.unit.loom.queue.test_slurm_admission import ReservationFixture
+
+    from loom.queue import slurm_ready_stage as module
+
+    fixture = ReservationFixture(tmp_path)
+    _, arguments = fixture.candidate("large-delivery", 0)
+    delivery = arguments["delivery"]
+    encoded = json.dumps(delivery.to_dict()) + " " * (256 * 1024)
+
+    def unexpected_cache(_):
+        pytest.fail("oversized source document must not enter the bounded cache")
+
+    monkeypatch.setattr(module, "_cached_retained_delivery", unexpected_cache)
+    assert module._retained_delivery(encoded) == delivery
 
 
 @pytest.mark.parametrize("version", [3, 4])
