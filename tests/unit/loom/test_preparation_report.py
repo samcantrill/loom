@@ -292,6 +292,28 @@ def test_mapping_order_is_retained_and_order_only_changes_never_share_compositio
     assert encode_ordered_config(loaded["requested_composition"]["resolved"]) == encode_ordered_config(requested["resolved"])
 
 
+def test_shared_ordered_views_remain_independent_after_hydration(tmp_path, monkeypatch):
+    composition = _composition()
+    composition["resolved"] = {
+        "parts": {"reconstruction": {"values": [False, 0, 0.0, None]}, "detrending": {}},
+        "branches": ["second", "first", "second"],
+    }
+    composition["redacted"] = deepcopy(composition["resolved"])
+    monkeypatch.setattr(__import__(__name__, fromlist=["_composition"]), "_composition", lambda: deepcopy(composition))
+    _, store, ref, companion = _write(tmp_path)
+    assert len(json.loads(companion.read_bytes())["compositions"]) == 1
+    loaded = load_preparation_report(ref, store.local_path(ref))
+    for name in ("composition", "requested_composition"):
+        resolved = loaded[name]["resolved"]
+        assert list(resolved["parts"]) == ["reconstruction", "detrending"]
+        assert resolved["branches"] == ["second", "first", "second"]
+        assert [type(value) for value in resolved["parts"]["reconstruction"]["values"]] == [bool, int, float, type(None)]
+    loaded["composition"]["resolved"]["parts"]["reconstruction"]["values"].append("changed")
+    loaded["composition"]["resolved"]["branches"].reverse()
+    assert loaded["requested_composition"] == composition
+    assert loaded["composition"]["redacted"] == composition["redacted"]
+
+
 def test_legacy_report_reads_original_plain_mapping_without_order_upgrade(tmp_path):
     from loom.fingerprints import hash_bytes
 

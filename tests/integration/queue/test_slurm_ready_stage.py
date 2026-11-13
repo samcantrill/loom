@@ -336,7 +336,7 @@ def test_slurm_offer_recovery_defers_preparation_and_rechecks_after_validation(
     deferred = Event()
     validated = Event()
     original_select = LocalDaemonExecution._select_slurm_agent
-    original_validate = contracts.validate_admitted_worker
+    original_metadata = contracts.worker_contract_metadata
     withdraw_on_validation = [True]
 
     def select(execution, selected):
@@ -346,7 +346,9 @@ def test_slurm_offer_recovery_defers_preparation_and_rechecks_after_validation(
         return original_select(execution, selected)
 
     def validate(*args, **kwargs):
-        result = original_validate(*args, **kwargs)
+        # This owner checks the report for both fresh preparation and retained
+        # request validation. Withdraw the offer after that actual boundary.
+        result = original_metadata(*args, **kwargs)
         if withdraw_on_validation[0]:
             withdraw_on_validation[0] = False
             available.clear()
@@ -354,7 +356,7 @@ def test_slurm_offer_recovery_defers_preparation_and_rechecks_after_validation(
         return result
 
     monkeypatch.setattr(LocalDaemonExecution, "_select_slurm_agent", select)
-    monkeypatch.setattr(contracts, "validate_admitted_worker", validate)
+    monkeypatch.setattr(contracts, "worker_contract_metadata", validate)
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config)
     daemon.start()

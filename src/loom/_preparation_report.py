@@ -290,22 +290,21 @@ def load_report(
             for key in ("resolved", "redacted", "recipe_manifest")
         }
         full.update(manifest=manifest, provenance=provenance)
-        hydrated[identifier] = full
-        report[name] = full
-    if report["report_format"] == REPORT_FORMAT:
-        for name in ("composition", "requested_composition"):
-            if name not in report:
-                continue
-            composition = _mapping(report[name])
+        if ordered:
+            # Decode each distinct composition before copying shared views.
+            # Copying the tagged transport first duplicates its larger tree and
+            # repeats decoding, although both references name identical bytes.
             for key in ("resolved", "redacted", "recipe_manifest"):
                 try:
-                    composition[key] = decode_ordered_config(composition[key])
+                    full[key] = decode_ordered_config(full[key])
                 except ConfigError as exc:
                     raise QueueConflictError(
                         f"preparation ordered configuration {key} is invalid"
                     ) from exc
-            if not isinstance(composition["resolved"], dict) or not isinstance(composition["redacted"], dict):
+            if not isinstance(full["resolved"], dict) or not isinstance(full["redacted"], dict):
                 raise QueueConflictError("preparation ordered configuration must decode to mappings")
-            if not isinstance(composition["recipe_manifest"], list):
+            if not isinstance(full["recipe_manifest"], list):
                 raise QueueConflictError("preparation recipe manifest must decode to a sequence")
+        hydrated[identifier] = full
+        report[name] = full
     return report
