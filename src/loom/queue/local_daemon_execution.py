@@ -1014,6 +1014,28 @@ def load_managed_local_intent(
         raise QueueServiceError(
             "exact runtime record execution requirements conflict with pipeline"
         )
+    if (
+        parallel_execution_options(runtime_options).max_parallel_stages
+        != record["max_parallel_stages"]
+    ):
+        raise QueueServiceError("exact runtime record concurrency conflicts")
+    intent = ManagedLocalIntent(
+        plan,
+        runtime,
+        placements,
+        execution_requirements,
+        pipeline,
+        str(record["digest"]),
+        cast(int | None, record["max_parallel_stages"]),
+        parallel_execution_options(runtime_options).continue_independent,
+    )
+    _validate_intent_bindings(config, intent, slurm_profiles)
+    return intent
+
+
+def _validate_intent_bindings(config, intent, slurm_profiles):
+    """Recheck current site permissions even when retained intent bytes are unchanged."""
+    pipeline, placements = intent.pipeline, intent.placements
     from .preparation import (
         LOCAL_PREPARATION_SCOPE,
         _local_scope,
@@ -1064,21 +1086,7 @@ def load_managed_local_intent(
                 raise QueueServiceError(
                     "exact runtime record names a changed or unavailable SLURM profile"
                 )
-    if (
-        parallel_execution_options(runtime_options).max_parallel_stages
-        != record["max_parallel_stages"]
-    ):
-        raise QueueServiceError("exact runtime record concurrency conflicts")
-    return ManagedLocalIntent(
-        plan,
-        runtime,
-        placements,
-        execution_requirements,
-        pipeline,
-        str(record["digest"]),
-        cast(int | None, record["max_parallel_stages"]),
-        parallel_execution_options(runtime_options).continue_independent,
-    )
+
 
 
 def _validate_recovery_request_identity(
@@ -1323,6 +1331,9 @@ class LocalDaemonExecution:
                 )
             provider.restore_capacity_holding(command)
         self._launch_lock = Lock()
+        from ._intent_cache import ManagedIntentCache
+
+        self._intent_cache = ManagedIntentCache()
         self.local_profile_ready = True
         self._sync_slurm_agent_references()
         self._slurm_agent = (
@@ -1837,10 +1848,9 @@ class LocalDaemonExecution:
         """Open and bind the exact retained execution context for one admission."""
 
         self.open_owner_stores()
-        intent = load_managed_local_intent(
-            self.config,
-            admission.run_uri,
-            slurm_profiles=self._scheduling.available_slurm_profiles(),
+        intent = self._intent_cache.load(
+            self.config, admission.run_uri,
+            self._scheduling.available_slurm_profiles(),
         )
         if intent.digest != admission.intent_digest:
             raise QueueConflictError(

@@ -890,3 +890,131 @@ def test_unlimited_runtime_intent_is_versioned_and_replayed_exactly(tmp_path: Pa
     before = _run_files(store.local_run_dir(receipt.run_uri))
     assert prepare_managed_local_run(coordinator, pipeline, "unlimited") == receipt
     assert _run_files(store.local_run_dir(receipt.run_uri)) == before
+
+
+@pytest.mark.parametrize('document', [
+    'run.json', 'plan.json', 'prepared_run.json', 'config/resolved.yaml',
+    'config/managed_local_runtime.json', 'config/composition_manifest.json',
+])
+def test_cached_intent_checks_document_bytes_not_timestamps(tmp_path, monkeypatch, document):
+    import os
+    from loom.queue import local_daemon_execution as execution
+    from loom.queue._intent_cache import ManagedIntentCache
+
+    path = _coordinator_config(tmp_path)
+    receipt = prepare_managed_local_run(path, _pipeline_config(tmp_path), 'cached')
+    config = load_coordinator_service_config(path).daemon
+    cache = ManagedIntentCache()
+    original = execution.load_managed_local_intent
+    calls = []
+
+    def load(*args, **kwargs):
+        calls.append(True)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(execution, 'load_managed_local_intent', load)
+    first = cache.load(config, receipt.run_uri, None)
+    assert cache.load(config, receipt.run_uri, None) is first
+    assert len(calls) == 1
+    target = LocalRunStore(config.run_store_root).local_run_dir(receipt.run_uri) / document
+    if target.exists():
+        previous, stat = target.read_bytes(), target.stat()
+        assert b'\n' in previous
+        # Same length and restored mtime: only content can detect this change.
+        target.write_bytes(previous.replace(b'\n', b' ', 1))
+        os.utime(target, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    else:
+        target.write_bytes(b'{}')
+    if document in {'config/resolved.yaml', 'config/composition_manifest.json'}:
+        with pytest.raises(QueueServiceError, match='snapshot|composition reference'):
+            cache.load(config, receipt.run_uri, None)
+    else:
+        cache.load(config, receipt.run_uri, None)
+    assert len(calls) == 2
+
+
+def test_cached_intent_rechecks_current_local_binding(tmp_path):
+    from loom.queue._intent_cache import ManagedIntentCache
+
+    path = _coordinator_config(tmp_path)
+    pipeline = _pipeline_config(tmp_path)
+    data = json.loads(pipeline.read_text())
+    data['pipeline']['stages'][0]['placement'] = {'target': 'local-machine'}
+    pipeline.write_text(json.dumps(data))
+    receipt = prepare_managed_local_run(path, pipeline, 'cached')
+    config = load_coordinator_service_config(path).daemon
+    cache = ManagedIntentCache()
+    cache.load(config, receipt.run_uri, None)
+    with pytest.raises(QueueServiceError):
+        cache.load(replace(config, machine_id='different-machine'), receipt.run_uri, None)
+
+
+def test_cached_intent_eviction_revalidates_and_restart_has_no_cached_authority(tmp_path, monkeypatch):
+    from loom.queue import local_daemon_execution as execution
+    from loom.queue._intent_cache import ManagedIntentCache
+
+    path = _coordinator_config(tmp_path)
+    pipeline = _pipeline_config(tmp_path)
+    a = prepare_managed_local_run(path, pipeline, 'cached-a')
+    b = prepare_managed_local_run(path, pipeline, 'cached-b')
+    config = load_coordinator_service_config(path).daemon
+    original = execution.load_managed_local_intent
+    calls = []
+
+    def load(*args, **kwargs):
+        calls.append(args[1])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(execution, 'load_managed_local_intent', load)
+    cache = ManagedIntentCache(max_entries=1)
+    for uri in (a.run_uri, b.run_uri, a.run_uri):
+        cache.load(config, uri, None)
+    ManagedIntentCache().load(config, a.run_uri, None)
+    assert calls == [a.run_uri, b.run_uri, a.run_uri, a.run_uri]
+
+
+def test_cached_intent_rejects_change_during_initial_load(tmp_path, monkeypatch):
+    from loom.queue import local_daemon_execution as execution
+    from loom.queue._intent_cache import ManagedIntentCache
+
+    path = _coordinator_config(tmp_path)
+    receipt = prepare_managed_local_run(path, _pipeline_config(tmp_path), 'cached')
+    config = load_coordinator_service_config(path).daemon
+    original = execution.load_managed_local_intent
+    target = LocalRunStore(config.run_store_root).local_config_path(receipt.run_uri, 'resolved')
+
+    def load(*args, **kwargs):
+        result = original(*args, **kwargs)
+        target.write_bytes(target.read_bytes() + b'\n')
+        return result
+
+    monkeypatch.setattr(execution, 'load_managed_local_intent', load)
+    with pytest.raises(QueueConflictError, match='changed while loading'):
+        ManagedIntentCache().load(config, receipt.run_uri, None)
+
+
+def test_cached_intent_serializes_concurrent_loads_and_bounds_source_bytes(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from loom.queue import local_daemon_execution as execution
+    from loom.queue._intent_cache import ManagedIntentCache
+
+    path = _coordinator_config(tmp_path)
+    receipt = prepare_managed_local_run(path, _pipeline_config(tmp_path), 'cached')
+    config = load_coordinator_service_config(path).daemon
+    original = execution.load_managed_local_intent
+    calls = []
+
+    def load(*args, **kwargs):
+        calls.append(True)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(execution, 'load_managed_local_intent', load)
+    cache = ManagedIntentCache()
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        futures = [workers.submit(cache.load, config, receipt.run_uri, None) for _ in range(2)]
+        first, second = [future.result(timeout=10) for future in futures]
+    assert first is second and len(calls) == 1
+    bounded = ManagedIntentCache(max_source_bytes=0)
+    bounded.load(config, receipt.run_uri, None)
+    bounded.load(config, receipt.run_uri, None)
+    assert len(calls) == 3

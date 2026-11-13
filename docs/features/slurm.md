@@ -261,6 +261,16 @@ assignment is fully `released`, including across coordinator restarts. An absent
 assignment or any earlier release state still retains that profile; a terminal
 scheduler observation alone does not authorize profile retirement.
 
+Admission reconciliation reuses decoded retained intent in a bounded in-memory
+cache. Every lookup still reads and hashes the run metadata, plan, exact runtime,
+resolved snapshot, composition manifest and optional prepared-run metadata.
+Changed bytes or missing documents require normal validation again; file sizes
+and modification times alone never authorize reuse. Current profile permissions,
+local preparation bindings and admission authority remain checked. The cache is
+discarded on restart and retains at most 32 entries representing at most 256 MiB
+of source documents. It changes neither accepted execution policy nor scientific
+identity, and supplies no authority to dispatch or release an assignment.
+
 An outbound submit-agent declaration independently accepts:
 
 ```yaml
