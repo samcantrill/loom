@@ -1,7 +1,7 @@
 # Resumable agent startup implementation
 
-Status: in progress. Branch `codex/resumable-agent-startup`, based on deployed
-revision `77088c3b01bcc3afd6f6789e662310832ffd46f7`. This is an incident correction,
+Status: fleet rollout in progress. PR #469 is merged at `3cba5f31`;
+the rollout follow-up uses branch `codex/loom-rollout-20261113`. This is an incident correction,
 not a numbered roadmap phase. Apollo's targeted containment and guarded release
 have completed; permanent fleet rollout remains in progress.
 
@@ -186,3 +186,22 @@ leave scientific admission closed after bounded infrastructure qualification.
 No total startup deadline is introduced. Genuine failed ownership remains UNKNOWN.
 Runtime rollout and scientific acceptance remain
 unverified; no claim of completion is made.
+
+
+### Obsolete pending reconciliation discovered during rollout
+
+The fixed installed client settled Calypso's contained result and released all
+retained assignments/provider claims. The old agent then remained stuck before
+publishing its live session identity: its journal retained a backward
+reconciliation created by the old authorization replay bug. The coordinator
+rejected that exact request, but startup replay treated it as permanently pending.
+
+Pending reconciliation now retires an intent only after a definite protocol
+conflict and a fresh handshake proving its target epoch is obsolete. Current-epoch
+conflicts and indeterminate transport outcomes remain errors with the intent
+retained. No session, claim or launch evidence is invented or overwritten.
+The existing TLS journal replay test now reproduces the legacy backward request,
+retains it through uncertainty, retires it after confirmed rejection, and verifies
+the current session is unchanged. That test and the coordinator-restart
+authorization-history regression pass (2 checks); changed-file Ruff, diff checks
+and source Pyright pass. No full-suite claim is made.
