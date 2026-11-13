@@ -2336,6 +2336,94 @@ def test_actual_native_preparation_pair_crosses_slurm_ready_helpers_and_ack_repl
     assert counter.read_text() == "1"
 
 
+def test_slow_shared_publication_allows_unrelated_gpu_dispatch_and_cancellation(
+    tmp_path, monkeypatch,
+):
+    from types import SimpleNamespace
+    from loom.pipeline.resources import ResourceEntry, ResourceRequest
+    from loom.queue.agent_sessions import AgentSessionService
+    from loom.queue.local_daemon_execution import _SlurmPublicationRequired
+    from loom.queue import _shared_publication as publication
+    from loom.queue._slurm_admission import SlurmAdmissionPolicy
+    from tests.unit.loom.queue.test_slurm_ready_stage import _shared_slurm_workspace
+
+    (tmp_path / "publication").mkdir()
+    workspace, shared_profile, result = _shared_slurm_workspace(tmp_path / "publication")
+    record = SimpleNamespace(
+        assignment=SimpleNamespace(agent_id="agent-1", assignment_id=workspace.root.name),
+        delivery=workspace.delivery(), report=workspace.retain_result(result),
+        bootstrap_incarnation="bootstrap", fence="fence-1",
+    )
+    runner = FakeSlurmCommandRunner()
+    profile = _profile(runner)
+    run_root = tmp_path / "runs"
+    run_uri = _persist_rejected_slurm_run(run_root, profile, resources=ResourceRequest(entries={
+        "cpu": ResourceEntry("cpu", 1, "count"),
+        "gpu": ResourceEntry("gpu", 1, "count", {"allocation_mode": "exclusive"}),
+    }))
+    config = LocalDaemonConfig(
+        coordinator_root=tmp_path / "coordinator",
+        agent_root=tmp_path / "agent",
+        run_store_root=run_root,
+        resident_worker_launch_profile=_launch_profile(),
+        slurm_profiles=(profile,),
+        shared_roots=shared_profile.shared_roots,
+        slurm_admission=SlurmAdmissionPolicy(8),
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    execution = daemon._execution
+    assert execution is not None
+    entered, proceed = Event(), Event()
+    original_prepare = publication.prepare_publication
+
+    def slow_prepare(*args, **kwargs):
+        entered.set()
+        assert proceed.wait(15), "test did not release publication IO"
+        return original_prepare(*args, **kwargs)
+
+    monkeypatch.setattr(publication, "prepare_publication", slow_prepare)
+
+    # Supply an already validated publication fixture at the authority boundary.
+    # Exercise the real lock/continuation and filesystem owners; unrelated work
+    # goes through the real daemon client, scheduler and Slurm assignment store.
+    def locked(session, epoch, evidence, cursor, **options):
+        if options.get("_defer_publication"):
+            raise _SlurmPublicationRequired(execution, record, "fence-1")
+        token = options["_publication"]
+        assert token.validates(execution, record, "fence-1")
+        return publication.accept_publication(token.prepared)
+
+    service = SimpleNamespace(_daemon=daemon, _slurm_work_locked=locked)
+    evidence = {"result_operation": "commit", "assignment_id": workspace.root.name}
+    try:
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            sealing = workers.submit(AgentSessionService.slurm_work, service, "session", "epoch", evidence)
+            try:
+                assert entered.wait(5)
+                client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+                workers.submit(client.submit, LocalDaemonAdmissionRequest("independent", run_uri)).result(timeout=5)
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    records = execution.slurm_assignments.list_run_unreleased(run_uri)
+                    if records and records[0].state == "accepted":
+                        break
+                    time.sleep(0.02)
+                assert len(records) == 1 and records[0].state == "accepted"
+                assert records[0].requested_gpu_count == 1
+                assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
+                cancelled = workers.submit(client.cancel, "independent").result(timeout=5)
+                assert cancelled.cancellation_operation_id is not None
+                assert not sealing.done(), "publication must still be waiting during dispatch/cancellation"
+            finally:
+                proceed.set()
+            assert sealing.result(timeout=5)
+    finally:
+        proceed.set()
+        daemon.stop()
+
+
 def test_gpu_budget_survives_restart_and_reload_preserves_admitted_work(tmp_path):
     from loom.pipeline.resources import ResourceEntry, ResourceRequest
     from loom.pipeline.executors.slurm.trusted_user import SlurmUserPrivateFileProvider
