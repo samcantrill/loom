@@ -1,5 +1,15 @@
 # Fleet configuration, administration and self-tests
 
+For a runtime upgrade during an existing incident hold, pass
+`fleet upgrade --maintenance-id ID --runtime-release RELEASE --apply ...`.
+The selected gate must already be closed and have no check permissions. Fleet
+retains its exact owner and intent, runs only its authorized infrastructure
+checks, restores the previous agent drain policies, and leaves admission closed
+on completion or pre-replacement abort. This option is separate from
+`--hold-admission`, which pauses for external publication. A changed gate owner
+or intent refuses continuation; opening the incident gate remains an explicit
+operator action.
+
 Install `loom[fleet]` in the operator's Python 3.12 environment. Fleet is generic:
 service software, workload profiles and site declarations have separate owners.
 `import loom` and Fleet help do not load administration, YAML or workload stacks.

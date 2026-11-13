@@ -70,6 +70,16 @@ def _maintenance_binding(intent):
     })
 
 
+
+def _existing_maintenance_binding(gate, maintenance_id):
+    """Borrow an explicitly selected empty gate; its owner remains responsible for opening."""
+    if maintenance_id is None:
+        return None
+    if (gate.get("state") != "closed" or gate.get("maintenance_id") != maintenance_id
+            or not gate.get("intent_digest") or gate.get("checks")):
+        raise QueueConflictError("selected maintenance gate is unavailable or has active checks")
+    return {"operation_id": maintenance_id, "target_intent_digest": gate["intent_digest"]}
+
 def _checks(inventory, deployment, connection, config, check_execution=None):
     if deployment is None or connection is None:
         for path in sorted(
@@ -136,6 +146,7 @@ def preview(
     runtime_release=None,
     recover_retained_results=False,
     hold_admission=False,
+    maintenance_id=None,
     workload_profile=None,
     retire_configuration=False,
     add_container_policies=False,
@@ -154,6 +165,9 @@ def preview(
     preview never presents an uninstalled candidate as qualified.
     """
     _environment_files(inventory, env_file)
+    if maintenance_id is not None and (runtime_release is None or hold_admission or retire_configuration
+            or add_container_policies or increase_publication_budgets or workload_profile is not None):
+        raise QueueConfigError("existing maintenance requires a runtime-only upgrade without publication hold")
     if increase_publication_budgets:
         if retire_configuration or add_container_policies or runtime_release is not None or workload_profile is not None or image is not None or recover_retained_results:
             raise QueueConfigError("publication budget increase must be separate from runtime, retirement, policy addition and image changes")
@@ -210,6 +224,7 @@ def preview(
     ) as operator:
         source = _capable(operator)
         gate = dict(operator.observe_maintenance())
+        binding = _existing_maintenance_binding(gate, maintenance_id)
         agents = {}
         for name in rows:
             if name != "coordinator":
@@ -292,6 +307,7 @@ def preview(
         "schema_version": 1,
         "outcome": "preview",
         "hold_admission": hold_admission,
+        "maintenance_binding": binding,
         "fleet": inventory.name,
         "release": target,
         "source": source,
@@ -1070,7 +1086,8 @@ def _restore(operation, *, abort=False):
         operation.settled()
     for identity in list(operation.gate()["checks"]):
         operation.maintenance("revoke-" + identity, "revoke", identity)
-    operation.maintenance("open", "open")
+    if not operation.intent.get("preserve_maintenance_gate"):
+        operation.maintenance("open", "open")
 
 
 def _independent_policies(operation, requests):
@@ -1243,6 +1260,7 @@ def upgrade(
     runtime_release=None,
     recover_retained_results=False,
     hold_admission=False,
+    maintenance_id=None,
     workload_profile=None,
     retire_configuration=False,
     add_container_policies=False,
@@ -1303,6 +1321,7 @@ def _upgrade(
     runtime_release=None,
     recover_retained_results=False,
     hold_admission=False,
+    maintenance_id=None,
     workload_profile=None,
     retire_configuration=False,
     add_container_policies=False,
@@ -1354,6 +1373,7 @@ def _upgrade(
             runtime_release=runtime_release,
             recover_retained_results=recover_retained_results,
             hold_admission=hold_admission,
+            maintenance_id=maintenance_id,
             workload_profile=workload_profile, image=image, workload_inventory=workload_inventory,
             retire_configuration=retire_configuration, add_container_policies=add_container_policies,
             increase_publication_budgets=increase_publication_budgets,
@@ -1383,6 +1403,7 @@ def _upgrade(
                 runtime_release=runtime_release,
                 recover_retained_results=recover_retained_results,
                 hold_admission=hold_admission,
+            maintenance_id=maintenance_id,
                 workload_profile=workload_profile, image=image, workload_inventory=workload_inventory,
                 retire_configuration=retire_configuration, add_container_policies=add_container_policies,
                 increase_publication_budgets=increase_publication_budgets,
@@ -1425,6 +1446,9 @@ def _upgrade(
                 intent["inventory_publication"] = bind(
                     inventory, target, inputs[str(inventory.path)]
                 )
+            if plan.get("maintenance_binding") is not None:
+                intent["maintenance_binding"] = plan["maintenance_binding"]
+                intent["preserve_maintenance_gate"] = True
             if hold_admission:
                 intent["kind"] += "-publication"
             atomic(path, intent)
@@ -1444,6 +1468,9 @@ def _upgrade(
         ):
             raise QueueConflictError("workload inventory intent changed")
         if apply:
+            if maintenance_id != (intent.get("maintenance_binding", {}).get("operation_id")
+                    if intent.get("preserve_maintenance_gate") else None):
+                raise QueueConflictError("existing maintenance selection changed")
             if bool(intent.get("increase_publication_budgets")) != increase_publication_budgets:
                 raise QueueConflictError("publication budget increase intent changed")
             if increase_publication_budgets and (workload_inventory is None or intent["workload_inventory"] != str(Path(workload_inventory).resolve())):
@@ -1509,6 +1536,9 @@ def _upgrade(
                 else:
                     if (operation.receipts / "close" / "intent.json").exists():
                         operation.maintenance("close", "close")
+                        _restore(operation, abort=True)
+                    elif intent.get("preserve_maintenance_gate"):
+                        operation.gate()
                         _restore(operation, abort=True)
                     atomic(directory / "aborted.json", {"state": "aborted"})
                     result = {"state": "aborted"}

@@ -38,6 +38,35 @@ def target_bundle(inventory, tmp_path):
     return path
 
 
+def test_runtime_upgrade_preserves_preexisting_closed_gate(site, tmp_path):  # noqa: F811
+    inventory, base, selection = site
+    inventory = bind_environments(inventory)
+    authored = read(inventory.hosts[0].config)
+    for principal in authored["agent_policy"]["principals"]:
+        if principal["role"] == "operator":
+            principal["actions"].append("resume")
+    write(inventory.hosts[0].config, authored)
+    setup = apply(inventory, operation_id="setup-held", issuer=base / "issuer", check_selection=selection)
+    assert setup["outcome"] == "complete", setup
+    with CoordinatorOperatorClient.from_connection_file(setup["operator_connection"]) as operator:
+        gate = operator.observe_maintenance()
+        operator.maintenance({"operation_id": "incident-close", "maintenance_id": "incident",
+            "maintenance_intent_digest": "incident-intent", "action": "close",
+            "expected_revision": gate["revision"], "check": None})
+    result = finish(inventory, "upgrade-held", apply=True,
+        runtime_release=target_bundle(inventory, tmp_path), maintenance_id="incident",
+        deployment=Path(setup["deployment"]), connection=Path(setup["operator_connection"]),
+        config=selection["config"])
+    assert result["outcome"] == "complete"
+    with CoordinatorOperatorClient.from_connection_file(setup["operator_connection"]) as operator:
+        gate = operator.observe_maintenance()
+        assert gate["state"] == "closed" and gate["maintenance_id"] == "incident"
+        assert gate["intent_digest"] == "incident-intent" and not gate["checks"]
+    directory = inventory.path.parent / "operations/upgrade-held"
+    assert not (directory / "steps/open/intent.json").exists()
+    assert not (directory / "steps/close/intent.json").exists()
+
+
 def finish(inventory, identity, **kwargs):
     deadline = time.monotonic() + 240
     result = upgrades.upgrade(inventory, operation_id=identity, **kwargs)

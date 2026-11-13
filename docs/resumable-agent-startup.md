@@ -145,6 +145,26 @@ permanent fleet upgrade. No host reboot or workload-image rebuild was needed.
 
 ## Remaining rollout work
 
+Rollout uncovered a retained authorization receipt from an older coordinator
+epoch on Calypso. Replaying it attempted backward reconciliation and reused a
+key with different session content. Authorization replay now selects an epoch
+only through a fresh handshake, consuming historical revisions without moving
+the session backwards. The TLS regression replays 66 expired receipts across a
+coordinator restart and verifies successful publication/release.
+
+Runtime upgrades can explicitly borrow an existing empty closed maintenance
+gate using `--maintenance-id`; they retain its owner/digest, revoke their check
+permissions and leave the gate closed after completion or abort. This lets the
+deployment preserve the user's scientific-admission hold without an open window.
+Validation: both authorization-history TLS cases pass; six gate binding,
+restoration/abort and CLI checks pass; an actual disposable SSH/native-service
+runtime upgrade completes while preserving the original closed gate and revoking
+its check permissions (208.93 seconds). The develop merge passes 41 affected
+accepted-time, observation and GPU-policy checks. Ruff/diff checks pass. Pyright
+reports no errors in changed runtime owners; the Fleet CLI reproduces the same
+25 pre-existing optional-result diagnostics on its unchanged baseline. The live
+read-only upgrade preflight reaches all 12 agents and the coordinator.
+
 The user cancelled current and future scientific work on November 13. Maintenance
 gate `stop-pos-for-loom-fixes-20261113` is closed, and MMPD cancellation was accepted.
 Complete physical settlement before replacing services. UBFC retry, scientific

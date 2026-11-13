@@ -1215,6 +1215,10 @@ to remain current. Drain alone never proves expiry or containment.
 
 ### Maintenance admission
 
+Transfer-authorization receipts are replayed exactly across coordinator restarts.
+A historical receipt's epoch is not current liveness evidence: agents consume
+its revision and use a fresh handshake when epoch reconciliation is needed.
+
 The `maintenance-admission-v1` capability provides a durable native admission
 barrier. An operator needs the explicit `maintenance` action in its protected
 local-owner or transport-principal policy. Check authorization additionally

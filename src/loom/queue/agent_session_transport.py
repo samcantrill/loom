@@ -2665,13 +2665,19 @@ class LocalDaemonAgentHttpClient:
                 == self._require_journal().session(session_id).coordinator_epoch
             ):
                 return result
-            # Authorization renewal is permitted during epoch recovery. Join the
-            # returned epoch instead of renewing forever against a stale journal.
-            self._epoch_reconciliation_pending = True
-            (yield from _steps(self.reconcile,
-                session_id, returned_epoch,
-                idempotency_key=f"{assignment_id}:reconcile:{returned_epoch}",
-            ))
+            # An exact replay can return a grant from an earlier coordinator
+            # incarnation. Only a fresh handshake can select the current epoch;
+            # consume historical revisions without reconciling backwards.
+            current = yield from _steps(self.handshake)
+            current_epoch = current.get("coordinator_epoch")
+            if not isinstance(current_epoch, str):
+                raise QueueConflictError("coordinator epoch evidence is invalid")
+            if current_epoch != self._require_journal().session(session_id).coordinator_epoch:
+                self._epoch_reconciliation_pending = True
+                yield from _steps(self.reconcile,
+                    session_id, current_epoch,
+                    idempotency_key=f"{assignment_id}:reconcile:{current_epoch}",
+                )
 
     @_cooperative
     def _authorized_transfer_call(
