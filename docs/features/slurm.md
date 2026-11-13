@@ -271,6 +271,13 @@ discarded on restart and retains at most 32 entries representing at most 256 MiB
 of source documents. It changes neither accepted execution policy nor scientific
 identity, and supplies no authority to dispatch or release an assignment.
 
+Producer reconciliation opens one authority handle per run and pass, rather
+than repeating run and audit-history initialization for each producer. It does
+not cache lifecycle snapshots: each operation reads current durable state, and
+the next pass opens the configured authority again. Preparation verification
+uses each workspace's primary input paths, including isolated resident payloads;
+Slurm's native relay layout and shared-root resolution remain unchanged.
+
 An outbound submit-agent declaration independently accepts:
 
 ```yaml

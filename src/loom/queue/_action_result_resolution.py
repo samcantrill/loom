@@ -65,8 +65,15 @@ class ActionResultResolution:
         self._pending: dict[tuple[str, str], _PendingReuse] = {}
 
     def reconcile_producers(self, run_uri: str) -> None:
-        for claim in self.store.producers(run_uri):
-            self._observe(claim)
+        claims = self.store.producers(run_uri)
+        if not claims:
+            return
+        # These claims have one immutable owner run. Reuse its authority handle
+        # only for this pass; every operation still reads current durable state.
+        # Reconstructing it per claim also rereads the run and audit history.
+        authority = self.execution._authority_store(run_uri)
+        for claim in claims:
+            self._observe(claim, authority)
 
     def detach_graph(self, run_uri: str, operation_id: str) -> None:
         for key in tuple(self._pending):
@@ -410,20 +417,18 @@ class ActionResultResolution:
             expected_revision=revision,
         )
 
-    def _observe(self, claim: Mapping[str, Any]) -> None:
-        self._observe_result(claim)
+    def _observe(self, claim: Mapping[str, Any], authority: Any) -> None:
+        self._observe_result(claim, authority)
         current = self.store.claim(claim["claim_id"])
         if current["state"] != "owned" and current["attempt_id"] is not None:
-            self.execution._authority_store(
-                current["owner_run_uri"]
-            ).release_action_producer(
+            authority.release_action_producer(
                 current["owner_run_uri"], self._producer_binding(current)
             )
 
-    def _observe_result(self, claim: Mapping[str, Any]) -> None:
+    def _observe_result(self, claim: Mapping[str, Any], authority: Any) -> None:
         if claim["state"] not in {"owned", "settling"}:
             return
-        snapshot = self.execution._authority_store(claim["owner_run_uri"]).open_run(
+        snapshot = authority.open_run(
             claim["owner_run_uri"]
         )
         stage = next(
@@ -442,9 +447,7 @@ class ActionResultResolution:
         ):
             # Authority settles the exact unstarted attempt with its permission,
             # so ordinary explicit retry can create a successor consistently.
-            self.execution._authority_store(
-                claim["owner_run_uri"]
-            ).release_action_producer(
+            authority.release_action_producer(
                 claim["owner_run_uri"], self._producer_binding(claim)
             )
             self.store.fail(

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from .shared_execution import assignment_scope, require_bindings, validate_workload, SHARED_EXECUTION_SCOPE
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
 import base64
 import hashlib
@@ -821,11 +821,16 @@ def _claim_from_dict(value: object) -> ResourceClaim:
 def _preparation_worker_context(
     request: _ResidentAssignmentBundle | SlurmStageDelivery,
     launch_profile: ResidentWorkerLaunchProfile, workspace_root: Path,
+    *, input_path: Callable[[str], Path] | None = None,
 ) -> Mapping[str, PlainData] | None:
     """Materialize the fixed preparation child's admitted artifacts and capture."""
     preparation = request.preparation_input
     if preparation is None:
         return None
+    # Resident payloads have an isolated directory and primary file; Slurm's
+    # native relay retains its flat input layout. The workspace owns that path.
+    if input_path is None:
+        input_path = lambda name: workspace_root / "inputs" / name
     from .preparation import SharedInputReceipt, _require_local_binding
 
     _require_local_binding(preparation.local_scope, launch_profile)
@@ -844,7 +849,9 @@ def _preparation_worker_context(
     if candidate_report is not None:
         from ._shared_publication import resolve_input
         from .shared_execution import execution_roots
-        path = resolve_input(candidate_report, execution_roots(launch_profile.shared_roots, container=launch_profile.container is not None))
+        path = input_path(candidate_report.logical_name)
+        if shared_binding(candidate_report.metadata) is not None:
+            path = resolve_input(candidate_report, execution_roots(launch_profile.shared_roots, container=launch_profile.container is not None))
         purpose["candidate_project_report"] = candidate_report.local_ref(path).to_dict()
     if preparation.action_verification is not None:
         from ._shared_publication import resolve_input
@@ -856,7 +863,7 @@ def _preparation_worker_context(
             prefix = _ACTION_PROJECT_INPUT_PREFIX if item.logical_name.startswith(_ACTION_PROJECT_INPUT_PREFIX) else _ACTION_RESULT_INPUT_PREFIX
             if not item.logical_name.startswith(prefix):
                 continue
-            path = workspace_root / "inputs" / item.logical_name
+            path = input_path(item.logical_name)
             if shared_binding(item.metadata) is not None:
                 path = resolve_input(item, execution_roots(launch_profile.shared_roots, container=launch_profile.container is not None))
             destination = reports if prefix == _ACTION_PROJECT_INPUT_PREFIX else artifacts
@@ -868,7 +875,7 @@ def _preparation_worker_context(
         from .preparation import resolve_staged_input
         directory = resolve_staged_input(
             preparation.input_receipt,
-            archive_path=workspace_root / "inputs" / _PREPARATION_ARCHIVE_INPUT,
+            archive_path=input_path(_PREPARATION_ARCHIVE_INPUT),
             workspace_root=workspace_root,
         )
         assert directory is not None
@@ -2263,7 +2270,9 @@ class _ResidentAssignmentWorkspace:
             ):
                 raise QueueConflictError("preparation input conflicts with the retained launch")
             launch_profile = launch.profile
-        return _preparation_worker_context(request, launch_profile, self.root)
+        return _preparation_worker_context(
+            request, launch_profile, self.root, input_path=self.input_path,
+        )
 
     def _prepare_staged_input(self) -> Path | None:
         from .preparation import StagedInputReceipt, resolve_staged_input

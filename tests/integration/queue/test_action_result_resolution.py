@@ -16,6 +16,39 @@ from tests.integration.queue.test_reconciled_runs import _reconciled_request
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
 
+def test_producer_reconciliation_opens_authority_once_per_pass(tmp_path, monkeypatch):
+    service = _text_service(tmp_path, qualify_actions=True)
+    LocalDaemon.initialize_deployment(service.daemon)
+    daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
+    daemon.start()
+    try:
+        result = _start(daemon, "producer-reconciliation")
+        assert daemon._wait(result["queue_item_id"], timeout_seconds=40).state.value == "SUCCEEDED"
+        uri = result["prepared_run"]["run_uri"]
+        with daemon._cycle_lock:
+            execution = daemon._execution
+            resolver = execution._action_resolution
+            claims = resolver.store.producers(uri)
+            assert len(claims) == 2 and all(claim["state"] == "succeeded" for claim in claims)
+            original = execution._authority_store
+            opened = []
+
+            def open_authority(run_uri):
+                opened.append(run_uri)
+                return original(run_uri)
+
+            monkeypatch.setattr(execution, "_authority_store", open_authority)
+            before = original(uri).open_run(uri)
+            for count in (1, 2):
+                resolver.reconcile_producers(uri)
+                # A pass shares only the authority handle, not retained state;
+                # the next pass must open the selected owner again.
+                assert opened == [uri] * count
+                assert original(uri).open_run(uri) == before
+    finally:
+        daemon.stop()
+
+
 def test_native_fresh_generation_replay_and_default_target_are_distinct(tmp_path):
     service = _text_service(tmp_path, qualify_actions=True)
     LocalDaemon.initialize_deployment(service.daemon)
