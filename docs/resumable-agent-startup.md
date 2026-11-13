@@ -2,8 +2,8 @@
 
 Status: in progress. Branch `codex/resumable-agent-startup`, based on deployed
 revision `77088c3b01bcc3afd6f6789e662310832ffd46f7`. This is an incident correction,
-not a numbered roadmap phase. Apollo's targeted containment has completed;
-coordinator recovery and fleet rollout remain in progress.
+not a numbered roadmap phase. Apollo's targeted containment and guarded release
+have completed; permanent fleet rollout remains in progress.
 
 ## Accepted scope
 
@@ -124,7 +124,7 @@ The locked bundle for `26c919cd` was published and installed as a candidate on
 Apollo. Native recovery `apollo-namespace-recovery-20261113` contained the original
 namespace, launcher and supervisor without reboot; successful exit is false.
 The user's protected scheduling reload authorized `recover_unknown` at revision
-15. Claims remain reserved until guarded close and ordinary release finish.
+15; temporary permission was removed at revision 16 after guarded release.
 
 Live admission exposed two additional recovery gaps: a GRANTED launch may have no
 process-start event, and drain clears the current-offer bit. Recovery now uses
@@ -134,7 +134,14 @@ The exact agent-owned containment evidence remains mandatory. A focused HTTPS
 integration reproduces missing acknowledgement plus drain, rejects a fresh offer
 and wrong root, closes CANCELLED, and releases the same session after a lost
 release response. This and the existing reboot case pass; changed source/test
-Ruff and Pyright pass. Coordinator deployment of this correction is pending.
+Ruff and Pyright pass. Commit `4800c191` was published as a locked, offline-verified
+bundle and installed on the coordinator host. A temporary recovery coordinator
+using that candidate and Apollo's recovery-only candidate client completed
+`apollo-namespace-close-20261113`: authority CANCELLED at revision 52, remote
+assignment RELEASED, zero local retained assignments and provider claims. The
+recovery supervisor shut down cleanly. Both original managed services were
+restored with retained root/session identities. Apollo remains drained for the
+permanent fleet upgrade. No host reboot or workload-image rebuild was needed.
 
 ## Remaining rollout work
 
@@ -144,9 +151,9 @@ Ruff and Pyright pass. Coordinator deployment of this correction is pending.
 - Run only checks affected by further edits. The repository's unparameterized
   `make validate-pr` runs whole lanes; the task's explicit focused-validation rule
   takes precedence. Record the targeted gate and build evidence for the release.
-- Complete guarded coordinator recovery using the native containment receipt;
-  restore Apollo's managed service and revoke the temporary operator permission.
-  All four original process identities are gone; the Linux boot is unchanged.
+- All four original Apollo process identities are gone; the Linux boot is
+  unchanged. Guarded close, release, service restoration and permission revocation
+  are complete. The fleet still selects its original runtime release.
 - Upgrade through the fleet lifecycle after settlement, qualify the deployed
   release, recover UBFC preserving valid outputs, and finish profiling/scientific
   canary acceptance before submitting the full scientific matrix.
