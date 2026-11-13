@@ -278,6 +278,17 @@ the next pass opens the configured authority again. Preparation verification
 uses each workspace's primary input paths, including isolated resident payloads;
 Slurm's native relay layout and shared-root resolution remain unchanged.
 
+Worker construction also reuses a bounded, process-local projection of checked
+project contracts, shared by resident and Slurm routes. Each lookup reads and
+hashes the primary report, every referenced composition companion and the
+resolved configuration, and rechecks the prepared report reference/namespace.
+Only unchanged evidence can reuse a projection; the requested stage declaration
+is still checked on every call. Projections are capped at 32 entries and 8 MiB,
+returned as independent mutable values, and discarded on restart. Whole reports
+and composed configurations are not retained by this cache. Missing or changed
+evidence cannot bypass the normal report validation, and no cached projection
+authorizes reservation, release or an expired agent offer.
+
 An outbound submit-agent declaration independently accepts:
 
 ```yaml

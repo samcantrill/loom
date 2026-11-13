@@ -10,8 +10,10 @@ from typing import Any, cast
 from loom.artifacts import ArtifactRef, ArtifactValidationError
 from loom.fingerprints import hash_mapping, validate_digest
 from loom.pipeline.stores.run_store import RunPreparedRunStore, RunConfigStore, LocalRunStorePaths
-from loom.serialization import PlainData, ensure_plain_data, thaw_plain_data
+from loom.serialization import PlainData, ensure_plain_data, stable_json_bytes, thaw_plain_data
 from weave.ordered import encode_ordered_config, ordered_config_fingerprint
+
+from ._project_contract_cache import WorkerContractCache
 
 CONTRACT = "loom.project_contract"
 CONTRACTS = "loom.project_contracts"
@@ -19,6 +21,8 @@ CAPTURE = "loom.project_contract_capture"
 REPORT = "loom.project_report"
 EXECUTION = "loom.execution_binding"
 RESERVED = frozenset({CONTRACT, CONTRACTS, CAPTURE, REPORT, EXECUTION, "loom.remote_recovery", "loom.recovery_binding"})
+
+_worker_contract_cache = WorkerContractCache()
 
 
 def reject_overrides(metadata: Mapping[str, object] | None) -> None:
@@ -238,31 +242,48 @@ def worker_contract_metadata(
     prepared_runs: RunPreparedRunStore, run_uri: str, stage: Any, *,
     config: RunConfigStore, local_paths: LocalRunStorePaths,
 ) -> dict[str, PlainData]:
-    report = load_contract_report(prepared_runs, run_uri,
-    config=config,
-    local_paths=local_paths)
-    if report is None:
-        return {}
-    metadata = _worker_contract_metadata(report, stage)
     prepared = prepared_runs.read_prepared_run(run_uri)
     if prepared is None:
-        raise ValueError("retained prepared run is missing")
-    entry = report_entry(_plain_mapping_view(prepared["metadata"])[CONTRACTS])
+        return {}
+    prepared_metadata = _plain_mapping_view(prepared["metadata"])
+    if CONTRACTS not in prepared_metadata:
+        return {}
+    entry = report_entry(prepared_metadata[CONTRACTS])
+    from loom.pipeline.stores import LocalArtifactStore
     from loom.pipeline.stores.shared_artifacts import binding
 
     reference = ArtifactRef.from_dict(entry["report_ref"])
+    path = LocalArtifactStore(local_paths.local_artifact_root(run_uri)).local_path(reference)
+
+    def fingerprint():
+        current = prepared_runs.read_prepared_run(run_uri)
+        current_entry = None if current is None else _plain_mapping_view(current["metadata"]).get(CONTRACTS)
+        if stable_json_bytes(current_entry) != stable_json_bytes(prepared_metadata[CONTRACTS]):
+            raise ValueError("retained prepared worker contract changed while loading")
+        return WorkerContractCache.fingerprint(
+            path, entry, config.read_config_snapshot(run_uri, "resolved")
+        )
+
+    def load_projection():
+        report = load_contract_report(prepared_runs, run_uri, config=config, local_paths=local_paths)
+        if report is None:
+            raise ValueError("retained prepared run is missing")
+        return {"project_contracts": report["project_contracts"], "capture": capture_digest(report)}
+
+    projection = _worker_contract_cache.load((run_uri, str(path)), fingerprint, load_projection)
+    metadata = _worker_contract_metadata(projection, stage, capture=cast(str, projection["capture"]))
     if binding(reference.metadata) is not None:
         metadata[REPORT] = entry["report_ref"]
     return metadata
 
 
 def _worker_contract_metadata(
-    report: dict[str, PlainData], stage: Any
+    report: dict[str, PlainData], stage: Any, *, capture: str | None = None
 ) -> dict[str, PlainData]:
     """Select one attachment from the freshly checked report owned by the caller."""
     contracts = _plain_mapping_view(report["project_contracts"])
     attached = _plain_mapping_view(contracts[stage.name])
-    capture = capture_digest(report)
+    capture = capture_digest(report) if capture is None else capture
     expected = envelope(
         cast(str, attached["namespace"]),
         {key: attached[key] for key in ("semantic_key", "payload")},

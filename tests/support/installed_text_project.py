@@ -104,7 +104,7 @@ def _checked(context, allowed):
 
 class GenerateText:
     def run(self, context, inputs):
-        binding = _checked(context, {"delay", "fail_once", "value"})
+        binding = _checked(context, {"delay", "fail_once", "value", "wait_for_release"})
         directory = (
             Path(binding["run_state_root"]) / "actions" / binding["origin_node_id"]
         )
@@ -113,6 +113,12 @@ class GenerateText:
         marker.touch()
         if context.stage_config.get("fail_once") and binding["attempt"] == 1:
             raise RuntimeError("fixture first attempt failure")
+        if context.stage_config.get("wait_for_release"):
+            deadline = time.monotonic() + 90
+            while not (directory / "release").exists():
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("fixture release was not observed")
+                time.sleep(0.05)
         time.sleep(context.stage_config.get("delay", 0))
         value = context.stage_config.get("value", "alpha\nbeta\n")
         return {
