@@ -193,6 +193,33 @@ from .slurm_ready_stage import (
 
 
 @dataclass(frozen=True, slots=True)
+class _PendingTransferInputs:
+    token: tuple[object, ...]
+    request: StageWorkerRequest
+    future: Future[tuple[tuple[_RemoteArtifact, Path], ...]]
+
+
+def _describe_transfer_inputs(request: StageWorkerRequest) -> tuple[tuple[_RemoteArtifact, Path], ...]:
+    from loom.pipeline.stores.shared_artifacts import binding
+
+    refs = _resident_input_refs(
+        request.inputs, cast(StageFingerprintRecord, request.fingerprint).to_dict(), request.metadata,
+    )
+    described = []
+    total_bytes = 0
+    for index, (name, ref) in enumerate(sorted(refs.items())):
+        descriptor, path = _RemoteArtifact.from_local_ref(
+            transfer_id=f"input-{index}", logical_name=name, ref=ref,
+        )
+        if binding(descriptor.metadata) is None:
+            total_bytes += descriptor.size_bytes
+        if total_bytes > MAX_TRANSFER_BYTES:
+            raise QueueServiceError("remote assignment inputs exceed the configured bound")
+        described.append((descriptor, path))
+    return tuple(described)
+
+
+@dataclass(frozen=True, slots=True)
 class ManagedLocalIntent:
     plan: ExecutionPlan
     runtime: Mapping[str, ResolvedStageRuntimeOptions]
@@ -1172,6 +1199,9 @@ class LocalDaemonExecution:
 
         self._action_resolution = None if daemon is None else ActionResultResolution(self)
         self.run_store = LocalRunStore(config.run_store_root)
+        self._transfer_inputs: dict[tuple[str, str], _PendingTransferInputs] = {}
+        self._remote_preflights: dict[tuple[str, str], tuple[tuple[object, ...], Future[bool]]] = {}
+        self._worker_requests: dict[tuple[str, str], tuple[tuple[object, ...], Future[StageWorkerRequest]]] = {}
         self.stage_work_store = SQLiteStageWorkStore(
             config.execution_database, _allow_initialize=False
         )
@@ -1354,6 +1384,29 @@ class LocalDaemonExecution:
 
     def begin_cycle(self) -> None:
         """Observe completed exact assignment work before scheduling again."""
+
+        if self._action_resolution is not None:
+            self._action_resolution.reconcile_cancellations()
+            self._action_resolution.discard_terminal_contexts()
+            self._action_resolution.complete_verifications()
+
+        ready_attempts = {
+            (record.run_uri, record.attempt_id) for record in self.stage_work_store.list_stage_work()
+            if record.scheduling_state is SchedulingProjectionState.READY
+        } if self._worker_requests or self._remote_preflights or self._transfer_inputs else set()
+        for work in (self._worker_requests, self._remote_preflights):
+            for key, (token, future) in tuple(work.items()):
+                if future.done() and (
+                    (key[0], token[3]) not in ready_attempts or self._attempt_cancel_requested(key[0], str(token[3]))
+                ):
+                    del work[key]
+
+        for key, pending in tuple(self._transfer_inputs.items()):
+            if pending.future.done() and (
+                (key[0], pending.token[3]) not in ready_attempts
+                or self._attempt_cancel_requested(key[0], str(pending.token[3]))
+            ):
+                del self._transfer_inputs[key]
 
         for assignment_id, future in tuple(self._local_assignment_futures.items()):
             if not future.done():
@@ -3068,63 +3121,11 @@ class LocalDaemonExecution:
                 attempt_id=record.attempt_id,
             )
             stage = intent.pipeline.get_stage(record.stage_name)
-            stage_plan = next(
-                item
-                for item in intent.plan.ordered_stage_plans
-                if item.stage_name == record.stage_name
-            )
-            raw_worker_request = self.run_store.read_stage_worker_request(
-                record.run_uri,
-                record.stage_name,
-                attempt=record.attempt,
-            )
-            worker_request = (
-                StageWorkerRequest.from_dict(raw_worker_request)
-                if raw_worker_request is not None
-                else prepare_stage_attempt(
-                    stage_state=self.run_store,
-                    stage_workspaces=self.run_store,
-                    local_paths=self.run_store,
-                    reliability=self.run_store,
-                    prepared_runs=self.run_store,
-                    config=self.run_store,
-                    run_status=snapshot.status,
-                    run_uri=record.run_uri,
-                    stage=stage,
-                    stage_plan=stage_plan,
-                    produced_outputs=_produced_outputs(snapshot),
-                    input_bindings=next(a.input_bindings for s in snapshot.stages for a in s.attempts if a.attempt_id == record.attempt_id),
-                    authority_attempt=next(a for s in snapshot.stages for a in s.attempts if a.attempt_id == record.attempt_id),
-                    fingerprint_context=intent.plan.fingerprint_context,
-                    resolved_runtime=_worker_runtime(intent, record.stage_name),
-                    metadata={
-                        "managed_output_predecessor": next(
-                            (
-                                fact.latest_commit.commit_id
-                                for fact in snapshot.stages
-                                if fact.stage_name == record.stage_name
-                                and fact.latest_commit is not None
-                            ),
-                            None,
-                        ),
-                    },
-                )
-            )
-            if (
-                worker_request.run_uri != record.run_uri
-                or worker_request.stage_name != record.stage_name
-                or worker_request.attempt != record.attempt
-                or worker_request.executor_name != profile.executor_name
-            ):
+            worker_request = self._worker_request_async(record, intent, snapshot)
+            if worker_request is None:
+                return None
+            if worker_request.executor_name != profile.executor_name:
                 raise QueueConflictError("SLURM worker preparation identity conflicts")
-            from loom.pipeline.stores.input_lineage import validate_worker_inputs
-            validate_worker_inputs(worker_request, next(a.input_bindings for s in snapshot.stages for a in s.attempts if a.attempt_id == record.attempt_id))
-            from loom.pipeline._project_contracts import validate_admitted_worker
-            validate_admitted_worker(self.run_store, worker_request, stage, config=self.run_store, local_paths=self.run_store)
-            _require_retained_resource_handoff_match(
-                worker_request.resolved_runtime,
-                _worker_runtime(intent, record.stage_name),
-            )
             owner_id, owner_root_id = self._select_slurm_agent(profile)
             assignment = SlurmStageAssignment(
                 agent_id=owner_id,
@@ -3143,8 +3144,6 @@ class LocalDaemonExecution:
             )
             remote_inputs: list[_RemoteArtifact] = []
             input_paths: dict[str, Path] = {}
-            total_bytes = 0
-            from ._remote_stage_execution import _resident_input_refs
             from .submitted_execution import assignment_binding
             from ._submitted_container_policy import SubmittedContainerPolicy
             from .shared_execution import assignment_scope, require_bindings
@@ -3162,39 +3161,17 @@ class LocalDaemonExecution:
                 if scope is None:
                     raise QueueConflictError("submitted SLURM work requires shared execution")
                 require_bindings(scope, self.config.coordinator_shared_roots)
-            refs = _resident_input_refs(worker_request.inputs, fingerprint, worker_request.metadata)
-            for logical_name, ref in sorted(refs.items()):
-                transfer_id = (
-                    "input-"
-                    + hashlib.sha256(
-                        (
-                            assignment.assignment_id
-                            + "\0"
-                            + logical_name
-                            + "\0"
-                            + ref.artifact_id
-                        ).encode()
-                    ).hexdigest()
-                )
-                descriptor, source = _RemoteArtifact.from_local_ref(
-                    transfer_id=transfer_id,
-                    logical_name=logical_name,
-                    ref=ref,
-                )
-                from loom.pipeline.stores.shared_artifacts import binding
+            described = self._transfer_inputs_async(record, intent, snapshot, worker_request, assignment_id)
+            if described is None:
+                return None
+            from loom.pipeline.stores.shared_artifacts import binding
+            for descriptor, source in described:
                 shared_input = binding(descriptor.metadata) is not None
-                if shared_input:
-                    if submitted is None:
-                        raise QueueServiceError("SLURM shared inputs require submitted container storage policy")
-                else:
-                    total_bytes += descriptor.size_bytes
-                if total_bytes > MAX_TRANSFER_BYTES:
-                    raise QueueServiceError(
-                        "SLURM assignment inputs exceed the configured bound"
-                    )
+                if shared_input and submitted is None:
+                    raise QueueServiceError("SLURM shared inputs require submitted container storage policy")
                 remote_inputs.append(descriptor)
                 if not shared_input:
-                    input_paths[transfer_id] = source
+                    input_paths[descriptor.transfer_id] = source
             delivery = SlurmStageDelivery.from_worker_request(
                 assignment=assignment,
                 worker_request=worker_request,
@@ -4719,6 +4696,53 @@ class LocalDaemonExecution:
                     f"for {kind!r}"
                 )
 
+    def _remote_eligibility_async(
+        self, *, intent: ManagedLocalIntent, snapshot: AuthoritativeRunSnapshot,
+        record: StageWorkRecord,
+    ) -> bool | None:
+        """Defer only this stage while its bounded remote preflight reads inputs.
+
+        A positive hint survives request preparation for this attempt; actual
+        delivery descriptors still verify the bytes before guarded reservation.
+        """
+        if self.daemon is None:
+            return self._remote_eligible(intent=intent, snapshot=snapshot, record=record)
+        daemon = self._daemon_owner()
+        attempt = next(
+            a for stage in snapshot.stages for a in stage.attempts if a.attempt_id == record.attempt_id
+        )
+        token = (
+            daemon._epoch, daemon._scheduling_epoch, intent.digest,
+            record.attempt_id, attempt.input_bindings, _worker_runtime(intent, record.stage_name),
+        )
+        key = (record.run_uri, record.stage_name)
+        pending = self._remote_preflights.get(key)
+        if pending is not None:
+            previous, future = pending
+            if not future.done():
+                return None
+            if previous == token:
+                try:
+                    eligible = future.result()
+                except BaseException:
+                    del self._remote_preflights[key]
+                    raise
+                if not eligible:
+                    del self._remote_preflights[key]
+                return eligible
+            del self._remote_preflights[key]
+        if len(self._remote_preflights) >= 2:
+            return None
+        from functools import partial
+
+        future = daemon._result_verifications.bulk.submit(
+            record.stage_work_id, "remote_input_preflight",
+            partial(self._remote_eligible, intent=intent, snapshot=snapshot, record=record),
+        )
+        if future is not None:
+            self._remote_preflights[key] = (token, future)
+        return None
+
     @staticmethod
     def _remote_eligible(
         *,
@@ -4812,6 +4836,131 @@ class LocalDaemonExecution:
                 yield
             conn.commit()
             daemon._scheduling_reference_revision += 1
+
+    def _worker_preparation_token(self, record, intent, snapshot) -> tuple[object, ...]:
+        daemon = self._daemon_owner()
+        attempt = next(
+            a for stage in snapshot.stages for a in stage.attempts if a.attempt_id == record.attempt_id
+        )
+        return (
+            daemon._epoch, daemon._scheduling_epoch, intent.digest,
+            record.attempt_id, attempt.input_bindings, _worker_runtime(intent, record.stage_name),
+        )
+
+    def _transfer_inputs_async(
+        self, record, intent, snapshot, request: StageWorkerRequest, assignment_id: str,
+    ) -> tuple[tuple[_RemoteArtifact, Path], ...] | None:
+        if self.daemon is None:
+            described = _describe_transfer_inputs(request)
+        else:
+            key = (record.run_uri, record.stage_name)
+            token = self._worker_preparation_token(record, intent, snapshot)
+            pending = self._transfer_inputs.get(key)
+            if pending is None:
+                if len(self._transfer_inputs) >= 2:
+                    return None
+                future = self._daemon_owner()._result_verifications.bulk.submit(
+                    record.stage_work_id, "transfer_input_verification", _describe_transfer_inputs, request,
+                )
+                if future is not None:
+                    self._transfer_inputs[key] = _PendingTransferInputs(token, request, future)
+                return None
+            if not pending.future.done():
+                return None
+            del self._transfer_inputs[key]
+            if pending.token != token or pending.request != request:
+                return None
+            described = pending.future.result()
+        # Transfer identity belongs to the current assignment; slow byte proof
+        # must not be invalidated by unrelated offer refreshes during the read.
+        return tuple(
+            (replace(descriptor, transfer_id="input-" + hashlib.sha256(
+                (assignment_id + "\0" + descriptor.logical_name + "\0" + descriptor.artifact_id).encode()
+            ).hexdigest()), path)
+            for descriptor, path in described
+        )
+
+    def _worker_request_async(
+        self, record: StageWorkRecord, intent: ManagedLocalIntent,
+        snapshot: AuthoritativeRunSnapshot,
+    ) -> StageWorkerRequest | None:
+        if self.daemon is None:
+            return self._load_worker_request(record, intent, snapshot)
+        daemon = self._daemon_owner()
+        token = self._worker_preparation_token(record, intent, snapshot)
+        key = (record.run_uri, record.stage_name)
+        transfer = self._transfer_inputs.get(key)
+        if transfer is not None:
+            if transfer.token == token:
+                return transfer.request
+            if not transfer.future.done():
+                return None
+            del self._transfer_inputs[key]
+        pending = self._worker_requests.get(key)
+        if pending is not None:
+            previous, future = pending
+            if not future.done():
+                return None
+            del self._worker_requests[key]
+            if previous == token:
+                return future.result()
+        if len(self._worker_requests) >= 2:
+            return None
+        future = daemon._result_verifications.bulk.submit(
+            record.stage_work_id, "worker_request_preparation", self._prepare_owned_worker_request,
+            record, intent, snapshot,
+        )
+        if future is not None:
+            self._worker_requests[key] = (token, future)
+        return None
+
+    def _prepare_owned_worker_request(self, record, intent, snapshot) -> StageWorkerRequest:
+        with self._daemon_owner()._publication_guards.hold("worker-request-" + record.stage_work_id):
+            return self._load_worker_request(record, intent, snapshot)
+
+    def _load_worker_request(self, record, intent, snapshot) -> StageWorkerRequest:
+        stage = intent.pipeline.get_stage(record.stage_name)
+        stage_plan = next(
+            item for item in intent.plan.ordered_stage_plans if item.stage_name == record.stage_name
+        )
+        attempt = next(
+            a for fact in snapshot.stages for a in fact.attempts if a.attempt_id == record.attempt_id
+        )
+        runtime = _worker_runtime(intent, record.stage_name)
+        raw = self.run_store.read_stage_worker_request(record.run_uri, record.stage_name, attempt=None)
+        if raw is not None:
+            retained = StageWorkerRequest.from_dict(raw)
+            if retained.attempt != record.attempt:
+                prior_failed = any(
+                    a.attempt == retained.attempt and a.status is StageStatus.FAILED
+                    for fact in snapshot.stages if fact.stage_name == record.stage_name
+                    for a in fact.attempts
+                )
+                if not prior_failed or retained.attempt + 1 != record.attempt:
+                    raise QueueConflictError("managed retry worker request conflicts")
+                raw = None
+        worker_request = StageWorkerRequest.from_dict(raw) if raw is not None else prepare_stage_attempt(
+            stage_state=self.run_store, stage_workspaces=self.run_store, local_paths=self.run_store,
+            reliability=self.run_store, prepared_runs=self.run_store, config=self.run_store,
+            run_status=snapshot.status, run_uri=record.run_uri, stage=stage, stage_plan=stage_plan,
+            produced_outputs=_produced_outputs(snapshot), input_bindings=attempt.input_bindings,
+            authority_attempt=attempt, fingerprint_context=intent.plan.fingerprint_context,
+            resolved_runtime=runtime,
+            metadata={"managed_output_predecessor": next(
+                (fact.latest_commit.commit_id for fact in snapshot.stages
+                 if fact.stage_name == record.stage_name and fact.latest_commit is not None), None,
+            )},
+        )
+        if (worker_request.run_uri != record.run_uri or worker_request.stage_name != record.stage_name
+            or worker_request.attempt != record.attempt):
+            raise QueueConflictError("managed worker preparation identity differs from authority attempt")
+        from loom.pipeline.stores.input_lineage import validate_worker_inputs
+        from loom.pipeline._project_contracts import validate_admitted_worker
+
+        validate_worker_inputs(worker_request, attempt.input_bindings)
+        validate_admitted_worker(self.run_store, worker_request, stage, config=self.run_store, local_paths=self.run_store)
+        _require_retained_resource_handoff_match(worker_request.resolved_runtime, runtime)
+        return worker_request
 
     def _execute(
         self,
@@ -4976,77 +5125,9 @@ class LocalDaemonExecution:
                 claim_id=f"claim-{assignment_id}",
             )
         stage = intent.pipeline.get_stage(record.stage_name)
-        stage_plan = next(
-            item
-            for item in intent.plan.ordered_stage_plans
-            if item.stage_name == record.stage_name
-        )
-        produced = _produced_outputs(snapshot)
-        runtime = _worker_runtime(intent, record.stage_name)
-        raw_worker_request = self.run_store.read_stage_worker_request(
-            record.run_uri, record.stage_name, attempt=None,
-        )
-        if raw_worker_request is not None:
-            retained_request = StageWorkerRequest.from_dict(raw_worker_request)
-            if retained_request.attempt != record.attempt:
-                prior_failed = any(
-                    attempt.attempt == retained_request.attempt
-                    and attempt.status is StageStatus.FAILED
-                    for stage_fact in snapshot.stages
-                    if stage_fact.stage_name == record.stage_name
-                    for attempt in stage_fact.attempts
-                )
-                if not prior_failed or retained_request.attempt + 1 != record.attempt:
-                    raise QueueConflictError("managed retry worker request conflicts")
-                raw_worker_request = None
-        with phase("scheduling_preparation"):
-            worker_request = (
-                StageWorkerRequest.from_dict(raw_worker_request)
-                if raw_worker_request is not None
-                else prepare_stage_attempt(
-                    stage_state=self.run_store,
-                    stage_workspaces=self.run_store,
-                    local_paths=self.run_store,
-                    reliability=self.run_store,
-                    prepared_runs=self.run_store,
-                    config=self.run_store,
-                    run_status=snapshot.status,
-                    run_uri=record.run_uri,
-                    stage=stage,
-                    stage_plan=stage_plan,
-                    produced_outputs=produced,
-                    input_bindings=next(a.input_bindings for s in snapshot.stages for a in s.attempts if a.attempt_id == record.attempt_id),
-                    authority_attempt=next(a for s in snapshot.stages for a in s.attempts if a.attempt_id == record.attempt_id),
-                    fingerprint_context=intent.plan.fingerprint_context,
-                    resolved_runtime=runtime,
-                    metadata={
-                        "managed_output_predecessor": next(
-                            (
-                                fact.latest_commit.commit_id
-                                for fact in snapshot.stages
-                                if fact.stage_name == record.stage_name
-                                and fact.latest_commit is not None
-                            ),
-                            None,
-                        ),
-                    },
-                )
-            )
-        if (
-            worker_request.run_uri != record.run_uri
-            or worker_request.stage_name != record.stage_name
-            or worker_request.attempt != record.attempt
-        ):
-            raise QueueConflictError(
-                "managed worker preparation identity differs from authority attempt"
-            )
-        from loom.pipeline.stores.input_lineage import validate_worker_inputs
-        validate_worker_inputs(worker_request, next(a.input_bindings for s in snapshot.stages for a in s.attempts if a.attempt_id == record.attempt_id))
-        from loom.pipeline._project_contracts import validate_admitted_worker
-        validate_admitted_worker(self.run_store, worker_request, stage, config=self.run_store, local_paths=self.run_store)
-        _require_retained_resource_handoff_match(
-            worker_request.resolved_runtime, runtime
-        )
+        worker_request = self._worker_request_async(record, intent, snapshot)
+        if worker_request is None:
+            return False
         snapshot_revision = (
             remote_target.scheduling_availability_revision
             if remote_target is not None
@@ -5081,40 +5162,13 @@ class LocalDaemonExecution:
             ],
         }
         if remote_target is not None:
-            remote_inputs: list[_RemoteArtifact] = []
-            input_paths: dict[str, Path] = {}
-            total_bytes = 0
-            transfer_refs = _resident_input_refs(
-                worker_request.inputs,
-                cast(StageFingerprintRecord, worker_request.fingerprint).to_dict(),
-                worker_request.metadata,
+            described = self._transfer_inputs_async(
+                record, intent, snapshot, worker_request, assignment.assignment_id,
             )
-            for logical_name, ref in sorted(transfer_refs.items()):
-                transfer_id = (
-                    "input-"
-                    + hashlib.sha256(
-                        (
-                            assignment.assignment_id
-                            + "\0"
-                            + logical_name
-                            + "\0"
-                            + ref.artifact_id
-                        ).encode("utf-8")
-                    ).hexdigest()
-                )
-                descriptor, path = _RemoteArtifact.from_local_ref(
-                    transfer_id=transfer_id,
-                    logical_name=logical_name,
-                    ref=ref,
-                )
-                from loom.pipeline.stores.shared_artifacts import binding
-                total_bytes += descriptor.size_bytes if binding(descriptor.metadata) is None else 0
-                if total_bytes > MAX_TRANSFER_BYTES:
-                    raise QueueServiceError(
-                        "remote assignment inputs exceed the configured bound"
-                    )
-                remote_inputs.append(descriptor)
-                input_paths[transfer_id] = path
+            if described is None:
+                return False
+            remote_inputs = [descriptor for descriptor, _ in described]
+            input_paths = {descriptor.transfer_id: path for descriptor, path in described}
             delivered = _ResidentAssignmentBundle.from_worker_request(
                 assignment_id=assignment.assignment_id,
                 stage_work_id=assignment.stage_work_id,

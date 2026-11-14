@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from concurrent.futures import Future
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from time import monotonic
@@ -39,7 +40,7 @@ from loom.pipeline.stores.shared_artifacts import binding as shared_binding, ver
 from loom.serialization import PlainData
 
 from ._action_results import ActionResults
-from ._phase_timing import PhaseTimings
+from ._phase_timing import PhaseTimings, phase
 from ._preparation_operations import _PendingActionVerification
 from .errors import QueueConflictError
 
@@ -53,6 +54,35 @@ class _PendingReuse:
     recheck_at: float
 
 
+@dataclass(frozen=True, slots=True)
+class _ReuseContext:
+    operation_id: str
+    implementation: Mapping[str, PlainData]
+    contract: Mapping[str, PlainData]
+    identity: Mapping[str, PlainData]
+
+
+@dataclass(frozen=True, slots=True)
+class _PendingReuseContext:
+    token: tuple[Any, ...]
+    future: Future[_ReuseContext | None]
+    timings: PhaseTimings
+
+
+@dataclass(frozen=True, slots=True)
+class _PendingReuseProof:
+    context_token: tuple[Any, ...]
+    context: _ReuseContext
+    claim_token: tuple[Any, ...]
+    future: Future[None] | None
+    timings: PhaseTimings
+
+
+class _InputUnavailable(Exception):
+    def __init__(self, port: str, artifact: ArtifactRef) -> None:
+        self.detail = {"input_port": port, "original_artifact": artifact.to_dict()}
+
+
 class ActionResultResolution:
     """Private coordinator integration; projects supply only checked semantics."""
 
@@ -63,12 +93,21 @@ class ActionResultResolution:
         # Bounded, disposable wait hints. Restart/eviction repeats the full proof;
         # no cached contract or artifact evidence can authorize adoption.
         self._pending: dict[tuple[str, str], _PendingReuse] = {}
+        self._contexts: dict[tuple[str, str], _PendingReuseContext] = {}
+        self._reuse_proofs: dict[tuple[str, str], _PendingReuseProof] = {}
 
     def reconcile_producers(self, run_uri: str) -> None:
         for claim in self.store.producers(run_uri):
             self._observe(claim)
 
     def detach_graph(self, run_uri: str, operation_id: str) -> None:
+        self.daemon._result_verifications.bulk.discard(("run", run_uri))
+        self.daemon._result_verifications.bulk.discard(("dispatch", run_uri))
+        self.daemon._preparations.discard_verification_reports(run_uri)
+        for work in (self._contexts, self._reuse_proofs):
+            for key in tuple(work):
+                if key[0] == run_uri:
+                    del work[key]
         for key in tuple(self._pending):
             if key[0] == run_uri:
                 self._pending.pop(key, None)
@@ -79,6 +118,18 @@ class ActionResultResolution:
                 ).release_action_producer(
                     claim["owner_run_uri"], self._producer_binding(claim)
                 )
+
+    def discard_terminal_contexts(self) -> None:
+        for work in (self._contexts, self._reuse_proofs):
+            for key, pending in tuple(work.items()):
+                if pending.future is not None and not pending.future.done():
+                    continue
+                with self.daemon._connection() as conn:
+                    row = conn.execute(
+                        "SELECT state FROM managed_admissions WHERE run_uri = ?", (key[0],),
+                    ).fetchone()
+                if row is None or row[0] in {"SUCCEEDED", "FAILED", "CANCELLED", "BLOCKED"}:
+                    del work[key]
 
     def reconcile_cancellations(self) -> None:
         """Reconstruct every demand detachment before resuming retained workers."""
@@ -177,66 +228,57 @@ class ActionResultResolution:
         # Recheck periodically even when a child cannot finish: unavailable
         # original bytes can prevent verifier input materialization indefinitely.
         # Completion or changed bindings also take this full path before adoption.
-        report = timings.call("reuse_contract_loading", load_contract_report, self.execution.run_store, run_uri, config=self.execution.run_store, local_paths=self.execution.run_store)
-        if report is None:
-            return None
-        spec = intent.pipeline.get_stage(node)
-        implementation = _report_implementation(report, intent.execution_requirements[node], spec)
-        if implementation is None:
-            return None
-        contract = _worker_contract_metadata(report, spec)[
-            CONTRACT
-        ]
         snapshot = timings.call("reuse_authority_read", authority.open_run, run_uri)
-        stages = {stage.stage_name: stage for stage in snapshot.stages}
-        inputs = {}
-        for input_ in (*stage_plan.bound_inputs.values(), *stage_plan.pending_inputs):
-            source = stages.get(input_.source_stage)
-            if source is None or source.latest_commit is None:
-                return None
-            fact = next(
-                (
-                    fact
-                    for fact in source.artifact_facts
-                    if fact.artifact_name == input_.source_output
-                ),
-                None,
-            )
-            if fact is None:
-                raise QueueConflictError("action input has no original output fact")
-            try:
-                timings.call("reuse_artifact_verification", self._verify_artifact, fact.artifact)
-            except (ArtifactStoreError, OSError, QueueConflictError):
-                return authority.transition_stage(
-                    run_uri,
-                    node,
-                    from_status=None if node not in stages else stages[node].status,
-                    to_status=StageStatus.FAILED,
-                    expected_revision=revision,
-                    reason=LifecycleReason(
-                        code="action.input_unavailable",
-                        detail={
-                            "input_port": input_.input_name,
-                            "original_artifact": fact.artifact.to_dict(),
-                        },
-                    ),
-                ).revision
-            inputs[input_.input_name] = {
-                "commit": source.latest_commit.to_dict(),
-                "output_port": input_.source_output,
-                "artifact": fact.artifact.to_dict(),
-            }
-        identity = action_execution_identity(
-            spec,
-            plain_mapping(contract),
-            implementation=implementation,
-            inputs=inputs,
-            generation=cast(
-                str, plain_mapping(report.get("generations", {})).get(node, "default")
-            ),
+        token = (
+            self.daemon._epoch, self.daemon._scheduling_epoch,
+            readiness_binding, admission.cancellation_operation_id,
+            _reuse_authority_binding(snapshot, stage_plan),
         )
-        if identity is None:
-            return None
+        context: _ReuseContext | None = None
+        proof = self._reuse_proofs.get(key)
+        if proof is not None and proof.context_token != token:
+            if proof.future is not None and not proof.future.done():
+                return revision
+            del self._reuse_proofs[key]
+            proof = None
+        if proof is not None:
+            if proof.future is not None and not proof.future.done():
+                return revision
+            context = proof.context
+        else:
+            context_pending = self._contexts.get(key)
+            if context_pending is not None:
+                if not context_pending.future.done():
+                    return revision
+                del self._contexts[key]
+                if context_pending.token == token:
+                    timings.observe(context_pending.timings.payload())
+                    try:
+                        context = context_pending.future.result()
+                    except _InputUnavailable as exc:
+                        stages = {stage.stage_name: stage for stage in snapshot.stages}
+                        return authority.transition_stage(
+                            run_uri, node,
+                            from_status=None if node not in stages else stages[node].status,
+                            to_status=StageStatus.FAILED, expected_revision=revision,
+                            reason=LifecycleReason(code="action.input_unavailable", detail=exc.detail),
+                        ).revision
+                    if context is None:
+                        return None
+            if context is None:
+                if len(self._contexts) >= 2:
+                    return revision
+                worker_timings = PhaseTimings()
+                future = self.daemon._result_verifications.bulk.submit(
+                    run_uri + ":" + node, "reuse_context_preparation", self._load_reuse_context,
+                    run_uri, intent, stage_plan, snapshot, worker_timings,
+                )
+                if future is not None:
+                    self._contexts[key] = _PendingReuseContext(token, future, worker_timings)
+                return revision
+        spec = intent.pipeline.get_stage(node)
+        implementation, contract, identity = context.implementation, context.contract, context.identity
+        report = {"operation_id": context.operation_id}
         with self.daemon._connection() as conn:
             source = conn.execute(
                 "SELECT principal_id, selected_json FROM preparation_operations WHERE operation_id = ?",
@@ -250,7 +292,7 @@ class ActionResultResolution:
                 self.daemon.config.coordinator_authority_factory
             ),
             "store_root": self.daemon.config.run_store_root.as_uri(),
-            "installation": implementation,
+            "installation": dict(implementation),
         }
         selected = timings.call("reuse_lookup", self.store.select,
             run_uri=run_uri,
@@ -264,6 +306,7 @@ class ActionResultResolution:
         claim = selected["claim"]
         timings.call("reuse_retention", self._retain, claim)
         if selected["decision"] == "owner":
+            self._reuse_proofs.pop(key, None)
             timings.call("reuse_producer_binding", authority.bind_action_producer, run_uri, self._producer_binding(claim))
             return None
         if selected["decision"] == "wait":
@@ -273,14 +316,19 @@ class ActionResultResolution:
             )
             claim = selected["claim"]
         if selected["decision"] == "wait":
+            self._reuse_proofs.pop(key, None)
             return revision
         if selected["decision"] == "failed":
+            self._reuse_proofs.pop(key, None)
             return self._reject(
                 authority, run_uri, node, revision, claim, "action.producer_failed"
             )
         if selected["decision"] == "bound":
             try:
-                self._verify_result(claim, plain_mapping(selected["binding"]["result"]), timings=timings)
+                if not self._verify_reuse_async(
+                    key, token, context, claim, plain_mapping(selected["binding"]["result"]), timings,
+                ):
+                    return revision
             except (ArtifactStoreError, OSError, QueueConflictError):
                 return self._reject(
                     authority,
@@ -298,7 +346,8 @@ class ActionResultResolution:
             )
         result = plain_mapping(json.loads(claim["result_json"]))
         try:
-            self._verify_result(claim, result, timings=timings)
+            if not self._verify_reuse_async(key, token, context, claim, result, timings):
+                return revision
         except (ArtifactStoreError, OSError, QueueConflictError):
             return self._reject(
                 authority,
@@ -325,7 +374,7 @@ class ActionResultResolution:
                 port: _output_spec_identity(output)
                 for port, output in spec.outputs.items()
             },
-            "installation": implementation,
+            "installation": dict(implementation),
             "access": {
                 "mode": "read_only",
                 "artifact_root": str(
@@ -347,6 +396,7 @@ class ActionResultResolution:
         candidate = action_candidate(candidate)
         verification = timings.call("reuse_verifier_observation", self.daemon._preparations.verify_action_result,
             source_operation_id=cast(str, report["operation_id"]),
+            consumer_run_uri=run_uri,
             node_id=node,
             contract=plain_mapping(contract),
             candidate=candidate,
@@ -375,10 +425,11 @@ class ActionResultResolution:
                 "action.project_rejected",
                 {"namespace": candidate["namespace"], "reason": verdict["reason"]},
             )
-        # Recheck mutable authority, bytes, retention and principal immediately
-        # before the revision-guarded binding transaction.
+        # This resolution has just consumed a fresh byte audit. A pending
+        # project verifier returns above and requires a new audit on resumption.
+        # Recheck mutable authority, retention and principal before binding.
         try:
-            self._verify_result(claim, result, timings=timings)
+            self._checked_result_outputs(claim, result, timings=timings)
         except (ArtifactStoreError, OSError, QueueConflictError):
             return self._reject(
                 authority,
@@ -408,6 +459,61 @@ class ActionResultResolution:
             node,
             ActionResultBinding.from_dict(binding),
             expected_revision=revision,
+        )
+
+    def _load_reuse_context(
+        self, run_uri: str, intent: Any, stage_plan: Any, snapshot: Any,
+        timings: PhaseTimings,
+    ) -> _ReuseContext | None:
+        node = stage_plan.stage_name
+        spec = intent.pipeline.get_stage(node)
+        report = timings.call("reuse_contract_loading", load_contract_report, self.execution.run_store, run_uri, config=self.execution.run_store, local_paths=self.execution.run_store)
+        if report is None:
+            return None
+        implementation = _report_implementation(report, intent.execution_requirements[node], spec)
+        if implementation is None:
+            return None
+        contract = _worker_contract_metadata(report, spec)[
+            CONTRACT
+        ]
+        stages = {stage.stage_name: stage for stage in snapshot.stages}
+        inputs = {}
+        for input_ in (*stage_plan.bound_inputs.values(), *stage_plan.pending_inputs):
+            source = stages.get(input_.source_stage)
+            if source is None or source.latest_commit is None:
+                return None
+            fact = next(
+                (
+                    fact
+                    for fact in source.artifact_facts
+                    if fact.artifact_name == input_.source_output
+                ),
+                None,
+            )
+            if fact is None:
+                raise QueueConflictError("action input has no original output fact")
+            try:
+                timings.call("reuse_artifact_verification", self._verify_artifact, fact.artifact)
+            except (ArtifactStoreError, OSError, QueueConflictError):
+                raise _InputUnavailable(input_.input_name, fact.artifact) from None
+            inputs[input_.input_name] = {
+                "commit": source.latest_commit.to_dict(),
+                "output_port": input_.source_output,
+                "artifact": fact.artifact.to_dict(),
+            }
+        identity = action_execution_identity(
+            spec,
+            plain_mapping(contract),
+            implementation=implementation,
+            inputs=inputs,
+            generation=cast(
+                str, plain_mapping(report.get("generations", {})).get(node, "default")
+            ),
+        )
+        if identity is None:
+            return None
+        return _ReuseContext(
+            cast(str, report["operation_id"]), implementation, plain_mapping(contract), identity,
         )
 
     def _observe(self, claim: Mapping[str, Any]) -> None:
@@ -459,20 +565,14 @@ class ActionResultResolution:
                 "artifact_facts": [fact.to_dict() for fact in stage.artifact_facts],
             }
             try:
-                self._verify_result(claim, result)
+                outputs = self._checked_result_outputs(claim, result)
             except (ArtifactStoreError, OSError, QueueConflictError):
-                self.store.fail(
-                    claim["claim_id"],
-                    {"code": "candidate_unavailable", "original_result": result},
-                    expected_revision=claim["revision"],
-                )
+                self.store.fail(claim["claim_id"], {"code": "candidate_unavailable"},
+                                expected_revision=claim["revision"])
                 return
-            self.store.publish(
-                claim["claim_id"],
-                result=result,
-                attempt_id=claim["attempt_id"],
-                assignment_id=claim["assignment_id"],
-                fencing_token=claim["fencing_token"],
+            self.daemon._result_verifications.submit(
+                claim, (self.daemon._epoch, self.daemon._scheduling_epoch), result,
+                outputs, self._verify_artifacts,
             )
         elif stage.status in {StageStatus.FAILED, StageStatus.CANCELLED}:
             self.store.fail(
@@ -488,12 +588,64 @@ class ActionResultResolution:
             operation_id="action-" + claim["claim_id"],
         )
 
-    def _verify_result(
+    def _verify_reuse_async(
+        self, key: tuple[str, str], token: tuple[Any, ...], context: _ReuseContext,
+        claim: Mapping[str, Any], result: Mapping[str, PlainData], timings: PhaseTimings,
+    ) -> bool:
+        try:
+            outputs = self._checked_result_outputs(claim, result, timings=timings)
+        except (ArtifactStoreError, OSError, QueueConflictError):
+            self._reuse_proofs.pop(key, None)
+            raise
+        claim_token = tuple(claim[name] for name in (
+            "claim_id", "revision", "owner_run_uri", "owner_node",
+            "attempt_id", "assignment_id", "fencing_token",
+        )) + (result,)
+        pending = self._reuse_proofs.get(key)
+        if pending is not None and pending.future is not None:
+            if not pending.future.done():
+                return False
+            del self._reuse_proofs[key]
+            if pending.context_token == token and pending.claim_token == claim_token:
+                timings.observe(pending.timings.payload())
+                pending.future.result()
+                return True
+        if key not in self._reuse_proofs and len(self._reuse_proofs) >= 2:
+            return False
+        worker_timings = PhaseTimings()
+        future = self.daemon._result_verifications.bulk.submit(
+            key[0] + ":" + key[1], "reuse_result_verification",
+            worker_timings.call, "reuse_artifact_verification", self._verify_artifacts, outputs,
+        )
+        self._reuse_proofs[key] = _PendingReuseProof(token, context, claim_token, future, worker_timings)
+        return False
+
+    def complete_verifications(self) -> None:
+        for completed in self.daemon._result_verifications.completed():
+            with phase("action_result_completion_apply",
+                       operation_id=str(completed.claim["claim_id"])):
+                claim, result = completed.claim, completed.result
+                if completed.epochs != (self.daemon._epoch, self.daemon._scheduling_epoch):
+                    continue
+                current = self.store.claim(claim["claim_id"])
+                keys = ("revision", "owner_run_uri", "owner_node", "attempt_id", "assignment_id", "fencing_token")
+                if any(current[key] != claim[key] for key in keys):
+                    continue
+                try:
+                    completed.future.result()
+                    self._checked_result_outputs(current, result)
+                except (ArtifactStoreError, OSError, QueueConflictError):
+                    self.store.fail(claim["claim_id"], {"code": "candidate_unavailable", "original_result": result},
+                                    expected_revision=claim["revision"])
+                    continue
+                self.store.publish(claim["claim_id"], result=result,
+                                   expected_revision=claim["revision"], attempt_id=claim["attempt_id"],
+                                   assignment_id=claim["assignment_id"], fencing_token=claim["fencing_token"])
+
+    def _checked_result_outputs(
         self, claim: Mapping[str, Any], result: Mapping[str, PlainData],
         *, timings: PhaseTimings | None = None,
-    ) -> None:
-        from ._phase_timing import phase
-
+    ) -> dict[str, ArtifactRef]:
         with phase("action_result_verification"):
             timings = timings or PhaseTimings()
             uri = claim["owner_run_uri"]
@@ -525,8 +677,15 @@ class ActionResultResolution:
                 "artifact_facts": [fact.to_dict() for fact in stage.artifact_facts],
             } != result:
                 raise QueueConflictError("action candidate original authority changed")
-            for fact in stage.artifact_facts:
-                timings.call("reuse_artifact_verification", self._verify_artifact, fact.artifact)
+            return {fact.artifact_name: fact.artifact for fact in stage.artifact_facts}
+
+    def _verify_artifacts(self, outputs: Mapping[str, ArtifactRef]) -> None:
+        from ._shared_publication import verify_outputs
+
+        verify_outputs(outputs)
+        for ref in outputs.values():
+            if shared_binding(ref.metadata) is None:
+                self._verify_artifact(ref)
 
     def _verify_artifact(self, ref: ArtifactRef) -> None:
         path = uri_to_path(ref.uri)
@@ -577,6 +736,20 @@ class ActionResultResolution:
                 },
             ),
         ).revision
+
+
+def _reuse_authority_binding(snapshot: Any, stage_plan: Any) -> tuple[Any, ...]:
+    # Run-wide revisions include diagnostic events and unrelated stage work.
+    # Only the desired stage and its scientific input producers qualify this read.
+    names = {stage_plan.stage_name} | {
+        item.source_stage for item in (*stage_plan.bound_inputs.values(), *stage_plan.pending_inputs)
+    }
+    stages = {stage.stage_name: stage for stage in snapshot.stages}
+    return (snapshot.status, tuple(
+        (name, StageStatus.PENDING, (), None, (), None) if (stage := stages.get(name)) is None
+        else (name, stage.status, stage.attempts, stage.latest_commit, stage.artifact_facts, stage.result_binding)
+        for name in sorted(names)
+    ))
 
 
 def _report_implementation(report: Mapping[str, PlainData], requirement: Any, stage: Any) -> dict[str, PlainData] | None:
