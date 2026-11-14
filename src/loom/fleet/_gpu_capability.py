@@ -33,10 +33,12 @@ def gpu_capability(profile: ResidentExecutionProfile) -> dict[str, object]:
                   profile.readiness_requirements.timeout_seconds, profile.descriptor.to_dict())
 
 
-def submitted_gpu_capability(policy, execution, inventory, *, workspace):
+def submitted_gpu_capability(policy, execution, inventory, *, workspace, selected_capability):
     """Probe an explicit submitted image using the agent's declared GPU inventory."""
-    launch = policy.launch_profile(execution, workspace=workspace)
-    return _probe(launch, inventory.gpu_devices, 120, policy.capability.to_dict())
+    launch = policy.launch_profile(
+        execution, workspace=workspace, selected_capability=selected_capability
+    )
+    return _probe(launch, inventory.gpu_devices, 120, selected_capability.to_dict())
 
 
 def _probe(launch, gpu_devices, timeout_seconds, identity):

@@ -96,7 +96,7 @@ def test_host_capability_binds_profile_and_refuses_uncertain_replay(tmp_path, mo
 
 
 @pytest.mark.parametrize("changed_image", [False, True])
-@pytest.mark.parametrize("selected_inputs", [False, True])
+@pytest.mark.parametrize("selected_inputs", ["none", "present", "missing"])
 def test_submitted_gpu_probe_uses_exact_image_and_native_inventory(tmp_path, monkeypatch, changed_image, selected_inputs):
     from loom.fleet import _host
     from loom.queue import deployment
@@ -104,11 +104,12 @@ def test_submitted_gpu_probe_uses_exact_image_and_native_inventory(tmp_path, mon
     from tests.integration.queue.test_submitted_container_agents import _fixture, _config
 
     policy, execution, _ = _fixture(tmp_path)
-    if selected_inputs:
+    if selected_inputs != "none":
         from loom.queue.submitted_execution import SELECTED_INPUT_WORKER_CONTRACT
 
         dataset = tmp_path / "unselected"
-        dataset.mkdir()
+        if selected_inputs == "present":
+            dataset.mkdir()
         policy = replace(policy, worker_contracts=(SELECTED_INPUT_WORKER_CONTRACT,),
             shared_roots={**policy.shared_roots, "unselected": {
                 "host_path": str(dataset), "container_path": "/loom/unselected", "access": "ro",
@@ -155,10 +156,18 @@ def test_submitted_gpu_probe_uses_exact_image_and_native_inventory(tmp_path, mon
         image.chmod(0o600)
         image.write_bytes(b"changed")
         image.chmod(0o444)
-    result = _host.execute({"action": "gpu-capability", "profile": policy.capability.to_dict(),
+    selected = policy.available_capability().to_dict()
+    if selected_inputs == "missing":
+        from loom.queue.errors import QueueConflictError
+
+        with pytest.raises(QueueConflictError, match="differs"):
+            _host.execute({"action": "gpu-capability", "profile": policy.capability.to_dict(),
+                           "execution": execution.to_dict()}, False, tmp_path)
+    result = _host.execute({"action": "gpu-capability", "profile": selected,
                             "execution": execution.to_dict()}, False, tmp_path)
     assert result["outcome"] == ("failed" if changed_image else "passed")
     assert len(calls) == (0 if changed_image else 1)
+    assert result["profile"] == selected
     assert result["execution"] == execution.to_dict()
     assert result["exclusive_scheduling"] == "not_tested"
     assert not client.agent_root.exists()
