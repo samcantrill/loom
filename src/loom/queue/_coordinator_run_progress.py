@@ -35,6 +35,16 @@ class LocalDaemonExecutionOutcome:
     reason: str | None = None
 
 
+def _dispatch_offering(self, record, phase):
+    from contextlib import nullcontext
+
+    if self.daemon is None:
+        return nullcontext()
+    return self.daemon._result_verifications.bulk.offering(
+        ("dispatch", record.run_uri, record.stage_work_id, phase),
+    )
+
+
 def reconcile_admission(
     self: LocalDaemonExecution, admission: LocalDaemonAdmission,
     *, prepared_intent: ManagedLocalIntent | None = None,
@@ -45,7 +55,11 @@ def reconcile_admission(
         self._cycle_context_epochs.setdefault(admission.admission_id, (self.daemon._epoch, self.daemon._scheduling_epoch))
     intent, scoped_authority = self._admission_context(admission, prepared_intent=prepared_intent)
     self._cycle_contexts[admission.admission_id] = (intent, scoped_authority)
-    outcome = _reconcile_admission(self, admission, intent, scoped_authority)
+    if self.daemon is None:
+        outcome = _reconcile_admission(self, admission, intent, scoped_authority)
+    else:
+        with self.daemon._result_verifications.bulk.offering(("run", admission.run_uri)):
+            outcome = _reconcile_admission(self, admission, intent, scoped_authority)
     if outcome.state not in {
         LocalDaemonAdmissionState.SUCCEEDED,
         LocalDaemonAdmissionState.FAILED,
@@ -72,14 +86,14 @@ def _reconcile_admission(
     scoped_authority: _ScopedCoordinatorAuthority,
 ) -> LocalDaemonExecutionOutcome:
     action_resolver = self._action_resolution
-    if action_resolver is not None:
-        action_resolver.reconcile_producers(admission.run_uri)
     cancelling = admission.cancellation_operation_id is not None or self.cancellation_operation(admission.admission_id) is not None
     if cancelling:
         outcome = self._cancel(admission, scoped_authority, intent.plan.stage_order)
         if action_resolver is None or not any(action_resolver.store.producer_needed(admission.run_uri, node) for node in intent.plan.stage_order):
             return outcome
     else:
+        if action_resolver is not None:
+            action_resolver.reconcile_producers(admission.run_uri)
         self.admission_activated(admission.admission_id)
 
     placements = dict(intent.placements)
@@ -181,6 +195,18 @@ def _settled_terminal_outcome(
         return LocalDaemonExecutionOutcome(
             LocalDaemonAdmissionState.ACTIVE,
             "managed assignment release remains durably in flight",
+        )
+    resolver = self._action_resolution
+    if resolver is not None and any(
+        claim["state"] in {"owned", "settling"}
+        for claim in resolver.store.producers(run_uri)
+    ):
+        # Keep the admission eligible for reconciliation while an audit is
+        # running or waiting for a bounded worker slot. Its final observation
+        # also releases the producer's authority continuation.
+        return LocalDaemonExecutionOutcome(
+            LocalDaemonAdmissionState.ACTIVE,
+            "action result settlement remains in flight",
         )
     return terminal
 
@@ -304,13 +330,14 @@ def schedule_once(
             if not self._failure_policy_allows_new_work(intent, snapshot):
                 exhausted_admissions.add(record.admission_id)
                 continue
-            outcome = self._dispatch_slurm_ready(
-                admission=admission,
-                intent=intent,
-                authority=authority,
-                snapshot=snapshot,
-                stage_work_id=record.stage_work_id,
-            )
+            with _dispatch_offering(self, record, "execution"):
+                outcome = self._dispatch_slurm_ready(
+                    admission=admission,
+                    intent=intent,
+                    authority=authority,
+                    snapshot=snapshot,
+                    stage_work_id=record.stage_work_id,
+                )
             if (
                 outcome is not None
                 and outcome.state is LocalDaemonAdmissionState.ACTIVE
@@ -348,25 +375,30 @@ def schedule_once(
             else:
                 excluded_work.add(record.stage_work_id)
             continue
-        if remote_target is not None and not self._remote_eligible(
-            intent=intent, snapshot=snapshot, record=record
-        ):
-            del remote_targets[candidate_id]
-            continue
+        if remote_target is not None:
+            with _dispatch_offering(self, record, "preflight"):
+                eligible = self._remote_eligibility_async(intent=intent, snapshot=snapshot, record=record)
+            if eligible is None:
+                excluded_work.add(record.stage_work_id)
+                continue
+            if not eligible:
+                del remote_targets[candidate_id]
+                continue
         try:
-            started = self._execute(
-                admission=admission,
-                intent=intent,
-                authority=authority,
-                snapshot=snapshot,
-                record=record,
-                decision=decision,
-                remote_targets={
-                    key: value[1] for key, value in remote_targets.items()
-                },
-                decision_as_of=decision_as_of,
-                execution_started=lambda: None,
-            )
+            with _dispatch_offering(self, record, "execution"):
+                started = self._execute(
+                    admission=admission,
+                    intent=intent,
+                    authority=authority,
+                    snapshot=snapshot,
+                    record=record,
+                    decision=decision,
+                    remote_targets={
+                        key: value[1] for key, value in remote_targets.items()
+                    },
+                    decision_as_of=decision_as_of,
+                    execution_started=lambda: None,
+                )
         except ManagedLocalError as exc:
             # The reserve operation is the final capacity and
             # max-parallel CAS.  A concurrent run-limit loser is
@@ -379,6 +411,7 @@ def schedule_once(
         if not started:
             excluded_work.add(record.stage_work_id)
             continue
+        self._remote_preflights.pop((record.run_uri, record.stage_name), None)
         return admission.admission_id, LocalDaemonExecutionOutcome(
             LocalDaemonAdmissionState.ACTIVE,
             "assignment was durably accepted",

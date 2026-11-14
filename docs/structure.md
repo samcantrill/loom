@@ -1455,6 +1455,13 @@ cycle contexts, scheduling epoch, launch lock, graph and cancellation owners.
 owners; its immutable outcome import remains available at the existing path.
 Progression can continue independently of future fresh-admission policy.
 
+`_bulk_operations.py` owns the two-slot disposable IO pool and owner-scoped FIFO
+wait hints. `_result_verification.py` retains producer audit futures; action
+resolution and preparation/dispatch owners retain their own captured tokens and
+apply only current completions. Workers do not own lifecycle transitions.
+`_shared_publication.py` groups exact publication audits within one operation.
+`_phase_timing.py` bounds diagnostic collection independently of authority.
+
 `_coordinator_run_authority.py` owns the existing scoped adapter for one accepted
 run/coordinator binding. It preserves identity checks and guarded-recovery
 mutation restrictions while the per-run store remains the lifecycle and output

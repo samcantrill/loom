@@ -37,19 +37,23 @@ def log_phases(value: dict[str, PlainData]) -> None:
 
 
 @contextmanager
-def phase(action: str, *, operation_id: str | None = None) -> Iterator[None]:
+def phase(action: str, *, operation_id: str | None = None) -> Iterator[dict[str, PlainData]]:
     """Record one boundary through the current diagnostic observer, if any.
 
-    Only action, duration, outcome and the existing operation identity are emitted.
-    Diagnostic failures never replace the operation's result or exception.
+    Callers may add bounded scalar evidence such as publication identity and
+    byte/member counts to the yielded attributes. Diagnostic failures never
+    replace the operation's result or exception.
     """
     token = _operation.set(operation_id or _operation.get())
     timing = PhaseTimings()
+    attributes: dict[str, PlainData] = {}
     try:
         with timing.measure(action):
-            yield
+            yield attributes
     finally:
         try:
+            if attributes:
+                cast(dict[str, PlainData], timing.spans[0])["attributes"] = dict(attributes)
             value = {**timing.payload(), "operation_id": _operation.get()}
             observer = _observer.get()
             if observer is not None:
@@ -135,17 +139,21 @@ _operation_samples = count()
 
 
 @contextmanager
-def reported_phases(action: str, *, operation_id: str | None = None) -> Iterator[None]:
+def reported_phases(
+    action: str, *, operation_id: str | None = None, started_monotonic: float | None = None,
+) -> Iterator[PhaseTimings]:
     """Report slow operations and one in 64 ordinary operations after completion.
 
     Each asynchronous owner installs its own collector; it never appends to a
     request or reconciliation collector after that parent operation has returned.
+    An earlier process-local start includes capacity wait in slow-log selection,
+    without changing the measured worker span or imposing any deadline.
     """
     timings = PhaseTimings()
-    start = monotonic()
+    start = monotonic() if started_monotonic is None else started_monotonic
     try:
         with observe_phases(timings.observe), phase(action, operation_id=operation_id):
-            yield
+            yield timings
     finally:
         if monotonic() - start >= 1.0 or next(_operation_samples) % 64 == 0:
             try:

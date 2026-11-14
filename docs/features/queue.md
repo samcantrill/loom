@@ -982,6 +982,30 @@ next cycle, and exhausting a scheduling batch does not impose a safety-interval
 delay on the next batch. An unchanged offer renewal does not itself request a
 new scheduling cycle.
 
+Coordinator artifact audits, preparation capture/publication, contract/report
+hydration, worker-request construction and remote input preflight share two
+actual bulk IO slots outside reconciliation. Waiting owners retain small FIFO
+identity hints, not an executor backlog of payloads. A hint is retired when its
+owner is reconsidered and no longer offers that work, or authoritative admission
+state retires the owner; merely missing an asynchronous context result does not
+erase its position. A running operation retains capacity until it actually ends.
+
+Completion alone cannot authorize a transition. The coordinator rechecks the
+captured epoch, claim/attempt, inputs and current demand before applying results;
+result publication enforces claim revision and producer fencing transactionally.
+Cancellation detaches obsolete demand before optional verification while retaining
+producers needed by other consumers. Files already published by an owned
+preparation remain recoverable by exact replay; cancellation suppresses admission.
+Shutdown drains guarded publication writes before releasing deployment ownership.
+
+Within one output-verification operation, references to the exact same publication
+share one complete inventory/byte audit. Each output association is still checked,
+and subsequent operations perform their own required audit. This is not a durable
+verification cache. Bounded phase diagnostics distinguish capacity wait, worker IO
+and owner completion application. Publication spans identify audited payload bytes
+and members (excluding receipt/control bytes); nested spans are not additive wall
+time. Diagnostic durations do not set lifecycle deadlines or authorize progress.
+
 Operation and admission waits are passive: they check durable state, wait for a
 committed-change hint, then check again. They do not drive scheduling and do not
 query every 50 milliseconds. A one-second fallback covers changes made by other
