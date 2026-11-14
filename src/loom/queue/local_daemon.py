@@ -2348,6 +2348,8 @@ class LocalDaemon:
         if len(views) != 1 or not isinstance(views[0].get("authority"), Mapping):
             raise QueueStorageError("targeted admission owner detail is unavailable")
         owners = dict(views[0])
+        if self._execution is not None:
+            owners["input_validation"] = self._execution._input_validations.observations(admission.run_uri)
         # Extend the existing loose owner detail, not the strict inspection wire.
         assignment = owners.get("assignment")
         if isinstance(assignment, Mapping):

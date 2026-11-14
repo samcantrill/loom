@@ -217,3 +217,44 @@ def test_overlapping_inputs_scan_once_and_revalidate_next_boundary(tmp_path, mon
     payload.unlink()
     with pytest.raises(QueueServiceError):
         require_bindings(selected, roots)
+
+
+def test_inspection_progress_is_bounded_and_cancellation_prevents_further_io(tmp_path, monkeypatch):
+    from concurrent.futures import CancelledError
+    from loom.queue import shared_execution
+
+    for index in range(10):
+        (tmp_path / str(index)).write_text("input")
+    roots = root_bindings({"data": _root(tmp_path)})
+    location = {"kind": "loom.shared-location", "schema_version": 1, "root_id": "data", "path": "."}
+    selected = stage_scope({"input": location}, {}, {"roots": qualifications(roots)})
+    reports = []
+    monkeypatch.setattr(shared_execution, "monotonic", lambda: 42.0)
+    require_bindings(selected, roots, progress=reports.append)
+    assert [report.entries_examined for report in reports] == [0, 10]
+    assert all(report.elapsed_seconds == 0 for report in reports)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("cancelled inspection touched the filesystem")
+
+    monkeypatch.setattr(shared_execution, "qualifications", forbidden)
+    with pytest.raises(CancelledError):
+        require_bindings(selected, roots, cancelled=lambda: True)
+
+
+def test_walk_io_error_preserves_failure_class_and_cause(tmp_path, monkeypatch):
+    from loom.queue import shared_execution
+
+    roots = root_bindings({"data": _root(tmp_path)})
+    location = {"kind": "loom.shared-location", "schema_version": 1, "root_id": "data", "path": "."}
+    selected = stage_scope({"input": location}, {}, {"roots": qualifications(roots)})
+    failure = PermissionError("storage unavailable")
+
+    def unreadable(path, *, onerror):
+        onerror(failure)
+        return iter(())
+
+    monkeypatch.setattr(shared_execution.os, "walk", unreadable)
+    with pytest.raises(shared_execution.InputValidationIOError) as caught:
+        require_bindings(selected, roots)
+    assert caught.value.__cause__ is failure

@@ -341,6 +341,33 @@ def test_retry_after_successful_cleanup_does_not_acquire_retired_tree(releasable
     assert not case.tree.exists()
 
 
+def test_deferred_retry_inspection_keeps_live_integrity_checks(releasable_attempt, tmp_path, monkeypatch):
+    from loom.queue._ready_preparation import inspect_recovery_predecessors
+    from loom.queue.errors import QueueConflictError
+
+    case = releasable_attempt
+    (tmp_path / "retry").mkdir()
+    retry, _, _ = _workspace(tmp_path / "retry", attempt=2)
+    with case.daemon._connection() as conn:
+        # A contained execution without a committed report can retain progress.
+        conn.execute("UPDATE remote_assignments SET report_json = NULL")
+        with monkeypatch.context() as patch:
+            patch.setattr(recovery, "resolve", lambda *args: pytest.fail("filesystem inspection inside binding"))
+            delivery = recovery.bind_delivery(
+                retry.request(), conn, "run", case.profile.shared_roots,
+                session_id="session", verify_trees=False,
+            )
+    references = tuple(delivery.worker_metadata[recovery.WIRE]["predecessors"])
+    assert len(references) == 1
+    assert inspect_recovery_predecessors(references, case.profile.shared_roots)
+    payload = case.tree / "partial"
+    payload.chmod(0o600)  # Simulate owner-side modification of a sealed payload.
+    payload.write_bytes(b"changed after capture")
+    payload.chmod(0o400)
+    with pytest.raises(QueueConflictError, match="integrity"):
+        inspect_recovery_predecessors(references, case.profile.shared_roots)
+
+
 def test_release_operator_permission_is_required_before_reservation(releasable_attempt):
     from loom.queue.errors import QueueServiceError
 

@@ -160,6 +160,7 @@ def bind_delivery(
     *,
     session_id: str,
     slurm_assignments: Any = None,
+    verify_trees: bool = True,
 ) -> Any:
     selection = selected(request)
     if selection is None or request.preparation_input is not None:
@@ -171,7 +172,7 @@ def bind_delivery(
         raise QueueConflictError("recovery destination machine is unavailable")
     return _bind_delivery(
         request, conn, run_uri, roots, agent_id=session["agent_root_id"],
-        slurm_assignments=slurm_assignments,
+        slurm_assignments=slurm_assignments, verify_trees=verify_trees,
     )
 
 
@@ -224,19 +225,19 @@ def assignment_rows(
 
 def bind_slurm_delivery(
     request: Any, conn: Any, run_uri: str, roots: Mapping[str, PlainData], *,
-    agent_id: str, slurm_assignments: Any,
+    agent_id: str, slurm_assignments: Any, verify_trees: bool = True,
 ) -> Any:
     if selected(request) is None or request.preparation_input is not None:
         return request
     return _bind_delivery(
         request, conn, run_uri, roots, agent_id=agent_id,
-        slurm_assignments=slurm_assignments,
+        slurm_assignments=slurm_assignments, verify_trees=verify_trees,
     )
 
 
 def _bind_delivery(
     request: Any, conn: Any, run_uri: str, roots: Mapping[str, PlainData], *,
-    agent_id: str, slurm_assignments: Any,
+    agent_id: str, slurm_assignments: Any, verify_trees: bool = True,
 ) -> Any:
     selection = selected(request)
     assert selection is not None
@@ -275,7 +276,8 @@ def _bind_delivery(
             or ref["identity"]["fence"] != row["fence"]
         ):
             raise QueueConflictError("recovery retained ownership is obsolete")
-        resolve(ref, roots)
+        if verify_trees:
+            resolve(ref, roots)
         predecessors.append(ref)
     result = replace(
         request,

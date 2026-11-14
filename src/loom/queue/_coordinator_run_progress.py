@@ -467,11 +467,14 @@ def _schedule_window(
             else:
                 excluded_work.add(record.stage_work_id)
             continue
-        if remote_target is not None and not self._remote_eligible(
-            intent=intent, snapshot=snapshot, record=record
-        ):
-            del remote_targets[candidate_id]
-            continue
+        if remote_target is not None:
+            eligible = self._remote_eligible(intent=intent, snapshot=snapshot, record=record)
+            if eligible is None:
+                excluded_work.add(record.stage_work_id)
+                continue
+            if not eligible:
+                del remote_targets[candidate_id]
+                continue
         try:
             started = self._execute(
                 admission=admission,

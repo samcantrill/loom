@@ -111,7 +111,25 @@ def search(daemon: Any, query: RunQuery) -> QueryPage:
             owner=owner,
             authority_factory=daemon.config.coordinator_authority_factory,
         )
-    operations, admissions = _journal(daemon)
+    bounded_candidates = None
+    if query.entity == "runs" and any(order.field == "submitted_at" for order in query.order_by) and not any(order.field == "created_at" for order in query.order_by):
+        from ._query_journal import run_submission_candidates
+        query = replace(query, order_by=(*query.order_by, Order("operation_id")))
+        bounded_candidates = run_submission_candidates(daemon, query, owner)
+        for candidate in bounded_candidates:
+            if candidate["submitted_at"] is None:
+                candidate["submitted_at"] = UNAVAILABLE
+        operations, admissions = [], []
+    elif query.entity == "runs":
+        if len(query.order_by) == 1 and query.order_by[0].field == "run_uri":
+            from ._query_journal import run_uri_candidates
+            operations, admissions = [], run_uri_candidates(daemon, query, owner)
+        else:
+            operations, admissions = _journal(daemon)
+    else:
+        from ._query_journal import journal_candidates
+        rows = journal_candidates(daemon, query, owner)
+        operations, admissions = (rows, []) if query.entity == "submissions" else ([], rows)
     originals = {row["operation_id"]: row for row in operations}
     factory = daemon.config.coordinator_authority_factory
     cache: dict[str, QueryRecord] = {}
@@ -142,11 +160,20 @@ def search(daemon: Any, query: RunQuery) -> QueryPage:
             include_notes=needs_notes(query),
         )
         native = record.sources["native"]
-        original = (
-            originals.get(native.get("operation_id"))
-            if native.get("coordinator_id") == owner
-            else None
-        )
+        original = None
+        if native.get("coordinator_id") == owner:
+            operation_id = native.get("operation_id")
+            original = originals.get(operation_id)
+            if original is None and operation_id is not None:
+                from ._query_journal import _OPERATION_COLUMNS
+                with daemon._connection() as conn:
+                    row = conn.execute(
+                        f"SELECT {_OPERATION_COLUMNS} FROM preparation_operations WHERE operation_id = ?",
+                        (operation_id,),
+                    ).fetchone()
+                original = None if row is None else dict(row)
+                if original is not None:
+                    originals[operation_id] = original
         if original is not None:
             native.update(
                 submitted_at=original["accepted_at"] or UNAVAILABLE,
@@ -164,7 +191,9 @@ def search(daemon: Any, query: RunQuery) -> QueryPage:
     by_submission = query.entity == "runs" and any(
         order.field == "submitted_at" for order in query.order_by
     )
-    if query.entity == "runs":
+    if bounded_candidates is not None:
+        candidates = bounded_candidates
+    elif query.entity == "runs":
         uris = {row["run_uri"] for row in admissions}
         uris.update(
             native["run_uri"]

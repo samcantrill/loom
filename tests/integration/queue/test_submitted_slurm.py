@@ -1,6 +1,8 @@
 """Submitted Slurm dispatch, worker, and shared commit across coordinator restart."""
 
 import base64
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 from dataclasses import replace
 import hashlib
 import json
@@ -36,9 +38,13 @@ from tests.integration.queue.test_slurm_ready_stage import (
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
 
-@pytest.mark.parametrize("preparation,recovery", [(False, False), (True, False), (False, True)])
+@pytest.mark.parametrize("preparation,recovery,cancel_inspection,peer_inspection", [
+    (False, False, False, False), (True, False, False, False),
+    (False, True, False, False), (False, False, True, False),
+    (False, False, True, True),
+])
 def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
-    tmp_path, monkeypatch, preparation, recovery
+    tmp_path, monkeypatch, preparation, recovery, cancel_inspection, peer_inspection
 ):
     monkeypatch.setenv("PYTHONPATH", os.pathsep.join((
         str(Path(loom.__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[3]),
@@ -149,6 +155,11 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
             prepared = prepare_managed_run(
                 service, composed, "workload", execution_requirements=requirements
             )
+        peer = None
+        if peer_inspection:
+            peer = prepare_managed_run(
+                service, composed, "independent-workload", execution_requirements=requirements
+            )
         profile = service.daemon.slurm_profiles[0]
         config = LocalDaemonConfig(
             coordinator_root=tmp_path / "daemon/coordinator",
@@ -159,6 +170,20 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
             shared_roots=service.daemon.shared_roots,
             container_capabilities=service.daemon.container_capabilities,
         )
+        # Hold the first coordinator inspection only. Worker launch checks
+        # remain real, and the restarted coordinator must inspect afresh.
+        validation_started, validation_release = Event(), Event()
+        if not preparation and not recovery:
+            from loom.queue import _input_validation
+            inspect_inputs = _input_validation.require_bindings
+
+            def slow_inputs(*args, **kwargs):
+                if not validation_started.is_set():
+                    validation_started.set()
+                    assert validation_release.wait(30)
+                return inspect_inputs(*args, **kwargs)
+
+            monkeypatch.setattr(_input_validation, "require_bindings", slow_inputs)
         LocalDaemon.initialize(config)
         daemon = LocalDaemon(config)
         daemon.start()
@@ -167,6 +192,48 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                 LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
             )
             client.submit(LocalDaemonAdmissionRequest("submitted", prepared.run_uri))
+            if not preparation and not recovery:
+                try:
+                    assert validation_started.wait(10)
+                    assert not daemon._execution.slurm_assignments.list_run_unreleased(prepared.run_uri)
+                    assert not [call for call in profile.runner.calls if call[0] == "sbatch"]
+                    with ThreadPoolExecutor(max_workers=1) as readers:
+                        detail = readers.submit(
+                            lambda: client.admission(client.admission_for_queue_item("submitted").admission_id)
+                        ).result(timeout=5)
+                        assert detail.admission.run_uri == prepared.run_uri
+                        inspections = detail.owners["input_validation"]["inspections"]
+                        assert len(inspections) == 1
+                        assert inspections[0]["reason"] == "input_validation_pending"
+                        if peer is not None:
+                            client.submit(LocalDaemonAdmissionRequest("independent", peer.run_uri))
+                            deadline = monotonic() + 10
+                            peer_records = ()
+                            while monotonic() < deadline:
+                                peer_records = daemon._execution.slurm_assignments.list_run_unreleased(peer.run_uri)
+                                if peer_records and peer_records[0].state == "accepted":
+                                    break
+                                sleep(0.02)
+                            assert peer_records and peer_records[0].state == "accepted"
+                            assert not validation_release.is_set()
+                            assert not daemon._execution.slurm_assignments.list_run_unreleased(prepared.run_uri)
+                            assert len([call for call in profile.runner.calls if call[0] == "sbatch"]) == 1
+                        if cancel_inspection:
+                            cancelled = readers.submit(client.cancel, "submitted").result(timeout=5)
+                            assert cancelled.cancellation_operation_id is not None
+                            validation_release.set()
+                            settled = readers.submit(client.wait, "submitted", timeout_seconds=10).result(timeout=12)
+                            assert settled.state.value == "CANCELLED"
+                            assert not daemon._execution.slurm_assignments.list_run_unreleased(prepared.run_uri)
+                            assert len([call for call in profile.runner.calls if call[0] == "sbatch"]) == int(peer is not None)
+                            return
+                    # Stop cannot wait on the blocked inspection. Its eventual
+                    # result cannot authorize work in the new coordinator.
+                    daemon.stop()
+                    daemon = LocalDaemon(config)
+                    daemon.start()
+                finally:
+                    validation_release.set()
             for attempt in range(1, 3 if recovery else 2):
                 deadline = monotonic() + 10
                 records = ()

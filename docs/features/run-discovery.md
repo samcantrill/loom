@@ -109,6 +109,20 @@ native request deadline; this never refreshes every run's authority. Limits are
 with incomplete coverage. Cursors bind query, order, scope and coordinator;
 they do not authorize access.
 
+Managed job and submission queries select at most 501 journal candidates in
+SQLite using the public keyset (500 candidates plus one continuation witness).
+Default run-identity ordering also pages distinct run URIs before authority
+acquisition; submission-time ordering pages submission facts with its private
+operation-ID continuation key, retaining initializer selection at acquisition. Supported journal string equality/`in` predicates narrow candidates;
+full typed evaluation still owns matching. Mixed predicates never discard an
+unsupported OR branch. Original submission context is read by exact operation
+identity for the selected run rather than loading the entire submission history.
+These bounds limit transferred rows and detailed acquisition, not all SQLite
+sorting/filtering work. Run ordering involving creation time and collection
+ordering still use metadata enumeration; their detailed acquisition limit remains
+500. Exact admission observations use `CoordinatorClient.admission(admission_id)`
+and need no discovery query.
+
 Empty pages may have `next_cursor` after exhausting the scan budget.
 `coverage.complete` qualifies the page independently of continuation;
 `collect_pages` retains warnings and observations, including incomplete empty

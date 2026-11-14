@@ -424,6 +424,27 @@ the older fixed `container_options` selection.
 The native bootstrap authenticates and consumes the allocation's single start
 permit before launching the submitted image. It retains the exact delivery,
 image binding, policy and execution fence in its private assignment workspace.
+Coordinator shared-input inspection runs in a dedicated bounded pool before
+Slurm assignment reservation. A slow scan does not reserve a GPU. The current
+implementation admits two inspections concurrently and retains at most eight
+pending/completed requests; superseded running work keeps its slot until it
+exits. Existing launch-boundary checks still inspect mutable inputs afresh.
+Request preparation, artifact hashing and retry predecessor closure inspection
+use a separate bounded preparation pool. Recovery binding rechecks current
+predecessor ownership and cleanup reservations before consuming inspected
+closure evidence; content verification runs outside coordinator locks and
+database transactions. Publication and resource release use separate workers.
+
+Exact admission detail includes `owners.input_validation`, a process-local
+observation containing stage/work identity, waiting reason, entries examined,
+elapsed seconds and the last progress timestamp. It has no percentage or input
+paths and is not durable launch authority. Invalid inputs and unavailable storage
+have distinct reasons and paced retries, permitting inputs to be repaired in
+place. Cancellation invalidates launch authorization immediately; stopping a
+scan is cooperative between filesystem operations. A thread blocked in kernel
+IO cannot be force-cancelled, and process exit may still wait for it. Restart
+repeats inspection under the existing attempt and submission identities.
+
 Image bytes and selected shared inputs are verified before a new launch. The
 contained worker consumes those bindings without importing project code on the
 bootstrap host. CPU, memory and walltime remain delegated to Slurm; GPU work
