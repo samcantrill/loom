@@ -15,7 +15,13 @@ its retained accounting observation is `sacct` `TIMEOUT`, `FAILED`, `CANCELLED`
 or `COMPLETED`, with an immutable accounting identity and matching retained job
 handle. Terminal scheduler state only makes the assignment eligible: the exact
 attempt/revision/fence, positive site containment, ordinary-result ownership,
-provider release and recovery sealing checks still apply. `COMPLETED` without
+provider release and recovery sealing checks still apply. A closed Slurm recovery
+is reconciled even after its admission becomes terminal: the exact authority
+close is checked before handing the assignment to the ordinary release protocol.
+The close receipt's `physical_ownership: retained` describes closure, not a release
+acknowledgement. Fresh containment, credential revocation and recovery sealing
+must complete before the GPU reservation is removed. Ordinary late results stay
+fenced; no scientific result is synthesized. `COMPLETED` without
 a scientific report does not establish success. Recovery can close failed or
 cancelled attempts; retry is an independent operator decision.
 

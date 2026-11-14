@@ -2015,13 +2015,17 @@ class LocalDaemonExecution:
             record.assignment.assignment_id
         )
         recovery_proof = None
+        recovery_closed = False
         with self.config.connect_database(self.config.control_database) as conn:
             requests = conn.execute(
-                "SELECT request_json FROM recovery_operations WHERE state IN ('pending', 'evidence_confirmed')"
+                "SELECT request_json, state FROM recovery_operations WHERE state IN ('pending', 'evidence_confirmed', 'closed')"
             ).fetchall()
         for row in requests:
             value = json.loads(str(row[0]))
             if value.get("assignment_id") == record.assignment.assignment_id:
+                if row[1] == "closed":
+                    recovery_closed = True
+                    continue
                 request = RecoverUnknownAssignment.from_dict(value)
                 profile = self._slurm_profile(
                     record.assignment.profile_id,
@@ -2032,7 +2036,7 @@ class LocalDaemonExecution:
                         request, record, profile
                     )
         return {
-            "result_identity": self.slurm_result_identity(record),
+            "result_identity": None if recovery_closed else self.slurm_result_identity(record),
             "recovery_request": recovery_proof,
             "schema_version": 1,
             "assignment": record.assignment.to_dict(),
@@ -2165,7 +2169,7 @@ class LocalDaemonExecution:
         _defer_publication: bool = False, _publication: _SlurmPublicationRequired | None = None,
     ) -> Mapping[str, PlainData]:
         if "result_operation" in evidence:
-            if self._recovery_retains_assignment(str(evidence.get("assignment_id"))):
+            if self._daemon_owner()._recovery_fences_ordinary_terminal(str(evidence.get("assignment_id"))):
                 raise QueueConflictError(
                     "ordinary SLURM result is frozen by guarded recovery"
                 )
@@ -2785,6 +2789,50 @@ class LocalDaemonExecution:
             "next_attempt": None if decision is None else decision.next_attempt,
             "physical_ownership": "retained",
         }
+
+    def reconcile_closed_slurm_recovery(
+        self, request: RecoverUnknownAssignment, evidence: Mapping[str, PlainData]
+    ) -> None:
+        """Hand an exact recovery close to ordinary contained provider release.
+
+        The authority close remains the terminal fact; no worker report is
+        synthesized. Replays also run for admissions already marked failed.
+        Fresh release containment, credential revocation and recovery sealing
+        remain with the existing agent/coordinator acknowledgement protocol.
+        """
+        if not isinstance(request.target, SlurmRecoveryTarget):
+            raise QueueConflictError("SLURM recovery release requires a SLURM target")
+        binding = self._recovery_binding(request)
+        record = cast(SlurmStageRecord, binding[0])
+        if record.state == "released":
+            return
+        self._validate_persisted_recovery_evidence(request, binding, evidence)
+        snapshot = self._authority_store(request.run_uri).open_run(request.run_uri)
+        matches = [
+            attempt
+            for stage in snapshot.stages if stage.stage_name == request.stage_name
+            for attempt in stage.attempts
+            if attempt.attempt == request.attempt and attempt.attempt_id == binding[4]
+        ]
+        status = StageStatus.FAILED if request.requested_outcome == "failed" else StageStatus.CANCELLED
+        if len(matches) != 1:
+            raise QueueConflictError("SLURM recovery release authority identity conflicts")
+        current = matches[0]
+        reason = current.reason
+        if (
+            current.status is not status or reason is None
+            or reason.code != "operator.recovery_close"
+            or reason.detail.get("recovery_id") != request.recovery_id
+            or reason.detail.get("assignment_id") != request.assignment_id
+            or reason.detail.get("evidence") != evidence
+        ):
+            raise QueueConflictError("SLURM recovery did not win the exact authority close")
+        self.slurm_assignments.mark_terminal(request.assignment_id)
+        try:
+            self._release_slurm_assignment(request.assignment_id)
+        except SlurmPlanningError:
+            # A later cycle/agent acknowledgement finishes the same release.
+            return
 
     def _record_recovery_reliability(
         self,

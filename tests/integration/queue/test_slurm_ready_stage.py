@@ -1003,8 +1003,8 @@ def _exercise_mixed_route_run(
                     incarnation,
                 ),
                 expected_state_version=attempt.revision.sequence,
-                requested_outcome="cancelled",
-                consider_retry=True,
+                requested_outcome="failed" if recovery_terminal_state else "cancelled",
+                consider_retry=recovery_terminal_state is None,
                 reason="SLURM containment integration proof",
             )
             operator = daemon.operator_view(
@@ -1084,7 +1084,7 @@ def _exercise_mixed_route_run(
                 recovery_receipt = operator.recover_unknown(recovery_request)
                 assert recovery_receipt["state"] == "closed"
                 assert operator.recover_unknown(recovery_request) == recovery_receipt
-                assert recovery_receipt["retry_allowed"] is False
+                assert recovery_receipt["retry_allowed"] is (False if recovery_terminal_state is None else None)
                 assert recovery_receipt["physical_ownership"] == "retained"
                 recovery_evidence = cast(
                     dict[str, object], recovery_receipt["evidence"]
@@ -1093,8 +1093,59 @@ def _exercise_mixed_route_run(
                 assert recovery_evidence["helper_descriptor"] == "test-contained-v1"
                 assert (
                     authority.open_run(run_uri).stages[1].status
-                    is StageStatus.CANCELLED
+                    is (StageStatus.FAILED if recovery_terminal_state else StageStatus.CANCELLED)
                 )
+                if recovery_terminal_state == "TIMEOUT":
+                    with pytest.raises(QueueConflictError, match="identity conflicts"):
+                        execution.reconcile_closed_slurm_recovery(
+                            replace(recovery_request, execution_fence="different-fence"), recovery_evidence,
+                        )
+                    with pytest.raises(QueueConflictError, match="exact authority close"):
+                        execution.reconcile_closed_slurm_recovery(
+                            replace(recovery_request, recovery_id="different-close"), recovery_evidence,
+                        )
+                    with pytest.raises(QueueConflictError, match="evidence conflicts"):
+                        execution.reconcile_closed_slurm_recovery(
+                            recovery_request, {**recovery_evidence, "echo": {}},
+                        )
+                    assert execution.slurm_assignments.read(assignment_id).state == "running"
+                import loom.queue._agent_slurm as agent_module
+                from loom.pipeline.executors.slurm.ready_stage import SlurmContainmentReceipt
+
+                original_containment = agent_module.resolve_slurm_containment
+                monkeypatch.setattr(agent_module, "resolve_slurm_containment", lambda *_: SlurmContainmentReceipt("UNKNOWN"))
+                daemon._resume_pending_recoveries(execution)
+                retained = execution.slurm_assignments.read(assignment_id)
+                assert retained.state == "logical_released"
+                assert capability_path(record.assignment.operation_id).exists()
+                assert execution._slurm_task(retained)["result_identity"] is None
+                with pytest.raises(QueueConflictError, match="frozen by guarded recovery"):
+                    execution.acknowledge_slurm_agent(
+                        retained.assignment.agent_id, retained.assignment.agent_root_id,
+                        {"assignment_id": assignment_id, "result_operation": "commit"},
+                    )
+            # Restart with release still unresolved. Closure must replay even
+            # when its failed admission is no longer in the active-run scan.
+            daemon.stop()
+            daemon = LocalDaemon(config, clock=clock)
+            daemon.start()
+            execution = daemon._execution
+            assert execution is not None
+            assert execution.slurm_assignments.read(assignment_id).state == "logical_released"
+            assert capability_path(record.assignment.operation_id).exists()
+            monkeypatch.setattr(agent_module, "resolve_slurm_containment", original_containment)
+            deadline = time.monotonic() + 10
+            while execution.slurm_assignments.read(assignment_id).state != "released":
+                assert time.monotonic() < deadline, "contained recovery release did not settle"
+                time.sleep(0.02)
+            assert not execution.slurm_assignments.list_run_unreleased(run_uri)
+            assert not capability_path(record.assignment.operation_id).exists()
+            assert execution.slurm_assignments.read(assignment_id).report is None
+            assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
+            operator = daemon.operator_view(LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR))
+            assert operator.recover_unknown(recovery_request) == recovery_receipt
+            assert daemon._recovery_fences_ordinary_terminal(assignment_id)
+            return
         if finish_during_outage:
             from loom.queue.local_daemon_execution import LocalDaemonExecution
             from loom.queue._slurm_result_transport import SharedSlurmResult
@@ -1345,22 +1396,6 @@ SharedSlurmResult(json.loads(sys.argv[2]), report.assignment_id, compute=True).p
                 )
                 if final:
                     break
-        if guarded_recovery:
-            assert recovery_receipt is not None
-            with pytest.raises(QueueConflictError, match="frozen by guarded recovery"):
-                view.commit_result(assignment_id, incarnation, fence)
-            retained_after_close = execution.slurm_assignments.read(assignment_id)
-            assert retained_after_close.state != "released"
-            assert execution.slurm_assignments.list_run_unreleased(run_uri) == (
-                retained_after_close,
-            )
-            assert capability_path(record.assignment.operation_id).exists()
-            assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
-            assert client.wait("mixed-route", timeout_seconds=10).state is (
-                LocalDaemonAdmissionState.CANCELLED
-            )
-            assert authority.open_run(run_uri).status is RunStatus.CANCELLED
-            return
         if terminal_boundary is None:
             view.commit_result(assignment_id, incarnation, fence)
             view.release(assignment_id, incarnation)
@@ -1575,7 +1610,7 @@ def test_slurm_native_failure_retains_portable_cause_through_result_replay(
     _exercise_mixed_route_run(tmp_path, monkeypatch, native_failure=True)
 
 
-def test_slurm_guarded_recovery_closes_from_exact_helper_and_retains_slot(
+def test_slurm_guarded_recovery_closes_then_releases_from_exact_helper(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _exercise_mixed_route_run(tmp_path, monkeypatch, guarded_recovery=True)

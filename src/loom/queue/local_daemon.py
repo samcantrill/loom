@@ -3429,8 +3429,9 @@ class LocalDaemon:
         with self._connection() as conn:
             rows = tuple(
                 conn.execute(
-                    "SELECT request_json, recorded_at FROM recovery_operations "
-                    "WHERE state IN ('pending', 'evidence_confirmed') "
+                    "SELECT request_json, recorded_at, state, evidence_json FROM recovery_operations "
+                    "WHERE state IN ('pending', 'evidence_confirmed') OR "
+                    "(state = 'closed' AND json_extract(request_json, '$.target.kind') = 'slurm') "
                     "ORDER BY recorded_at, recovery_id"
                 )
             )
@@ -3438,7 +3439,12 @@ class LocalDaemon:
             request = RecoverUnknownAssignment.from_dict(
                 json.loads(str(row["request_json"]))
             )
-            self._advance_recovery(execution, request, str(row["recorded_at"]))
+            if row["state"] == "closed":
+                execution.reconcile_closed_slurm_recovery(
+                    request, json.loads(str(row["evidence_json"]))
+                )
+            else:
+                self._advance_recovery(execution, request, str(row["recorded_at"]))
 
     def _recovery_fences_ordinary_terminal(self, assignment_id: str) -> bool:
         """Whether recovery has permanently fenced ordinary terminal mutation."""
@@ -3481,13 +3487,18 @@ class LocalDaemon:
         with self._connection() as conn:
             rows = tuple(
                 conn.execute(
-                    "SELECT request_json FROM recovery_operations "
+                    "SELECT request_json, state FROM recovery_operations "
                     "WHERE state IN ('pending', 'evidence_confirmed', 'closed')"
                 )
             )
         return any(
             isinstance(value := json.loads(str(row["request_json"])), Mapping)
             and value.get("assignment_id") == assignment_id
+            and not (
+                row["state"] == "closed"
+                and isinstance(value.get("target"), Mapping)
+                and value["target"].get("kind") == "slurm"
+            )
             for row in rows
         )
 
