@@ -434,13 +434,22 @@ use a separate bounded preparation pool. Recovery binding rechecks current
 predecessor ownership and cleanup reservations before consuming inspected
 closure evidence; content verification runs outside coordinator locks and
 database transactions. Publication and resource release use separate workers.
+The outbound service drives scheduler reconciliation in a dedicated single-worker
+lane. Its durable outbox acknowledgements return to the service owner thread in
+order, while control receipts and offer renewal can progress during scheduler
+IO. Profile/control effects retain their existing scheduler-boundary ordering;
+there is no second submission writer. Closing the acknowledgement bridge rejects
+pending callbacks rather than leaving a worker waiting on a stopped owner.
 
 Exact admission detail includes `owners.input_validation`, a process-local
 observation containing stage/work identity, waiting reason, entries examined,
 elapsed seconds and the last progress timestamp. It has no percentage or input
 paths and is not durable launch authority. Invalid inputs and unavailable storage
 have distinct reasons and paced retries, permitting inputs to be repaired in
-place. Cancellation invalidates launch authorization immediately; stopping a
+place. A finished worker reports `input_validation_complete` (or its failure
+reason) even if an unavailable route prevents another dispatch poll. Completion
+does not mean submission is authorized: current ownership and placement still
+require scheduling checks. Cancellation invalidates launch authorization immediately; stopping a
 scan is cooperative between filesystem operations. A thread blocked in kernel
 IO cannot be force-cancelled, and process exit may still wait for it. Restart
 repeats inspection under the existing attempt and submission identities.

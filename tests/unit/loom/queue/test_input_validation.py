@@ -9,6 +9,38 @@ from loom.queue import _input_validation as owner
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.parametrize("error,expected", [
+    (None, "input_validation_complete"),
+    (OSError("storage unavailable"), "input_validation_storage_unavailable"),
+    (owner.QueueServiceError("invalid entry"), "input_validation_invalid"),
+    (owner.CancelledError(), "input_validation_cancelled"),
+])
+def test_observation_reports_completion_without_another_dispatch_poll(monkeypatch, error, expected):
+    started, release, woke = Event(), Event(), Event()
+
+    def inspect(*args, **kwargs):
+        started.set()
+        assert release.wait(10)
+        if error is not None:
+            raise error
+
+    monkeypatch.setattr(owner, "require_bindings", inspect)
+    pool = owner.InputValidationPool(woke.set)
+    identity = {"worker_request": {"run_uri": "file:///run", "stage_name": "prepare"}}
+    try:
+        pool.poll("stage", identity, {}, {})
+        assert started.wait(10)
+        assert pool.observations("file:///run")["inspections"][0]["reason"] == "input_validation_pending"
+        release.set()
+        assert woke.wait(10)
+        # An unavailable execution route may prevent further dispatch polls.
+        # Ordinary status must still distinguish completed IO from active IO.
+        assert pool.observations("file:///run")["inspections"][0]["reason"] == expected
+    finally:
+        release.set()
+        pool.close()
+
+
 def test_bounded_validation_supersession_and_shutdown(monkeypatch):
     started, release, woke = Event(), Event(), Event()
     captured = []

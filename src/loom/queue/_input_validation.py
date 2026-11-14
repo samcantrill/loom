@@ -165,10 +165,30 @@ class InputValidationPool:
                 continue
             with item.lock:
                 progress = item.progress
+                reason = item.reason
+                future = item.future
+                # A route/agent can become unavailable before the scheduling
+                # owner polls again. Report actual worker completion rather
+                # than leaving a finished scan labelled pending indefinitely.
+                # This is diagnostic only: it neither consumes the result nor
+                # grants permission to reserve or submit work.
+                if reason == "input_validation_pending" and future is not None and future.done():
+                    try:
+                        future.result()
+                    except CancelledError:
+                        reason = "input_validation_cancelled"
+                    except (InputValidationIOError, OSError):
+                        reason = "input_validation_storage_unavailable"
+                    except QueueServiceError:
+                        reason = "input_validation_invalid"
+                    except Exception:
+                        reason = "input_validation_failed"
+                    else:
+                        reason = "input_validation_complete"
                 items.append({
                     "stage_work_id": item.work_id,
                     "stage": item.stage_name,
-                    "reason": item.reason,
+                    "reason": reason,
                     "progress": None if progress is None else {
                         "entries_examined": progress.entries_examined,
                         "elapsed_seconds": progress.elapsed_seconds,

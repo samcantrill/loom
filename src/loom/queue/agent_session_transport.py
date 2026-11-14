@@ -2413,6 +2413,8 @@ class LocalDaemonAgentHttpClient:
 
     @_cooperative
     def drive_slurm_jobs(self) -> Generator[_Progress, Any, None]:
+        from ._agent_slurm_progress import drive_operation
+
         if self._slurm_agent is None:
             return
         session = self.active_session()
@@ -2424,11 +2426,7 @@ class LocalDaemonAgentHttpClient:
             "coordinator_epoch": session.coordinator_epoch,
             "cursor": self._slurm_cursor,
         }
-        self._slurm_agent.replay_pending(
-            lambda evidence: self._call(
-                "slurm_work", {**binding, "evidence": dict(evidence)}
-            )
-        )
+        yield from drive_operation(self, self._slurm_agent.replay_pending, binding)
         response = (yield from _steps(self._call, "slurm_work", {**binding, "evidence": None}))
         cursor = response.get("next_cursor")
         if cursor is not None and not isinstance(cursor, str):
@@ -2444,18 +2442,14 @@ class LocalDaemonAgentHttpClient:
             self._slurm_agent.observation_policy is not None
             and self._slurm_agent.observation_policy.max_jobs_per_query is not None
         ):
-            self._slurm_agent.step_cycle(
-                tasks,
-                lambda evidence: self._call("slurm_work", {**binding, "evidence": dict(evidence)}),
+            yield from drive_operation(
+                self, self._slurm_agent.step_cycle, binding, tasks,
                 allow_submission=not self._drained,
             )
             return
         for task in tasks:
-            self._slurm_agent.step(
-                task,
-                lambda evidence: self._call(
-                    "slurm_work", {**binding, "evidence": dict(evidence)}
-                ),
+            yield from drive_operation(
+                self, self._slurm_agent.step, binding, task,
                 allow_submission=not self._drained,
             )
 
