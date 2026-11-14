@@ -1647,6 +1647,9 @@ class LocalDaemon:
         from ._context_preparation import ContextPreparations
 
         self._contexts = ContextPreparations(self._wake.set)
+        from ._result_verification import ResultVerifications
+
+        self._result_verifications = ResultVerifications(self._wake.set)
         from ._agent_poll_waiters import _PollWaiters
 
         self._poll_waiters = _PollWaiters()
@@ -1811,6 +1814,8 @@ class LocalDaemon:
     def start(self) -> DaemonStatus:
         if self._coordinator_lock is not None:
             raise QueueServiceError("local daemon is already started")
+        if self._result_verifications.running():
+            raise QueueServiceError("result verification is still stopping")
         if self._contexts.running():
             raise QueueServiceError("retained-input preparation is still stopping")
         if self.config.deployment_root is not None:
@@ -2023,9 +2028,20 @@ class LocalDaemon:
         self._cancelled_admission_repairs = None
         self._verified_local_owner_subject = verified_local_owner_subject
         self._contexts.close()
+        self._result_verifications.close()
         from ._context_preparation import ContextPreparations
 
         self._contexts = ContextPreparations(self._wake.set)
+        from ._result_verification import ResultVerifications
+
+        self._result_verifications = ResultVerifications(self._wake.set)
+        self._preparations._verification_reports.clear()
+        self._preparations._reports.clear()
+        self._preparations._publications.clear()
+        self._preparations._children.clear()
+        self._preparations._captures.clear()
+        self._preparations._images.clear()
+        self._preparations._candidates.clear()
         self._stop.clear()
         from ._agent_poll_waiters import _PollWaiters
 
@@ -2080,6 +2096,7 @@ class LocalDaemon:
         if thread is not None:
             thread.join()
         self._contexts.close()
+        self._result_verifications.close()
         if self._execution is not None:
             self._execution.close()
             try:
@@ -2656,6 +2673,14 @@ class LocalDaemon:
                     ),
                 )
             )
+        self._result_verifications.bulk.retain(
+            ("run",), {("run", admission.run_uri) for admission in admissions},
+        )
+        active_run_uris = {admission.run_uri for admission in admissions}
+        bulk = self._result_verifications.bulk
+        bulk.retain(("dispatch",), {
+            scope for scope in bulk.scopes(("dispatch",)) if scope[1] in active_run_uris
+        })
         with self._state_guard():
             epochs = (self._epoch, self._scheduling_epoch)
             invalidated = tuple(self._context_invalidations)
@@ -2699,6 +2724,8 @@ class LocalDaemon:
                 execution._cycle_context_epochs[admission.admission_id] = preparation.epochs
                 outcome = execution.reconcile_admission(admission, prepared_intent=intent)
             except QueueConflictError:
+                bulk.discard(("run", admission.run_uri))
+                bulk.discard(("dispatch", admission.run_uri))
                 if preparation.epochs != (self._epoch, self._scheduling_epoch):
                     self._wake.set()
                     continue
@@ -2711,6 +2738,8 @@ class LocalDaemon:
                     reason="authority_or_intent_conflict", observed=admission,
                 )
             except Exception as error:  # one unhealthy run cannot stop other admissions
+                bulk.discard(("run", admission.run_uri))
+                bulk.discard(("dispatch", admission.run_uri))
                 self._record_admission_health(admission.admission_id, "unavailable")
                 with self._state_guard():
                     retry = self._admission_retries.setdefault(admission.run_uri, _RecoveryRetry())
@@ -2726,6 +2755,8 @@ class LocalDaemon:
                     LocalDaemonAdmissionState.FAILED,
                     LocalDaemonAdmissionState.CANCELLED,
                 }:
+                    bulk.discard(("run", admission.run_uri))
+                    bulk.discard(("dispatch", admission.run_uri))
                     self._event_observers.flush_prepared(admission.run_uri)
                 self._record_admission_health(
                     admission.admission_id,
@@ -2755,32 +2786,33 @@ class LocalDaemon:
         # launch at most that many assignments, but a larger pipeline is
         # never rejected merely for having more stages.
         started_admissions: set[str] = set()
-        if time_healthy:
-            for _ in range(256):
-                if epochs != (self._epoch, self._scheduling_epoch):
+        with bulk.visiting({("dispatch", admission.run_uri) for admission in schedulable.values()}):
+            if time_healthy:
+                for _ in range(256):
+                    if epochs != (self._epoch, self._scheduling_epoch):
+                        self._wake.set()
+                        break
+                    scheduled = execution.schedule_once(schedulable)
+                    if scheduled is None:
+                        break
+                    admission_id, outcome = scheduled
+                    started_admissions.add(admission_id)
+                    admission = schedulable[admission_id]
+                    self._record_admission_health(
+                        admission_id,
+                        (
+                            "unavailable"
+                            if execution.local_assignment_reconciliation_pending(
+                                admission.run_uri
+                            )
+                            else "healthy"
+                        ),
+                    )
+                    self._set_state(admission_id, outcome.state, reason=outcome.reason, observed=admission)
+                else:
+                    # A full batch may leave runnable work. Yield the cycle lock
+                    # but do not impose the safety interval on the next batch.
                     self._wake.set()
-                    break
-                scheduled = execution.schedule_once(schedulable)
-                if scheduled is None:
-                    break
-                admission_id, outcome = scheduled
-                started_admissions.add(admission_id)
-                admission = schedulable[admission_id]
-                self._record_admission_health(
-                    admission_id,
-                    (
-                        "unavailable"
-                        if execution.local_assignment_reconciliation_pending(
-                            admission.run_uri
-                        )
-                        else "healthy"
-                    ),
-                )
-                self._set_state(admission_id, outcome.state, reason=outcome.reason, observed=admission)
-            else:
-                # A full batch may leave runnable work. Yield the cycle lock
-                # but do not impose the safety interval on the next batch.
-                self._wake.set()
         for admission_id, outcome in waiting_outcomes.items():
             if admission_id in started_admissions:
                 continue

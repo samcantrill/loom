@@ -204,8 +204,11 @@ def retain(
         # Still verify the final primary bytes and complete receipt below.
         available = final if final.exists() else tree
         logs = _retain_execution_logs(workspace, result, available, sealed=available == final)
-        with phase("publication_inventory_hash", operation_id=request.assignment_id):
+        with phase("publication_inventory_hash", operation_id=request.assignment_id) as evidence:
+            evidence["publication_id"] = pub_id
             members = inventory(available, limits)
+            evidence["member_count"] = len(members)
+            evidence["payload_bytes"] = sum(cast(int, member["size_bytes"]) for member in members)
         indexed = {str(member["path"]): member for member in members}
         outputs = {}
         for name, ref in result.outputs.items():
@@ -329,8 +332,12 @@ def prepare_publication(
             ):
                 raise QueueConflictError("shared output publication identity conflicts")
             if receipt is None:
-                with phase("publication_inventory_hash", operation_id=request.assignment_id):
+                with phase("publication_inventory_hash", operation_id=request.assignment_id) as evidence:
+                    evidence["publication_id"] = pub_id
                     receipt = read_receipt(available, reference, limits=limits)
+                    audited_members = cast(list[Mapping[str, PlainData]], receipt["members"])
+                    evidence["member_count"] = len(audited_members)
+                    evidence["payload_bytes"] = sum(cast(int, member["size_bytes"]) for member in audited_members)
                 receipt_digest = reference["receipt_digest"]
             elif reference["receipt_digest"] != receipt_digest:
                 raise QueueConflictError("shared outputs select different closures")
@@ -371,7 +378,11 @@ def prepare_publication(
             if available == staging:
                 from ._remote_stage_execution import _fsync_directory
 
-                with phase("publication_sync", operation_id=request.assignment_id):
+                audited_members = cast(list[Mapping[str, PlainData]], receipt["members"])
+                with phase("publication_sync", operation_id=request.assignment_id) as evidence:
+                    evidence["publication_id"] = pub_id
+                    evidence["member_count"] = len(audited_members)
+                    evidence["payload_bytes"] = sum(cast(int, member["size_bytes"]) for member in audited_members)
                     for directory, _, files in os.walk(staging, topdown=False):
                         for name in files:
                             descriptor = os.open(
@@ -479,10 +490,14 @@ def verify_outputs(outputs: Mapping[str, ArtifactRef]) -> None:
             tree = tree.parent
         if contained(tree, str(reference["primary"])) != primary:
             raise ArtifactStoreError("shared artifact primary binding conflicts")
-        key = (str(tree), encoded({k: v for k, v in reference.items() if k != "primary"}))
+        key = (str(tree.resolve()), encoded({k: v for k, v in reference.items() if k != "primary"}))
         if key not in verified:
-            with phase("publication_inventory_hash"):
+            with phase("publication_inventory_hash") as evidence:
+                evidence["publication_id"] = reference["publication_id"]
                 receipt = read_receipt(tree, reference)
+                audited_members = cast(list[Mapping[str, PlainData]], receipt["members"])
+                evidence["member_count"] = len(audited_members)
+                evidence["payload_bytes"] = sum(cast(int, item["size_bytes"]) for item in audited_members)
             verified[key] = (
                 cast(Mapping[str, PlainData], receipt["outputs"]),
                 {str(item["path"]): item for item in cast(list[Mapping[str, PlainData]], receipt["members"])},

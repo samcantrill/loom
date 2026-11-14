@@ -212,11 +212,17 @@ class ActionResults:
         claim_id: str,
         *,
         result: Mapping[str, PlainData],
+        expected_revision: int,
         attempt_id: str,
         assignment_id: str,
         fencing_token: str,
     ) -> None:
-        """Retain a native verified successful commit after its authority handoff."""
+        """Publish only the verified claim revision, preserving exact replay.
+
+        Producer fencing and claim revision are checked in the same transaction.
+        An already published identical result is replayable with its original
+        revision; changed demand or retry ownership cannot authorize a new result.
+        """
         encoded = _json(result)
         with self.transaction() as conn:
             claim = _claim(conn, claim_id)
@@ -228,6 +234,8 @@ class ActionResults:
                 if claim["result_json"] != encoded:
                     raise QueueConflictError("immutable action result conflicts")
                 return
+            if claim["revision"] != expected_revision:
+                raise QueueConflictError("verified action claim revision changed before publication")
             if claim["state"] not in {"owned", "settling"}:
                 raise QueueConflictError("action claim cannot publish a result")
             conn.execute(

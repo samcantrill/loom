@@ -1679,7 +1679,8 @@ def _shared_publication_workspace(tmp_path, *, limits=None, assignment_id="assig
     return workspace, profile, launch, result
 
 
-def test_shared_commit_verifies_one_closure_and_every_output_association(tmp_path, monkeypatch):
+@pytest.mark.parametrize("consumer", ["commit", "action_result"])
+def test_shared_commit_verifies_one_closure_and_every_output_association(tmp_path, monkeypatch, consumer):
     from loom.queue import _shared_publication as publication
     from loom.pipeline.stores.errors import ArtifactStoreError
 
@@ -1687,6 +1688,10 @@ def test_shared_commit_verifies_one_closure_and_every_output_association(tmp_pat
     report = workspace.retain_outputs()
     outputs = publication.publish(workspace.request(), report, profile.shared_roots,
                                   agent_id="agent-1", fence="fence-1")
+    from loom.queue._action_result_resolution import ActionResultResolution
+
+    verify = (publication.verify_outputs if consumer == "commit" else
+              object.__new__(ActionResultResolution)._verify_artifacts)
     original = publication.read_receipt
     checked = []
 
@@ -1695,17 +1700,30 @@ def test_shared_commit_verifies_one_closure_and_every_output_association(tmp_pat
         return original(*args, **kwargs)
 
     monkeypatch.setattr(publication, "read_receipt", inspect)
-    publication.verify_outputs(outputs)
+    from loom.queue._phase_timing import PhaseTimings, observe_phases
+    from loom.pipeline.stores.shared_artifacts import binding
+
+    timings = PhaseTimings()
+    with observe_phases(timings.observe):
+        verify(outputs)
     assert len(checked) == 1
+    reference = binding(outputs["result"].metadata)
+    receipt = original(checked[0], reference)
+    span, = timings.spans
+    assert span["attributes"] == {
+        "publication_id": reference["publication_id"],
+        "member_count": len(receipt["members"]),
+        "payload_bytes": sum(member["size_bytes"] for member in receipt["members"]),
+    }
     # Each logical association is still checked when another output already
     # verified the same inventory. The closure itself remains byte-identical.
     with pytest.raises(ArtifactStoreError, match="association"):
-        publication.verify_outputs({"result": outputs["result"], "companion": outputs["result"]})
-    publication.verify_outputs(outputs)
+        verify({"result": outputs["result"], "companion": outputs["result"]})
+    verify(outputs)
     assert len(checked) == 3  # New operations never reuse prior filesystem proof.
     Path(outputs["companion"].uri.removeprefix("file://")).write_bytes(b"corrupted")
     with pytest.raises(ArtifactStoreError, match="closure integrity"):
-        publication.verify_outputs(outputs)
+        verify(outputs)
 
 
 def test_publication_rechecks_inventory_binding_before_acceptance(tmp_path):
@@ -1763,11 +1781,19 @@ def test_shared_publication_replay_keeps_complete_closure_and_native_identity(tm
     workspace, profile, launch, _ = _shared_publication_workspace(tmp_path, container=container)
     original_digest = launch.spec_digest
     original_argv = launch.command_argv
+    from loom.queue._phase_timing import PhaseTimings, observe_phases
+
+    timings = PhaseTimings()
     report = workspace.retain_outputs()
+    retention_events = [payload for _, _, payload in workspace.pending_events()
+                        if payload.get("kind") == "native_timing"]
+    assert len(retention_events) == 1
+    timings.observe(retention_events[0])
     assert report.schema_version == 6
     assert report.output_kind == "shared"
     assert _RemoteExecutionReport.from_dict(report.to_dict()) == report
-    refs = publish(workspace.request(), report, profile.shared_roots, agent_id="agent-1", fence="fence-1")
+    with observe_phases(timings.observe):
+        refs = publish(workspace.request(), report, profile.shared_roots, agent_id="agent-1", fence="fence-1")
     # Recovery decodes the retained launch before retaining outputs again.
     retained = workspace.supervisor_launch_json()
     assert retained is not None
@@ -1784,6 +1810,21 @@ def test_shared_publication_replay_keeps_complete_closure_and_native_identity(tm
     publication = binding(refs["result"].metadata)
     assert publication is not None
     assert publication["primary"] == "primary.json"
+    from loom.pipeline.stores.shared_artifacts import read_receipt
+
+    receipt = read_receipt(tree, publication)
+    audited = [span for span in timings.spans if span["action"] in {
+        "publication_inventory_hash", "publication_sync",
+    }]
+    assert [span["action"] for span in audited] == [
+        "publication_inventory_hash", "publication_inventory_hash", "publication_sync",
+    ]
+    for span in audited:
+        assert span["attributes"] == {
+            "publication_id": publication["publication_id"],
+            "member_count": len(receipt["members"]),
+            "payload_bytes": sum(member["size_bytes"] for member in receipt["members"]),
+        }
     assert not (workspace.root / "retained-outputs").exists()
     with pytest.raises(QueueConflictError, match="identity"):
         publish(workspace.request(), report, profile.shared_roots, agent_id="agent-1", fence="obsolete-fence")
