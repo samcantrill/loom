@@ -734,13 +734,14 @@ def execute(request, repeated, directory):
             from loom.queue.submitted_execution import SubmittedContainerExecution
 
             execution = SubmittedContainerExecution.from_dict(request["execution"])
-            policies = [p for p in service.client.container_policies
-                        if p.capability.to_dict() == request["profile"]]
+            policies = [(p, capability) for p in service.client.container_policies
+                        for capability in (p.available_capability(),)
+                        if capability.to_dict() == request["profile"]]
             if len(policies) != 1:
                 raise QueueConflictError("GPU capability policy differs from admitted selection")
             return submitted_gpu_capability(
-                policies[0], execution, service.client.execution_inventory,
-                workspace=service.client.agent_root,
+                policies[0][0], execution, service.client.execution_inventory,
+                workspace=service.client.agent_root, selected_capability=policies[0][1],
             )
         profiles = [
             p for p in service.client.resident_profiles

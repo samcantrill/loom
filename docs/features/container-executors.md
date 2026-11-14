@@ -821,3 +821,9 @@ conflicting duplicate targets, including attempts to add a writable mount over
 one of these roots. The parser performs no directory creation or fallback lookup.
 Native submitted-container workers continue to use their published storage
 policy; this option does not replace native storage qualification.
+
+Fleet GPU capability checks bind the current availability-qualified container
+policy advertised by the agent. Unavailable optional input directories are
+omitted using the same policy owner as capacity offers; protected runtime, image
+and output roots remain required. The probe retains that exact selected
+capability in its launch and result, and refuses stale selections.
