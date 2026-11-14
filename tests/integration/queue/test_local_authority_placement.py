@@ -128,7 +128,11 @@ def test_native_preparation_restart_inspection_and_explicit_failed_retry(
             )
             assert inspected.stages[0].attempt == 2
             assert str(state_root) not in json.dumps(inspected.to_dict())
-        assert not list(service.daemon.run_store_root.rglob("*.sqlite*"))
+        # The collection owns a derived discovery index, never a second run
+        # authority. All lifecycle databases still belong to state_root.
+        assert set(service.daemon.run_store_root.rglob("*.sqlite*")) <= {
+            service.daemon.run_store_root / '.loom_catalog/discovery.sqlite'
+        }
         # Both the preparation child and its published target use the same owner.
         databases = list(state_root.rglob("authority.sqlite3"))
         assert len(databases) == 2
