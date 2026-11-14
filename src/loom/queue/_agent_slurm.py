@@ -379,6 +379,9 @@ class AgentSlurmJobs:
         diagnostic = self._containment_diagnostics.get(assignment.operation_id)
         if diagnostic is not None and release is None and recovery_evidence is None:
             evidence["containment_diagnostic"] = diagnostic
+        # The journal and the first HTTP acknowledgement must see the same
+        # JSON-native tree, including nested frozen scheduler task identities.
+        evidence = cast(dict[str, PlainData], thaw_plain_data(evidence))
         encoded = _json(evidence)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -821,4 +824,4 @@ class AgentSlurmJobs:
 
 
 def _json(value: object) -> str:
-    return json.dumps(thaw_plain_data(value), sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)

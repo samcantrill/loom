@@ -563,6 +563,7 @@ def test_live_job_resume_requires_current_epoch_task_and_acknowledged_handle(tmp
 
 @pytest.mark.parametrize("recovering", [False, True])
 def test_frozen_containment_evidence_survives_lost_ack_and_restart(tmp_path, monkeypatch, recovering):
+    import json
     from types import SimpleNamespace
 
     import loom.queue._agent_slurm as owner
@@ -592,6 +593,9 @@ def test_frozen_containment_evidence_survives_lost_ack_and_restart(tmp_path, mon
     lost = []
 
     def lose_ack(value):
+        # Match the real transport: it encodes the initial callback directly,
+        # whereas restart replay has already decoded the persisted JSON.
+        json.dumps(value, allow_nan=False)
         if value[field] is not None:
             lost.append(thaw_plain_data(value))
             raise OSError("lost containment acknowledgement")
