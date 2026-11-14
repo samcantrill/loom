@@ -30,7 +30,7 @@ from loom.pipeline.executors.slurm.ready_stage import (
     SlurmContainmentReceipt,
     resolve_slurm_containment,
 )
-from loom.serialization import PlainData
+from loom.serialization import PlainData, thaw_plain_data
 from loom.timestamps import utc_timestamp
 
 from ._slurm_result_transport import SharedSlurmResult
@@ -821,4 +821,4 @@ class AgentSlurmJobs:
 
 
 def _json(value: object) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return json.dumps(thaw_plain_data(value), sort_keys=True, separators=(",", ":"), allow_nan=False)

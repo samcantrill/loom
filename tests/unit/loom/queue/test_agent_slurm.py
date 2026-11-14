@@ -561,6 +561,63 @@ def test_live_job_resume_requires_current_epoch_task_and_acknowledged_handle(tmp
     assert reopened.has_unreconciled_work(binding)
 
 
+@pytest.mark.parametrize("recovering", [False, True])
+def test_frozen_containment_evidence_survives_lost_ack_and_restart(tmp_path, monkeypatch, recovering):
+    from types import SimpleNamespace
+
+    import loom.queue._agent_slurm as owner
+    from loom.pipeline.executors.slurm.ready_stage import SlurmContainmentHelper
+    from loom.serialization import freeze_plain_data, thaw_plain_data
+
+    runner = FakeSlurmCommandRunner()
+    profile = replace(_profile(runner, tmp_path),
+                      containment_helper=SlurmContainmentHelper("fixture", ("true",)))
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,))
+    task = _task(profile)
+
+    def accept(value):
+        return {"sequence": value["sequence"], "cancel_requested": False}
+
+    agent.step(task, accept)
+    saved = agent.journal.read("operation-1")
+    proof = {"job_id": saved.job_id, "cluster_id": saved.cluster,
+             "accounting_identity": {"job_id": saved.job_id, "cluster": saved.cluster,
+                                     "steps": ["batch", "extern"], "name": "caf\u00e9"}}
+    monkeypatch.setattr(owner, "resolve_slurm_containment", lambda _profile, request: SimpleNamespace(
+        contained=True, diagnostic_code=None, state="CONTAINED",
+        evidence_id="proof", evidence_revision="1", echo=request,
+    ))
+    field = "recovery_evidence" if recovering else "release"
+    lost = []
+
+    def lose_ack(value):
+        if value[field] is not None:
+            lost.append(thaw_plain_data(value))
+            raise OSError("lost containment acknowledgement")
+        return accept(value)
+
+    request = {**task, "job_id": saved.job_id, "cluster": saved.cluster}
+    if recovering:
+        request["recovery_request"] = proof
+    else:
+        request.update(release_requested=True, containment_request=proof)
+    with pytest.raises(OSError, match="lost containment acknowledgement"):
+        agent.step(freeze_plain_data(request), lose_ack)
+    assert lost[0][field]["echo"] == proof
+    replayed = []
+
+    def replay_ack(value):
+        replayed.append(value)
+        return accept(value)
+
+    reopened = AgentSlurmJobs(tmp_path, (profile,))
+    reopened.replay_pending(replay_ack)
+    assert replayed == lost
+    assert reopened.journal.read("operation-1").job_id == saved.job_id
+    assert sum(call[0] == "sbatch" for call in runner.calls) == 1
+
+
 def test_known_job_awaiting_containment_does_not_block_recovery_admission(tmp_path, monkeypatch):
     from types import SimpleNamespace
     import loom.queue._agent_slurm as owner
