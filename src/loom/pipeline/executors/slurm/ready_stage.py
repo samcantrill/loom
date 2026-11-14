@@ -76,6 +76,7 @@ class SlurmContainmentReceipt:
     evidence_id: str | None = None
     evidence_revision: str | None = None
     echo: Mapping[str, PlainData] | None = None
+    diagnostic_code: str | None = None
 
     @property
     def contained(self) -> bool:
@@ -173,6 +174,20 @@ def resolve_slurm_containment(
             ):
                 return SlurmContainmentReceipt("UNKNOWN")
         value = helper.resolve(request)
+        if isinstance(value, Mapping) and set(value) == {"state", "diagnostic"}:
+            diagnostic = value["diagnostic"]
+            if (
+                value["state"] == "UNKNOWN"
+                and isinstance(diagnostic, Mapping)
+                and set(diagnostic) == {"schema_version", "code"}
+                and type(diagnostic["schema_version"]) is int
+                and diagnostic["schema_version"] == 1
+                and diagnostic["code"] == "terminal_controller_record_retained"
+            ):
+                return SlurmContainmentReceipt(
+                    "UNKNOWN", diagnostic_code="terminal_controller_record_retained",
+                )
+            return SlurmContainmentReceipt("UNKNOWN")
         if not isinstance(value, Mapping) or set(value) != {
             "state",
             "evidence_id",

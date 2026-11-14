@@ -56,6 +56,28 @@ def _ack(value):
     return {"sequence": value["sequence"], "cancel_requested": False}
 
 
+@pytest.mark.parametrize("diagnostic,expected", [
+    ("terminal_controller_record_retained", [0, 30, 60, 90]),
+    (None, [0, 30, 90]),
+    ("unrecognized", [0, 30, 90]),
+])
+def test_containment_pending_keeps_normal_interval(tmp_path, monkeypatch, diagnostic, expected):
+    import loom.queue._agent_slurm as agent_module
+
+    owner, _task_value, clock, _runner, profile = _owner(tmp_path, monkeypatch)
+    probes = []
+
+    def probe(*_args):
+        probes.append(clock[0])
+        return SlurmContainmentReceipt("UNKNOWN", diagnostic_code=diagnostic)
+
+    monkeypatch.setattr(agent_module, "resolve_slurm_containment", probe)
+    for now in (0, 29, 30, 59, 60, 89, 90):
+        clock[0] = now
+        assert not owner._containment(profile, "operation-1", {}).contained
+    assert probes == expected
+
+
 def _queries(runner):
     return len([call for call in runner.calls if call[0] in {"squeue", "sacct"}])
 

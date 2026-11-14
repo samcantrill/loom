@@ -169,6 +169,11 @@ class AgentSlurmJobs:
         self._batch_sequence = 0
         self._replay_after: str | None = None
         self._batch_limits: dict[tuple[str, str], int] = {}
+        self._containment_diagnostics: dict[str, str] = {}
+        self._containment_order: dict[str, int] = {}
+        self._containment_sequence = 0
+        self._containment_budget: int | None = None
+        self._containment_deadline: float | None = None
         self._reconciliation_binding: tuple[str, str] | None = None
         self._reconciled_operations: dict[str, tuple[object, object, bool]] = {}
 
@@ -253,8 +258,27 @@ class AgentSlurmJobs:
     ) -> SlurmContainmentReceipt:
         if not self._retry_due("containment", operation_id):
             return SlurmContainmentReceipt("UNKNOWN")
+        if self._containment_budget is not None:
+            if self._containment_budget == 0 or (
+                self._containment_deadline is not None and monotonic() >= self._containment_deadline
+            ):
+                return SlurmContainmentReceipt("UNKNOWN")
+            self._containment_budget -= 1
+        self._containment_sequence += 1
+        self._containment_order[operation_id] = self._containment_sequence
         receipt = resolve_slurm_containment(profile, request)
-        self._retry_completed("containment", operation_id, profile, failed=not receipt.contained)
+        if receipt.diagnostic_code is None:
+            self._containment_diagnostics.pop(operation_id, None)
+        else:
+            self._containment_diagnostics[operation_id] = receipt.diagnostic_code
+        expected_pending = (
+            receipt.state == "UNKNOWN"
+            and receipt.diagnostic_code == "terminal_controller_record_retained"
+        )
+        self._retry_completed(
+            "containment", operation_id, profile,
+            failed=not receipt.contained and not expected_pending,
+        )
         return receipt
 
     @staticmethod
@@ -352,6 +376,9 @@ class AgentSlurmJobs:
             if recovery_evidence is None
             else dict(recovery_evidence),
         }
+        diagnostic = self._containment_diagnostics.get(assignment.operation_id)
+        if diagnostic is not None and release is None and recovery_evidence is None:
+            evidence["containment_diagnostic"] = diagnostic
         encoded = _json(evidence)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -396,6 +423,8 @@ class AgentSlurmJobs:
             self._reconciled_operations.pop(assignment.operation_id, None)
             self._next_poll.pop(assignment.operation_id, None)
             self._batch_order.pop(assignment.operation_id, None)
+            self._containment_order.pop(assignment.operation_id, None)
+            self._containment_diagnostics.pop(assignment.operation_id, None)
             for kind in ("observation", "cancel", "containment"):
                 self._retry_at.pop((kind, assignment.operation_id), None)
                 self._retry_failures.pop((kind, assignment.operation_id), None)
@@ -461,7 +490,9 @@ class AgentSlurmJobs:
         """Deliver this page's results before bounded, fair accounting batches.
 
         The shared budget covers ordinary accounting queries. Submission,
-        cancellation, helper calls, transport and filesystem IO are separate.
+        cancellation, transport and filesystem IO are separate. Containment
+        has its own equal-sized query/time budget and oldest-probed ordering;
+        one bounded helper may finish after that budget's deadline.
         """
         policy = self.observation_policy
         if policy is None or policy.max_jobs_per_query is None:
@@ -471,8 +502,17 @@ class AgentSlurmJobs:
         with self._lock:
             for task in tasks:
                 self._step(task, acknowledge, allow_submission=False, _defer_observation=True, _delivery_only=True)
-            for task in tasks:
-                self._step(task, acknowledge, allow_submission=allow_submission, _defer_observation=True)
+            assert policy.max_queries_per_cycle is not None and policy.cycle_budget_seconds is not None
+            self._containment_budget = policy.max_queries_per_cycle
+            self._containment_deadline = monotonic() + policy.cycle_budget_seconds
+            try:
+                for task in sorted(tasks, key=lambda value: self._containment_order.get(
+                    SlurmStageAssignment.from_dict(value["assignment"]).operation_id, 0,
+                )):
+                    self._step(task, acknowledge, allow_submission=allow_submission, _defer_observation=True)
+            finally:
+                self._containment_budget = None
+                self._containment_deadline = None
             self._observe_batches(tasks, acknowledge, policy)
 
     def _observe_batches(self, tasks, acknowledge, policy: SlurmObservationPolicy) -> None:

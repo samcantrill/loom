@@ -431,6 +431,25 @@ def test_slurm_containment_requires_exact_positive_echo(process_policy) -> None:
     assert not resolve_slurm_containment(profile, request).contained
 
 
+@pytest.mark.parametrize("state,version,code,accepted", [
+    ("UNKNOWN", 1, "terminal_controller_record_retained", True),
+    ("CONTAINED", 1, "terminal_controller_record_retained", False),
+    ("UNKNOWN", True, "terminal_controller_record_retained", False),
+    ("UNKNOWN", 2, "terminal_controller_record_retained", False),
+    ("UNKNOWN", 1, "unrecognized", False),
+])
+def test_containment_negative_diagnostic_never_proves_release(state, version, code, accepted):
+    payload = {"state": state, "diagnostic": {"schema_version": version, "code": code}}
+    program = f"print({json.dumps(payload)!r})"
+    profile = _profile(FakeSlurmCommandRunner())
+    object.__setattr__(profile, "containment_helper", SlurmContainmentHelper(
+        "diagnostic-fixture", (sys.executable, "-c", program),
+    ))
+    receipt = resolve_slurm_containment(profile, {})
+    assert not receipt.contained
+    assert receipt.diagnostic_code == (code if accepted else None)
+
+
 def test_slurm_containment_timeout_is_part_of_retained_profile_identity() -> None:
     runner = FakeSlurmCommandRunner()
     helper = SlurmContainmentHelper("site-helper-v1", ("site-helper",), 5.0)
@@ -471,6 +490,7 @@ def _exercise_mixed_route_run(
     slurm_output_size: int | None = None,
     lose_output_ack_at: int | None = None,
     guarded_recovery: bool = False,
+    recovery_terminal_state: str | None = None,
     native_failure: bool = False,
     container_options: Mapping[str, object] | None = None,
 ) -> None:
@@ -478,6 +498,7 @@ def _exercise_mixed_route_run(
     from loom.timestamps import parse_timestamp, utc_timestamp
 
     now = [utc_timestamp()]
+    history_state = ["RUNNING"]
     def clock():
         return now[0] if long_outage else utc_timestamp()
 
@@ -496,7 +517,7 @@ def _exercise_mixed_route_run(
             result = original(**selection)
             submitted = utc_timestamp(parse_timestamp(selection["started_after"]) + timedelta(seconds=60))[:-1]
             return replace(result, stdout=(
-                f"1200|{selection['job_name']}|1000|cluster-a|{submitted}|1200|sFixture1200|RUNNING\n"
+                f"1200|{selection['job_name']}|1000|cluster-a|{submitted}|1200|sFixture1200|{history_state[0]}\n"
             ))
         monkeypatch.setattr(candidate.runner, "discover_named_operation", observe)
         return replace(candidate, accounting_history=SlurmHistoryPolicy(1000))
@@ -1019,18 +1040,50 @@ def _exercise_mixed_route_run(
                     assignment_id
                 )
 
+                if not accounting_history:
+                    _agent_observation(
+                        execution, record.assignment.operation_id,
+                        expected_job_id="1200", scheduler_state="TIMEOUT",
+                        scheduler_source="sacct", observed_at="2030-01-01T00:00:01+00:00",
+                    )
+                    with pytest.raises(QueueConflictError, match="not in an exact unknown state"):
+                        operator.recover_unknown(replace(recovery_request, recovery_id="no-accounting-identity"))
+
+                with pytest.raises(QueueConflictError, match="identity conflicts"):
+                    operator.recover_unknown(replace(
+                        recovery_request, recovery_id="wrong-incarnation",
+                        target=replace(recovery_request.target, bootstrap_incarnation_id="other-incarnation"),
+                    ))
+                with pytest.raises(QueueConflictError, match="expected state conflicts"):
+                    operator.recover_unknown(replace(
+                        recovery_request, recovery_id="stale-revision",
+                        expected_state_version=recovery_request.expected_state_version + 1,
+                    ))
+
                 unknown_observation = _agent_observation(
                     execution,  # noqa: SLF001
                     record.assignment.operation_id,
                     expected_job_id="1200",
-                    scheduler_state=None,
-                    scheduler_source="unavailable",
+                    scheduler_state=recovery_terminal_state,
+                    scheduler_source="sacct" if recovery_terminal_state else "unavailable",
                     observed_at="2030-01-01T00:00:01+00:00",
                 )
-                assert unknown_observation.scheduler_source == "unavailable"
-                assert unknown_observation.scheduler_state is None
+                assert unknown_observation.scheduler_source == (
+                    "sacct" if recovery_terminal_state else "unavailable"
+                )
+                assert unknown_observation.scheduler_state == recovery_terminal_state
+                if recovery_terminal_state is not None:
+                    history_state[0] = recovery_terminal_state
+                    import loom.queue._agent_slurm as agent_module
+                    from loom.pipeline.executors.slurm.ready_stage import SlurmContainmentReceipt
+                    with monkeypatch.context() as pending_patch:
+                        pending_patch.setattr(agent_module, "resolve_slurm_containment", lambda *_: SlurmContainmentReceipt("UNKNOWN"))
+                        pending = operator.recover_unknown(recovery_request)
+                        assert pending["state"] == "pending"
+                        assert execution.slurm_assignments.read(assignment_id).state == "running"
                 recovery_receipt = operator.recover_unknown(recovery_request)
                 assert recovery_receipt["state"] == "closed"
+                assert operator.recover_unknown(recovery_request) == recovery_receipt
                 assert recovery_receipt["retry_allowed"] is False
                 assert recovery_receipt["physical_ownership"] == "retained"
                 recovery_evidence = cast(
@@ -1526,6 +1579,14 @@ def test_slurm_guarded_recovery_closes_from_exact_helper_and_retains_slot(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _exercise_mixed_route_run(tmp_path, monkeypatch, guarded_recovery=True)
+
+
+@pytest.mark.parametrize("terminal_state", ["TIMEOUT", "FAILED", "CANCELLED", "COMPLETED"])
+def test_terminal_without_report_uses_guarded_recovery(tmp_path, monkeypatch, terminal_state):
+    _exercise_mixed_route_run(
+        tmp_path, monkeypatch, guarded_recovery=True,
+        accounting_history=True, recovery_terminal_state=terminal_state,
+    )
 
 
 @pytest.mark.parametrize(

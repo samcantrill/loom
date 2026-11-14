@@ -262,6 +262,7 @@ def test_cancelled_published_result_waits_for_terminal_rejection_ack(
         "resolve_slurm_containment",
         lambda _profile, proof: SimpleNamespace(
             contained=True,
+            diagnostic_code=None,
             state="CONTAINED",
             evidence_id="proof",
             evidence_revision="1",
@@ -391,6 +392,7 @@ def test_interrupted_acknowledged_cleanup_replays_authority_before_retirement(
         "resolve_slurm_containment",
         lambda _profile, proof: SimpleNamespace(
             contained=True,
+            diagnostic_code=None,
             state="CONTAINED",
             evidence_id="proof",
             evidence_revision="1",
@@ -578,7 +580,7 @@ def test_known_job_awaiting_containment_does_not_block_recovery_admission(tmp_pa
 
     agent.step(task, acknowledge)
     saved = agent.journal.read("operation-1")
-    monkeypatch.setattr(owner, "resolve_slurm_containment", lambda *_: SimpleNamespace(contained=False, state="UNKNOWN"))
+    monkeypatch.setattr(owner, "resolve_slurm_containment", lambda *_: SimpleNamespace(contained=False, state="UNKNOWN", diagnostic_code=None))
     agent.step({**task, "job_id": saved.job_id, "cluster": saved.cluster,
                 "release_requested": True, "containment_request": {}}, acknowledge)
     assert not agent.has_unreconciled_work(binding)

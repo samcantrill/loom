@@ -29,6 +29,36 @@ def _line(key, *, uid=1000, submitted="2026-11-02T00:00:00", sluid=None):
     return f"{16 + key}|{operation_job_name(f'operation-{key}')}|{uid}|cluster-a|{submitted}|{40 + key}|{sluid or f's{key}'}|RUNNING\n"
 
 
+@pytest.mark.parametrize("slow", [False, True])
+def test_containment_budget_is_bounded_and_fair(tmp_path, monkeypatch, slow):
+    from loom.pipeline.executors.slurm.ready_stage import SlurmContainmentReceipt
+    import loom.queue._agent_slurm as module
+
+    owner, clock, runner, profile = _batch_owner(tmp_path, monkeypatch, calls=2, budget=10)
+    tasks = [_task(profile, key=str(i)) for i in range(1, 6)]
+    owner.step_cycle(tasks, _ack)
+    probes = []
+
+    def containment(_profile, proof):
+        probes.append(proof["operation"])
+        if slow:
+            clock[0] += 10
+        return SlurmContainmentReceipt("UNKNOWN", diagnostic_code="terminal_controller_record_retained")
+
+    monkeypatch.setattr(module, "resolve_slurm_containment", containment)
+    tasks = [{**task, "release_requested": True, "containment_request": {"operation": str(i)}}
+             for i, task in enumerate(tasks, start=1)]
+    received = []
+    for _ in range(5 if slow else 3):
+        before = len(probes)
+        owner.step_cycle(tasks, lambda value: (received.append(value) or _ack(value)))
+        assert len(probes) - before <= (1 if slow else 2)
+        clock[0] += 30
+    assert probes[:5] == ["1", "2", "3", "4", "5"]
+    assert any(value.get("containment_diagnostic") == "terminal_controller_record_retained" for value in received)
+    assert owner.has_retained_work()
+
+
 def _query_responses(monkeypatch, runner, response):
     original = runner.discover_named_operations
     def query(**selection):

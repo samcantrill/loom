@@ -2001,7 +2001,7 @@ def test_slurm_dispatch_resolves_the_exact_retained_profile() -> None:
     subject = cast(
         Any,
         SimpleNamespace(
-            stage_work_store=SimpleNamespace(list_stage_work=lambda: (record,)),
+            stage_work_store=SimpleNamespace(find_stage_work=lambda work_id: record if work_id == record.stage_work_id else None),
             _slurm_profile=resolve_profile,
         ),
     )
@@ -2446,7 +2446,9 @@ def test_slurm_grant_and_start_are_blocked_by_the_durable_cancel_request(
     )
     execution = object.__new__(local_daemon_execution.LocalDaemonExecution)
     subject = cast(Any, execution)
-    subject.config = SimpleNamespace(control_database=control_database)
+    subject.config = SimpleNamespace(
+        control_database=control_database, connect_database=sqlite3.connect,
+    )
     subject._slurm_authorized_record = lambda *args, **kwargs: record
     subject._remote_authority = lambda run_uri: pytest.fail(
         "cancellation must block authority grant"

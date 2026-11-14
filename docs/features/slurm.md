@@ -8,6 +8,32 @@ whole-pipeline continuation is generated.
 
 ## Connected ready-stage execution
 
+### Terminal assignments without worker reports
+
+Guarded recovery also accepts a running assignment with no worker report when
+its retained accounting observation is `sacct` `TIMEOUT`, `FAILED`, `CANCELLED`
+or `COMPLETED`, with an immutable accounting identity and matching retained job
+handle. Terminal scheduler state only makes the assignment eligible: the exact
+attempt/revision/fence, positive site containment, ordinary-result ownership,
+provider release and recovery sealing checks still apply. `COMPLETED` without
+a scientific report does not establish success. Recovery can close failed or
+cancelled attempts; retry is an independent operator decision.
+
+A helper may return the negative diagnostic
+`{"state":"UNKNOWN","diagnostic":{"schema_version":1,"code":"terminal_controller_record_retained"}}`.
+It authorizes no release. The agent uses normal polling for this expected wait;
+unknown codes, malformed responses and query failures retain error backoff.
+Positive evidence retains its exact request echo validation. Operation status
+exposes the last acknowledged `containment_diagnostic` separately from
+`loom_result_status`. Old helper responses remain accepted; upgrade the
+coordinator before an agent that emits the optional diagnostic evidence field.
+
+With bounded accounting observation enabled, containment receives a separate
+query/time budget using the configured `max_queries_per_cycle` and
+`cycle_budget_seconds`, with oldest-probed ordering. A single bounded helper may
+finish after that deadline. Retry timers and probe ordering are disposable;
+retained assignments and acknowledged evidence remain the ownership authority.
+
 The native coordinator owns an explicit ready-stage route. A managed-stage run may resolve
 different execution targets per stage, but the coordinator remains the one run
 owner:

@@ -1419,6 +1419,7 @@ class LocalDaemonExecution:
         if retained is None:
             return None
         submission = self.slurm_submissions.find(operation_id)
+        _, agent_evidence = self.slurm_assignments.agent_evidence(retained.assignment.assignment_id)
         result: dict[str, PlainData] = {
             "assignment_id": retained.assignment.assignment_id,
             "agent_id": retained.assignment.agent_id,
@@ -1435,6 +1436,7 @@ class LocalDaemonExecution:
             if submission is None
             else submission.state.value,
             "submission_evidence": None if submission is None else submission.evidence,
+            "containment_diagnostic": None if agent_evidence is None else agent_evidence.get("containment_diagnostic"),
             "scheduler_state": None
             if submission is None
             else submission.scheduler_state,
@@ -2172,7 +2174,7 @@ class LocalDaemonExecution:
                 _defer_publication=_defer_publication, _publication=_publication,
             )
         if (
-            set(evidence)
+            set(evidence) - {"containment_diagnostic"}
             != {
                 "schema_version",
                 "provider_released",
@@ -2187,6 +2189,8 @@ class LocalDaemonExecution:
             raise QueueServiceError("SLURM evidence version or fields are unsupported")
         if not isinstance(evidence.get("provider_released"), bool):
             raise QueueServiceError("SLURM provider release is invalid")
+        if "containment_diagnostic" in evidence and evidence["containment_diagnostic"] != "terminal_controller_record_retained":
+            raise QueueServiceError("SLURM containment diagnostic is invalid")
         for field in ("release", "recovery_evidence"):
             if evidence[field] is not None and not isinstance(evidence[field], Mapping):
                 raise QueueServiceError("SLURM containment evidence is invalid")
@@ -2604,6 +2608,17 @@ class LocalDaemonExecution:
             return submission is not None and (
                 submission.scheduler_source == "unavailable"
                 or submission.scheduler_state == "UNKNOWN"
+                or (
+                    submission.scheduler_source == "sacct"
+                    and submission.scheduler_state in {
+                        "TIMEOUT", "FAILED", "CANCELLED", "COMPLETED",
+                    }
+                    # The submission owner validates and retains the accounting
+                    # incarnation. Eligibility alone never proves containment.
+                    and submission.accounting_identity is not None
+                    and (submission.job_id, submission.cluster)
+                    == (record.job_id, record.cluster)
+                )
             )
         if self._managed_target_is_remote(request.assignment_id):
             with self.config.connect_database(self.config.control_database) as conn:
