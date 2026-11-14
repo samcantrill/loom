@@ -408,7 +408,11 @@ class LocalRunStore:
             "created_at": created_at,
             "metadata": normalized_metadata,
         }
+        from ._run_discovery_index import register
+
+        register(run_dir.parent, run_uri_text, created_at, published=False)
         atomic_write_json(run_dir / "run.json", payload)
+        register(run_dir.parent, run_uri_text, created_at, published=True)
         self._touch_run_freshness(run_uri_text, reason="run_metadata")
 
     def read_run_freshness(self, run_uri: str) -> RunFreshnessRecord | None:

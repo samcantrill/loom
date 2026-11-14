@@ -63,10 +63,28 @@ def catalog_db_path(collection_path: str | Path) -> Path:
     return catalog_sidecar_dir(collection_path) / CATALOG_DB_FILENAME
 
 
-def rebuild_catalog(collection_path: str | Path) -> CatalogIndexResult:
+def rebuild_catalog(collection_path: str | Path, *, discovery_only: bool = False) -> CatalogIndexResult:
     """Rebuild the derived catalog DB from authoritative run-store metadata."""
 
     collection = Path(collection_path)
+    if collection.is_dir() or discovery_only:
+        from loom.pipeline.stores._run_discovery_index import refresh, connection
+        from loom.pipeline.stores.errors import StoreError
+        from .models import CatalogWarning, CatalogWarningCode
+
+        try:
+            warnings = refresh(collection)
+            if discovery_only:
+                with connection(collection) as conn:
+                    count = conn.execute("SELECT COUNT(*) FROM discovery_runs").fetchone()[0]
+                return CatalogIndexResult(
+                    indexed_count=count, skipped_count=len(warnings), checked_at=utc_timestamp(),
+                    warnings=tuple(CatalogWarning(CatalogWarningCode.UNREADABLE_RUN,
+                        "Run metadata unavailable during discovery refresh", run_uri=row['run_uri'])
+                        for row in warnings),
+                )
+        except StoreError as error:
+            raise CatalogStorageError(str(error)) from error
     scan = scan_current_collection_records(collection)
     if collection.is_dir():
         _replace_catalog_records(collection, scan.records, checked_at=scan.checked_at)

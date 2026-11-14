@@ -32,12 +32,16 @@ class RunCatalog:
 
         return cls(path)
 
-    def rebuild(self) -> CatalogIndexResult:
-        """Rebuild the derived catalog from authoritative run-store metadata."""
+    def rebuild(self, *, discovery_only: bool = False) -> CatalogIndexResult:
+        """Refresh external imports/deletions; optionally rebuild only discovery.
+
+        Discovery stores membership and creation time, never lifecycle status.
+        The default also retains the existing full summary-catalog rebuild.
+        """
 
         from ._sqlite import rebuild_catalog
 
-        return rebuild_catalog(self.collection_path)
+        return rebuild_catalog(self.collection_path, discovery_only=discovery_only)
 
     def scan_current(self) -> ListRunsResult:
         """Directly scan the local collection for current run summaries."""

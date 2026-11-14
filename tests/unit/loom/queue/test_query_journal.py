@@ -18,7 +18,7 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture
 def journal():
-    conn = sqlite3.connect(":memory:")
+    conn = sqlite3.connect(":memory:", uri=True)
     conn.row_factory = sqlite3.Row
     conn.execute("CREATE TABLE managed_admissions(admission_id TEXT PRIMARY KEY, queue_item_id TEXT, state TEXT, run_uri TEXT, accepted_at TEXT)")
     conn.execute("CREATE TABLE preparation_operations(operation_id TEXT PRIMARY KEY, principal_id TEXT, state TEXT, kind TEXT, queue_item_id TEXT, accepted_at TEXT, result_json TEXT)")
@@ -123,3 +123,41 @@ def test_run_submission_sort_pages_noninitializers_and_unbound_runs(journal):
     assert len(result.items) == len({item["identity"] for item in result.items}) == 1103
     assert max(counts) == 501
     assert result.pages[0].items == () and result.pages[0].next_cursor is not None
+
+
+@pytest.mark.parametrize("descending", [False, True])
+def test_creation_sort_pages_index_without_reading_run_documents(journal, tmp_path, monkeypatch, descending):
+    from loom.pipeline.stores import LocalRunStore
+    from loom.pipeline.stores._run_discovery_index import connection
+    from loom.queue._query_journal import run_creation_candidates
+    from loom.runs import RunQuery
+
+    daemon, conn = journal
+    daemon.config = SimpleNamespace(run_store_root=tmp_path)
+    with connection(tmp_path, create=True) as write, write:
+        write.executemany("INSERT INTO discovery_runs VALUES(?,?,0,0)",
+                          [(f"file:///run/{i}", f"2026-01-{1 + i % 28:02}T00:00:00Z") for i in range(1103)])
+    with connection(tmp_path) as read:
+        assert read.execute("SELECT COUNT(*) FROM discovery_runs").fetchone()[0] == 1103
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("creation-time candidate discovery read a run document")
+
+    monkeypatch.setattr(LocalRunStore, "read_run_document", forbidden)
+    query = RunQuery(order_by=(Order("created_at", descending),), limit=137).checked()
+    sizes = []
+
+    def search(current):
+        rows, warnings = run_creation_candidates(daemon, current, "owner")
+        sizes.append(len(rows))
+        return search_page(current, "owner",
+                           [((r['created_at'], r['run_uri']), r) for r in rows],
+                           lambda row: QueryRecord({'native': row}), warnings=warnings)
+
+    result = collect_pages(search, query)
+    assert len(result.items) == len({item['identity'] for item in result.items}) == 1103
+    assert max(sizes) == 501
+    expected = sorted([(f"2026-01-{1+i%28:02}T00:00:00Z", f"file:///run/{i}") for i in range(1103)],
+                      key=cmp_to_key(lambda a, b: compare_keys(a, b, query.order_by)))
+    assert [row['identity'] for row in result.items] == [key[1] for key in expected]
+    assert not result.complete  # Explicit refresh has not established imported-run coverage.
