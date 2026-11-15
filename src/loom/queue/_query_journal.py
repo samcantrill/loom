@@ -13,6 +13,17 @@ _OPERATION_COLUMNS = (
 )
 
 
+def managed_run_exists(daemon: Any, uri: str) -> bool:
+    """Test exact managed membership without loading or paging the journals."""
+    with daemon._connection() as conn:
+        return bool(conn.execute(
+            "SELECT EXISTS(SELECT 1 FROM managed_admissions WHERE run_uri=?) "
+            "OR EXISTS(SELECT 1 FROM preparation_operations "
+            "WHERE json_extract(result_json, '$.prepared_run.run_uri')=?)",
+            (uri, uri),
+        ).fetchone()[0])
+
+
 def journal_candidates(daemon: Any, query: RunQuery, owner: str) -> list[dict[str, Any]]:
     """Read at most 501 rows, using the public keyset and null-last ordering."""
     submissions = query.entity == "submissions"

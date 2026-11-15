@@ -65,10 +65,14 @@ def lineage_operation(daemon: Any, query: LineageQuery) -> QueryPage:
             False,
         )
     if query.scope["kind"] == "managed":
-        from ._run_queries import _journal
+        from ._query_journal import run_uri_candidates
+        from loom.runs.query import RunQuery
 
-        operations, admissions = _journal(daemon)
-        uris = {row["run_uri"] for row in (*operations, *admissions) if row["run_uri"]}
+        # One lookahead row preserves the traversal-limit warning without
+        # materializing every managed operation before the 500-run scan.
+        uris = {row["run_uri"] for row in run_uri_candidates(
+            daemon, RunQuery().checked(), owner,
+        )}
     else:
         try:
             uris = {

@@ -101,6 +101,19 @@ def test_default_run_discovery_deduplicates_and_pages_before_authority_reads(jou
     assert max(sizes) == 501
 
 
+def test_managed_membership_is_exact_and_not_limited_to_first_page(journal):
+    from loom.queue._output_selection import authorized_run
+
+    daemon, conn = journal
+    conn.execute("UPDATE preparation_operations SET result_json=? WHERE operation_id=?",
+                 ('{"prepared_run":{"run_uri":"file:///prepared-only"}}', 'o0000'))
+    scope = {"kind": "managed"}
+    assert authorized_run(daemon, "file:///run/999", scope)
+    assert authorized_run(daemon, "file:///prepared-only", scope)
+    assert not authorized_run(daemon, "file:///not-managed", scope)
+    assert not authorized_run(daemon, "file:///run/999/child", scope)
+
+
 def test_run_submission_sort_pages_noninitializers_and_unbound_runs(journal):
     from loom.queue._query_journal import run_submission_candidates
     from loom.runs import RunQuery

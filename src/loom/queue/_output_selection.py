@@ -37,10 +37,9 @@ def authorized_run(daemon: Any, uri: str, scope: Any) -> bool:
     check before either its metadata or location is disclosed.
     """
     if scope["kind"] == "managed":
-        from ._run_queries import _journal
+        from ._query_journal import managed_run_exists
 
-        operations, admissions = _journal(daemon)
-        return any(row["run_uri"] == uri for row in (*operations, *admissions))
+        return managed_run_exists(daemon, uri)
     from loom.io.uris import uri_to_path
 
     try:
