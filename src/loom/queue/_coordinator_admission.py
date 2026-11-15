@@ -29,7 +29,14 @@ def _submit(
     coordinator_id = self._require_started()
     from .local_daemon_execution import load_managed_local_intent
 
-    with self._cycle_lock:
+    execution = self._execution
+    if execution is None:
+        raise QueueServiceError("coordinator execution is unavailable")
+    # Exact concurrent submission retries share one run-local operation guard.
+    with self._publication_guards.hold("admission:" + request.run_uri):
+        with self._state_guard():
+            epochs = (self._epoch, self._scheduling_epoch)
+            config = self.config
         self._lifetime.require_accepting()
         from ._preparation_operations import (
             PREPARATION_RUN_PREFIX,
@@ -93,7 +100,7 @@ def _submit(
         if row is not None:
             existing = _admission_from_row(row)
             intent = load_managed_local_intent(
-                self.config,
+                config,
                 request.run_uri,
                 slurm_profiles=execution.slurm_profiles,
             )
@@ -114,13 +121,20 @@ def _submit(
         if request.retry_failed_revision is not None:
             raise QueueConflictError("retry requires an existing failed admission")
 
-        intent = load_managed_local_intent(self.config, request.run_uri)
+        intent = load_managed_local_intent(config, request.run_uri)
         execution.validate_fresh_intent(intent)
         run_priority = self._resolve_admission_priority(request.run_uri)
         admission_id = f"admission-{uuid4()}"
         operation_id = f"authority-bind-{uuid4()}"
-        with self._connection() as conn:
+        with execution.scheduling_reload_guard(), self._state_guard(), self._connection() as conn:
+            if self._execution is not execution or epochs != (self._epoch, self._scheduling_epoch):
+                raise QueueConflictError("admission scheduling changed during preparation")
             conn.execute("BEGIN IMMEDIATE")
+            self._lifetime.require_accepting()
+            if run_operation_id is not None:
+                current = conn.execute("SELECT cancellation_requested, state FROM preparation_operations WHERE operation_id = ?", (run_operation_id,)).fetchone()
+                if current is None or current["cancellation_requested"] or current["state"] in {"applied", "cancelled", "failed", "conflict"}:
+                    raise QueueConflictError("run continuation is suppressed or complete")
             from ._maintenance import classify
             classify(conn, request.queue_item_id, parent_id=preparation_operation_id or run_operation_id,
                      intent=intent, preparation_child=preparation_operation_id is not None)
@@ -159,6 +173,7 @@ def _submit(
                     conn, run_operation_id, _admission_from_row(admitted)
                 )
             conn.commit()
+            self._scheduling_reference_revision += 1
     self._wake.set()
     return self._admission(admission_id)
 
@@ -193,7 +208,7 @@ def _retry_failed_admission(
             "authority_revision": snapshot.revision.to_dict(),
             "state": "pending",
         }
-        with self._connection() as conn:
+        with execution.scheduling_reload_guard(), self._state_guard(), self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             from ._maintenance import classify
             classify(conn, request.queue_item_id, parent_id=parent_id)
@@ -202,6 +217,7 @@ def _retry_failed_admission(
                 (key, json.dumps(record)),
             )
             conn.commit()
+            self._scheduling_reference_revision += 1
     else:
         record = json.loads(str(row["value"]))
     if record["state"] == "pending":
@@ -228,14 +244,14 @@ def _apply_admission_retry(
         expected_revision=BackendRevision.from_dict(record["authority_revision"]),
     )
     record["state"] = "applied"
-    with self._connection() as conn:
+    with execution.scheduling_reload_guard(), self._state_guard(), self._connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
         conn.execute(
             "UPDATE managed_admissions SET state = ?, blocked_reason = NULL, "
-            "revision = revision + 1 WHERE admission_id = ?",
+            "revision = revision + 1 WHERE admission_id = ? AND revision = ? AND cancellation_operation_id IS NULL",
             (
                 LocalDaemonAdmissionState.PENDING_AUTHORITY.value,
-                admission.admission_id,
+                admission.admission_id, record["failed_revision"],
             ),
         )
         conn.execute(
@@ -243,6 +259,7 @@ def _apply_admission_retry(
             (json.dumps(record), key),
         )
         conn.commit()
+        self._scheduling_reference_revision += 1
 
 
 def _resume_pending_admission_retries(
@@ -257,9 +274,10 @@ def _resume_pending_admission_retries(
         )
     for row in pending:
         try:
-            _apply_admission_retry(self,
-                str(row["key"]), json.loads(str(row["value"])), execution
-            )
+            record = json.loads(str(row["value"]))
+            admission = self._admission(record["admission_id"])
+            with self._publication_guards.hold("admission:" + admission.run_uri):
+                _apply_admission_retry(self, str(row["key"]), record, execution)
         except Exception:
             self._record_admission_health(
                 json.loads(str(row["value"]))["admission_id"], "unavailable"

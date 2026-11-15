@@ -214,6 +214,7 @@ def test_submitted_offer_matches_policy_without_installed_profile(tmp_path, diff
         view.publish_offer(offer, idempotency_key="offer")
         assert daemon._execution is not None
         candidates = daemon._execution._remote_candidates()
+        assert all(row[0].attributes["outstanding_assignments"] == 0 for row in candidates.values())
         assert len(candidates) == 1
         candidate, target = next(iter(candidates.values()))
         assert target.profile == policy.capability

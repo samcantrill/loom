@@ -67,6 +67,7 @@ class SubmittedPreparationProfile:
     runtime_options: RunOptions
     shared_scope: Mapping[str, PlainData]
     image_roots: Mapping[str, PlainData]
+    execution_route: Mapping[str, PlainData] | None = None
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
@@ -76,6 +77,7 @@ class SubmittedPreparationProfile:
             "runtime_options": self.runtime_options.to_dict(),
             "shared_scope": thaw_plain_data(self.shared_scope),
             "image_roots": thaw_plain_data(self.image_roots),
+            **({"execution_route": thaw_plain_data(self.execution_route)} if self.execution_route is not None else {}),
         }
 
 
@@ -155,6 +157,7 @@ class PreparationPolicy:
                    if isinstance(profile, PreparationProfile) else {
                        "container_capability": profile.capability.to_dict(),
                        "image_roots_digest": hash_mapping(thaw_plain_data(profile.image_roots)),
+                       **({"execution_route": thaw_plain_data(profile.execution_route)} if profile.execution_route is not None else {}),
                    }),
                 "allowed_source_roots": list(profile.allowed_source_roots),
                 "source_modes": list(profile.source_modes),
@@ -205,7 +208,7 @@ def load_preparation_policy(
             raw, "preparation profile",
             required={selector, "allowed_source_roots", "source_modes", "runtime_options"},
             optional={"configuration_policy", "shared_locations"}
-            | (set() if submitted else {"project_processor"}),
+            | ({"execution_route"} if submitted else {"project_processor"}),
         )
         profile_id = _alias(data[selector], selector)
         matches = (
@@ -271,6 +274,14 @@ def load_preparation_policy(
         if submitted:
             from .shared_execution import root_bindings
 
+            route = data.get("execution_route")
+            if route is not None:
+                route = _mapping(route, "preparation execution route", required={"kind", "profile"})
+                if route["kind"] != "slurm":
+                    raise QueueConfigError("preparation execution route must select Slurm")
+                _alias(route["profile"], "preparation Slurm profile")
+                route = freeze_plain_data(route, path="preparation execution route")
+
             capability = cast(SubmittedContainerCapability, matches[0])
             private_roots = root_bindings({} if shared_roots is None else shared_roots)
             image_roots: dict[str, PlainData] = {}
@@ -286,6 +297,7 @@ def load_preparation_policy(
                 capability, allowed, modes, options,
                 cast(Mapping[str, PlainData], freeze_plain_data(shared)),
                 cast(Mapping[str, PlainData], freeze_plain_data(image_roots)),
+                cast(Mapping[str, PlainData] | None, route),
             )
         else:
             profiles[alias] = PreparationProfile(

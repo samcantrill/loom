@@ -95,13 +95,13 @@ def _require_runtime(command: str, deadline: float) -> None:
     if (
         version.returncode != 0
         or re.fullmatch(
-            r"singularity(?:-ce)? version (?:3\.10\.4(?:-focal)?|4\.1\.1)\s*",
+            r"singularity(?:-ce)? version (?:3\.10\.4(?:-focal)?|4\.1\.(?:1|5))\s*",
             version.stdout,
         )
         is None
     ):
         raise UnsupportedTimeoutError(
-            "container timeout cleanup is currently verified for SingularityCE 3.10.4 or 4.1.1 "
+            "container timeout cleanup is currently verified for SingularityCE 3.10.4, 4.1.1 or 4.1.5 "
             "foreground exec with its PID-namespace init; select that runtime or "
             "explicitly disable the timeout"
         )

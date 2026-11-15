@@ -17,7 +17,7 @@ import sqlite3
 import stat
 import tempfile
 from collections.abc import Callable, Generator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from fractions import Fraction
@@ -3465,6 +3465,7 @@ def run_managed_local_assignment(
     cancellation_requested: Callable[[], bool] | None = None,
     suspend_requested: Callable[[], bool] | None = None,
     execution_started: Callable[[], None] | None = None,
+    reservation_guard: Callable[[], AbstractContextManager[None]] | None = None,
 ) -> ManagedExecutionReceipt:
     """Run one exact local assignment through the durable Phase 2 saga.
 
@@ -3644,12 +3645,13 @@ def run_managed_local_assignment(
     # The assignment-local bundle and exact bytes precede the logical reserve.
     # A crash after reserve can therefore reconstruct claims and launch identity
     # without serializing the coordinator run URI into the child workspace.
-    coordinator.reserve(
-        assignment,
-        claims,
-        max_parallel_stages=max_parallel_stages,
-        decision_receipt=decision_receipt,
-    )
+    with reservation_guard() if reservation_guard is not None else nullcontext():
+        coordinator.reserve(
+            assignment,
+            claims,
+            max_parallel_stages=max_parallel_stages,
+            decision_receipt=decision_receipt,
+        )
     authority.bind_prepared_attempt(
         assignment.run_uri,
         assignment_id=assignment.assignment_id,

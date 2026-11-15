@@ -31,8 +31,11 @@ from tests.integration.queue.test_preparation_operations import _service, _reque
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
 
-@pytest.mark.parametrize("scenario", ["small", "input_directory", "scientific", "unresolved_restart", "workspace_restart", "started_restart", "completed_input_unavailable", "cancel_missing", "missing_selector"])
+@pytest.mark.parametrize("scenario", ["small", "input_directory", "scientific", "unresolved_restart", "workspace_restart", "started_restart", "completed_input_unavailable", "cancel_missing", "missing_selector", "preflight_cancel", "descriptor_cancel"])
 def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, scenario):
+    from threading import Event
+
+    preflight_entered, preflight_release, preflight_finished = Event(), Event(), Event()
     scientific = scenario == "scientific"
     _service(tmp_path)
     first = tmp_path / "nas" / "data"
@@ -161,9 +164,42 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, s
             assert unavailable["result"] == "wait"
             with sqlite3.connect(service.daemon.execution_database) as conn:
                 assert conn.execute("SELECT COUNT(*) FROM coordinator_assignments WHERE run_uri = ?", (target_uri,)).fetchone()[0] == 0
+            if scenario in {"preflight_cancel", "descriptor_cancel"}:
+                from loom.queue import local_daemon_execution as execution
+
+                preflight = (
+                    execution.LocalDaemonExecution._remote_eligible if scenario == "preflight_cancel"
+                    else execution._describe_transfer_inputs
+                )
+
+                def held_preflight(*args, **kwargs):
+                    preflight_entered.set()
+                    try:
+                        assert preflight_release.wait(timeout=30), "artifact read barrier was not released"
+                        return preflight(*args, **kwargs)
+                    finally:
+                        preflight_finished.set()
+
+                if scenario == "preflight_cancel":
+                    monkeypatch.setattr(execution.LocalDaemonExecution, "_remote_eligible", staticmethod(held_preflight))
+                else:
+                    monkeypatch.setattr(execution, "_describe_transfer_inputs", held_preflight)
             remote.publish_offer(AgentOffer(session.session_id, session.coordinator_epoch, session.config_revision,
                 session.inventory_revision, session.availability_revision, 1, 0, 30,
                 _resident_provider_descriptors(executor, session.agent_id), resident_profiles=(executor.descriptor,)), idempotency_key="offer-qualified")
+            if scenario in {"preflight_cancel", "descriptor_cancel"}:
+                assert preflight_entered.wait(timeout=10), daemon._service_error
+                client.cancel("target")
+                assert client.wait("target", timeout_seconds=10).state.value == "CANCELLED"
+                assert not preflight_release.is_set()
+                preflight_release.set()
+                assert preflight_finished.wait(timeout=10)
+                daemon.reconcile_once()
+                with sqlite3.connect(service.daemon.execution_database) as conn:
+                    assert conn.execute(
+                        "SELECT COUNT(*) FROM coordinator_assignments WHERE run_uri = ?", (target_uri,),
+                    ).fetchone()[0] == 0
+                return
             payload_backup = None
             payload_path = None
             if scenario in {"unresolved_restart", "cancel_missing"}:
@@ -321,6 +357,7 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, s
             assert str(first) not in json.dumps(request.to_dict())
             assert str(second) not in json.dumps(request.to_dict())
     finally:
+        preflight_release.set()
         remote.close()
         server.stop()
         unix.stop()

@@ -580,6 +580,7 @@ def test_agent_restart_recovers_fenced_poll_without_coordinator_restart(
 ) -> None:
     """A lost rejection after real offer expiry must not wedge startup replay."""
     from loom.queue.errors import QueueConflictError
+    from loom.queue._agent_progress import _cooperative, _steps
 
     work = remote_owner
     lost = Event()
@@ -589,12 +590,15 @@ def test_agent_restart_recovers_fenced_poll_without_coordinator_restart(
     class LostApplication(BaseException):
         pass
 
+    @_cooperative
     def short_first_offer(client, *, ttl_seconds=30):
-        return original_refresh(client, ttl_seconds=ttl_seconds if lost.is_set() else 1)
+        return (yield from _steps(original_refresh, client,
+                                 ttl_seconds=ttl_seconds if lost.is_set() else 1))
 
+    @_cooperative
     def lose_expiry_reply(client, operation, value, **kwargs):
         try:
-            return original_call(client, operation, value, **kwargs)
+            return (yield from _steps(original_call, client, operation, value, **kwargs))
         except QueueConflictError:
             if operation == "poll" and not lost.is_set():
                 lost.set()
@@ -647,7 +651,12 @@ def test_agent_restart_recovers_fenced_poll_without_coordinator_restart(
     second = work.start_agent()
     deadline = monotonic() + 45
     while not work.released():
-        assert monotonic() < deadline, "same-epoch pending poll blocked agent recovery"
+        assert monotonic() < deadline, (
+            "same-epoch pending poll blocked agent recovery", second.errors,
+            [(launch.assignment_id, work.supervisor.query(launch).state.value)
+             for launch in work.launches()],
+            [stage.status.value for stage in work.authority.open_run(work.run_uri).stages],
+        )
         assert not second.errors
         sleep(0.05)
     assert work.daemon._epoch == epoch

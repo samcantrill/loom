@@ -76,6 +76,7 @@ def test_unverified_runtime_rejected_before_payload(
         "singularity version 3.10.4\n",
         "singularity-ce version 3.10.4-focal\n",
         "singularity-ce version 4.1.1\n",
+        "singularity-ce version 4.1.5\n",
     ],
 )
 def test_qualified_runtime_versions_admitted(

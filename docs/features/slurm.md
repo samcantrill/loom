@@ -35,7 +35,7 @@ runtime:
 ```
 
 This is an intentional hard cut-over for the exact managed-stage route record.
-Current records use placement schema v2 and retain `profile_id`, the complete
+Current records use placement schema v3 and retain `profile_id`, the complete
 profile descriptor, and its configuration fingerprint. The earlier provisional
 `profile_name`/`profile_fingerprint` shape is rejected rather than translated.
 Runs must be prepared again and daemon owner roots must be freshly initialized
@@ -43,8 +43,13 @@ when crossing this boundary. Historical whole-run SLURM manifests and the
 single-job/`afterok` controllers use different owners and remain unchanged.
 
 Protected deployment composition supplies the concrete profile separately from
-authored stage configuration. The current built-in bootstrap executes only the
-resident local executor:
+authored stage configuration. The built-in bootstrap executes the local worker
+inside its allocation. A profile can select an installed environment or an
+explicit `submitted_container_policy` for submission-selected Apptainer images:
+
+An optional profile `time` sets Slurm's allocation walltime (for example
+`02:30:00`), including bootstrap and result publication. It participates in the
+retained profile identity; it is distinct from a scientific training budget.
 
 ```python
 from loom.pipeline.executors.slurm import SlurmReadyStageProfile
@@ -72,8 +77,13 @@ profile = SlurmReadyStageProfile(
 ```
 
 The fixed bootstrap reads its protected TLS/workspace configuration from a
-private deployment-owned file and removes that file reference from the process
-environment before authored stage code runs. The concrete
+private deployment-owned file. Native profile declarations can select absolute
+`bootstrap_executable` (the installed `loom` console script) and
+`bootstrap_config_path` values. These produce the fixed command
+`/site/bin/loom slurm-bootstrap --config /site/private/bootstrap.json`, and both
+paths participate in the profile identity. This works with Slurm's clean export
+environment. Omitting them keeps the existing `loom slurm-bootstrap` command and
+`LOOM_SLURM_BOOTSTRAP_CONFIG` environment selection. The concrete
 `job_private_file_v1` provider is selected only by protected site composition:
 it invokes the site-owned helper with a strict non-secret JSON request on stdin
 and an explicit non-inherited environment. The helper writes one
@@ -84,9 +94,10 @@ it never exports the capability through
 the script, `sbatch` environment, arguments, or durable state. Ready-stage
 submission uses `--export=NIL` and a protected explicit environment.
 
-The ready-stage request, submission, and delivery records are schema v3; both
-ready-stage SQLite owners require `PRAGMA user_version = 3`; and the protected
-helper request/response envelope is v2. Earlier ready-stage records, helper
+The execution-only delivery uses schema v5, including admitted auxiliary project
+artifacts and submitted-image bindings. Both ready-stage SQLite owners require
+`PRAGMA user_version = 3`; the protected helper request/response envelope is v2.
+Earlier delivery records, helper
 envelopes, unversioned databases, and mixed table shapes are rejected before
 mutation. After a receipt is retained, Loom installs its exact verifier in the
 assignment owner before the submission owner records `SUBMITTING`, then mirrors
@@ -101,6 +112,33 @@ QoS, resource/directive mappings, submission limits, resident bootstrap
 environment, command adapter, credential delivery, data path, reconciliation,
 and retention behavior. Authored data cannot inject raw `SBATCH` directives,
 commands, preludes, submit hosts, or credentials.
+
+For submitted workloads, `submitted_container_policy` uses the same protected
+policy codec as managed container agents. It declares the runtime command,
+allowed image roots, qualified shared roots, captured-input roots and authorized
+mounts; it contains no selected image. The coordinator checks each Slurm stage's
+submitted requirement against that policy before creating its prepared run.
+The policy is part of the Slurm profile fingerprint and cannot be combined with
+the older fixed `container_options` selection.
+
+The native bootstrap authenticates and consumes the allocation's single start
+permit before launching the submitted image. It retains the exact delivery,
+image binding, policy and execution fence in its private assignment workspace.
+Image bytes and selected shared inputs are verified before a new launch. The
+contained worker consumes those bindings without importing project code on the
+bootstrap host. CPU, memory and walltime remain delegated to Slurm; GPU work
+requires matching allocation-provided `CUDA_VISIBLE_DEVICES`. The container
+uses a clean environment and mounts only its authorized inputs and writable
+assignment paths. Bootstrap configuration and credentials are not mounted into
+the workload.
+
+Submitted preparation profiles can set
+`execution_route: {kind: slurm, profile: hpc-cpu}` to run configuration composition
+and scientific inspection inside a CPU allocation. This protected selection is
+retained with the preparation operation; scientific stages retain their own
+explicit routes. A Slurm-only deployment must configure this route instead of
+relying on an available managed worker. Image building is separate from this
+execution path: a verified prebuilt SIF can be installed without build privileges.
 
 SLURM is a target, not a Loom resource pool. Unallocated cluster nodes are not
 agent offers and a pending SLURM job holds no agent claim. Route feasibility
@@ -213,10 +251,16 @@ profile fingerprint. A changed binding requires new prepared work. The submit
 agent reserves 65 MiB per attempt before submission (64 MiB aggregate artifact
 limit plus bounded report/manifest overhead). Quota exhaustion retains existing
 attempts and blocks new submission; it never evicts unacknowledged output.
-Larger checkpoints require separate transfer support. Worker scratch space is
-separate and is not the durable transport.
+Submitted workloads with an admitted shared-publication root retain checkpoints
+and prediction trees directly on that storage, under its explicit payload,
+member-count and manifest budgets. These payloads do not cross the 64 MiB byte
+relay. Their authenticated report carries the publication references; the
+coordinator verifies the complete closure and rechecks execution authority before
+publishing it. Downstream Slurm workers resolve the same references through their
+qualified roots. The result journal never copies or deletes those artifact trees.
+Worker scratch space is separate and is not the durable transport.
 
-The bootstrap writes complete output files and report version 3, fsyncs them,
+The bootstrap writes relayed output files and report version 6, fsyncs them,
 and atomically publishes manifest version 1 last. The manifest binds the stable
 coordinator, original agent/root, assignment, attempt, execution fence, bootstrap
 incarnation and submission operation, with paths, digests and byte counts. A

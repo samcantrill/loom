@@ -49,6 +49,7 @@ def _publish(store, claim):
     store.publish(
         claim,
         result=result,
+        expected_revision=store.claim(claim)["revision"],
         attempt_id="attempt-a",
         assignment_id="assignment-a",
         fencing_token="fence-a",
@@ -134,6 +135,7 @@ def test_stale_fence_cannot_publish_and_failed_producer_is_not_a_miss(tmp_path):
         store.publish(
             claim,
             result={"commit": "stale"},
+            expected_revision=store.claim(claim)["revision"],
             attempt_id="attempt-a",
             assignment_id="assignment-a",
             fencing_token="stale",
@@ -200,7 +202,41 @@ def test_only_authorized_owner_retry_reopens_failure_and_stale_observer_cannot_f
         store.publish(
             claim["claim_id"],
             result={"commit": "old"},
+            expected_revision=claim["revision"],
             attempt_id="fit-1",
             assignment_id="assignment-1",
             fencing_token="fence-1",
         )
+
+
+def test_delayed_verified_result_cannot_publish_after_final_demand_detaches(tmp_path):
+    store = _store(tmp_path)
+    claim_id = _select(store)["claim"]["claim_id"]
+    fence = dict(attempt_id="attempt-a", assignment_id="assignment-a", fencing_token="fence-a")
+    store.attach_fence(claim_id, run_uri="run-a", node="generate", **fence)
+    verified_revision = store.claim(claim_id)["revision"]
+    result = {"commit": "original", "artifact": "checked"}
+    store.detach_graph("run-a", "cancel-a")
+    current = store.claim(claim_id)
+    assert current["revision"] != verified_revision
+    with pytest.raises(QueueConflictError, match="revision changed"):
+        _store(tmp_path).publish(claim_id, result=result,
+                                expected_revision=verified_revision, **fence)
+    assert store.claim(claim_id) == current
+
+
+def test_verified_publication_replays_original_revision_but_not_changed_result(tmp_path):
+    store = _store(tmp_path)
+    claim_id = _select(store)["claim"]["claim_id"]
+    fence = dict(attempt_id="attempt-a", assignment_id="assignment-a", fencing_token="fence-a")
+    store.attach_fence(claim_id, run_uri="run-a", node="generate", **fence)
+    verified_revision = store.claim(claim_id)["revision"]
+    result = {"commit": "original", "artifact": "checked"}
+    store.publish(claim_id, result=result, expected_revision=verified_revision, **fence)
+    published = store.claim(claim_id)
+    assert published["revision"] > verified_revision
+    _store(tmp_path).publish(claim_id, result=result, expected_revision=verified_revision, **fence)
+    assert store.claim(claim_id) == published
+    with pytest.raises(QueueConflictError, match="immutable action result"):
+        store.publish(claim_id, result={"commit": "different"},
+                      expected_revision=verified_revision, **fence)

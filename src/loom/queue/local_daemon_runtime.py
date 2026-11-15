@@ -245,20 +245,27 @@ def _stage_placement_policy(
         raise QueueServiceError("stage placement pool must be non-empty")
     if target is not None and (not isinstance(target, str) or not target):
         raise QueueServiceError("stage placement target must be non-empty or null")
+    route = _execution_route(raw.get("execution_route"), slurm_profiles)
+    # Slurm checks the protected profile and shared bindings at dispatch and
+    # bootstrap; resident offer attributes apply only to managed-agent selection.
+    constraints = (
+        _preparation_constraints(stage, hard_evaluators)
+        if route.kind is ExecutionRouteKind.MANAGED_AGENT else ()
+    )
     return StagePlacementPolicy(
         pool_name=pool,
         target=cast(str | None, target),
         default_resources=ResourceRequest(
             entries={"cpu": ResourceEntry("cpu", 1, "count")}
         ),
-        hard_constraints=_preparation_constraints(stage, hard_evaluators),
+        hard_constraints=constraints,
         preferences=_resolved_preferences(
             stage,
             resources,
             raw.get("preferences"),
             preference_scorers=preference_scorers,
         ),
-        route=_execution_route(raw.get("execution_route"), slurm_profiles),
+        route=route,
     )
 
 
@@ -377,6 +384,7 @@ def _resolved_preferences(
         "gpu_model_order": "gpu_model",
         "resource_attribute_order": "resource_attribute",
         "packing": "packing",
+        "spreading": "spreading",
     }
     tiers = {
         "agent_order": 0,
@@ -384,6 +392,11 @@ def _resolved_preferences(
         "resource_attribute_order": 1,
         "packing": 2,
     }
+    # Opt-in spreading precedes hardware preferences. Existing declarations
+    # retain their tiers and fingerprints when spreading is absent.
+    if any(isinstance(item, Mapping) and item.get("kind") == "spreading" for item in value):
+        tiers = {kind: tier + 1 for kind, tier in tiers.items()}
+    tiers["spreading"] = 0
     for index, item in enumerate(value):
         if not isinstance(item, Mapping):
             raise QueueServiceError("stage placement preference is invalid")
@@ -409,7 +422,7 @@ def _resolved_preferences(
         data: dict[str, PlainData]
         utility_min = 0
         utility_max = 0
-        if kind == "packing":
+        if kind in {"packing", "spreading"}:
             _exact_preference_fields(item, {"kind", "fallback_after_seconds"})
             data = {}
             utility_min = -(2**63) + 1
@@ -505,7 +518,7 @@ def load_managed_local_runtime_record(
             "managed-local admission requires a fresh exact runtime record"
         )
     try:
-        data = json_loads(path.read_text(encoding="utf-8"), path=str(path))
+        data = json_loads(store._read_document_bytes(path).decode("utf-8"), path=str(path))
     except Exception as exc:
         raise QueueServiceError("managed-local runtime record is corrupt") from exc
     if (
@@ -543,17 +556,20 @@ def load_managed_local_runtime_record(
     digest = payload.pop("digest", None)
     if not isinstance(digest, str) or digest != _digest(payload):
         raise QueueServiceError("managed-local runtime record digest conflicts")
-    if "composition_manifest_ref" in payload:
-        try:
-            store._validate_composition_reference(run_uri, payload["composition_manifest_ref"])
-            store.read_composition_manifest(run_uri)
-        except Exception as exc:
-            raise QueueServiceError("managed composition reference is missing or changed") from exc
-    if "project_contracts_digest" in payload:
-        from loom.pipeline._project_contracts import prepared_contracts_digest
-        actual = prepared_contracts_digest(store, run_uri)
-        if actual is None or actual != payload["project_contracts_digest"]:
-            raise QueueServiceError("managed project report reference is missing or changed")
+    from ._phase_timing import phase
+
+    with phase("composition_provenance_validation"):
+        if "composition_manifest_ref" in payload:
+            try:
+                store._validate_composition_reference(run_uri, payload["composition_manifest_ref"])
+                store.read_composition_manifest(run_uri)
+            except Exception as exc:
+                raise QueueServiceError("managed composition reference is missing or changed") from exc
+        if "project_contracts_digest" in payload:
+            from loom.pipeline._project_contracts import prepared_contracts_digest
+            actual = prepared_contracts_digest(store, run_uri)
+            if actual is None or actual != payload["project_contracts_digest"]:
+                raise QueueServiceError("managed project report reference is missing or changed")
     plan = payload.get("plan")
     if not isinstance(plan, Mapping) or payload.get("plan_digest") != _digest(plan):
         raise QueueServiceError("managed-local runtime record plan identity conflicts")

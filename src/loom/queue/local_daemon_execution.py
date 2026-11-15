@@ -22,6 +22,8 @@ import json
 from pathlib import Path
 import sqlite3
 from concurrent.futures import Future, ThreadPoolExecutor
+from ._validated_context_cache import ValidatedContextCache
+from ._phase_timing import phase
 from threading import Event, Lock
 from types import MappingProxyType
 from typing import Any, cast
@@ -188,6 +190,33 @@ from .slurm_ready_stage import (
     SlurmStageDelivery,
     SlurmStageRecord,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class _PendingTransferInputs:
+    token: tuple[object, ...]
+    request: StageWorkerRequest
+    future: Future[tuple[tuple[_RemoteArtifact, Path], ...]]
+
+
+def _describe_transfer_inputs(request: StageWorkerRequest) -> tuple[tuple[_RemoteArtifact, Path], ...]:
+    from loom.pipeline.stores.shared_artifacts import binding
+
+    refs = _resident_input_refs(
+        request.inputs, cast(StageFingerprintRecord, request.fingerprint).to_dict(), request.metadata,
+    )
+    described = []
+    total_bytes = 0
+    for index, (name, ref) in enumerate(sorted(refs.items())):
+        descriptor, path = _RemoteArtifact.from_local_ref(
+            transfer_id=f"input-{index}", logical_name=name, ref=ref,
+        )
+        if binding(descriptor.metadata) is None:
+            total_bytes += descriptor.size_bytes
+        if total_bytes > MAX_TRANSFER_BYTES:
+            raise QueueServiceError("remote assignment inputs exceed the configured bound")
+        described.append((descriptor, path))
+    return tuple(described)
 
 
 @dataclass(frozen=True, slots=True)
@@ -844,157 +873,162 @@ def load_managed_local_intent(
     run_uri: str,
     *,
     slurm_profiles: Mapping[tuple[str, str], SlurmReadyStageProfile] | None = None,
+    cache: ValidatedContextCache[ManagedLocalIntent] | None = None,
 ) -> ManagedLocalIntent:
     """Load and validate the one canonical local admission intent."""
 
-    store = LocalRunStore(config.run_store_root)
-    run_path = store.local_run_dir(run_uri).resolve()
-    configured_root = config.run_store_root.resolve()
-    try:
-        run_path.relative_to(configured_root)
-    except ValueError as exc:
-        raise QueueServiceError(
-            "run_uri is outside the configured local run store"
-        ) from exc
-    store.open_run(run_uri)
-    record = load_managed_local_runtime_record(store, run_uri)
-    plan_payload = store.read_plan(run_uri)
-    if plan_payload is None:
-        raise QueueServiceError("managed-local admission requires a persisted plan")
-    plan = ExecutionPlan.from_dict(plan_payload)
-    exact_plan = ExecutionPlan.from_dict(record["plan"])
-    if plan != exact_plan or plan.run_uri != run_uri:
-        raise QueueServiceError(
-            "persisted execution plan conflicts with exact runtime record"
-        )
-    snapshot = store.read_config_snapshot(run_uri, "resolved")
-    if snapshot is None:
-        raise QueueServiceError(
-            "managed-local admission requires a resolved config snapshot"
-        )
-    decoded = json_loads(snapshot, path="config/resolved.json")
-    if (
-        hashlib.sha256(snapshot.encode("utf-8")).hexdigest()
-        != record["pipeline_digest"]
-    ):
-        raise QueueServiceError(
-            "resolved pipeline snapshot conflicts with exact runtime record"
-        )
-    if not isinstance(decoded, Mapping) or "pipeline" not in decoded:
-        raise QueueServiceError(
-            "resolved config snapshot must contain a pipeline definition"
-        )
-    pipeline = parse_pipeline_config(decoded["pipeline"])
-    if set(plan.stage_order) != set(pipeline.stage_names):
-        raise QueueServiceError(
-            "persisted plan and resolved pipeline stage identities differ"
-        )
-    unsupported_actions = {
-        stage.action
-        for stage in plan.stage_plans
-        if stage.action not in {PlanAction.RUN, PlanAction.REUSE, PlanAction.SKIP}
-    }
-    if unsupported_actions:
-        raise QueueServiceError(
-            "managed-local admission does not support plan actions: "
-            + ", ".join(sorted(action.value for action in unsupported_actions))
-        )
-    runtime_options = RunOptions.from_dict(record["runtime_options"])
-    runtime = resolve_run_runtime(runtime_options, stage_ids=pipeline.stage_names)
-    placements_payload = record["placements"]
-    if not isinstance(placements_payload, Mapping) or set(placements_payload) != set(
-        pipeline.stage_names
-    ):
-        raise QueueServiceError(
-            "exact runtime record placements conflict with pipeline"
-        )
-    placements = {
-        name: ResolvedStagePlacement.from_dict(payload)
-        for name, payload in placements_payload.items()
-    }
-    requirements_payload = record["execution_requirements"]
-    if not isinstance(requirements_payload, Mapping):
-        raise QueueServiceError(
-            "exact runtime record execution requirements are invalid"
-        )
-    try:
-        execution_requirements = {
-            name: ExecutionRequirement.from_dict(payload)
-            for name, payload in requirements_payload.items()
-        }
-    except Exception as exc:
-        raise QueueServiceError(
-            "exact runtime record execution requirements are invalid"
-        ) from exc
-    if set(execution_requirements) != set(pipeline.stage_names):
-        raise QueueServiceError(
-            "exact runtime record execution requirements conflict with pipeline"
-        )
-    from .preparation import (
-        LOCAL_PREPARATION_SCOPE,
-        _local_scope,
-        _require_local_binding,
-    )
-
-    for stage in pipeline.stages:
-        scope = _local_scope(stage.fingerprint_fields.get(LOCAL_PREPARATION_SCOPE))
-        _require_local_binding(
-            scope, config.resident_worker_launch_profile, agent_id=config.machine_id
-        )
-        if scope is not None and placements[stage.name].target != scope["agent_id"]:
-            raise QueueServiceError("local preparation retained placement conflicts")
-    allowed_targets = {config.machine_id} | {
-        rule.agent_id for rule in config.agent_policy.agents
-    }
-    available_slurm_profiles = (
-        {
-            (profile.profile_id, profile.configuration_fingerprint): profile
-            for profile in config.slurm_profiles
-        }
-        if slurm_profiles is None
-        else dict(slurm_profiles)
-    )
-    for placement in placements.values():
-        if placement.route.kind is ExecutionRouteKind.MANAGED_AGENT and (
-            placement.target is not None and placement.target not in allowed_targets
+    def decode(store: LocalRunStore) -> ManagedLocalIntent:
+        run_path = store.local_run_dir(run_uri).resolve()
+        configured_root = config.run_store_root.resolve()
+        try:
+            run_path.relative_to(configured_root)
+        except ValueError as exc:
+            raise QueueServiceError(
+                "run_uri is outside the configured local run store"
+            ) from exc
+        store.open_run(run_uri)
+        record = load_managed_local_runtime_record(store, run_uri)
+        plan_payload = store.read_plan(run_uri)
+        if plan_payload is None:
+            raise QueueServiceError("managed-local admission requires a persisted plan")
+        plan = ExecutionPlan.from_dict(plan_payload)
+        exact_plan = ExecutionPlan.from_dict(record["plan"])
+        if plan != exact_plan or plan.run_uri != run_uri:
+            raise QueueServiceError(
+                "persisted execution plan conflicts with exact runtime record"
+            )
+        snapshot = store.read_config_snapshot(run_uri, "resolved")
+        if snapshot is None:
+            raise QueueServiceError(
+                "managed-local admission requires a resolved config snapshot"
+            )
+        decoded = json_loads(snapshot, path="config/resolved.json")
+        if (
+            hashlib.sha256(snapshot.encode("utf-8")).hexdigest()
+            != record["pipeline_digest"]
         ):
             raise QueueServiceError(
-                "exact runtime record targets an unauthorized managed agent"
+                "resolved pipeline snapshot conflicts with exact runtime record"
             )
-        if placement.route.kind is ExecutionRouteKind.SLURM:
-            profile = available_slurm_profiles.get(
-                (
-                    cast(str, placement.route.profile_id),
-                    cast(
-                        str,
-                        placement.route.profile_configuration_fingerprint,
-                    ),
-                )
+        if not isinstance(decoded, Mapping) or "pipeline" not in decoded:
+            raise QueueServiceError(
+                "resolved config snapshot must contain a pipeline definition"
             )
-            if (
-                profile is None
-                or placement.route.profile_descriptor != profile.descriptor
-                or placement.route.profile_configuration_fingerprint
-                != profile.configuration_fingerprint
+        pipeline = parse_pipeline_config(decoded["pipeline"])
+        if set(plan.stage_order) != set(pipeline.stage_names):
+            raise QueueServiceError(
+                "persisted plan and resolved pipeline stage identities differ"
+            )
+        unsupported_actions = {
+            stage.action
+            for stage in plan.stage_plans
+            if stage.action not in {PlanAction.RUN, PlanAction.REUSE, PlanAction.SKIP}
+        }
+        if unsupported_actions:
+            raise QueueServiceError(
+                "managed-local admission does not support plan actions: "
+                + ", ".join(sorted(action.value for action in unsupported_actions))
+            )
+        runtime_options = RunOptions.from_dict(record["runtime_options"])
+        runtime = resolve_run_runtime(runtime_options, stage_ids=pipeline.stage_names)
+        placements_payload = record["placements"]
+        if not isinstance(placements_payload, Mapping) or set(placements_payload) != set(
+            pipeline.stage_names
+        ):
+            raise QueueServiceError(
+                "exact runtime record placements conflict with pipeline"
+            )
+        placements = {
+            name: ResolvedStagePlacement.from_dict(payload)
+            for name, payload in placements_payload.items()
+        }
+        requirements_payload = record["execution_requirements"]
+        if not isinstance(requirements_payload, Mapping):
+            raise QueueServiceError(
+                "exact runtime record execution requirements are invalid"
+            )
+        try:
+            execution_requirements = {
+                name: ExecutionRequirement.from_dict(payload)
+                for name, payload in requirements_payload.items()
+            }
+        except Exception as exc:
+            raise QueueServiceError(
+                "exact runtime record execution requirements are invalid"
+            ) from exc
+        if set(execution_requirements) != set(pipeline.stage_names):
+            raise QueueServiceError(
+                "exact runtime record execution requirements conflict with pipeline"
+            )
+        from .preparation import (
+            LOCAL_PREPARATION_SCOPE,
+            _local_scope,
+            _require_local_binding,
+        )
+
+        for stage in pipeline.stages:
+            scope = _local_scope(stage.fingerprint_fields.get(LOCAL_PREPARATION_SCOPE))
+            _require_local_binding(
+                scope, config.resident_worker_launch_profile, agent_id=config.machine_id
+            )
+            if scope is not None and placements[stage.name].target != scope["agent_id"]:
+                raise QueueServiceError("local preparation retained placement conflicts")
+        allowed_targets = {config.machine_id} | {
+            rule.agent_id for rule in config.agent_policy.agents
+        }
+        available_slurm_profiles = (
+            {
+                (profile.profile_id, profile.configuration_fingerprint): profile
+                for profile in config.slurm_profiles
+            }
+            if slurm_profiles is None
+            else dict(slurm_profiles)
+        )
+        for placement in placements.values():
+            if placement.route.kind is ExecutionRouteKind.MANAGED_AGENT and (
+                placement.target is not None and placement.target not in allowed_targets
             ):
                 raise QueueServiceError(
-                    "exact runtime record names a changed or unavailable SLURM profile"
+                    "exact runtime record targets an unauthorized managed agent"
                 )
-    if (
-        parallel_execution_options(runtime_options).max_parallel_stages
-        != record["max_parallel_stages"]
-    ):
-        raise QueueServiceError("exact runtime record concurrency conflicts")
-    return ManagedLocalIntent(
-        plan,
-        runtime,
-        placements,
-        execution_requirements,
-        pipeline,
-        str(record["digest"]),
-        cast(int, record["max_parallel_stages"]),
-        parallel_execution_options(runtime_options).continue_independent,
-    )
+            if placement.route.kind is ExecutionRouteKind.SLURM:
+                profile = available_slurm_profiles.get(
+                    (
+                        cast(str, placement.route.profile_id),
+                        cast(
+                            str,
+                            placement.route.profile_configuration_fingerprint,
+                        ),
+                    )
+                )
+                if (
+                    profile is None
+                    or placement.route.profile_descriptor != profile.descriptor
+                    or placement.route.profile_configuration_fingerprint
+                    != profile.configuration_fingerprint
+                ):
+                    raise QueueServiceError(
+                        "exact runtime record names a changed or unavailable SLURM profile"
+                    )
+        if (
+            parallel_execution_options(runtime_options).max_parallel_stages
+            != record["max_parallel_stages"]
+        ):
+            raise QueueServiceError("exact runtime record concurrency conflicts")
+        return ManagedLocalIntent(
+            plan,
+            runtime,
+            placements,
+            execution_requirements,
+            pipeline,
+            str(record["digest"]),
+            cast(int, record["max_parallel_stages"]),
+            parallel_execution_options(runtime_options).continue_independent,
+        )
+
+
+    selected = cache if cache is not None else ValidatedContextCache[ManagedLocalIntent](1)
+    return selected.load(config, run_uri, slurm_profiles=slurm_profiles, decode=decode)
 
 
 def _validate_recovery_request_identity(
@@ -1165,6 +1199,9 @@ class LocalDaemonExecution:
 
         self._action_resolution = None if daemon is None else ActionResultResolution(self)
         self.run_store = LocalRunStore(config.run_store_root)
+        self._transfer_inputs: dict[tuple[str, str], _PendingTransferInputs] = {}
+        self._remote_preflights: dict[tuple[str, str], tuple[tuple[object, ...], Future[bool]]] = {}
+        self._worker_requests: dict[tuple[str, str], tuple[tuple[object, ...], Future[StageWorkerRequest]]] = {}
         self.stage_work_store = SQLiteStageWorkStore(
             config.execution_database, _allow_initialize=False
         )
@@ -1236,6 +1273,8 @@ class LocalDaemonExecution:
                 )
             provider.restore_capacity_holding(command)
         self._launch_lock = Lock()
+        self._context_cache: ValidatedContextCache[ManagedLocalIntent] = ValidatedContextCache()
+        self._cycle_context_epochs: dict[str, tuple[str | None, str | None]] = {}
         self.local_profile_ready = True
         self._sync_slurm_agent_references()
         self._slurm_agent = (
@@ -1268,6 +1307,7 @@ class LocalDaemonExecution:
         self._pending_local_assignment_reconciliation.clear()
         self._local_assignment_retries.clear()
         self._cycle_contexts.clear()
+        self._cycle_context_epochs.clear()
 
     def shutdown_clean(self) -> None:
         """Use all local authoritative owners before retiring the supervisor."""
@@ -1345,6 +1385,29 @@ class LocalDaemonExecution:
     def begin_cycle(self) -> None:
         """Observe completed exact assignment work before scheduling again."""
 
+        if self._action_resolution is not None:
+            self._action_resolution.reconcile_cancellations()
+            self._action_resolution.discard_terminal_contexts()
+            self._action_resolution.complete_verifications()
+
+        ready_attempts = {
+            (record.run_uri, record.attempt_id) for record in self.stage_work_store.list_stage_work()
+            if record.scheduling_state is SchedulingProjectionState.READY
+        } if self._worker_requests or self._remote_preflights or self._transfer_inputs else set()
+        for work in (self._worker_requests, self._remote_preflights):
+            for key, (token, future) in tuple(work.items()):
+                if future.done() and (
+                    (key[0], token[3]) not in ready_attempts or self._attempt_cancel_requested(key[0], str(token[3]))
+                ):
+                    del work[key]
+
+        for key, pending in tuple(self._transfer_inputs.items()):
+            if pending.future.done() and (
+                (key[0], pending.token[3]) not in ready_attempts
+                or self._attempt_cancel_requested(key[0], str(pending.token[3]))
+            ):
+                del self._transfer_inputs[key]
+
         for assignment_id, future in tuple(self._local_assignment_futures.items()):
             if not future.done():
                 continue
@@ -1401,6 +1464,7 @@ class LocalDaemonExecution:
                 future.add_done_callback(wake_daemon)
             self._local_assignment_futures[assignment_id] = future
         self._cycle_contexts.clear()
+        self._cycle_context_epochs.clear()
 
     def next_local_retry_at(self, now: float) -> float | None:
         """Wake for a pending replay without rescheduling its running observer."""
@@ -1724,21 +1788,30 @@ class LocalDaemonExecution:
                 "retained daemon owner state is unavailable"
             ) from None
 
-    def _admission_context(
-        self, admission: LocalDaemonAdmission
-    ) -> tuple[ManagedLocalIntent, _ScopedCoordinatorAuthority]:
-        """Open and bind the exact retained execution context for one admission."""
+    def load_context(self, admission: LocalDaemonAdmission) -> ManagedLocalIntent:
+        """Read and validate inputs without binding or mutating execution owners."""
+        from ._phase_timing import phase
 
-        self.open_owner_stores()
-        intent = load_managed_local_intent(
-            self.config,
-            admission.run_uri,
-            slurm_profiles=self._scheduling.available_slurm_profiles(),
-        )
-        if intent.digest != admission.intent_digest:
-            raise QueueConflictError(
-                "persisted managed-local plan or runtime changed after admission"
+        with phase("execution_context_loading", operation_id=admission.authority_operation_id):
+            intent = load_managed_local_intent(
+                self.config,
+                admission.run_uri,
+                slurm_profiles=self._scheduling.available_slurm_profiles(),
+                cache=self._context_cache,
             )
+            if intent.digest != admission.intent_digest:
+                raise QueueConflictError(
+                    "persisted managed-local plan or runtime changed after admission"
+                )
+            return intent
+
+    def _admission_context(
+        self, admission: LocalDaemonAdmission,
+        *, prepared_intent: ManagedLocalIntent | None = None,
+    ) -> tuple[ManagedLocalIntent, _ScopedCoordinatorAuthority]:
+        """Bind validated inputs through the retained authority operation identity."""
+        self.open_owner_stores()
+        intent = self.load_context(admission) if prepared_intent is None else prepared_intent
         authority = self._authority_store(admission.run_uri)
         receipt = authority.bind_coordinator_admission(
             admission.run_uri,
@@ -1819,10 +1892,11 @@ class LocalDaemonExecution:
         )
 
     def reconcile_admission(
-        self, admission: LocalDaemonAdmission
+        self, admission: LocalDaemonAdmission,
+        *, prepared_intent: ManagedLocalIntent | None = None,
     ) -> LocalDaemonExecutionOutcome:
         """Reconcile one run into durable ready work without selecting capacity."""
-        return _run_progress.reconcile_admission(self, admission)
+        return _run_progress.reconcile_admission(self, admission, prepared_intent=prepared_intent)
 
 
     def _settled_terminal_outcome(
@@ -2404,8 +2478,8 @@ class LocalDaemonExecution:
                 ) not in {"GRANTED", "RUNNING"}:
                     return False
                 offer = conn.execute(
-                    "SELECT expires_at FROM agent_offers "
-                    "WHERE session_id = ? AND current = 1",
+                    "SELECT MAX(expires_at) AS expires_at FROM agent_offers "
+                    "WHERE session_id = ?",
                     (str(row["session_id"]),),
                 ).fetchone()
             observed_at = (
@@ -2413,7 +2487,13 @@ class LocalDaemonExecution:
                 if self.daemon is None
                 else self._daemon_owner()._clock()  # noqa: SLF001
             )
-            return offer is not None and str(offer["expires_at"]) < observed_at
+            # Draining invalidates current offers without erasing their expiry.
+            # Require every retained offer to have expired before recovery.
+            return (
+                offer is not None
+                and offer["expires_at"] is not None
+                and str(offer["expires_at"]) < observed_at
+            )
         return self._is_exact_retained_unknown(request.assignment_id)
 
     def resolve_recovery_evidence(
@@ -2698,6 +2778,12 @@ class LocalDaemonExecution:
                     "WHERE r.assignment_id = ?",
                     (request.assignment_id,),
                 ).fetchone()
+            process_execution_id = self._remote_process_execution_id(request.assignment_id)
+            if process_execution_id is None and row is not None and row["state"] == "GRANTED":
+                # The agent may lose startup acknowledgement before publishing
+                # its first event. Its root execution identity is deterministic;
+                # closing still requires the exact target-owned containment proof.
+                process_execution_id = f"{request.assignment_id}:root"
             if (
                 row is None
                 or str(row["agent_id"]) != target.agent_id
@@ -2708,8 +2794,7 @@ class LocalDaemonExecution:
                 or str(row["stage_name"]) != request.stage_name
                 or int(row["attempt"]) != request.attempt
                 or str(row["attempt_id"]) != assignment.attempt_id
-                or self._remote_process_execution_id(request.assignment_id)
-                != request.process_execution_id
+                or process_execution_id != request.process_execution_id
             ):
                 raise QueueConflictError("managed recovery target identity conflicts")
         elif (
@@ -2975,6 +3060,7 @@ class LocalDaemonExecution:
         snapshot: AuthoritativeRunSnapshot,
         stage_work_id: str,
     ) -> LocalDaemonExecutionOutcome | None:
+        epochs = self._cycle_context_epochs.get(admission.admission_id)
         records = tuple(
             sorted(
                 (
@@ -3035,63 +3121,11 @@ class LocalDaemonExecution:
                 attempt_id=record.attempt_id,
             )
             stage = intent.pipeline.get_stage(record.stage_name)
-            stage_plan = next(
-                item
-                for item in intent.plan.ordered_stage_plans
-                if item.stage_name == record.stage_name
-            )
-            raw_worker_request = self.run_store.read_stage_worker_request(
-                record.run_uri,
-                record.stage_name,
-                attempt=record.attempt,
-            )
-            worker_request = (
-                StageWorkerRequest.from_dict(raw_worker_request)
-                if raw_worker_request is not None
-                else prepare_stage_attempt(
-                    stage_state=self.run_store,
-                    stage_workspaces=self.run_store,
-                    local_paths=self.run_store,
-                    reliability=self.run_store,
-                    prepared_runs=self.run_store,
-                    config=self.run_store,
-                    run_status=snapshot.status,
-                    run_uri=record.run_uri,
-                    stage=stage,
-                    stage_plan=stage_plan,
-                    produced_outputs=_produced_outputs(snapshot),
-                    input_bindings=next(a.input_bindings for s in snapshot.stages for a in s.attempts if a.attempt_id == record.attempt_id),
-                    authority_attempt=next(a for s in snapshot.stages for a in s.attempts if a.attempt_id == record.attempt_id),
-                    fingerprint_context=intent.plan.fingerprint_context,
-                    resolved_runtime=_worker_runtime(intent, record.stage_name),
-                    metadata={
-                        "managed_output_predecessor": next(
-                            (
-                                fact.latest_commit.commit_id
-                                for fact in snapshot.stages
-                                if fact.stage_name == record.stage_name
-                                and fact.latest_commit is not None
-                            ),
-                            None,
-                        ),
-                    },
-                )
-            )
-            if (
-                worker_request.run_uri != record.run_uri
-                or worker_request.stage_name != record.stage_name
-                or worker_request.attempt != record.attempt
-                or worker_request.executor_name != profile.executor_name
-            ):
+            worker_request = self._worker_request_async(record, intent, snapshot)
+            if worker_request is None:
+                return None
+            if worker_request.executor_name != profile.executor_name:
                 raise QueueConflictError("SLURM worker preparation identity conflicts")
-            from loom.pipeline.stores.input_lineage import validate_worker_inputs
-            validate_worker_inputs(worker_request, next(a.input_bindings for s in snapshot.stages for a in s.attempts if a.attempt_id == record.attempt_id))
-            from loom.pipeline._project_contracts import validate_admitted_worker
-            validate_admitted_worker(self.run_store, worker_request, stage, config=self.run_store, local_paths=self.run_store)
-            _require_retained_resource_handoff_match(
-                worker_request.resolved_runtime,
-                _worker_runtime(intent, record.stage_name),
-            )
             owner_id, owner_root_id = self._select_slurm_agent(profile)
             assignment = SlurmStageAssignment(
                 agent_id=owner_id,
@@ -3110,35 +3144,34 @@ class LocalDaemonExecution:
             )
             remote_inputs: list[_RemoteArtifact] = []
             input_paths: dict[str, Path] = {}
-            total_bytes = 0
-            for logical_name, ref in sorted(worker_request.inputs.items()):
-                transfer_id = (
-                    "input-"
-                    + hashlib.sha256(
-                        (
-                            assignment.assignment_id
-                            + "\0"
-                            + logical_name
-                            + "\0"
-                            + ref.artifact_id
-                        ).encode()
-                    ).hexdigest()
-                )
-                descriptor, source = _RemoteArtifact.from_local_ref(
-                    transfer_id=transfer_id,
-                    logical_name=logical_name,
-                    ref=ref,
-                )
-                from loom.pipeline.stores.shared_artifacts import binding
-                if binding(descriptor.metadata) is not None:
-                    raise QueueServiceError("shared artifact inputs require the qualified resident route")
-                total_bytes += descriptor.size_bytes
-                if total_bytes > MAX_TRANSFER_BYTES:
-                    raise QueueServiceError(
-                        "SLURM assignment inputs exceed the configured bound"
-                    )
+            from .submitted_execution import assignment_binding
+            from ._submitted_container_policy import SubmittedContainerPolicy
+            from .shared_execution import assignment_scope, require_bindings
+
+            fingerprint = cast(StageFingerprintRecord, worker_request.fingerprint).to_dict()
+            submitted = assignment_binding(fingerprint)
+            if submitted is not None:
+                if profile.submitted_container_policy is None:
+                    raise QueueConflictError("SLURM profile has no submitted container policy")
+                policy = SubmittedContainerPolicy.from_dict(profile.submitted_container_policy)
+                if policy.capability != submitted[1] and not policy.capability.permits(submitted[1]):
+                    raise QueueConflictError("SLURM profile does not authorize the submitted capability")
+                policy.capability.require_execution(submitted[0])
+                scope = assignment_scope(fingerprint)
+                if scope is None:
+                    raise QueueConflictError("submitted SLURM work requires shared execution")
+                require_bindings(scope, self.config.coordinator_shared_roots)
+            described = self._transfer_inputs_async(record, intent, snapshot, worker_request, assignment_id)
+            if described is None:
+                return None
+            from loom.pipeline.stores.shared_artifacts import binding
+            for descriptor, source in described:
+                shared_input = binding(descriptor.metadata) is not None
+                if shared_input and submitted is None:
+                    raise QueueServiceError("SLURM shared inputs require submitted container storage policy")
                 remote_inputs.append(descriptor)
-                input_paths[transfer_id] = source
+                if not shared_input:
+                    input_paths[descriptor.transfer_id] = source
             delivery = SlurmStageDelivery.from_worker_request(
                 assignment=assignment,
                 worker_request=worker_request,
@@ -3156,6 +3189,7 @@ class LocalDaemonExecution:
                 issuer_epoch=self.coordinator_epoch,
                 max_parallel_stages=intent.max_parallel_stages,
                 max_profile_outstanding=profile.max_outstanding,
+                reservation_guard=lambda: self._reservation_guard(admission.admission_id, record, epochs),
             )
             self._sync_slurm_agent_references()
             authority.bind_prepared_attempt(
@@ -3705,7 +3739,10 @@ class LocalDaemonExecution:
                 rows = tuple(
                     conn.execute(
                         "SELECT run_uri, intent_digest FROM managed_admissions "
-                        "WHERE state NOT IN (?, ?, ?, ?) ORDER BY admission_id",
+                        "WHERE state NOT IN (?, ?, ?, ?) OR admission_id IN ("
+                        "SELECT json_extract(value, '$.admission_id') FROM daemon_metadata "
+                        "WHERE key LIKE 'admission-retry:%' AND json_extract(value, '$.state') = 'pending') "
+                        "ORDER BY admission_id",
                         terminal,
                     )
                 )
@@ -4302,7 +4339,13 @@ class LocalDaemonExecution:
                 atoms=observed.atoms,
             )
         profile = self.config.resident_worker_launch_profile
-        attributes: dict[str, PlainData] = {}
+        with sqlite3.connect(self.config.execution_database) as conn:
+            outstanding = conn.execute(
+                "SELECT COUNT(*) FROM coordinator_assignments "
+                "WHERE agent_id=? AND state!='released'",
+                (self.agent_id,),
+            ).fetchone()[0]
+        attributes: dict[str, PlainData] = {"outstanding_assignments": outstanding}
         if profile is not None:
             if profile.shared_roots:
                 try:
@@ -4589,6 +4632,7 @@ class LocalDaemonExecution:
                     attributes={
                         "agent_id": agent_id,
                         "target": agent_id,
+                        "outstanding_assignments": outstanding.get(str(row["session_id"]), 0),
                         **identity,
                         "artifact_capability": "regular-file-relay-v1",
                         **(shared_attributes({"roots": dict(profile.shared_roots)})
@@ -4652,6 +4696,53 @@ class LocalDaemonExecution:
                     f"for {kind!r}"
                 )
 
+    def _remote_eligibility_async(
+        self, *, intent: ManagedLocalIntent, snapshot: AuthoritativeRunSnapshot,
+        record: StageWorkRecord,
+    ) -> bool | None:
+        """Defer only this stage while its bounded remote preflight reads inputs.
+
+        A positive hint survives request preparation for this attempt; actual
+        delivery descriptors still verify the bytes before guarded reservation.
+        """
+        if self.daemon is None:
+            return self._remote_eligible(intent=intent, snapshot=snapshot, record=record)
+        daemon = self._daemon_owner()
+        attempt = next(
+            a for stage in snapshot.stages for a in stage.attempts if a.attempt_id == record.attempt_id
+        )
+        token = (
+            daemon._epoch, daemon._scheduling_epoch, intent.digest,
+            record.attempt_id, attempt.input_bindings, _worker_runtime(intent, record.stage_name),
+        )
+        key = (record.run_uri, record.stage_name)
+        pending = self._remote_preflights.get(key)
+        if pending is not None:
+            previous, future = pending
+            if not future.done():
+                return None
+            if previous == token:
+                try:
+                    eligible = future.result()
+                except BaseException:
+                    del self._remote_preflights[key]
+                    raise
+                if not eligible:
+                    del self._remote_preflights[key]
+                return eligible
+            del self._remote_preflights[key]
+        if len(self._remote_preflights) >= 2:
+            return None
+        from functools import partial
+
+        future = daemon._result_verifications.bulk.submit(
+            record.stage_work_id, "remote_input_preflight",
+            partial(self._remote_eligible, intent=intent, snapshot=snapshot, record=record),
+        )
+        if future is not None:
+            self._remote_preflights[key] = (token, future)
+        return None
+
     @staticmethod
     def _remote_eligible(
         *,
@@ -4702,6 +4793,175 @@ class LocalDaemonExecution:
             return False
         return True
 
+    @contextmanager
+    def _reservation_guard(
+        self, admission_id: str, record: StageWorkRecord,
+        epochs: tuple[str | None, str | None] | None,
+        target: _RemoteCandidateTarget | None = None,
+    ) -> Iterator[None]:
+        """Pin current scheduling and cancellation only during durable reserve.
+
+        Assignment preparation and external authority effects precede/follow
+        this boundary. The control write transaction linearizes cancellation;
+        the launch guard excludes replacement inventory and configuration swap.
+        """
+        daemon = self._daemon_owner()
+        with self.scheduling_reload_guard(), daemon._state_guard(), daemon._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if (daemon._execution is not self
+                or epochs != (daemon._epoch, daemon._scheduling_epoch)
+                or action_attempt_cancelled(conn, record.run_uri, record.attempt_id)):
+                raise ManagedLocalError("assignment preparation is no longer authorized")
+            if target is not None:
+                current = conn.execute(
+                    "SELECT o.offer_id, o.expires_at, s.availability_revision, r.observed_claim_ids_json "
+                    "FROM agent_offers o JOIN agent_sessions s USING(session_id) "
+                    "LEFT JOIN session_replacements r ON r.successor_session_id = s.session_id AND r.readiness = 'ready' "
+                    "WHERE o.session_id = ? AND o.current = 1 AND s.state = 'ACTIVE' "
+                    "AND o.coordinator_epoch = ? AND s.coordinator_epoch = ?",
+                    (target.session_id, daemon._epoch, daemon._epoch),
+                ).fetchone()
+                if (current is None or str(current["expires_at"]) < daemon._accepted_time(conn)
+                    or current["availability_revision"] != target.availability_revision):
+                    raise ManagedLocalError("assignment offer changed during preparation")
+                offer_id, availability_revision = str(current["offer_id"]), str(current["availability_revision"])
+                if current["observed_claim_ids_json"] is not None:
+                    offer_id, availability_revision = _replacement_scheduling_identities(
+                        offer_id=offer_id, availability_revision=availability_revision,
+                        withheld_claim_ids=tuple(sorted(json.loads(current["observed_claim_ids_json"]))),
+                    )
+                if (offer_id, availability_revision) != (target.offer_id, target.scheduling_availability_revision):
+                    raise ManagedLocalError("assignment capacity projection changed during preparation")
+            with phase("scheduling_commit"):
+                yield
+            conn.commit()
+            daemon._scheduling_reference_revision += 1
+
+    def _worker_preparation_token(self, record, intent, snapshot) -> tuple[object, ...]:
+        daemon = self._daemon_owner()
+        attempt = next(
+            a for stage in snapshot.stages for a in stage.attempts if a.attempt_id == record.attempt_id
+        )
+        return (
+            daemon._epoch, daemon._scheduling_epoch, intent.digest,
+            record.attempt_id, attempt.input_bindings, _worker_runtime(intent, record.stage_name),
+        )
+
+    def _transfer_inputs_async(
+        self, record, intent, snapshot, request: StageWorkerRequest, assignment_id: str,
+    ) -> tuple[tuple[_RemoteArtifact, Path], ...] | None:
+        if self.daemon is None:
+            described = _describe_transfer_inputs(request)
+        else:
+            key = (record.run_uri, record.stage_name)
+            token = self._worker_preparation_token(record, intent, snapshot)
+            pending = self._transfer_inputs.get(key)
+            if pending is None:
+                if len(self._transfer_inputs) >= 2:
+                    return None
+                future = self._daemon_owner()._result_verifications.bulk.submit(
+                    record.stage_work_id, "transfer_input_verification", _describe_transfer_inputs, request,
+                )
+                if future is not None:
+                    self._transfer_inputs[key] = _PendingTransferInputs(token, request, future)
+                return None
+            if not pending.future.done():
+                return None
+            del self._transfer_inputs[key]
+            if pending.token != token or pending.request != request:
+                return None
+            described = pending.future.result()
+        # Transfer identity belongs to the current assignment; slow byte proof
+        # must not be invalidated by unrelated offer refreshes during the read.
+        return tuple(
+            (replace(descriptor, transfer_id="input-" + hashlib.sha256(
+                (assignment_id + "\0" + descriptor.logical_name + "\0" + descriptor.artifact_id).encode()
+            ).hexdigest()), path)
+            for descriptor, path in described
+        )
+
+    def _worker_request_async(
+        self, record: StageWorkRecord, intent: ManagedLocalIntent,
+        snapshot: AuthoritativeRunSnapshot,
+    ) -> StageWorkerRequest | None:
+        if self.daemon is None:
+            return self._load_worker_request(record, intent, snapshot)
+        daemon = self._daemon_owner()
+        token = self._worker_preparation_token(record, intent, snapshot)
+        key = (record.run_uri, record.stage_name)
+        transfer = self._transfer_inputs.get(key)
+        if transfer is not None:
+            if transfer.token == token:
+                return transfer.request
+            if not transfer.future.done():
+                return None
+            del self._transfer_inputs[key]
+        pending = self._worker_requests.get(key)
+        if pending is not None:
+            previous, future = pending
+            if not future.done():
+                return None
+            del self._worker_requests[key]
+            if previous == token:
+                return future.result()
+        if len(self._worker_requests) >= 2:
+            return None
+        future = daemon._result_verifications.bulk.submit(
+            record.stage_work_id, "worker_request_preparation", self._prepare_owned_worker_request,
+            record, intent, snapshot,
+        )
+        if future is not None:
+            self._worker_requests[key] = (token, future)
+        return None
+
+    def _prepare_owned_worker_request(self, record, intent, snapshot) -> StageWorkerRequest:
+        with self._daemon_owner()._publication_guards.hold("worker-request-" + record.stage_work_id):
+            return self._load_worker_request(record, intent, snapshot)
+
+    def _load_worker_request(self, record, intent, snapshot) -> StageWorkerRequest:
+        stage = intent.pipeline.get_stage(record.stage_name)
+        stage_plan = next(
+            item for item in intent.plan.ordered_stage_plans if item.stage_name == record.stage_name
+        )
+        attempt = next(
+            a for fact in snapshot.stages for a in fact.attempts if a.attempt_id == record.attempt_id
+        )
+        runtime = _worker_runtime(intent, record.stage_name)
+        raw = self.run_store.read_stage_worker_request(record.run_uri, record.stage_name, attempt=None)
+        if raw is not None:
+            retained = StageWorkerRequest.from_dict(raw)
+            if retained.attempt != record.attempt:
+                prior_failed = any(
+                    a.attempt == retained.attempt and a.status is StageStatus.FAILED
+                    for fact in snapshot.stages if fact.stage_name == record.stage_name
+                    for a in fact.attempts
+                )
+                if not prior_failed or retained.attempt + 1 != record.attempt:
+                    raise QueueConflictError("managed retry worker request conflicts")
+                raw = None
+        worker_request = StageWorkerRequest.from_dict(raw) if raw is not None else prepare_stage_attempt(
+            stage_state=self.run_store, stage_workspaces=self.run_store, local_paths=self.run_store,
+            reliability=self.run_store, prepared_runs=self.run_store, config=self.run_store,
+            run_status=snapshot.status, run_uri=record.run_uri, stage=stage, stage_plan=stage_plan,
+            produced_outputs=_produced_outputs(snapshot), input_bindings=attempt.input_bindings,
+            authority_attempt=attempt, fingerprint_context=intent.plan.fingerprint_context,
+            resolved_runtime=runtime,
+            metadata={"managed_output_predecessor": next(
+                (fact.latest_commit.commit_id for fact in snapshot.stages
+                 if fact.stage_name == record.stage_name and fact.latest_commit is not None), None,
+            )},
+        )
+        if (worker_request.run_uri != record.run_uri or worker_request.stage_name != record.stage_name
+            or worker_request.attempt != record.attempt):
+            raise QueueConflictError("managed worker preparation identity differs from authority attempt")
+        from loom.pipeline.stores.input_lineage import validate_worker_inputs
+        from loom.pipeline._project_contracts import validate_admitted_worker
+
+        validate_worker_inputs(worker_request, attempt.input_bindings)
+        validate_admitted_worker(self.run_store, worker_request, stage, config=self.run_store, local_paths=self.run_store)
+        _require_retained_resource_handoff_match(worker_request.resolved_runtime, runtime)
+        return worker_request
+
     def _execute(
         self,
         *,
@@ -4715,6 +4975,7 @@ class LocalDaemonExecution:
         decision_as_of: str,
         execution_started: Callable[[], None],
     ) -> bool:
+        epochs = self._cycle_context_epochs.get(admission.admission_id)
         selected = getattr(decision, "selected")
         claims = tuple(selected.claims)
         if len({claim.resource_kind for claim in claims}) != len(claims):
@@ -4864,76 +5125,9 @@ class LocalDaemonExecution:
                 claim_id=f"claim-{assignment_id}",
             )
         stage = intent.pipeline.get_stage(record.stage_name)
-        stage_plan = next(
-            item
-            for item in intent.plan.ordered_stage_plans
-            if item.stage_name == record.stage_name
-        )
-        produced = _produced_outputs(snapshot)
-        runtime = _worker_runtime(intent, record.stage_name)
-        raw_worker_request = self.run_store.read_stage_worker_request(
-            record.run_uri, record.stage_name, attempt=None,
-        )
-        if raw_worker_request is not None:
-            retained_request = StageWorkerRequest.from_dict(raw_worker_request)
-            if retained_request.attempt != record.attempt:
-                prior_failed = any(
-                    attempt.attempt == retained_request.attempt
-                    and attempt.status is StageStatus.FAILED
-                    for stage_fact in snapshot.stages
-                    if stage_fact.stage_name == record.stage_name
-                    for attempt in stage_fact.attempts
-                )
-                if not prior_failed or retained_request.attempt + 1 != record.attempt:
-                    raise QueueConflictError("managed retry worker request conflicts")
-                raw_worker_request = None
-        worker_request = (
-            StageWorkerRequest.from_dict(raw_worker_request)
-            if raw_worker_request is not None
-            else prepare_stage_attempt(
-                stage_state=self.run_store,
-                stage_workspaces=self.run_store,
-                local_paths=self.run_store,
-                reliability=self.run_store,
-                prepared_runs=self.run_store,
-                config=self.run_store,
-                run_status=snapshot.status,
-                run_uri=record.run_uri,
-                stage=stage,
-                stage_plan=stage_plan,
-                produced_outputs=produced,
-                input_bindings=next(a.input_bindings for s in snapshot.stages for a in s.attempts if a.attempt_id == record.attempt_id),
-                authority_attempt=next(a for s in snapshot.stages for a in s.attempts if a.attempt_id == record.attempt_id),
-                fingerprint_context=intent.plan.fingerprint_context,
-                resolved_runtime=runtime,
-                metadata={
-                    "managed_output_predecessor": next(
-                        (
-                            fact.latest_commit.commit_id
-                            for fact in snapshot.stages
-                            if fact.stage_name == record.stage_name
-                            and fact.latest_commit is not None
-                        ),
-                        None,
-                    ),
-                },
-            )
-        )
-        if (
-            worker_request.run_uri != record.run_uri
-            or worker_request.stage_name != record.stage_name
-            or worker_request.attempt != record.attempt
-        ):
-            raise QueueConflictError(
-                "managed worker preparation identity differs from authority attempt"
-            )
-        from loom.pipeline.stores.input_lineage import validate_worker_inputs
-        validate_worker_inputs(worker_request, next(a.input_bindings for s in snapshot.stages for a in s.attempts if a.attempt_id == record.attempt_id))
-        from loom.pipeline._project_contracts import validate_admitted_worker
-        validate_admitted_worker(self.run_store, worker_request, stage, config=self.run_store, local_paths=self.run_store)
-        _require_retained_resource_handoff_match(
-            worker_request.resolved_runtime, runtime
-        )
+        worker_request = self._worker_request_async(record, intent, snapshot)
+        if worker_request is None:
+            return False
         snapshot_revision = (
             remote_target.scheduling_availability_revision
             if remote_target is not None
@@ -4968,40 +5162,13 @@ class LocalDaemonExecution:
             ],
         }
         if remote_target is not None:
-            remote_inputs: list[_RemoteArtifact] = []
-            input_paths: dict[str, Path] = {}
-            total_bytes = 0
-            transfer_refs = _resident_input_refs(
-                worker_request.inputs,
-                cast(StageFingerprintRecord, worker_request.fingerprint).to_dict(),
-                worker_request.metadata,
+            described = self._transfer_inputs_async(
+                record, intent, snapshot, worker_request, assignment.assignment_id,
             )
-            for logical_name, ref in sorted(transfer_refs.items()):
-                transfer_id = (
-                    "input-"
-                    + hashlib.sha256(
-                        (
-                            assignment.assignment_id
-                            + "\0"
-                            + logical_name
-                            + "\0"
-                            + ref.artifact_id
-                        ).encode("utf-8")
-                    ).hexdigest()
-                )
-                descriptor, path = _RemoteArtifact.from_local_ref(
-                    transfer_id=transfer_id,
-                    logical_name=logical_name,
-                    ref=ref,
-                )
-                from loom.pipeline.stores.shared_artifacts import binding
-                total_bytes += descriptor.size_bytes if binding(descriptor.metadata) is None else 0
-                if total_bytes > MAX_TRANSFER_BYTES:
-                    raise QueueServiceError(
-                        "remote assignment inputs exceed the configured bound"
-                    )
-                remote_inputs.append(descriptor)
-                input_paths[transfer_id] = path
+            if described is None:
+                return False
+            remote_inputs = [descriptor for descriptor, _ in described]
+            input_paths = {descriptor.transfer_id: path for descriptor, path in described}
             delivered = _ResidentAssignmentBundle.from_worker_request(
                 assignment_id=assignment.assignment_id,
                 stage_work_id=assignment.stage_work_id,
@@ -5020,12 +5187,15 @@ class LocalDaemonExecution:
             from ._shared_recovery import bind_delivery
             with self._daemon_owner()._connection() as conn:
                 delivered = bind_delivery(delivered, conn, assignment.run_uri, self._daemon_owner().config.coordinator_shared_roots, session_id=remote_target.session_id)
-            self.coordinator.reserve(
-                assignment,
-                claims,
-                max_parallel_stages=intent.max_parallel_stages,
-                decision_receipt=decision_receipt,
-            )
+            if self._attempt_cancel_requested(record.run_uri, record.attempt_id):
+                return False
+            with self._reservation_guard(admission.admission_id, record, epochs, remote_target):
+                self.coordinator.reserve(
+                    assignment,
+                    claims,
+                    max_parallel_stages=intent.max_parallel_stages,
+                    decision_receipt=decision_receipt,
+                )
             authority.bind_prepared_attempt(
                 assignment.run_uri,
                 assignment_id=assignment.assignment_id,
@@ -5061,6 +5231,8 @@ class LocalDaemonExecution:
                 return False
             execution_started()
             return True
+        if self._attempt_cancel_requested(record.run_uri, record.attempt_id):
+            return False
         accepted = Event()
         journal = self.journal
         supervisor = self.supervisor
@@ -5097,6 +5269,7 @@ class LocalDaemonExecution:
                     None if self.daemon is None else self.daemon._stop.is_set
                 ),
                 execution_started=started,
+                reservation_guard=lambda: self._reservation_guard(admission.admission_id, record, epochs),
             )
 
         prior = self._local_assignment_futures.get(assignment.assignment_id)
@@ -5671,9 +5844,6 @@ class LocalDaemonExecution:
     def _slurm_finalize_record(self, record: SlurmStageRecord, fence: str) -> None:
         assignment_id = record.assignment.assignment_id
         incarnation = cast(str, record.bootstrap_incarnation)
-        report, outputs = self.slurm_assignments.committed_result(
-            assignment_id, incarnation, fence
-        )
         authority = self._remote_authority(record.assignment.run_uri)
         granted = authority.grant_prepared_attempt(
             record.assignment.run_uri,
@@ -5682,6 +5852,26 @@ class LocalDaemonExecution:
         )
         if granted.fencing_token != fence:
             raise QueueConflictError("SLURM terminal fence conflicts")
+        shared_outputs = None
+        if record.report is not None and record.report.output_kind == "shared":
+            from ._shared_publication import prepare_publication, accept_publication
+
+            publication = prepare_publication(
+                record.delivery, record.report, self.config.coordinator_shared_roots,
+                agent_id=record.assignment.agent_id, fence=fence,
+            )
+            # Verification may perform substantial storage IO. Reauthorize the
+            # same attempt before publishing, including a concurrent cancellation.
+            current = authority.grant_prepared_attempt(
+                record.assignment.run_uri, assignment_id=assignment_id,
+                attempt_id=record.assignment.attempt_id,
+            )
+            if current.fencing_token != fence:
+                raise QueueConflictError("SLURM publication fence conflicts")
+            shared_outputs = accept_publication(publication)
+        report, outputs = self.slurm_assignments.committed_result(
+            assignment_id, incarnation, fence, shared_outputs=shared_outputs,
+        )
         if report.status is StageStatus.SUCCEEDED:
             authority.record_output_commit(
                 record.assignment.run_uri,

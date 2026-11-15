@@ -7,6 +7,40 @@ import pytest
 from loom.fleet import upgrades
 
 
+@pytest.mark.parametrize("change", [{"state": "open"}, {"maintenance_id": "other"}, {"checks": {"running": {}}}])
+def test_existing_gate_requires_exact_closed_owner_without_checks(change):
+    from loom.queue.errors import QueueConflictError
+    gate = {"state": "closed", "maintenance_id": "incident", "intent_digest": "digest", "checks": {}}
+    assert upgrades._existing_maintenance_binding(gate, "incident") == {
+        "operation_id": "incident", "target_intent_digest": "digest",
+    }
+    with pytest.raises(QueueConflictError, match="selected maintenance gate"):
+        upgrades._existing_maintenance_binding({**gate, **change}, "incident")
+
+
+@pytest.mark.parametrize("abort", [False, True])
+def test_existing_gate_remains_closed_on_restore_and_abort(tmp_path, abort):
+    calls = []
+    operation = SimpleNamespace(
+        intent={"kind": "runtime-upgrade", "agents": {}, "preserve_maintenance_gate": True},
+        receipts=tmp_path, gate=lambda: {"checks": {"check-1": {}}},
+        settled=lambda: calls.append("settled"),
+        maintenance=lambda *args: calls.append(args),
+    )
+    upgrades._restore(operation, abort=abort)
+    assert ("revoke-check-1", "revoke", "check-1") in calls
+    assert not any(isinstance(call, tuple) and "open" in call for call in calls)
+
+
+def test_existing_gate_cli_selection():
+    from loom.cli.main import build_parser
+    selected = build_parser().parse_args([
+        "fleet", "upgrade", "--fleet", "lab", "--runtime-release", "/private/release.json",
+        "--maintenance-id", "incident", "--apply", "--operation-id", "upgrade",
+    ])
+    assert selected.maintenance_id == "incident"
+
+
 @pytest.mark.parametrize("selected", ["infrastructure", "previous-generation"])
 def test_check_profile_selects_resident_alias_among_submitted_container_policies(selected):
     declarations = {

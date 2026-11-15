@@ -1395,6 +1395,19 @@ def test_coordinator_config_constructs_complete_protected_composition(
     assert profile.container_options is not None
     assert profile.apptainer_options is not None
 
+    from loom.queue.deployment import _slurm_profile_composition
+    declaration = payload["slurm_profiles"][0]
+    declaration["bootstrap_executable"] = "/site/loom/bin/loom"
+    declaration["bootstrap_config_path"] = "/site/private/bootstrap-training.json"
+    configured = _slurm_profile_composition([declaration])[0]
+    assert configured.bootstrap_argv == (
+        "/site/loom/bin/loom", "slurm-bootstrap", "--config", "/site/private/bootstrap-training.json",
+    )
+    assert configured.configuration_fingerprint != profile.configuration_fingerprint
+    declaration["bootstrap_config_path"] = "relative-bootstrap.json"
+    with pytest.raises(QueueConfigError, match="bootstrap paths must be absolute"):
+        _slurm_profile_composition([declaration])
+
 
 def test_https_authority_schema_resolves_tls_and_service_scope(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

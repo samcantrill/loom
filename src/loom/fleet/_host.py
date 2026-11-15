@@ -714,6 +714,9 @@ def bind_principal(request, directory):
 
 def execute(request, repeated, directory):
     action = request["action"]
+    if action == "repair-gpu-policy":
+        from .gpu_policy_repair import repair_host
+        return repair_host(request, directory)
     if action == "gpu-capability":
         from dataclasses import replace
         from loom.fleet._gpu_capability import gpu_capability
@@ -731,13 +734,14 @@ def execute(request, repeated, directory):
             from loom.queue.submitted_execution import SubmittedContainerExecution
 
             execution = SubmittedContainerExecution.from_dict(request["execution"])
-            policies = [p for p in service.client.container_policies
-                        if p.capability.to_dict() == request["profile"]]
+            policies = [(p, capability) for p in service.client.container_policies
+                        for capability in (p.available_capability(),)
+                        if capability.to_dict() == request["profile"]]
             if len(policies) != 1:
                 raise QueueConflictError("GPU capability policy differs from admitted selection")
             return submitted_gpu_capability(
-                policies[0], execution, service.client.execution_inventory,
-                workspace=service.client.agent_root,
+                policies[0][0], execution, service.client.execution_inventory,
+                workspace=service.client.agent_root, selected_capability=policies[0][1],
             )
         profiles = [
             p for p in service.client.resident_profiles
@@ -789,7 +793,7 @@ def main():
     request = json.loads(sys.stdin.buffer.read(128 * 1024 * 1024 + 1))
     if request["action"] not in {
         "receipt", "prepare", "issue", "receive", "initialize", "start", "enroll", "bind",
-        "gpu-capability",
+        "gpu-capability", "repair-gpu-policy",
         "observe", "resources", "upgrade-probe", "upgrade-settlement", "upgrade-result-recovery", "upgrade-stop",
         "upgrade-check-capture", "upgrade-check-prepare",
         "upgrade-replace", "workload-probe", "workload-coordinator-probe", "workload-recover",

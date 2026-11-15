@@ -164,7 +164,19 @@ def _replay_pending_reconciliation(self: LocalDaemonAgentHttpClient):
     journal = self._require_journal()
     for operation_id, encoded in journal.pending_reconciliations():
         self._epoch_reconciliation_pending = True
-        response = yield from _steps(self._call, "reconcile", json.loads(encoded))
+        request = json.loads(encoded)
+        try:
+            response = yield from _steps(self._call, "reconcile", request)
+        except QueueConflictError:
+            # Old runtimes could persist backward reconciliation while replaying
+            # authorization history. Retire only a definitely rejected request
+            # whose target is no longer the coordinator's current epoch.
+            handshake = yield from _steps(self.handshake)
+            if handshake["coordinator_epoch"] == request["coordinator_epoch"]:
+                raise
+            journal.discard_rejected_reconciliation(operation_id)
+            self._epoch_reconciliation_pending = False
+            continue
         session = _session_from_value(response)
         journal.persist_reconciled_session(session)
         journal.complete_mutation("reconcile", operation_id, session.value())

@@ -1,4 +1,4 @@
-"""Shared payload routing within the native resident assignment protocol."""
+"""Shared payload publication for native resident and Slurm assignments."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ from ._phase_timing import phase
 from collections.abc import Mapping
 from dataclasses import dataclass
 import hashlib
-import json
 import os
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, cast
@@ -44,12 +43,16 @@ if TYPE_CHECKING:
         _RemoteOutputArtifact,
         _RemoteExecutionReport,
     )
+    from .slurm_ready_stage import SlurmStageDelivery, SlurmBootstrapWorkspace
+
+    PublicationRequest = _ResidentAssignmentBundle | SlurmStageDelivery
+    PublicationWorkspace = _ResidentAssignmentWorkspace | SlurmBootstrapWorkspace
 
 CAPABILITY = "shared-artifact-publication-v1"
 
 
 def selected(
-    request: _ResidentAssignmentBundle,
+    request: PublicationRequest,
 ) -> tuple[str, Mapping[str, PlainData]] | None:
     scope = assignment_scope(request.fingerprint)
     if scope is None:
@@ -62,7 +65,7 @@ def selected(
 
 
 def identity(
-    request: _ResidentAssignmentBundle, *, agent_id: str, fence: str
+    request: PublicationRequest, *, agent_id: str, fence: str
 ) -> dict[str, PlainData]:
     return {
         "assignment_id": request.assignment_id,
@@ -78,14 +81,14 @@ def publication_id(identity: Mapping[str, PlainData]) -> str:
     return hashlib.sha256(encoded(identity)).hexdigest()
 
 
-def staging_relative(request: _ResidentAssignmentBundle, agent_id: str) -> str:
+def staging_relative(request: PublicationRequest, agent_id: str) -> str:
     # Hash only path components whose native identities can contain punctuation.
     machine = hashlib.sha256(agent_id.encode()).hexdigest()
     return f"loom-work/{machine}/{request.assignment_id}/{request.attempt_id}/artifacts/{request.stage_name}"
 
 
 def staging_tree(
-    request: _ResidentAssignmentBundle,
+    request: PublicationRequest,
     roots: Mapping[str, PlainData],
     agent_id: str,
     *,
@@ -106,12 +109,9 @@ def staging_tree(
 
 
 def workspace_facts(
-    workspace: _ResidentAssignmentWorkspace,
+    workspace: PublicationWorkspace,
 ) -> tuple[dict[str, Any], dict[str, PlainData]]:
-    value = workspace.supervisor_launch_json()
-    if value is None:
-        raise QueueConflictError("shared publication requires a retained launch")
-    launch = json.loads(value)
+    launch = workspace.publication_binding()
     return launch, identity(
         workspace.request(),
         agent_id=launch["agent_id"],
@@ -120,7 +120,7 @@ def workspace_facts(
 
 
 def worker_artifact_root(
-    workspace: _ResidentAssignmentWorkspace, *, container: bool = False
+    workspace: PublicationWorkspace, *, container: bool = False
 ) -> Path | None:
     request = workspace.request()
     if selected(request) is None:
@@ -183,7 +183,7 @@ def _retain_execution_logs(workspace: Any, result: Any, tree: Path, *, sealed: b
 
 
 def retain(
-    workspace: _ResidentAssignmentWorkspace, result: StageWorkerResult
+    workspace: PublicationWorkspace, result: StageWorkerResult
 ) -> list[_RemoteOutputArtifact]:
     try:
         from ._remote_stage_execution import _RemoteOutputArtifact
@@ -204,8 +204,11 @@ def retain(
         # Still verify the final primary bytes and complete receipt below.
         available = final if final.exists() else tree
         logs = _retain_execution_logs(workspace, result, available, sealed=available == final)
-        with phase("publication_inventory_hash", operation_id=request.assignment_id):
+        with phase("publication_inventory_hash", operation_id=request.assignment_id) as evidence:
+            evidence["publication_id"] = pub_id
             members = inventory(available, limits)
+            evidence["member_count"] = len(members)
+            evidence["payload_bytes"] = sum(cast(int, member["size_bytes"]) for member in members)
         indexed = {str(member["path"]): member for member in members}
         outputs = {}
         for name, ref in result.outputs.items():
@@ -257,14 +260,14 @@ def retain(
         for name, ref in sorted(result.outputs.items()):
             primary = outputs[name]
             member = indexed[primary]
-            reference = {
+            reference: dict[str, PlainData] = {
                 "schema_version": 1,
                 "root_id": alias,
                 "tree": final_relative,
                 "publication_id": pub_id,
                 "receipt_digest": hashlib.sha256(data).hexdigest(),
                 "primary": primary,
-                "budgets": limits,
+                "budgets": cast(PlainData, limits),
             }
             descriptors.append(
                 _RemoteOutputArtifact(
@@ -282,7 +285,7 @@ def retain(
                     created_at=ref.created_at,
                     metadata={
                         **ref.metadata, SHARED_PUBLICATION: reference,
-                        **({EXECUTION_LOGS: logs} if logs else {}),
+                        **({EXECUTION_LOGS: cast(PlainData, logs)} if logs else {}),
                     },
                 )
             )
@@ -292,7 +295,7 @@ def retain(
 
 
 def prepare_publication(
-    request: _ResidentAssignmentBundle,
+    request: PublicationRequest,
     report: _RemoteExecutionReport,
     roots: Mapping[str, PlainData],
     *,
@@ -329,8 +332,12 @@ def prepare_publication(
             ):
                 raise QueueConflictError("shared output publication identity conflicts")
             if receipt is None:
-                with phase("publication_inventory_hash", operation_id=request.assignment_id):
+                with phase("publication_inventory_hash", operation_id=request.assignment_id) as evidence:
+                    evidence["publication_id"] = pub_id
                     receipt = read_receipt(available, reference, limits=limits)
+                    audited_members = cast(list[Mapping[str, PlainData]], receipt["members"])
+                    evidence["member_count"] = len(audited_members)
+                    evidence["payload_bytes"] = sum(cast(int, member["size_bytes"]) for member in audited_members)
                 receipt_digest = reference["receipt_digest"]
             elif reference["receipt_digest"] != receipt_digest:
                 raise QueueConflictError("shared outputs select different closures")
@@ -371,7 +378,11 @@ def prepare_publication(
             if available == staging:
                 from ._remote_stage_execution import _fsync_directory
 
-                with phase("publication_sync", operation_id=request.assignment_id):
+                audited_members = cast(list[Mapping[str, PlainData]], receipt["members"])
+                with phase("publication_sync", operation_id=request.assignment_id) as evidence:
+                    evidence["publication_id"] = pub_id
+                    evidence["member_count"] = len(audited_members)
+                    evidence["payload_bytes"] = sum(cast(int, member["size_bytes"]) for member in audited_members)
                     for directory, _, files in os.walk(staging, topdown=False):
                         for name in files:
                             descriptor = os.open(
@@ -436,7 +447,7 @@ def accept_publication(prepared: PreparedPublication) -> dict[str, ArtifactRef]:
 
 
 def publish(
-    request: _ResidentAssignmentBundle,
+    request: PublicationRequest,
     report: _RemoteExecutionReport,
     roots: Mapping[str, PlainData],
     *,
@@ -479,10 +490,14 @@ def verify_outputs(outputs: Mapping[str, ArtifactRef]) -> None:
             tree = tree.parent
         if contained(tree, str(reference["primary"])) != primary:
             raise ArtifactStoreError("shared artifact primary binding conflicts")
-        key = (str(tree), encoded({k: v for k, v in reference.items() if k != "primary"}))
+        key = (str(tree.resolve()), encoded({k: v for k, v in reference.items() if k != "primary"}))
         if key not in verified:
-            with phase("publication_inventory_hash"):
+            with phase("publication_inventory_hash") as evidence:
+                evidence["publication_id"] = reference["publication_id"]
                 receipt = read_receipt(tree, reference)
+                audited_members = cast(list[Mapping[str, PlainData]], receipt["members"])
+                evidence["member_count"] = len(audited_members)
+                evidence["payload_bytes"] = sum(cast(int, item["size_bytes"]) for item in audited_members)
             verified[key] = (
                 cast(Mapping[str, PlainData], receipt["outputs"]),
                 {str(item["path"]): item for item in cast(list[Mapping[str, PlainData]], receipt["members"])},

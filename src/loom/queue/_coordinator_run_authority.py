@@ -54,8 +54,11 @@ class _ScopedCoordinatorAuthority:
             raise QueueConflictError("scoped authority run conflicts")
 
     def open_run(self, run_uri: str) -> AuthoritativeRunSnapshot:
+        from ._phase_timing import phase
+
         self._run(run_uri)
-        return self._store.open_run(run_uri)
+        with phase("authority_observation"):
+            return self._store.open_run(run_uri)
 
     def transition_run(self, run_uri: str, **kwargs: object) -> StatusTransition:
         self._run(run_uri)

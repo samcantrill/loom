@@ -407,6 +407,20 @@ def test_preparation_resumes_retention_before_dispatch_without_recapturing(
     operation = daemon._preparations
     operation._reconcile_lock.acquire()
     daemon.start()
+    def advance_to_boundary():
+        from concurrent.futures import wait
+
+        for _ in range(20):
+            operation._advance(operation._read(request.operation_id))
+            futures = [
+                future for work in (operation._captures, operation._images, operation._children)
+                for _, future in work.values()
+            ]
+            if futures:
+                _, pending = wait(futures, timeout=10)
+                assert not pending
+        pytest.fail("preparation did not reach the injected boundary")
+
     request = replace(_request(), execution=_execution())
     client = daemon.client_view(LocalDaemonPrincipal("client-a", LocalDaemonRole.CLIENT))
     try:
@@ -429,7 +443,7 @@ def test_preparation_resumes_retention_before_dispatch_without_recapturing(
 
                 patch.setattr(submitted_execution, "retain_submitted_image", interrupt_after_pin)
             with pytest.raises(Interrupted):
-                operation._advance(operation._read(request.operation_id))
+                advance_to_boundary()
         captured = json.loads(operation._read(request.operation_id)["result_json"])
         assert captured["input_receipt"] is not None
         assert captured["image_retained"] is False
@@ -447,7 +461,7 @@ def test_preparation_resumes_retention_before_dispatch_without_recapturing(
 
         monkeypatch.setattr(callbacks, "prepare_child", inspect_dispatch)
         with pytest.raises(AtDispatch):
-            operation._advance(operation._read(request.operation_id))
+            advance_to_boundary()
         resumed = json.loads(operation._read(request.operation_id)["result_json"])
         assert resumed["image_retained"] is True
         assert resumed["input_receipt"] == captured["input_receipt"]
@@ -489,3 +503,80 @@ def test_action_implementation_joins_the_report_image_to_its_admitted_node(tmp_p
     changed = replace(execution, image=replace(execution.image, sha256="b" * 64))
     with pytest.raises(QueueConflictError, match="implementation differs"):
         _report_implementation({**report, "execution": changed.to_dict()}, requirement, stage)
+
+
+def test_slow_image_retention_allows_other_preparation_and_cancels_before_dispatch(tmp_path, monkeypatch):
+    from threading import Event
+
+    from loom.pipeline.cleanup.preparation_pins import preparation_path_is_retained
+    from loom.preparation import CoordinatorPreparation
+    from loom.queue import submitted_execution
+    from loom.queue.deployment import CoordinatorServiceConfig
+    from loom.queue.local_daemon import LocalDaemon, LocalDaemonConfig, LocalDaemonPrincipal, LocalDaemonRole
+
+    config_path = tmp_path / "projects" / "example" / "config" / "pipeline.yaml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text("original configuration")
+    image_path = tmp_path / "workloads" / "images" / "aaa" / "image.sif"
+    image_path.parent.mkdir(parents=True)
+    image_path.write_bytes(b"x" * 1024)
+    image_path.chmod(0o444)
+    config = LocalDaemonConfig(
+        coordinator_root=tmp_path / "coordinator", agent_root=None,
+        run_store_root=tmp_path / "runs", resident_worker_launch_profile=None,
+        cpu_capacity=0, preparation_policy=_policy(tmp_path),
+        container_capabilities=(_capability(tmp_path),),
+    )
+    LocalDaemon.initialize(config)
+    callbacks = CoordinatorPreparation(CoordinatorServiceConfig(
+        config, None, tmp_path / "coordinator.json", "immutable", "active",
+    ))
+    entered, release, independent = Event(), Event(), Event()
+    request = replace(_request(), execution=_execution())
+    retain = submitted_execution.retain_submitted_image
+    dispatched = []
+
+    def hold_pin(*args, **kwargs):
+        if kwargs["operation_id"] == request.operation_id:
+            entered.set()
+            assert release.wait(timeout=30), "image retention barrier was not released"
+        return retain(*args, **kwargs)
+
+    def observe_dispatch(config, binding, run_name, options):
+        dispatched.append(binding.operation_id)
+        assert preparation_path_is_retained(image_path)
+        independent.set()
+        raise QueueServiceError("fixture stops after verified image retention")
+
+    monkeypatch.setattr(submitted_execution, "retain_submitted_image", hold_pin)
+    monkeypatch.setattr(callbacks, "prepare_child", observe_dispatch)
+    daemon = LocalDaemon(config, preparation=callbacks)
+    daemon.start()
+    client = daemon.client_view(LocalDaemonPrincipal("client-a", LocalDaemonRole.CLIENT))
+    try:
+        client.prepare_run(request)
+        assert entered.wait(timeout=10), daemon._service_error
+        client.cancel_preparation(request.operation_id)
+        other = replace(request, operation_id="independent-image", run_name="independent-image")
+        client.prepare_run(other)
+        assert independent.wait(timeout=10), daemon._service_error
+        outcome = daemon.wait_operation(other.operation_id, timeout=10).operation
+        assert outcome.state == "failed"
+        assert cast(dict[str, Any], outcome.result)["image_retained"] is True
+        assert dispatched == [other.operation_id]
+        assert not release.is_set()
+        release.set()
+        cancelled = daemon.wait_operation(request.operation_id, timeout=10).operation
+        assert cancelled.state == "cancelled", cancelled.to_dict()
+        assert cast(dict[str, Any], cancelled.result)["image_retained"] is True
+        assert preparation_path_is_retained(image_path)
+        assert dispatched == [other.operation_id]
+        with daemon._connection() as conn:
+            row = conn.execute(
+                "SELECT dispatch_claimed FROM preparation_operations WHERE operation_id = ?",
+                (request.operation_id,),
+            ).fetchone()
+        assert not row[0]
+    finally:
+        release.set()
+        daemon.stop()

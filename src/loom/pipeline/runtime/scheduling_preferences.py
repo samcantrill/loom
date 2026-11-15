@@ -160,6 +160,34 @@ class ResourceAttributePreferenceScorer:
         return _ordered_score(selected[0], spec.data.get("values"))
 
 
+class SpreadingPreferenceScorer:
+    """Prefer hosts with fewer authority-owned outstanding assignments.
+
+    Assignment counts include preparation and reserved work until release.
+    They describe scheduling occupancy, not measured CPU or GPU utilization.
+    """
+
+    descriptor = _descriptor("spreading")
+
+    def evaluate(
+        self,
+        work: WorkItem,
+        candidate: Candidate,
+        claims: tuple[ResourceClaim, ...],
+        spec: PreferenceSpec,
+    ) -> PreferenceResult:
+        del work, claims, spec
+        count = candidate.attributes.get("outstanding_assignments")
+        if type(count) is not int or count < 0:
+            return PreferenceResult(
+                PreferenceEvaluationState.INDETERMINATE,
+                explanation="spreading requires an observed outstanding-assignment count",
+            )
+        return PreferenceResult(
+            PreferenceEvaluationState.SCORE, PreferenceScore(-count, "preferred")
+        )
+
+
 class PackingPreferenceScorer:
     descriptor = _descriptor("packing")
 
@@ -189,4 +217,5 @@ __all__ = [
     "OrderedAgentPreferenceScorer",
     "PackingPreferenceScorer",
     "ResourceAttributePreferenceScorer",
+    "SpreadingPreferenceScorer",
 ]

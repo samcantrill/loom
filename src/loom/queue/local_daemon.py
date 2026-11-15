@@ -69,7 +69,7 @@ from ._managed_local import AgentResourceProvider
 from ._remote_stage_execution import GpuDeviceDescriptor, ResidentProfileDescriptor
 from ._preparation_policy import PreparationPolicy
 from .submitted_execution import SubmittedContainerCapability
-from .errors import QueueConflictError, QueueServiceError, QueueStorageError
+from .errors import QueueConflictError, QueueServiceError, QueueStorageError, _AcceptedTimeError
 from ._service_signals import _ChangeConnection, _ServiceSignal
 from ._recovery_retry import _RecoveryRetry
 
@@ -117,7 +117,14 @@ class LocalDaemonAdmissionState(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class CoordinatorSchedulingReload:
-    """Inert request to read and install protected coordinator-local config."""
+    """Inert request to read and install protected coordinator-local config.
+
+    Policy transition modes carry the exact maintenance owner, intent digest
+    and gate revision. ``gpu_policy_contraction`` permits only nonempty GPU
+    inventory subsets while preserving identities and other configuration.
+    ``gpu_policy_expansion`` permits strict supersets with unchanged existing
+    device descriptions under the same settled maintenance guards.
+    """
 
     operation_id: str
     expected_scheduling_epoch: str
@@ -125,6 +132,8 @@ class CoordinatorSchedulingReload:
     retirement: Mapping[str, PlainData] | None = None
     container_policy_addition: Mapping[str, PlainData] | None = None
     publication_budget_increase: Mapping[str, PlainData] | None = None
+    gpu_policy_contraction: Mapping[str, PlainData] | None = None
+    gpu_policy_expansion: Mapping[str, PlainData] | None = None
 
     def __post_init__(self) -> None:
         for value, name in (
@@ -142,10 +151,10 @@ class CoordinatorSchedulingReload:
                 "scheduling reload reason must be 1..512 characters"
             )
 
-        modes = (self.retirement, self.container_policy_addition, self.publication_budget_increase)
+        modes = (self.retirement, self.container_policy_addition, self.publication_budget_increase, self.gpu_policy_contraction, self.gpu_policy_expansion)
         if sum(value is not None for value in modes) > 1:
-            raise QueueServiceError("policy addition, retirement and budget increase are mutually exclusive")
-        for name in ("retirement", "container_policy_addition", "publication_budget_increase"):
+            raise QueueServiceError("coordinator policy transition modes are mutually exclusive")
+        for name in ("retirement", "container_policy_addition", "publication_budget_increase", "gpu_policy_contraction", "gpu_policy_expansion"):
             value = getattr(self, name)
             if value is None:
                 continue
@@ -168,6 +177,10 @@ class CoordinatorSchedulingReload:
                if self.container_policy_addition is not None else {}),
             **({"publication_budget_increase": thaw_plain_data(self.publication_budget_increase)}
                if self.publication_budget_increase is not None else {}),
+            **({"gpu_policy_contraction": thaw_plain_data(self.gpu_policy_contraction)}
+               if self.gpu_policy_contraction is not None else {}),
+            **({"gpu_policy_expansion": thaw_plain_data(self.gpu_policy_expansion)}
+               if self.gpu_policy_expansion is not None else {}),
         }
 
     @classmethod
@@ -176,7 +189,9 @@ class CoordinatorSchedulingReload:
             data,
             {"operation_id", "expected_scheduling_epoch", "reason"} | ({"retirement"} if "retirement" in data else set())
             | ({"container_policy_addition"} if "container_policy_addition" in data else set())
-            | ({"publication_budget_increase"} if "publication_budget_increase" in data else set()),
+            | ({"publication_budget_increase"} if "publication_budget_increase" in data else set())
+            | ({"gpu_policy_contraction"} if "gpu_policy_contraction" in data else set())
+            | ({"gpu_policy_expansion"} if "gpu_policy_expansion" in data else set()),
             "coordinator scheduling reload",
         )
         return cls(
@@ -188,6 +203,8 @@ class CoordinatorSchedulingReload:
             retirement=cast(Mapping[str, PlainData] | None, data.get("retirement")),
             container_policy_addition=cast(Mapping[str, PlainData] | None, data.get("container_policy_addition")),
             publication_budget_increase=cast(Mapping[str, PlainData] | None, data.get("publication_budget_increase")),
+            gpu_policy_contraction=cast(Mapping[str, PlainData] | None, data.get("gpu_policy_contraction")),
+            gpu_policy_expansion=cast(Mapping[str, PlainData] | None, data.get("gpu_policy_expansion")),
         )
 
 
@@ -646,6 +663,7 @@ def _default_scheduling_components() -> LocalDaemonSchedulingComponents:
         OrderedAgentPreferenceScorer,
         PackingPreferenceScorer,
         ResourceAttributePreferenceScorer,
+        SpreadingPreferenceScorer,
     )
     from loom.pipeline.runtime.scheduling_resources import GpuResourcePlanner
     from loom.scheduling import (
@@ -669,6 +687,7 @@ def _default_scheduling_components() -> LocalDaemonSchedulingComponents:
             GpuModelPreferenceScorer(),
             ResourceAttributePreferenceScorer(),
             PackingPreferenceScorer(),
+            SpreadingPreferenceScorer(),
         ),
         policy=FifoSchedulingPolicy(),
     )
@@ -1623,6 +1642,14 @@ class LocalDaemon:
         self._thread: Thread | None = None
         self._execution: LocalDaemonExecution | None = None
         self._cycle_lock = RLock()
+        self._scheduling_reference_revision = 0
+        self._reconcile_guard = RLock()
+        from ._context_preparation import ContextPreparations
+
+        self._contexts = ContextPreparations(self._wake.set)
+        from ._result_verification import ResultVerifications
+
+        self._result_verifications = ResultVerifications(self._wake.set)
         from ._agent_poll_waiters import _PollWaiters
 
         self._poll_waiters = _PollWaiters()
@@ -1631,6 +1658,7 @@ class LocalDaemon:
         self._publication_guards = PublicationGuards()
         self._service_error: str | None = None
         self._admission_retries: dict[str, _RecoveryRetry] = {}
+        self._context_invalidations: set[str] = set()
         self._cancelled_admission_repairs: deque[str] | None = None
         self._agent_policy = config.agent_policy
         self._verified_local_owner_subject: str | None = None
@@ -1640,6 +1668,11 @@ class LocalDaemon:
         from ._service_lifetime import CoordinatorLifetime
 
         self._lifetime = CoordinatorLifetime(self)
+
+    def _state_guard(self):
+        from ._phase_timing import state_lock
+
+        return state_lock(self._cycle_lock)
 
     @property
     def preparation_available(self) -> bool:
@@ -1781,6 +1814,10 @@ class LocalDaemon:
     def start(self) -> DaemonStatus:
         if self._coordinator_lock is not None:
             raise QueueServiceError("local daemon is already started")
+        if self._result_verifications.running():
+            raise QueueServiceError("result verification is still stopping")
+        if self._contexts.running():
+            raise QueueServiceError("retained-input preparation is still stopping")
         if self.config.deployment_root is not None:
             _validate_deployment_binding(self.config)
         _validate_distinct_roots(self.config)
@@ -1899,6 +1936,7 @@ class LocalDaemon:
             self._agent_id = agent_id
             epoch = f"coordinator-epoch-{uuid4()}"
             with self._connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
                 try:
                     started_at = self._accepted_time(conn)
                 except QueueServiceError:
@@ -1989,6 +2027,21 @@ class LocalDaemon:
         self._admission_retries.clear()
         self._cancelled_admission_repairs = None
         self._verified_local_owner_subject = verified_local_owner_subject
+        self._contexts.close()
+        self._result_verifications.close()
+        from ._context_preparation import ContextPreparations
+
+        self._contexts = ContextPreparations(self._wake.set)
+        from ._result_verification import ResultVerifications
+
+        self._result_verifications = ResultVerifications(self._wake.set)
+        self._preparations._verification_reports.clear()
+        self._preparations._reports.clear()
+        self._preparations._publications.clear()
+        self._preparations._children.clear()
+        self._preparations._captures.clear()
+        self._preparations._images.clear()
+        self._preparations._candidates.clear()
         self._stop.clear()
         from ._agent_poll_waiters import _PollWaiters
 
@@ -2030,7 +2083,7 @@ class LocalDaemon:
             pass
 
     def stop(self) -> None:
-        with self._cycle_lock:
+        with self._state_guard():
             self._stop.set()
             self._poll_waiters.close()
             self._publication_guards.close()
@@ -2042,6 +2095,8 @@ class LocalDaemon:
         self._thread = None
         if thread is not None:
             thread.join()
+        self._contexts.close()
+        self._result_verifications.close()
         if self._execution is not None:
             self._execution.close()
             try:
@@ -2100,7 +2155,7 @@ class LocalDaemon:
             raise QueueServiceError(
                 "SLURM bootstrap credentials must remain role-exclusive"
             )
-        with self._cycle_lock:
+        with self._state_guard():
             self._agent_policy = policy
             self._poll_waiters.notify_all()
 
@@ -2580,105 +2635,163 @@ class LocalDaemon:
         )
 
     def reconcile_once(self) -> tuple[LocalDaemonAdmission, ...]:
-        """Project every admission, then schedule one global bounded window."""
+        """Prepare bounded inputs, project completed admissions and schedule work."""
+        with self._reconcile_guard:
+            return self._reconcile_once()
 
+    def _reconcile_once(self) -> tuple[LocalDaemonAdmission, ...]:
         self._require_started()
         self._preparations.reconcile()
         for provider in self._local_resource_providers():
             if isinstance(provider, GpuResourceProvider):
                 provider.refresh_occupancy()
-        with self._cycle_lock:
-            self._event_observers.flush_prepared()
-            # A reload may replace providers while the bounded query runs.
-            # Its new provider starts unknown and is refreshed next cycle.
+        self._event_observers.flush_prepared()
+        # A reload may replace providers while the bounded query runs.
+        # Its new provider starts unknown and is refreshed next cycle.
+        with self._state_guard():
             time_healthy = self._sample_clock_health()
             execution = self._execution
-            if execution is None:
-                raise QueueServiceError("local daemon execution is absent")
-            execution.open_owner_stores()
-            self._resume_pending_admission_retries(execution)
-            self._resume_pending_recoveries(execution)
-            execution.begin_cycle()
-            self._repair_cancelled_admissions(execution)
-            with self._connection() as conn:
-                admissions = tuple(
-                    _admission_from_row(row)
-                    for row in conn.execute(
-                        "SELECT * FROM managed_admissions "
-                        "WHERE state NOT IN (?, ?, ?, ?) "
-                        "ORDER BY run_priority DESC, enqueue_sequence, admission_id",
-                        (
-                            LocalDaemonAdmissionState.SUCCEEDED.value,
-                            LocalDaemonAdmissionState.FAILED.value,
-                            LocalDaemonAdmissionState.CANCELLED.value,
-                            LocalDaemonAdmissionState.BLOCKED.value,
-                        ),
-                    )
+        if execution is None:
+            raise QueueServiceError("local daemon execution is absent")
+        execution.open_owner_stores()
+        self._resume_pending_admission_retries(execution)
+        self._resume_pending_recoveries(execution)
+        execution.begin_cycle()
+        self._repair_cancelled_admissions(execution)
+        with self._connection() as conn:
+            admissions = tuple(
+                _admission_from_row(row)
+                for row in conn.execute(
+                    "SELECT * FROM managed_admissions "
+                    "WHERE state NOT IN (?, ?, ?, ?) "
+                    "ORDER BY run_priority DESC, enqueue_sequence, admission_id",
+                    (
+                        LocalDaemonAdmissionState.SUCCEEDED.value,
+                        LocalDaemonAdmissionState.FAILED.value,
+                        LocalDaemonAdmissionState.CANCELLED.value,
+                        LocalDaemonAdmissionState.BLOCKED.value,
+                    ),
                 )
-            schedulable: dict[str, LocalDaemonAdmission] = {}
-            waiting_outcomes: dict[str, LocalDaemonExecutionOutcome] = {}
-            active_runs = {admission.run_uri for admission in admissions}
+            )
+        self._result_verifications.bulk.retain(
+            ("run",), {("run", admission.run_uri) for admission in admissions},
+        )
+        active_run_uris = {admission.run_uri for admission in admissions}
+        bulk = self._result_verifications.bulk
+        bulk.retain(("dispatch",), {
+            scope for scope in bulk.scopes(("dispatch",)) if scope[1] in active_run_uris
+        })
+        with self._state_guard():
+            epochs = (self._epoch, self._scheduling_epoch)
+            invalidated = tuple(self._context_invalidations)
+            self._context_invalidations.clear()
+        self._contexts.submit(
+            (admission for admission in admissions
+             if (retry := self._admission_retries.get(admission.run_uri)) is None
+             or retry.ready((admission.revision, self._scheduling_epoch))),
+            epochs, execution.load_context,
+            minimum_interval=self.config.poll_interval_seconds, invalidated=invalidated,
+        )
+        prepared = {item.admission.admission_id: item for item in self._contexts.completed()}
+        if prepared:
+            # A completion frees a bounded slot after submission above.
+            # Wake another turn even when all remaining IO is blocked.
+            self._wake.set()
+        epochs = (self._epoch, self._scheduling_epoch)
+        schedulable: dict[str, LocalDaemonAdmission] = {}
+        waiting_outcomes: dict[str, LocalDaemonExecutionOutcome] = {}
+        active_runs = {admission.run_uri for admission in admissions}
+        with self._state_guard():
             for run_uri in self._admission_retries.keys() - active_runs:
                 del self._admission_retries[run_uri]
-            for admission in admissions:
-                progress = (admission.revision, self._scheduling_epoch)
-                retry = self._admission_retries.get(admission.run_uri)
-                if retry is not None and not retry.ready(progress):
+        for admission in admissions:
+            preparation = prepared.get(admission.admission_id)
+            if preparation is None:
+                continue
+            with self._state_guard():
+                current = self._admission(admission.admission_id)
+                epochs = (self._epoch, self._scheduling_epoch)
+            if preparation.epochs != epochs or preparation.admission.revision != current.revision:
+                self._wake.set()
+                continue
+            admission = current
+            progress = (admission.revision, self._scheduling_epoch)
+            retry = self._admission_retries.get(admission.run_uri)
+            if retry is not None and not retry.ready(progress):
+                continue
+            try:
+                intent = preparation.future.result()  # completed() only returns done futures
+                execution._cycle_context_epochs[admission.admission_id] = preparation.epochs
+                outcome = execution.reconcile_admission(admission, prepared_intent=intent)
+            except QueueConflictError:
+                bulk.discard(("run", admission.run_uri))
+                bulk.discard(("dispatch", admission.run_uri))
+                if preparation.epochs != (self._epoch, self._scheduling_epoch):
+                    self._wake.set()
                     continue
-                try:
-                    outcome = execution.reconcile_admission(admission)
-                except QueueConflictError:
+                with self._state_guard():
                     self._admission_retries.pop(admission.run_uri, None)
-                    self._record_admission_health(admission.admission_id, "failed")
+                self._record_admission_health(admission.admission_id, "failed")
+                self._set_state(
+                    admission.admission_id,
+                    LocalDaemonAdmissionState.BLOCKED,
+                    reason="authority_or_intent_conflict", observed=admission,
+                )
+            except Exception as error:  # one unhealthy run cannot stop other admissions
+                bulk.discard(("run", admission.run_uri))
+                bulk.discard(("dispatch", admission.run_uri))
+                self._record_admission_health(admission.admission_id, "unavailable")
+                with self._state_guard():
+                    retry = self._admission_retries.setdefault(admission.run_uri, _RecoveryRetry())
+                retry.failed(
+                    error, admission_id=admission.admission_id,
+                    operation_id=admission.authority_operation_id, state=progress,
+                )
+            else:
+                with self._state_guard():
+                    self._admission_retries.pop(admission.run_uri, None)
+                if outcome.state in {
+                    LocalDaemonAdmissionState.SUCCEEDED,
+                    LocalDaemonAdmissionState.FAILED,
+                    LocalDaemonAdmissionState.CANCELLED,
+                }:
+                    bulk.discard(("run", admission.run_uri))
+                    bulk.discard(("dispatch", admission.run_uri))
+                    self._event_observers.flush_prepared(admission.run_uri)
+                self._record_admission_health(
+                    admission.admission_id,
+                    (
+                        "unavailable"
+                        if execution.local_assignment_reconciliation_pending(
+                            admission.run_uri
+                        )
+                        else "healthy"
+                    ),
+                )
+                if outcome.state is LocalDaemonAdmissionState.WAITING:
+                    waiting_outcomes[admission.admission_id] = outcome
+                else:
                     self._set_state(
                         admission.admission_id,
-                        LocalDaemonAdmissionState.BLOCKED,
-                        reason="authority_or_intent_conflict",
+                        outcome.state,
+                        reason=outcome.reason, observed=admission,
                     )
-                except Exception as error:  # one unhealthy run cannot stop other admissions
-                    self._record_admission_health(admission.admission_id, "unavailable")
-                    self._admission_retries.setdefault(admission.run_uri, _RecoveryRetry()).failed(
-                        error, admission_id=admission.admission_id,
-                        operation_id=admission.authority_operation_id, state=progress,
-                    )
-                else:
-                    self._admission_retries.pop(admission.run_uri, None)
-                    if outcome.state in {
-                        LocalDaemonAdmissionState.SUCCEEDED,
-                        LocalDaemonAdmissionState.FAILED,
-                        LocalDaemonAdmissionState.CANCELLED,
-                    }:
-                        self._event_observers.flush_prepared(admission.run_uri)
-                    self._record_admission_health(
-                        admission.admission_id,
-                        (
-                            "unavailable"
-                            if execution.local_assignment_reconciliation_pending(
-                                admission.run_uri
-                            )
-                            else "healthy"
-                        ),
-                    )
-                    if outcome.state is LocalDaemonAdmissionState.WAITING:
-                        waiting_outcomes[admission.admission_id] = outcome
-                    else:
-                        self._set_state(
-                            admission.admission_id,
-                            outcome.state,
-                            reason=outcome.reason,
-                        )
-                    if outcome.state in {
-                        LocalDaemonAdmissionState.ACTIVE,
-                        LocalDaemonAdmissionState.WAITING,
-                    }:
-                        schedulable[admission.admission_id] = admission
+                if preparation.epochs == (self._epoch, self._scheduling_epoch) and outcome.state in {
+                    LocalDaemonAdmissionState.ACTIVE,
+                    LocalDaemonAdmissionState.WAITING,
+                }:
+                    schedulable[admission.admission_id] = admission
 
-            # The durable ready query owns the 256-item window.  A cycle may
-            # launch at most that many assignments, but a larger pipeline is
-            # never rejected merely for having more stages.
-            started_admissions: set[str] = set()
+        # The durable ready query owns the 256-item window.  A cycle may
+        # launch at most that many assignments, but a larger pipeline is
+        # never rejected merely for having more stages.
+        started_admissions: set[str] = set()
+        with bulk.visiting({("dispatch", admission.run_uri) for admission in schedulable.values()}):
             if time_healthy:
                 for _ in range(256):
+                    if epochs != (self._epoch, self._scheduling_epoch):
+                        self._wake.set()
+                        break
                     scheduled = execution.schedule_once(schedulable)
                     if scheduled is None:
                         break
@@ -2695,37 +2808,40 @@ class LocalDaemon:
                             else "healthy"
                         ),
                     )
-                    self._set_state(admission_id, outcome.state, reason=outcome.reason)
+                    self._set_state(admission_id, outcome.state, reason=outcome.reason, observed=admission)
                 else:
                     # A full batch may leave runnable work. Yield the cycle lock
                     # but do not impose the safety interval on the next batch.
                     self._wake.set()
-            for admission_id, outcome in waiting_outcomes.items():
-                if admission_id in started_admissions:
-                    continue
-                self._set_state(
-                    admission_id,
-                    LocalDaemonAdmissionState.WAITING,
-                    reason=outcome.reason,
-                )
-            # Reconciliation is an internal operation; retain its bounded
-            # nonterminal work result without rebuilding public detail/status.
-            return tuple(
-                self._admission(admission.admission_id) for admission in admissions
+        for admission_id, outcome in waiting_outcomes.items():
+            if admission_id in started_admissions:
+                continue
+            self._set_state(
+                admission_id,
+                LocalDaemonAdmissionState.WAITING,
+                reason=outcome.reason, observed=prepared[admission_id].admission,
             )
+        # Reconciliation is an internal operation; retain its bounded
+        # nonterminal work result without rebuilding public detail/status.
+        return tuple(
+            self._admission(admission.admission_id) for admission in admissions
+        )
 
     def _serve(self) -> None:
+        from ._phase_timing import reported_phases
+
         while not self._stop.is_set():
             observed = self._wake.snapshot()
             try:
-                self.reconcile_once()
+                with reported_phases("reconciliation"):
+                    self.reconcile_once()
             except Exception:  # keep the durable owner alive and diagnosable
                 self._service_error = "reconciliation_unavailable"
             else:
                 self._service_error = None
             if not self._stop.is_set():
                 now = time.monotonic()
-                with self._cycle_lock:
+                with self._state_guard():
                     delay = min(
                         (retry.retry_at - now for retry in self._admission_retries.values()
                          if retry.retry_at > now),
@@ -2735,12 +2851,16 @@ class LocalDaemon:
                         local_retry = self._execution.next_local_retry_at(now)
                         if local_retry is not None:
                             delay = min(delay, local_retry - now)
+                context_delay = self._contexts.next_delay()
+                if context_delay is not None:
+                    delay = min(delay, context_delay)
                 self._wake.wait_for_change(observed, min(delay, self.config.poll_interval_seconds))
 
     def _wake_admission(self, run_uri: str) -> None:
         """Retry this run after committed owner progress, not another run's heartbeat."""
-        with self._cycle_lock:
+        with self._state_guard():
             self._admission_retries.pop(run_uri, None)
+            self._context_invalidations.add(run_uri)
         self._wake.set()
 
     def _submit(
@@ -2973,7 +3093,10 @@ class LocalDaemon:
         _public_operation_id(request.operation_id)
         self._authorizer().require_operator(principal, "scheduling_reload")
         encoded = json.dumps(request.to_dict(), sort_keys=True, separators=(",", ":"))
-        with self._cycle_lock:
+        execution = self._execution
+        if execution is None:
+            raise QueueServiceError("coordinator execution is unavailable")
+        with self._publication_guards.hold("scheduling-reload"):
             replacement_fingerprint: str | None = None
             with self._connection() as conn:
                 conn.execute("BEGIN IMMEDIATE")
@@ -3013,7 +3136,9 @@ class LocalDaemon:
                 replacement = loader()
                 self._validate_scheduling_replacement(replacement, retirement=request.retirement,
                                                       container_policy_addition=request.container_policy_addition,
-                                                      publication_budget_increase=request.publication_budget_increase)
+                                                      publication_budget_increase=request.publication_budget_increase,
+                                                      gpu_policy_contraction=request.gpu_policy_contraction,
+                                                      gpu_policy_expansion=request.gpu_policy_expansion)
                 candidate_fingerprint = _scheduling_fingerprint(replacement)
                 if (
                     replacement_fingerprint is not None
@@ -3048,7 +3173,9 @@ class LocalDaemon:
                     principal_id=principal.subject,
                     request_json=encoded,
                 )
-            with execution.scheduling_reload_guard():
+            for _attempt in range(3):
+                with self._state_guard():
+                    reference_revision = self._scheduling_reference_revision
                 try:
                     reload_plan = execution.prepare_scheduling_reload(
                         replacement, next_epoch
@@ -3062,59 +3189,73 @@ class LocalDaemon:
                         principal_id=principal.subject,
                         request_json=encoded,
                     )
-                if replacement_fingerprint is None:
-                    self._record_scheduling_reload_intent(
-                        operation_id=request.operation_id,
-                        principal_id=principal.subject,
-                        request_json=encoded,
-                        replacement_fingerprint=candidate_fingerprint,
-                        assignment_payload_root_id=replacement.assignment_payload_root_id,
-                    )
-                with self._connection() as conn:
-                    conn.execute("BEGIN IMMEDIATE")
-                    revision_row = conn.execute(
-                        "SELECT value FROM daemon_metadata "
-                        "WHERE key = 'active_configuration_revision'"
-                    ).fetchone()
-                    if (
-                        revision_row is None
-                        or not str(revision_row["value"]).isdecimal()
-                    ):
-                        raise QueueStorageError(
-                            "active scheduling configuration is unavailable"
+                with execution.scheduling_reload_guard(), self._state_guard():
+                    if reference_revision != self._scheduling_reference_revision:
+                        continue
+                    if self._execution is not execution or request.expected_scheduling_epoch != self._scheduling_epoch:
+                        raise QueueConflictError("scheduling reload epoch changed during preparation")
+                    if request.gpu_policy_expansion is not None:
+                        from ._agent_gpu_policy import validate_coordinator
+                        validate_coordinator(self, replacement, request.gpu_policy_expansion, expansion=True)
+                    if request.gpu_policy_contraction is not None:
+                        from ._agent_gpu_policy import validate_coordinator
+                        validate_coordinator(self, replacement, request.gpu_policy_contraction)
+                    if replacement_fingerprint is None:
+                        self._record_scheduling_reload_intent(
+                            operation_id=request.operation_id,
+                            principal_id=principal.subject,
+                            request_json=encoded,
+                            replacement_fingerprint=candidate_fingerprint,
+                            assignment_payload_root_id=replacement.assignment_payload_root_id,
                         )
-                    next_revision = int(str(revision_row["value"])) + 1
-                    conn.execute(
-                        "INSERT OR REPLACE INTO daemon_metadata(key, value) "
-                        "VALUES ('scheduling_epoch', ?)",
-                        (next_epoch,),
-                    )
-                    conn.execute(
-                        "INSERT OR REPLACE INTO daemon_metadata(key, value) "
-                        "VALUES ('scheduling_fingerprint', ?)",
-                        (candidate_fingerprint,),
-                    )
-                    conn.execute(
-                        "INSERT OR REPLACE INTO daemon_metadata(key, value) "
-                        "VALUES ('active_configuration_revision', ?)",
-                        (str(next_revision),),
-                    )
-                    conn.execute(
-                        "UPDATE scheduling_reloads SET state = 'applied', "
-                        "result_code = 'applied', scheduling_epoch = ?, "
-                        "configuration_revision = ? "
-                        "WHERE operation_id = ?",
-                        (next_epoch, next_revision, request.operation_id),
-                    )
-                    conn.commit()
-                execution.apply_scheduling_reload(replacement, reload_plan)
-                # The trusted preparer performs every fallible action before
-                # persistence and returns an assignment-only installer.
-                apply_role_reload()
-                self.config = replacement
-                self._agent_policy = replacement.agent_policy
-                self._scheduling_epoch = next_epoch
-                self._poll_waiters.notify_all()
+                    with self._connection() as conn:
+                        conn.execute("BEGIN IMMEDIATE")
+                        revision_row = conn.execute(
+                            "SELECT value FROM daemon_metadata "
+                            "WHERE key = 'active_configuration_revision'"
+                        ).fetchone()
+                        if (
+                            revision_row is None
+                            or not str(revision_row["value"]).isdecimal()
+                        ):
+                            raise QueueStorageError(
+                                "active scheduling configuration is unavailable"
+                            )
+                        next_revision = int(str(revision_row["value"])) + 1
+                        conn.execute(
+                            "INSERT OR REPLACE INTO daemon_metadata(key, value) "
+                            "VALUES ('scheduling_epoch', ?)",
+                            (next_epoch,),
+                        )
+                        conn.execute(
+                            "INSERT OR REPLACE INTO daemon_metadata(key, value) "
+                            "VALUES ('scheduling_fingerprint', ?)",
+                            (candidate_fingerprint,),
+                        )
+                        conn.execute(
+                            "INSERT OR REPLACE INTO daemon_metadata(key, value) "
+                            "VALUES ('active_configuration_revision', ?)",
+                            (str(next_revision),),
+                        )
+                        conn.execute(
+                            "UPDATE scheduling_reloads SET state = 'applied', "
+                            "result_code = 'applied', scheduling_epoch = ?, "
+                            "configuration_revision = ? "
+                            "WHERE operation_id = ?",
+                            (next_epoch, next_revision, request.operation_id),
+                        )
+                        conn.commit()
+                    execution.apply_scheduling_reload(replacement, reload_plan)
+                    # The trusted preparer performs every fallible action before
+                    # persistence and returns an assignment-only installer.
+                    apply_role_reload()
+                    self.config = replacement
+                    self._agent_policy = replacement.agent_policy
+                    self._scheduling_epoch = next_epoch
+                    self._poll_waiters.notify_all()
+                break
+            else:
+                raise QueueConflictError("scheduling references kept changing during reload preparation")
         self._wake.set()
         return freeze_plain_data(
             {
@@ -3140,7 +3281,7 @@ class LocalDaemon:
         execution = self._execution
         if execution is None:
             raise QueueServiceError("recovery coordinator execution is unavailable")
-        with self._cycle_lock:
+        with self._publication_guards.hold("recovery:" + request.recovery_id):
             with self._connection() as conn:
                 prior = conn.execute(
                     "SELECT principal_id, request_json, request_digest, recorded_at, "
@@ -3211,9 +3352,8 @@ class LocalDaemon:
         execution = self._execution
         if execution is None:
             raise QueueServiceError("replacement coordinator execution is unavailable")
-        with self._cycle_lock:
-            with execution.scheduling_reload_guard():
-                result = replace_agent_session(self, principal, request)
+        with self._publication_guards.hold("replacement:" + request.agent_id):
+            result = replace_agent_session(self, principal, request)
         self._wake.set()
         return result
 
@@ -3349,7 +3489,8 @@ class LocalDaemon:
             request = RecoverUnknownAssignment.from_dict(
                 json.loads(str(row["request_json"]))
             )
-            self._advance_recovery(execution, request, str(row["recorded_at"]))
+            with self._publication_guards.hold("recovery:" + request.recovery_id):
+                self._advance_recovery(execution, request, str(row["recorded_at"]))
 
     def _recovery_fences_ordinary_terminal(self, assignment_id: str) -> bool:
         """Whether recovery has permanently fenced ordinary terminal mutation."""
@@ -3567,7 +3708,7 @@ class LocalDaemon:
             "active_configuration_revision": str(next_revision),
         }
 
-    def _validate_scheduling_replacement(self, replacement: LocalDaemonConfig, *, retirement=None, container_policy_addition=None, publication_budget_increase=None) -> None:
+    def _validate_scheduling_replacement(self, replacement: LocalDaemonConfig, *, retirement=None, container_policy_addition=None, publication_budget_increase=None, gpu_policy_contraction=None, gpu_policy_expansion=None) -> None:
         if not isinstance(replacement, LocalDaemonConfig):
             raise QueueServiceError("trusted scheduling configuration is invalid")
         if (
@@ -3598,6 +3739,14 @@ class LocalDaemon:
         replacement_roots = replacement.coordinator_shared_roots
         from .shared_execution import _readonly_root_relocations
 
+        if gpu_policy_expansion is not None:
+            from ._agent_gpu_policy import validate_coordinator
+            validate_coordinator(self, replacement, gpu_policy_expansion, expansion=True)
+            return
+        if gpu_policy_contraction is not None:
+            from ._agent_gpu_policy import validate_coordinator
+            validate_coordinator(self, replacement, gpu_policy_contraction)
+            return
         if publication_budget_increase is not None:
             self._validate_coordinator_retirement(replacement, publication_budget_increase, budget_increase=True)
             return
@@ -3803,13 +3952,16 @@ class LocalDaemon:
         state: LocalDaemonAdmissionState,
         *,
         reason: str | None,
+        observed: LocalDaemonAdmission | None = None,
     ) -> None:
         with self._connection() as conn:
             conn.execute(
                 "UPDATE managed_admissions SET state = ?, blocked_reason = ?, "
                 "revision = revision + 1 WHERE admission_id = ? AND "
-                "(state != ? OR blocked_reason IS NOT ?)",
-                (state.value, reason, admission_id, state.value, reason),
+                "(state != ? OR blocked_reason IS NOT ?) "
+                "AND (? OR cancellation_operation_id IS ?)",
+                (state.value, reason, admission_id, state.value, reason,
+                 observed is None, None if observed is None else observed.cancellation_operation_id),
             )
             conn.commit()
 
@@ -3817,6 +3969,7 @@ class LocalDaemon:
         if health not in {"healthy", "failed", "unavailable"}:
             raise QueueServiceError("admission reconciliation health is invalid")
         with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             try:
                 observed_at = self._accepted_time(conn)
             except QueueServiceError:
@@ -3852,6 +4005,7 @@ class LocalDaemon:
 
     def _sample_clock_health(self) -> bool:
         with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             try:
                 self._accepted_time(conn)
             except QueueServiceError:
@@ -3868,7 +4022,7 @@ class LocalDaemon:
             request.to_dict(), sort_keys=True, separators=(",", ":"), allow_nan=False
         )
         digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
-        with self._cycle_lock:
+        with self._state_guard():
             with self._connection() as conn:
                 conn.execute("BEGIN IMMEDIATE")
                 existing = conn.execute(
@@ -4039,6 +4193,12 @@ class LocalDaemon:
             conn.close()
 
     def _accepted_time(self, conn: sqlite3.Connection) -> str:
+        """Advance accepted time inside the caller's immediate write transaction.
+
+        Acquire the writer reservation before sampling the clock and retain it
+        through commit or rollback. A genuine clock fault commits degraded health
+        before raising, so caller rollback cannot erase the safety guard.
+        """
         now = self._clock()
         parse_timestamp(now)
         state = {
@@ -4046,20 +4206,26 @@ class LocalDaemon:
             for row in conn.execute(
                 "SELECT key, value FROM daemon_metadata WHERE key IN "
                 "('accepted_time_high_water', 'accepted_time_health', "
-                "'accepted_time_diagnostic')"
+                "'accepted_time_diagnostic', 'accepted_time_revision')"
             )
         }
         if state.get("accepted_time_health") == "degraded":
-            raise QueueServiceError(
-                "coordinator accepted-time is degraded; operator recovery is required"
+            raise _AcceptedTimeError(
+                state.get("accepted_time_diagnostic", "clock_regressed"),
+                int(state.get("accepted_time_revision", "0")),
             )
         previous = state.get("accepted_time_high_water")
         if previous is not None and parse_timestamp(now) < parse_timestamp(previous):
             self._degrade_time(conn, "clock_regressed")
             conn.commit()
             self._poll_waiters.notify_all()
-            raise QueueServiceError(
-                "coordinator accepted-time regressed; scheduling is degraded"
+            _LOGGER.warning("coordinator clock guard: %s", json.dumps({
+                "diagnostic": "clock_regressed", "sampled_at": now,
+                "previous_high_water": previous,
+                "time_revision": int(state.get("accepted_time_revision", "0")) + 1,
+            }, sort_keys=True))
+            raise _AcceptedTimeError(
+                "clock_regressed", int(state.get("accepted_time_revision", "0")) + 1,
             )
         if (
             previous is not None
@@ -4069,8 +4235,13 @@ class LocalDaemon:
             self._degrade_time(conn, "clock_step_exceeds_policy")
             conn.commit()
             self._poll_waiters.notify_all()
-            raise QueueServiceError(
-                "coordinator accepted-time step exceeds protected policy; scheduling is degraded"
+            _LOGGER.warning("coordinator clock guard: %s", json.dumps({
+                "diagnostic": "clock_step_exceeds_policy", "sampled_at": now,
+                "previous_high_water": previous,
+                "time_revision": int(state.get("accepted_time_revision", "0")) + 1,
+            }, sort_keys=True))
+            raise _AcceptedTimeError(
+                "clock_step_exceeds_policy", int(state.get("accepted_time_revision", "0")) + 1,
             )
         accepted = now
         conn.execute(
@@ -4106,6 +4277,7 @@ class LocalDaemon:
         """Return one monotonic accepted timestamp and whole-second snapshot time."""
 
         with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             accepted = self._accepted_time(conn)
             conn.commit()
         return accepted, int(parse_timestamp(accepted).timestamp())
@@ -4372,6 +4544,10 @@ class LocalDaemonSlurmBootstrapView:
             incarnation=incarnation,
             capability=capability,
         )
+        profile = self._execution()._slurm_profile(
+            record.assignment.profile_id,
+            record.assignment.profile_configuration_fingerprint,
+        )
         return freeze_plain_data(
             {
                 "assignment_id": record.assignment.assignment_id,
@@ -4382,15 +4558,9 @@ class LocalDaemonSlurmBootstrapView:
                 "incarnation": record.bootstrap_incarnation,
                 "delivery": record.delivery.to_dict(),
                 "result_identity": self._execution().slurm_result_identity(record),
-                "result_storage": dict(
-                    self._execution()
-                    ._slurm_profile(
-                        record.assignment.profile_id,
-                        record.assignment.profile_configuration_fingerprint,
-                    )
-                    .result_storage
-                    or {}
-                ),
+                "result_storage": dict(profile.result_storage or {}),
+                **({"submitted_container_policy": thaw_plain_data(profile.submitted_container_policy)}
+                   if record.delivery.submitted_execution is not None else {}),
             },
             path="SLURM bootstrap registration",
         )
@@ -5267,7 +5437,9 @@ def _validate_retired_coordinator_execution(previous, replacement):
                 raise QueueConflictError("coordinator retirement cannot rebind preparation policy")
             _validate_retired_capabilities((previous.capability,), (profile.capability,))
             old_scope, new_scope = previous.shared_scope, profile.shared_scope
-            if (any(old_scope["roots"].get(alias) != value for alias, value in new_scope["roots"].items())
+            old_roots = cast(Mapping[str, PlainData], old_scope["roots"])
+            new_roots = cast(Mapping[str, PlainData], new_scope["roots"])
+            if (any(old_roots.get(alias) != value for alias, value in new_roots.items())
                 or {**new_scope, "roots": old_scope["roots"]} != old_scope):
                 raise QueueConflictError("coordinator retirement cannot expand preparation shared scope")
             if not set(profile.image_roots) <= set(previous.image_roots):

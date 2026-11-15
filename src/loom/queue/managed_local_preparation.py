@@ -149,7 +149,12 @@ def prepare_managed_run(
             profile = profiles.get(cast(str, route.get("profile")))
             requirement = requirements[stage.name]
             if isinstance(requirement, SubmittedContainerRequirement):
-                raise QueueServiceError("submitted containers do not support the Slurm route")
+                from ._submitted_container_policy import SubmittedContainerPolicy
+
+                if (profile is None or profile.submitted_container_policy is None
+                    or not SubmittedContainerPolicy.from_dict(profile.submitted_container_policy).capability.satisfies(requirement)):
+                    raise QueueServiceError("prepared SLURM container policy does not satisfy checked requirements")
+                continue
             if profile is None or (
                 profile.project_fingerprint != requirement.project_fingerprint
                 or profile.environment_fingerprint

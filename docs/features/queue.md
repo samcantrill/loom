@@ -307,7 +307,10 @@ ownership and other publication conflicts still retain work for recovery.
 
 For the protected same-host resident route, Loom preserves the regular files in
 the stage artifact directory as one atomically published local tree and stages a
-separate copy beside each primary input. This lets a declared file artifact use
+separate copy beside each primary input. Preparation verification and staged
+archive extraction resolve that same primary file within its isolated directory;
+the directory itself is never substituted for the declared file artifact.
+This lets a declared file artifact use
 relative companion files without making those companions additional declared
 outputs. It does not extend the authenticated remote relay: remote agents and
 SLURM bootstraps still transfer only the declared immutable regular files.
@@ -328,6 +331,24 @@ expiry, fallback, receipt, and freshness. Detected local regression or an out-
 of-policy jump makes time health degraded, pauses new scheduling, and withholds
 retained capacity until clock/session reconciliation; it never extends an old
 offer by trusting a rolled-back clock.
+Clock sampling and the high-water comparison/update run inside the same
+immediate SQLite write transaction, held through commit or rollback. This also
+applies to work-poll and transfer-authorization checks; filesystem and network
+work remain outside the transaction. Concurrent callers therefore sample time
+in writer order, rather than mistaking an earlier overlapping observation for a
+clock regression. Equal timestamps remain valid, and failed transactions do not
+advance the high-water unless they durably record a genuine clock fault.
+
+A clock guard logs the sampled timestamp, previous high-water, diagnostic and
+time revision. Agent retry diagnostics preserve `accepted_time_degraded`, its
+specific clock diagnostic and revision, and `operator_time_recovery` as the
+required recovery action. They do not expose arbitrary exception text or request
+contents. Recovery remains a guarded operator action; retries do not clear a
+clock fault automatically. Retained worker results can publish after recovery
+without repeating computation. If a renewed transfer authorization belongs to a
+new coordinator epoch, the agent reconciles its retained session to that epoch
+before continuing publication, rather than repeatedly renewing against an old
+local epoch.
 A production command-scoped composition opens and retains those same kinds of
 role roots; “embedded” changes process lifetime only. It connects to a compatible
 active owner when configured/reachable or acquires the role locks itself. A held
@@ -961,6 +982,30 @@ next cycle, and exhausting a scheduling batch does not impose a safety-interval
 delay on the next batch. An unchanged offer renewal does not itself request a
 new scheduling cycle.
 
+Coordinator artifact audits, preparation capture/publication, contract/report
+hydration, worker-request construction and remote input preflight share two
+actual bulk IO slots outside reconciliation. Waiting owners retain small FIFO
+identity hints, not an executor backlog of payloads. A hint is retired when its
+owner is reconsidered and no longer offers that work, or authoritative admission
+state retires the owner; merely missing an asynchronous context result does not
+erase its position. A running operation retains capacity until it actually ends.
+
+Completion alone cannot authorize a transition. The coordinator rechecks the
+captured epoch, claim/attempt, inputs and current demand before applying results;
+result publication enforces claim revision and producer fencing transactionally.
+Cancellation detaches obsolete demand before optional verification while retaining
+producers needed by other consumers. Files already published by an owned
+preparation remain recoverable by exact replay; cancellation suppresses admission.
+Shutdown drains guarded publication writes before releasing deployment ownership.
+
+Within one output-verification operation, references to the exact same publication
+share one complete inventory/byte audit. Each output association is still checked,
+and subsequent operations perform their own required audit. This is not a durable
+verification cache. Bounded phase diagnostics distinguish capacity wait, worker IO
+and owner completion application. Publication spans identify audited payload bytes
+and members (excluding receipt/control bytes); nested spans are not additive wall
+time. Diagnostic durations do not set lifecycle deadlines or authorize progress.
+
 Operation and admission waits are passive: they check durable state, wait for a
 committed-change hint, then check again. They do not drive scheduling and do not
 query every 50 milliseconds. A one-second fallback covers changes made by other
@@ -986,6 +1031,13 @@ new launch. Losing a reply before local receipt leaves the control eligible for
 redelivery. Receipt of drain/reload is separate from preparation of its effects:
 an unanswered work poll must be settled before the agent fences its session.
 Controls received before application restart resume from that same journal.
+
+An assignment cancellation can arrive after its execution view has finished.
+The control receiver settles these late commands only when the local assignment
+is durably released. It validates the original fence and launch identity, records
+a terminal acknowledgement, and preserves the committed result. Lost replies
+replay the same acknowledgement after reconnect or application restart. Controls
+for assignments that still own work remain with their execution views.
 
 Control waits have a dedicated agent execution slot, separate from work polling,
 short controls/renewals and bulk IO. The HTTPS listener admits at most 32 active
@@ -1141,7 +1193,55 @@ This route does not cover SLURM, remote Docker engines, cloned VM snapshots,
 state copied between hosts or hostile host attestation. Controlled-boot tests
 exercise native settlement; actual host reboot qualification is separate.
 
+### Targeted recovery of a stranded PID namespace
+
+`agent-recover-namespace` is an explicit local cancellation-only operation for
+an Apptainer launch whose original supervisor is still alive but cannot contain
+its namespace. It does not adopt a process for execution. Stop the outbound
+agent first and keep its protected root, configuration and journals intact.
+The operator selects the exact assignment, current Linux boot ID, and fresh
+host PID/start-time-in-clock-ticks pairs for the supervisor, launcher and
+namespace init. Obtain birth ticks from field 22 of `/proc/PID/stat`, parsing
+the parenthesized command correctly; PID numbers alone are insufficient.
+
+```sh
+loom queue agent-recover-namespace /private/agent.yaml \
+  --env-file /private/agent.env --operation-id namespace-recovery-001 \
+  --assignment-id ASSIGNMENT --boot-id BOOT_UUID \
+  --supervisor-pid PID --supervisor-start-ticks TICKS \
+  --launcher-pid PID --launcher-start-ticks TICKS \
+  --namespace-pid PID --namespace-start-ticks TICKS --format json
+```
+
+The command holds the agent lock, authenticates the original supervisor and
+requires exactly one unresolved launch. It pins Linux pidfds, quiesces the
+supervisor and launcher, verifies their exclusive child lineage and the init's
+namespace PID 1, then terminates only that namespace, launcher and supervisor.
+It never signals a shared cgroup or a numeric process group. Completed kernel
+observations and exclusive supervisor ownership precede an atomic native
+containment receipt and clean replacement boundary. Preflight failures resume
+any processes stopped by the command. A destructive attempt interrupted before
+receipt publication remains unresolved; do not clear its pending receipt or
+infer containment from missing PIDs. Boot recovery remains available if the
+original boundary can no longer be proved.
+
+Replay a completed operation with identical arguments after a lost response.
+The command starts no service, releases no claim and records no scientific
+success. Restart with an agent and supervisor version supporting this receipt;
+the agent retains reservations until `daemon-recover-unknown` closes the exact
+attempt and ordinary provider release completes. Unrelated live launches on the
+same supervisor cause refusal, rather than silently expanding the kill scope.
+For a remote GRANTED assignment without a start acknowledgement, recovery binds
+the agent's deterministic `<assignment_id>:root` execution identity and still
+requires exact agent-owned containment evidence. Draining clears current offers;
+recovery checks expiry across retained session offers rather than requiring one
+to remain current. Drain alone never proves expiry or containment.
+
 ### Maintenance admission
+
+Transfer-authorization receipts are replayed exactly across coordinator restarts.
+A historical receipt's epoch is not current liveness evidence: agents consume
+its revision and use a fresh handshake when epoch reconciliation is needed.
 
 The `maintenance-admission-v1` capability provides a durable native admission
 barrier. An operator needs the explicit `maintenance` action in its protected
@@ -1288,6 +1388,16 @@ its materialized `ArtifactRef`; the stage loads the report through
 project-owned companions relative to that report. The loader verifies and
 hydrates the native composition companion; decoding only the primary JSON does
 not establish complete preparation evidence.
+New reports use physical format `loom.preparation_report.v2`: resolved and redacted
+configuration, recipe expansions, manifest, and provenance all live in the
+checksum-bound companion. Equal requested and effective compositions share one
+entry. The primary contains references rather than repeated configuration trees.
+The public loader also reads existing v1 physical reports without rewriting them;
+its hydrated logical composition and scientific identities remain unchanged.
+Local placement binding updates the validated execution view. Diagnostic mappings
+may receive the same binding, while unresolved interpolation strings and whole
+redaction markers remain unchanged; resolved private values are never copied
+back into diagnostic views.
 This input is separate from user-authored stage ports and does not inline the
 whole report into worker metadata. Original references are bound to admitted
 bytes and worker paths use the selected host's shared-root mapping.

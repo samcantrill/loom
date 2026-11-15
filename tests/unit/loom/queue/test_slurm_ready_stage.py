@@ -11,6 +11,117 @@ from loom.queue.errors import QueueServiceError
 from loom.queue.slurm_ready_stage import SQLiteSlurmStageAssignments
 
 
+def _shared_slurm_workspace(tmp_path):
+    from dataclasses import fields, replace
+    from tests.unit.loom.queue.test_remote_stage_execution import _shared_publication_workspace
+    from loom.queue.slurm_ready_stage import SlurmBootstrapWorkspace, SlurmStageDelivery
+
+    resident, profile, _launch, result = _shared_publication_workspace(tmp_path)
+    request = resident.request()
+    values = {
+        field.name: getattr(request, field.name)
+        for field in fields(SlurmStageDelivery)
+        if hasattr(request, field.name) and field.name != "schema_version"
+    }
+    delivery = SlurmStageDelivery(
+        **values, profile_id="hpc-cpu",
+        project_fingerprint=request.profile.project_fingerprint,
+        environment_fingerprint=request.profile.environment_fingerprint,
+        executor_fingerprint=request.profile.executor_fingerprint,
+    )
+    workspace = SlurmBootstrapWorkspace(tmp_path / "compute", request.assignment_id)
+    workspace.persist_delivery(delivery)
+    workspace.persist_execution_binding(
+        agent_id="agent-1", fence="fence-1", profile=profile.launch_profile,
+    )
+    return workspace, profile, replace(result, run_uri=f"loom-slurm:{request.assignment_id}")
+
+
+def test_shared_slurm_large_output_survives_relay_restart_and_lost_ack(tmp_path):
+    from dataclasses import replace
+    from loom.io.uris import uri_to_path
+    from loom.queue._remote_stage_execution import MAX_TRANSFER_BYTES
+    from loom.queue._slurm_result_transport import SharedSlurmResult
+    from loom.queue import _shared_publication as publication
+
+    workspace, profile, result = _shared_slurm_workspace(tmp_path)
+    primary = uri_to_path(result.outputs["result"].uri)
+    with primary.open("wb") as output:
+        output.truncate(MAX_TRANSFER_BYTES + 1)
+    result = replace(result, outputs={"result": replace(result.outputs["result"], checksum=None)})
+    report = workspace.retain_result(result)
+    assert report.output_kind == "shared"
+    assert report.outputs[0].size_bytes == MAX_TRANSFER_BYTES + 1
+    journal_root = tmp_path / "transport"
+    journal_root.mkdir()
+    storage = {"agent_root": str(journal_root), "compute_root": str(journal_root),
+               "retention_bytes": 65 * 1024 * 1024}
+    identity = {"assignment": {"assignment_id": workspace.root.name, "agent_id": "agent-1"},
+                "fence": "fence-1", "incarnation": "bootstrap"}
+    journal = SharedSlurmResult(storage, workspace.root.name)
+    journal.reserve(identity["assignment"])
+    journal.publish(identity, report, lambda *_: pytest.fail("shared payload was copied"))
+    assert journal.read(identity) == (report, {})
+    committed = []
+
+    def relay(value):
+        if value["result_operation"] == "report":
+            assert value["report"] == report.to_dict()
+            return {"accepted": True}
+        assert value["result_operation"] == "commit"
+        committed.append(publication.publish(
+            workspace.delivery(), report, profile.shared_roots,
+            agent_id="agent-1", fence="fence-1",
+        ))
+        if len(committed) == 1:
+            raise OSError("commit acknowledgement lost")
+        return {"acknowledged": True}
+
+    with pytest.raises(OSError, match="acknowledgement"):
+        journal.deliver(identity, relay)
+    reopened = SharedSlurmResult(storage, workspace.root.name)
+    assert reopened.deliver(identity, relay)
+    assert committed[0] == committed[1]
+    final = uri_to_path(committed[0]["result"].uri)
+    assert final.stat().st_size == MAX_TRANSFER_BYTES + 1
+    assert (final.parent / "values.bin").read_bytes() == b"companion-bytes"
+    assert not journal.path.exists()
+    assert workspace.retained_report() == report
+    # The next Slurm stage consumes the same large publication by reference.
+    from loom.queue._remote_stage_execution import _RemoteArtifact
+    from loom.queue.slurm_ready_stage import SlurmBootstrapWorkspace
+    from loom.queue.errors import QueueConflictError
+    descriptor, _ = _RemoteArtifact.from_local_ref(
+        transfer_id="checkpoint-input", logical_name="source", ref=committed[0]["result"],
+    )
+    successor = SlurmBootstrapWorkspace(tmp_path / "compute", "successor")
+    successor.persist_delivery(replace(workspace.delivery(), assignment_id="successor", inputs=(descriptor,)))
+    with pytest.raises(QueueConflictError, match="qualified roots"):
+        successor.accept_inputs()
+    successor.accept_inputs(shared_roots=profile.shared_roots)
+    assert successor.worker_request(shared_roots=profile.shared_roots).inputs["source"].uri == final.as_uri()
+    assert not (successor.root / "inputs").exists()
+    with pytest.raises(QueueConflictError, match="not declared"):
+        successor.stage_input_chunk(descriptor.transfer_id, 0, b"copied", final=True)
+
+
+def test_shared_slurm_rejects_changed_closure_and_execution_binding(tmp_path):
+    from loom.io.uris import uri_to_path
+    from loom.queue.errors import QueueConflictError
+    from loom.queue import _shared_publication as publication
+
+    workspace, profile, result = _shared_slurm_workspace(tmp_path)
+    report = workspace.retain_result(result)
+    with pytest.raises(QueueConflictError, match="binding replay"):
+        workspace.persist_execution_binding(
+            agent_id="agent-1", fence="different-fence", profile=profile.launch_profile,
+        )
+    (uri_to_path(result.outputs["result"].uri).parent / "values.bin").write_bytes(b"changed")
+    with pytest.raises(QueueConflictError):
+        publication.publish(workspace.delivery(), report, profile.shared_roots,
+                            agent_id="agent-1", fence="fence-1")
+
+
 def test_assignment_store_requires_final_schema_identity(tmp_path: Path) -> None:
     path = tmp_path / "assignments.sqlite"
     store = SQLiteSlurmStageAssignments(path, tmp_path / "transfers")

@@ -566,7 +566,7 @@ Apptainer/Singularity:
 An enabled policy uses the built-in subprocess runner's foreground PID namespace
 (`--pid --no-init=false`). The currently verified path is Linux with pidfds and
 non-reaping child waits, running SingularityCE 3.10.4 (including the `-focal`
-build) or 4.1.1. These are specific verified versions, not a version range.
+build), 4.1.1 or 4.1.5. These are specific verified versions, not a version range.
 Other runtimes, injected runners, and instance/join modes are not admitted
 for enabled timeouts. Static capability diagnostics describe this supported
 path; they do not probe a remote execution host. Unsupported selections fail with

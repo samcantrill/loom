@@ -66,14 +66,9 @@ def _write(tmp_path: Path, *, requested=None):
 def test_actual_serializer_shares_complete_equal_views_and_hydrates_all_facts(tmp_path):
     logical, store, ref, companion = _write(tmp_path)
     physical = cast(Any, store.load(ref))
-    assert physical["report_format"] == "loom.preparation_report.v1"
+    assert physical["report_format"] == "loom.preparation_report.v2"
     assert physical["schema_version"] == 10
-    assert set(physical["composition"]) == {
-        "resolved",
-        "redacted",
-        "recipe_manifest",
-        "evidence_ref",
-    }
+    assert set(physical["composition"]) == {"evidence_ref"}
     saved = json.loads(companion.read_bytes())
     assert len(saved["compositions"]) == 1
     projected = saved["compositions"]["c0"]["provenance"]
@@ -83,17 +78,88 @@ def test_actual_serializer_shares_complete_equal_views_and_hydrates_all_facts(tm
     }
     assert projected["metadata"] == {"specific": 2, "loom_invocation": {"argv": []}}
     full = cast(Any, load_preparation_report(ref, store.local_path(ref)))
-    assert full == {**logical, "report_format": "loom.preparation_report.v1"}
+    assert full == {**logical, "report_format": "loom.preparation_report.v2"}
     for name in ("composition", "requested_composition"):
         assert hash_mapping(full[name]) == hash_mapping(logical[name])
         assert stable_json_bytes(full[name]) == stable_json_bytes(logical[name])
     full["composition"]["manifest"]["metadata"]["source_fact_records"]["false"] = True
-    assert stable_json_bytes(full["requested_composition"]) == stable_json_bytes(logical["requested_composition"])
-    assert full["composition"]["provenance"]["metadata"]["source_fact_records"]["false"] is False
+    assert stable_json_bytes(full["requested_composition"]) == stable_json_bytes(
+        logical["requested_composition"]
+    )
+    assert (
+        full["composition"]["provenance"]["metadata"]["source_fact_records"]["false"]
+        is False
+    )
     assert (
         load_preparation_report(ref, store.local_path(ref))["composition"]
         == logical["composition"]
     )
+
+
+def test_large_expanded_configuration_is_not_repeated_in_primary_report(tmp_path):
+    composition = _composition()
+    composition["resolved"]["actions"] = {"large": "x" * (5 * 1024**2)}
+    composition["redacted"] = deepcopy(composition["resolved"])
+    logical = {
+        "schema_version": 10,
+        "composition": composition,
+        "requested_composition": deepcopy(composition),
+    }
+    store = LocalArtifactStore(tmp_path)
+    companion = tmp_path / "composition.json"
+    primary = save_composition_evidence(logical, companion)
+    ref = store.save(
+        primary,
+        stage_name="prepare",
+        name="report",
+        artifact_type="json",
+        codec_key="json.v1",
+    )
+    # The companion is located next to the native primary, as in publication.
+    destination = store.local_path(ref).parent / companion.name
+    companion.rename(destination)
+    assert store.local_path(ref).stat().st_size < 16 * 1024
+    assert len(json.loads(destination.read_bytes())["compositions"]) == 1
+    assert load_preparation_report(ref, store.local_path(ref)) == {
+        **logical,
+        "report_format": "loom.preparation_report.v2",
+    }
+
+
+def test_existing_v1_report_remains_readable_without_rewriting_retained_bytes(tmp_path):
+    from loom.fingerprints import hash_bytes
+
+    logical, store, ref, companion = _write(tmp_path)
+    primary = cast(Any, store.load(ref))
+    evidence = json.loads(companion.read_bytes())
+    primary["report_format"] = "loom.preparation_report.v1"
+    evidence.update(schema="loom.preparation_composition.v1", schema_version=1)
+    entry = evidence["compositions"]["c0"]
+    for key in ("resolved", "redacted", "recipe_manifest"):
+        entry.pop(key)
+    companion.write_bytes(stable_json_bytes(evidence))
+    for name in ("composition", "requested_composition"):
+        primary[name].update(
+            {
+                key: deepcopy(logical[name][key])
+                for key in ("resolved", "redacted", "recipe_manifest")
+            }
+        )
+        primary[name]["evidence_ref"]["metadata"]["document_schema_version"] = 1
+        primary[name]["evidence_ref"]["checksum"] = hash_bytes(companion.read_bytes())
+    ref = store.save(
+        primary,
+        stage_name="prepare",
+        name="report",
+        artifact_type="json",
+        codec_key="json.v1",
+    )
+    before = {path: path.read_bytes() for path in (store.local_path(ref), companion)}
+    assert load_preparation_report(ref, store.local_path(ref)) == {
+        **logical,
+        "report_format": "loom.preparation_report.v1",
+    }
+    assert {path: path.read_bytes() for path in before} == before
 
 
 @pytest.mark.parametrize(
@@ -114,7 +180,7 @@ def test_complete_distinct_views_never_share_by_selected_counts(tmp_path, change
     assert len(json.loads(companion.read_bytes())["compositions"]) == 2
     assert load_preparation_report(ref, store.local_path(ref)) == {
         **logical,
-        "report_format": "loom.preparation_report.v1",
+        "report_format": "loom.preparation_report.v2",
     }
 
 
@@ -156,10 +222,10 @@ def test_damaged_actual_published_closure_refuses_complete_read(tmp_path, damage
             "/compositions/missing"
         )
     elif damage == "shared_config":
-        primary["requested_composition"]["resolved"]["value"] = 42
+        primary["requested_composition"]["resolved"] = {"value": 42}
     elif damage == "shared_false_zero":
-        primary["composition"]["resolved"]["value"] = 0
-        primary["requested_composition"]["resolved"]["value"] = False
+        primary["composition"]["resolved"] = {"value": 0}
+        primary["requested_composition"]["resolved"] = {"value": False}
     else:
         entry = evidence["compositions"]["c0"]
         if damage == "schema":
@@ -203,12 +269,14 @@ def test_relocated_retained_closure_reads_without_original_source(tmp_path):
     companion.unlink()
     assert load_preparation_report(ref, copied / primary.name) == {
         **logical,
-        "report_format": "loom.preparation_report.v1",
+        "report_format": "loom.preparation_report.v2",
     }
 
 
 @pytest.mark.parametrize("version", [7, True, 12])
-def test_unsupported_report_schema_refuses_before_companion_publication(tmp_path, version):
+def test_unsupported_report_schema_refuses_before_companion_publication(
+    tmp_path, version
+):
     logical, store, _ref, companion = _write(tmp_path)
     before = companion.read_bytes()
     logical["schema_version"] = version
@@ -216,9 +284,14 @@ def test_unsupported_report_schema_refuses_before_companion_publication(tmp_path
         save_composition_evidence(logical, companion)
     assert companion.read_bytes() == before
     # A matching primary checksum does not authorize a retired report schema.
-    physical = {**logical, "report_format": "loom.preparation_report.v1"}
-    retired = store.save(physical, stage_name="prepare", name="retired",
-                         artifact_type="json", codec_key="json.v1")
+    physical = {**logical, "report_format": "loom.preparation_report.v2"}
+    retired = store.save(
+        physical,
+        stage_name="prepare",
+        name="retired",
+        artifact_type="json",
+        codec_key="json.v1",
+    )
     with pytest.raises(QueueConflictError, match="schema is unsupported"):
         load_preparation_report(retired, store.local_path(retired))
 

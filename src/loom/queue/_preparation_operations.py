@@ -8,6 +8,7 @@ proof, and never holds the daemon's cycle lock during capture or publication.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from concurrent.futures import Future
 from dataclasses import dataclass, replace
 import hashlib
 import json
@@ -28,11 +29,13 @@ from .errors import QueueConflictError, QueueServiceError
 from .run import RunRequest, _public_operation_id
 from ._maintenance import MaintenanceCheckConflict
 from ._service_lifetime import ServiceRetiring
-from ._phase_timing import PhaseTimings
+from ._phase_timing import PhaseTimings, phase
 from .submitted_execution import SubmittedContainerCapability
 from .preparation import (
     PreparationChildInput,
     PrepareRunRequest,
+    SharedInputReceipt,
+    StagedInputReceipt,
     capture_shared_input,
     capture_staged_input,
     discard_shared_input_temporaries,
@@ -41,6 +44,7 @@ from .preparation import (
 )
 
 if TYPE_CHECKING:
+    from ._publication_guards import PublicationGuards
     from .managed_local_preparation import ManagedLocalPreparationReceipt
     from .local_daemon import (
         LocalDaemon,
@@ -63,6 +67,25 @@ class _PendingActionVerification:
 
     operation_id: str
     run_uri: str
+
+
+@dataclass(frozen=True, slots=True)
+class _PendingVerificationReport:
+    consumer_run_uri: str
+    node_id: str
+    token: tuple[object, ...]
+    future: Future[dict[str, PlainData]]
+
+
+def _load_verification_report(
+    root: Path, reference: ArtifactRef, requested: Mapping[str, PlainData], operation_id: str,
+) -> dict[str, PlainData]:
+    from loom.pipeline.stores import LocalArtifactStore
+
+    report = _mapping(LocalArtifactStore(root).load(reference))
+    if report["action_verification"] != requested or report["operation_id"] != operation_id:
+        raise QueueConflictError("action verification retained report conflicts")
+    return report
 
 
 class _InvalidInitialContext(ValueError):
@@ -97,6 +120,23 @@ class PreparationReport:
     action_verification: Mapping[str, PlainData] | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _PendingPublication:
+    token: tuple[object, ...]
+    future: Future[ManagedLocalPreparationReceipt]
+    result: Mapping[str, PlainData]
+    preflight: Mapping[str, PlainData]
+    publication_owner: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _PendingCandidate:
+    token: tuple[object, ...]
+    report_token: tuple[object, ...]
+    report: PreparationReport
+    future: Future[dict[str, PlainData]] | None
+
+
 class PreparationCallbacks(Protocol):
     """Application wiring above queue; no project composition enters this owner."""
 
@@ -127,6 +167,63 @@ class PreparationCallbacks(Protocol):
         request: PrepareRunRequest,
         report: PreparationReport,
     ) -> ManagedLocalPreparationReceipt: ...
+
+
+def _publish_owned_target(
+    guards: PublicationGuards, callbacks: PreparationCallbacks,
+    config: LocalDaemonConfig, request: PrepareRunRequest, report: PreparationReport,
+) -> ManagedLocalPreparationReceipt:
+    # Existing shutdown drains these guards before releasing deployment ownership.
+    with guards.hold("preparation-" + request.operation_id):
+        return callbacks.publish_target(config, request, report)
+
+
+def _prepare_owned_child(
+    guards: PublicationGuards, callbacks: PreparationCallbacks,
+    config: LocalDaemonConfig, binding: PreparationChildInput,
+    child_name: str, options: RunOptions,
+) -> ManagedLocalPreparationReceipt:
+    with guards.hold("preparation-child-" + binding.operation_id):
+        return callbacks.prepare_child(config, binding, child_name, options)
+
+
+def _capture_owned_input(
+    guards: PublicationGuards, config: LocalDaemonConfig, request: PrepareRunRequest,
+    root: Mapping[str, PlainData], owner_id: str,
+) -> SharedInputReceipt | StagedInputReceipt:
+    with guards.hold("preparation-input-" + request.operation_id):
+        if request.source.mode == "staged":
+            artifact_root = config.coordinator_root / "preparation-inputs"
+            discard_staged_input_temporaries(request, artifact_root=artifact_root, owner_id=owner_id)
+            receipt = capture_staged_input(
+                request, source_root=Path(cast(str, root["path"])),
+                artifact_root=artifact_root, owner_id=owner_id,
+            )
+            captured_path = uri_to_path(receipt.reference.uri)
+        else:
+            snapshot_root = Path(cast(str, root["shared_snapshot_root"]))
+            discard_shared_input_temporaries(request, snapshot_root=snapshot_root, owner_id=owner_id)
+            receipt = capture_shared_input(
+                request, source_root=Path(cast(str, root["path"])),
+                snapshot_root=snapshot_root, owner_id=owner_id,
+            )
+            captured_path = snapshot_root / receipt.path
+        retain_preparation_path(captured_path, coordinator_id=owner_id, operation_id=request.operation_id)
+        return receipt
+
+
+def _retain_owned_image(
+    guards: PublicationGuards, request: PrepareRunRequest,
+    roots: Mapping[str, PlainData], owner_id: str,
+) -> None:
+    from .submitted_execution import retain_submitted_image
+
+    assert request.execution is not None
+    with guards.hold("preparation-image-" + request.operation_id):
+        retain_submitted_image(
+            request.execution.image, roots,
+            coordinator_id=owner_id, operation_id=request.operation_id,
+        )
 
 
 class PreparationConfigurationUnavailable(QueueServiceError):
@@ -241,6 +338,13 @@ class CoordinatorPreparations:
         self._reconcile_lock = Lock()
         self._cursor = 0
         self._cancel_cursor = 0
+        self._verification_reports: dict[str, _PendingVerificationReport] = {}
+        self._reports: dict[str, tuple[tuple[object, ...], Future[PreparationReport]]] = {}
+        self._publications: dict[str, _PendingPublication] = {}
+        self._candidates: dict[str, _PendingCandidate] = {}
+        self._images: dict[str, tuple[tuple[object, ...], Future[None]]] = {}
+        self._captures: dict[str, tuple[tuple[object, ...], Future[SharedInputReceipt | StagedInputReceipt]]] = {}
+        self._children: dict[str, tuple[tuple[object, ...], Future[ManagedLocalPreparationReceipt]]] = {}
 
     @property
     def available(self) -> bool:
@@ -263,7 +367,7 @@ class CoordinatorPreparations:
             )
 
     def verify_action_result(
-        self, *, source_operation_id: str, node_id: str,
+        self, *, source_operation_id: str, consumer_run_uri: str, node_id: str,
         contract: Mapping[str, PlainData], candidate: Mapping[str, PlainData],
         timings: PhaseTimings | None = None,
     ) -> dict[str, PlainData] | _PendingActionVerification:
@@ -276,12 +380,16 @@ class CoordinatorPreparations:
         from dataclasses import replace
         from loom.fingerprints import hash_mapping
         from loom.pipeline._action_verification import action_verification_request
-        from loom.pipeline.stores import LocalArtifactStore
-
         requested = action_verification_request({"node_id": node_id, "contract": dict(contract), "candidate": dict(candidate)})
         intent = hash_mapping({"source_operation_id": source_operation_id, "request": requested})
         operation_id = "action-verify-" + intent.split(":", 1)[1]
         child_name = PREPARATION_RUN_PREFIX + hashlib.sha256(operation_id.encode()).hexdigest()
+        for previous_id, previous in tuple(self._verification_reports.items()):
+            if (
+                previous.consumer_run_uri == consumer_run_uri and previous.node_id == node_id
+                and previous_id != operation_id
+            ):
+                del self._verification_reports[previous_id]
         pending = _PendingActionVerification(
             operation_id, (self.daemon.config.run_store_root / child_name).as_uri()
         )
@@ -324,10 +432,28 @@ class CoordinatorPreparations:
             raise QueueConflictError("installed action verification child failed")
         result = _mapping(json.loads(str(row["result_json"])))
         reference = ArtifactRef.from_dict(result["report_ref"])
-        report = _mapping(LocalArtifactStore(self.daemon.config.run_store_root).load(reference))
-        if report["action_verification"] != requested or report["operation_id"] != operation_id:
-            raise QueueConflictError("action verification retained report conflicts")
-        return report
+        token = (
+            self.daemon._epoch, self.daemon._scheduling_epoch, consumer_run_uri,
+            row["intent_digest"], row["result_json"],
+        )
+        loading = self._verification_reports.get(operation_id)
+        if loading is not None:
+            if not loading.future.done():
+                return pending
+            del self._verification_reports[operation_id]
+            if loading.token == token:
+                return loading.future.result()
+        if len(self._verification_reports) >= 2:
+            return pending
+        future = self.daemon._result_verifications.bulk.submit(
+            operation_id, "action_verification_report_load", _load_verification_report,
+            self.daemon.config.run_store_root, reference, requested, operation_id,
+        )
+        if future is not None:
+            self._verification_reports[operation_id] = _PendingVerificationReport(
+                consumer_run_uri, node_id, token, future,
+            )
+        return pending
 
     def action_verification_pending(self, pending: _PendingActionVerification) -> bool:
         """Observe only native progress; completed children require full resolution."""
@@ -336,7 +462,17 @@ class CoordinatorPreparations:
                 "SELECT state FROM preparation_operations WHERE operation_id = ?",
                 (pending.operation_id,),
             ).fetchone()
-        return row is not None and row["state"] not in _TERMINAL
+        loading = self._verification_reports.get(pending.operation_id)
+        return row is not None and (
+            row["state"] not in _TERMINAL
+            or (row["state"] == "applied" and loading is not None and not loading.future.done())
+        )
+
+    def discard_verification_reports(self, run_uri: str) -> None:
+        """Detach cancelled consumers without pretending their IO has stopped."""
+        for operation_id, pending in tuple(self._verification_reports.items()):
+            if pending.consumer_run_uri == run_uri:
+                del self._verification_reports[operation_id]
 
     def accept_run(
         self, request: RunRequest, principal_id: str
@@ -404,7 +540,7 @@ class CoordinatorPreparations:
         if run_mode == "reconcile":
             intent = hashlib.sha256(stable_json_bytes([intent, run_mode, retry_policy])).hexdigest()
         coordinator_id = self.daemon._require_started()
-        with self.daemon._cycle_lock, self.daemon._connection() as conn:
+        with self.daemon._state_guard(), self.daemon._connection() as conn:
             self.daemon._lifetime.require_accepting()
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
@@ -452,7 +588,7 @@ class CoordinatorPreparations:
             )
             selected["slurm_profiles"] = [
                 item.descriptor.to_dict() for item in self.daemon.config.slurm_profiles
-            ] if request.execution is None else []
+            ]
             selected["remote_profiles"] = [
                 item.to_dict() for item in self.daemon.config.remote_profiles
             ] if request.execution is None else []
@@ -556,6 +692,7 @@ class CoordinatorPreparations:
             # operation in the same acceptance transaction.
             conn.execute("DELETE FROM daemon_metadata WHERE key = ?", ("startup-attachment:" + request.operation_id,))
             conn.commit()
+            self.daemon._scheduling_reference_revision += 1
         self.daemon._wake.set()
         return operation
 
@@ -585,10 +722,26 @@ class CoordinatorPreparations:
         return operation
 
     def reconcile(self) -> None:
+        self.daemon._result_verifications.bulk.reap()
         if self.callbacks is None or not self._reconcile_lock.acquire(blocking=False):
             return
         try:
             self._reconcile_cancellations()
+            with self.daemon._connection() as conn:
+                for operation_id, pending in tuple(self._verification_reports.items()):
+                    admission = conn.execute(
+                        "SELECT state FROM managed_admissions WHERE run_uri = ?",
+                        (pending.consumer_run_uri,),
+                    ).fetchone()
+                    if admission is None or admission[0] in {"SUCCEEDED", "FAILED", "CANCELLED", "BLOCKED"}:
+                        del self._verification_reports[operation_id]
+            for operation_id, candidate in tuple(self._candidates.items()):
+                if (candidate.future is None or candidate.future.done()) and self._read(operation_id)["state"] in _TERMINAL:
+                    del self._candidates[operation_id]
+            for pending in (self._reports, self._children, self._images):
+                for operation_id, (_, future) in tuple(pending.items()):
+                    if future.done() and self._read(operation_id)["state"] in _TERMINAL:
+                        del pending[operation_id]
             with self.daemon._connection() as conn:
                 rows = tuple(
                     conn.execute(
@@ -715,83 +868,86 @@ class CoordinatorPreparations:
             raise PreparationConfigurationUnavailable(
                 "preparation execution owner is unavailable"
             )
-        with self.daemon._cycle_lock:
-            from .preparation import _local_scope, _require_local_binding
-
-            scope = _local_scope(_mapping(selected["profile"]).get("local_scope"))
-            try:
-                _require_local_binding(scope, self.daemon.config.resident_worker_launch_profile,
-                                       agent_id=self.daemon.config.machine_id)
-            except QueueConflictError as exc:
-                raise PreparationConfigurationUnavailable("accepted local preparation binding is unavailable") from exc
-            if (
-                coordinator_authority_identity(
-                    self.daemon.config.coordinator_authority_factory
-                )
-                != selected["authority"]
-            ):
-                raise PreparationConfigurationUnavailable(
-                    "accepted preparation authority is unavailable"
-                )
+        with self.daemon._state_guard():
+            config = self.daemon.config
             available = tuple(execution.slurm_profiles.values())
-            profiles = []
-            for descriptor in cast(list[PlainData], selected["slurm_profiles"]):
-                profile = next(
-                    (
-                        item
-                        for item in available
-                        if item.descriptor.to_dict() == descriptor
-                    ),
-                    None,
-                )
-                if profile is None:
-                    raise PreparationConfigurationUnavailable(
-                        "accepted preparation Slurm profile is unavailable"
-                    )
-                profiles.append(profile)
-            remote_profiles = []
-            for descriptor in cast(list[PlainData], selected["remote_profiles"]):
-                remote = next(
-                    (
-                        item
-                        for item in self.daemon.config.remote_profiles
-                        if item.to_dict() == descriptor
-                    ),
-                    None,
-                )
-                if remote is None:
-                    raise PreparationConfigurationUnavailable(
-                        "accepted preparation remote profile is unavailable"
-                    )
-                remote_profiles.append(remote)
-            components = execution.preparation_scheduling_components(
-                _mapping(selected["scheduling"])
+            components = execution.preparation_scheduling_components(_mapping(selected["scheduling"]))
+        from .preparation import _local_scope, _require_local_binding
+
+        scope = _local_scope(_mapping(selected["profile"]).get("local_scope"))
+        try:
+            _require_local_binding(scope, config.resident_worker_launch_profile,
+                                   agent_id=config.machine_id)
+        except QueueConflictError as exc:
+            raise PreparationConfigurationUnavailable("accepted local preparation binding is unavailable") from exc
+        if (
+            coordinator_authority_identity(
+                config.coordinator_authority_factory
             )
-            capability_data = _mapping(selected["profile"]).get("container_capability")
-            capabilities = self.daemon.config.container_capabilities
-            if capability_data is not None:
-                retained_capability = SubmittedContainerCapability.from_dict(capability_data)
-                from .submitted_execution import SELECTED_INPUT_WORKER_CONTRACT
-                dynamic = request.execution is not None and request.execution.worker_contract == SELECTED_INPUT_WORKER_CONTRACT
-                capabilities = tuple(
-                    item for item in capabilities if (
-                        item.permits(retained_capability) if dynamic else item.to_dict() == capability_data
-                    )
-                )
-                if not capabilities:
-                    raise PreparationConfigurationUnavailable(
-                        "accepted container execution policy is unavailable"
-                    )
-            return replace(
-                self.daemon.config,
-                run_store_root=Path(cast(str, selected["run_store_root"])),
-                scheduling_components=components,
-                slurm_profiles=tuple(profiles),
-                remote_profiles=tuple(remote_profiles),
-                container_capabilities=capabilities,
+            != selected["authority"]
+        ):
+            raise PreparationConfigurationUnavailable(
+                "accepted preparation authority is unavailable"
             )
+        profiles = []
+        for descriptor in cast(list[PlainData], selected["slurm_profiles"]):
+            profile = next(
+                (
+                    item
+                    for item in available
+                    if item.descriptor.to_dict() == descriptor
+                ),
+                None,
+            )
+            if profile is None:
+                raise PreparationConfigurationUnavailable(
+                    "accepted preparation Slurm profile is unavailable"
+                )
+            profiles.append(profile)
+        remote_profiles = []
+        for descriptor in cast(list[PlainData], selected["remote_profiles"]):
+            remote = next(
+                (
+                    item
+                    for item in config.remote_profiles
+                    if item.to_dict() == descriptor
+                ),
+                None,
+            )
+            if remote is None:
+                raise PreparationConfigurationUnavailable(
+                    "accepted preparation remote profile is unavailable"
+                )
+            remote_profiles.append(remote)
+        capability_data = _mapping(selected["profile"]).get("container_capability")
+        capabilities = config.container_capabilities
+        if capability_data is not None:
+            retained_capability = SubmittedContainerCapability.from_dict(capability_data)
+            from .submitted_execution import SELECTED_INPUT_WORKER_CONTRACT
+            dynamic = request.execution is not None and request.execution.worker_contract == SELECTED_INPUT_WORKER_CONTRACT
+            capabilities = tuple(
+                item for item in capabilities if (
+                    item.permits(retained_capability) if dynamic else item.to_dict() == capability_data
+                )
+            )
+            if not capabilities:
+                raise PreparationConfigurationUnavailable(
+                    "accepted container execution policy is unavailable"
+                )
+        return replace(
+            config,
+            run_store_root=Path(cast(str, selected["run_store_root"])),
+            scheduling_components=components,
+            slurm_profiles=tuple(profiles),
+            remote_profiles=tuple(remote_profiles),
+            container_capabilities=capabilities,
+        )
 
     def _advance(self, row: sqlite3.Row) -> None:
+        with self.daemon._result_verifications.bulk.offering(("preparation", str(row["operation_id"]))):
+            self._advance_owned(row)
+
+    def _advance_owned(self, row: sqlite3.Row) -> None:
         from .local_daemon import LocalDaemonAdmissionRequest, LocalDaemonAdmissionState
 
         callbacks = self.callbacks
@@ -801,6 +957,11 @@ class CoordinatorPreparations:
         # selected. Only this reconciler mutates execution/publication progress.
         row = self._read(operation_id)
         if row["state"] in _TERMINAL:
+            pending = self._publications.get(operation_id)
+            if pending is not None and pending.future.done():
+                del self._publications[operation_id]
+            return
+        if self._complete_publication(row):
             return
         result = _mapping(json.loads(str(row["result_json"])))
         if row["kind"] == "run" and result["prepared_run"] is not None:
@@ -815,6 +976,25 @@ class CoordinatorPreparations:
             and row["state"] == "pending"
             and not row["dispatch_claimed"]
         ):
+            pending_image = self._images.get(operation_id)
+            if pending_image is not None:
+                if not pending_image[1].done():
+                    return
+                del self._images[operation_id]
+                try:
+                    pending_image[1].result()
+                    result["image_retained"] = True
+                except (QueueServiceError, OSError):
+                    pass
+            pending_capture = self._captures.get(operation_id)
+            if pending_capture is not None:
+                if not pending_capture[1].done():
+                    return  # Never remove temporary files beneath a running capture.
+                del self._captures[operation_id]
+                try:
+                    result["input_receipt"] = pending_capture[1].result().to_dict()
+                except (QueueServiceError, OSError):
+                    pass  # Cancellation owns cleanup of this finished failed capture.
             if result["input_receipt"] is None and request.source.mode == "staged":
                 discard_staged_input_temporaries(
                     request,
@@ -837,36 +1017,9 @@ class CoordinatorPreparations:
         if receipt_data is None:
             root = _mapping(selected["source_root"])
             try:
-                owner_id = self.daemon._require_started()
-                if request.source.mode == "staged":
-                    artifact_root = config.coordinator_root / "preparation-inputs"
-                    discard_staged_input_temporaries(
-                        request, artifact_root=artifact_root, owner_id=owner_id
-                    )
-                    receipt = capture_staged_input(
-                        request,
-                        source_root=Path(cast(str, root["path"])),
-                        artifact_root=artifact_root,
-                        owner_id=owner_id,
-                    )
-                    captured_path = uri_to_path(receipt.reference.uri)
-                else:
-                    snapshot_root = Path(cast(str, root["shared_snapshot_root"]))
-                    discard_shared_input_temporaries(
-                        request, snapshot_root=snapshot_root, owner_id=owner_id
-                    )
-                    receipt = capture_shared_input(
-                        request,
-                        source_root=Path(cast(str, root["path"])),
-                        snapshot_root=snapshot_root,
-                        owner_id=owner_id,
-                    )
-                    captured_path = snapshot_root / receipt.path
-                retain_preparation_path(
-                    captured_path,
-                    coordinator_id=owner_id,
-                    operation_id=operation_id,
-                )
+                receipt = self._capture_input_async(row, config, request, root)
+                if receipt is None:
+                    return
                 result["input_receipt"] = receipt.to_dict()
                 _with_report(operation_id, "pending", None, result, None)
                 self._store_result(_operation(operation_id, "pending", None, result))
@@ -889,15 +1042,9 @@ class CoordinatorPreparations:
         else:
             receipt = input_receipt_from_dict(_mapping(receipt_data))
         if request.execution is not None and not result.get("image_retained"):
-            from .submitted_execution import retain_submitted_image
-
             try:
-                retain_submitted_image(
-                    request.execution.image,
-                    _mapping(profile["image_roots"]),
-                    coordinator_id=self.daemon._require_started(),
-                    operation_id=operation_id,
-                )
+                if not self._retain_image_async(row, request, _mapping(profile["image_roots"])):
+                    return
                 result["image_retained"] = True
                 self._store_result(_operation(operation_id, "pending", None, result))
             except (QueueServiceError, OSError):
@@ -960,12 +1107,12 @@ class CoordinatorPreparations:
                         coordinator_id=self.daemon._require_started(),
                         operation_id=operation_id,
                     )
-                    child_receipt = callbacks.prepare_child(
-                        config,
-                        binding,
-                        child_name,
+                    child_receipt = self._prepare_child_async(
+                        row, config, binding, child_name,
                         RunOptions.from_dict(profile["runtime_options"]),
                     )
+                    if child_receipt is None:
+                        return
                 except (QueueServiceError, QueueConflictError):
                     self._fail(row, "preparation_child_failed")
                     return
@@ -1028,7 +1175,7 @@ class CoordinatorPreparations:
             )
             execution = self.daemon._execution
             assert execution is not None
-            with self.daemon._cycle_lock:
+            with self.daemon._state_guard():
                 released = (
                     execution.coordinator.run_active_assignment_count(admission.run_uri)
                     == 0
@@ -1045,7 +1192,9 @@ class CoordinatorPreparations:
         if admission.state is not LocalDaemonAdmissionState.SUCCEEDED:
             return
         try:
-            report = callbacks.read_report(config, admission, request, binding)
+            report = self._read_report_async(row, config, admission, request, binding)
+            if report is None:
+                return
             if "reconciliation" in selected:
                 references = cast(list[PlainData], result["evidence_refs"])
                 if not references:
@@ -1123,26 +1272,7 @@ class CoordinatorPreparations:
                 conn.commit()
             if not claimed:
                 return
-        try:
-            prepared = callbacks.publish_target(config, request, report)
-        except QueueConflictError:
-            self._fail(self._read(operation_id), "publication_conflict", conflict=True)
-            return
-        # Unknown publication failures leave the durable claim applying. The
-        # next pass uses native complete replay or native partial-target conflict.
-        self._initialize_context(row, prepared.run_uri)
-        result["prepared_run"] = prepared.to_dict()
-        self._store_result(
-            _with_report(
-                operation_id,
-                "applying" if row["kind"] == "run" else "applied",
-                None,
-                result,
-                report.preflight,
-            )
-        )
-        if row["kind"] == "run":
-            self._continue_run(self._read(operation_id))
+        self._publish_async(config, request, report, result, publication_owner=None)
 
     def _save_selection(self, operation_id: str, selected: Mapping[str, PlainData]) -> None:
         with self.daemon._connection() as conn:
@@ -1162,121 +1292,337 @@ class CoordinatorPreparations:
         target_name = run_uri_to_path(uri).name
         reconciliation = _mapping(selected["reconciliation"])
         selected["reconciliation"] = reconciliation
-        with self.daemon._cycle_lock:
-            row = self._read(operation_id)
-            if row["cancellation_requested"]:
-                self._store_result(_with_report(operation_id, "cancelled", None, result, report.preflight))
-                return
-            if row["target_name"] is None:
-                retain_preparation_path(config.run_store_root / target_name,
-                                        coordinator_id=self.daemon._require_started(), operation_id=operation_id)
-                with self.daemon._connection() as conn:
-                    conn.execute("BEGIN IMMEDIATE")
-                    owners = conn.execute("SELECT * FROM preparation_operations WHERE target_name = ? ORDER BY rowid", (target_name,)).fetchall()
-                    owner = owners[0] if owners else None
-                    if owner is not None:
-                        previous = _mapping(json.loads(str(owner["selected_json"])))
-                        previous.pop("reconciliation", None)
-                        scope = dict(selected)
-                        scope.pop("reconciliation", None)
-                        old_request = PrepareRunRequest.from_dict(json.loads(str(owner["request_json"])))
-                        if owner["principal_id"] != row["principal_id"] or previous != scope or (old_request.source.root, old_request.source.path) != (request.source.root, request.source.path):
-                            conn.rollback()
-                            self._fail(row, "candidate_scope_conflict", conflict=True)
-                            return
-                    queue_id = target_name if owner is None else owner["queue_item_id"] or target_name
-                    reconciliation["publication_owner"] = operation_id if owner is None else str(owner["operation_id"])
-                    result["queue_item_id"] = queue_id
-                    try:
-                        self._check_run_budget(operation_id, {**result, "prepared_run": report.prospective_receipt.to_dict()})
-                    except _ResultTooLarge:
+        row = self._read(operation_id)
+        if row["cancellation_requested"]:
+            self._store_result(_with_report(operation_id, "cancelled", None, result, report.preflight))
+            return
+        if row["target_name"] is None:
+            retain_preparation_path(config.run_store_root / target_name,
+                                    coordinator_id=self.daemon._require_started(), operation_id=operation_id)
+            with self.daemon._connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                current = conn.execute("SELECT cancellation_requested, result_json FROM preparation_operations WHERE operation_id = ?", (operation_id,)).fetchone()
+                if current["cancellation_requested"]:
+                    return
+                if "cancellation_operation_id" in result:
+                    result["cancellation_operation_id"] = json.loads(current["result_json"])["cancellation_operation_id"]
+                owners = conn.execute("SELECT * FROM preparation_operations WHERE target_name = ? ORDER BY rowid", (target_name,)).fetchall()
+                owner = owners[0] if owners else None
+                if owner is not None:
+                    previous = _mapping(json.loads(str(owner["selected_json"])))
+                    previous.pop("reconciliation", None)
+                    scope = dict(selected)
+                    scope.pop("reconciliation", None)
+                    old_request = PrepareRunRequest.from_dict(json.loads(str(owner["request_json"])))
+                    if owner["principal_id"] != row["principal_id"] or previous != scope or (old_request.source.root, old_request.source.path) != (request.source.root, request.source.path):
                         conn.rollback()
-                        self._fail(row, "result_too_large")
+                        self._fail(row, "candidate_scope_conflict", conflict=True)
                         return
-                    conn.execute("UPDATE preparation_operations SET target_name = ?, queue_item_id = ?, selected_json = ?, result_json = ? WHERE operation_id = ?",
-                                 (target_name, queue_id, _json(selected), _json(result), operation_id))
-                    conn.commit()
-                row = self._read(operation_id)
-            elif row["target_name"] != target_name:
-                self._fail(row, "candidate_key_conflict", conflict=True)
-                return
-            else:
-                # Binding and cancellation receipts are retained independently of child reports.
-                retained = _mapping(json.loads(str(row["result_json"])))
-                result["queue_item_id"], result["binding"] = retained["queue_item_id"], retained["binding"]
-            owner = self._read(cast(str, reconciliation["publication_owner"]))
-            if owner["cancellation_requested"] or owner["state"] in {"failed", "cancelled", "conflict"}:
-                self._fail(row, "candidate_publication_failed", conflict=True)
-                return
-            if owner["operation_id"] != operation_id and owner["state"] != "applied":
-                return
-            try:
-                admission = self.daemon.admission_for_run_uri(uri)
-            except AdmissionNotFoundError:
-                admission = None
-            if admission is not None:
-                if admission.queue_item_id != row["queue_item_id"]:
-                    self._fail(row, "candidate_admission_conflict", conflict=True)
+                queue_id = target_name if owner is None else owner["queue_item_id"] or target_name
+                reconciliation["publication_owner"] = operation_id if owner is None else str(owner["operation_id"])
+                result["queue_item_id"] = queue_id
+                try:
+                    self._check_run_budget(operation_id, {**result, "prepared_run": report.prospective_receipt.to_dict()})
+                except _ResultTooLarge:
+                    conn.rollback()
+                    self._fail(row, "result_too_large")
                     return
-                if admission.state.value in {"CANCELLED", "CANCELLATION_REQUESTED"} or admission.cancellation_operation_id is not None:
-                    self._fail(row, "candidate_cancelled", conflict=True)
-                    return
-            path = run_uri_to_path(uri)
-            if admission is None and not path.exists() and not path.is_symlink() and owner["operation_id"] == operation_id and row["state"] == "pending":
-                # Binding was serialized with cancellation; only this owner can publish.
-                self._store_result(_with_report(operation_id, "applying", None, result, report.preflight))
+                conn.execute("UPDATE preparation_operations SET target_name = ?, queue_item_id = ?, selected_json = ?, result_json = ? WHERE operation_id = ?",
+                             (target_name, queue_id, _json(selected), _json(result), operation_id))
+                conn.commit()
+            row = self._read(operation_id)
+        elif row["target_name"] != target_name:
+            self._fail(row, "candidate_key_conflict", conflict=True)
+            return
+        else:
+            # Binding and cancellation receipts are retained independently of child reports.
+            retained = _mapping(json.loads(str(row["result_json"])))
+            result["queue_item_id"], result["binding"] = retained["queue_item_id"], retained["binding"]
+        owner = self._read(cast(str, reconciliation["publication_owner"]))
+        if owner["cancellation_requested"] or owner["state"] in {"failed", "cancelled", "conflict"}:
+            self._fail(row, "candidate_publication_failed", conflict=True)
+            return
+        if owner["operation_id"] != operation_id and owner["state"] != "applied":
+            return
+        try:
+            admission = self.daemon.admission_for_run_uri(uri)
+        except AdmissionNotFoundError:
+            admission = None
+        if admission is not None:
+            if admission.queue_item_id != row["queue_item_id"]:
+                self._fail(row, "candidate_admission_conflict", conflict=True)
+                return
+            if admission.state.value in {"CANCELLED", "CANCELLATION_REQUESTED"} or admission.cancellation_operation_id is not None:
+                self._fail(row, "candidate_cancelled", conflict=True)
+                return
+        path = run_uri_to_path(uri)
+        if admission is None and not path.exists() and not path.is_symlink() and owner["operation_id"] == operation_id and row["state"] == "pending":
+            # Only the selected owner can publish; cancellation still fences admission.
+            self._store_result(_with_report(operation_id, "applying", None, result, report.preflight))
+            publish = True
+        else:
+            publish = False
+        if not publish:
+            if owner["operation_id"] == operation_id and row["state"] == "applying" and reconciliation["candidate"] is None:
+                # The original publisher alone may reconcile a lost publication reply.
                 publish = True
             else:
-                publish = False
-            if not publish:
-                if owner["operation_id"] == operation_id and row["state"] == "applying" and reconciliation["candidate"] is None:
-                    # The original publisher alone may reconcile a lost publication reply.
-                    publish = True
-                else:
-                    try:
-                        candidate = self.callbacks.capture_candidate(config, uri, admission)
-                    except Exception:
-                        self._fail(row, "candidate_unavailable", conflict=True)
+                try:
+                    candidate = self._capture_candidate_async(row, config, uri, admission, report)
+                    if candidate is None:
                         return
-                    if reconciliation["failed_revision"] is None and admission is not None and admission.state.value == "FAILED":
-                        if reconciliation["retry_policy"] != "one_observed_failure":
-                            self._fail(row, "candidate_failed", conflict=True)
-                            return
-                        reconciliation["failed_revision"] = admission.revision
-                        self._save_selection(operation_id, selected)
-                    if not _same_candidate(reconciliation["candidate"], candidate):
-                        reconciliation["candidate"] = candidate
-                        reconciliation["verification_generation"] = cast(int, reconciliation["verification_generation"]) + 1
-                        generation = reconciliation["verification_generation"]
-                        child_name = PREPARATION_RUN_PREFIX + hashlib.sha256(f"{operation_id}:verify:{generation}".encode()).hexdigest()
-                        with self.daemon._connection() as conn:
-                            conn.execute("UPDATE preparation_operations SET selected_json = ?, child_name = ?, child_admission_id = NULL, dispatch_claimed = 0, state = 'pending', result_json = ? WHERE operation_id = ?",
-                                         (_json(selected), child_name, _json(result), operation_id))
-                            conn.commit()
-                        return
-                    # read_report checked a committed installed verifier against this pinned input.
-                    if reconciliation["verification_generation"] == 0:
-                        raise QueueConflictError("candidate verifier is missing")
-                    result["verification_report_ref"] = report.reference.to_dict()
-                    result["binding"] = {"run_uri": uri, "publication_operation_id": reconciliation["publication_owner"]}
-                    result["prepared_run"] = candidate["prepared_run"]
-                    result["decision"] = "retry" if reconciliation["failed_revision"] is not None else "reuse" if admission is not None and admission.state.value == "SUCCEEDED" else "observe" if admission is not None else "admit_prepared"
-                    self._store_result(_with_report(operation_id, "applying", None, result, report.preflight))
-                    self._continue_run(self._read(operation_id))
+                except Exception:
+                    self._fail(row, "candidate_unavailable", conflict=True)
                     return
-        # Native publication does filesystem work outside the cycle lock. A bound
-        # cancellation suppresses subsequent admission under that same owner.
-        try:
-            prepared = self.callbacks.publish_target(config, replace(request, run_name=target_name), report)
-        except QueueConflictError:
-            self._fail(self._read(operation_id), "publication_conflict", conflict=True)
+                if reconciliation["failed_revision"] is None and admission is not None and admission.state.value == "FAILED":
+                    if reconciliation["retry_policy"] != "one_observed_failure":
+                        self._fail(row, "candidate_failed", conflict=True)
+                        return
+                    reconciliation["failed_revision"] = admission.revision
+                    self._save_selection(operation_id, selected)
+                if not _same_candidate(reconciliation["candidate"], candidate):
+                    reconciliation["candidate"] = candidate
+                    reconciliation["verification_generation"] = cast(int, reconciliation["verification_generation"]) + 1
+                    generation = reconciliation["verification_generation"]
+                    child_name = PREPARATION_RUN_PREFIX + hashlib.sha256(f"{operation_id}:verify:{generation}".encode()).hexdigest()
+                    with self.daemon._connection() as conn:
+                        conn.execute("BEGIN IMMEDIATE")
+                        current = conn.execute("SELECT result_json FROM preparation_operations WHERE operation_id = ?", (operation_id,)).fetchone()
+                        result["cancellation_operation_id"] = json.loads(current["result_json"])["cancellation_operation_id"]
+                        conn.execute("UPDATE preparation_operations SET selected_json = ?, child_name = ?, child_admission_id = NULL, dispatch_claimed = 0, state = 'pending', result_json = ? WHERE operation_id = ?",
+                                     (_json(selected), child_name, _json(result), operation_id))
+                        conn.commit()
+                    return
+                # read_report checked a committed installed verifier against this pinned input.
+                if reconciliation["verification_generation"] == 0:
+                    raise QueueConflictError("candidate verifier is missing")
+                result["verification_report_ref"] = report.reference.to_dict()
+                result["binding"] = {"run_uri": uri, "publication_operation_id": reconciliation["publication_owner"]}
+                result["prepared_run"] = candidate["prepared_run"]
+                result["decision"] = "retry" if reconciliation["failed_revision"] is not None else "reuse" if admission is not None and admission.state.value == "SUCCEEDED" else "observe" if admission is not None else "admit_prepared"
+                self._store_result(_with_report(operation_id, "applying", None, result, report.preflight))
+                self._continue_run(self._read(operation_id))
+                return
+        # Publication retains its exact identity; a cancellation accepted during
+        # IO suppresses subsequent admission in the final native transaction.
+        self._publish_async(
+            config, replace(request, run_name=target_name), report, result,
+            publication_owner=cast(str, reconciliation["publication_owner"]),
+        )
+
+    def _report_token(
+        self, row: sqlite3.Row, config: LocalDaemonConfig, admission: LocalDaemonAdmission,
+    ) -> tuple[object, ...]:
+        factory = config.coordinator_authority_factory
+        assert factory is not None
+        return (
+            self.daemon._epoch, self.daemon._scheduling_epoch,
+            row["selected_json"], row["request_json"], row["child_admission_id"],
+            admission.revision, factory(admission.run_uri).open_run(admission.run_uri).revision,
+        )
+
+    def _capture_candidate_async(
+        self, row: sqlite3.Row, config: LocalDaemonConfig, uri: str,
+        admission: LocalDaemonAdmission | None, report: PreparationReport,
+    ) -> dict[str, PlainData] | None:
+        operation_id = str(row["operation_id"])
+        factory = config.coordinator_authority_factory
+        assert factory is not None and self.callbacks is not None
+        token = (
+            *self._publication_token(row), uri,
+            None if admission is None else admission.revision,
+            factory(uri).open_run(uri).revision,
+        )
+        pending = self._candidates.get(operation_id)
+        if pending is not None and pending.future is not None:
+            if not pending.future.done():
+                return None
+            del self._candidates[operation_id]
+            if pending.token == token:
+                return pending.future.result()
+        if operation_id not in self._candidates and len(self._candidates) >= 2:
+            return None
+        child = self.daemon._admission(str(row["child_admission_id"]))
+        future = self.daemon._result_verifications.bulk.submit(
+            operation_id, "preparation_candidate_inspection",
+            self.callbacks.capture_candidate, config, uri, admission,
+        )
+        # Keep the admitted report only for this inspection operation, including
+        # capacity waits. Do not rehydrate it on every reconciliation turn.
+        self._candidates[operation_id] = _PendingCandidate(
+            token, self._report_token(row, config, child), report, future,
+        )
+        return None
+
+    def _retain_image_async(
+        self, row: sqlite3.Row, request: PrepareRunRequest, roots: Mapping[str, PlainData],
+    ) -> bool:
+        operation_id = str(row["operation_id"])
+        token = self._publication_token(row)
+        pending = self._images.get(operation_id)
+        if pending is not None:
+            previous, future = pending
+            if not future.done():
+                return False
+            del self._images[operation_id]
+            if previous == token:
+                future.result()
+                return True
+        if len(self._images) >= 2:
+            return False
+        future = self.daemon._result_verifications.bulk.submit(
+            operation_id, "preparation_image_retention", _retain_owned_image,
+            self.daemon._publication_guards, request, dict(roots), self.daemon._require_started(),
+        )
+        if future is not None:
+            self._images[operation_id] = (token, future)
+        return False
+
+    def _capture_input_async(
+        self, row: sqlite3.Row, config: LocalDaemonConfig,
+        request: PrepareRunRequest, root: Mapping[str, PlainData],
+    ) -> SharedInputReceipt | StagedInputReceipt | None:
+        operation_id = str(row["operation_id"])
+        token = self._publication_token(row)
+        pending = self._captures.get(operation_id)
+        if pending is not None:
+            previous, future = pending
+            if not future.done():
+                return None
+            del self._captures[operation_id]
+            if previous == token:
+                return future.result()
+        if len(self._captures) >= 2:
+            return None
+        future = self.daemon._result_verifications.bulk.submit(
+            operation_id, "preparation_input_capture", _capture_owned_input,
+            self.daemon._publication_guards, config, request, dict(root),
+            self.daemon._require_started(),
+        )
+        if future is not None:
+            self._captures[operation_id] = (token, future)
+        return None
+
+    def _prepare_child_async(
+        self, row: sqlite3.Row, config: LocalDaemonConfig,
+        binding: PreparationChildInput, child_name: str, options: RunOptions,
+    ) -> ManagedLocalPreparationReceipt | None:
+        operation_id = str(row["operation_id"])
+        token = (*self._publication_token(row), child_name)
+        pending = self._children.get(operation_id)
+        if pending is not None:
+            previous, future = pending
+            if not future.done():
+                return None
+            del self._children[operation_id]
+            if previous == token:
+                return future.result()
+        if len(self._children) >= 2:
+            return None
+        assert self.callbacks is not None
+        future = self.daemon._result_verifications.bulk.submit(
+            operation_id, "preparation_child_construction", _prepare_owned_child,
+            self.daemon._publication_guards, self.callbacks, config, binding,
+            child_name, options,
+        )
+        if future is not None:
+            self._children[operation_id] = (token, future)
+        return None
+
+    def _publication_token(self, row: sqlite3.Row) -> tuple[object, ...]:
+        return (
+            self.daemon._epoch, self.daemon._scheduling_epoch,
+            row["request_json"], row["selected_json"], row["child_admission_id"],
+            row["target_name"],
+        )
+
+    def _publish_async(
+        self, config: LocalDaemonConfig, request: PrepareRunRequest,
+        report: PreparationReport, result: Mapping[str, PlainData],
+        *, publication_owner: str | None,
+    ) -> None:
+        operation_id = request.operation_id
+        row = self._read(operation_id)
+        if row["state"] != "applying" or len(self._publications) >= 2:
             return
-        self._initialize_context(row, prepared.run_uri)
-        result["binding"] = {"run_uri": prepared.run_uri, "publication_operation_id": reconciliation["publication_owner"]}
-        result["prepared_run"] = prepared.to_dict()
-        result["decision"] = "new_attempt"
-        self._store_result(_with_report(operation_id, "applying", None, result, report.preflight))
-        self._continue_run(self._read(operation_id))
+        assert self.callbacks is not None
+        future = self.daemon._result_verifications.bulk.submit(
+            operation_id, "preparation_target_publication",
+            _publish_owned_target, self.daemon._publication_guards,
+            self.callbacks, config, request, report,
+        )
+        if future is not None:
+            self._publications[operation_id] = _PendingPublication(
+                self._publication_token(row), future, dict(result),
+                report.preflight, publication_owner,
+            )
+
+    def _complete_publication(self, row: sqlite3.Row) -> bool:
+        operation_id = str(row["operation_id"])
+        pending = self._publications.get(operation_id)
+        if pending is None:
+            return False
+        if not pending.future.done():
+            return True
+        with phase("preparation_publication_completion_apply", operation_id=operation_id):
+            del self._publications[operation_id]
+            if row["state"] != "applying" or pending.token != self._publication_token(row):
+                # IO may already have published. The durable applying claim owns
+                # exact replay; a stale completion cannot authorize admission.
+                return False
+            request = PrepareRunRequest.from_dict(_mapping(json.loads(str(row["request_json"]))))
+            self._configuration(_mapping(json.loads(str(row["selected_json"]))), request)
+            try:
+                prepared = pending.future.result()
+            except QueueConflictError:
+                self._fail(row, "publication_conflict", conflict=True)
+                return True
+            # Unknown errors propagate with the durable claim still applying.
+            self._initialize_context(row, prepared.run_uri)
+            result = dict(pending.result)
+            result["prepared_run"] = prepared.to_dict()
+            if pending.publication_owner is not None:
+                result["binding"] = {
+                    "run_uri": prepared.run_uri,
+                    "publication_operation_id": pending.publication_owner,
+                }
+                result["decision"] = "new_attempt"
+            self._store_result(_with_report(
+                operation_id, "applying" if row["kind"] == "run" else "applied",
+                None, result, pending.preflight,
+            ))
+            if row["kind"] == "run":
+                self._continue_run(self._read(operation_id))
+            return True
+
+    def _read_report_async(
+        self, row: sqlite3.Row, config: LocalDaemonConfig,
+        admission: LocalDaemonAdmission, request: PrepareRunRequest,
+        binding: PreparationChildInput,
+    ) -> PreparationReport | None:
+        operation_id = str(row["operation_id"])
+        assert self.callbacks is not None
+        token = self._report_token(row, config, admission)
+        candidate = self._candidates.get(operation_id)
+        if candidate is not None and candidate.report_token == token:
+            return candidate.report
+        pending = self._reports.get(operation_id)
+        if pending is not None:
+            previous, future = pending
+            if not future.done():
+                return None
+            del self._reports[operation_id]
+            if previous == token:
+                return future.result()
+        if len(self._reports) >= 2:
+            return None
+        future = self.daemon._result_verifications.bulk.submit(
+            operation_id, "preparation_report_hydration", self.callbacks.read_report,
+            config, admission, request, binding,
+        )
+        if future is not None:
+            self._reports[operation_id] = (token, future)
+        return None
 
     def _initialize_context(self, row: sqlite3.Row, run_uri: str) -> None:
         from loom.pipeline.stores.local_runs import LocalRunStore
@@ -1421,74 +1767,72 @@ class CoordinatorPreparations:
         from .local_daemon import AdmissionNotFoundError, LocalDaemonAdmissionRequest
 
         operation_id = str(row["operation_id"])
-        # Same lock as native admission: cancellation cannot acknowledge
-        # suppression while admission is in flight, including a lost reply.
-        with self.daemon._cycle_lock:
-            row = self._read(operation_id)
-            if row["state"] in _TERMINAL:
+        # Native admission rechecks suppression inside its final transaction.
+        row = self._read(operation_id)
+        if row["state"] in _TERMINAL:
+            return
+        result = _mapping(json.loads(str(row["result_json"])))
+        prepared = _mapping(result["prepared_run"])
+        try:
+            admission = self.daemon.admission_for_queue_item(
+                str(row["queue_item_id"])
+            )
+        except AdmissionNotFoundError:
+            admission = None
+        if admission is not None:
+            if admission.run_uri != prepared["run_uri"]:
+                self._fail(row, "admission_conflict", conflict=True)
                 return
-            result = _mapping(json.loads(str(row["result_json"])))
-            prepared = _mapping(result["prepared_run"])
-            try:
-                admission = self.daemon.admission_for_queue_item(
-                    str(row["queue_item_id"])
-                )
-            except AdmissionNotFoundError:
-                admission = None
-            if admission is not None:
-                if admission.run_uri != prepared["run_uri"]:
-                    self._fail(row, "admission_conflict", conflict=True)
+            selected = _mapping(json.loads(str(row["selected_json"])))
+            reconciliation = selected.get("reconciliation")
+            if isinstance(reconciliation, Mapping) and reconciliation["failed_revision"] is not None:
+                if row["cancellation_requested"]:
+                    self._fail(row, "target_cancelled", conflict=True)
                     return
-                selected = _mapping(json.loads(str(row["selected_json"])))
-                reconciliation = selected.get("reconciliation")
-                if isinstance(reconciliation, Mapping) and reconciliation["failed_revision"] is not None:
-                    if row["cancellation_requested"]:
-                        self._fail(row, "target_cancelled", conflict=True)
-                        return
-                    try:
-                        admission = self.daemon._submit(LocalDaemonAdmissionRequest(
-                            str(row["queue_item_id"]), cast(str, prepared["run_uri"]),
-                            retry_failed_revision=cast(int, reconciliation["failed_revision"])),
-                            run_operation_id=operation_id)
-                    except QueueConflictError:
-                        self._fail(row, "retry_revision_conflict", conflict=True)
-                        return
-                with self.daemon._connection() as conn:
-                    self.retain_admission(conn, operation_id, admission)
-                    conn.commit()
-                return
-            if row["cancellation_requested"]:
-                # The preparation child has succeeded before publication can
-                # complete. Its ordinary admission owner proved release.
-                self._store_result(
-                    _with_report(
-                        operation_id,
-                        "cancelled",
-                        None,
-                        result,
-                        None
-                        if result["preflight"] is None
-                        else _mapping(result["preflight"]),
-                    )
+                try:
+                    admission = self.daemon._submit(LocalDaemonAdmissionRequest(
+                        str(row["queue_item_id"]), cast(str, prepared["run_uri"]),
+                        retry_failed_revision=cast(int, reconciliation["failed_revision"])),
+                        run_operation_id=operation_id)
+                except QueueConflictError:
+                    self._fail(row, "retry_revision_conflict", conflict=True)
+                    return
+            with self.daemon._connection() as conn:
+                self.retain_admission(conn, operation_id, admission)
+                conn.commit()
+            return
+        if row["cancellation_requested"]:
+            # The preparation child has succeeded before publication can
+            # complete. Its ordinary admission owner proved release.
+            self._store_result(
+                _with_report(
+                    operation_id,
+                    "cancelled",
+                    None,
+                    result,
+                    None
+                    if result["preflight"] is None
+                    else _mapping(result["preflight"]),
                 )
-                return
-            try:
-                self.daemon._submit(
-                    LocalDaemonAdmissionRequest(
-                        str(row["queue_item_id"]), cast(str, prepared["run_uri"])
-                    ),
-                    run_operation_id=operation_id,
-                )
-            except QueueConflictError:
-                self._fail(
-                    self._read(operation_id), "admission_conflict", conflict=True
-                )
+            )
+            return
+        try:
+            self.daemon._submit(
+                LocalDaemonAdmissionRequest(
+                    str(row["queue_item_id"]), cast(str, prepared["run_uri"])
+                ),
+                run_operation_id=operation_id,
+            )
+        except QueueConflictError:
+            self._fail(
+                self._read(operation_id), "admission_conflict", conflict=True
+            )
 
     def cancel_run(self, operation_id: str, principal_id: str) -> LocalDaemonOperation:
         from .local_daemon import _operation_projection
 
         cancel_id = _cancel_id(operation_id)
-        with self.daemon._cycle_lock, self.daemon._connection() as conn:
+        with self.daemon._state_guard(), self.daemon._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 "SELECT * FROM preparation_operations WHERE operation_id = ?",
@@ -1572,7 +1916,7 @@ class CoordinatorPreparations:
             return
         for control in rows:
             self._cancel_cursor = int(control["sequence"])
-            with self.daemon._cycle_lock:
+            with self.daemon._state_guard():
                 target = self._read(str(control["target_operation_id"]))
                 target_result = _mapping(json.loads(str(target["result_json"])))
                 result = _mapping(json.loads(str(control["result_json"])))

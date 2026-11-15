@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
 import json
+from itertools import count
 import sys
 from time import monotonic
 from typing import Any, cast
@@ -36,19 +37,23 @@ def log_phases(value: dict[str, PlainData]) -> None:
 
 
 @contextmanager
-def phase(action: str, *, operation_id: str | None = None) -> Iterator[None]:
+def phase(action: str, *, operation_id: str | None = None) -> Iterator[dict[str, PlainData]]:
     """Record one boundary through the current diagnostic observer, if any.
 
-    Only action, duration, outcome and the existing operation identity are emitted.
-    Diagnostic failures never replace the operation's result or exception.
+    Callers may add bounded scalar evidence such as publication identity and
+    byte/member counts to the yielded attributes. Diagnostic failures never
+    replace the operation's result or exception.
     """
     token = _operation.set(operation_id or _operation.get())
     timing = PhaseTimings()
+    attributes: dict[str, PlainData] = {}
     try:
         with timing.measure(action):
-            yield
+            yield attributes
     finally:
         try:
+            if attributes:
+                cast(dict[str, PlainData], timing.spans[0])["attributes"] = dict(attributes)
             value = {**timing.payload(), "operation_id": _operation.get()}
             observer = _observer.get()
             if observer is not None:
@@ -103,3 +108,62 @@ class PhaseTimings:
         return {"clock": "process_monotonic", "spans": self.spans,
                 "dropped_spans": self.dropped,
                 **({"related": self.related} if self.related else {})}
+
+
+@contextmanager
+def state_lock(lock: Any) -> Iterator[None]:
+    """Measure coordinator lock wait/hold and defer all reporting until release.
+
+    Nested phase spans are collected into the same bounded diagnostic payload.
+    With reentrant locks, the outer collector also defers inner lock reporting.
+    """
+    timings = PhaseTimings()
+    observer = _observer.get()
+    try:
+        with timings.measure("coordinator_state_lock_wait"):
+            lock.acquire()
+        try:
+            with observe_phases(timings.observe), timings.measure("coordinator_state_lock_hold"):
+                yield
+        finally:
+            lock.release()
+    finally:
+        if observer is not None:
+            try:
+                observer({**timings.payload(), "operation_id": _operation.get()})
+            except Exception:
+                pass
+
+
+_operation_samples = count()
+
+
+@contextmanager
+def reported_phases(
+    action: str, *, operation_id: str | None = None, started_monotonic: float | None = None,
+) -> Iterator[PhaseTimings]:
+    """Report slow operations and one in 64 ordinary operations after completion.
+
+    Each asynchronous owner installs its own collector; it never appends to a
+    request or reconciliation collector after that parent operation has returned.
+    An earlier process-local start includes capacity wait in slow-log selection,
+    without changing the measured worker span or imposing any deadline.
+    """
+    timings = PhaseTimings()
+    start = monotonic() if started_monotonic is None else started_monotonic
+    try:
+        with observe_phases(timings.observe), phase(action, operation_id=operation_id):
+            yield timings
+    finally:
+        if monotonic() - start >= 1.0 or next(_operation_samples) % 64 == 0:
+            try:
+                log_phases({**timings.payload(), "operation_id": operation_id})
+            except Exception:
+                pass
+
+
+@contextmanager
+def request_phases() -> Iterator[None]:
+    """Report bounded HTTP dispatch diagnostics after the handler returns."""
+    with reported_phases("request_dispatch"):
+        yield

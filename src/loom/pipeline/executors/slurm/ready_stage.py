@@ -354,10 +354,12 @@ class SlurmReadyStageProfile:
     result_storage: Mapping[str, object] | None = None
     container_options: ContainerOptions | Mapping[str, object] | None = None
     apptainer_options: ApptainerExecOptions | Mapping[str, object] | None = None
+    submitted_container_policy: Mapping[str, PlainData] | None = None
     executor_name: str = "local"
     credential_policy_revision: str = "slurm-policy-1"
     account: str | None = None
     qos: str | None = None
+    time: str | None = None
     cluster: str | None = None
     available: bool = True
     poll_interval_seconds: float = 1.0
@@ -379,7 +381,7 @@ class SlurmReadyStageProfile:
             self.credential_policy_revision,
         ):
             _safe_text(value)
-        for value in (self.account, self.qos, self.cluster):
+        for value in (self.account, self.qos, self.cluster, self.time):
             if value is not None:
                 _safe_text(value)
         if (
@@ -430,8 +432,24 @@ class SlurmReadyStageProfile:
             )
         object.__setattr__(self, "container_options", container)
         object.__setattr__(self, "apptainer_options", apptainer)
+        submitted_policy = self.submitted_container_policy
+        if submitted_policy is not None:
+            if container is not None:
+                raise SlurmPlanningError(
+                    "a Slurm profile cannot combine a fixed bootstrap image and submitted images"
+                )
+            # The native deployment layer owns the policy codec. The scheduler
+            # adapter binds its plain declaration without importing queue code.
+            submitted_policy = cast(Mapping[str, PlainData], freeze_plain_data(
+                _plain_mapping(submitted_policy, "submitted container policy")
+            ))
+            object.__setattr__(self, "submitted_container_policy", submitted_policy)
         argv = tuple(self.bootstrap_argv)
-        if argv != ("loom", "slurm-bootstrap"):
+        if (len(argv) not in {2, 4}
+            or any(not isinstance(item, str) or not item or "\x00" in item for item in argv)
+            or argv[1] != "slurm-bootstrap"
+            or not (argv[0] == "loom" or (Path(argv[0]).is_absolute() and Path(argv[0]).name == "loom"))
+            or len(argv) == 4 and (argv[2] != "--config" or not Path(argv[3]).is_absolute())):
             raise SlurmPlanningError(
                 "ready-stage profile must invoke the fixed Loom bootstrap"
             )
@@ -461,6 +479,7 @@ class SlurmReadyStageProfile:
             "partition": self.partition,
             "account": self.account,
             "qos": self.qos,
+            **({"time": self.time} if self.time is not None else {}),
             "cluster": self.cluster,
             "max_outstanding": self.max_outstanding,
             "bootstrap_argv": list(argv),
@@ -494,6 +513,8 @@ class SlurmReadyStageProfile:
         }
         if storage is not None:
             payload["result_storage"] = dict(storage)
+        if submitted_policy is not None:
+            payload["submitted_container_policy"] = thaw_plain_data(submitted_policy)
         if self.poll_interval_seconds != 1.0:
             payload["poll_interval_seconds"] = float(self.poll_interval_seconds)
         if container is not None:
@@ -737,6 +758,8 @@ def map_ready_stage(
         directives.append(SlurmSbatchDirective("account", profile.account, "profile"))
     if profile.qos is not None:
         directives.append(SlurmSbatchDirective("qos", profile.qos, "profile"))
+    if profile.time is not None:
+        directives.append(SlurmSbatchDirective("time", profile.time, "profile"))
     directives.extend(resources)
     directives.append(SlurmSbatchDirective("comment", marker, "operation"))
     command = SlurmCommandArgv(launcher_argv=profile.bootstrap_argv)

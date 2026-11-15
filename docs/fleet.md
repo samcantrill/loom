@@ -1,5 +1,15 @@
 # Fleet configuration, administration and self-tests
 
+For a runtime upgrade during an existing incident hold, pass
+`fleet upgrade --maintenance-id ID --runtime-release RELEASE --apply ...`.
+The selected gate must already be closed and have no check permissions. Fleet
+retains its exact owner and intent, runs only its authorized infrastructure
+checks, restores the previous agent drain policies, and leaves admission closed
+on completion or pre-replacement abort. This option is separate from
+`--hold-admission`, which pauses for external publication. A changed gate owner
+or intent refuses continuation; opening the incident gate remains an explicit
+operator action.
+
 Install `loom[fleet]` in the operator's Python 3.12 environment. Fleet is generic:
 service software, workload profiles and site declarations have separate owners.
 `import loom` and Fleet help do not load administration, YAML or workload stacks.
@@ -547,8 +557,14 @@ The coordinator matches every outstanding remote assignment/reference against
 that cohort. A pending preparation may recover only after its child has been
 dispatched and every outstanding child assignment belongs to that successful
 cohort, before any target report or publication claim. Cancellation of that same
-preparation may remain pending; ordinary replay and cancellation still own final
-settlement. Input capture, target publication, unrelated cancellations, admission
+preparation may remain pending. Cancellation of an ordinary admission may also
+recover when every outstanding assignment belongs to the proved successful
+cohort and each has an acknowledged `contained` cancellation receipt. Ordinary
+replay and cancellation still own final settlement. Its public cancellation
+record may remain pending only when its already-applied run operation is bound
+to that same proved admission. A missing result, unacknowledged
+containment, or an unrelated cancellation refuses recovery.
+Input capture, target publication, admission
 retries and startup mutations refuse.
 
 If this eligibility check reveals that an unactivated candidate needs a further
@@ -573,6 +589,24 @@ different replay target refuse. The explicit successor repeats the normal
 qualification/replacement/replay sequence and remains resumable through the
 original operation ID; prior intents and receipts remain intact.
 
+If the already-bound agent declaration excludes a failed GPU but the coordinator
+still expects its former inventory, use `loom fleet operation repair-gpu-policy
+OPERATION --fleet FLEET --agent-id AGENT`. The active runtime successor must have
+acknowledged every replacement; admission must remain closed and settled, with
+no authorized or begun qualification checks. This action accepts only the
+agent's bound explicit NVIDIA UUID allowlist as a nonempty strict subset of its
+coordinator rule. It cannot add devices, change retained device descriptions,
+identities, credentials, permissions, or other configuration. Both the host and
+coordinator must support `quiescent-agent-gpu-policy-contraction-v1`.
+
+The host retains the before/after declaration and a conditional scheduling
+reload. The coordinator checks the exact maintenance owner, intent, revision and
+settlement again at activation. Existing source-publication receipts reconcile
+lost replies; original upgrade intents remain immutable. Continue the original
+upgrade after repair, including when it has a runtime successor. This repair
+does not change the agent's selection, mask unknown GPU occupancy, establish
+hardware health, or bypass the ordinary CPU/storage/GPU qualification checks.
+
 The operation retains that exact cohort before any stop. Native stop and locked
 replacement recheck it; a later new or changed result cannot join the operation.
 This is recovery eligibility, **not settlement**: claims and journals remain
@@ -593,7 +627,12 @@ conflicting reports are rejected. First publication, first execution commit,
 and subsequent artifact consumption retain their integrity checks. Worker
 success, durable result retention, and execution commit are distinct facts.
 
-Transfer grants retain their one-minute lifetime and exact replay identity.
+Transfer grants retain their one-minute lifetime for admitting requests and exact
+replay identity. A publication admitted before expiry may finish integrity
+verification and file synchronization after expiry; expiry alone does not undo
+that admitted operation. Before recording its result, the coordinator still
+rechecks the grant's epoch, session, assignment fence, policy and captured
+publication identity. A new or replayed request must pass the expiry check again.
 Their per-assignment history ceiling is 1,000,000 revisions, replacing the old
 64-revision lifetime ceiling that could permanently strand a long-lived result.
 The agent can traverse expired retained grants to obtain a current grant;
@@ -605,8 +644,9 @@ Initial shared publication hashing, preparation decoding and recursive file
 synchronization run outside the coordinator cycle lock and write transaction.
 One process-local guard serializes declaration and commit for each assignment.
 Acceptance rechecks current session/transfer/fence, coordinator and scheduling
-authority, the exact request, and tree/receipt binding before the bounded rename
-and journal update. Shutdown drains these operations before closing their owner.
+authority, the exact request, and tree/receipt binding before journal adoption. Filesystem publication,
+including rename and synchronization, completes outside the control transaction;
+a stale publication remains immutable and unadopted for retained replay. Shutdown drains these operations before closing their owner.
 Each first commit verifies an exact publication closure once per operation and
 still checks every logical output's primary association and checksum. No verified
 filesystem cache persists between requests or consumers.
@@ -621,7 +661,18 @@ the agent received an HTTP response. A disconnected reply logs its operation,
 assignment/session IDs, HTTP status and result state with unknown delivery; it
 does not retry the reply or diagnose a certificate fault.
 
-Existing phase diagnostics measure input-root traversal, publication inventory
+Reconciliation uses two bounded, read-only context preparation workers. A blocked
+read retains its slot until it actually finishes; cancellation can be recorded
+while preparation is still pending. Context reuse reads and hashes current bytes
+before reusing a validated context. Epoch, admission and reservation checks fence
+stale work. Offer expiry does not release a running assignment, and the normal
+30-second offer lifetime is unchanged. Expensive HTTP handlers have bounded
+capacity separate from renewal and bounded polling.
+
+Existing phase diagnostics separate state-lock wait and hold, context loading,
+provenance validation, authority observation, result verification and scheduling
+preparation/commit. Diagnostic reporting runs after state locks are released.
+They also measure input-root traversal, publication inventory
 hashing, preparation semantic decoding, synchronization and result commit.
 Publication/result HTTP handlers install the observer in their own thread.
 Input validation resolves every selected location and traverses overlapping
@@ -1427,3 +1478,22 @@ The current five-node composition closure was 1,541,464 primary bytes plus
 14,654,153 companion bytes and loaded in 0.73 s; this excludes scientific
 preflight evidence. Complete authorship and independent hydrated views remain
 covered by serializer regression checks.
+
+### Restoring a recovered GPU
+
+A recovered device must pass a UUID-bound computation in the selected workload
+image before it is restored to scheduling. Hardware visibility alone is not
+qualification. The native `CoordinatorSchedulingReload.gpu_policy_expansion`
+binding authorizes a strict GPU inventory superset under exact settled
+maintenance (owner, intent digest and gate revision), with no authorized checks.
+It preserves existing device descriptors, agent identities and all other policy
+fields. Both preflight and commit recheck maintenance. Clients negotiate
+`quiescent-agent-gpu-policy-expansion-v1` before sending the mutation.
+
+Close admission and settle work, then drain the affected agent. Publish the
+protected coordinator policy and apply the bound scheduling reload. Publish the
+agent UUID selection and use its conditional native reload to refresh the offer;
+keep admission closed until the full inventory matches and workload GPU checks
+pass. Reopening admission is a separate operator action. This does not weaken
+`repair-gpu-policy`, which remains contraction-only, or qualify device health
+by itself. Never edit native databases or manufacture session receipts.

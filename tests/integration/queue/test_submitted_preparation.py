@@ -23,17 +23,41 @@ from tests.integration.queue.test_submitted_container_agents import _fixture
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
 
-def _run(tmp_path, monkeypatch, *, stage_update=None, selected_inputs=False):
+def _run(tmp_path, monkeypatch, *, stage_update=None, selected_inputs=False, slurm=False, configuration_update=None):
     service = _service(tmp_path)
     policy, execution, _ = _fixture(tmp_path)
     if selected_inputs:
         from loom.queue.submitted_execution import SELECTED_INPUT_WORKER_CONTRACT
         execution = replace(execution, worker_contract=SELECTED_INPUT_WORKER_CONTRACT)
         policy = replace(policy, worker_contracts=(SELECTED_INPUT_WORKER_CONTRACT,))
+    if slurm:
+        from loom.queue._preparation_policy import load_preparation_policy
+        from loom.pipeline.executors.slurm.commands import FakeSlurmCommandRunner
+        from tests.integration.queue.test_slurm_ready_stage import _profile
+
+        profile = replace(_profile(FakeSlurmCommandRunner(), capability_path=tmp_path / "job-capability"), profile_id="batch",
+                          submitted_container_policy=policy.to_dict())
+        preparation_policy = load_preparation_policy({
+            "source_roots": {"projects": {"path": str(tmp_path / "projects"), "shared_snapshot_root": str(tmp_path / "captures")}},
+            "profiles": {"containers": {
+                "container_policy_id": policy.policy_id, "allowed_source_roots": ["projects"],
+                "source_modes": ["shared"], "runtime_options": {"executor": "local"},
+                "execution_route": {"kind": "slurm", "profile": "batch"},
+            }},
+        }, base=tmp_path, descriptors=(), container_capabilities=(policy.capability,), shared_roots=policy.shared_roots)
+        service = replace(service, daemon=replace(
+            service.daemon, slurm_profiles=(profile,), container_capabilities=(policy.capability,),
+            shared_roots=policy.shared_roots, preparation_policy=preparation_policy,
+        ))
     if stage_update is not None:
         path = tmp_path / "projects/pipeline.yaml"
         configuration = json.loads(path.read_text())
         configuration["pipeline"]["stages"][0].update(stage_update)
+        path.write_text(json.dumps(configuration))
+    if configuration_update is not None:
+        path = tmp_path / "projects/pipeline.yaml"
+        configuration = json.loads(path.read_text())
+        configuration_update(configuration)
         path.write_text(json.dumps(configuration))
     request = PrepareRunRequest("submitted", "target", PreparationSource("shared", "projects", ".", ("pipeline.yaml",)),
                                 "pipeline.yaml", "containers", execution=execution)
@@ -148,8 +172,6 @@ def test_report_rejects_changed_image_or_published_node_binding(tmp_path, monkey
 @pytest.mark.parametrize("stage_update, message", [
     ({"fingerprint": {SUBMITTED_EXECUTION_SCOPE: {"image": "another.sif"}}},
      "captured configuration cannot select protected preparation scope"),
-    ({"placement": {"execution_route": {"kind": "slurm", "profile": "batch"}}},
-     "submitted containers require the managed agent route"),
 ])
 def test_authored_per_stage_execution_overrides_refuse_before_publication(
     tmp_path, monkeypatch, stage_update, message,
@@ -157,3 +179,77 @@ def test_authored_per_stage_execution_overrides_refuse_before_publication(
     with pytest.raises(QueueConflictError, match=message):
         _run(tmp_path, monkeypatch, stage_update=stage_update)
     assert not list((tmp_path / "artifacts").rglob("*.json"))
+
+
+@pytest.mark.parametrize("selected_inputs", [False, True])
+def test_submitted_slurm_preparation_preserves_route_and_requires_matching_policy(tmp_path, monkeypatch, selected_inputs):
+    from loom.queue.managed_local_preparation import prepare_managed_run
+    from loom.queue.errors import QueueServiceError
+
+    route = {"kind": "slurm", "profile": "batch"}
+    service, binding, report = _run(tmp_path, monkeypatch, slurm=True, selected_inputs=selected_inputs,
+                                  stage_update={"placement": {"execution_route": route}})
+    composed, requirements, preflight = decode_preparation_report(report, expected=binding)
+    assert preflight.status.value == "PASS"
+    assert composed.resolved["pipeline"]["stages"][0]["placement"]["execution_route"] == route
+    child = prepare_child_run(service, binding, "slurm-child", runtime_options=RunOptions(executor="local"))
+    child_intent = load_managed_local_intent(service.daemon, child.run_uri)
+    assert child_intent.pipeline.stages[0].placement["execution_route"] == route
+    prepared = prepare_managed_run(service, composed, "slurm-workload", execution_requirements=requirements)
+    intent = load_managed_local_intent(service.daemon, prepared.run_uri)
+    assert intent.execution_requirements == requirements
+    wrong = replace(service, daemon=replace(service.daemon, slurm_profiles=(
+        replace(service.daemon.slurm_profiles[0], submitted_container_policy=None),
+    )))
+    with pytest.raises(QueueServiceError, match="container policy does not satisfy"):
+        prepare_managed_run(wrong, composed, "wrong-slurm-workload", execution_requirements=requirements)
+    assert not (service.daemon.run_store_root / "wrong-slurm-workload").exists()
+
+
+@pytest.mark.parametrize("selected_inputs", [False, True])
+@pytest.mark.parametrize("shape", ["pipeline", "stages", "stage", "fingerprint", "literal"])
+def test_submitted_preparation_preserves_diagnostic_interpolations(tmp_path, monkeypatch, selected_inputs, shape):
+    from loom.queue.shared_execution import SHARED_EXECUTION_SCOPE
+
+    def configure(config):
+        pipeline = config["pipeline"]
+        stage = pipeline["stages"][0]
+        stage["fingerprint"] = {"api_token": "private-fixture-value"}
+        if shape == "pipeline":
+            config["matrix"] = {"pipeline": pipeline}
+            config["pipeline"] = "${matrix.pipeline}"
+        elif shape == "stages":
+            config["matrix"] = {"stages": pipeline["stages"]}
+            pipeline["stages"] = "${matrix.stages}"
+        elif shape == "stage":
+            config["matrix"] = {"stage": stage}
+            pipeline["stages"] = ["${matrix.stage}"]
+        elif shape == "fingerprint":
+            config["secret_fingerprint"] = stage["fingerprint"]
+            stage["fingerprint"] = "${secret_fingerprint}"
+
+    _, binding, report = _run(tmp_path, monkeypatch, selected_inputs=selected_inputs,
+                              configuration_update=configure)
+    composed, requirements, preflight = decode_preparation_report(report, expected=binding)
+    assert preflight.status.value == "PASS"
+    resolved = cast(Any, composed).resolved["pipeline"]["stages"][0]
+    assert resolved["fingerprint"]["api_token"] == "private-fixture-value"
+    assert SHARED_EXECUTION_SCOPE in resolved["fingerprint"]
+    execution, capability = submitted_binding(resolved["fingerprint"][SUBMITTED_EXECUTION_SCOPE])
+    assert execution == binding.execution
+    assert capability.requirement(execution) == requirements["produce"]
+    diagnostic = report["composition"]["redacted"]
+    assert "private-fixture-value" not in json.dumps(diagnostic)
+    if shape == "pipeline":
+        assert diagnostic["pipeline"] == "${matrix.pipeline}"
+    elif shape == "stages":
+        assert diagnostic["pipeline"]["stages"] == "${matrix.stages}"
+    elif shape == "stage":
+        assert diagnostic["pipeline"]["stages"] == ["${matrix.stage}"]
+    elif shape == "fingerprint":
+        assert diagnostic["pipeline"]["stages"][0]["fingerprint"] == "${secret_fingerprint}"
+    else:
+        fingerprint = diagnostic["pipeline"]["stages"][0]["fingerprint"]
+        assert fingerprint["api_token"] == "***REDACTED***"
+        assert fingerprint[SHARED_EXECUTION_SCOPE] == resolved["fingerprint"][SHARED_EXECUTION_SCOPE]
+        assert fingerprint[SUBMITTED_EXECUTION_SCOPE] == resolved["fingerprint"][SUBMITTED_EXECUTION_SCOPE]

@@ -17,7 +17,7 @@ import traceback
 from pathlib import Path
 from typing import Any, cast
 
-from loom._preparation_report import PREPARATION_REPORT_SCHEMA_VERSION, SUBMITTED_PREPARATION_REPORT_SCHEMA_VERSION
+from loom._preparation_report import PREPARATION_REPORT_SCHEMA_VERSION, SUBMITTED_PREPARATION_REPORT_SCHEMA_VERSION, SUPPORTED_REPORT_FORMATS
 from loom.artifacts import ArtifactRef
 from loom.diagnostics.models import (
     PreflightCheckStatus,
@@ -40,6 +40,7 @@ from loom.pipeline.runtime import merge_config_run_options
 from loom.pipeline.status import StageStatus
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore
 from loom.pipeline.stores.errors import ArtifactChecksumMismatchError, ArtifactStoreError
+from loom.queue._diagnostic_snapshot import annotate_mapping, diagnostic_stages
 from loom.queue._preparation_operations import (
     PreparationInstallationMismatch,
     PreparationReport,
@@ -496,19 +497,13 @@ def _bind_local_snapshot(
                 raise QueueConflictError("local preparation requires the managed agent route")
     if scope is None:
         return
-    # Redaction may mask valid declarations (for example an output named tokens).
-    # Annotate that diagnostic view without parsing it or restoring authored data.
-    for view in (snapshot,) if redacted is None else (snapshot, redacted):
-        definition = cast(dict[str, PlainData], view["pipeline"])
-        for stage in cast(list[dict[str, PlainData]], definition["stages"]):
-            stage["placement"] = {
-                **cast(dict[str, PlainData], stage.get("placement", {})),
-                "target": scope["agent_id"],
-            }
-            stage["fingerprint"] = {
-                **cast(dict[str, PlainData], stage.get("fingerprint", {})),
-                LOCAL_PREPARATION_SCOPE: dict(scope),
-            }
+    definition = cast(dict[str, PlainData], snapshot["pipeline"])
+    for stage in cast(list[dict[str, PlainData]], definition["stages"]):
+        stage["placement"] = {**cast(dict[str, PlainData], stage.get("placement", {})), "target": scope["agent_id"]}
+        stage["fingerprint"] = {**cast(dict[str, PlainData], stage.get("fingerprint", {})), LOCAL_PREPARATION_SCOPE: dict(scope)}
+    for _, stage in diagnostic_stages(redacted):
+        annotate_mapping(stage, "placement", {"target": scope["agent_id"]})
+        annotate_mapping(stage, "fingerprint", {LOCAL_PREPARATION_SCOPE: dict(scope)})
 
 
 def _compose_worker_config(
@@ -664,7 +659,7 @@ def _decode_preparation_report(
                         | ({"candidate", "verification"} if expected.candidate is not None else set())
                         | ({"project_contracts"} if expected.project_preparation is not None else set())
                         | ({"generations"} if expected.generations is not None else set()))
-        or report["report_format"] != "loom.preparation_report.v1"
+        or report["report_format"] not in SUPPORTED_REPORT_FORMATS
         or type(report["schema_version"]) is not int
         or report["schema_version"] != _report_schema(expected)
     ):
@@ -852,7 +847,7 @@ def prepare_child_run(
         "runtime": runtime_options.to_dict(),
     }
     from loom.queue._maintenance import preparation_placement
-    placement = preparation_placement(service.daemon, binding.operation_id)
+    placement = preparation_placement(service.daemon, binding.operation_id, binding.preparation_profile)
     if placement is not None:
         child = cast(list[dict[str, PlainData]], cast(Mapping[str, PlainData], resolved["pipeline"])["stages"])[0]
         child["placement"] = dict(placement)
@@ -914,8 +909,12 @@ def _stage_execution_data(binding: PreparationChildInput, shared: object) -> dic
 
 def _require_submitted_route(stage: StageSpec) -> None:
     route = stage.placement.get("execution_route")
+    if isinstance(route, Mapping) and route.get("kind") == "slurm":
+        # The coordinator checks the named profile against the immutable
+        # submitted capability before preparing/admitting the run.
+        return
     if route is not None and route != {"kind": "managed_agent"}:
-        raise QueueConflictError("submitted containers require the managed agent route")
+        raise QueueConflictError("submitted containers require a managed agent or Slurm route")
 
 
 def _bind_submitted_snapshot(
@@ -928,15 +927,19 @@ def _bind_submitted_snapshot(
         _require_submitted_route(stage)
         if SUBMITTED_EXECUTION_SCOPE in stage.fingerprint_fields:
             raise QueueConflictError("authored configuration cannot select submitted execution")
-    for view in (snapshot,) if redacted is None else (snapshot, redacted):
-        definition = cast(dict[str, PlainData], view["pipeline"])
-        for stage in cast(list[dict[str, PlainData]], definition["stages"]):
-            stage["fingerprint"] = {
-                **cast(dict[str, PlainData], stage.get("fingerprint", {})),
-                SUBMITTED_EXECUTION_SCOPE: _stage_execution_data(
-                    binding, cast(Mapping[str, PlainData], stage.get("fingerprint", {})).get(SHARED_EXECUTION_SCOPE)
-                ),
-            }
+    definition = cast(dict[str, PlainData], snapshot["pipeline"])
+    diagnostics = dict(diagnostic_stages(redacted))
+    for index, stage in enumerate(cast(list[dict[str, PlainData]], definition["stages"])):
+        fingerprint = cast(dict[str, PlainData], stage.get("fingerprint", {}))
+        selected = _stage_execution_data(binding, fingerprint.get(SHARED_EXECUTION_SCOPE))
+        stage["fingerprint"] = {**fingerprint, SUBMITTED_EXECUTION_SCOPE: selected}
+        diagnostic = diagnostics.get(index)
+        if diagnostic is not None:
+            # Annotate only when the shared facts are already visible. Never
+            # reconstruct a redacted scope from the executable graph.
+            visible = diagnostic.get("fingerprint", {})
+            if isinstance(visible, dict) and visible.get(SHARED_EXECUTION_SCOPE) == fingerprint.get(SHARED_EXECUTION_SCOPE):
+                annotate_mapping(diagnostic, "fingerprint", {SUBMITTED_EXECUTION_SCOPE: selected})
 
 
 def _profile_requirement(profile: ResidentProfileDescriptor) -> ExecutionRequirement:

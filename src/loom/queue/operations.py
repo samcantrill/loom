@@ -15,6 +15,8 @@ from pathlib import Path
 import sqlite3
 from typing import TYPE_CHECKING, cast
 
+from ._agent_gpu_policy import CAPABILITY as GPU_POLICY_CONTRACTION_CAPABILITY
+from ._agent_gpu_policy import EXPANSION_CAPABILITY as GPU_POLICY_EXPANSION_CAPABILITY
 from loom._sqlite_inspection import inspect_sqlite_database
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.timestamps import utc_timestamp as utc_now
@@ -110,7 +112,7 @@ def _coordinator_observation(daemon: LocalDaemon) -> OperatorObservation:
             "configuration_revision": metadata.get("active_configuration_revision"),
             "configuration_fingerprint": daemon.config.active_configuration_fingerprint,
             "scheduling_fingerprint": metadata.get("scheduling_fingerprint"),
-            "capabilities": [OPERATOR_CAPABILITY, MAINTENANCE_CAPABILITY, SUBMITTED_CHECK_CAPABILITY, CONDITIONAL_CONTROL_CAPABILITY, "quiescent-profile-promotion-v2", "quiescent-source-promotion-v1", "quiescent-configuration-retirement-v1", "quiescent-coordinator-retirement-v1", "quiescent-container-policy-addition-v1", "quiescent-publication-budget-increase-v1"],
+            "capabilities": [OPERATOR_CAPABILITY, MAINTENANCE_CAPABILITY, SUBMITTED_CHECK_CAPABILITY, CONDITIONAL_CONTROL_CAPABILITY, "quiescent-profile-promotion-v2", "quiescent-source-promotion-v1", "quiescent-configuration-retirement-v1", "quiescent-coordinator-retirement-v1", "quiescent-container-policy-addition-v1", "quiescent-publication-budget-increase-v1", GPU_POLICY_CONTRACTION_CAPABILITY, GPU_POLICY_EXPANSION_CAPABILITY],
         },
     )
 
@@ -159,6 +161,15 @@ def _agent_observation(daemon: LocalDaemon, agent_id: str) -> OperatorObservatio
         **agent.to_dict(),
         "agent_root_id": session["agent_root_id"],
         "connected": connected,
+        # Legacy connected is an offer/session observation, not a network probe.
+        "connected_basis": "session_and_capacity_offer",
+        "offer_freshness": (
+            "missing" if row is None else
+            "expired" if row["expires_at"] < now else
+            "superseded" if not row["current"] or offer is None
+            or offer.availability_revision != agent.availability_revision else
+            "fresh"
+        ),
         "drained": drained,
         "control": None
         if control is None or control_value is None
@@ -327,7 +338,7 @@ def probe_upgrade_compatibility(
                 if role == "coordinator":
                     _validate_coordinator_schema(conn)
         missing = sorted(
-            set(required_capabilities) - {OPERATOR_CAPABILITY, "daemon-control-v1", MAINTENANCE_CAPABILITY, SUBMITTED_CHECK_CAPABILITY, CONDITIONAL_CONTROL_CAPABILITY, "quiescent-profile-promotion-v2", "quiescent-source-promotion-v1", "quiescent-configuration-retirement-v1", "quiescent-coordinator-retirement-v1", "quiescent-container-policy-addition-v1", "quiescent-publication-budget-increase-v1"}
+            set(required_capabilities) - {OPERATOR_CAPABILITY, "daemon-control-v1", MAINTENANCE_CAPABILITY, SUBMITTED_CHECK_CAPABILITY, CONDITIONAL_CONTROL_CAPABILITY, "quiescent-profile-promotion-v2", "quiescent-source-promotion-v1", "quiescent-configuration-retirement-v1", "quiescent-coordinator-retirement-v1", "quiescent-container-policy-addition-v1", "quiescent-publication-budget-increase-v1", GPU_POLICY_CONTRACTION_CAPABILITY, GPU_POLICY_EXPANSION_CAPABILITY}
         )
         reason = (
             "unsupported_capability"
@@ -347,7 +358,7 @@ def probe_upgrade_compatibility(
                 "target_storage_version": target,
                 "compatible": supported and not missing,
                 "protocol_version": "1",
-                "capabilities": ["daemon-control-v1", OPERATOR_CAPABILITY, MAINTENANCE_CAPABILITY, SUBMITTED_CHECK_CAPABILITY, CONDITIONAL_CONTROL_CAPABILITY, "quiescent-profile-promotion-v2", "quiescent-source-promotion-v1", "quiescent-configuration-retirement-v1", "quiescent-coordinator-retirement-v1", "quiescent-container-policy-addition-v1", "quiescent-publication-budget-increase-v1"],
+                "capabilities": ["daemon-control-v1", OPERATOR_CAPABILITY, MAINTENANCE_CAPABILITY, SUBMITTED_CHECK_CAPABILITY, CONDITIONAL_CONTROL_CAPABILITY, "quiescent-profile-promotion-v2", "quiescent-source-promotion-v1", "quiescent-configuration-retirement-v1", "quiescent-coordinator-retirement-v1", "quiescent-container-policy-addition-v1", "quiescent-publication-budget-increase-v1", GPU_POLICY_CONTRACTION_CAPABILITY, GPU_POLICY_EXPANSION_CAPABILITY],
                 "missing_capabilities": cast(list[PlainData], missing),
                 "profile_constraints": "unchanged_bindings_require_separate_qualification",
             },

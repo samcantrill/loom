@@ -8,7 +8,7 @@ existing explicit local-owner policy.
 
 The client negotiates `operator-observations-v1`. A peer missing that capability
 returns `unsupported_capability` and the missing capability name; there is no
-SQL fallback. Existing client methods and their response shapes are unchanged.
+SQL fallback. Existing client methods and observation envelopes remain compatible.
 
 - `observe_status()` exposes coordinator ID/epoch, accepted configuration revision
   and fingerprint, scheduling fingerprint/epoch, capabilities and native health.
@@ -18,7 +18,12 @@ SQL fallback. Existing client methods and their response shapes are unchanged.
   drain state, profile identities, offer revision, remaining resources and reasons.
   A connected agent can have CPU capacity while GPU capacity is externally occupied.
   Connectivity is the coordinator's current-epoch, unexpired offer evidence; it
-  does not prove host process ownership. Drain withdrawal does not imply disconnect.
+  does not prove host process ownership or transport liveness. The compatible
+  `connected` boolean carries `connected_basis: session_and_capacity_offer`.
+  `offer_freshness` distinguishes `missing`, `expired`, `superseded` (withdrawn or
+  changed availability revision), and `fresh`. An expired offer can follow an
+  agent admission hold while transport remains operational; it is not evidence
+  of a network failure. Drain withdrawal does not imply disconnect.
   A pending or rejected resume preserves the preceding drain state; it clears
   only after the agent acknowledges an applied resume.
 - `observe_assignment(assignment_id)` joins exactly one coordinator assignment
