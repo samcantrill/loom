@@ -436,3 +436,34 @@ def test_recovery_preview_inventory_does_not_read_payloads(tmp_path, monkeypatch
     assert sum(row["size_bytes"] for row in receipt["members"]) == len(b"completepartial")
     assert {row["path"] for row in receipt["members"]} == {"checkpoints/completed", "partial"}
     assert publication_path_is_retained(tree)
+
+
+def test_retention_preparation_has_no_receipt_writes_and_commit_is_exact(tmp_path):
+    workspace, profile, _ = _workspace(tmp_path)
+    _write(workspace)
+    row = {"provider_release_proof_json": "positive-exact-proof", "fence": "fence-1"}
+    with _retention_database(tmp_path / "retention.sqlite") as conn:
+        prepared = recovery.prepare_retention(
+            conn, row, workspace.request(), profile.shared_roots, agent_id="agent-1",
+        )
+        assert prepared is not None
+        assert conn.execute("SELECT COUNT(*) FROM agent_receipts").fetchone()[0] == 0
+        recovery.commit_retention(conn, prepared)
+        recovery.commit_retention(conn, prepared)
+        assert conn.execute("SELECT COUNT(*) FROM agent_receipts").fetchone()[0] == 1
+        with pytest.raises(QueueConflictError, match="outcome replay conflicts"):
+            recovery.commit_retention(conn, replace(prepared, digest="conflicting"))
+
+
+def test_committed_retention_replay_validates_receipt_without_resealing(tmp_path, monkeypatch):
+    workspace, profile, _ = _workspace(tmp_path)
+    _write(workspace)
+    row = {"provider_release_proof_json": "positive-exact-proof", "fence": "fence-1"}
+    database = tmp_path / "retention.sqlite"
+    with _retention_database(database) as conn:
+        recovery.retain_released(conn, row, workspace.request(), profile.shared_roots, agent_id="agent-1")
+    monkeypatch.setattr(recovery, "seal", lambda *args, **kwargs: pytest.fail("replayed committed seal"))
+    with _retention_database(database) as conn:
+        recovery.retain_released(conn, row, workspace.request(), profile.shared_roots, agent_id="agent-1")
+        with pytest.raises(QueueConflictError, match="binding conflicts"):
+            recovery.retain_released(conn, {**row, "fence": "other"}, workspace.request(), profile.shared_roots, agent_id="agent-1")

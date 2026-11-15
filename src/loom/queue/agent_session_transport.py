@@ -2427,7 +2427,11 @@ class LocalDaemonAgentHttpClient:
             "cursor": self._slurm_cursor,
         }
         yield from drive_operation(self, self._slurm_agent.replay_pending, binding)
-        response = (yield from _steps(self._call, "slurm_work", {**binding, "evidence": None}))
+        from ._slurm_result_transport import SlurmRequestUncertain
+        try:
+            response = (yield from _steps(self._call, "slurm_work", {**binding, "evidence": None}))
+        except SlurmRequestUncertain:
+            return
         cursor = response.get("next_cursor")
         if cursor is not None and not isinstance(cursor, str):
             raise QueueServiceError("SLURM task cursor is invalid")
@@ -3048,6 +3052,9 @@ class LocalDaemonAgentHttpClient:
                 )
                 break
             except _IndeterminateAgentProtocolError as error:
+                if operation == "slurm_work":
+                    from ._slurm_result_transport import SlurmRequestUncertain
+                    raise SlurmRequestUncertain(str(error)) from error
                 if not self._service_progress:
                     raise
                 connection = None
@@ -3253,6 +3260,10 @@ def _read_agent_reply(
     return freeze_plain_data(result, path="agent HTTP response")
 
 
+class _SlurmWorkCapacityError(QueueServiceError):
+    """Request was not dispatched; retry its exact retained identity later."""
+
+
 class _MutualTlsHttpServer(ThreadingHTTPServer):
     daemon_threads = True
 
@@ -3271,12 +3282,18 @@ class _MutualTlsHttpServer(ThreadingHTTPServer):
         self.client_slots = BoundedSemaphore(8)
         self.client_wait_slots = BoundedSemaphore(6)
         self.agent_work_wait_slots = BoundedSemaphore(32)
+        self.agent_slurm_work_slots = BoundedSemaphore(8)
         self.agent_control_wait_slots = BoundedSemaphore(32)
         super().__init__(address, _Handler)
 
     def acquire_agent_wait(self, role: str, operation: str) -> BoundedSemaphore | None:
-        if role != "agent" or operation not in {"poll", "control_wait"}:
+        if role != "agent" or operation not in {"poll", "control_wait", "slurm_work"}:
             return None
+        if operation == "slurm_work":
+            slot = self.agent_slurm_work_slots
+            if not slot.acquire(blocking=False):
+                raise _SlurmWorkCapacityError("SLURM request capacity is exhausted")
+            return slot
         slot = self.agent_work_wait_slots if operation == "poll" else self.agent_control_wait_slots
         if not slot.acquire(blocking=False):
             raise QueueServiceError("agent wait capacity is exhausted")
@@ -3483,6 +3500,8 @@ class _Handler(BaseHTTPRequestHandler):
                 self._reply_query_result(result)
             else:
                 self._reply(200, {"ok": True, "result": result})
+        except _SlurmWorkCapacityError:
+            self._reply(503, {"ok": False, "error": "slurm_work_capacity"})
         except _RunInspectionHttpError as exc:
             self._reply_query_failure(exc.code, exc.status)
         except AgentPollActiveError:

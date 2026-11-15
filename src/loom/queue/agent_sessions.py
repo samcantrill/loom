@@ -75,6 +75,7 @@ PROTOCOL_VERSION = "13"
 CONTROL_WAIT_CAPABILITY = "agent-control-wait-v1"
 _MAX_RECEIVED_CONTROLS = 1025
 SLURM_SUBMISSION_CAPABILITY = "slurm-agent-jobs-v1"
+SLURM_PENDING_EFFECTS_CAPABILITY = "slurm-pending-effects-v1"
 _MAX_IDENTIFIER = 160
 _MAX_COLLECTION = 32
 _MAX_OFFER_TTL_SECONDS = 3600
@@ -2004,6 +2005,12 @@ class AgentSessionService:
     ) -> Mapping[str, PlainData]:
         from .local_daemon_execution import _SlurmRetentionRequired, _SlurmPublicationRequired
 
+        with self._daemon._cycle_lock:
+            negotiated = self._slurm_work_locked(
+                session_id, coordinator_epoch, evidence, cursor, _pending_only=True,
+            )
+            if negotiated is not None:
+                return negotiated
         publication = evidence is not None and evidence.get("result_operation") == "commit"
         release = evidence is not None and evidence.get("provider_released") is True
         if publication or release:
@@ -2043,8 +2050,8 @@ class AgentSessionService:
     def _slurm_work_locked(
         self, session_id: str, coordinator_epoch: str,
         evidence: Mapping[str, PlainData] | None, cursor: str | None,
-        **retention,
-    ) -> Mapping[str, PlainData]:
+        _pending_only: bool = False, **retention,
+    ) -> Mapping[str, PlainData] | None:
         rule, revision = self._authorize("poll")
         with self._daemon._connection() as conn:
             session = _session_from_row(
@@ -2062,6 +2069,12 @@ class AgentSessionService:
         execution = self._daemon._execution
         if execution is None:
             raise QueueServiceError("SLURM assignment owner is unavailable")
+        if _pending_only:
+            if SLURM_PENDING_EFFECTS_CAPABILITY not in session.capabilities:
+                return None
+            if evidence is not None:
+                return execution.acknowledge_slurm_pending(session.agent_id, session.agent_root_id, evidence)
+            return execution.slurm_agent_task_page(session.agent_id, session.agent_root_id, cursor=cursor)
         if evidence is not None:
             return execution.acknowledge_slurm_agent(
                 session.agent_id, session.agent_root_id, evidence, **retention,
@@ -2083,6 +2096,8 @@ class AgentSessionService:
                     SUBMITTED_CONTAINER_CAPABILITY,
                     "shared-assignment-reference-v1",
                     SLURM_SUBMISSION_CAPABILITY,
+                    *([SLURM_PENDING_EFFECTS_CAPABILITY] if self._daemon._execution is not None
+                      and self._daemon._execution.slurm_assignments.schema_version >= 5 else []),
                     REMOTE_EXECUTION_CAPABILITY,
                     REGULAR_FILE_RELAY_CAPABILITY,
                 ],

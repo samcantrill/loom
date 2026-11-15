@@ -73,3 +73,37 @@ def test_blocked_scheduler_preserves_control_renewal_and_acknowledgement_owner(a
     else:
         assert failures == []
         assert results == [{"acknowledged": 1}]
+
+
+def test_slurm_request_capacity_does_not_consume_control_or_poll_slots():
+    from threading import BoundedSemaphore
+    from loom.queue.agent_session_transport import _MutualTlsHttpServer, _SlurmWorkCapacityError
+
+    owner = SimpleNamespace(
+        agent_slurm_work_slots=BoundedSemaphore(2),
+        agent_control_wait_slots=BoundedSemaphore(1),
+        agent_work_wait_slots=BoundedSemaphore(1),
+    )
+    acquire = lambda operation: _MutualTlsHttpServer.acquire_agent_wait(owner, "agent", operation)
+    slots = [acquire("slurm_work"), acquire("slurm_work")]
+    with pytest.raises(_SlurmWorkCapacityError):
+        acquire("slurm_work")
+    controls = acquire("control_wait")
+    polls = acquire("poll")
+    controls.release()
+    polls.release()
+    slots.pop().release()
+    slots.append(acquire("slurm_work"))
+    for slot in slots:
+        slot.release()
+
+
+def test_slurm_capacity_reply_is_retryable_without_acknowledgement():
+    from io import BytesIO
+    from loom.queue.agent_session_transport import _read_agent_reply, _IndeterminateAgentProtocolError
+
+    response = BytesIO(b'{"ok":false,"error":"slurm_work_capacity"}')
+    response.status = 503
+    connection = SimpleNamespace(request=lambda *args, **kwargs: None, getresponse=lambda: response)
+    with pytest.raises(_IndeterminateAgentProtocolError):
+        _read_agent_reply(connection, "slurm_work", b'{}', "agent")

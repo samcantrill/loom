@@ -50,6 +50,18 @@ def validate_identity(value: object, expected: Mapping[str, PlainData]) -> None:
         raise QueueConflictError("SLURM retained result identity conflicts")
 
 
+class SlurmRequestUncertain(Exception):
+    """One exchange ended without a known outcome; exact replay is required."""
+
+
+class SlurmEffectPending(Exception):
+    """An accepted effect must yield its assignment without retiring evidence."""
+
+    def __init__(self, retry_after_seconds: float):
+        super().__init__("SLURM effect remains pending")
+        self.retry_after_seconds = retry_after_seconds
+
+
 class SharedSlurmResult:
     """Read/publish only the location bound by this protected profile/assignment."""
 
@@ -341,6 +353,21 @@ class SharedSlurmResult:
                 "result_operation": "commit",
             }
         )
+        disposition = response.get("disposition", "applied")
+        if disposition not in {"pending", "applied"}:
+            raise QueueConflictError("SLURM result disposition conflicts")
+        if disposition == "pending":
+            validate_identity(response.get("identity"), identity)
+            delay = response.get("retry_after_seconds")
+            if (
+                response.get("assignment_id") != self.assignment_id
+                or response.get("result_operation") != "commit"
+                or response.get("acknowledged") is True
+                or type(delay) not in (int, float)
+                or not 0 < delay <= 60
+            ):
+                raise QueueConflictError("SLURM pending result acknowledgement conflicts")
+            raise SlurmEffectPending(delay)
         if response.get("acknowledged") is not True:
             raise QueueConflictError(
                 "SLURM result final acknowledgement is unavailable"

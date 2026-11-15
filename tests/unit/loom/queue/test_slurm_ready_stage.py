@@ -70,7 +70,7 @@ def test_large_retained_delivery_is_validated_without_caching(tmp_path, monkeypa
     assert module._retained_delivery(encoded) == delivery
 
 
-@pytest.mark.parametrize("version", [3, 4])
+@pytest.mark.parametrize("version", [3, 4, 5])
 def test_assignment_and_projection_share_one_version_on_initialize_and_reopen(tmp_path, version):
     from loom._sqlite_policy import SQLitePolicy
     from loom.queue._agent_slurm import SlurmSubmissionProjection
@@ -394,3 +394,24 @@ def test_native_preparation_framing_uses_existing_slurm_chunk_identity(tmp_path)
     wrapper.write_bytes(data[:-1])
     with pytest.raises(QueueConflictError, match="unavailable"):
         workspace.output_chunk(transfer_id, 0)
+
+
+def test_pending_effect_upgrade_keeps_existing_gpu_reservations(tmp_path):
+    from tests.unit.loom.queue.test_slurm_admission import ReservationFixture
+    from loom.queue.slurm_ready_stage import _upgrade_pending_effects_schema
+
+    fixture = ReservationFixture(tmp_path)
+    assignment, arguments = fixture.candidate("pending-upgrade", 2)
+    fixture.store.reserve(assignment, **arguments)
+    with sqlite3.connect(fixture.path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        _upgrade_pending_effects_schema(conn)
+        assert conn.execute(
+            "SELECT requested_gpu_count, publication_requested_at, compute_released_at "
+            "FROM slurm_stage_assignments WHERE assignment_id=?", (assignment.assignment_id,),
+        ).fetchone() == (2, None, None)
+    reopened = SQLiteSlurmStageAssignments(
+        fixture.path, tmp_path / "transfer", schema_version=5,
+    )
+    assert reopened.reserved_gpu_count() == 2
+    assert reopened.read(assignment.assignment_id).state == "reserved"

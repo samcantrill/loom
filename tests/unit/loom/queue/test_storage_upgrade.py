@@ -47,13 +47,21 @@ def _profile():
     }
 
 
-def _cohort(root, *, kind="slurm", explicit_wal=False, legacy=False, custom_provider=False):
+def _cohort(root, *, kind="slurm", explicit_wal=False, legacy=False, custom_provider=False,
+            pending_effects=False):
     c, a = root / "c", root / "a"
     c.mkdir(mode=0o700)
     a.mkdir(mode=0o700)
     source_c = _coordinator_config(c)
     payload = json.loads(source_c.read_text())
     payload["local_agent"] = None
+    if pending_effects:
+        payload["slurm_admission"] = {"max_reserved_gpus": 8}
+        payload["agent_policy"]["agents"] = [{
+            "credential_id": "credential", "principal_id": "principal",
+            "agent_id": "submit-agent", "pools": ["default"],
+            "capabilities": ["slurm-agent-jobs-v1"], "gpu_devices": [],
+        }]
     (c / "authority").mkdir(mode=0o700)
     payload["authority"]["state_root"] = "authority"
     if explicit_wal:
@@ -78,6 +86,8 @@ def _cohort(root, *, kind="slurm", explicit_wal=False, legacy=False, custom_prov
         agent_payload["resident_profiles"] = []
     if kind != "resident":
         agent_payload["slurm_profiles"] = [_profile()]
+    if pending_effects:
+        agent_payload["registration"]["capabilities"] = ["slurm-agent-jobs-v1"]
     if explicit_wal:
         agent_payload["storage"] = payload["storage"]
     _write_protected(source_a, agent_payload)
@@ -90,6 +100,9 @@ def _cohort(root, *, kind="slurm", explicit_wal=False, legacy=False, custom_prov
         conn.commit()
     payload["storage"] = _rollback_storage()
     payload["slurm_admission"] = {"max_reserved_gpus": 8}
+    if pending_effects:
+        payload["agent_policy"]["agents"][0]["capabilities"].append("slurm-pending-effects-v1")
+        agent_payload["registration"]["capabilities"].append("slurm-pending-effects-v1")
     target_c = _write_protected(c / "target.yaml", payload)
     agent_payload["storage"] = _rollback_storage()
     target_a = _write_protected(a / "target.yaml", agent_payload)
@@ -111,6 +124,46 @@ def _cohort(root, *, kind="slurm", explicit_wal=False, legacy=False, custom_prov
 
 def _snapshot(root):
     return {str(path): (path.read_bytes(), path.stat().st_mtime_ns) for path in root.rglob("*") if path.is_file()}
+
+
+def test_pending_effects_supported_upgrade_and_restore(root):
+    request, old_c, _, new_c, _ = _cohort(root, pending_effects=True)
+    assert old_c.daemon.slurm_schema_version == 4
+    assert new_c.daemon.slurm_schema_version == 5
+    assert storage_upgrade(request)["state"] == "eligible"
+    assert storage_upgrade(request, action="apply")["state"] == "ready"
+    _validate_deployment_binding(new_c.daemon)
+    from loom.queue.slurm_ready_stage import SQLiteSlurmStageAssignments
+    store = SQLiteSlurmStageAssignments(
+        new_c.daemon.execution_database, root / "transfers", schema_version=5,
+        sqlite_policy=new_c.daemon.sqlite_policy, _allow_initialize=False,
+    )
+    store._open_existing()
+    assert store.pending_storage_page() == ()
+    SlurmSubmissionProjection(
+        new_c.daemon.execution_database, schema_version=5,
+        sqlite_policy=new_c.daemon.sqlite_policy,
+    )._open_existing()
+    assert storage_upgrade(request, action="restore")["state"] == "restored"
+    _validate_deployment_binding(old_c.daemon)
+    with closing(sqlite3.connect(old_c.daemon.execution_database)) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone() == (4,)
+
+
+@pytest.mark.parametrize("role", ["coordinator", "outbound-agent"])
+def test_pending_effects_upgrade_does_not_allow_unrelated_capability(root, role):
+    request, *_ = _cohort(root, pending_effects=True)
+    declaration = next(item for item in json.loads(request.read_text())["roles"] if item["role"] == role)
+    target = Path(declaration["target_config"])
+    payload = json.loads(target.read_text())
+    registration = (payload["agent_policy"]["agents"][0] if role == "coordinator"
+                    else payload["registration"])
+    registration["capabilities"].append("unrelated-capability")
+    _write_protected(target, payload)
+    before = _snapshot(root)
+    with pytest.raises(QueueError, match="other declarations must match"):
+        storage_upgrade(request)
+    assert _snapshot(root) == before
 
 
 def _retained_run(root, coordinator, *, annotated=True, name="run"):

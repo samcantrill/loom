@@ -22,12 +22,14 @@ from .shared_execution import SHARED_EXECUTION_CAPABILITY, attributes as shared_
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
 import sqlite3
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from threading import Event, Lock
+from time import monotonic
 from types import MappingProxyType
 from typing import Any, cast
 
@@ -192,6 +194,9 @@ from .slurm_ready_stage import (
 )
 
 
+_SLURM_STORAGE_LIMIT = 32
+
+
 class _SlurmPublicationRequired(Exception):
     """Shared-output verification awaiting fresh authority before acceptance."""
 
@@ -234,20 +239,27 @@ class _SlurmRetentionRequired(Exception):
         self.evidence = cast(Mapping[str, PlainData], freeze_plain_data(evidence, path="SLURM release evidence"))
         self.roots = cast(Mapping[str, PlainData], freeze_plain_data(execution.config.coordinator_shared_roots, path="SLURM release roots"))
         self.completed = False
+        self.prepared = None
 
     def retain(self) -> None:
-        from ._shared_recovery import retain_released
+        from ._shared_recovery import prepare_retention
 
         from ._phase_timing import phase
         with phase("slurm.recovery_retention", operation_id=self.record.assignment.operation_id), self.execution._daemon_owner()._connection() as conn:
-            retain_released(
+            self.prepared = prepare_retention(
                 conn,
                 {"provider_release_proof_json": self.evidence["release"], "fence": self.record.fence},
                 self.record.delivery, self.roots,
                 agent_id=self.record.assignment.agent_id,
             )
-            conn.commit()
         self.completed = True
+
+    def commit(self) -> None:
+        from ._shared_recovery import commit_retention
+
+        with self.execution._daemon_owner()._connection() as conn:
+            commit_retention(conn, self.prepared)
+            conn.commit()
 
     def retain_guarded(self) -> None:
         with self.execution._daemon_owner()._publication_guards.hold(self.record.assignment.assignment_id):
@@ -259,6 +271,7 @@ class _SlurmRetentionRequired(Exception):
             self.completed and self.execution is execution
             and self.record.assignment == record.assignment
             and self.record.fence == record.fence
+            and self.record.bootstrap_incarnation == record.bootstrap_incarnation
             and self.record.delivery == record.delivery
             and self.evidence == freeze_plain_data(evidence, path="SLURM release evidence")
             and self.roots == freeze_plain_data(execution.config.coordinator_shared_roots, path="SLURM release roots")
@@ -1360,6 +1373,13 @@ class LocalDaemonExecution:
         )
         self._local_assignment_futures: dict[str, Future[None]] = {}
         self._local_preparing: dict[str, str] = {}
+        self._slurm_storage_cursor = None
+        self._slurm_storage_progress = {}
+        self._slurm_storage_progress_lock = Lock()
+        self._slurm_storage_errors: dict[str, str] = {}
+        self._slurm_storage_failures: dict[str, Exception] = {}
+        self._slurm_storage_failed_publications: set[str] = set()
+        self._slurm_storage_retry_at: dict[str, float] = {}
         self._slurm_storage_futures: dict[str, tuple[Future[None], _SlurmRetentionRequired | _SlurmPublicationRequired]] = {}
         self._pending_local_assignment_reconciliation: dict[str, str] = {}
         self._local_assignment_retries: dict[str, _RecoveryRetry] = {}
@@ -1465,6 +1485,7 @@ class LocalDaemonExecution:
     def begin_cycle(self) -> None:
         """Observe completed exact assignment work before scheduling again."""
 
+        self.reconcile_slurm_storage()
         self._input_validations.retain(
             lambda work_id: (
                 (record := self.stage_work_store.find_stage_work(work_id)) is not None
@@ -2045,6 +2066,11 @@ class LocalDaemonExecution:
             "cancel_requested": self._attempt_cancel_requested(record.assignment.run_uri, record.assignment.attempt_id),
             "job_id": record.job_id,
             "cluster": record.cluster,
+            "compute_release_requested": (
+                record.publication_requested_at is not None
+                and record.publication_completed_at is None
+                and record.compute_released_at is None
+            ),
             "release_requested": record.state
             in {"terminal", "logical_released", "rejected"},
             "containment_request": {
@@ -2151,6 +2177,10 @@ class LocalDaemonExecution:
             )
             return {"received": received}
         if operation == "commit":
+            if record.publication_cancelled_at is not None:
+                raise QueueConflictError("SLURM publication was superseded by cancellation")
+            if record.publication_completed_at is not None:
+                return {"acknowledged": True}
             self._slurm_finalize_record(record, record.fence, _defer_publication=_defer_publication, _publication=_publication)
             return {"acknowledged": True}
         raise QueueServiceError("SLURM result operation is invalid")
@@ -2232,6 +2262,7 @@ class LocalDaemonExecution:
                     )
                 if (
                     record.state not in {"terminal", "logical_released", "released"}
+                    and not (record.publication_requested_at is not None and record.report is not None)
                     and not self._attempt_cancel_requested(assignment.run_uri, assignment.attempt_id)
                 ):
                     raise QueueConflictError("SLURM live assignment cannot release")
@@ -2279,6 +2310,16 @@ class LocalDaemonExecution:
         release = evidence.get("release")
         if isinstance(release, Mapping):
             record = self.slurm_assignments.read(assignment.assignment_id)
+            if (record.publication_requested_at is not None and record.publication_completed_at is None and record.publication_cancelled_at is None
+                and not self._attempt_cancel_requested(assignment.run_uri, assignment.attempt_id)):
+                # Containment has been checked above; publication still owns the
+                # scientific result, so physical release must not synthesize it.
+                if evidence.get("provider_released") is True:
+                    self.slurm_assignments.release_compute(assignment.assignment_id, sequence, evidence)
+                    return {"assignment_id": assignment.assignment_id, "sequence": sequence,
+                            "disposition": "pending", "reason": "output_publication",
+                            "retry_after_seconds": 5}
+                return {"sequence": sequence, "cancel_requested": False}
             if submission.state is ReadyStageState.REJECTED and release == {
                 "kind": "definite_rejection"
             }:
@@ -2330,22 +2371,44 @@ class LocalDaemonExecution:
                     expected=record.state,
                     next_state="logical_released",
                 )
+            if (record.publication_requested_at is not None and record.publication_completed_at is None
+                and self._attempt_cancel_requested(assignment.run_uri, assignment.attempt_id)):
+                self.slurm_assignments.cancel_publication(assignment.assignment_id, record.fence)
+                record = self.slurm_assignments.read(assignment.assignment_id)
             if evidence.get("provider_released") is True:
                 from ._shared_recovery import WIRE
 
-                # Keep the GPU reservation until exact containment AND durable
-                # retention exist. The HTTP owner may perform the slow seal
-                # outside its global lock, then replay every ownership check.
+                # Accepted exact containment/revocation owns unfinished retention.
+                # Final release and cleanup still wait for the retained outcome.
+                if self.slurm_assignments.schema_version >= 5:
+                    self.slurm_assignments.release_compute(assignment.assignment_id, sequence, evidence)
+                if record.publication_cancelled_at is not None:
+                    pending = self._slurm_storage_futures.get(assignment.assignment_id)
+                    if pending is not None and isinstance(pending[1], _SlurmPublicationRequired):
+                        if not pending[0].done():
+                            return {"assignment_id": assignment.assignment_id, "sequence": sequence,
+                                    "disposition": "pending", "reason": "assignment_storage_busy",
+                                    "retry_after_seconds": 5}
+                        # Cancellation supersedes the result, not the running IO.
+                        # Settle it before release even when no recovery tree exists.
+                        del self._slurm_storage_futures[assignment.assignment_id]
+                    if assignment.assignment_id in self._slurm_storage_failed_publications:
+                        self._slurm_storage_failed_publications.discard(assignment.assignment_id)
+                        self._slurm_storage_failures.pop(assignment.assignment_id, None)
+                        self._slurm_storage_errors.pop(assignment.assignment_id, None)
+                        self._slurm_storage_retry_at.pop(assignment.assignment_id, None)
                 if (record.fence is not None and record.state != "released"
                     and WIRE in record.delivery.worker_metadata):
                     if _retained is not None:
                         if not _retained.validates(self, record, evidence):
                             raise QueueConflictError("SLURM recovery retention context changed")
+                        _retained.commit()
                     else:
                         retention = _SlurmRetentionRequired(self, record, evidence)
                         if _defer_retention:
                             raise retention
                         retention.retain()
+                        retention.commit()
                 self.slurm_assignments.release(assignment.assignment_id)
                 with self.config.connect_database(self.config.control_database) as conn:
                     conn.execute(
@@ -2356,6 +2419,176 @@ class LocalDaemonExecution:
             "sequence": sequence,
             "cancel_requested": self._attempt_cancel_requested(assignment.run_uri, assignment.attempt_id),
         }
+
+    def _perform_slurm_storage(self, continuation):
+        key = continuation.record.assignment.assignment_id
+        started = datetime.now(timezone.utc).isoformat()
+        with self._slurm_storage_progress_lock:
+            self._slurm_storage_progress[key] = {
+                "started_at": started, "last_progress_at": started,
+                "phase": "verifying_publication" if isinstance(continuation, _SlurmPublicationRequired) else "sealing_recovery",
+            }
+        try:
+            if isinstance(continuation, _SlurmPublicationRequired):
+                continuation.prepare_guarded()
+            else:
+                continuation.retain_guarded()
+        except Exception:
+            with self._slurm_storage_progress_lock:
+                self._slurm_storage_progress[key] = {**self._slurm_storage_progress[key],
+                    "last_progress_at": datetime.now(timezone.utc).isoformat(), "phase": "failed"}
+            raise
+        with self._slurm_storage_progress_lock:
+            self._slurm_storage_progress[key] = {**self._slurm_storage_progress[key],
+                "last_progress_at": datetime.now(timezone.utc).isoformat(), "phase": "prepared"}
+
+    def slurm_storage_observations(self, run_uri):
+        """Explain pending effects; process-local worker facts are not receipts."""
+        observations = []
+        for record in self.slurm_assignments.list_run_unreleased(run_uri):
+            key = record.assignment.assignment_id
+            pending = self._slurm_storage_futures.get(key)
+            failure = self._slurm_storage_errors.get(key)
+            _, evidence = self.slurm_assignments.agent_evidence(key)
+            retention = evidence is not None and evidence.get("provider_released") is True
+            publication = record.publication_requested_at is not None and record.publication_completed_at is None and record.publication_cancelled_at is None
+            state = ("retry_wait" if failure and self._slurm_storage_retry_at.get(key, 0) > monotonic()
+                     else "failed" if failure else "commit_pending" if pending and pending[0].done()
+                     else "running" if pending and pending[0].running() else "queued" if pending
+                     else "pending" if retention or publication else "idle")
+            with self._slurm_storage_progress_lock:
+                progress = dict(self._slurm_storage_progress.get(key, {}))
+            observations.append({
+                "assignment_id": key,
+                "compute": {"state": "released" if record.compute_released_at else "reserved",
+                            "released_at": record.compute_released_at},
+                "publication": {"state": "cancelled" if record.publication_cancelled_at else "applied" if record.publication_completed_at else
+                                state if record.publication_requested_at else "not_requested",
+                                "accepted_at": record.publication_requested_at,
+                                "completed_at": record.publication_completed_at},
+                "storage": {"state": state,
+                            "kind": ("publication" if isinstance(pending[1], _SlurmPublicationRequired)
+                                     else "recovery_retention") if pending else None,
+                            "worker_state_consistency": "process_local",
+                            "progress": progress or None,
+                            "accepted_evidence_at": record.agent_evidence_accepted_at,
+                            "retry_after_seconds": max(0, self._slurm_storage_retry_at.get(key, 0) - monotonic()),
+                            "last_error": failure},
+            })
+        return {"availability": "available", "assignments": observations}
+
+    def reconcile_slurm_storage(self):
+        """Advance durable effects even without a connected submit agent."""
+        records = self.slurm_assignments.pending_storage_page(after=self._slurm_storage_cursor)
+        for record in records:
+            assignment = record.assignment
+            self._slurm_storage_cursor = assignment.assignment_id
+            try:
+                _, retained_evidence = self.slurm_assignments.agent_evidence(assignment.assignment_id)
+                cancelled_release = (
+                    retained_evidence is not None
+                    and isinstance(retained_evidence.get("release"), Mapping)
+                    and self._attempt_cancel_requested(assignment.run_uri, assignment.attempt_id)
+                )
+                if cancelled_release:
+                    # Recover a crash after authority cancellation but before the
+                    # publication supersession marker, without an agent poll.
+                    evidence = retained_evidence
+                elif record.publication_requested_at is not None and record.publication_completed_at is None and record.publication_cancelled_at is None:
+                    evidence = {"assignment_id": assignment.assignment_id,
+                                "identity": self.slurm_result_identity(record), "result_operation": "commit"}
+                else:
+                    evidence = retained_evidence
+                    if evidence is None:
+                        continue
+                self.acknowledge_slurm_pending(assignment.agent_id, assignment.agent_root_id, evidence)
+            except Exception as error:
+                self._slurm_storage_errors[assignment.assignment_id] = str(error)
+        if len(records) < 32:
+            self._slurm_storage_cursor = None
+
+    def acknowledge_slurm_pending(self, agent_id, agent_root_id, evidence):
+        """Accept exact evidence and poll bounded storage without waiting on IO.
+
+        Called under the cycle lock by authenticated sessions or reconciliation
+        of previously retained evidence. Futures never own durable intent.
+        """
+        if self.slurm_assignments.schema_version < 5:
+            raise QueueServiceError("pending SLURM effects require execution schema 5")
+        publication = evidence.get("result_operation") == "commit"
+        if not publication and evidence.get("provider_released") is not True:
+            return self.acknowledge_slurm_agent(agent_id, agent_root_id, evidence)
+        assignment_id = (evidence.get("assignment_id") if publication
+                         else evidence.get("assignment", {}).get("assignment_id"))
+        pending = self._slurm_storage_futures.get(assignment_id)
+        completed = None
+        if pending is not None and pending[0].done():
+            try:
+                pending[0].result()
+            except Exception as error:
+                if isinstance(pending[1], _SlurmPublicationRequired):
+                    self._slurm_storage_failed_publications.add(assignment_id)
+                self._slurm_storage_failures[assignment_id] = error
+                self._slurm_storage_errors[assignment_id] = str(error)
+                self._slurm_storage_retry_at[assignment_id] = monotonic() + 5
+                del self._slurm_storage_futures[assignment_id]
+                pending = None
+            else:
+                completed = pending[1]
+        try:
+            reply = self.acknowledge_slurm_agent(
+                agent_id, agent_root_id, evidence,
+                _defer_retention=True, _defer_publication=True,
+                _retained=completed if isinstance(completed, _SlurmRetentionRequired) else None,
+                _publication=completed if isinstance(completed, _SlurmPublicationRequired) else None,
+            )
+        except (_SlurmRetentionRequired, _SlurmPublicationRequired) as continuation:
+            pending = self._slurm_storage_futures.get(assignment_id)
+            if pending is not None:
+                previous = pending[1]
+                if type(previous) is not type(continuation):
+                    identity = ({"identity": evidence["identity"], "result_operation": "commit"}
+                                if publication else {"sequence": evidence["sequence"]})
+                    return {"assignment_id": assignment_id, **identity, "disposition": "pending",
+                            "reason": "assignment_storage_busy", "retry_after_seconds": 5}
+                if (previous.record.assignment != continuation.record.assignment
+                    or previous.record.fence != continuation.record.fence
+                    or previous.record.delivery != continuation.record.delivery
+                    or previous.roots != continuation.roots
+                    or getattr(previous, "evidence", None) != getattr(continuation, "evidence", None)
+                    or previous.record.report != continuation.record.report):
+                    raise QueueConflictError("SLURM pending storage context changed")
+            reason = "output_publication" if publication else "recovery_retention"
+            if pending is None:
+                failure = self._slurm_storage_failures.get(assignment_id)
+                if failure is not None and not isinstance(failure, OSError):
+                    raise QueueConflictError(f"SLURM storage effect failed: {failure}") from failure
+                if monotonic() < self._slurm_storage_retry_at.get(assignment_id, 0):
+                    reason = "storage_retry"
+                elif len(self._slurm_storage_futures) >= _SLURM_STORAGE_LIMIT:
+                    reason = "storage_capacity"
+                else:
+                    future = self._slurm_storage_workers.submit(
+                        self._perform_slurm_storage, continuation,
+                    )
+                    self._slurm_storage_futures[assignment_id] = (future, continuation)
+                    future.add_done_callback(lambda _: self._daemon_owner()._wake.set())
+            identity = ({"identity": evidence["identity"], "result_operation": "commit"}
+                        if publication else {"sequence": evidence["sequence"]})
+            return {"assignment_id": assignment_id, **identity, "disposition": "pending",
+                    "reason": reason, "retry_after_seconds": 5}
+        if reply.get("disposition") == "pending":
+            return reply
+        if completed is not None:
+            self._slurm_storage_futures.pop(assignment_id, None)
+        with self._slurm_storage_progress_lock:
+            self._slurm_storage_progress.pop(assignment_id, None)
+        self._slurm_storage_failures.pop(assignment_id, None)
+        self._slurm_storage_retry_at.pop(assignment_id, None)
+        self._slurm_storage_errors.pop(assignment_id, None)
+        current = self.slurm_assignments.read(assignment_id)
+        return {**reply, "assignment_id": assignment_id, "disposition": "applied",
+                "result_committed": current.publication_completed_at is not None}
 
     def _drive_local_slurm(self, record: SlurmStageRecord) -> None:
         if self._slurm_agent is None or record.assignment.agent_id != self.agent_id:
@@ -2386,7 +2619,7 @@ class LocalDaemonExecution:
             # Embedded Slurm has no HTTP request thread to yield the cycle lock.
             # Its durable unacknowledged receipt is retried after bounded worker
             # verification/retention completes; no acknowledgement is released early.
-            if identity not in self._slurm_storage_futures and len(self._slurm_storage_futures) < 32:
+            if identity not in self._slurm_storage_futures and len(self._slurm_storage_futures) < _SLURM_STORAGE_LIMIT:
                 future = self._slurm_storage_workers.submit(
                     continuation.prepare_guarded if isinstance(continuation, _SlurmPublicationRequired)
                     else continuation.retain_guarded,
@@ -5977,6 +6210,8 @@ class LocalDaemonExecution:
                     raise QueueConflictError("SLURM publication context changed during verification")
                 publication = _publication.prepared
             elif _defer_publication:
+                if self.slurm_assignments.schema_version >= 5:
+                    self.slurm_assignments.request_publication(assignment_id, incarnation, fence)
                 raise _SlurmPublicationRequired(self, record, fence)
             else:
                 publication = prepare_publication(
@@ -6076,6 +6311,7 @@ class LocalDaemonExecution:
             ),
         )
         self.slurm_assignments.mark_terminal(assignment_id)
+        self.slurm_assignments.complete_publication(assignment_id, incarnation, fence)
 
     def slurm_release(
         self,

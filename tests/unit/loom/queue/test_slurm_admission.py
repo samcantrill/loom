@@ -235,3 +235,30 @@ def test_agent_task_page_filters_owner_before_limit_and_survives_restart(tmp_pat
     assert [row.assignment.assignment_id for row in remaining] == ["task-4"]
     assert fixture.store.agent_page("selected", "wrong-root") == ()
     assert fixture.reopen().agent_page("selected", selected_root, after="task-2", limit=2) == remaining
+
+
+def test_compute_release_preserves_assignment_and_storage_ownership(tmp_path):
+    from loom.queue.errors import QueueConflictError
+
+    fixture = ReservationFixture(tmp_path, schema_version=5)
+    assignment, arguments = fixture.candidate("retaining", 2)
+    fixture.store.reserve(assignment, **arguments)
+    evidence = {"provider_released": True, "release": {"kind": "definite_rejection"}}
+    fixture.store.accept_agent_evidence(assignment.assignment_id, 1, evidence)
+    with pytest.raises(QueueConflictError):
+        fixture.store.release_compute(assignment.assignment_id, 1, evidence)
+    fixture.store.advance(assignment.assignment_id, expected="reserved", next_state="bound")
+    fixture.store.advance(assignment.assignment_id, expected="bound", next_state="submitting")
+    fixture.store.advance(assignment.assignment_id, expected="submitting", next_state="rejected")
+    fixture.store.advance(assignment.assignment_id, expected="rejected", next_state="logical_released")
+    fixture.store.release_compute(assignment.assignment_id, 1, evidence)
+    reopened = fixture.reopen()
+    assert reopened.reserved_gpu_count() == 0
+    record = reopened.read(assignment.assignment_id)
+    assert record.state == "logical_released"
+    assert record.compute_released_at is not None
+    assert reopened.agent_evidence(assignment.assignment_id) == (1, evidence)
+    reopened.release_compute(assignment.assignment_id, 1, evidence)
+    assert reopened.read(assignment.assignment_id).compute_released_at == record.compute_released_at
+    with pytest.raises(QueueConflictError):
+        reopened.release_compute(assignment.assignment_id, 2, evidence)

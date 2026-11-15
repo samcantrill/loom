@@ -43,8 +43,9 @@ pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
     (False, True, False, False), (False, False, True, False),
     (False, False, True, True),
 ])
+@pytest.mark.parametrize("outbound,cancel_publication", [(False, False), (True, False), (True, True)])
 def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
-    tmp_path, monkeypatch, preparation, recovery, cancel_inspection, peer_inspection
+    tmp_path, monkeypatch, preparation, recovery, cancel_inspection, peer_inspection, outbound, cancel_publication
 ):
     monkeypatch.setenv("PYTHONPATH", os.pathsep.join((
         str(Path(loom.__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[3]),
@@ -140,6 +141,7 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                     replace(
                         service.daemon.slurm_profiles[0],
                         containment_helper=_positive_containment_helper(),
+                        max_outstanding=None if outbound else service.daemon.slurm_profiles[0].max_outstanding,
                     ),
                 ),
             ),
@@ -156,7 +158,7 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                 service, composed, "workload", execution_requirements=requirements
             )
         peer = None
-        if peer_inspection:
+        if peer_inspection or (outbound and recovery):
             peer = prepare_managed_run(
                 service, composed, "independent-workload", execution_requirements=requirements
             )
@@ -173,6 +175,9 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
         # Hold the first coordinator inspection only. Worker launch checks
         # remain real, and the restarted coordinator must inspect afresh.
         validation_started, validation_release = Event(), Event()
+        retention_started, retention_release = Event(), Event()
+        publication_started, publication_release = Event(), Event()
+        peer_submitted = False
         if not preparation and not recovery:
             from loom.queue import _input_validation
             inspect_inputs = _input_validation.require_bindings
@@ -184,8 +189,13 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                 return inspect_inputs(*args, **kwargs)
 
             monkeypatch.setattr(_input_validation, "require_bindings", slow_inputs)
+        from tests.support.outbound_slurm import OutboundSlurmCoordinator
+        if outbound:
+            config = OutboundSlurmCoordinator.configure(config)
+        def make_daemon(config):
+            return OutboundSlurmCoordinator(config, tmp_path / 'outbound') if outbound else LocalDaemon(config)
         LocalDaemon.initialize(config)
-        daemon = LocalDaemon(config)
+        daemon = make_daemon(config)
         daemon.start()
         try:
             client = daemon.client_view(
@@ -230,7 +240,7 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                     # Stop cannot wait on the blocked inspection. Its eventual
                     # result cannot authorize work in the new coordinator.
                     daemon.stop()
-                    daemon = LocalDaemon(config)
+                    daemon = make_daemon(config)
                     daemon.start()
                 finally:
                     validation_release.set()
@@ -249,10 +259,10 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                 operation = daemon.operation(record.assignment.operation_id)
                 assert operation.result["job_id"] == record.job_id
                 assert (
-                    len([call for call in profile.runner.calls if call[0] == "sbatch"]) == attempt
+                    len([call for call in profile.runner.calls if call[0] == "sbatch"]) == attempt + int(peer_submitted)
                 )
                 daemon.stop()
-                daemon = LocalDaemon(config)
+                daemon = make_daemon(config)
                 daemon.start()
                 principal = LocalDaemonPrincipal(
                     profile.bootstrap_principal_id,
@@ -314,6 +324,9 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
 
                     def interrupted_seal(*args, **kwargs):
                         nonlocal interrupted
+                        if outbound and not interrupted:
+                            retention_started.set()
+                            assert retention_release.wait(30)
                         reference = original_seal(*args, **kwargs)
                         if not interrupted:
                             interrupted = True
@@ -324,12 +337,92 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                 retained = workspace.retain_result(result)
                 if not failed:
                     assert retained.output_kind == "shared"
-                view.declare_report(delivery.assignment_id, "compute-1", fence, retained)
-                view.commit_result(delivery.assignment_id, "compute-1", fence)
-                # A lost commit reply may replay after restart, without launching twice.
-                daemon.stop()
-                daemon = LocalDaemon(config)
-                daemon.start()
+                if outbound and (recovery or cancel_publication) and not failed:
+                    from loom.queue import _shared_publication
+                    from loom.queue._slurm_result_transport import SharedSlurmResult
+                    prepare_publication = _shared_publication.prepare_publication
+                    def held_publication(*args, **kwargs):
+                        publication_started.set()
+                        assert publication_release.wait(30)
+                        return prepare_publication(*args, **kwargs)
+                    monkeypatch.setattr(_shared_publication, "prepare_publication", held_publication)
+                    identity = daemon._execution.slurm_result_identity(
+                        daemon._execution.slurm_assignments.read(delivery.assignment_id),
+                    )
+                    transport = SharedSlurmResult(profile.result_storage, delivery.assignment_id, compute=True)
+                    from loom.queue import local_daemon_execution as execution_module
+                    # Force durable acceptance without an in-memory worker. A
+                    # new coordinator must rediscover this publication intent.
+                    with monkeypatch.context() as capacity:
+                        capacity.setattr(execution_module, "_SLURM_STORAGE_LIMIT", 0)
+                        transport.publish(identity, retained, lambda *args: pytest.fail("shared payload relay"))
+                        deadline = monotonic() + 10
+                        while monotonic() < deadline:
+                            queued = daemon._execution.slurm_assignments.read(delivery.assignment_id)
+                            if queued.publication_requested_at is not None:
+                                break
+                            sleep(0.02)
+                        assert queued.publication_requested_at is not None
+                        assert queued.publication_completed_at is None
+                        assert not daemon._execution._slurm_storage_futures
+                        assert not publication_started.is_set()
+                        daemon.stop()
+                    daemon = make_daemon(config)
+                    daemon.start()
+                    assert publication_started.wait(10)
+                    deadline = monotonic() + 15
+                    while monotonic() < deadline:
+                        pending_record = daemon._execution.slurm_assignments.read(delivery.assignment_id)
+                        if pending_record.compute_released_at is not None:
+                            break
+                        sleep(0.02)
+                    assert pending_record.compute_released_at is not None
+                    assert pending_record.publication_completed_at is None
+                    assert pending_record.state != "released"
+                    assert transport.path.exists()
+                    if cancel_publication:
+                        cancel_client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+                        cancel_client.cancel("submitted")
+                        deadline = monotonic() + 15
+                        while monotonic() < deadline:
+                            cancelled = daemon._execution.slurm_assignments.read(delivery.assignment_id)
+                            if cancelled.publication_cancelled_at is not None:
+                                break
+                            sleep(0.02)
+                        assert cancelled.publication_cancelled_at is not None
+                        assert cancelled.publication_completed_at is None
+                        assert cancelled.state != "released"
+                        assert transport.path.exists()
+                        assert delivery.assignment_id in daemon._execution._slurm_storage_futures
+                        publication_release.set()
+                        daemon.stop()
+                        daemon = make_daemon(config)
+                        daemon.start()
+                        cancel_client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+                        assert cancel_client.wait("submitted", timeout_seconds=15).state.value == "CANCELLED"
+                        deadline = monotonic() + 10
+                        while monotonic() < deadline and transport.path.exists():
+                            sleep(0.02)
+                        assert not transport.path.exists()
+                        assert daemon._execution.slurm_assignments.read(delivery.assignment_id).publication_completed_at is None
+                        assert not daemon._execution._slurm_storage_futures
+                        return
+                    publication_release.set()
+                    deadline = monotonic() + 15
+                    while monotonic() < deadline:
+                        if daemon._execution.slurm_assignments.read(delivery.assignment_id).publication_completed_at is not None:
+                            break
+                        sleep(0.02)
+                    assert daemon._execution.slurm_assignments.read(delivery.assignment_id).publication_completed_at is not None
+                else:
+                    view.declare_report(delivery.assignment_id, "compute-1", fence, retained)
+                    view.commit_result(delivery.assignment_id, "compute-1", fence)
+                # Hold retention on the live outbound owner for peer progress;
+                # the subsequent successful attempt still exercises commit restart.
+                if not (outbound and failed):
+                    daemon.stop()
+                    daemon = make_daemon(config)
+                    daemon.start()
                 view = daemon.slurm_bootstrap_view(principal)
                 assert not view.start_permit(delivery.assignment_id, "compute-1", fence)
                 view.commit_result(delivery.assignment_id, "compute-1", fence)
@@ -337,7 +430,39 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                 client = daemon.client_view(
                     LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
                 )
-                settled = client.wait("submitted", timeout_seconds=10)
+                if outbound and failed:
+                    assert retention_started.wait(10), "outbound retention did not start"
+                    assert peer is not None
+                    original_squeue = profile.runner.squeue
+                    def running_peer(*, job_ids=()):
+                        response = original_squeue(job_ids=job_ids)
+                        return replace(response, stdout="".join(f"{job}|RUNNING|None\n" for job in job_ids))
+                    monkeypatch.setattr(profile.runner, "squeue", running_peer)
+                    client.submit(LocalDaemonAdmissionRequest("retention-peer", peer.run_uri))
+                    peer_submitted = True
+                    deadline = monotonic() + 15
+                    peer_record = None
+                    while monotonic() < deadline:
+                        candidates = daemon._execution.slurm_assignments.list_run_unreleased(peer.run_uri)
+                        if candidates and candidates[0].job_id:
+                            peer_record = candidates[0]
+                            observed = daemon._execution.slurm_submissions.read(peer_record.assignment.operation_id)
+                            if observed.scheduler_source == "squeue":
+                                break
+                        sleep(0.02)
+                    assert peer_record is not None and observed.scheduler_source == "squeue"
+                    client.cancel("retention-peer")
+                    deadline = monotonic() + 10
+                    while monotonic() < deadline:
+                        if any(call[0] == "scancel" and peer_record.job_id in call[1] for call in profile.runner.calls):
+                            break
+                        sleep(0.02)
+                    assert any(call[0] == "scancel" and peer_record.job_id in call[1] for call in profile.runner.calls)
+                    assert not retention_release.is_set()
+                    assert daemon._execution.slurm_assignments.read(delivery.assignment_id).state != "released"
+                    assert len(daemon._execution._slurm_storage_futures) <= 2
+                    retention_release.set()
+                settled = client.wait("submitted", timeout_seconds=15)
                 assert settled.state.value == ("FAILED" if failed else "SUCCEEDED")
                 if recovery:
                     deadline = monotonic() + 10
@@ -370,7 +495,7 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                         first_reference = reference
                         # Retry must acquire the retained seal after reopening the same owners.
                         daemon.stop()
-                        daemon = LocalDaemon(config)
+                        daemon = make_daemon(config)
                         daemon.start()
                         client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
                         client.submit(LocalDaemonAdmissionRequest(
@@ -399,7 +524,7 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                         # Scope the test's operator to the dynamically allocated
                         # native agent. Protected-config reload has separate coverage.
                         with monkeypatch.context() as patch:
-                            patch.setattr(daemon, "_agent_policy", AgentPolicyConfig(principals=(
+                            patch.setattr(daemon.daemon if outbound else daemon, "_agent_policy", AgentPolicyConfig(principals=(
                                 TransportPrincipalPolicy(
                                     "operator-credential", "operator", "operator", actions=("cleanup_recovery",),
                                     agent_ids=(record.assignment.agent_id,),
@@ -410,7 +535,9 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                         assert not tree.exists()
                         assert _shared_recovery.resolve(first_reference, config.coordinator_shared_roots).is_dir()
                 assert (
-                    len([call for call in profile.runner.calls if call[0] == "sbatch"]) == attempt
+                    len([call for call in profile.runner.calls if call[0] == "sbatch"]) == attempt + int(peer_submitted)
                 )
         finally:
+            retention_release.set()
+            publication_release.set()
             daemon.stop()

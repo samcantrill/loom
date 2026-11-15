@@ -727,6 +727,9 @@ class LocalDaemonConfig:
     @property
     def slurm_schema_version(self) -> int:
         """Select the shared execution schema before any co-owner initializes it."""
+        from .agent_sessions import SLURM_PENDING_EFFECTS_CAPABILITY
+        if any(SLURM_PENDING_EFFECTS_CAPABILITY in rule.capabilities for rule in self.agent_policy.agents):
+            return 5
         return 4 if self.slurm_admission is not None or any(
             profile.job_private_file_provider.delivery_kind == "user_private_file_v1"
             for profile in self.slurm_profiles
@@ -2350,6 +2353,8 @@ class LocalDaemon:
         owners = dict(views[0])
         if self._execution is not None:
             owners["input_validation"] = self._execution._input_validations.observations(admission.run_uri)
+            with self._cycle_lock:
+                owners["slurm_storage"] = self._execution.slurm_storage_observations(admission.run_uri)
         # Extend the existing loose owner detail, not the strict inspection wire.
         assignment = owners.get("assignment")
         if isinstance(assignment, Mapping):

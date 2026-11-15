@@ -200,3 +200,48 @@ def test_existing_aggregate_artifact_bound_at_and_over_limit(tmp_path):
     )
     with pytest.raises(QueueServiceError):
         replace(report, outputs=(*report.outputs, extra))
+
+
+def test_pending_commit_preserves_transport_until_exact_replay(tmp_path):
+    owner, identity, report, chunk = _fixture(tmp_path)
+    owner.publish(identity, report, chunk)
+    pending = {
+        "assignment_id": owner.assignment_id,
+        "identity": freeze_plain_data(identity),
+        "result_operation": "commit",
+        "disposition": "pending",
+        "retry_after_seconds": 5,
+    }
+    with pytest.raises(transport_module.SlurmEffectPending):
+        owner.finish_delivery(identity, lambda _: pending)
+    assert owner.read(identity)[0] == report
+    reopened = SharedSlurmResult(owner.storage, owner.assignment_id)
+    assert reopened.finish_delivery(identity, lambda _: {
+        "disposition": "applied", "acknowledged": True,
+    })
+    assert not owner.path.exists()
+
+
+@pytest.mark.parametrize("change", [
+    {"assignment_id": "different"},
+    {"identity": {}},
+    {"result_operation": "report"},
+    {"acknowledged": True},
+    {"retry_after_seconds": True},
+    {"retry_after_seconds": float("nan")},
+    {"disposition": "unknown"},
+])
+def test_conflicting_pending_commit_never_cleans_transport(tmp_path, change):
+    owner, identity, report, chunk = _fixture(tmp_path)
+    owner.publish(identity, report, chunk)
+    response = {
+        "assignment_id": owner.assignment_id,
+        "identity": identity,
+        "result_operation": "commit",
+        "disposition": "pending",
+        "retry_after_seconds": 5,
+        **change,
+    }
+    with pytest.raises(QueueConflictError):
+        owner.finish_delivery(identity, lambda _: response)
+    assert owner.read(identity)[0] == report

@@ -723,7 +723,8 @@ def test_failed_pending_ack_does_not_hide_later_receipts_or_submit_again(tmp_pat
     assert not any(call[0] == "sbatch" for call in runner.calls)
 
 
-def test_pending_ack_replay_visits_at_most_32_receipts_per_iteration(tmp_path):
+def test_pending_ack_replay_visits_at_most_32_receipts_per_iteration(tmp_path, monkeypatch):
+    monkeypatch.setattr("loom.queue._agent_slurm.monotonic", lambda: 1.0)
     runner = FakeSlurmCommandRunner()
     profile = _profile(runner, tmp_path, retention_bytes=8 * 1024**3)
     AgentSlurmJobs.initialize(tmp_path)
@@ -748,3 +749,133 @@ def test_pending_ack_replay_visits_at_most_32_receipts_per_iteration(tmp_path):
     AgentSlurmJobs(tmp_path, (profile,)).replay_pending(acknowledge)
     assert len(received) == 35
     assert not any(call[0] == "sbatch" for call in runner.calls)
+
+
+def test_pending_evidence_preserves_outbox_and_allows_peer_submission(tmp_path):
+    runner = FakeSlurmCommandRunner()
+    profile = _profile(runner, tmp_path, retention_bytes=256 * 1024 * 1024)
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,))
+    pending = []
+
+    def acknowledge(value):
+        if (value['assignment']['assignment_id'] == 'assignment-1'
+                and value['submission']['state'] == 'accepted'):
+            pending.append(value)
+            return {'sequence': value['sequence'], 'assignment_id': 'assignment-1',
+                    'disposition': 'pending', 'retry_after_seconds': 5}
+        return {'sequence': value['sequence'], 'cancel_requested': False}
+
+    agent.step(_task(profile), acknowledge)
+    with agent._connect() as conn:
+        assert conn.execute('SELECT acknowledged FROM agent_slurm_operations WHERE operation_id=?',
+                            ('operation-1',)).fetchone() == (0,)
+    agent.replay_pending(acknowledge)
+    agent.step(_task(profile, key='2'), acknowledge)
+    assert len(pending) == 1
+    assert len([call for call in runner.calls if call[0] == 'sbatch']) == 2
+    reopened = AgentSlurmJobs(tmp_path, (profile,))
+    receipts = []
+
+    def applied(value):
+        receipts.append(value)
+        return {'sequence': value['sequence'], 'disposition': 'applied', 'cancel_requested': False}
+
+    reopened.replay_pending(applied)
+    assert receipts == pending
+    with reopened._connect() as conn:
+        assert conn.execute('SELECT acknowledged FROM agent_slurm_operations WHERE operation_id=?',
+                            ('operation-1',)).fetchone() == (1,)
+    assert len([call for call in runner.calls if call[0] == 'sbatch']) == 2
+
+
+def test_uncertain_receipt_preserves_outbox_without_blocking_peer(tmp_path):
+    from loom.queue._slurm_result_transport import SlurmRequestUncertain
+
+    runner = FakeSlurmCommandRunner()
+    profile = _profile(runner, tmp_path, retention_bytes=256 * 1024 * 1024)
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,))
+    retained = []
+
+    def acknowledge(value):
+        if value["assignment"]["assignment_id"] == "assignment-1":
+            retained.append(value)
+            raise SlurmRequestUncertain("response lost")
+        return {"sequence": value["sequence"], "cancel_requested": False}
+
+    agent.step(_task(profile), acknowledge)
+    agent.step(_task(profile, key="2"), acknowledge)
+    assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
+    with agent._connect() as conn:
+        assert conn.execute(
+            "SELECT acknowledged FROM agent_slurm_operations WHERE operation_id='operation-1'",
+        ).fetchone() == (0,)
+    reopened = AgentSlurmJobs(tmp_path, (profile,))
+    replayed = []
+
+    def applied(value):
+        replayed.append(value)
+        return {"sequence": value["sequence"], "cancel_requested": False}
+
+    reopened.replay_pending(applied)
+    assert replayed == retained
+    assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
+
+
+def test_pending_release_confirms_ownership_only_for_current_session(tmp_path):
+    profile = _profile(FakeSlurmCommandRunner(), tmp_path)
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,))
+    binding = ("session-1", "epoch-1")
+    agent.begin_reconciliation(binding)
+
+    def acknowledge(value):
+        if value["provider_released"]:
+            return {
+                "assignment_id": value["assignment"]["assignment_id"],
+                "sequence": value["sequence"], "disposition": "pending",
+                "reason": "recovery_retention", "retry_after_seconds": 5,
+            }
+        return {"sequence": value["sequence"], "cancel_requested": True}
+
+    agent.step(_task(profile), acknowledge)
+    assert not agent.has_unreconciled_work(binding)
+    assert agent.has_retained_work()
+    assert agent.has_started_or_unacknowledged_work()
+    with agent._connect() as conn:
+        assert conn.execute("SELECT acknowledged, released FROM agent_slurm_operations").fetchone() == (0, 0)
+    next_binding = ("session-2", "epoch-2")
+    agent.begin_reconciliation(next_binding)
+    assert agent.has_unreconciled_work(next_binding)
+    agent.replay_pending(acknowledge)
+    assert not agent.has_unreconciled_work(next_binding)
+    reopened = AgentSlurmJobs(tmp_path, (profile,))
+    reopened.begin_reconciliation(next_binding)
+    assert reopened.has_unreconciled_work(next_binding)
+    reopened.replay_pending(acknowledge)
+    assert not reopened.has_unreconciled_work(next_binding)
+    assert reopened.has_retained_work()
+    assert not any(call[0] == "sbatch" for call in profile.runner.calls)
+
+
+def test_replay_time_budget_preserves_cursor_and_visits_later_receipts(tmp_path, monkeypatch):
+    profile = _profile(FakeSlurmCommandRunner(), tmp_path, retention_bytes=1024**3)
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,))
+    def unavailable(value):
+        raise OSError("retained request")
+    for key in ("1", "2", "3"):
+        with pytest.raises(OSError):
+            agent.step(_task(profile, key=key), unavailable, allow_submission=False)
+    clock = [10.0]
+    monkeypatch.setattr("loom.queue._agent_slurm.monotonic", lambda: clock[0])
+    received = []
+    def acknowledge(value):
+        received.append(value["assignment"]["operation_id"])
+        clock[0] += 2
+        return {"sequence": value["sequence"], "cancel_requested": False}
+    for count in (1, 2, 3):
+        agent.replay_pending(acknowledge)
+        assert len(received) == count
+    assert received == ["operation-1", "operation-2", "operation-3"]

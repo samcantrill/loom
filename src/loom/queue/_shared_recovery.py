@@ -8,7 +8,7 @@ no-link containment, checksums, and cleanup protection.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 import hashlib
 import json
 import os
@@ -511,9 +511,45 @@ def seal(
     return ref
 
 
+@dataclass(frozen=True)
+class PreparedRetention:
+    assignment_id: str
+    operation: str
+    digest: str
+    result_json: str
+
+
+def commit_retention(conn: Any, prepared: PreparedRetention | None) -> None:
+    """Persist a prepared outcome after its caller revalidates ownership."""
+    if prepared is None:
+        return
+    previous = conn.execute(
+        "SELECT operation, digest, result_json FROM agent_receipts "
+        "WHERE principal_id=? AND idempotency_key=? "
+        "AND operation IN ('seal', 'seal_unavailable')",
+        (_PRINCIPAL, prepared.assignment_id),
+    ).fetchall()
+    expected = (prepared.operation, prepared.digest, prepared.result_json)
+    if any(tuple(row) != expected for row in previous):
+        raise QueueConflictError("recovery retention outcome replay conflicts")
+    conn.execute(
+        "INSERT OR IGNORE INTO agent_receipts "
+        "(principal_id, operation, idempotency_key, digest, result_json) VALUES (?, ?, ?, ?, ?)",
+        (_PRINCIPAL, prepared.operation, prepared.assignment_id,
+         prepared.digest, prepared.result_json),
+    )
+
+
 def retain_released(
     conn: Any, row: Any, request: Any, roots: Mapping[str, PlainData], *, agent_id: str
 ) -> None:
+    commit_retention(conn, prepare_retention(conn, row, request, roots, agent_id=agent_id))
+
+
+def prepare_retention(
+    conn: Any, row: Any, request: Any, roots: Mapping[str, PlainData], *, agent_id: str
+) -> PreparedRetention | None:
+    """Perform storage IO without writing lifecycle or receipt state."""
     if row["provider_release_proof_json"] is None:
         raise QueueConflictError(
             "recovery seal requires positive provider release proof"
@@ -535,7 +571,7 @@ def retain_released(
         (_PRINCIPAL, request.assignment_id),
     ).fetchone()
     sealed = conn.execute(
-        "SELECT result_json FROM agent_receipts WHERE principal_id = ? "
+        "SELECT digest, result_json FROM agent_receipts WHERE principal_id = ? "
         "AND operation = 'seal' AND idempotency_key = ?",
         (_PRINCIPAL, request.assignment_id),
     ).fetchone()
@@ -555,6 +591,22 @@ def retain_released(
         ):
             raise QueueConflictError("recovery unavailable outcome replay conflicts")
         return
+    if sealed is not None:
+        ref = _reference(json.loads(sealed["result_json"]))
+        if (ref["identity"] != owner or ref["root_id"] != value["root_id"]
+            or ref["budgets"] != limits or ref["receipt_digest"] != sealed["digest"]):
+            raise QueueConflictError("recovery retained receipt binding conflicts")
+        root = cast(Mapping[str, PlainData], roots[value["root_id"]])
+        final = contained(Path(str(root["host_path"])), ref["tree"])
+        manifest = receipt_bytes(contained(final, RECEIPT), limits["max_manifest_bytes"])
+        if hashlib.sha256(manifest).hexdigest() != ref["receipt_digest"]:
+            raise QueueConflictError("recovery retained receipt digest conflicts")
+        marker = json.loads(manifest)
+        if marker.get("identity") != owner or marker.get("publication_id") != ref["publication_id"]:
+            raise QueueConflictError("recovery retained receipt ownership conflicts")
+        # The immutable manifest binds the retained tree. Payload inventory is
+        # verified when consuming recovery, not on this control replay.
+        return PreparedRetention(request.assignment_id, "seal", sealed["digest"], sealed["result_json"])
     try:
         ref = seal(request, roots, agent_id=agent_id, fence=row["fence"])
     except SharedPublicationBudgetExceeded as exc:
@@ -575,12 +627,9 @@ def retain_released(
             "observed_at_least": exc.observed_at_least,
         }}
         data = encoded(failure).decode()
-        conn.execute(
-            "INSERT INTO agent_receipts(principal_id, operation, idempotency_key, digest, result_json) "
-            "VALUES (?, 'seal_unavailable', ?, ?, ?)",
-            (_PRINCIPAL, request.assignment_id, hashlib.sha256(data.encode()).hexdigest(), data),
+        return PreparedRetention(
+            request.assignment_id, "seal_unavailable", hashlib.sha256(data.encode()).hexdigest(), data,
         )
-        return
     if ref is None:
         return
     data = encoded(ref).decode()
@@ -590,7 +639,4 @@ def retain_released(
     ).fetchone()
     if prior is not None and prior["result_json"] != data:
         raise QueueConflictError("recovery retention reference replay conflicts")
-    conn.execute(
-        "INSERT OR IGNORE INTO agent_receipts(principal_id, operation, idempotency_key, digest, result_json) VALUES (?, 'seal', ?, ?, ?)",
-        (_PRINCIPAL, request.assignment_id, ref["receipt_digest"], data),
-    )
+    return PreparedRetention(request.assignment_id, "seal", ref["receipt_digest"], data)

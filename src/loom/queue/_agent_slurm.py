@@ -33,7 +33,7 @@ from loom.pipeline.executors.slurm.ready_stage import (
 from loom.serialization import PlainData, thaw_plain_data
 from loom.timestamps import utc_timestamp
 
-from ._slurm_result_transport import SharedSlurmResult
+from ._slurm_result_transport import SharedSlurmResult, SlurmEffectPending, SlurmRequestUncertain
 from ._slurm_admission import submit_interval
 from ._slurm_observation import SlurmObservationPolicy, parse_slurm_observation_policy
 from .errors import QueueConflictError, QueueServiceError
@@ -47,7 +47,7 @@ class SlurmSubmissionProjection:
         self, path: Path, *, _allow_initialize: bool = False,
         sqlite_policy: SQLitePolicy | None = None, schema_version: int = 3,
     ) -> None:
-        if type(schema_version) is not int or schema_version not in {3, 4}:
+        if type(schema_version) is not int or schema_version not in {3, 4, 5}:
             raise QueueServiceError("SLURM submission projection schema selection is unsupported")
         self.path = path
         self._sqlite_policy = sqlite_policy
@@ -122,6 +122,10 @@ class SlurmSubmissionProjection:
             )
 
 
+class _EvidencePending(Exception):
+    """This assignment must yield without acknowledging its durable outbox."""
+
+
 class AgentSlurmJobs:
     """Open-only exact-agent submission owner with a durable replayable outbox."""
 
@@ -163,6 +167,7 @@ class AgentSlurmJobs:
         }
         self._lock = RLock()
         self._next_poll: dict[str, float] = {}
+        self._ack_retry_at: dict[str, float] = {}
         self._retry_at: dict[tuple[str, str], float] = {}
         self._retry_failures: dict[tuple[str, str], int] = {}
         self._batch_order: dict[str, int] = {}
@@ -175,6 +180,7 @@ class AgentSlurmJobs:
         self._containment_budget: int | None = None
         self._containment_deadline: float | None = None
         self._reconciliation_binding: tuple[str, str] | None = None
+        self._pending_effect_confirmations: dict[str, tuple[str, int]] = {}
         self._reconciled_operations: dict[str, tuple[object, object, bool]] = {}
 
     def begin_reconciliation(self, binding: tuple[str, str]) -> None:
@@ -183,22 +189,42 @@ class AgentSlurmJobs:
             if binding != self._reconciliation_binding:
                 self._reconciliation_binding = binding
                 self._reconciled_operations.clear()
+                self._pending_effect_confirmations.clear()
+                self._ack_retry_at.clear()
 
     def has_unreconciled_work(self, binding: tuple[str, str]) -> bool:
         """Known live jobs may resume; uncertain effects must first reconcile.
 
         This is an admission check, not a release/retirement proof. The current
-        coordinator must have redelivered each exact retained task, and the
-        local submission and outbox must agree under the configured profile.
+        coordinator must redeliver the exact task or confirm ownership of its
+        pending release effect. The local submission and outbox must agree
+        under the configured profile; confirmation never permits retirement.
         """
         with self._lock:
             with self._connect() as conn:
                 rows = conn.execute(
-                    "SELECT operation_id, assignment_json, evidence_json, released, acknowledged "
+                    "SELECT operation_id, assignment_json, evidence_json, released, acknowledged, sequence "
                     "FROM agent_slurm_operations WHERE released=0 OR acknowledged=0"
                 ).fetchall()
-            for operation_id, encoded, evidence, released, acknowledged in rows:
+            for operation_id, encoded, evidence, released, acknowledged, sequence in rows:
                 if not acknowledged:
+                    if (
+                        binding == self._reconciliation_binding
+                        and self._pending_effect_confirmations.get(operation_id) == (evidence, sequence)
+                    ):
+                        retained = json.loads(evidence)
+                        assignment = SlurmStageAssignment.from_dict(json.loads(encoded))
+                        profile = self.profiles.get((assignment.profile_id, assignment.profile_configuration_fingerprint))
+                        submission = self.journal.find(operation_id)
+                        if (
+                            retained.get("provider_released") is True
+                            and retained.get("release") is not None
+                            and profile is not None and profile.descriptor == assignment.profile_descriptor
+                            and submission is not None
+                            and submission.state not in {ReadyStageState.SUBMITTING, ReadyStageState.UNKNOWN}
+                            and SlurmReadyStageSubmission.from_dict(retained["submission"]) == submission
+                        ):
+                            continue
                     return True
                 if released:
                     continue
@@ -287,6 +313,8 @@ class AgentSlurmJobs:
         transport: SharedSlurmResult,
         acknowledge: Callable[[Mapping[str, PlainData]], Mapping[str, PlainData]],
     ) -> None:
+        if task.get("compute_release_requested") is True:
+            return
         identity = task.get("result_identity")
         if (
             isinstance(identity, Mapping)
@@ -403,6 +431,20 @@ class AgentSlurmJobs:
         response = acknowledge({**evidence, "sequence": sequence})
         if response.get("sequence") != sequence:
             raise QueueConflictError("agent SLURM acknowledgement conflicts")
+        disposition = response.get("disposition", "applied")
+        if disposition not in {"pending", "applied"}:
+            raise QueueConflictError("agent SLURM acknowledgement disposition conflicts")
+        if disposition == "pending":
+            delay = response.get("retry_after_seconds")
+            if (response.get("assignment_id") != assignment.assignment_id
+                or type(delay) not in (int, float) or not 0 < delay <= 60):
+                raise QueueConflictError("agent SLURM pending acknowledgement conflicts")
+            self._ack_retry_at[assignment.operation_id] = monotonic() + delay
+            if self._reconciliation_binding is not None:
+                self._pending_effect_confirmations[assignment.operation_id] = (encoded, sequence)
+            raise _EvidencePending
+        self._ack_retry_at.pop(assignment.operation_id, None)
+        self._pending_effect_confirmations.pop(assignment.operation_id, None)
         if provider_released:
             profile = self.profiles[
                 (assignment.profile_id, assignment.profile_configuration_fingerprint)
@@ -412,6 +454,7 @@ class AgentSlurmJobs:
             )
             if transport.path.exists() and (
                 response.get("cancel_requested") is True
+                or response.get("result_committed") is True
                 or not (transport.path / "manifest.json").exists()
             ):
                 transport.cleanup()
@@ -449,18 +492,31 @@ class AgentSlurmJobs:
                     "AND (? IS NULL OR operation_id > ?) ORDER BY operation_id LIMIT 32",
                     (self._replay_after, self._replay_after),
                 ).fetchall()
+            deadline = monotonic() + 1.0
+            scanned = 0
             for row in rows:
+                if scanned and monotonic() >= deadline:
+                    break
+                scanned += 1
                 self._replay_after = str(row[0])
                 pending = json.loads(str(row[1]))
-                self._publish(
-                    SlurmStageAssignment.from_dict(pending["assignment"]),
-                    SlurmReadyStageSubmission.from_dict(pending["submission"]),
-                    acknowledge,
-                    release=pending["release"],
-                    recovery_evidence=pending.get("recovery_evidence"),
-                    provider_released=pending.get("provider_released", False),
-                )
-            if len(rows) < 32:
+                if monotonic() < self._ack_retry_at.get(str(row[0]), 0):
+                    continue
+                try:
+                    self._publish(
+                        SlurmStageAssignment.from_dict(pending["assignment"]),
+                        SlurmReadyStageSubmission.from_dict(pending["submission"]),
+                        acknowledge,
+                        release=pending["release"],
+                        recovery_evidence=pending.get("recovery_evidence"),
+                        provider_released=pending.get("provider_released", False),
+                    )
+                except _EvidencePending:
+                    continue
+                except SlurmRequestUncertain:
+                    self._ack_retry_at[str(row[0])] = monotonic() + 5
+                    continue
+            if scanned == len(rows) and len(rows) < 32:
                 self._replay_after = None
 
     def _before_submit(
@@ -527,9 +583,9 @@ class AgentSlurmJobs:
             operation = assignment.operation_id
             with self._connect() as conn:
                 released = conn.execute(
-                    "SELECT released FROM agent_slurm_operations WHERE operation_id=?", (operation,),
+                    "SELECT released, acknowledged FROM agent_slurm_operations WHERE operation_id=?", (operation,),
                 ).fetchone()
-            if released is None or released[0] or not self._retry_due("observation", operation):
+            if released is None or released[0] or not released[1] or not self._retry_due("observation", operation):
                 continue
             current = self.journal.read(operation)
             if current.state in {ReadyStageState.ACCEPTED, ReadyStageState.SUBMITTING, ReadyStageState.UNKNOWN}:
@@ -590,12 +646,38 @@ class AgentSlurmJobs:
                     "observation", operation, profile,
                     failed=current.evidence not in {"slurm_history_observed", "slurm_history_not_found"},
                 )
-                reply = self._publish(assignment, current, acknowledge)
-                self._deliver_result(
-                    task, reply, SharedSlurmResult(profile.result_storage, assignment.assignment_id), acknowledge,
-                )
+                try:
+                    reply = self._publish(assignment, current, acknowledge)
+                except _EvidencePending:
+                    continue
+                except SlurmRequestUncertain:
+                    self._ack_retry_at[operation] = monotonic() + 5
+                    continue
+                try:
+                    self._deliver_result(
+                        task, reply, SharedSlurmResult(profile.result_storage, assignment.assignment_id), acknowledge,
+                    )
+                except SlurmEffectPending as pending:
+                    self._ack_retry_at[operation] = monotonic() + pending.retry_after_seconds
+                except SlurmRequestUncertain:
+                    self._ack_retry_at[operation] = monotonic() + 5
 
-    def _step(
+    def _step(self, task, acknowledge, **options):
+        operation_id = SlurmStageAssignment.from_dict(task["assignment"]).operation_id
+        if monotonic() < self._ack_retry_at.get(operation_id, 0):
+            return
+        try:
+            return self._advance_step(task, acknowledge, **options)
+        except _EvidencePending:
+            return
+        except SlurmRequestUncertain:
+            self._ack_retry_at[operation_id] = monotonic() + 5
+            return
+        except SlurmEffectPending as pending:
+            self._ack_retry_at[operation_id] = monotonic() + pending.retry_after_seconds
+            return
+
+    def _advance_step(
         self,
         task: Mapping[str, PlainData],
         acknowledge: Callable[[Mapping[str, PlainData]], Mapping[str, PlainData]],
@@ -740,7 +822,7 @@ class AgentSlurmJobs:
                 )
                 observed = self.observation_policy is not None
         reply = self._publish(assignment, current, acknowledge)
-        if self.observation_policy is not None:
+        if self.observation_policy is not None and task.get("compute_release_requested") is not True:
             self._deliver_result(task, reply, transport, acknowledge)
         if _delivery_only:
             return
@@ -767,7 +849,7 @@ class AgentSlurmJobs:
                 updated = self._publish(assignment, current, acknowledge)
                 if self.observation_policy is not None:
                     reply = updated
-        if self.observation_policy is None:
+        if self.observation_policy is None and task.get("compute_release_requested") is not True:
             self._deliver_result(task, reply, transport, acknowledge)
         recovery_request = task.get("recovery_request")
         if isinstance(recovery_request, Mapping):
@@ -793,6 +875,7 @@ class AgentSlurmJobs:
             release = {"kind": "definite_rejection"}
         elif current.job_id is not None and (
             task.get("release_requested") is True
+            or task.get("compute_release_requested") is True
             or reply.get("cancel_requested") is True
         ):
             proof = {

@@ -1207,6 +1207,10 @@ not select an upgrade retain their existing startup behavior and fingerprints.
 
 Use sibling protected source/target role declarations; they may differ in storage
 and Slurm policy, while identities, roots and other declarations remain fixed.
+An existing `slurm-agent-jobs-v1` declaration may additionally enable
+`slurm-pending-effects-v1` in the coordinator's protected agent policy and the
+outbound agent's registration. This narrow protocol upgrade does not permit
+unrelated capability or identity changes.
 Embedded authority requires an existing explicit `state_root`; only that
 deployment's authority namespace is included. Retained native run references
 must have matching stores. Each store's canonical run hash and annotation
@@ -1268,6 +1272,52 @@ SQLite, never deletion of live sidecars. Both owners of coordinator
 `execution.sqlite` advance together from schema 3 to 4 when selected. Agent
 Slurm schema remains 3. Released historical assignments retain unknown GPU
 quantities/legacy credential fields; unreleased assignments cannot migrate.
+Selecting pending effects advances the coordinator execution database to schema
+5, including from schema 4. Publication request/completion/cancellation and
+compute-release timestamps initially remain null; migration never infers that
+compute has been released. The stopped-upgrade settlement requirements still
+apply. Schema 5 does not change the outbound agent submission database schema.
+
+### Pending Slurm publication and retention
+
+Sessions negotiating `slurm-pending-effects-v1` receive `pending` after exact
+evidence or a publication request is durably accepted, and `applied` only after
+its required effect is committed. Ordinary replies bind assignment and evidence
+sequence; publication replies bind the existing result identity and commit
+operation. A transport timeout provides neither guarantee and requires exact
+replay. Legacy sessions retain their previous acknowledgement behavior.
+
+The coordinator shares a two-worker, 32-outstanding storage executor between
+embedded and outbound Slurm execution. Full capacity leaves accepted work
+durably pending. Workers perform filesystem preparation outside the scheduling
+lock; completion revalidates assignment, fence, delivery, roots and evidence.
+Reconciliation discovers unfinished work without a connected agent. Duplicate
+requests share the existing operation. Receipt replay checks the retained
+manifest and binding without resealing every payload; recovery consumption
+retains its payload integrity checks.
+
+The agent retains pending messages and transport files, yields that assignment,
+and advances unrelated work. Slurm HTTP attempts are finite, with receipt replay
+bounded by count and elapsed time. Current-session confirmation of exact pending
+release evidence permits unrelated admission without treating the message as
+finally acknowledged; restart must establish that confirmation again. Eight
+nonblocking Slurm request slots are separate from polling/control capacity.
+These slots bound endpoint work, not every server connection.
+
+Compute reservations become available only after exact containment and provider
+revocation evidence is accepted and remaining storage work is durably owned.
+This does not accept scientific outputs, unblock their dependants or authorize
+artifact deletion. Final assignment release still waits for storage settlement.
+Cancellation supersedes unfinished publication; its running worker must exit
+before final release, even when no recovery tree is configured.
+
+Admission owner observations expose `slurm_storage` with compute/publication
+state, storage capacity/retry/error information and process-local phase timestamps.
+Those timestamps reset with the process and are not completion evidence or a
+percentage. Storage errors remain assignment-specific: transient I/O failures
+retry with backoff, while integrity conflicts retain ownership and diagnostics.
+
+### Recovering a stopped storage upgrade
 
 Resume validates the same request and the original snapshots, recognizes exact
 source/target intermediate states, and continues publication. It never takes a

@@ -123,9 +123,27 @@ def _declarations(request: dict, *, qualify: bool) -> list[dict]:
             if selected[side]["storage"] is not None:
                 selected[side]["storage"].require_owner()
         before, after = selected["source"], selected["target"]
+        comparable_target = json.loads(json.dumps(after["payload"]))
+        from .agent_sessions import SLURM_PENDING_EFFECTS_CAPABILITY, SLURM_SUBMISSION_CAPABILITY
+
+        def allow_pending_capability(old, new):
+            previous = old.get("capabilities", [])
+            current = new.get("capabilities", [])
+            if (SLURM_SUBMISSION_CAPABILITY in previous
+                and SLURM_PENDING_EFFECTS_CAPABILITY not in previous
+                and SLURM_PENDING_EFFECTS_CAPABILITY in current):
+                new["capabilities"] = [value for value in current if value != SLURM_PENDING_EFFECTS_CAPABILITY]
+
+        if item["role"] == "coordinator":
+            old_agents = before["payload"]["agent_policy"]["agents"]
+            new_agents = comparable_target["agent_policy"]["agents"]
+            for old, new in zip(old_agents, new_agents):
+                allow_pending_capability(old, new)
+        else:
+            allow_pending_capability(before["payload"]["registration"], comparable_target["registration"])
         if before["root"] != after["root"] or {
             k: v for k, v in before["payload"].items() if k not in allowed
-        } != {k: v for k, v in after["payload"].items() if k not in allowed}:
+        } != {k: v for k, v in comparable_target.items() if k not in allowed}:
             raise QueueConfigError("storage upgrade may change storage and Slurm policy only; roots and other declarations must match")
         if before["storage"] is not None and after["storage"] is None:
             raise QueueConfigError("removing explicit storage policy requires a separate migration")
@@ -461,10 +479,13 @@ def _prepare_database(role: dict, owner: dict, original: Path, candidate: Path) 
             for key, value in updates.items():
                 conn.execute(f"INSERT INTO {table}(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
         elif owner["role"] == "coordinator" and original == Path(owner["root"]) / "execution.sqlite":
-            from .slurm_ready_stage import _require_schema, _upgrade_released_schema
+            from .slurm_ready_stage import _require_schema, _upgrade_released_schema, _upgrade_pending_effects_schema
             version = conn.execute("PRAGMA user_version").fetchone()[0]
-            if version == 3 and target.daemon.slurm_schema_version == 4:
+            if version == 3 and target.daemon.slurm_schema_version >= 4:
                 _upgrade_released_schema(conn)
+                version = 4
+            if version == 4 and target.daemon.slurm_schema_version == 5:
+                _upgrade_pending_effects_schema(conn)
             _require_schema(conn, expected_version=target.daemon.slurm_schema_version)
             if {row[1] for row in conn.execute("PRAGMA table_info(ready_stage_submissions)")} != {"operation_id", "state", "value_json"}:
                 raise QueueServiceError("storage upgrade submission projection is incompatible")

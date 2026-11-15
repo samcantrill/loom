@@ -7,6 +7,7 @@ from time import monotonic
 
 from ._agent_progress import _Spawn, _delay, _external, _steps
 from .errors import QueueError, QueueServiceError
+from ._slurm_result_transport import SlurmRequestUncertain
 
 
 def drive_operation(client, operation, binding, *args, **kwargs):
@@ -59,6 +60,9 @@ def drive_operation(client, operation, binding, *args, **kwargs):
                     value = yield from _steps(
                         client._call, "slurm_work", {**binding, "evidence": evidence},
                     )
+                except SlurmRequestUncertain as error:
+                    # The scheduler yields only this assignment, preserving its outbox.
+                    reply.set_exception(error)
                 except BaseException as error:
                     reply.set_exception(error)
                     raise

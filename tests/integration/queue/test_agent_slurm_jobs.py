@@ -57,9 +57,10 @@ pytestmark = pytest.mark.integration
     (True, True, True, False, False), (True, False, False, True, False),
     (True, True, True, True, True),
 ])
+@pytest.mark.parametrize("pending_effects", [False, True])
 def test_outbound_service_settles_slurm_while_drained(
     tmp_path: Path, monkeypatch, restart_with_job: bool, observation_policy: bool, batching: bool, start_held: bool,
-    resume_before_completion: bool,
+    resume_before_completion: bool, pending_effects: bool,
 ):
     from loom.queue._slurm_admission import SlurmAdmissionPolicy
     from loom.queue._slurm_observation import SlurmObservationPolicy
@@ -96,7 +97,8 @@ def test_outbound_service_settles_slurm_while_drained(
             return accounting(**selection)
         monkeypatch.setattr(runner, "discover_named_operations", batch)
         monkeypatch.setattr(runner, "discover_named_operation", accounting)
-    capabilities = (SLURM_SUBMISSION_CAPABILITY,)
+    from loom.queue.agent_sessions import SLURM_PENDING_EFFECTS_CAPABILITY
+    capabilities = (SLURM_SUBMISSION_CAPABILITY,) + ((SLURM_PENDING_EFFECTS_CAPABILITY,) if pending_effects else ())
     config = LocalDaemonConfig(
         coordinator_root=tmp_path / "coordinator",
         agent_root=None,
