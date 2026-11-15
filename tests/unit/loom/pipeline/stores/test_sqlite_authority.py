@@ -54,6 +54,37 @@ from loom.pipeline.stores.sqlite_authority import (
 pytestmark = pytest.mark.unit
 
 
+def test_explicit_sqlite_policy_survives_authority_restart(tmp_path):
+    from loom._sqlite_policy import SQLitePolicy
+    from loom.pipeline.stores.coordinator_authority import (
+        EmbeddedCoordinatorAuthorityFactory, coordinator_authority_identity,
+    )
+
+    private = tmp_path / "authority"
+    private.mkdir(mode=0o700)
+    factory = EmbeddedCoordinatorAuthorityFactory(
+        private, tmp_path / "deployment", sqlite_policy=SQLitePolicy("delete", "extra", 4321)
+    )
+    legacy = EmbeddedCoordinatorAuthorityFactory(private, tmp_path / "deployment")
+    assert set(coordinator_authority_identity(legacy)) == {"family", "binding"}
+    assert coordinator_authority_identity(factory) == {
+        **coordinator_authority_identity(legacy),
+        "sqlite": {"journal_mode": "delete", "synchronous": "extra", "busy_timeout_ms": 4321},
+    }
+    uri = path_to_run_uri(tmp_path / "run")
+    store = factory._store(uri)
+    store.create_run(uri)
+    store.append_audit_event(uri, PipelineEvent(scope=EventScope.run(), event_type="run.created"))
+    reopened = factory(uri)
+    assert len(reopened.list_audit_events(uri)) == 1
+    database = _authority_database_path(uri, store._state_root)
+    with reopened._connect(database, write=True) as connection:
+        assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+        assert connection.execute("PRAGMA synchronous").fetchone()[0] == 3
+        assert connection.execute("PRAGMA busy_timeout").fetchone()[0] == 4321
+    assert not Path(str(database) + "-wal").exists()
+
+
 def test_audit_events_require_retained_current_record_before_mutation(
     tmp_path: Path,
 ) -> None:

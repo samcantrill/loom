@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import selectors
+import shutil
 import subprocess
 import tempfile
 from time import monotonic, sleep
@@ -74,21 +75,27 @@ def run_resident_probe(
     ):
         raise ValueError("resident probe device environment is invalid")
 
+    try:
+        temporary_root = _probe_temporary_root(profile)
+    except (OSError, ValueError):
+        return ResidentProbeResult(None, "resident probe scratch creation failed", True)
     if profile.container is not None:
         return _container_probe(
-            profile, script, request, float(timeout_seconds), device_environment, runtime, preparation
+            profile, script, request, float(timeout_seconds), device_environment, runtime, preparation,
+            temporary_root,
         )
 
     try:
-        temporary = tempfile.TemporaryDirectory(prefix="loom-resident-probe-", dir="/tmp")
+        scratch = tempfile.mkdtemp(prefix="loom-resident-probe-", dir=temporary_root)
     except OSError:
         return ResidentProbeResult(None, "resident probe scratch creation failed", True)
     result: ResidentProbeResult | None = None
     try:
-        with temporary as scratch:
-            result = _run_probe_process(
-                profile, script, request, timeout_seconds, device_environment, scratch
-            )
+        result = _run_probe_process(
+            profile, script, request, timeout_seconds, device_environment, scratch
+        )
+        if result.contained:
+            shutil.rmtree(scratch)
     except OSError:
         return ResidentProbeResult(
             None,
@@ -96,6 +103,27 @@ def run_resident_probe(
             False if result is None else result.contained,
         )
     return result
+
+
+def _probe_temporary_root(profile: ResidentWorkerLaunchProfile) -> Path | None:
+    """Select host scratch without interpreting container TMPDIR as a host path."""
+    selected = os.environ.get("TMPDIR")
+    if profile.container is None:
+        selected = profile.environment.get("TMPDIR", selected)
+    elif profile.temporary_mounts:
+        from loom.pipeline.executors.containers import parse_container_options
+
+        mounts = parse_container_options(profile.container["container"]).mounts
+        selected = next(mount.source for mount in mounts if mount.target == profile.temporary_mounts[0])
+    if selected is None:
+        return None  # Unselected deployments retain platform temporary defaults.
+    path = Path(selected)
+    if not path.is_absolute() or ".." in path.parts:
+        raise ValueError("probe temporary root must be absolute without '..'")
+    path = path.resolve(strict=True)
+    if not path.is_dir() or not os.access(path, os.W_OK | os.X_OK):
+        raise ValueError("probe temporary root must be an existing writable directory")
+    return path
 
 
 def _run_probe_process(
@@ -115,6 +143,8 @@ def _run_probe_process(
         {
             "PYTHONDONTWRITEBYTECODE": "1",
             "TMPDIR": scratch,
+            "TMP": scratch,
+            "TEMP": scratch,
             "XDG_CACHE_HOME": scratch,
             "XDG_CONFIG_HOME": scratch,
             "CUDA_VISIBLE_DEVICES": "",
@@ -257,21 +287,23 @@ def _drain_and_contain(
     )
 
 
-def _container_probe(profile, script, request, timeout_seconds, device_environment, runtime, preparation):
+def _container_probe(profile, script, request, timeout_seconds, device_environment, runtime, preparation, temporary_root):
     """Use the same daemon evidence owner for installed-environment probes.
 
     Unknown Docker effects retain scratch and evidence for operator recovery; they
     never qualify an installation or cause an unsafe automatic cleanup.
     """
     import hashlib
-    import shutil
     import sqlite3
     from loom.pipeline.errors import RuntimeResourceError
     from ._container_worker import build_container_worker
     from ._docker_worker import DockerWorker
     from ._managed_local import _worker_environment
 
-    scratch = Path(tempfile.mkdtemp(prefix="loom-resident-probe-", dir="/tmp"))
+    try:
+        scratch = Path(tempfile.mkdtemp(prefix="loom-resident-probe-", dir=temporary_root))
+    except OSError:
+        return ResidentProbeResult(None, "resident probe scratch creation failed", True)
     workspace = scratch / "assignments" / "probe"
     workspace.mkdir(parents=True)
     output = workspace / "probe.json"
@@ -359,7 +391,11 @@ def _container_probe(profile, script, request, timeout_seconds, device_environme
             )
 
             result = SubprocessApptainerExecRunner().run(
-                cast(ApptainerExecCommand, command), timeout_seconds=timeout_seconds
+                cast(ApptainerExecCommand, command), timeout_seconds=timeout_seconds,
+                host_environment={
+                    **os.environ,
+                    **dict.fromkeys(("TMPDIR", "TMP", "TEMP", "APPTAINER_TMPDIR", "SINGULARITY_TMPDIR"), str(scratch)),
+                },
             )
             # The built-in timeout runner owns the qualified namespace barrier.
             contained = result.error is None

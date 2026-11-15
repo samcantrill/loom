@@ -1294,11 +1294,13 @@ def test_agent_reload_recovers_crash_after_bound_replacement(
         recovered.close()
 
 
-@pytest.mark.parametrize("change", ["resources", "ceiling"])
+@pytest.mark.parametrize("change", ["resources", "ceiling", "slurm-pacing", "slurm-observation", "slurm-batching"])
 def test_agent_reload_allows_idle_capacity_change_but_not_retained_reinterpretation(
     tmp_path: Path,
     change: str,
 ) -> None:
+    from loom.queue._slurm_observation import SlurmObservationPolicy
+
     root = _fresh_remote_agent_root(tmp_path)
     original = ResidentExecutionProfile(
         ResidentProfileDescriptor(
@@ -1321,6 +1323,12 @@ def test_agent_reload_allows_idle_capacity_change_but_not_retained_reinterpretat
     replacement = (
         replace(base, resident_profiles=(replace(original, cpu_capacity=2),))
         if change == "resources"
+        else replace(base, slurm_submit_interval_seconds=1.0)
+        if change == "slurm-pacing"
+        else replace(base, slurm_observation_policy=SlurmObservationPolicy(300))
+        if change == "slurm-observation"
+        else replace(base, slurm_observation_policy=SlurmObservationPolicy(300, 8, 4, 10))
+        if change == "slurm-batching"
         else replace(base, max_concurrent_assignments=2)
     )
     try:

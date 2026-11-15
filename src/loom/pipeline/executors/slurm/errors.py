@@ -38,6 +38,10 @@ class SlurmCommandExecutionError(SlurmLiveOperationError):
     """Raised when a scheduler command returns an unsuccessful result."""
 
 
+class SlurmCommandOutputLimitError(SlurmLiveOperationError):
+    """A complete scheduler response cannot fit in bounded evidence capture."""
+
+
 class SlurmJobIdParseError(SlurmLiveOperationError):
     """Raised when ``sbatch --parsable`` output does not contain a job ID."""
 

@@ -9,6 +9,8 @@ an attempt or take a run lock.
 
 from __future__ import annotations
 
+from loom._sqlite_policy import SQLitePolicy, connect_existing, initialize_database
+
 import hashlib
 import json
 import os
@@ -1171,22 +1173,28 @@ class SQLiteAgentJournal:
     makes a fact durable before it can be delivered and refuses an event gap.
     """
 
-    def __init__(self, path: str | Path, *, _allow_initialize: bool = True) -> None:
+    def __init__(self, path: str | Path, *, _allow_initialize: bool = True, sqlite_policy: SQLitePolicy | None = None) -> None:
         self.path = Path(path)
-        self._allow_initialize = _allow_initialize
+        self._allow_initialize = _allow_initialize and sqlite_policy is None
+        self._sqlite_policy = sqlite_policy
 
     def _initialize(self) -> None:
         """Create the current journal schema at an explicit owner boundary."""
 
-        with self._transaction():
-            pass
+        previous = self._allow_initialize
+        self._allow_initialize = True
+        try:
+            with self._transaction():
+                pass
+        finally:
+            self._allow_initialize = previous
 
     def _open_existing(self) -> None:
         """Verify the current journal without creating or repairing it."""
 
         if not self.path.is_file():
             raise ManagedLocalError("agent journal is missing")
-        with _connect_sqlite(self.path, require_existing=True) as conn:
+        with _connect_sqlite(self.path, sqlite_policy=self._sqlite_policy, require_existing=True) as conn:
             conn.row_factory = sqlite3.Row
             _require_agent_journal_schema(conn)
 
@@ -1962,7 +1970,7 @@ class SQLiteAgentJournal:
             if not self._allow_initialize:
                 raise ManagedLocalError("agent journal is missing")
             return ()
-        with _connect_sqlite(self.path, require_existing=True) as conn:
+        with _connect_sqlite(self.path, sqlite_policy=self._sqlite_policy, require_existing=True) as conn:
             conn.row_factory = sqlite3.Row
             try:
                 rows = tuple(
@@ -2009,7 +2017,7 @@ class SQLiteAgentJournal:
                 raise ManagedLocalError("agent journal is missing")
             self.path.parent.mkdir(parents=True, exist_ok=True)
         with _connect_sqlite(
-            self.path, require_existing=not self._allow_initialize
+            self.path, sqlite_policy=self._sqlite_policy, require_existing=not self._allow_initialize
         ) as conn:
             conn.row_factory = sqlite3.Row
             conn.execute("BEGIN IMMEDIATE")
@@ -2238,9 +2246,11 @@ class SQLiteCoordinatorAssignments:
         capacity: Sequence[CapacityAtom],
         *,
         _allow_initialize: bool = True,
+        sqlite_policy: SQLitePolicy | None = None,
     ) -> None:
         self.path = Path(path)
-        self._allow_initialize = _allow_initialize
+        self._allow_initialize = _allow_initialize and sqlite_policy is None
+        self._sqlite_policy = sqlite_policy
         self._capacity = {atom.key: atom for atom in capacity}
         if len(self._capacity) != len(tuple(capacity)):
             raise ManagedLocalError("coordinator capacity atoms must be unique")
@@ -2248,15 +2258,20 @@ class SQLiteCoordinatorAssignments:
     def _initialize(self) -> None:
         """Create the current coordinator-assignment schema explicitly."""
 
-        with self._transaction():
-            pass
+        previous = self._allow_initialize
+        self._allow_initialize = True
+        try:
+            with self._transaction():
+                pass
+        finally:
+            self._allow_initialize = previous
 
     def _open_existing(self) -> None:
         """Verify the current assignment schema without creating or repairing it."""
 
         if not self.path.is_file():
             raise ManagedLocalError("coordinator assignment store is missing")
-        with _connect_sqlite(self.path, require_existing=True) as conn:
+        with _connect_sqlite(self.path, sqlite_policy=self._sqlite_policy, require_existing=True) as conn:
             conn.row_factory = sqlite3.Row
             _require_coordinator_assignment_schema(conn)
 
@@ -3191,7 +3206,7 @@ class SQLiteCoordinatorAssignments:
                 raise ManagedLocalError("coordinator assignment store is missing")
             self.path.parent.mkdir(parents=True, exist_ok=True)
         with _connect_sqlite(
-            self.path, require_existing=not self._allow_initialize
+            self.path, sqlite_policy=self._sqlite_policy, require_existing=not self._allow_initialize
         ) as conn:
             conn.row_factory = sqlite3.Row
             conn.execute("BEGIN IMMEDIATE")
@@ -3253,8 +3268,11 @@ class SQLiteCoordinatorAssignments:
 
 
 def _connect_sqlite(
-    path: Path, *, require_existing: bool = False
+    path: Path, *, require_existing: bool = False, sqlite_policy: SQLitePolicy | None = None
 ) -> sqlite3.Connection:
+    if sqlite_policy is not None:
+        connect = connect_existing if require_existing else initialize_database
+        return connect(path, policy=sqlite_policy, isolation_level="")
     target: str | Path = (
         f"{path.resolve().as_uri()}?mode=rw" if require_existing else path
     )
@@ -3462,6 +3480,7 @@ def run_managed_local_assignment(
     agent_root: Path,
     supervisor: AgentProcessSupervisorClient,
     resident_launch_profile: ResidentWorkerLaunchProfile,
+    durable_files: str = "best_effort",
     cancellation_requested: Callable[[], bool] | None = None,
     suspend_requested: Callable[[], bool] | None = None,
     execution_started: Callable[[], None] | None = None,
@@ -3537,7 +3556,13 @@ def run_managed_local_assignment(
                 "decision claim contract is not supported by configured provider"
             )
     profile = ResidentProfileDescriptor.from_dict(resident_launch_profile.descriptor)
-    workspace = _ResidentAssignmentWorkspace(agent_root, assignment.assignment_id)
+    workspace = _ResidentAssignmentWorkspace(
+        agent_root, assignment.assignment_id, sqlite_policy=journal._sqlite_policy,
+        durable_files=durable_files,
+        _allow_initialize=None if journal._sqlite_policy is None else (
+            journal.find_state(assignment.assignment_id) is None
+        ),
+    )
     retained_inputs = (
         {item.logical_name: item for item in workspace.request().inputs}
         if workspace.has_request() and workspace.state() in {"GRANTED", "STARTED", "RESULT"}
@@ -3688,7 +3713,7 @@ def run_managed_local_assignment(
             raise ManagedLocalError("failed launch ownership is unresolved")
         result_path = workspace.root / "worker-result.json"
         if not result_path.is_file():
-            atomic_write_bytes(result_path, _json(child_result.to_dict()).encode())
+            atomic_write_bytes(result_path, _json(child_result.to_dict()).encode(), durability=workspace.durable_files)
         workspace.persist_failed_before_start(
             child_result, fence=retained_fence, supervisor_rejected=retained_launch
         )
@@ -3947,8 +3972,7 @@ def run_managed_local_assignment(
         child_result = _cancelled_worker_result(workspace.worker_request())
         atomic_write_bytes(
             workspace.root / "worker-result.json",
-            _json(child_result.to_dict()).encode("utf-8"),
-        )
+            _json(child_result.to_dict()).encode("utf-8"), durability=workspace.durable_files)
         workspace.persist_cancelled_before_start(child_result)
         worker_result = _map_resident_result_identity(
             child_result, worker_request=worker_request, outputs={}
@@ -4003,8 +4027,7 @@ def run_managed_local_assignment(
         )
         atomic_write_bytes(
             workspace.root / "worker-result.json",
-            _json(child_result.to_dict()).encode("utf-8"),
-        )
+            _json(child_result.to_dict()).encode("utf-8"), durability=workspace.durable_files)
         workspace.persist_failed_before_start(child_result, fence=fence.fencing_token)
         journal.record_result(assignment.assignment_id, worker_result.to_dict())
         return finalize_result(worker_result, coordinator_expected="granted")
@@ -4085,8 +4108,7 @@ def run_managed_local_assignment(
                 worker_result, worker_request=workspace.worker_request(), outputs={}
             )
             atomic_write_bytes(
-                workspace.root / "worker-result.json", _json(child_result.to_dict()).encode()
-            )
+                workspace.root / "worker-result.json", _json(child_result.to_dict()).encode(), durability=workspace.durable_files)
             workspace.persist_failed_before_start(
                 child_result, fence=fence.fencing_token, supervisor_rejected=True
             )
@@ -4119,8 +4141,7 @@ def run_managed_local_assignment(
                     worker_result, worker_request=workspace.worker_request(), outputs={}
                 )
                 atomic_write_bytes(
-                    workspace.root / "worker-result.json", _json(child_result.to_dict()).encode()
-                )
+                    workspace.root / "worker-result.json", _json(child_result.to_dict()).encode(), durability=workspace.durable_files)
                 workspace.persist_failed_before_start(
                     child_result, fence=fence.fencing_token, supervisor_rejected=True
                 )
@@ -4174,7 +4195,7 @@ def run_managed_local_assignment(
             cancellation_seen = True
         if not result_path.is_file() and cancellation_seen:
             cancelled = _cancelled_worker_result(workspace.worker_request())
-            atomic_write_bytes(result_path, _json(cancelled.to_dict()).encode("utf-8"))
+            atomic_write_bytes(result_path, _json(cancelled.to_dict()).encode("utf-8"), durability=workspace.durable_files)
         if not result_path.is_file():
             missing = ManagedLocalError(
                 "resident worker exited without a durable worker result"
@@ -4184,7 +4205,7 @@ def run_managed_local_assignment(
                 missing,
                 process_exit_code=receipt.exit_code,
             )
-            atomic_write_bytes(result_path, _json(failed.to_dict()).encode("utf-8"))
+            atomic_write_bytes(result_path, _json(failed.to_dict()).encode("utf-8"), durability=workspace.durable_files)
         contained = supervisor.contain(launch)
         if contained.state is not SupervisorLaunchState.CONTAINED:
             raise ManagedLocalError("supervisor process-group containment is unknown")
@@ -5091,7 +5112,7 @@ def _worker_environment(
 
         try:
             request = _ResidentAssignmentWorkspace(
-                workspace.parent.parent, workspace.name
+                workspace.parent.parent, workspace.name, _allow_initialize=False,
             ).worker_request()
             build_container_worker(
                 profile,

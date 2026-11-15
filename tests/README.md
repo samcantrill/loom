@@ -121,6 +121,21 @@ These hooks are marked `slow` and/or `optional_dependency`. They are manual
 acceptance evidence and are not required by `make validate-pr` or
 `make test-summary`.
 
+Rollback-storage process probes require both an explicit opt-in and an existing
+operator-selected directory:
+
+```sh
+LOOM_RUN_STORAGE_ACCEPTANCE=1 \
+  LOOM_STORAGE_ACCEPTANCE_ROOT=/selected/private/retained/root \
+  python -m pytest tests/storage_acceptance/test_sqlite_rollback.py
+```
+
+They create unique private children for SQLite writer exclusion, reader
+visibility, busy timeout, killed-writer recovery, role locks and strict file
+publication. Children are removed after the fixture processes exit. An unreaped
+process leaves its fixture intact for inspection. These observations do not
+certify cross-host locking, storage-server power loss or a complete deployment.
+
 ## Validation split for optional dependencies
 
 Validation separates three install surfaces:
@@ -143,7 +158,14 @@ only when an additional execution/report is required. The summary e2e row runs w
 
 The timeout acceptance image needs `sh`, `setsid`, and `sleep`; the supplied path
 must already exist. Tests use temporary bind-mounted readiness files, fixture-owned
-pidfds, and the selected Linux/SingularityCE 3.10.4 or 4.1.1 foreground namespace path.
+pidfds, and the selected Linux/SingularityCE 3.10.4 or 4.1.1 foreground namespace
+path, or explicit `loom-apptainer-guard` version 1. The guard requires Apptainer
+1.5.3 and util-linux unshare 2.37.4; bare Apptainer remains unqualified. Select
+the guard's installed executable through LOOM_APPTAINER_COMMAND and its component
+paths through LOOM_APPTAINER_GUARD_RUNTIME/LOOM_APPTAINER_GUARD_UNSHARE or the selected
+host PATH. Fixtures select private host temp/cache/config children and explicit
+container /tmp and /var/tmp backing beneath pytest's chosen temporary base;
+configure --basetemp/TMPDIR for hosts with restricted temporary storage.
 They exercise direct timeout/startup/interruption, root-first exit, TERM-resistant
 descendants, uncertain cleanup, ordinary results, and both managed group owners.
 They neither pull/build an image nor request CPU/RAM cgroups or GPUs.

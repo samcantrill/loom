@@ -7,6 +7,11 @@ saga. Clients provide only a queue identity and run URI.
 
 from __future__ import annotations
 
+from loom._sqlite_policy import SQLitePolicy, connect_existing, initialize_database
+from loom.pipeline.stores.atomic import atomic_write_text, _fsync_path_strict
+from ._storage_policy import StoragePolicy
+from ._slurm_admission import SlurmAdmissionPolicy
+
 from .gpu.occupancy import GpuOccupancyPolicy, GpuOccupancyMonitor
 from ._managed_local import (
     ResourceAvailabilityStatus,
@@ -708,6 +713,35 @@ class LocalDaemonConfig:
     shared_roots: Mapping[str, PlainData] = field(default_factory=dict)
     assignment_payload_root_id: str | None = None
     container_capabilities: tuple[SubmittedContainerCapability, ...] = ()
+    storage: StoragePolicy | None = None
+    slurm_admission: SlurmAdmissionPolicy | None = None
+
+    @property
+    def sqlite_policy(self) -> SQLitePolicy | None:
+        return None if self.storage is None else self.storage.sqlite
+
+    @property
+    def durable_files(self) -> str:
+        return "best_effort" if self.storage is None else self.storage.durable_files
+
+    @property
+    def slurm_schema_version(self) -> int:
+        """Select the shared execution schema before any co-owner initializes it."""
+        return 4 if self.slurm_admission is not None or any(
+            profile.job_private_file_provider.delivery_kind == "user_private_file_v1"
+            for profile in self.slurm_profiles
+        ) else 3
+
+    def connect_database(self, path: Path, *, initialize=False, **legacy_options):
+        if self.storage is None:
+            return sqlite3.connect(path, **legacy_options)
+        self.storage.require_owner()
+        connect = initialize_database if initialize else connect_existing
+        return connect(
+            path, policy=self.storage.sqlite,
+            isolation_level=legacy_options.get("isolation_level", ""),
+            factory=legacy_options.get("factory"),
+        )
 
     @property
     def coordinator_shared_roots(self) -> Mapping[str, PlainData]:
@@ -725,6 +759,10 @@ class LocalDaemonConfig:
 
     def __post_init__(self) -> None:
         from .shared_execution import root_bindings, qualifications
+        if self.storage is not None and not isinstance(self.storage, StoragePolicy):
+            raise QueueServiceError("storage policy is invalid")
+        if self.slurm_admission is not None and not isinstance(self.slurm_admission, SlurmAdmissionPolicy):
+            raise QueueServiceError("SLURM admission policy is invalid")
 
         roots = root_bindings(self.shared_roots)
         qualifications(roots)
@@ -1649,6 +1687,8 @@ class LocalDaemon:
     def initialize_deployment(cls, config: LocalDaemonConfig) -> None:
         """Publish one complete coordinator/embedded-agent bundle atomically."""
 
+        if config.storage is not None:
+            config.storage.require_owner()
         target = config.deployment_root
         if target is None:
             raise QueueServiceError("coordinator deployment root is required")
@@ -1682,14 +1722,14 @@ class LocalDaemon:
             if agent_id is not None:
                 binding["agent_id"] = agent_id
             binding_path = staging / _DEPLOYMENT_BINDING_FILE
-            binding_path.write_text(
-                json.dumps(
+            atomic_write_text(
+                binding_path, json.dumps(
                     binding,
                     sort_keys=True,
                     separators=(",", ":"),
                     allow_nan=False,
                 ),
-                encoding="utf-8",
+                encoding="utf-8", durability=config.durable_files,
             )
             binding_path.chmod(0o600)
             from .local_daemon_execution import local_daemon_owner_stores_available
@@ -1703,6 +1743,8 @@ class LocalDaemon:
             if target.exists():
                 raise QueueServiceError("coordinator deployment requires a fresh root")
             staging.rename(target)
+            if config.durable_files == "strict":
+                _fsync_path_strict(target.parent)
         finally:
             if staging.exists():
                 shutil.rmtree(staging)
@@ -1720,9 +1762,11 @@ class LocalDaemon:
                 "local daemon requires fresh roots; migration and compatibility "
                 "with existing managed-local state are unsupported"
             )
-        _initialize_root(config.coordinator_root, role="coordinator")
+        if config.storage is not None:
+            config.storage.require_owner()
+        _initialize_root(config.coordinator_root, role="coordinator", sqlite_policy=config.sqlite_policy)
         try:
-            with sqlite3.connect(config.control_database) as conn:
+            with config.connect_database(config.control_database) as conn:
                 conn.execute(
                     "INSERT INTO daemon_metadata(key, value) "
                     "VALUES ('scheduling_epoch', ?)",
@@ -1740,7 +1784,7 @@ class LocalDaemon:
                 conn.commit()
             agent_id: str | None = None
             if config.agent_root is not None:
-                cls.initialize_agent_root(config.agent_root)
+                cls.initialize_agent_root(config.agent_root, storage=config.storage)
                 from ._agent_process_supervisor import (
                     AgentProcessSupervisorService,
                     SupervisorLaunchConfiguration,
@@ -1752,7 +1796,7 @@ class LocalDaemon:
                     raise QueueServiceError("local agent profile is unavailable")
                 AgentProcessSupervisorService.initialize_process_free(
                     config.agent_root,
-                    configuration=SupervisorLaunchConfiguration(agent_id, (profile,)),
+                    configuration=SupervisorLaunchConfiguration(agent_id, (profile,), storage=config.storage),
                     final_agent_root=_final_agent_root,
                 )
             from .local_daemon_execution import initialize_local_daemon_owner_stores
@@ -1767,18 +1811,25 @@ class LocalDaemon:
 
 
     @classmethod
-    def initialize_agent_root(cls, root: Path) -> None:
+    def initialize_agent_root(cls, root: Path, *, storage: StoragePolicy | None = None) -> None:
         """Create one fresh protected agent root for an outbound agent owner."""
         path = Path(root)
         if path.exists():
             raise QueueServiceError("remote agent requires a fresh root")
-        _initialize_root(path, role="local-agent")
+        if storage is not None:
+            storage.require_owner()
+        sqlite_policy = None if storage is None else storage.sqlite
+        _initialize_root(path, role="local-agent", sqlite_policy=sqlite_policy)
         from loom.queue._managed_local import SQLiteAgentJournal
 
-        SQLiteAgentJournal(path / "journal.sqlite")._initialize()
+        SQLiteAgentJournal(path / "journal.sqlite", sqlite_policy=sqlite_policy)._initialize()
         (path / "journal.sqlite").chmod(0o600)
 
-    def start(self) -> DaemonStatus:
+    def start(self, *, start_held: bool = False) -> DaemonStatus:
+        from ._storage_upgrade_state import require_storage_upgrade_ready
+        require_storage_upgrade_ready(self.config.coordinator_root)
+        if self.config.storage is not None:
+            self.config.storage.require_owner()
         if self._coordinator_lock is not None:
             raise QueueServiceError("local daemon is already started")
         if self.config.deployment_root is not None:
@@ -1811,6 +1862,7 @@ class LocalDaemon:
             )
             from .retirement import require_unretired
             require_unretired(self.config.coordinator_root)
+            require_storage_upgrade_ready(self.config.coordinator_root, entering=True)
             with self._connection() as conn:
                 conn.execute("BEGIN IMMEDIATE")
                 retained = conn.execute("SELECT value FROM root_metadata WHERE key = 'assignment_payload_root_id'").fetchone()
@@ -1862,6 +1914,12 @@ class LocalDaemon:
                 raise QueueStorageError(
                     "active scheduling configuration is unavailable"
                 )
+            if start_held:
+                from ._maintenance import hold_for_startup
+                with self._connection() as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    hold_for_startup(conn, coordinator_id, applied_at=self._clock())
+                    conn.commit()
             self._event_observers.start()
             # This is the same cross-owner proof used by normal shutdown.  It
             # rejects unavailable owner state before process creation and
@@ -1881,7 +1939,7 @@ class LocalDaemon:
                     raise QueueServiceError("local agent profile is unavailable")
                 supervisor_configuration = SupervisorLaunchConfiguration(
                     agent_id, (profile,)
-                )
+                , storage=self.config.storage)
                 try:
                     AgentProcessSupervisorClient(
                         self.config.agent_root, supervisor_configuration
@@ -2156,10 +2214,7 @@ class LocalDaemon:
                         "WHERE state NOT IN ('RELEASED', 'FAILED', 'CANCELLED')"
                     ).fetchone()[0]
                 )
-            with sqlite3.connect(
-                f"{self.config.execution_database.resolve().as_uri()}?mode=rw",
-                uri=True,
-            ) as execution:
+            with inspect_sqlite_database(self.config.execution_database) as execution:
                 running += int(
                     execution.execute(
                         "SELECT COUNT(*) FROM slurm_stage_assignments "
@@ -2167,9 +2222,7 @@ class LocalDaemon:
                     ).fetchone()[0]
                 )
             if self.config.agent_root is not None:
-                with sqlite3.connect(
-                    f"{self.config.agent_journal.resolve().as_uri()}?mode=rw", uri=True
-                ) as journal:
+                with inspect_sqlite_database(self.config.agent_journal) as journal:
                     running += int(
                         journal.execute(
                             "SELECT COUNT(*) FROM assignments "
@@ -2679,7 +2732,7 @@ class LocalDaemon:
             started_admissions: set[str] = set()
             if time_healthy:
                 for _ in range(256):
-                    scheduled = execution.schedule_once(schedulable)
+                    scheduled = execution.schedule_once(schedulable, waiting_outcomes=waiting_outcomes)
                     if scheduled is None:
                         break
                     admission_id, outcome = scheduled
@@ -3980,11 +4033,12 @@ class LocalDaemon:
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
         try:
-            conn = sqlite3.connect(
-                f"{self.config.control_database.resolve().as_uri()}?mode=rw",
-                uri=True,
-                timeout=30,
-                factory=_ChangeConnection,
+            conn = (
+                sqlite3.connect(
+                    f"{self.config.control_database.resolve().as_uri()}?mode=rw",
+                    uri=True, timeout=30, factory=_ChangeConnection,
+                ) if self.config.storage is None else
+                self.config.connect_database(self.config.control_database, factory=_ChangeConnection)
             )
             conn.on_commit = self._status_changed.set
             conn.row_factory = sqlite3.Row
@@ -4018,10 +4072,12 @@ class LocalDaemon:
         if agent_root is None:
             raise QueueStorageError("coordinator has no local agent control state")
         try:
-            conn = sqlite3.connect(
-                f"{agent_root.joinpath('control.sqlite').resolve().as_uri()}?mode=rw",
-                uri=True,
-                timeout=30,
+            conn = (
+                sqlite3.connect(
+                    f"{agent_root.joinpath('control.sqlite').resolve().as_uri()}?mode=rw",
+                    uri=True, timeout=30,
+                ) if self.config.storage is None else
+                self.config.connect_database(agent_root / "control.sqlite")
             )
             conn.row_factory = sqlite3.Row
             expected = self._agent_id
@@ -4519,11 +4575,11 @@ def _require_role(principal: LocalDaemonPrincipal, role: LocalDaemonRole) -> Non
         raise QueueServiceError("daemon principal is not authorized for this operation")
 
 
-def _initialize_root(path: Path, *, role: str) -> None:
+def _initialize_root(path: Path, *, role: str, sqlite_policy: SQLitePolicy | None = None) -> None:
     path.mkdir(parents=True, mode=0o700)
     path.chmod(0o700)
     database = path / "control.sqlite"
-    with sqlite3.connect(database) as conn:
+    with (sqlite3.connect(database) if sqlite_policy is None else initialize_database(database, policy=sqlite_policy, isolation_level="")) as conn:
         conn.execute(
             "CREATE TABLE root_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
         )
@@ -5126,6 +5182,7 @@ def _scheduling_fingerprint(config: LocalDaemonConfig) -> str:
     if config.active_configuration_fingerprint is not None:
         return config.active_configuration_fingerprint
     payload = {
+        **({"slurm_admission": config.slurm_admission.to_dict()} if config.slurm_admission is not None else {}),
         **({"shared_roots": thaw_plain_data(config.shared_roots)} if config.shared_roots else {}),
         **({"assignment_payload_root_id": config.assignment_payload_root_id} if config.assignment_payload_root_id is not None else {}),
         **(

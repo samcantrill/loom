@@ -378,6 +378,23 @@ loudly until a backend provides those guarantees.
 
 ### 3.2.3 V9 SQLite Workspace Coordination Backend
 
+The private SQLite stores accept an optional `sqlite_policy` from
+`loom._sqlite_policy.SQLitePolicy`. Unconfigured stores preserve their existing
+connection behavior. Explicit policy selects `wal` or `delete` journaling,
+`full` or `extra` synchronization, and a connection-local busy timeout of
+1–300000 milliseconds. For example, `SQLitePolicy("delete", "extra", 30000)`
+requests rollback journaling with strict SQLite synchronization; it does not
+certify shared storage. The embedded coordinator authority factory passes the
+same selection to its per-run stores and retains it in its protected identity.
+
+Only explicit initialization creates files or selects a mode on empty state.
+Opening existing state uses SQLite `mode=rw`, verifies the selected journal
+mode, and refuses missing databases or mode mismatches. Converting populated
+state requires a separate stopped-owner migration. Read-only inspection keeps
+its existing no-mutation contract. These options do not advertise multi-host
+authority or general shared-filesystem safety; deployment owner locking,
+role-wide policy plumbing and filesystem qualification remain separate duties.
+
 `SQLiteWorkspaceCoordinationStore` is separate from runtime service authority
 and from the private legacy per-run SQLite implementation. It may coordinate
 trial claims and named-resource leases across ordinary `run_uri` references,
@@ -1578,6 +1595,16 @@ remove temp file on failure
 ```
 
 ### 12.3 Partial Writes
+
+The atomic byte/text/JSON helpers accept keyword-only
+`durability="best_effort"` (the existing default) or `durability="strict"`.
+Strict writes create an exclusive mode-0600 sibling, flush and fsync its bytes,
+replace the target, then fsync its containing directory. Newly created parent
+directories are private and their publication is synchronized too. Fsync errors
+are reported as `AtomicWriteError`; an error after replacement does **not** mean
+the target is unchanged. Recovery must inspect the same retained operation.
+`replace_file(..., durability="strict")` synchronizes replacement metadata;
+its caller is responsible for synchronizing the source file before calling it.
 
 On reading state files:
 

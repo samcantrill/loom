@@ -51,6 +51,17 @@ An optional profile `time` sets Slurm's allocation walltime (for example
 `02:30:00`), including bootstrap and result publication. It participates in the
 retained profile identity; it is distinct from a scientific training budget.
 
+The optional profile `requeue` selects scheduler requeue eligibility. Omission
+or `None` preserves the existing profile identity and emits no directive, leaving
+the scheduler default in force. Explicit `false` emits `#SBATCH --no-requeue`;
+explicit `true` emits `#SBATCH --requeue`. Only booleans are accepted. A selected
+value participates in both profile identity and the retained request/script;
+changing it cannot reinterpret a prepared submission or bypass replay checks.
+This is distinct from Loom retry decisions and does not establish containment
+after node failure or an administrative requeue. A deployment whose cleanup
+policy does not support restarted allocations should select `requeue: false`
+and still retain UNKNOWN when its required cleanup evidence is unavailable.
+
 ```python
 from loom.pipeline.executors.slurm import SlurmReadyStageProfile
 from loom.pipeline.executors.slurm.ready_stage import SlurmJobPrivateFileProvider
@@ -95,8 +106,10 @@ the script, `sbatch` environment, arguments, or durable state. Ready-stage
 submission uses `--export=NIL` and a protected explicit environment.
 
 The execution-only delivery uses schema v5, including admitted auxiliary project
-artifacts and submitted-image bindings. Both ready-stage SQLite owners require
-`PRAGMA user_version = 3`; the protected helper request/response envelope is v2.
+artifacts and submitted-image bindings. Legacy coordinator execution databases
+and the separate agent submission database use `PRAGMA user_version = 3`;
+trusted-user coordinator deployments select version 4 as described below.
+The protected allocation-private helper request/response envelope remains v2.
 Earlier delivery records, helper
 envelopes, unversioned databases, and mixed table shapes are rejected before
 mutation. After a receipt is retained, Loom installs its exact verifier in the
@@ -106,6 +119,213 @@ register during the synchronous call without granting any profile-wide
 authority. Definite rejection and terminal release remain logical until the
 same retained receipt receives an exact replayable helper revoke acknowledgement;
 unknown prepare, submit, or start outcomes are not revoked or inferred safe.
+
+### Explicit trusted-user file delivery
+
+Deployments that trust all processes running as the submitting UID can select
+`loom.pipeline.executors.slurm.trusted_user.SlurmUserPrivateFileProvider` through
+the existing `job_private_file_provider` field:
+
+```yaml
+job_private_file_provider:
+  _target_: loom.pipeline.executors.slurm.trusted_user.SlurmUserPrivateFileProvider
+  root: /persistent/private/bootstrap-credentials
+  descriptor: trusted-user-files-v1
+  ttl_seconds: 604800
+```
+
+This is `user_private_file_v1`, not allocation-private isolation. The provider
+root must have the same absolute path on submit and compute hosts. The current
+mode supports native bootstrap, including submitted-image execution, and refuses
+fixed bootstrap containers. The existing helper-backed provider and its profile
+fingerprints are unchanged when this mode is absent.
+
+Construction creates no files. Preparation creates private mode-0700 directories
+and mode-0600 files, refuses symlink paths, and locks a stable per-operation file.
+An operation's SHA-256 selects its directory; its request digest is retained in
+the receipt. Concurrent or response-loss replays return the same receipt.
+The raw 32-byte secret is stored only in `capability`; returned/persisted receipts
+carry its verifier. A consumed token is never regenerated. Revocation publishes
+a synchronized tombstone before unlinking the token; replays finish that same
+revocation. Lock files, receipts and tombstones have no automatic garbage
+collection while operations may be replayed. Interrupted unpublished staging may
+remain after an uncatchable process kill; it must not be treated as published work.
+
+The new protected bootstrap JSON retains its existing TLS, workspace and profile
+fields, replaces `capability_file_path` with the following declaration, and uses
+strict file durability:
+
+```json
+{
+  "schema_version": 1,
+  "credential_delivery": {
+    "kind": "user_private_file_v1",
+    "root": "/persistent/private/bootstrap-credentials",
+    "descriptor": "trusted-user-files-v1"
+  },
+  "durable_files": "strict"
+}
+```
+
+This is a fragment, not a complete configuration. Mixed, unknown or unversioned
+new-mode declarations fail. Legacy unversioned fixed-path bootstrap documents
+remain accepted; they can explicitly select `durable_files: strict` without
+changing credential delivery. Strict mode covers incarnation, deadline,
+diagnostic and registration/delivery publication, plus capability unlink
+synchronization. It acknowledges no failed fsync as success. A replay after an
+uncertain publication preserves the original identity and re-establishes sync.
+
+The coordinator persists the new credential kind and expiry. First registration
+checks expiry against coordinator accepted time in the consumption transaction;
+the worker clock is not authoritative. Exact already-consumed registration replay
+remains valid after expiry, but changed request/token/job/incarnation bindings
+still fail. Expiry does not establish containment or release a reservation.
+
+Fresh coordinators selecting trusted-user delivery or an explicit
+`slurm_admission` policy use execution schema 4 for credential metadata
+and validated GPU quantity on assignments. The submission projection and
+assignment store share this database and must initialize/reopen the same version.
+The separate agent submission database remains version 3. Submission JSON also
+remains version 3 unless operation-name accounting is selected, which uses the
+version-4 receipt described below.
+Old-mode fresh coordinators retain execution schema 3. Startup and scheduling
+reload never convert schemas; selecting a different execution schema requires a
+stopped-owner migration. The migration/operator installation path is still being
+implemented; do not upgrade retained owners by editing `user_version` manually.
+
+File privacy and successful software tests do not qualify shared-storage locking,
+server durability, an actual scheduler or container execution. A site must test
+its selected root and restart/result-recovery path before enabling submission.
+
+## Optional GPU reservation budget and submission pacing
+
+Coordinator role schema 3 accepts an optional aggregate whole-GPU ceiling:
+
+```yaml
+slurm_admission:
+  max_reserved_gpus: 8
+```
+
+The existing assignment reservation transaction checks the sum of requested
+GPUs on all unreleased Slurm assignments, across profiles and runs. It derives
+each quantity from the same validated resource request used for Slurm mapping.
+CPU-only work reserves zero. Pending, unknown, cancelling and terminal-but-not-
+released assignments keep their quantity; scheduler absence and credential
+expiry do not free it. Exact replay never reserves twice, and reopening reads
+the same rows rather than reconstructing a separate counter. This limit covers
+this coordinator's admitted Slurm work, not unrelated jobs or other coordinators.
+
+Fresh runnable requests larger than the entire budget are rejected before
+admission. A temporarily full budget leaves work waiting with
+`slurm_gpu_capacity_reserved`. The profile can select `max_outstanding: null`
+to remove its job-count cap; existing positive integer caps and their profile
+identities remain unchanged. Run parallelism, per-job resources and finite
+result retention still apply independently. Admission diagnostics distinguish
+GPU reservations, profile counts and run counts from unavailable routes.
+
+The budget participates in active scheduling identity. A scheduling reload
+cannot lower it below the current reserved quantity. Already admitted,
+unreserved work made oversized by a reduction waits with
+`slurm_gpu_request_exceeds_budget` rather than becoming a failed scientific
+execution. An explicit `max_reserved_gpus: null` disables the ceiling while
+retaining schema 4. Omitting the entire policy preserves legacy schema selection
+and fingerprints; removing it must not be used to downgrade a v4 owner.
+Protected service reload reuses existing Slurm profile instances when their
+declarations and source binding are unchanged. Changing a budget therefore does
+not reinterpret retained profiles. Changed profile declarations are constructed
+normally and remain subject to retained-identity checks.
+
+An outbound submit-agent declaration independently accepts:
+
+```yaml
+slurm_submit_interval_seconds: 1.0
+```
+
+This finite positive interval spaces fresh `sbatch` calls using the agent's
+monotonic clock. A paced operation stays at INTENT, without sleeping in a database
+transaction or blocking due observations and cancellation. The clock is sampled
+after the existing durable SUBMITTING acknowledgement, at the call boundary.
+Restart may allow one fresh call immediately; retained SUBMITTING/UNKNOWN work
+still reconciles instead of issuing a second automatic call. The setting belongs
+to active agent identity and uses the existing settled-work reload rules. Omitted
+pacing keeps existing behavior and fingerprints. Each agent owns its own pacing;
+this is not a distributed submission-rate limit.
+
+Select independent observation/retry timing on the outbound agent with:
+
+```yaml
+slurm_observation_policy:
+  failure_backoff_cap_seconds: 300
+```
+
+The finite positive cap is at most 3600 seconds and must be at least every
+selected profile's `poll_interval_seconds`. Normal cadence continues to use that
+profile setting. Each operation has separate monotonic deadlines for observation,
+cancellation and containment. Failure delays increase from one normal interval,
+doubling up to the cap: at a 30-second interval, 30/60/120/240/300 seconds. A healthy
+observation resets its failure count, including an empty selected-name accounting
+response; empty history still leaves execution unresolved. Legacy observations
+that expose only `unavailable` cannot distinguish empty from failed queries and
+back off conservatively. Inconclusive containment checks also back off.
+
+An available fenced result is delivered before a due scheduler observation and
+while observations are deferred, including while drained. Result acceptance does
+not release an assignment without the existing containment/revocation protocol.
+The first cancellation with a known handle proceeds independently of observation
+backoff; repeated unsuccessful attempts respect their own deadline. Selected-name
+cancellation still obtains fresh exact accounting identity. Reconciliation and
+cancellation that already queried history do not immediately repeat ordinary
+observation in that same step. Release/recovery requests no longer bypass retry
+timing on every task cycle.
+
+Retry deadlines are transient, not a new persistent job state. Restart permits
+one immediate observation/cancellation retry; the retained submission journal
+still forbids another automatic `sbatch`. A retained release proof is replayed
+and acknowledged before finishing revocation, without needing a new helper
+query. Timers are removed after acknowledged release. The option changes active
+agent configuration only, follows existing settled-work reload rules, and leaves
+legacy semantics/fingerprints unchanged when omitted. Its Python value is
+`loom.queue._slurm_observation.SlurmObservationPolicy`.
+
+The cap-only selection controls per-operation retry frequency and delivery
+ordering. Select all three additional fields to batch ordinary accounting through
+the actual outbound-agent cycle:
+
+```yaml
+slurm_observation_policy:
+  failure_backoff_cap_seconds: 300
+  max_jobs_per_query: 8
+  max_queries_per_cycle: 4
+  cycle_budget_seconds: 10
+```
+
+Batching requires bounded command policy and named-accounting support on every
+selected Slurm profile. Custom runners can opt into `discover_named_operations`;
+the base runner protocol is unchanged. The agent delivers available authorized
+results across its task page before fresh submissions or ordinary queries, then
+rotates fairly through due operations. Compatible operations share a query within
+one protected profile; each still validates its own full name, UID, cluster,
+submission window and retained accounting incarnation. Unknown outcomes never
+authorize another submission. Results are not containment evidence.
+
+Each query receives the smaller of its command timeout and the remaining
+monotonic cycle budget. Unqueried operations remain due. The call/time budget
+covers ordinary accounting, not submission, cancellation, helper effects,
+filesystem IO or HTTP. Cancellation keeps its independent fresh identity check.
+Oversized capture is unavailable evidence and reduces later batch sizes down to
+one operation; a still-oversized singleton stays unresolved. Malformed or
+unattributable rows cannot become a false empty observation. Fairness, batch
+sizes and retry timers are transient; durable operation and outbox state survive
+restart. Omitted batching fields preserve cap-only encoding and behavior.
+
+Draining an outbound agent holds unsubmitted INTENT operations without calling
+`sbatch`. Existing jobs still progress through observation, cancellation, result
+replay and release, including during startup recovery. Cancellation of a held
+intent closes it as a definite non-submission. Resume may proceed when the only
+retained work consists of acknowledged, unsubmitted intents under unchanged
+bindings; missing journals, uncertain calls, active jobs and unacknowledged
+effects still block it. Those intents remain retained work for reload and
+retirement, and keep their original assignment and request on resume.
 
 The profile, not authored stage data, supplies allowlisted account/partition/
 QoS, resource/directive mappings, submission limits, resident bootstrap
@@ -159,8 +379,8 @@ run / stage attempt / stage work
   -> process execution ID + authority fence
 ```
 
-It consumes the run's `max_parallel_stages` slot and a configured profile
-outstanding-submission slot, but no agent capacity. Submission uses a deliberate
+It consumes the run's `max_parallel_stages` slot, any configured profile count
+slot and any selected GPU quantity budget, but no resident-agent capacity. Submission uses a deliberate
 at-most-one automatic invocation boundary:
 
 ```text
@@ -182,6 +402,137 @@ metadata. Exactly one discovered match repairs the handle, zero unproven
 matches remain unknown, and multiple matches are a conflict. This can sacrifice
 liveness when the command was never actually invoked, but it prevents a blind
 duplicate job.
+
+Select bounded scheduler commands explicitly on a protected profile's runner:
+
+```yaml
+runner:
+  _target_: loom.pipeline.executors.slurm.SubprocessSlurmCommandRunner
+  command_policy:
+    observation_timeout_seconds: 10
+    submission_timeout_seconds: 60
+    cancellation_timeout_seconds: 10
+```
+
+All three deadlines are required finite positive seconds, at most 3600 each.
+They apply to `squeue`/`sacct` (including discovery), `sbatch`, and `scancel`,
+respectively. The optional Python value is
+`loom.pipeline.executors.slurm.commands.SlurmCommandPolicy`. Its normalized
+values bind the ready-stage profile fingerprint. Omission preserves the legacy
+runner behavior and profile fingerprint; do not select a new policy underneath
+retained work that requires the old profile identity.
+
+Bounded mode requires POSIX process groups. On timeout or interruption it kills
+the owned command group and reaps the command, including wrappers whose children
+keep output pipes open. This bounds ordinary subprocess work, not an
+uninterruptible kernel/storage stall. Stdout and stderr are each limited during
+capture to 4096 decoded characters; overflow stops the command group and rejects
+the response as unavailable evidence rather than buffering unbounded output or
+accepting truncation. A selected `sbatch` timeout has
+`slurm_submit_timeout` evidence; an unclassified nonzero exit has
+`slurm_submit_command_failed` evidence. Both remain UNKNOWN and reconcile without
+a second automatic call. A selected `scancel` timeout/nonzero exit records
+`slurm_cancel_timeout`/`slurm_cancel_unknown` and does not claim cancellation was
+requested successfully. Neither a successful cancellation command nor an
+observation is containment evidence.
+
+The real and fake runners also accept an optional explicit `client_environment`:
+
+```yaml
+runner:
+  _target_: loom.pipeline.executors.slurm.SubprocessSlurmCommandRunner
+  client_environment:
+    PATH: /site/slurm/bin:/usr/bin:/bin
+    TMPDIR: /site/scratch/temporary
+    TMP: /site/scratch/temporary
+    TEMP: /site/scratch/temporary
+    LC_ALL: C
+```
+
+This can be combined with `command_policy`. It replaces parent-shell inheritance
+for every scheduler command and selects executable lookup in both preflight and
+execution. `PATH` is required; all path entries must be absolute, without empty
+entries or `..`. Optional keys are `TMPDIR`, `TMP`, `TEMP`, `LC_ALL`, `LANG`, `TZ`
+and `LD_LIBRARY_PATH`; values must be nonempty literal text without control
+characters. Constructors validate/freeze declarations without inspecting paths
+or creating directories. Qualify executable/library/temp access at deployment.
+No unlisted variables are accepted, including scheduler option overrides,
+proxies, Python injection and `LD_PRELOAD`. These settings are non-secret and
+bind the ready-stage profile fingerprint only when selected.
+
+The selected environment is for the scheduler **client process**. `sbatch` still
+uses `--export=NIL`, including when its per-call `environment` argument is omitted.
+In this mode that argument must be omitted or empty; a nonempty override fails
+before invoking a command. Bootstrap/workload setup is separately configured.
+All selected accounting calls force `TZ=UTC` and
+`SLURM_TIME_FORMAT=%Y-%m-%dT%H:%M:%S` for consistent parsing. Omission of
+`client_environment` preserves existing lookup, environment/export behavior and
+fingerprints. This is an application environment policy, not an OS egress
+restriction. The fake runner records effective selected environments in
+`client_environments`, in `calls` order (`None` for unselected mode), while its
+existing `environments` list retains the original sbatch arguments.
+
+Command deadlines alone do not change historical matching: omitted history
+policy preserves the existing comment-based discovery. A site can explicitly
+select operation-name accounting on the profile, alongside bounded commands:
+
+```yaml
+cluster: example-cluster
+accounting_history:
+  user_id: 1000
+  clock_skew_seconds: 60
+```
+
+Use the actual submitting UID and one explicit cluster. The optional Python
+policy is `loom.pipeline.executors.slurm.history.SlurmHistoryPolicy`. Its values
+bind the profile fingerprint only when selected. It requires a command policy
+and runner methods `discover_named_operation` and `scancel_named_operation`;
+the built-in real/fake runners implement them. Existing runner implementations
+remain usable with unselected history policy.
+
+Mapping adds `--job-name=loom-<sha256(operation_id)>` and the selected cluster to
+the retained script/directives. Accounting uses explicit name/UID/cluster/time
+filters, `--duplicates`, allocation rows and adequate field widths. The runner
+fixes TZ and SLURM_TIME_FORMAT to UTC. Its lower bound is original intent creation
+minus the configured skew, not an invented actual-call timestamp. The upper
+bound advances with each observation plus the skew. This permits later controller
+acceptance/accounting after a client timeout; no empty query proves rejection.
+
+A unique complete row must match the full name, UID, cluster and submission
+interval and include DBIndex and SLUID. Missing, truncated, contradictory or
+multiple rows remain unresolved, even when multiple incarnations share a numeric
+job ID. The selected mode may wait for accounting while a job is live; it never
+falls back to a weaker name prefix or comment-only match. Ordinary scheduler
+status observation also uses this exact accounting binding. Accounting delay or
+an incarnation mismatch yields unavailable evidence and keeps capacity held.
+
+Selected submissions use receipt schema 4 with a retained `accounting_identity`;
+legacy submissions keep the exact schema-3 shape. This is independent of the
+SQLite database schema: existing agent journal tables remain version 3, and
+the coordinator's assignment/projection version is selected separately. New
+code reads both receipt versions; old code cannot interpret selected receipts.
+First activation requires drained work and coherent compatible installations.
+
+Before cancellation, selected mode obtains matching current accounting evidence.
+It then constrains `scancel` by job ID, operation name, UID and cluster. A reused
+ID or unavailable identity causes no cancellation call. Ordinary release and
+guarded-recovery helper requests include the retained accounting identity; the
+native helper boundary refuses positive evidence without its exact operation,
+UID, cluster and job binding. A valid accounting row alone is not proof of step
+cleanup or containment. The site helper and actual cancellation/cleanup behavior
+still require physical qualification. Job requeue or operator changes that alter
+the retained incarnation remain unresolved for explicit recovery.
+
+The selected scheduler client environment must also supply
+site libraries and permitted temporary paths; `--export=NIL` controls job
+environment propagation, not the command's filesystem or network behavior.
+
+After a long coordinator outage, retain the accepted-time guard. An authorized
+local operator can use the existing revision/epoch-bound time recovery operation
+after verifying the clock. A result from an already granted Slurm execution can
+replay across restart and time-recovery epochs; recovery does not issue another
+start permit or scheduler submission. Workers without a start permit cannot
+begin authored work while the coordinator is unavailable.
 
 The generated job does not immediately run authored stage code. It starts a
 fixed restricted Loom bootstrap:
@@ -231,6 +582,36 @@ inspects/reconciles the same stable operation, and never resubmits. A bootstrap
 that starts while the coordinator is unavailable waits with no authored effects
 until it can obtain the grant. Granted work may continue through coordinator
 loss and later replay its result within the profile's bounded retention model.
+
+The protected containment helper can opt into bounded communication:
+
+```yaml
+containment_helper:
+  _target_: loom.pipeline.executors.slurm.ready_stage.SlurmContainmentHelper
+  descriptor: site-qualified-cleanup-v1
+  argv: [/site/python, /site/containment-helper.py]
+  timeout_seconds: 30
+  process_policy: bounded-v1
+```
+
+Selected mode requires a finite timeout in (0, 3600] seconds. It delivers JSON
+stdin and captures stdout/stderr concurrently under that one monotonic deadline,
+with a 16384-byte bound on each output stream. A request already larger than
+that cannot fit in the required response echo and is refused before launch.
+Timeout, overflow, nonzero exit or malformed output is unavailable evidence,
+never positive containment. Timeout, overflow or communication failure kills
+the owned POSIX process group and reaps the helper leader, including when the
+leader exited before its children closed inherited pipes. This does not bound
+kernel-uninterruptible IO or contain
+descendants that deliberately create another session. The trusted helper must
+keep any nested commands bounded within its outer budget; configured timeout
+ordering must leave room for their cleanup.
+
+The helper inherits the service environment, including the deployment's explicit
+scratch settings. Bounded mode does not choose a filesystem or qualify the site
+predicate. Its selected policy is part of the retained profile fingerprint;
+omission preserves the previous helper behavior and identity. Normal/inert
+native profile composition accepts the same selection without launching it.
 
 ### Durable ready-stage results
 

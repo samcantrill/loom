@@ -9,11 +9,12 @@ import stat
 import ssl
 import sqlite3
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import cast
 from urllib import request
 
+from loom._sqlite_policy import SQLitePolicy
 from loom.artifacts import ArtifactRef
 from loom.pipeline.events import PipelineEvent, PipelineEventRecord
 from loom.pipeline.event_sinks import EventSinkFailureRecord, EventObserverLinkRecord
@@ -183,6 +184,7 @@ class EmbeddedCoordinatorAuthorityFactory:
 
     state_root: Path
     deployment_root: Path
+    sqlite_policy: SQLitePolicy | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "state_root", Path(self.state_root).resolve())
@@ -210,7 +212,9 @@ class EmbeddedCoordinatorAuthorityFactory:
 
         self._validate_root()
         owner = hashlib.sha256(str(self.deployment_root).encode()).hexdigest()
-        return SQLitePerRunAuthorityStore(run_uri, state_root=self.state_root / owner)
+        return SQLitePerRunAuthorityStore(
+            run_uri, state_root=self.state_root / owner, sqlite_policy=self.sqlite_policy
+        )
 
     def __call__(self, run_uri: str):
         authority = self._store(run_uri)
@@ -238,12 +242,15 @@ def embedded_coordinator_authority(run_uri: str):
 def coordinator_authority_identity(factory: object) -> dict[str, PlainData]:
     """Return credential-free protected owner identity for preparation recovery."""
     if isinstance(factory, EmbeddedCoordinatorAuthorityFactory):
-        return {
+        identity: dict[str, PlainData] = {
             "family": "embedded",
             "binding": hashlib.sha256(
                 json.dumps([str(factory.state_root), str(factory.deployment_root)]).encode()
             ).hexdigest(),
         }
+        if factory.sqlite_policy is not None:
+            identity["sqlite"] = asdict(factory.sqlite_policy)
+        return identity
     if factory is embedded_coordinator_authority:
         return {"family": "embedded"}
     if isinstance(factory, _AuthenticatedCoordinatorAuthorityFactory):

@@ -904,8 +904,8 @@ def _timeout_capability_message(
         if executor in {"apptainer", "singularity"}:
             return (
                 f"executor {executor!r} can enforce reliability timeout policy with "
-                "the built-in runner on supported Linux/SingularityCE 3.10.4 or 4.1.1 "
-                "PID-namespace hosts; execution-host prerequisites are checked at "
+                "the built-in runner on Linux with supported SingularityCE 3.10.4/4.1.1 "
+                "or explicit loom-apptainer-guard version 1; execution-host prerequisites are checked at "
                 "launch, not by this static diagnostic"
             )
         return f"executor {executor!r} can enforce reliability timeout policy"

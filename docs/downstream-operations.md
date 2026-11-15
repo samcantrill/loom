@@ -491,8 +491,13 @@ and current-session restart/replay remain supported.
 For an unsupported installation, settle its work with its original owner, verify
 containment and release, stop its services and preserve roots and receipts. Create
 fresh roots with the current runtime and regenerate client bindings. The current
-runtime has no upgrade, adoption or conversion command. Healthy current roots
-retain their identity across compatible runtime replacement.
+runtime has no general old-control-schema upgrade or adoption command. Current
+pure-coordinator and outbound-agent roots can select the bounded
+[`storage-upgrade` operation](features/queue.md#stopped-storage-upgrades) for
+stopped SQLite policy and coordinator Slurm schema conversion. It preserves owner
+identity and requires verified snapshots, settled effects and explicit source/
+target declarations; it does not adopt arbitrary older or incomplete roots.
+Healthy current roots retain their identity across compatible runtime replacement.
 
 ### Durable run intent on existing services
 

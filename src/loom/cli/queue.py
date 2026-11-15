@@ -37,6 +37,11 @@ def register_subparser(
     queue_subparsers = parser.add_subparsers(
         dest="queue_command", metavar="QUEUE_COMMAND"
     )
+    upgrade = queue_subparsers.add_parser("storage-upgrade", help="inspect or execute a stopped same-root storage upgrade")
+    upgrade.add_argument("action", choices=("inspect", "apply", "resume", "restore"))
+    upgrade.add_argument("--request", required=True, type=Path)
+    upgrade.set_defaults(handler=handle_storage_upgrade)
+    _add_output_options(upgrade)
     daemon_check = queue_subparsers.add_parser(
         "daemon-check", help="validate one protected coordinator role configuration"
     )
@@ -64,6 +69,7 @@ def register_subparser(
         "daemon-serve", help="serve one initialized coordinator deployment bundle"
     )
     _add_role_config_arguments(daemon_serve)
+    daemon_serve.add_argument("--start-held", action="store_true", help="close fresh admission before startup reconciliation")
     _add_output_options(daemon_serve)
     daemon_serve.set_defaults(handler=handle_daemon_serve)
     agent_check = queue_subparsers.add_parser(
@@ -108,6 +114,7 @@ def register_subparser(
         "agent-serve", help="serve one initialized outbound-agent root"
     )
     _add_role_config_arguments(agent_serve)
+    agent_serve.add_argument("--start-held", action="store_true", help="persist drain before startup; resume must name the observed hold ID")
     agent_serve.add_argument("--external-supervisor", action="store_true", help="require a separately owned native supervisor")
     agent_serve.add_argument("--expected-coordinator-id", help="pin the native coordinator during handshake")
     _add_output_options(agent_serve)
@@ -240,6 +247,8 @@ def register_subparser(
         control.add_argument("--pool")
         control.add_argument("--cancel-active", action="store_true")
         control.add_argument("--reason", default=f"cli-{kind}")
+        if kind == "resume":
+            control.add_argument("--startup-hold-id", help="current hold ID from daemon-owner --root AGENT_ROOT")
         control.set_defaults(handler=handle_daemon_agent_control, agent_control=kind)
         _add_output_options(control)
     scheduling_reload = queue_subparsers.add_parser(
@@ -298,6 +307,18 @@ def register_subparser(
     assignment.set_defaults(handler=handle_operator_assignment)
 
 
+def handle_storage_upgrade(namespace: argparse.Namespace) -> int:
+    from loom.queue.storage_upgrade import storage_upgrade
+
+    try:
+        result = storage_upgrade(namespace.request, action=namespace.action)
+    except QueueError as exc:
+        raise _queue_cli_error(exc) from exc
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise _queue_cli_error(QueueServiceError(f"storage upgrade evidence is unavailable: {exc}")) from exc
+    return _emit_daemon_payload(namespace, result)
+
+
 def handle_daemon_check(namespace: argparse.Namespace) -> int:
     """Report coordinator and optional local-agent readiness without initialization."""
     return _handle_role_check(namespace, "coordinator")
@@ -350,7 +371,7 @@ def handle_daemon_serve(namespace: argparse.Namespace) -> int:
                 },
             )
 
-        serve_coordinator(service, stop=Event(), ready=ready)
+        serve_coordinator(service, stop=Event(), ready=ready, start_held=namespace.start_held)
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     return int(ExitCode.SUCCESS)
@@ -507,7 +528,7 @@ def handle_agent_supervisor_serve(namespace: argparse.Namespace) -> int:
                 configuration=SupervisorLaunchConfiguration(
                     _read_remote_agent_root_id(service.client.agent_root),
                     tuple(profile.launch_profile for profile in service.client.resident_profiles),
-                    service.client.container_policies,
+                    service.client.container_policies, storage=service.client.storage,
                 ),
                 immutable_fingerprint=service.immutable_fingerprint,
                 active_fingerprint=service.active_fingerprint,
@@ -566,6 +587,7 @@ def handle_agent_serve(namespace: argparse.Namespace) -> int:
                 stop=stop,
                 expected_coordinator_id=getattr(namespace, "expected_coordinator_id", None),
                 trusted_config_loader=load_service,
+                start_held=namespace.start_held,
             )
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
@@ -763,6 +785,7 @@ def handle_daemon_agent_control(namespace: argparse.Namespace) -> int:
             pool=namespace.pool,
             cancel_active=bool(namespace.cancel_active),
             reason=namespace.reason,
+            startup_hold_id=getattr(namespace, "startup_hold_id", None),
         )
         client = _operator_client(namespace)
         result = client.control_agent(control)

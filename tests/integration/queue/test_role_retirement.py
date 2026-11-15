@@ -47,7 +47,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
 
 @contextmanager
-def fleet(tmp_path):
+def fleet(tmp_path, *, rollback_storage=False):
     _mixed_selection(tmp_path, "persistent", "persistent")
     path = tmp_path / "coordinator.json"
     config = json.loads(path.read_text())
@@ -56,6 +56,20 @@ def fleet(tmp_path):
         "agent_ids": ["worker"],
         "pools": ["default"],
     }
+    if rollback_storage:
+        import socket
+        storage = {
+            "owner_host": socket.gethostname(),
+            "sqlite": {"journal_mode": "delete", "synchronous": "extra"},
+            "durable_files": "strict",
+        }
+        (tmp_path / "authority").mkdir(mode=0o700)
+        config["authority"] = {"kind": "embedded", "state_root": "authority"}
+        config["storage"] = storage
+        agent_path = tmp_path / "agent.json"
+        agent = json.loads(agent_path.read_text())
+        agent["storage"] = storage
+        agent_path.write_text(json.dumps(agent))
     path.write_text(json.dumps(config))
     service = load_coordinator_service_config(tmp_path / "coordinator.json")
     LocalDaemon.initialize_deployment(service.daemon)
@@ -74,8 +88,9 @@ def fleet(tmp_path):
         daemon.stop()
 
 
-def test_coordinator_retirement_is_fenced_replayable_and_persistent(tmp_path):
-    with fleet(tmp_path) as (daemon, client):
+@pytest.mark.parametrize("rollback_storage", (False, True))
+def test_coordinator_retirement_is_fenced_replayable_and_persistent(tmp_path, rollback_storage):
+    with fleet(tmp_path, rollback_storage=rollback_storage) as (daemon, client):
         identity = client.observe_status().owner
         with pytest.raises(QueueError):
             client.retire("remove", "wrong-coordinator")
@@ -108,14 +123,16 @@ def test_pending_work_prevents_retirement_without_fencing_acceptance(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "mode", ["service", "spec", "broken-workload", "lost-response", "missing-binding"]
+    "mode,rollback_storage",
+    [(mode, False) for mode in ("service", "spec", "broken-workload", "lost-response", "missing-binding")]
+    + [("service", True), ("spec", True), ("lost-response", True)],
 )
 def test_agent_clean_retirement_before_revoke_and_native_guard(
-    tmp_path, monkeypatch, mode
+    tmp_path, monkeypatch, mode, rollback_storage,
 ):
     from loom.queue._agent_process_supervisor import _profile_from_value
 
-    with fleet(tmp_path) as (daemon, operator):
+    with fleet(tmp_path, rollback_storage=rollback_storage) as (daemon, operator):
         path = tmp_path / "agent.json"
         workload = tmp_path / "old-workload"
         if mode == "broken-workload":

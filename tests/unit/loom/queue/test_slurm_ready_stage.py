@@ -11,6 +11,57 @@ from loom.queue.errors import QueueServiceError
 from loom.queue.slurm_ready_stage import SQLiteSlurmStageAssignments
 
 
+@pytest.mark.parametrize("version", [3, 4])
+def test_assignment_and_projection_share_one_version_on_initialize_and_reopen(tmp_path, version):
+    from loom._sqlite_policy import SQLitePolicy
+    from loom.queue._agent_slurm import SlurmSubmissionProjection
+
+    path = tmp_path / "execution.sqlite"
+    policy = SQLitePolicy("delete", "extra")
+    projection = SlurmSubmissionProjection(path, _allow_initialize=True, sqlite_policy=policy, schema_version=version)
+    owner = SQLiteSlurmStageAssignments(path, tmp_path / "transfers", sqlite_policy=policy, schema_version=version)
+    owner._initialize()
+    owner._open_existing()
+    projection._open_existing()
+    SlurmSubmissionProjection(path, _allow_initialize=True, sqlite_policy=policy, schema_version=version)._open_existing()
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone() == (version,)
+        assert conn.execute("PRAGMA journal_mode").fetchone() == ("delete",)
+    conn.close()
+    other = 4 if version == 3 else 3
+    with pytest.raises(QueueServiceError, match="migration"):
+        SlurmSubmissionProjection(path, _allow_initialize=True, sqlite_policy=policy, schema_version=other)
+    with pytest.raises(QueueServiceError, match="schema is unsupported"):
+        SQLiteSlurmStageAssignments(path, tmp_path / "transfers", schema_version=other)._open_existing()
+    projection._open_existing()
+    owner._open_existing()
+
+
+def test_strict_registration_replay_after_failed_sync(tmp_path, monkeypatch):
+    import loom.pipeline.stores.atomic as atomic
+    from loom.queue.slurm_ready_stage import SlurmBootstrapWorkspace
+
+    workspace = SlurmBootstrapWorkspace(tmp_path / "compute", "assignment", durable_files="strict")
+    sync = atomic._fsync_path_strict
+    failed = False
+
+    def fail_after_publish(path):
+        nonlocal failed
+        if (path / "registration.json").exists() and not failed:
+            failed = True
+            raise OSError("injected directory sync failure")
+        sync(path)
+
+    monkeypatch.setattr(atomic, "_fsync_path_strict", fail_after_publish)
+    registration = {"assignment_id": "assignment", "delivery": {}}
+    with pytest.raises(atomic.AtomicWriteError, match="sync failure"):
+        workspace.persist_registration(registration)
+    assert failed
+    before = (workspace.root / "registration.json").read_bytes()
+    workspace.persist_registration(registration)
+    assert (workspace.root / "registration.json").read_bytes() == before
+
+
 def _shared_slurm_workspace(tmp_path):
     from dataclasses import fields, replace
     from tests.unit.loom.queue.test_remote_stage_execution import _shared_publication_workspace

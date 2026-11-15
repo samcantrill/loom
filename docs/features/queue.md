@@ -538,6 +538,43 @@ stopped supervisor. It never initializes a missing/partial root or starts a
 supervisor. These helpers live in `loom.queue.retirement`; they let current fleet
 launchers validate native ownership without constructing a qualified service.
 
+Coordinator and outbound-agent roles accept an optional immutable `storage`
+block. Omitting it preserves the existing database and fingerprint behavior.
+An explicit block supplies all three fields:
+
+```yaml
+storage:
+  owner_host: selected-kernel-hostname
+  sqlite:
+    journal_mode: delete
+    synchronous: extra
+    busy_timeout_ms: 30000
+  durable_files: strict
+```
+
+The owner check compares the kernel hostname without DNS resolution. It is
+placement validation, not a replacement for native lifetime locks. The SQLite
+policy reaches control, execution, agent, supervisor and lifetime writers; the
+embedded authority additionally requires an explicit `state_root`. Selected
+settings contribute to immutable ownership and cannot be hot-reloaded. Existing
+database opens refuse missing state or a different journal mode. Do not switch
+a populated deployment merely by editing YAML: stopped-owner migration and
+filesystem qualification are separate requirements.
+
+Explicit-policy resident workspaces retain their SQLite and file durability policy in workspace
+schema 1 so execution-only children can reopen the same settings without
+access to authority configuration. Legacy workspaces keep schema 0. Workers
+reopen existing state; they do not initialize a missing workspace. An existing
+legacy workspace is not silently adopted into the new policy. Old software's
+strict workspace schema check rejects the added storage table.
+
+Rollback journaling does not certify NFS or any other filesystem. The opt-in
+[storage process probes](../../tests/README.md#opt-in-runtime-acceptance-hooks)
+exercise isolated locks, process interruption and publication on an explicitly
+selected directory. Cross-node locks and storage-server failure semantics need
+separate evidence. A process stuck on a hard network mount must not be replaced
+by a second owner based only on a timeout.
+
 Outbound agents accept optional `max_concurrent_assignments`, a non-Boolean
 integer from 1 through 1024, defaulting to one. `AgentTlsClientConfig` and
 `AgentOffer` expose the same trailing defaulted field. The ceiling counts all
@@ -803,6 +840,18 @@ visibility, disable bytecode writes, and use private temporary scratch/cache
 directories. Output, elapsed time and process descendants are bounded. Raw
 subprocess output and private path/environment values are omitted from ordinary
 findings. Trusted import code is not sandboxed.
+
+Native probe scratch uses the profile's explicit host `TMPDIR`, then the owning
+process's `TMPDIR`, then platform temporary defaults. Container probes use the
+host source of their first configured `temporary_mounts` target when present;
+container environment values such as `TMPDIR=/tmp` are not host paths. Otherwise
+they use the owning process's temporary selection. Explicit bases must already
+exist and be writable; invalid selections fail without falling back elsewhere.
+Each probe owns a unique private child. Native child `TMPDIR`, `TMP` and `TEMP`
+select that child. Apptainer probe launcher/version processes and timeout-output
+files receive that host scratch explicitly, including runtime temporary variables.
+Scratch is removed only after containment; unresolved cleanup retains it for
+operator inspection. These choices do not add fields to profile identities.
 
 ```sh
 loom queue daemon-check coordinator.yaml --env-file coordinator.env
@@ -1141,7 +1190,158 @@ This route does not cover SLURM, remote Docker engines, cloned VM snapshots,
 state copied between hosts or hostile host attestation. Controlled-boot tests
 exercise native settlement; actual host reboot qualification is separate.
 
+### Stopped storage upgrades
+
+`loom queue storage-upgrade inspect|apply|resume|restore --request upgrade.json`
+owns explicit same-root conversion. Ordinary startup never changes a populated
+database's journal mode or schema. The first supported cohort consists of pure
+coordinators and outbound agents, including resident, Slurm-only and mixed
+agents. Coordinator bundles, arbitrary old control schemas, root relocation,
+removal of an explicit storage policy and migration from legacy run-local
+authority storage are refused before conversion. Healthy deployments which do
+not select an upgrade retain their existing startup behavior and fingerprints.
+
+Use sibling protected source/target role declarations; they may differ in storage
+and Slurm policy, while identities, roots and other declarations remain fixed.
+Embedded authority requires an existing explicit `state_root`; only that
+deployment's authority namespace is included. Retained native run references
+must have matching stores. Each store's canonical run hash and annotation
+initializer or native admission receipt must establish its ownership; anonymous,
+misbound or missing stores refuse migration. The native queue repository shares
+the coordinator control database. Independently owned workspace coordination or
+remote authority databases are not converted by this operation. A higher-level
+availability creation binding is not rewritten: select the target role files
+through a new explicit availability binding or the native service commands.
+
+The protected request uses absolute paths and observed native owner IDs:
+
+```json
+{
+  "version": 1,
+  "operation_id": "storage-2026-01",
+  "snapshot_root": "/persistent/private/upgrades/storage-2026-01",
+  "roles": [
+    {
+      "role": "coordinator",
+      "expected_root_id": "OBSERVED_COORDINATOR_ID",
+      "source_config": "/private/config/coordinator.yaml",
+      "target_config": "/private/config/coordinator-target.yaml"
+    },
+    {
+      "role": "outbound-agent",
+      "expected_root_id": "OBSERVED_AGENT_ID",
+      "source_config": "/private/config/agent.yaml",
+      "target_config": "/private/config/agent-target.yaml"
+    }
+  ]
+}
+```
+
+Each role may additionally supply `source_env_file` and `target_env_file`.
+The snapshot parent must already be owner-private. The snapshot directory is
+outside the live owner roots; preserve it with its manifests and prepared target
+copies. Database snapshots may contain sensitive state. All managed upgrade
+records/copies are private, and publication requires file and directory fsync.
+
+Inspection validates protected declarations and retained source bindings without
+constructing arbitrary authored runtime components, acquiring owner locks,
+repairing live databases or contacting scheduler helpers. It may use disposable
+private WAL/hot-journal inspection copies in the selected temporary directory.
+HTTPS authority inspection does not qualify or contact its remote endpoint.
+Target Slurm profiles require a verified retained execution store; migration
+cannot add that execution mode by creating a missing database.
+An eligible inspection is not target execution qualification or filesystem
+qualification. Apply qualifies the target, requires closed coordinator admission,
+drained agents and settled native effects, and rechecks under all selected owner
+locks. Supervisors must also be stopped with retained clean evidence.
+
+Apply backs up all selected databases/bindings and prepares converted copies.
+This includes retained resident assignment workspaces and their explicit storage
+metadata; populated workspaces require a settled native assignment association.
+Every owner receives a startup guard before live conversion begins. SQLite
+backup transactions publish each database; checkpoint/journal conversion uses
+SQLite, never deletion of live sidecars. Both owners of coordinator
+`execution.sqlite` advance together from schema 3 to 4 when selected. Agent
+Slurm schema remains 3. Released historical assignments retain unknown GPU
+quantities/legacy credential fields; unreleased assignments cannot migrate.
+
+Resume validates the same request and the original snapshots, recognizes exact
+source/target intermediate states, and continues publication. It never takes a
+new rollback snapshot of partly converted state. Only interrupted preparation
+before conversion can recapture a freshly revalidated stopped source. Conflicting
+operation guards, altered declarations, missing state, changed snapshots or
+unrecorded live contents refuse rather than overwrite evidence. Request identity
+includes composed declarations, including selected environment values and
+included/base inputs. Every mutating recovery action rechecks the selected
+physical-owner constraints under the cohort locks.
+
+Restore is whole-cohort and itself resumable while stopped. It is forbidden once
+any target owner has entered ordinary startup or availability attachment, even
+if it subsequently stopped without active work. Native startup durably records
+that boundary before mutable service activity. An incomplete upgrade blocks
+coordinator, agent, supervisor and availability startup; it does not automatically
+stop processes or complete an upgrade. Use the migration-aware runtime for every
+launch; predecessor binaries unaware of these guards are unsupported against
+partially converted roots. Retain admission/drain holds for reconciliation and
+explicitly reopen them through the existing native controls.
+
+### Held manual restart
+
+`daemon-serve CONFIG --start-held` establishes native maintenance admission
+under the coordinator owner lock before progress or endpoints start. It keeps
+an existing closed maintenance owner; otherwise it creates an ordinary retained
+close receipt. Observe `daemon-maintenance` and use its returned maintenance ID
+with the existing `--open --operation-id ID` command when ready. Accepted
+continuations, result acceptance and cancellation remain available; this is not
+a pause or cancellation of existing scientific execution.
+
+`agent-serve CONFIG --start-held` persists drain under the outbound owner lock
+before service progress. It withdraws local offers and fences uncertain polls
+without dropping their recovery identity. Existing Slurm observation, results,
+cancellation and release continue, while new offers and `sbatch` remain held.
+For a Slurm deployment, select both role flags during manual recovery.
+
+The agent retains a fresh `startup_hold_id` in its existing journal metadata for
+each explicitly held launch. Observe it without mutation:
+
+```sh
+loom queue daemon-owner --root /persistent/private/agent --format json
+```
+
+The observation's `value.startup_hold_id` must accompany the existing resume
+control as `daemon-agent-resume --startup-hold-id ID`, together with its usual
+new operation ID and observed agent/session/configuration revision. A pending
+older resume returns `startup_hold` and cannot release a newer hold, even if it
+had not reached the agent before restart. Already completed controls replay
+their recorded result without undoing the hold. A successful matching resume
+atomically clears the hold with its native effect. Inspect the operation result;
+control acceptance alone is not successful resume, and retained-work checks
+still apply.
+
+Ordinary reconnect or restart without the flag preserves the retained hold;
+another explicit `--start-held` rotates the agent hold ID. The optional control
+field is omitted from legacy wire values. Unselected startup and profile/config
+fingerprints are unchanged. Use the feature-compatible runtime for held owners;
+older binaries do not enforce the additional resume binding. No separate pause
+file, new role schema, automatic restart or scheduler cancellation is involved.
+
 ### Maintenance admission
+
+Native service settlement inspects execution ownership as well as communication
+state. Coordinator Slurm assignments must be released. Submit agents must have
+acknowledged their retained evidence and completed provider release; a terminal
+scheduler observation alone does not establish settlement. Missing required
+stores make evidence unavailable and are never recreated by inspection.
+
+Fresh outbound-agent initialization retains the required execution-store
+inventory in control metadata. Slurm-only roots intentionally have no resident
+supervisor; resident and mixed roots still require its containment and temporary
+storage cleanup evidence. This metadata does not change profile fingerprints.
+Older roots without inventory retain the conservative supervisor requirement;
+an upgrade must establish their inventory from verified configuration while
+stopped. All inspection uses the read-only SQLite path, including private WAL
+or hot-journal recovery when needed. Settlement is an observation; replacement
+still requires its normal drain, owner-lock and stopped-owner checks.
 
 The `maintenance-admission-v1` capability provides a durable native admission
 barrier. An operator needs the explicit `maintenance` action in its protected

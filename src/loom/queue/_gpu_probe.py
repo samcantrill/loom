@@ -209,6 +209,13 @@ def _probe_owner(
     from .local_daemon import _acquire_lock, _open_root, _validate_deployment_binding
     from .local_daemon_execution import local_daemon_owner_work_is_retained
 
+    role = (
+        configuration.daemon
+        if isinstance(configuration, CoordinatorServiceConfig)
+        else configuration.client
+    )
+    if role.storage is not None:
+        role.storage.require_owner()
     with ExitStack() as stack:
         if isinstance(configuration, CoordinatorServiceConfig):
             config = configuration.daemon
@@ -239,6 +246,7 @@ def _probe_owner(
             try:
                 control = _RemoteAgentJournal(
                     root,
+                    sqlite_policy=client.sqlite_policy,
                     expected_configuration_fingerprint=client.deployment_configuration_fingerprint,
                     expected_active_configuration_fingerprint=_agent_active_fingerprint(
                         client
@@ -263,11 +271,13 @@ def _probe_owner(
         current = SupervisorLaunchConfiguration(
             root_id, tuple(profile.launch_profile for profile in profiles),
             () if isinstance(configuration, CoordinatorServiceConfig) else configuration.client.container_policies,
+            storage=role.storage,
         )
         if current.fingerprint != retained_configuration.fingerprint:
             raise ManagedLocalError("GPU probe launch binding conflicts")
         journal = SQLiteAgentJournal(
-            Path(root) / "journal.sqlite", _allow_initialize=False
+            Path(root) / "journal.sqlite", _allow_initialize=False,
+            sqlite_policy=role.sqlite_policy,
         )
         journal._open_existing()
         retained = journal.retained_claim_commands()

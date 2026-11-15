@@ -7,6 +7,8 @@ control replay never revisits bindings, including after a later promotion.
 
 from __future__ import annotations
 
+from loom._sqlite_inspection import inspect_sqlite_database
+
 from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import fields, replace
@@ -282,8 +284,9 @@ def _supervisor_value(root_id: str, config: Any) -> dict[str, Any]:
 
     value = SupervisorLaunchConfiguration(
         root_id, tuple(p.launch_profile for p in config.resident_profiles), config.container_policies
-    )
+    , storage=config.storage)
     return {
+        **({"storage": value.storage.to_dict()} if value.storage is not None else {}),
         "agent_id": root_id,
         "profiles": [_profile_value(p) for p in value.profiles],
         "configuration_fingerprint": value.fingerprint,
@@ -329,7 +332,7 @@ def _finish(journal: Any, config: Any, pending: dict[str, Any]) -> Any:
     current = json.loads(path.read_bytes())
     if current not in (old, target):
         raise QueueConflictError("profile promotion supervisor binding conflicts")
-    with sqlite3.connect(root / "supervisor" / "supervisor.sqlite") as conn:
+    with config.connect_database(root / "supervisor" / "supervisor.sqlite") as conn:
         conn.execute("BEGIN IMMEDIATE")
         fp = conn.execute(
             "SELECT value FROM metadata WHERE key='configuration_fingerprint'"
@@ -452,7 +455,7 @@ def receive_stopped(spec, control, *, expected_coordinator_id):
         raise QueueConflictError("stopped delivery requires accepted declaration binding")
     journal = _RemoteAgentJournal(current.agent_root,
         expected_configuration_fingerprint=binding.immutable_fingerprint,
-        expected_active_configuration_fingerprint=binding.active_fingerprint)
+        expected_active_configuration_fingerprint=binding.active_fingerprint, sqlite_policy=current.sqlite_policy)
     try:
         require_unretired(current.agent_root)
         if read_agent_declaration_binding(current.agent_root, current.declaration_digest) != binding:
@@ -544,7 +547,7 @@ def apply_stopped(spec, control):
         raise QueueConflictError("stopped retirement requires accepted declaration binding")
     journal = _RemoteAgentJournal(current.agent_root,
         expected_configuration_fingerprint=binding.immutable_fingerprint,
-        expected_active_configuration_fingerprint=binding.active_fingerprint)
+        expected_active_configuration_fingerprint=binding.active_fingerprint, sqlite_policy=current.sqlite_policy)
     try:
         require_unretired(current.agent_root)
         if read_agent_declaration_binding(current.agent_root, current.declaration_digest) != binding:
@@ -706,7 +709,7 @@ def recover(config: Any) -> Any:
 
     with _acquire_lock(root), _supervisor_lock(root):
         root_id = _open_root(root, role="local-agent")
-        with sqlite3.connect(database) as conn:
+        with inspect_sqlite_database(database) as conn:
             row = conn.execute(
                 "SELECT value FROM root_metadata WHERE key=?", (_PENDING,)
             ).fetchone()
@@ -717,6 +720,7 @@ def recover(config: Any) -> Any:
         journal = object.__new__(_RemoteAgentJournal)
         journal._root = root
         journal._path = database
+        journal._sqlite_policy = config.sqlite_policy
         journal.root_id = root_id
         pending = json.loads(row[0])
         from .deployment import AgentSpec, load_outbound_agent_service_config

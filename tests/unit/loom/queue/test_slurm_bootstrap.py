@@ -88,6 +88,39 @@ def test_bootstrap_config_rejects_the_pre_policy_shape(tmp_path: Path) -> None:
         SlurmBootstrapClientConfig.from_file(path)
 
 
+@pytest.mark.parametrize("invalid", [None, "mixed", "unversioned", "version", "kind", "durability"])
+def test_tagged_trusted_user_bootstrap_is_explicit_and_side_effect_free(tmp_path, invalid):
+    value = _config_value(tmp_path)
+    value.pop("capability_file_path")
+    value.update(schema_version=1, credential_delivery={
+        "kind": "user_private_file_v1", "root": str(tmp_path / "credentials"),
+        "descriptor": "trusted-test-v1",
+    })
+    if invalid == "mixed":
+        value["capability_file_path"] = str(tmp_path / "fixed")
+    elif invalid == "unversioned":
+        value.pop("schema_version")
+    elif invalid == "version":
+        value["schema_version"] = 2
+    elif invalid == "kind":
+        value["credential_delivery"]["kind"] = "unknown"
+    elif invalid == "durability":
+        value["durable_files"] = "best_effort"
+    path = tmp_path / "bootstrap.json"
+    path.write_text(json.dumps(value))
+    path.chmod(0o600)
+    if invalid is None:
+        loaded = SlurmBootstrapClientConfig.from_file(path)
+        assert loaded.capability_file_path is None
+        assert loaded.durable_files == "strict"
+        assert loaded.credential_delivery == value["credential_delivery"]
+    else:
+        with pytest.raises(QueueServiceError):
+            SlurmBootstrapClientConfig.from_file(path)
+    assert not (tmp_path / "credentials").exists()
+    assert not (tmp_path / "workspace").exists()
+
+
 def test_job_private_capability_is_regular_bounded_and_unlinked(tmp_path: Path) -> None:
     path = tmp_path / "capability"
     secret = b"a" * 32
@@ -106,14 +139,27 @@ def test_job_private_capability_is_regular_bounded_and_unlinked(tmp_path: Path) 
 
 
 @pytest.mark.parametrize("pending_responses", [0, 2, None])
+@pytest.mark.parametrize(("durable_files", "trusted_user"), [("best_effort", False), ("strict", False), ("strict", True)])
 def test_bootstrap_passes_outer_boundary_containment_owner(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pending_responses: int | None
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pending_responses: int | None,
+    durable_files: str, trusted_user: bool,
 ) -> None:
     config_path = tmp_path / "bootstrap.json"
-    config_path.write_text(json.dumps(_config_value(tmp_path)), encoding="utf-8")
+    config_value = _config_value(tmp_path)
+    if trusted_user:
+        from loom.pipeline.executors.slurm.trusted_user import SlurmUserPrivateFileProvider
+
+        provider = SlurmUserPrivateFileProvider(root=tmp_path / "credentials", descriptor="trusted-test-v1")
+        prepared = provider.prepare(operation_id="operation-1", request_digest="digest-1")
+        expected_token = provider.read_capability(operation_id="operation-1", request_digest="digest-1")
+        config_value.pop("capability_file_path")
+        config_value.update(schema_version=1, credential_delivery={
+            "kind": provider.delivery_kind, "root": str(provider.root), "descriptor": provider.descriptor,
+        })
+    config_path.write_text(json.dumps(config_value), encoding="utf-8")
     config_path.chmod(0o600)
     config = SlurmBootstrapClientConfig.from_file(config_path)
-    config = replace(config, bootstrap_deadline_seconds=3, reconnect_seconds=1)
+    config = replace(config, bootstrap_deadline_seconds=3, reconnect_seconds=1, durable_files=durable_files)
     captured: dict[str, object] = {}
     actions: list[str] = []
     now = [10.0]
@@ -145,6 +191,9 @@ def test_bootstrap_passes_outer_boundary_containment_owner(
                     return {"state": "awaiting_submission_ack"}
                 return {"state": "input_ready"}
             if action == "register":
+                if trusted_user:
+                    import base64
+                    assert base64.b64decode(payload["capability"]) == expected_token
                 return {
                     "assignment_id": "assignment-1",
                     "delivery": {},
@@ -160,7 +209,8 @@ def test_bootstrap_passes_outer_boundary_containment_owner(
             pass
 
     class FakeWorkspace:
-        def __init__(self, _root: Path, _assignment_id: str) -> None:
+        def __init__(self, _root: Path, _assignment_id: str, **kwargs) -> None:
+            assert kwargs == {"durable_files": durable_files}
             self.root = tmp_path / "resident-workspace"
             self.root.mkdir()
 
@@ -193,9 +243,10 @@ def test_bootstrap_passes_outer_boundary_containment_owner(
     monkeypatch.setattr(
         slurm_bootstrap, "_read_job_private_capability", lambda _path: b"capability"
     )
-    monkeypatch.setattr(
-        slurm_bootstrap, "_unlink_job_private_capability", lambda _path: None
-    )
+    if not trusted_user:
+        monkeypatch.setattr(
+            slurm_bootstrap, "_unlink_job_private_capability", lambda _path, **_kwargs: None
+        )
     monkeypatch.setattr(
         slurm_bootstrap.SlurmStageDelivery,
         "from_dict",
@@ -252,6 +303,49 @@ def test_bootstrap_passes_outer_boundary_containment_owner(
             captured["process_containment_owner"]
             is ProcessContainmentOwner.OUTER_BOUNDARY
         )
+    if trusted_user:
+        assert not Path(prepared.path).exists()
+        assert provider.prepare(operation_id="operation-1", request_digest="digest-1") == prepared
+        assert not Path(prepared.path).exists()
+
+
+def test_strict_incarnation_replay_after_failed_publication_sync(tmp_path, monkeypatch):
+    import loom.pipeline.stores.atomic as atomic
+
+    root = tmp_path / "workspace"
+    root.mkdir()
+    sync = atomic._fsync_path_strict
+    failed = False
+
+    def fail_after_publish(path):
+        nonlocal failed
+        if (path / "incarnation").exists() and not failed:
+            failed = True
+            raise OSError("injected directory sync failure")
+        sync(path)
+
+    monkeypatch.setattr(atomic, "_fsync_path_strict", fail_after_publish)
+    with pytest.raises(atomic.AtomicWriteError, match="sync failure"):
+        slurm_bootstrap._operation_incarnation(root, "operation", durable_files="strict")
+    assert failed
+    retained = next(root.glob("operations/*/incarnation")).read_text().strip()
+    assert slurm_bootstrap._operation_incarnation(root, "operation", durable_files="strict") == retained
+
+
+def test_strict_bootstrap_fsync_failure_prevents_any_remote_start(tmp_path, monkeypatch):
+    import loom.pipeline.stores.atomic as atomic
+
+    path = tmp_path / "bootstrap.json"
+    value = _config_value(tmp_path)
+    value["durable_files"] = "strict"
+    path.write_text(json.dumps(value))
+    path.chmod(0o600)
+    config = SlurmBootstrapClientConfig.from_file(path)
+    monkeypatch.setenv("SLURM_JOB_ID", "123")
+    monkeypatch.setattr(slurm_bootstrap, "LocalDaemonAgentHttpClient", lambda *_: pytest.fail("connected before durable bootstrap state"))
+    monkeypatch.setattr(atomic.os, "fsync", lambda *_: (_ for _ in ()).throw(OSError("unavailable sync")))
+    with pytest.raises(atomic.AtomicWriteError, match="unavailable sync"):
+        run_slurm_bootstrap(operation_id="operation", request_digest="request", config=config)
 
 
 def test_prestart_reconnect_deadline_never_grants_offline(

@@ -26,6 +26,7 @@ def serve_coordinator(
     stop: Event,
     lifetime: str | None = None,
     ready: Callable[[DaemonStatus, int | None], None] | None = None,
+    start_held: bool = False,
 ) -> None:
     """Serve reconciled endpoints until explicit stop or authorized run retirement."""
     config = service.daemon
@@ -95,9 +96,13 @@ def serve_coordinator(
         )
     )
     try:
-        status = daemon.start()
-        lifetime = retained_lifetime(config.coordinator_root, lifetime)
-        record_process(config.coordinator_root, stopped=False)
+        status = daemon.start(start_held=start_held)
+        lifetime = retained_lifetime(
+            config.coordinator_root, lifetime, sqlite_policy=config.sqlite_policy,
+        )
+        record_process(
+            config.coordinator_root, stopped=False, sqlite_policy=config.sqlite_policy,
+        )
         server.start()
         if agent_server is not None:
             agent_server.start()
@@ -121,7 +126,9 @@ def serve_coordinator(
         server.stop()
         daemon.stop()
         if daemon._lifetime.clean_shutdown_verified:
-            record_process(config.coordinator_root, stopped=True)
+            record_process(
+                config.coordinator_root, stopped=True, sqlite_policy=config.sqlite_policy,
+            )
 
 
 def main() -> None:

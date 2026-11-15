@@ -10,13 +10,15 @@ from time import monotonic, sleep
 
 import pytest
 
+from loom import _pidfd
+
 from loom.pipeline.executors.apptainer import (
     ApptainerExecOptions,
     SubprocessApptainerExecRunner,
     build_apptainer_exec_command,
 )
 from loom.pipeline.executors.apptainer import _timeout
-from loom.pipeline.executors.containers import ContainerMount, ContainerOptions
+from loom.pipeline.executors.containers import ContainerEnvironment, ContainerMount, ContainerOptions
 from tests.container_acceptance.test_real_container_runtimes import (
     _required_apptainer_resource_command,
 )
@@ -26,7 +28,7 @@ pytestmark = [pytest.mark.slow, pytest.mark.optional_dependency]
 
 
 @pytest.fixture
-def runtime() -> tuple[str, str]:
+def runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[str, str]:
     if os.environ.get("LOOM_RUN_APPTAINER_TIMEOUT_ACCEPTANCE") != "1":
         pytest.skip(
             "set LOOM_RUN_APPTAINER_TIMEOUT_ACCEPTANCE=1 for namespace lifecycle acceptance"
@@ -35,27 +37,54 @@ def runtime() -> tuple[str, str]:
     assert image and Path(image).is_file(), (
         "set LOOM_APPTAINER_RESOURCE_IMAGE to an approved local SIF"
     )
+    host_temporary = tmp_path / "host-temporary"
+    cache = tmp_path / "runtime-cache"
+    config = tmp_path / "runtime-config"
+    for directory in (host_temporary, cache, config):
+        directory.mkdir(mode=0o700)
+    for name in ("TMPDIR", "TMP", "TEMP", "APPTAINER_TMPDIR", "SINGULARITY_TMPDIR"):
+        monkeypatch.setenv(name, str(host_temporary))
+    for name in ("APPTAINER_CACHEDIR", "SINGULARITY_CACHEDIR"):
+        monkeypatch.setenv(name, str(cache))
+    monkeypatch.setenv("APPTAINER_CONFIGDIR", str(config))
+    for name in ("APPTAINER_BIND", "APPTAINER_BINDPATH", "SINGULARITY_BIND", "SINGULARITY_BINDPATH"):
+        monkeypatch.delenv(name, raising=False)
     return _required_apptainer_resource_command(), image
 
 
-def _command(runtime: tuple[str, str], workspace: Path, *, resistant: bool = True):  # noqa: ANN202
+def _container(runtime: tuple[str, str], workspace: Path) -> ContainerOptions:
+    temporary = workspace / "container-tmp"
+    var_temporary = workspace / "container-var-tmp"
+    temporary.mkdir(mode=0o700, exist_ok=True)
+    var_temporary.mkdir(mode=0o700, exist_ok=True)
+    return ContainerOptions(
+        image=runtime[1], workdir="/fixture",
+        environment=ContainerEnvironment(variables={"TMPDIR": "/tmp", "TMP": "/tmp", "TEMP": "/tmp"}),
+        mounts=(
+            ContainerMount(source=str(workspace), target="/fixture", mode="rw"),
+            ContainerMount(source=str(temporary), target="/tmp", mode="rw"),
+            ContainerMount(source=str(var_temporary), target="/var/tmp", mode="rw"),
+        ),
+    )
+
+
+def _command(
+    runtime: tuple[str, str], workspace: Path, *, resistant: bool = True,
+    wait_for_grant: bool = False,
+):  # noqa: ANN202
     child = (
         "trap '' TERM; " if resistant else ""
     ) + "printf ready > /fixture/ready; while :; do sleep 1; done"
+    gate = "while [ ! -f /fixture/run.grant ]; do sleep 0.01; done; " if wait_for_grant else ""
     return build_apptainer_exec_command(
-        container_options=ContainerOptions(
-            image=runtime[1],
-            mounts=(
-                ContainerMount(source=str(workspace), target="/fixture", mode="rw"),
-            ),
-        ),
-        apptainer_options=ApptainerExecOptions(command=runtime[0]),
-        worker_command=("sh", "-c", 'setsid sh -c "$1" & wait', "sh", child),
+        container_options=_container(runtime, workspace),
+        apptainer_options=ApptainerExecOptions(command=runtime[0], no_home=True),
+        worker_command=("sh", "-c", gate + 'setsid sh -c "$1" & wait', "sh", child),
     )
 
 
 def _pin_tree(root: int) -> dict[int, int]:
-    handles = {root: os.pidfd_open(root)}
+    handles = {root: _pidfd.open_pidfd(root)}
     pending = [root]
     while pending:
         parent = pending.pop()
@@ -64,7 +93,7 @@ def _pin_tree(root: int) -> dict[int, int]:
                 pid = int(value)
                 if pid not in handles:
                     try:
-                        handles[pid] = os.pidfd_open(pid)
+                        handles[pid] = _pidfd.open_pidfd(pid)
                         pending.append(pid)
                     except ProcessLookupError:
                         pass
@@ -75,11 +104,32 @@ def _exited(fd: int) -> bool:
     return bool(select.select([fd], [], [], 0)[0])
 
 
+def _namespace_init(handles: dict[int, int]) -> tuple[int, int]:
+    facts = {
+        pid: dict(line.split(":", 1) for line in Path(f"/proc/{pid}/status").read_text().splitlines())
+        for pid in handles
+    }
+    candidates = [
+        pid for pid, fact in facts.items()
+        if len(fact.get("NSpid", "").split()) > 1
+        and fact["NSpid"].split()[-1] == "1"
+    ]
+    if candidates:
+        depth = min(len(facts[pid]["NSpid"].split()) for pid in candidates)
+        candidates = [pid for pid in candidates if len(facts[pid]["NSpid"].split()) == depth]
+    assert len(candidates) == 1, facts
+    init = candidates[0]
+    parent = int(facts[init]["PPid"])
+    assert parent in handles
+    assert not _exited(handles[init])
+    return init, parent
+
+
 def _cleanup(handles: dict[int, int]) -> None:
     for fd in handles.values():
         try:
             if not _exited(fd):
-                signal.pidfd_send_signal(fd, signal.SIGKILL)
+                _pidfd.send_pidfd_signal(fd, signal.SIGKILL)
         except ProcessLookupError:
             pass
         finally:
@@ -114,18 +164,18 @@ def test_real_direct_namespace_settlement(
             handles.update(_pin_tree(process.pid))
             assert len(handles) >= 4  # launcher, init, worker, separate-session child
             assert os.getpgid(process.pid) == os.getpgrp()
-            facts = [Path(f"/proc/{pid}/status").read_text() for pid in handles]
-            init_pids = [
-                pid
-                for pid, fact in zip(handles, facts, strict=True)
-                if "Name:\tsinit\n" in fact
-            ]
-            assert len(init_pids) == 1
-            assert os.getpgid(init_pids[0]) == group
+            init, parent = _namespace_init(handles)
+            assert parent == process.pid
+            descriptor = dict(
+                line.split(":", 1)
+                for line in Path(f"/proc/self/fdinfo/{fd}").read_text().splitlines()
+            )
+            assert int(descriptor["Pid"]) == init
+            assert os.getpgid(init) == group
             assert any(os.getpgid(pid) != group for pid in handles)
             topology_verified = True
             if mode == "root_first":
-                signal.pidfd_send_signal(handles[process.pid], signal.SIGKILL)
+                _pidfd.send_pidfd_signal(handles[process.pid], signal.SIGKILL)
         if mode == "uncertain":
             os.close(fd)
             return None  # deliberately unavailable direct identity, not fake settlement
@@ -170,17 +220,21 @@ def test_real_direct_namespace_settlement(
             not all(_exited(fd) for fd in handles.values()) and monotonic() < deadline
         ):
             sleep(0.01)
-        assert all(_exited(fd) for fd in handles.values())
+        assert all(_exited(fd) for fd in handles.values()), {
+            pid: Path(f"/proc/{pid}/status").read_text()
+            for pid, fd in handles.items() if not _exited(fd)
+        }
     finally:
         _cleanup(handles)
 
 
 def test_real_success_without_timeout_keeps_old_invocation(
     runtime: tuple[str, str],
+    tmp_path: Path,
 ) -> None:
     command = build_apptainer_exec_command(
-        container_options=ContainerOptions(image=runtime[1]),
-        apptainer_options=ApptainerExecOptions(command=runtime[0]),
+        container_options=_container(runtime, tmp_path),
+        apptainer_options=ApptainerExecOptions(command=runtime[0], no_home=True),
         worker_command=("sh", "-c", "printf ready"),
     )
     result = SubprocessApptainerExecRunner().run(command)
@@ -193,10 +247,11 @@ def test_real_success_without_timeout_keeps_old_invocation(
 def test_real_completed_command_with_timeout(
     runtime: tuple[str, str],
     exit_code: int,
+    tmp_path: Path,
 ) -> None:
     command = build_apptainer_exec_command(
-        container_options=ContainerOptions(image=runtime[1]),
-        apptainer_options=ApptainerExecOptions(command=runtime[0]),
+        container_options=_container(runtime, tmp_path),
+        apptainer_options=ApptainerExecOptions(command=runtime[0], no_home=True),
         worker_command=("sh", "-c", f"sleep 0.1; printf ready; exit {exit_code}"),
     )
     result = SubprocessApptainerExecRunner().run(command, timeout_seconds=3)
@@ -231,12 +286,17 @@ def test_deadline_during_runtime_startup_reports_missing_init(
     assert "namespace init identity unavailable; cleanup unresolved" in result.error
 
 
+@pytest.mark.parametrize("backend", ["native", "apptainer"])
 def test_real_resident_query_then_contain_settles_namespace(
     runtime: tuple[str, str],
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    backend: str,
 ) -> None:
+    from loom.pipeline.executors.apptainer import ApptainerExecCommand
     from loom.queue._agent_process_supervisor import (
         AgentProcessSupervisor,
+        ResidentWorkerLaunch,
         ResidentWorkerLaunchProfile,
         SupervisorLaunchState,
     )
@@ -244,7 +304,7 @@ def test_real_resident_query_then_contain_settles_namespace(
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    command = _command(runtime, workspace)
+    command = _command(runtime, workspace, wait_for_grant=backend == "apptainer")
     executable = tmp_path / "namespace-worker"
     executable.write_text(
         f"#!{sys.executable}\n"
@@ -261,16 +321,38 @@ def test_real_resident_query_then_contain_settles_namespace(
             "version": 1,
         },
     )
+    if backend == "apptainer":
+        profile = replace(profile, container={
+            "kind": "apptainer",
+            "container": _container(runtime, workspace).to_dict(),
+            "options": {"command": runtime[0], "no_home": True},
+            "python_executable": "/bin/sh",
+            "daemon_endpoint": None,
+        })
+        # Substitute only the scientific worker projection with the gated shell
+        # fixture. Launch, namespace capture, query and containment remain real.
+        projected = ApptainerExecCommand.from_argv(_timeout.namespace_argv(command.argv))
+        monkeypatch.setattr(
+            ResidentWorkerLaunch, "container_command", property(lambda _: projected),
+        )
     agent = tmp_path / "agent"
     agent.mkdir()
     supervisor = AgentProcessSupervisor.initialize(
         agent, agent_id="agent-A", profiles=(profile,)
     )
-    launch = replace(_launch(supervisor, workspace), profile=profile)
+    child_environment = {
+        name: os.environ[name] for name in (
+            "PATH", "PYTHONPATH", "PYTHONDONTWRITEBYTECODE", "PYTHONNOUSERSITE",
+            "TMPDIR", "TMP", "TEMP", "APPTAINER_TMPDIR", "SINGULARITY_TMPDIR",
+            "APPTAINER_CACHEDIR", "SINGULARITY_CACHEDIR", "APPTAINER_CONFIGDIR",
+            "LOOM_APPTAINER_GUARD_RUNTIME", "LOOM_APPTAINER_GUARD_UNSHARE",
+        ) if name in os.environ
+    }
+    launch = replace(_launch(supervisor, workspace), profile=profile, environment=child_environment)
     receipt = supervisor.launch(launch)
     root = receipt.process_id
     assert root is not None
-    handles = {root: os.pidfd_open(root)}
+    handles = {root: _pidfd.open_pidfd(root)}
     try:
         deadline = monotonic() + 5
         while not (workspace / "ready").exists():
@@ -278,15 +360,12 @@ def test_real_resident_query_then_contain_settles_namespace(
             sleep(0.01)
         os.close(handles.pop(root))
         handles.update(_pin_tree(root))
-        init = next(
-            pid
-            for pid in handles
-            if "Name:\tsinit\n" in Path(f"/proc/{pid}/status").read_text()
-        )
+        init, launcher = _namespace_init(handles)
+        assert (launcher == root) is (backend == "apptainer")
         assert os.getpgid(init) == root
         assert any(os.getpgid(pid) != root for pid in handles)
         assert not supervisor.quiescent()
-        signal.pidfd_send_signal(handles[root], signal.SIGKILL)
+        _pidfd.send_pidfd_signal(handles[root], signal.SIGKILL)
         deadline = monotonic() + 3
         while supervisor.query(launch).state is not SupervisorLaunchState.EXITED:
             assert monotonic() < deadline
