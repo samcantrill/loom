@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+from loom._sqlite_policy import SQLitePolicy, connect_existing, initialize_database
+
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager, nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import base64
 from datetime import datetime, timezone
+from functools import lru_cache
 import hashlib
 import hmac
 import json
 from pathlib import Path
 import sqlite3
-from typing import TYPE_CHECKING, Any, Iterator, cast
+from typing import TYPE_CHECKING, Any, Iterator, Literal, cast
 
 from loom._sqlite_inspection import inspect_sqlite_database
 from loom.artifacts import ArtifactRef
@@ -29,9 +32,11 @@ from loom.pipeline.resources import ResourceRequest
 from loom.pipeline.runtime._resource_controls import resource_control_records
 from loom.pipeline.runtime.resource_policy import ResourcePolicy
 from loom.pipeline.status import StageStatus
+from loom.pipeline.stores.atomic import _ensure_durable_parent, atomic_write_bytes
 from loom.pipeline.stores.shared_artifacts import binding as shared_binding
 from loom.scheduling import SchedulingComponentDescriptor
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
+from loom.timestamps import parse_timestamp
 
 from ._remote_stage_execution import (
     TRANSFER_CHUNK_BYTES,
@@ -50,16 +55,28 @@ from ._remote_stage_execution import (
     _validate_remote_semantic_data,
 )
 from .errors import QueueConflictError, QueueServiceError
+from ._slurm_admission import SlurmAdmissionDeferred, validate_gpu_limit
 
 if TYPE_CHECKING:
     from ._agent_process_supervisor import ResidentWorkerLaunchProfile
     from .preparation import PreparationChildInput
     from .submitted_execution import SubmittedContainerExecution
 
+if TYPE_CHECKING:
+    from ._agent_process_supervisor import ResidentWorkerLaunchProfile
+    from .preparation import PreparationChildInput
+    from .submitted_execution import SubmittedContainerExecution
 
 SLURM_STAGE_DELIVERY_SCHEMA_VERSION = 5
 _ASSIGNMENT_TABLE = "slurm_stage_assignments"
 _OUTPUT_TABLE = "slurm_stage_outputs"
+
+
+def _reserved_gpu_count(conn: sqlite3.Connection, schema_version: int = 4) -> int:
+    return int(conn.execute(
+        f"SELECT COALESCE(SUM(requested_gpu_count), 0) FROM {_ASSIGNMENT_TABLE} "
+        "WHERE state != 'released'" + (" AND compute_released_at IS NULL" if schema_version >= 5 else "")
+    ).fetchone()[0])
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,6 +274,9 @@ class SlurmStageDelivery:
         object.__setattr__(self, "worker_metadata", metadata)
         object.__setattr__(self, "inputs", inputs)
         object.__setattr__(self, "declared_outputs", outputs)
+        from ._shared_recovery import validate_wire
+
+        validate_wire(self)
 
     @classmethod
     def from_worker_request(
@@ -451,6 +471,13 @@ class SlurmStageRecord:
     report: _RemoteExecutionReport | None
     start_consumed: bool
     agent_evidence_accepted_at: str | None
+    requested_gpu_count: int | None = None
+    capability_delivery_kind: str | None = None
+    capability_expires_at: str | None = None
+    publication_requested_at: str | None = None
+    publication_completed_at: str | None = None
+    publication_cancelled_at: str | None = None
+    compute_released_at: str | None = None
 
 
 class SQLiteSlurmStageAssignments:
@@ -462,20 +489,38 @@ class SQLiteSlurmStageAssignments:
         transfer_root: str | Path,
         *,
         _allow_initialize: bool = True,
+        sqlite_policy: SQLitePolicy | None = None,
+        schema_version: int = 3,
     ) -> None:
+        if type(schema_version) is not int or schema_version not in {3, 4, 5}:
+            raise QueueServiceError("SLURM assignment schema selection is unsupported")
+        self.schema_version = schema_version
         self.path = Path(path)
         self.transfer_root = Path(transfer_root)
-        self._allow_initialize = _allow_initialize
+        self._allow_initialize = _allow_initialize and sqlite_policy is None
+        self._sqlite_policy = sqlite_policy
 
     def _initialize(self) -> None:
-        with self._transaction():
-            pass
+        previous = self._allow_initialize
+        self._allow_initialize = True
+        try:
+            with self._transaction():
+                pass
+        finally:
+            self._allow_initialize = previous
 
     def _open_existing(self) -> None:
         if not self.path.is_file():
             raise QueueServiceError("SLURM assignment store is missing")
         with inspect_sqlite_database(self.path) as conn:
-            _require_schema(conn)
+            _require_schema(conn, expected_version=self.schema_version)
+
+    def reserved_gpu_count(self) -> int:
+        """Read the durable debit for a scheduling reload under its owner guard."""
+        if self.schema_version < 4:
+            raise QueueServiceError("SLURM GPU admission requires execution schema 4")
+        with self._transaction() as conn:
+            return _reserved_gpu_count(conn, self.schema_version)
 
     def reserve(
         self,
@@ -485,8 +530,10 @@ class SQLiteSlurmStageAssignments:
         delivery: SlurmStageDelivery,
         input_paths: Mapping[str, Path],
         issuer_epoch: str,
-        max_parallel_stages: int,
-        max_profile_outstanding: int,
+        max_parallel_stages: int | None,
+        max_profile_outstanding: int | None,
+        requested_gpu_count: int | None = None,
+        max_reserved_gpus: int | None = None,
         reservation_guard: Callable[[], AbstractContextManager[None]] | None = None,
     ) -> str:
         if not isinstance(assignment, SlurmStageAssignment):
@@ -495,11 +542,21 @@ class SQLiteSlurmStageAssignments:
             raise QueueConflictError("SLURM delivery assignment conflicts")
         if assignment.request_digest != request_json.get("digest"):
             raise QueueConflictError("SLURM request digest conflicts")
+        if self.schema_version >= 4 and (type(requested_gpu_count) is not int or requested_gpu_count < 0):
+            raise QueueServiceError("SLURM reservation requires a nonnegative GPU quantity")
+        try:
+            validate_gpu_limit(max_reserved_gpus)
+        except ValueError as exc:
+            raise QueueServiceError(str(exc)) from exc
+        if max_reserved_gpus is not None and self.schema_version < 4:
+            raise QueueServiceError("SLURM GPU admission requires execution schema 4")
         _text(issuer_epoch, "issuer_epoch")
         for value, name in (
             (max_parallel_stages, "run slot limit"),
             (max_profile_outstanding, "profile slot limit"),
         ):
+            if value is None:
+                continue
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise QueueServiceError(f"SLURM {name} is invalid")
         paths = {key: Path(value).resolve() for key, value in input_paths.items()}
@@ -528,6 +585,7 @@ class SQLiteSlurmStageAssignments:
                     or str(existing["request_json"]) != request_value
                     or str(existing["delivery_json"]) != delivery_json
                     or str(existing["input_paths_json"]) != input_paths_json
+                    or self.schema_version >= 4 and existing["requested_gpu_count"] != requested_gpu_count
                 ):
                     raise QueueConflictError("SLURM assignment replay conflicts")
                 return str(existing["state"])
@@ -542,6 +600,11 @@ class SQLiteSlurmStageAssignments:
             except Exception as exc:
                 raise QueueConflictError("SLURM stage work is invalid") from exc
             route = work.placement.route
+            if self.schema_version >= 4:
+                from loom.pipeline.executors.slurm.ready_stage import _ready_stage_requested_gpu_count
+
+                if requested_gpu_count != _ready_stage_requested_gpu_count(work.placement.resource_request):
+                    raise QueueConflictError("SLURM GPU quantity conflicts with stage work")
             if (
                 work.run_uri != assignment.run_uri
                 or work.stage_name != assignment.stage_name
@@ -580,24 +643,42 @@ class SQLiteSlurmStageAssignments:
                     (assignment.run_uri,),
                 ).fetchone()[0]
             )
-            if managed_count + slurm_count >= max_parallel_stages:
-                raise QueueServiceError("run active-assignment limit reached")
-            profile_count = int(
-                conn.execute(
-                    f"SELECT COUNT(*) FROM {_ASSIGNMENT_TABLE} WHERE profile_id = ? "
-                    "AND state != 'released'",
-                    (assignment.profile_id,),
-                ).fetchone()[0]
-            )
-            if profile_count >= max_profile_outstanding:
-                raise QueueServiceError("SLURM profile outstanding limit reached")
+            if max_parallel_stages is not None and managed_count + slurm_count >= max_parallel_stages:
+                raise SlurmAdmissionDeferred(
+                    "run_active_assignment_limit", "run active-assignment limit reached",
+                )
+            if max_profile_outstanding is not None:
+                profile_count = int(
+                    conn.execute(
+                        f"SELECT COUNT(*) FROM {_ASSIGNMENT_TABLE} WHERE profile_id = ? "
+                        "AND state != 'released'",
+                        (assignment.profile_id,),
+                    ).fetchone()[0]
+                )
+                if profile_count >= max_profile_outstanding:
+                    raise SlurmAdmissionDeferred(
+                        "slurm_profile_outstanding_limit", "SLURM profile outstanding limit reached",
+                    )
+            if max_reserved_gpus is not None:
+                assert requested_gpu_count is not None
+                if requested_gpu_count > max_reserved_gpus:
+                    raise SlurmAdmissionDeferred(
+                        "slurm_gpu_request_exceeds_budget", "SLURM request exceeds GPU reservation budget",
+                    )
+                if _reserved_gpu_count(conn, self.schema_version) + requested_gpu_count > max_reserved_gpus:
+                    raise SlurmAdmissionDeferred(
+                        "slurm_gpu_capacity_reserved", "SLURM GPU reservation budget is full",
+                    )
+            quantity_columns = ", requested_gpu_count" if self.schema_version >= 4 else ""
+            quantity_values = ", ?" if self.schema_version >= 4 else ""
             conn.execute(
                 f"INSERT INTO {_ASSIGNMENT_TABLE} ("
                 "assignment_id, operation_id, run_uri, stage_work_id, profile_id, "
                 "state, identity_json, request_json, delivery_json, input_paths_json, "
                 "issuer_epoch, job_id, cluster, bootstrap_incarnation, input_ready, "
-                "fence, process_execution_id, report_json, capability_verifier, submission_eligible, capability_consumed) VALUES (?, ?, ?, ?, ?, "
-                "'reserved', ?, ?, ?, ?, ?, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL, 0, 0)",
+                "fence, process_execution_id, report_json, capability_verifier, submission_eligible, capability_consumed"
+                f"{quantity_columns}) VALUES (?, ?, ?, ?, ?, "
+                f"'reserved', ?, ?, ?, ?, ?, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL, 0, 0{quantity_values})",
                 (
                     assignment.assignment_id,
                     assignment.operation_id,
@@ -609,6 +690,7 @@ class SQLiteSlurmStageAssignments:
                     delivery_json,
                     input_paths_json,
                     issuer_epoch,
+                    *((requested_gpu_count,) if self.schema_version >= 4 else ()),
                 ),
             )
             decided = StageWorkRecord.from_dict(
@@ -718,11 +800,24 @@ class SQLiteSlurmStageAssignments:
         profile_id: str,
         profile_descriptor: SchedulingComponentDescriptor,
         verifier: str,
+        delivery_kind: str | None = None,
+        expires_at: str | None = None,
     ) -> None:
         """Durably publish one exact prepared capability to bootstrap authority."""
 
         if not isinstance(profile_descriptor, SchedulingComponentDescriptor):
             raise QueueServiceError("SLURM capability profile is invalid")
+        if delivery_kind is not None:
+            if delivery_kind != "user_private_file_v1" or self.schema_version < 4:
+                raise QueueServiceError("SLURM capability delivery requires schema 4")
+            try:
+                if not isinstance(expires_at, str):
+                    raise ValueError("missing expiry")
+                parse_timestamp(expires_at)
+            except ValueError as exc:
+                raise QueueServiceError("SLURM capability expiry is invalid") from exc
+        elif expires_at is not None:
+            raise QueueServiceError("SLURM capability expiry requires a delivery kind")
         if (
             not isinstance(verifier, str)
             or len(verifier) != 64
@@ -745,12 +840,20 @@ class SQLiteSlurmStageAssignments:
             if retained is None:
                 if str(row["state"]) != "bound":
                     raise QueueConflictError("SLURM capability handoff is ineligible")
+                metadata_sql = ", capability_delivery_kind = ?, capability_expires_at = ?" if self.schema_version >= 4 else ""
+                metadata_values = (delivery_kind, expires_at) if self.schema_version >= 4 else ()
                 conn.execute(
-                    f"UPDATE {_ASSIGNMENT_TABLE} SET capability_verifier = ? "
+                    f"UPDATE {_ASSIGNMENT_TABLE} SET capability_verifier = ?{metadata_sql} "
                     "WHERE assignment_id = ?",
-                    (verifier, assignment_id),
+                    (verifier, *metadata_values, assignment_id),
                 )
-            elif not hmac.compare_digest(retained, verifier):
+            elif (
+                not hmac.compare_digest(retained, verifier)
+                or self.schema_version >= 4 and (
+                    row["capability_delivery_kind"] != delivery_kind
+                    or row["capability_expires_at"] != expires_at
+                )
+            ):
                 raise QueueConflictError("SLURM capability handoff conflicts")
 
     def mark_submission_eligible(
@@ -762,6 +865,8 @@ class SQLiteSlurmStageAssignments:
         profile_id: str,
         profile_descriptor: SchedulingComponentDescriptor,
         verifier: str,
+        delivery_kind: str | None = None,
+        expires_at: str | None = None,
     ) -> None:
         """Mirror the exact pre-run submission barrier to bootstrap authority."""
 
@@ -772,6 +877,8 @@ class SQLiteSlurmStageAssignments:
             profile_id=profile_id,
             profile_descriptor=profile_descriptor,
             verifier=verifier,
+            delivery_kind=delivery_kind,
+            expires_at=expires_at,
         )
         with self._transaction() as conn:
             row = self._row(conn, assignment_id)
@@ -888,6 +995,7 @@ class SQLiteSlurmStageAssignments:
         cluster: str | None,
         incarnation: str,
         capability: str,
+        accepted_time: str | None = None,
     ) -> SlurmStageRecord:
         for value, name in (
             (operation_id, "operation_id"),
@@ -940,6 +1048,15 @@ class SQLiteSlurmStageAssignments:
                 # The same verifier/handle/incarnation is a response-loss replay;
                 # all changed bindings above have already failed without mutation.
                 return self._record(row)
+            if self.schema_version >= 4 and row["capability_delivery_kind"] == "user_private_file_v1":
+                if accepted_time is None:
+                    raise QueueServiceError("trusted-user first registration requires coordinator accepted time")
+                try:
+                    expired = parse_timestamp(accepted_time) >= parse_timestamp(row["capability_expires_at"])
+                except (TypeError, ValueError) as exc:
+                    raise QueueServiceError("SLURM capability time evidence is invalid") from exc
+                if expired:
+                    raise QueueConflictError("SLURM capability first use has expired")
             conn.execute(
                 f"UPDATE {_ASSIGNMENT_TABLE} SET job_id = ?, cluster = ?, "
                 "bootstrap_incarnation = ?, capability_consumed = 1 WHERE assignment_id = ?",
@@ -1025,12 +1142,12 @@ class SQLiteSlurmStageAssignments:
             )
 
     def read(self, assignment_id: str) -> SlurmStageRecord:
-        with _connect(self.path, require_existing=True) as conn:
+        with _connect(self.path, sqlite_policy=self._sqlite_policy, require_existing=True) as conn:
             conn.row_factory = sqlite3.Row
             return self._record(self._row(conn, assignment_id))
 
     def read_operation(self, operation_id: str) -> SlurmStageRecord:
-        with _connect(self.path, require_existing=True) as conn:
+        with _connect(self.path, sqlite_policy=self._sqlite_policy, require_existing=True) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 f"SELECT * FROM {_ASSIGNMENT_TABLE} WHERE operation_id = ?",
@@ -1043,7 +1160,7 @@ class SQLiteSlurmStageAssignments:
     def find_operation(self, operation_id: str) -> SlurmStageRecord | None:
         """Return one exact retained operation without weakening store failures."""
 
-        with _connect(self.path, require_existing=True) as conn:
+        with _connect(self.path, sqlite_policy=self._sqlite_policy, require_existing=True) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 f"SELECT * FROM {_ASSIGNMENT_TABLE} WHERE operation_id = ?",
@@ -1052,7 +1169,7 @@ class SQLiteSlurmStageAssignments:
             return None if row is None else self._record(row)
 
     def list_run_unreleased(self, run_uri: str) -> tuple[SlurmStageRecord, ...]:
-        with _connect(self.path, require_existing=True) as conn:
+        with _connect(self.path, sqlite_policy=self._sqlite_policy, require_existing=True) as conn:
             conn.row_factory = sqlite3.Row
             rows = tuple(
                 conn.execute(
@@ -1063,10 +1180,30 @@ class SQLiteSlurmStageAssignments:
             )
             return tuple(self._record(row) for row in rows)
 
+    def recovery_records(
+        self, run_uri: str, *, stage_name: str | None = None, limit: int | None = None,
+    ) -> tuple[tuple[SlurmStageRecord, Mapping[str, PlainData] | None], ...]:
+        """Read bounded attempt history and its accepted provider evidence together."""
+        with _connect(self.path, sqlite_policy=self._sqlite_policy, require_existing=True) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                f"SELECT * FROM {_ASSIGNMENT_TABLE} WHERE run_uri = ? "
+                "AND (? IS NULL OR json_extract(identity_json, '$.stage_name') = ?) "
+                "ORDER BY assignment_id LIMIT ?",
+                (run_uri, stage_name, stage_name, -1 if limit is None else limit + 1),
+            ).fetchall()
+            if limit is not None and len(rows) > limit:
+                raise QueueConflictError("recovery history exceeds assignment limit")
+            return tuple(
+                (self._record(row), None if row["agent_evidence_json"] is None
+                 else json.loads(row["agent_evidence_json"]))
+                for row in rows
+            )
+
     def list_unreleased(self) -> tuple[SlurmStageRecord, ...]:
         """Return every assignment whose profile binding is still retained."""
 
-        with _connect(self.path, require_existing=True) as conn:
+        with _connect(self.path, sqlite_policy=self._sqlite_policy, require_existing=True) as conn:
             conn.row_factory = sqlite3.Row
             rows = tuple(
                 conn.execute(
@@ -1074,6 +1211,37 @@ class SQLiteSlurmStageAssignments:
                     "WHERE state != 'released' ORDER BY assignment_id"
                 )
             )
+            return tuple(self._record(row) for row in rows)
+
+    def pending_storage_page(self, *, after: str | None = None) -> tuple[SlurmStageRecord, ...]:
+        """Bound restart discovery to retained publication/release evidence."""
+        if self.schema_version < 5:
+            return ()
+        with self._transaction() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM {_ASSIGNMENT_TABLE} WHERE state != 'released' AND "
+                "((publication_requested_at IS NOT NULL AND publication_completed_at IS NULL AND publication_cancelled_at IS NULL) "
+                "OR json_extract(agent_evidence_json, '$.provider_released') = 1) "
+                "AND (? IS NULL OR assignment_id > ?) ORDER BY assignment_id LIMIT 32",
+                (after, after),
+            ).fetchall()
+            return tuple(self._record(row) for row in rows)
+
+    def agent_page(
+        self, agent_id: str, agent_root_id: str, *, after: str | None = None, limit: int = 33,
+    ) -> tuple[SlurmStageRecord, ...]:
+        """Bound materialization to one agent's keyset page, including lookahead."""
+        if type(limit) is not int or not 1 <= limit <= 33:
+            raise QueueServiceError("SLURM task page limit is invalid")
+        with _connect(self.path, sqlite_policy=self._sqlite_policy, require_existing=True) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                f"SELECT * FROM {_ASSIGNMENT_TABLE} WHERE state != 'released' "
+                "AND json_extract(identity_json, '$.agent_id') = ? "
+                "AND json_extract(identity_json, '$.agent_root_id') = ? "
+                "AND (? IS NULL OR assignment_id > ?) ORDER BY assignment_id LIMIT ?",
+                (agent_id, agent_root_id, after, after, limit),
+            ).fetchall()
             return tuple(self._record(row) for row in rows)
 
     def read_input_chunk(
@@ -1094,7 +1262,7 @@ class SQLiteSlurmStageAssignments:
         )
         if descriptor is None or shared_binding(descriptor.metadata) is not None:
             raise QueueConflictError("SLURM input transfer is not authorized")
-        with _connect(self.path, require_existing=True) as conn:
+        with _connect(self.path, sqlite_policy=self._sqlite_policy, require_existing=True) as conn:
             conn.row_factory = sqlite3.Row
             row = self._row(conn, assignment_id)
             paths = cast(Mapping[str, str], json.loads(str(row["input_paths_json"])))
@@ -1109,6 +1277,56 @@ class SQLiteSlurmStageAssignments:
             raise QueueConflictError("SLURM input offset exceeds its size")
         chunk = data[offset : offset + TRANSFER_CHUNK_BYTES]
         return chunk, offset + len(chunk) == len(data)
+
+    def request_publication(self, assignment_id: str, incarnation: str, fence: str) -> None:
+        """Retain an authenticated shared-report commit request before pending."""
+        if self.schema_version < 5:
+            raise QueueServiceError("pending publication requires execution schema 5")
+        with self._transaction() as conn:
+            row = self._row(conn, assignment_id)
+            self._incarnation(row, incarnation)
+            if row["fence"] != fence or not row["start_consumed"] or row["report_json"] is None:
+                raise QueueConflictError("SLURM publication request lacks an exact consumed grant/report")
+            report = _RemoteExecutionReport.from_dict(json.loads(row["report_json"]))
+            if report.output_kind != "shared":
+                raise QueueServiceError("pending publication requires shared output")
+            if row["state"] not in {"running", "terminal", "logical_released", "released"}:
+                raise QueueConflictError("SLURM publication request state conflicts")
+            conn.execute(
+                f"UPDATE {_ASSIGNMENT_TABLE} SET publication_requested_at=COALESCE(publication_requested_at, ?) "
+                "WHERE assignment_id=?",
+                (datetime.now(timezone.utc).isoformat(), assignment_id),
+            )
+
+    def cancel_publication(self, assignment_id: str, fence: str) -> None:
+        """Persist supersession after exact contained cancellation is committed."""
+        if self.schema_version < 5:
+            return
+        with self._transaction() as conn:
+            row = self._row(conn, assignment_id)
+            if row["fence"] != fence or row["state"] not in {"logical_released", "released"}:
+                raise QueueConflictError("SLURM publication cancellation context conflicts")
+            if row["publication_requested_at"] is None or row["publication_completed_at"] is not None:
+                return
+            conn.execute(
+                f"UPDATE {_ASSIGNMENT_TABLE} SET publication_cancelled_at=COALESCE(publication_cancelled_at, ?) "
+                "WHERE assignment_id=?", (datetime.now(timezone.utc).isoformat(), assignment_id),
+            )
+
+    def complete_publication(self, assignment_id: str, incarnation: str, fence: str) -> None:
+        """Record completion after outputs and terminal authority were committed."""
+        if self.schema_version < 5:
+            return
+        with self._transaction() as conn:
+            row = self._row(conn, assignment_id)
+            self._incarnation(row, incarnation)
+            if (row["fence"] != fence or row["report_json"] is None or row["publication_cancelled_at"] is not None
+                or row["state"] not in {"terminal", "logical_released", "released"}):
+                raise QueueConflictError("SLURM publication completion context conflicts")
+            conn.execute(
+                f"UPDATE {_ASSIGNMENT_TABLE} SET publication_completed_at=COALESCE(publication_completed_at, ?) "
+                "WHERE assignment_id=?", (datetime.now(timezone.utc).isoformat(), assignment_id),
+            )
 
     def declare_report(
         self,
@@ -1289,7 +1507,7 @@ class SQLiteSlurmStageAssignments:
             }:
                 raise QueueConflictError("SLURM shared outputs require authoritative publication")
             return record.report, shared_outputs
-        with _connect(self.path, require_existing=True) as conn:
+        with _connect(self.path, sqlite_policy=self._sqlite_policy, require_existing=True) as conn:
             conn.row_factory = sqlite3.Row
             rows = tuple(
                 conn.execute(
@@ -1359,6 +1577,29 @@ class SQLiteSlurmStageAssignments:
         self.advance(assignment_id, expected=record.state, next_state="terminal")
         self.advance(assignment_id, expected="terminal", next_state="logical_released")
 
+    def release_compute(self, assignment_id: str, sequence: int, evidence: Mapping[str, PlainData]) -> None:
+        """Debit release after the coordinator validates exact containment/revocation.
+
+        The retained evidence remains the durable owner of unfinished storage;
+        this transition neither releases the assignment nor accepts outputs.
+        """
+        if self.schema_version < 5:
+            raise QueueServiceError("independent compute release requires execution schema 5")
+        with self._transaction() as conn:
+            row = self._row(conn, assignment_id)
+            proof = evidence.get("release")
+            if (row["agent_sequence"] != sequence or row["agent_evidence_json"] != _json(evidence)
+                or evidence.get("provider_released") is not True
+                or not isinstance(proof, Mapping)
+                or (proof.get("state") != "CONTAINED" and proof != {"kind": "definite_rejection"})
+                or (row["state"] not in {"logical_released", "released"}
+                    and not (row["publication_requested_at"] is not None and row["report_json"] is not None))):
+                raise QueueConflictError("SLURM compute release lacks accepted provider evidence")
+            conn.execute(
+                f"UPDATE {_ASSIGNMENT_TABLE} SET compute_released_at=COALESCE(compute_released_at, ?) "
+                "WHERE assignment_id=?", (datetime.now(timezone.utc).isoformat(), assignment_id),
+            )
+
     def release(self, assignment_id: str) -> None:
         record = self.read(assignment_id)
         if record.state == "released":
@@ -1369,17 +1610,29 @@ class SQLiteSlurmStageAssignments:
     def _transaction(self) -> Iterator[sqlite3.Connection]:
         if self.path.is_file():
             with inspect_sqlite_database(self.path) as conn:
-                initialize = _requires_initialization(conn, self._allow_initialize)
+                initialize = _requires_initialization(conn, self._allow_initialize, self.schema_version)
                 if not initialize:
-                    _require_schema(conn)
+                    _require_schema(conn, expected_version=self.schema_version)
         elif not self._allow_initialize:
             raise QueueServiceError("SLURM assignment store is missing")
         else:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-        with _connect(self.path, require_existing=not self._allow_initialize) as conn:
+        with _connect(self.path, sqlite_policy=self._sqlite_policy, require_existing=not self._allow_initialize) as conn:
             conn.row_factory = sqlite3.Row
             conn.execute("BEGIN IMMEDIATE")
-            if _requires_initialization(conn, self._allow_initialize):
+            if _requires_initialization(conn, self._allow_initialize, self.schema_version):
+                effect_columns = (
+                    ", publication_requested_at TEXT, publication_completed_at TEXT, publication_cancelled_at TEXT, compute_released_at TEXT"
+                    if self.schema_version >= 5 else ""
+                )
+                extra_columns = (
+                    ", requested_gpu_count INTEGER CHECK ((requested_gpu_count IS NULL AND state = 'released') "
+                    "OR (typeof(requested_gpu_count) = 'integer' AND requested_gpu_count >= 0)), "
+                    "capability_delivery_kind TEXT, capability_expires_at TEXT, "
+                    "CHECK ((capability_delivery_kind IS NULL AND capability_expires_at IS NULL) OR "
+                    "(capability_delivery_kind IS NOT NULL AND capability_delivery_kind = 'user_private_file_v1' AND capability_expires_at IS NOT NULL))"
+                    if self.schema_version >= 4 else ""
+                )
                 conn.execute(
                     f"CREATE TABLE {_ASSIGNMENT_TABLE} ("
                     "assignment_id TEXT PRIMARY KEY, operation_id TEXT NOT NULL UNIQUE, "
@@ -1392,7 +1645,7 @@ class SQLiteSlurmStageAssignments:
                     "fence TEXT, process_execution_id TEXT, report_json TEXT, "
                     "capability_verifier TEXT, submission_eligible INTEGER NOT NULL, "
                     "capability_consumed INTEGER NOT NULL, start_consumed INTEGER NOT NULL DEFAULT 0, "
-                    "agent_sequence INTEGER NOT NULL DEFAULT 0, agent_evidence_json TEXT, agent_evidence_accepted_at TEXT)"
+                    f"agent_sequence INTEGER NOT NULL DEFAULT 0, agent_evidence_json TEXT, agent_evidence_accepted_at TEXT{effect_columns}{extra_columns})"
                 )
                 conn.execute(
                     f"CREATE TABLE {_OUTPUT_TABLE} ("
@@ -1401,10 +1654,10 @@ class SQLiteSlurmStageAssignments:
                     "finalized INTEGER NOT NULL, "
                     "PRIMARY KEY (assignment_id, transfer_id))"
                 )
-                _require_schema(conn, allow_unversioned=True)
-                conn.execute("PRAGMA user_version = 3")
+                _require_schema(conn, allow_unversioned=True, expected_version=self.schema_version)
+                conn.execute(f"PRAGMA user_version = {self.schema_version}")
             else:
-                _require_schema(conn)
+                _require_schema(conn, expected_version=self.schema_version)
             try:
                 yield conn
             except Exception:
@@ -1442,9 +1695,7 @@ class SQLiteSlurmStageAssignments:
             assignment=SlurmStageAssignment.from_dict(
                 json.loads(str(row["identity_json"]))
             ),
-            delivery=SlurmStageDelivery.from_dict(
-                json.loads(str(row["delivery_json"]))
-            ),
+            delivery=_retained_delivery(str(row["delivery_json"])),
             request=cast(Mapping[str, PlainData], json.loads(str(row["request_json"]))),
             state=str(row["state"]),
             issuer_epoch=str(row["issuer_epoch"]),
@@ -1459,16 +1710,47 @@ class SQLiteSlurmStageAssignments:
             agent_evidence_accepted_at=cast(
                 str | None, row["agent_evidence_accepted_at"]
             ),
+            requested_gpu_count=row["requested_gpu_count"] if "requested_gpu_count" in row.keys() else None,
+            capability_delivery_kind=row["capability_delivery_kind"] if "capability_delivery_kind" in row.keys() else None,
+            capability_expires_at=row["capability_expires_at"] if "capability_expires_at" in row.keys() else None,
+            publication_requested_at=row["publication_requested_at"] if "publication_requested_at" in row.keys() else None,
+            publication_completed_at=row["publication_completed_at"] if "publication_completed_at" in row.keys() else None,
+            publication_cancelled_at=row["publication_cancelled_at"] if "publication_cancelled_at" in row.keys() else None,
+            compute_released_at=row["compute_released_at"] if "compute_released_at" in row.keys() else None,
         )
+
+
+@lru_cache(maxsize=128)
+def _cached_retained_delivery(encoded: str) -> SlurmStageDelivery:
+    return SlurmStageDelivery.from_dict(json.loads(encoded))
+
+
+def _retained_delivery(encoded: str) -> SlurmStageDelivery:
+    # Delivery and nested values are immutable. Key by the complete bytes read
+    # from SQLite, never by assignment ID or a mutable record revision. Only
+    # successful validation is cached; live state and release proofs are not.
+    # Bound retained source documents to 32 MiB, excluding decoded-object overhead.
+    if len(encoded.encode("utf-8")) > 256 * 1024:
+        return SlurmStageDelivery.from_dict(json.loads(encoded))
+    return _cached_retained_delivery(encoded)
 
 
 class SlurmBootstrapWorkspace:
     """Bootstrap-owned durable inputs and retained output bytes."""
 
-    def __init__(self, root: str | Path, assignment_id: str) -> None:
+    def __init__(
+        self, root: str | Path, assignment_id: str, *,
+        durable_files: Literal["best_effort", "strict"] = "best_effort",
+    ) -> None:
         _identifier(assignment_id, "assignment_id")
+        if durable_files not in {"best_effort", "strict"}:
+            raise QueueServiceError("SLURM workspace durable_files is invalid")
+        self._durable_files = durable_files
         self.root = Path(root).resolve() / "assignments" / assignment_id
-        self.root.mkdir(parents=True, exist_ok=True)
+        if durable_files == "strict":
+            _ensure_durable_parent(self.root)
+        else:
+            self.root.mkdir(parents=True, exist_ok=True)
         self.root.chmod(0o700)
         self._delivery_path = self.root / "delivery.json"
         self._registration_path = self.root / "registration.json"
@@ -1493,8 +1775,9 @@ class SlurmBootstrapWorkspace:
         if self._execution_binding_path.exists():
             if self._execution_binding_path.read_bytes() != encoded:
                 raise QueueConflictError("SLURM execution binding replay conflicts")
-            return
-        _atomic_regular_file(self._execution_binding_path, encoded)
+            if self._durable_files != "strict":
+                return
+        self._write_protocol_file(self._execution_binding_path, encoded)
         self._execution_binding_path.chmod(0o600)
 
     def publication_binding(self) -> dict[str, Any]:
@@ -1532,8 +1815,9 @@ class SlurmBootstrapWorkspace:
         if self._delivery_path.exists():
             if self._delivery_path.read_bytes() != encoded:
                 raise QueueConflictError("SLURM delivery replay conflicts")
-            return
-        _atomic_regular_file(self._delivery_path, encoded)
+            if self._durable_files != "strict":
+                return
+        self._write_protocol_file(self._delivery_path, encoded)
         self._delivery_path.chmod(0o600)
 
     def persist_registration(self, registration: Mapping[str, PlainData]) -> None:
@@ -1542,9 +1826,18 @@ class SlurmBootstrapWorkspace:
         if self._registration_path.exists():
             if self._registration_path.read_bytes() != encoded:
                 raise QueueConflictError("SLURM registration replay conflicts")
-            return
-        _atomic_regular_file(self._registration_path, encoded)
+            if self._durable_files != "strict":
+                return
+        self._write_protocol_file(self._registration_path, encoded)
         self._registration_path.chmod(0o600)
+
+    def _write_protocol_file(self, path: Path, data: bytes) -> None:
+        if self._durable_files == "strict":
+            if path.is_symlink() or path.exists() and not path.is_file():
+                raise QueueConflictError("SLURM protocol target is not a regular file")
+            atomic_write_bytes(path, data, durability="strict")
+        else:
+            _atomic_regular_file(path, data)
 
     def delivery(self) -> SlurmStageDelivery:
         if not self._delivery_path.is_file():
@@ -1606,7 +1899,15 @@ class SlurmBootstrapWorkspace:
 
     def worker_request(self, *, shared_roots: Mapping[str, PlainData] | None = None) -> StageWorkerRequest:
         self.accept_inputs(shared_roots=shared_roots)
-        return self.delivery().worker_request(self.root, shared_roots=shared_roots)
+        request = self.delivery().worker_request(self.root, shared_roots=shared_roots)
+        from ._shared_recovery import BINDING, WIRE, worker_binding
+
+        metadata = dict(request.metadata)
+        metadata.pop(WIRE, None)
+        binding = worker_binding(self)
+        if binding is not None:
+            metadata[BINDING] = binding
+        return replace(request, metadata=metadata)
 
     def retain_result(self, result: StageWorkerResult) -> _RemoteExecutionReport:
         """Retain a result produced inside the acknowledged bootstrap root.
@@ -1764,14 +2065,17 @@ class SlurmBootstrapWorkspace:
         raise QueueConflictError("SLURM output transfer is unavailable")
 
 
-def _connect(path: Path, *, require_existing: bool = False) -> sqlite3.Connection:
+def _connect(path: Path, *, require_existing: bool = False, sqlite_policy: SQLitePolicy | None = None) -> sqlite3.Connection:
+    if sqlite_policy is not None:
+        connect = connect_existing if require_existing else initialize_database
+        return connect(path, policy=sqlite_policy, isolation_level="")
     target: str | Path = (
         f"{path.resolve().as_uri()}?mode=rw" if require_existing else path
     )
     return sqlite3.connect(target, uri=require_existing)
 
 
-def _requires_initialization(conn: sqlite3.Connection, allowed: bool) -> bool:
+def _requires_initialization(conn: sqlite3.Connection, allowed: bool, expected_version: int = 3) -> bool:
     # Fresh coordinator setup creates its shared database before this owner.
     # Any retained assignment/output table must pass full current admission.
     if not allowed:
@@ -1783,13 +2087,58 @@ def _requires_initialization(conn: sqlite3.Connection, allowed: bool) -> bool:
     if tables:
         return False
     version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-    if version not in {0, 3}:
+    if version not in {0, expected_version}:
         raise QueueServiceError("SLURM assignment store schema is unsupported")
     return True
 
 
+def _upgrade_released_schema(conn: sqlite3.Connection) -> None:
+    """Convert a stopped, snapshotted v3 assignment/projection database to v4.
+
+    The explicit upgrade owner supplies the transaction and verifies the other
+    owners of this shared database. No ordinary open calls this function.
+    Released history keeps unknown quantities and legacy credential semantics.
+    """
+    _require_schema(conn, expected_version=3)
+    if not conn.in_transaction:
+        raise QueueServiceError("SLURM schema conversion requires an upgrade transaction")
+    if conn.execute(f"SELECT 1 FROM {_ASSIGNMENT_TABLE} WHERE state != 'released' LIMIT 1").fetchone():
+        raise QueueServiceError("SLURM schema conversion requires released assignments")
+    conn.execute(
+        f"ALTER TABLE {_ASSIGNMENT_TABLE} ADD COLUMN requested_gpu_count INTEGER "
+        "CHECK ((requested_gpu_count IS NULL AND state = 'released') OR "
+        "(typeof(requested_gpu_count) = 'integer' AND requested_gpu_count >= 0))"
+    )
+    conn.execute(f"ALTER TABLE {_ASSIGNMENT_TABLE} ADD COLUMN capability_delivery_kind TEXT")
+    conn.execute(
+        f"ALTER TABLE {_ASSIGNMENT_TABLE} ADD COLUMN capability_expires_at TEXT "
+        "CHECK ((capability_delivery_kind IS NULL AND capability_expires_at IS NULL) OR "
+        "(capability_delivery_kind IS NOT NULL AND capability_delivery_kind = 'user_private_file_v1' "
+        "AND capability_expires_at IS NOT NULL))"
+    )
+    conn.execute("PRAGMA user_version = 4")
+    _require_schema(conn, expected_version=4)
+
+
+def _upgrade_pending_effects_schema(conn: sqlite3.Connection) -> None:
+    """Upgrade a stopped v4 owner inside the supported upgrade transaction.
+
+    Existing assignments retain their GPU debit and acquire no publication
+    intent. Later reconciliation must validate evidence before either changes.
+    """
+    _require_schema(conn, expected_version=4)
+    if not conn.in_transaction:
+        raise QueueServiceError("SLURM schema conversion requires an upgrade transaction")
+    conn.execute(f"ALTER TABLE {_ASSIGNMENT_TABLE} ADD COLUMN publication_requested_at TEXT")
+    conn.execute(f"ALTER TABLE {_ASSIGNMENT_TABLE} ADD COLUMN publication_completed_at TEXT")
+    conn.execute(f"ALTER TABLE {_ASSIGNMENT_TABLE} ADD COLUMN publication_cancelled_at TEXT")
+    conn.execute(f"ALTER TABLE {_ASSIGNMENT_TABLE} ADD COLUMN compute_released_at TEXT")
+    conn.execute("PRAGMA user_version = 5")
+    _require_schema(conn, expected_version=5)
+
+
 def _require_schema(
-    conn: sqlite3.Connection, *, allow_unversioned: bool = False
+    conn: sqlite3.Connection, *, allow_unversioned: bool = False, expected_version: int = 3,
 ) -> None:
     expected = {
         "assignment_id",
@@ -1818,6 +2167,10 @@ def _require_schema(
         "agent_evidence_json",
         "agent_evidence_accepted_at",
     }
+    if expected_version >= 4:
+        expected |= {"requested_gpu_count", "capability_delivery_kind", "capability_expires_at"}
+    if expected_version >= 5:
+        expected |= {"publication_requested_at", "publication_completed_at", "publication_cancelled_at", "compute_released_at"}
     columns = {
         str(row[1]) for row in conn.execute(f"PRAGMA table_info({_ASSIGNMENT_TABLE})")
     }
@@ -1826,7 +2179,7 @@ def _require_schema(
     }
     version = int(conn.execute("PRAGMA user_version").fetchone()[0])
     if (
-        (version != 3 and not (allow_unversioned and version == 0))
+        (version != expected_version and not (allow_unversioned and version == 0))
         or columns != expected
         or output_columns
         != {
@@ -1838,6 +2191,15 @@ def _require_schema(
         }
     ):
         raise QueueServiceError("SLURM assignment store schema is unsupported")
+    if expected_version >= 4 and conn.execute(
+        f"SELECT 1 FROM {_ASSIGNMENT_TABLE} WHERE "
+        "(state != 'released' AND requested_gpu_count IS NULL) OR requested_gpu_count < 0 "
+        "OR (requested_gpu_count IS NOT NULL AND typeof(requested_gpu_count) != 'integer') "
+        "OR (capability_delivery_kind IS NULL AND capability_expires_at IS NOT NULL) "
+        "OR (capability_delivery_kind IS NOT NULL AND (capability_delivery_kind != 'user_private_file_v1' "
+        "OR capability_expires_at IS NULL)) LIMIT 1"
+    ).fetchone():
+        raise QueueServiceError("SLURM assignment store has invalid quantity or credential evidence")
 
 
 def _json(value: Mapping[str, object]) -> str:

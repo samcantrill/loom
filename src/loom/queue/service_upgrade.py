@@ -6,14 +6,17 @@ import json
 from pathlib import Path
 import sqlite3
 from typing import cast
+from loom._sqlite_inspection import inspect_sqlite_database
 from loom.serialization import PlainData
 
+from .errors import QueueError
 from .operations import OperatorObservation, inspect_native_service, _readonly_root
 from ._service_lifetime import _retained_coordinator_operations
 
 
 def inspect_service_settlement(
-    root: str | Path, *, expected_root_id: str, include_pending_poll: bool = True
+    root: str | Path, *, expected_root_id: str, include_pending_poll: bool = True,
+    _verified_agent_inventory: dict[str, object] | None = None,
 ) -> OperatorObservation:
     """Observe retained native effects without stopping or initializing a role.
 
@@ -21,6 +24,10 @@ def inspect_service_settlement(
     projection. A pending agent poll is unresolved work, even with no CPU use.
     Supervisor launches must have native terminal containment evidence. Missing
     or incompatible records produce unavailable evidence, never an empty root.
+    Fresh outbound roots retain their required execution stores. Legacy roots
+    without that inventory retain the conservative supervisor requirement.
+    Slurm release includes acknowledged evidence and provider cleanup, not just
+    a terminal scheduler observation. All inspection is read-only.
     ``include_pending_poll=False`` observes assignment/containment settlement
     while a service remains accepting maintenance checks; its ordinary empty
     work poll is not a previous check's effect. Service replacement always uses
@@ -44,6 +51,7 @@ def inspect_service_settlement(
                     "SELECT 1 FROM agent_controls WHERE state IN ('pending_delivery','applying') OR acknowledged = 0 LIMIT 1"
                 ).fetchone():
                     waits.append("control_settlement")
+                _coordinator_slurm_settlement(root, expected_root_id, waits)
             elif owner.value["role"] == "local-agent":
                 if conn.execute(
                     "SELECT 1 FROM agent_session_references WHERE reference_kind = 'delivery' AND resolved = 0 LIMIT 1"
@@ -56,17 +64,13 @@ def inspect_service_settlement(
                     ).fetchone()
                 ):
                     waits.append("unresolved_poll")
-                database = root / "supervisor" / "supervisor.sqlite"
-                with sqlite3.connect(
-                    database.resolve().as_uri() + "?mode=ro", uri=True
-                ) as supervisor:
-                    if supervisor.execute(
-                        "SELECT 1 FROM launches WHERE state NOT IN ('contained','exited') LIMIT 1"
-                    ).fetchone():
-                        waits.append("supervisor_containment")
+                _agent_execution_settlement(
+                    root, conn, expected_root_id, waits,
+                    verified_inventory=_verified_agent_inventory,
+                )
             else:
                 raise ValueError("unsupported service role")
-    except (OSError, sqlite3.Error, ValueError, KeyError, json.JSONDecodeError):
+    except (OSError, sqlite3.Error, ValueError, KeyError, TypeError, QueueError):
         return OperatorObservation(
             owner.owner,
             owner.observed_at,
@@ -84,6 +88,104 @@ def inspect_service_settlement(
         "available",
         {"settled": not waits, "wait_reasons": cast(list[PlainData], waits)},
     )
+
+
+def _coordinator_slurm_settlement(root: Path, root_id: str, waits: list[str]) -> None:
+    from .local_daemon_execution import _verify_owner_store_binding
+    from .slurm_ready_stage import _require_schema
+
+    with inspect_sqlite_database(root / "execution.sqlite") as conn:
+        conn.row_factory = None
+        _verify_owner_store_binding(conn, role="coordinator", stable_id=root_id)
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if version not in {3, 4, 5}:
+            raise ValueError("coordinator execution schema is unsupported")
+        _require_schema(conn, expected_version=version)
+        if conn.execute(
+            "SELECT 1 FROM slurm_stage_assignments WHERE state != 'released' LIMIT 1"
+        ).fetchone() or conn.execute(
+            "SELECT 1 FROM ready_stage_submissions s LEFT JOIN slurm_stage_assignments a "
+            "ON a.operation_id = s.operation_id WHERE a.operation_id IS NULL LIMIT 1"
+        ).fetchone():
+            waits.append("slurm_assignment_or_release")
+
+
+def _agent_execution_settlement(
+    root: Path, control: sqlite3.Connection, root_id: str, waits: list[str],
+    *, verified_inventory: dict[str, object] | None = None,
+) -> None:
+    from ._agent_process_supervisor import AgentProcessSupervisor
+    from ._managed_local import _require_agent_journal_schema
+
+    row = control.execute(
+        "SELECT value FROM root_metadata WHERE key = 'execution_store_requirements'"
+    ).fetchone()
+    if row is None and verified_inventory is None:
+        # Never infer that a missing supervisor was intentionally omitted. A
+        # stopped upgrade can establish legacy inventory from verified config.
+        supervisor_required = True
+        slurm_required = False
+    else:
+        value = json.loads(row[0]) if row is not None else verified_inventory
+        if (
+            not isinstance(value, dict)
+            or set(value) != {"version", "supervisor", "slurm"}
+            or type(value["version"]) is not int or value["version"] != 1
+            or type(value["supervisor"]) is not bool or type(value["slurm"]) is not bool
+            or not (value["supervisor"] or value["slurm"])
+        ):
+            raise ValueError("execution store requirements are unavailable")
+        supervisor_required, slurm_required = value["supervisor"], value["slurm"]
+    if control.execute(
+        "SELECT 1 FROM agent_controls_local WHERE effect_json IS NULL OR acknowledged = 0 LIMIT 1"
+    ).fetchone() or control.execute(
+        "SELECT 1 FROM remote_assignment_controls_local "
+        "WHERE result_code IS NULL OR acknowledged = 0 LIMIT 1"
+    ).fetchone():
+        waits.append("local_control_settlement")
+    with inspect_sqlite_database(root / "journal.sqlite") as execution:
+        _require_agent_journal_schema(execution)
+        if execution.execute(
+            "SELECT 1 FROM assignments WHERE state NOT IN ('released','declined') LIMIT 1"
+        ).fetchone():
+            waits.append("local_execution_release")
+        if execution.execute(
+            "SELECT 1 FROM events WHERE acknowledged_sequence IS NULL LIMIT 1"
+        ).fetchone():
+            waits.append("local_execution_evidence")
+        if execution.execute(
+            "SELECT 1 FROM diagnostic_probes WHERE state != 'released' LIMIT 1"
+        ).fetchone():
+            waits.append("diagnostic_release")
+    if supervisor_required or (root / "supervisor").exists():
+        with inspect_sqlite_database(root / "supervisor" / "supervisor.sqlite") as supervisor:
+            metadata = dict(supervisor.execute("SELECT key, value FROM metadata"))
+            if (metadata.get("schema_version") != str(AgentProcessSupervisor._SCHEMA_VERSION)
+                    or metadata.get("agent_id") != root_id):
+                raise ValueError("supervisor identity or schema changed")
+            if supervisor.execute(
+                "SELECT 1 FROM launches WHERE state NOT IN ('contained','exited') "
+                "OR temporary_storage_pending != 0 OR temporary_storage_error IS NOT NULL LIMIT 1"
+            ).fetchone():
+                waits.append("supervisor_containment")
+    if slurm_required or (root / "slurm.sqlite").exists():
+        with inspect_sqlite_database(root / "slurm.sqlite") as slurm:
+            if slurm.execute("PRAGMA user_version").fetchone()[0] != 3:
+                raise ValueError("agent Slurm journal schema changed")
+            slurm.execute("SELECT operation_id, state, value_json FROM ready_stage_submissions LIMIT 0")
+            slurm.execute(
+                "SELECT operation_id, assignment_json, sequence, evidence_json, acknowledged, released "
+                "FROM agent_slurm_operations LIMIT 0"
+            )
+            if slurm.execute(
+                "SELECT 1 FROM agent_slurm_operations WHERE released != 1 OR acknowledged != 1 LIMIT 1"
+            ).fetchone():
+                waits.append("slurm_submission_or_release")
+            if slurm.execute(
+                "SELECT 1 FROM ready_stage_submissions s LEFT JOIN agent_slurm_operations a "
+                "ON a.operation_id = s.operation_id WHERE a.operation_id IS NULL LIMIT 1"
+            ).fetchone():
+                raise ValueError("Slurm submission has no agent release owner")
 
 
 def inspect_agent_result_recovery(

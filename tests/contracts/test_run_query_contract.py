@@ -217,7 +217,7 @@ def test_oversize_record_retains_identity_diagnostic():
     )
 
 
-def test_collection_time_order_enumerates_metadata_but_caps_detail_reads(
+def test_collection_time_order_uses_refreshed_index_and_caps_detail_reads(
     tmp_path, monkeypatch
 ):
     from loom.pipeline.stores import LocalRunStore
@@ -243,6 +243,14 @@ def test_collection_time_order_enumerates_metadata_but_caps_detail_reads(
 
     monkeypatch.setattr(LocalRunStore, "read_run_document", metadata)
     monkeypatch.setattr(_query_local, "acquire_run", detailed)
+    from loom.pipeline.stores._run_discovery_index import refresh
+
+    assert refresh(root) == ()
+    assert len(metadata_reads) == 502
+    metadata_reads.clear()
+    def forbidden_enumeration(path):
+        pytest.fail('collection query enumerated directories instead of paging the index')
+    monkeypatch.setattr(type(root), 'iterdir', forbidden_enumeration)
     query = RunQuery(
         scope=CollectionScope(),
         order_by=(Order("created_at"),),
@@ -251,7 +259,7 @@ def test_collection_time_order_enumerates_metadata_but_caps_detail_reads(
     page = _query_local.search_collection(
         root, query, authority_factory=lambda uri: object()
     )
-    assert len(metadata_reads) == 502
+    assert metadata_reads == []
     assert len(detailed_reads) == page.examined == 500
     assert page.items == () and page.next_cursor is not None
     following = _query_local.search_collection(
@@ -260,6 +268,7 @@ def test_collection_time_order_enumerates_metadata_but_caps_detail_reads(
         authority_factory=lambda uri: object(),
     )
     assert following.examined == 2 and following.next_cursor is None
+    assert metadata_reads == []
 
 
 def test_note_excerpt_contains_late_casefolded_match():
@@ -288,19 +297,26 @@ def test_note_excerpt_contains_late_casefolded_match():
 
 def test_local_empty_partial_and_unavailable_are_distinct(tmp_path):
     from loom.runs import CollectionScope, RunCatalog
+    from loom.pipeline.stores._run_discovery_index import refresh
 
     missing = RunCatalog.open(tmp_path / "missing").search(
         RunQuery(scope=CollectionScope())
     )
+    unindexed = RunCatalog.open(tmp_path).search(RunQuery(scope=CollectionScope()))
+    assert not unindexed.complete and unindexed.warnings[0]['code'] == 'discovery_index_unavailable'
+    assert refresh(tmp_path) == ()
     empty = RunCatalog.open(tmp_path).search(RunQuery(scope=CollectionScope()))
     (tmp_path / "partial").mkdir()
+    # Out-of-band changes are discovered only by the explicit refresh.
+    assert RunCatalog.open(tmp_path).search(RunQuery(scope=CollectionScope())).complete
+    assert refresh(tmp_path)
     partial = RunCatalog.open(tmp_path).search(RunQuery(scope=CollectionScope()))
     assert missing.items == empty.items == partial.items == ()
     assert empty.complete and not empty.warnings
     assert (
         not missing.complete and missing.warnings[0]["code"] == "collection_unavailable"
     )
-    assert not partial.complete and partial.warnings[0]["code"] == "partial_run"
+    assert not partial.complete and partial.warnings[0]["code"] == "discovery_refresh_required"
 
 
 def test_managed_initializer_order_bounds_context_reads_and_skips_reconciled_requests(

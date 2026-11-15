@@ -11,6 +11,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass
 import fcntl
 import json
+from loom._pidfd import open_pidfd, send_pidfd_signal
 import os
 from pathlib import Path
 import select
@@ -52,11 +53,11 @@ def _ready(fd: int) -> bool:
 class _PinnedProcess:
     def __init__(self, identity: ProcessIdentity):
         self.identity = identity
-        self.fd = os.pidfd_open(identity.pid)
+        self.fd = open_pidfd(identity.pid)
         self.stopped = False
         try:
             self.check()
-            signal.pidfd_send_signal(self.fd, 0)
+            send_pidfd_signal(self.fd, 0)
         except BaseException:
             os.close(self.fd)
             raise
@@ -70,7 +71,7 @@ class _PinnedProcess:
 
     def stop(self) -> None:
         self.check()
-        signal.pidfd_send_signal(self.fd, signal.SIGSTOP)
+        send_pidfd_signal(self.fd, signal.SIGSTOP)
         self.stopped = True
         deadline = monotonic() + 5
         while True:
@@ -84,14 +85,14 @@ class _PinnedProcess:
 
     def kill_and_observe(self) -> None:
         self.check()
-        signal.pidfd_send_signal(self.fd, signal.SIGKILL)
+        send_pidfd_signal(self.fd, signal.SIGKILL)
         if not select.select([self.fd], [], [], 10)[0]:
             raise QueueConflictError("namespace recovery containment observation incomplete")
 
     def close(self) -> None:
         try:
             if self.stopped and not _ready(self.fd):
-                signal.pidfd_send_signal(self.fd, signal.SIGCONT)
+                send_pidfd_signal(self.fd, signal.SIGCONT)
         except ProcessLookupError:
             pass
         finally:

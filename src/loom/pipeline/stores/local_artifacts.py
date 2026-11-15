@@ -39,7 +39,8 @@ class ArtifactInspection:
 
     ``primary`` and member paths are relative to ``root``. Member declarations
     contain ``path``, ``size_bytes`` and a SHA-256 ``digest`` (None for a local
-    artifact without a native checksum). Consumers must securely open selected
+    artifact without a native checksum). Schema-2 receipts list primary outputs
+    and logs only: companions are deliberately not inventoried. Consumers must securely open selected
     members and verify their bytes before exposing a completed download.
     """
 
@@ -53,7 +54,8 @@ class LocalArtifactStore:
     """Filesystem-backed artifact store with optional protected shared mappings.
 
     ``shared_roots`` translates native immutable publication references under the
-    consumer's qualified root prefixes, preserving identity and full integrity.
+    consumer's qualified root prefixes, preserving identity and the recorded
+    verified or trusted payload policy.
     Checksum validation streams file bytes without retaining the full payload.
     """
 
@@ -173,8 +175,19 @@ class LocalArtifactStore:
                 )
             computed_checksum = None
         elif path.is_file():
-            content = path.read_bytes()
-            computed_checksum = hash_bytes(content)
+            from .shared_artifacts import publication_policy, TRUSTED_SHARED_STORAGE
+
+            trusted = any(
+                publication_policy(root["publication"]) == TRUSTED_SHARED_STORAGE
+                and path.is_relative_to(Path(str(root["host_path"])))
+                for root in (self._shared_roots or {}).values()
+                if isinstance(root, Mapping) and "publication" in root
+            )
+            if trusted and checksum is not None:
+                computed_checksum = self._validate_checksum(checksum)
+            else:
+                with path.open("rb") as stream:
+                    computed_checksum = "sha256:" + hashlib.file_digest(stream, "sha256").hexdigest()
             if checksum is not None:
                 expected = self._validate_checksum(checksum)
                 if expected != computed_checksum:
@@ -286,7 +299,9 @@ class LocalArtifactStore:
                 f"Cannot load checksumed artifact from non-file path {path}"
             )
 
-        if ref.checksum is not None:
+        from .shared_artifacts import binding
+        publication = binding(ref.metadata)
+        if ref.checksum is not None and not (publication is not None and publication["schema_version"] == 2):
             self._verify_checksum_path(ref, path)
 
     def local_stage_dir(self, stage_name: str) -> Path:
@@ -313,7 +328,7 @@ class LocalArtifactStore:
         return self._require_local_path(ref.uri)
 
     def local_path(self, ref: ArtifactRef) -> Path:
-        """Resolve a native shared binding and verify its entire immutable closure.
+        """Resolve a native shared binding using its recorded trust policy.
 
         ``shared_roots`` supplies protected consumer mappings when retained file
         URIs belong to another host; the reference's identity stays unchanged.

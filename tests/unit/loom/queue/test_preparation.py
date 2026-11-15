@@ -746,3 +746,26 @@ def test_current_child_requires_explicit_scope_and_purpose():
     ):
         with pytest.raises(QueueServiceError):
             PreparationChildInput.from_dict({**encoded, field: value})
+
+
+def test_local_binding_preserves_unresolved_diagnostic_fields():
+    from copy import deepcopy
+    from loom.preparation import _bind_local_snapshot
+    from loom.queue.preparation import LOCAL_PREPARATION_SCOPE
+
+    snapshot = {"pipeline": {"stages": [{
+        "name": "inspect", "factory": {"_target_": "installed.Stage"},
+        "outputs": {"receipt": {"artifact_type": "json"}},
+        "placement": {}, "fingerprint": {"private": "secret"},
+    }]}}
+    diagnostic = deepcopy(snapshot)
+    diagnostic["pipeline"]["stages"][0].update(
+        placement="${fit_placement}", fingerprint="***REDACTED***"
+    )
+    before = deepcopy(diagnostic)
+    scope = {"agent_id": "selected", "binding_fingerprint": "a" * 64}
+    _bind_local_snapshot(snapshot, scope, redacted=diagnostic)
+    stage = snapshot["pipeline"]["stages"][0]
+    assert stage["placement"]["target"] == "selected"
+    assert stage["fingerprint"][LOCAL_PREPARATION_SCOPE] == scope
+    assert diagnostic == before

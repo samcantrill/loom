@@ -17,6 +17,7 @@ import stat
 from typing import TYPE_CHECKING, cast
 
 from loom._sqlite_inspection import inspect_sqlite_database
+from loom._sqlite_policy import SQLitePolicy, connect_existing
 from loom.serialization import PlainData
 
 from .errors import QueueConflictError, QueueServiceError
@@ -154,6 +155,7 @@ def read_agent_declaration_binding(
 def agent_declaration_guard(
     root: Path,
     declaration_digest: str,
+    *, storage=None,
 ) -> Iterator[AgentDeclarationBinding]:
     """Hold an existing bound agent's native owner lock without execution probes.
 
@@ -163,6 +165,8 @@ def agent_declaration_guard(
     """
     from ._agent_session_journal import _RemoteAgentJournal
 
+    if storage is not None:
+        storage.require_owner()
     binding = read_agent_declaration_binding(root, declaration_digest)
     if binding is None:
         raise QueueServiceError("agent lacks accepted declaration binding")
@@ -170,6 +174,7 @@ def agent_declaration_guard(
         root,
         expected_configuration_fingerprint=binding.immutable_fingerprint,
         expected_active_configuration_fingerprint=binding.active_fingerprint,
+        sqlite_policy=None if storage is None else storage.sqlite,
     )
     try:
         if read_agent_declaration_binding(root, declaration_digest) != binding:
@@ -189,11 +194,11 @@ def _retained_agent_owners(
     root = spec.agent_root
     execution = None
     if spec.declarations["resident_profiles"] or (root / "journal.sqlite").exists():
-        execution = SQLiteAgentJournal(root / "journal.sqlite", _allow_initialize=False)
+        execution = SQLiteAgentJournal(root / "journal.sqlite", _allow_initialize=False, sqlite_policy=spec.sqlite_policy)
         execution._open_existing()
     slurm = None
     if spec.declarations["slurm_profiles"] or (root / "slurm.sqlite").exists():
-        slurm = AgentSlurmJobs(root, ())
+        slurm = AgentSlurmJobs(root, (), sqlite_policy=spec.sqlite_policy)
     return execution, slurm
 
 
@@ -215,7 +220,7 @@ def verify_agent_candidate(spec: AgentSpec) -> AgentDeclarationBinding:
 
     try:
         with agent_declaration_guard(
-            spec.agent_root, spec.declaration_digest
+            spec.agent_root, spec.declaration_digest, storage=spec.storage
         ) as binding:
             # The guard owns this journal's lock. Inspection itself stays read-only.
             with closing(
@@ -275,9 +280,17 @@ def require_unretired(root: Path) -> None:
         )
 
 
-def _save(root: Path, receipt: Mapping[str, PlainData]) -> None:
+def _save(
+    root: Path, receipt: Mapping[str, PlainData], *,
+    sqlite_policy: SQLitePolicy | None = None,
+) -> None:
     # The caller holds the native role lock, and for coordinators the cycle lock.
-    with sqlite3.connect(root / "control.sqlite") as conn:
+    with (
+        sqlite3.connect(root / "control.sqlite") if sqlite_policy is None
+        else connect_existing(
+            root / "control.sqlite", policy=sqlite_policy, isolation_level="",
+        )
+    ) as conn:
         conn.execute(
             "INSERT INTO root_metadata(key,value) VALUES ('role_retirement',?)",
             (json.dumps(dict(receipt), sort_keys=True),),
@@ -318,6 +331,9 @@ def retire_outbound_agent(
     )
 
     _identifiers(operation_id, expected_coordinator_id, expected_session_id)
+    storage = config.storage if isinstance(config, AgentSpec) else config.client.storage
+    if storage is not None:
+        storage.require_owner()
     if isinstance(config, AgentSpec):
         binding = read_agent_declaration_binding(
             config.agent_root, config.declaration_digest
@@ -393,7 +409,7 @@ def retire_outbound_agent(
                 role_receipt=receipt,
             )
         else:
-            _save(root, receipt)
+            _save(root, receipt, sqlite_policy=config.client.sqlite_policy)
         return receipt
     finally:
         client.close()
@@ -444,6 +460,7 @@ def _retire_bound_agent(
         root,
         expected_configuration_fingerprint=binding.immutable_fingerprint,
         expected_active_configuration_fingerprint=binding.active_fingerprint,
+        sqlite_policy=spec.sqlite_policy,
     )
     try:
         if read_agent_declaration_binding(root, spec.declaration_digest) != binding:
@@ -523,7 +540,7 @@ def _retire_bound_agent(
                     role_receipt=receipt,
                 )
             else:
-                _save(root, receipt)
+                _save(root, receipt, sqlite_policy=spec.sqlite_policy)
             return receipt
     except (
         AgentProcessSupervisorError,

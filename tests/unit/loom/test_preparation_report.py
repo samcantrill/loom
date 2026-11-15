@@ -66,7 +66,7 @@ def _write(tmp_path: Path, *, requested=None):
 def test_actual_serializer_shares_complete_equal_views_and_hydrates_all_facts(tmp_path):
     logical, store, ref, companion = _write(tmp_path)
     physical = cast(Any, store.load(ref))
-    assert physical["report_format"] == "loom.preparation_report.v2"
+    assert physical["report_format"] == "loom.preparation_report.v3"
     assert physical["schema_version"] == 10
     assert set(physical["composition"]) == {"evidence_ref"}
     saved = json.loads(companion.read_bytes())
@@ -78,7 +78,7 @@ def test_actual_serializer_shares_complete_equal_views_and_hydrates_all_facts(tm
     }
     assert projected["metadata"] == {"specific": 2, "loom_invocation": {"argv": []}}
     full = cast(Any, load_preparation_report(ref, store.local_path(ref)))
-    assert full == {**logical, "report_format": "loom.preparation_report.v2"}
+    assert full == {**logical, "report_format": "loom.preparation_report.v3"}
     for name in ("composition", "requested_composition"):
         assert hash_mapping(full[name]) == hash_mapping(logical[name])
         assert stable_json_bytes(full[name]) == stable_json_bytes(logical[name])
@@ -122,7 +122,7 @@ def test_large_expanded_configuration_is_not_repeated_in_primary_report(tmp_path
     assert len(json.loads(destination.read_bytes())["compositions"]) == 1
     assert load_preparation_report(ref, store.local_path(ref)) == {
         **logical,
-        "report_format": "loom.preparation_report.v2",
+        "report_format": "loom.preparation_report.v3",
     }
 
 
@@ -180,7 +180,7 @@ def test_complete_distinct_views_never_share_by_selected_counts(tmp_path, change
     assert len(json.loads(companion.read_bytes())["compositions"]) == 2
     assert load_preparation_report(ref, store.local_path(ref)) == {
         **logical,
-        "report_format": "loom.preparation_report.v2",
+        "report_format": "loom.preparation_report.v3",
     }
 
 
@@ -269,7 +269,7 @@ def test_relocated_retained_closure_reads_without_original_source(tmp_path):
     companion.unlink()
     assert load_preparation_report(ref, copied / primary.name) == {
         **logical,
-        "report_format": "loom.preparation_report.v2",
+        "report_format": "loom.preparation_report.v3",
     }
 
 
@@ -284,7 +284,7 @@ def test_unsupported_report_schema_refuses_before_companion_publication(
         save_composition_evidence(logical, companion)
     assert companion.read_bytes() == before
     # A matching primary checksum does not authorize a retired report schema.
-    physical = {**logical, "report_format": "loom.preparation_report.v2"}
+    physical = {**logical, "report_format": "loom.preparation_report.v3"}
     retired = store.save(
         physical,
         stage_name="prepare",
@@ -345,3 +345,124 @@ def test_native_frozen_candidate_plain_values_are_detached_before_encoding(tmp_p
     full = cast(Any, load_preparation_report(ref, store.local_path(ref)))
     assert full["candidate"] == {"result": {"artifacts": [{"verified": True}]}}
     assert full["composition"] == logical["composition"]
+
+
+def test_mapping_order_is_retained_and_order_only_changes_never_share_composition(tmp_path):
+    from weave.ordered import encode_ordered_config
+
+    requested = _composition()
+    requested["resolved"] = {"z": 1, "a": {"reconstruction": {}, "detrending": {}}}
+    # The two views are semantically distinct even though ordinary dict equality agrees.
+    logical = {
+        "schema_version": 10,
+        "composition": {**requested, "resolved": dict(reversed(list(requested["resolved"].items())))},
+        "requested_composition": requested,
+    }
+    store = LocalArtifactStore(tmp_path)
+    companion = store.local_artifact_path(stage_name="prepare", name="report", codec_key="json.v1").with_suffix(".composition.json")
+    primary = save_composition_evidence(logical, companion)
+    ref = store.save(primary, stage_name="prepare", name="report", artifact_type="json", codec_key="json.v1")
+    assert len(json.loads(companion.read_bytes())["compositions"]) == 2
+    loaded = load_preparation_report(ref, store.local_path(ref))
+    assert list(loaded["composition"]["resolved"]) == ["a", "z"]
+    assert list(loaded["requested_composition"]["resolved"]) == ["z", "a"]
+    assert list(loaded["composition"]["resolved"]["a"]) == ["reconstruction", "detrending"]
+    assert encode_ordered_config(loaded["requested_composition"]["resolved"]) == encode_ordered_config(requested["resolved"])
+
+
+def test_shared_ordered_views_remain_independent_after_hydration(tmp_path, monkeypatch):
+    composition = _composition()
+    composition["resolved"] = {
+        "parts": {"reconstruction": {"values": [False, 0, 0.0, None]}, "detrending": {}},
+        "branches": ["second", "first", "second"],
+    }
+    composition["redacted"] = deepcopy(composition["resolved"])
+    monkeypatch.setattr(__import__(__name__, fromlist=["_composition"]), "_composition", lambda: deepcopy(composition))
+    _, store, ref, companion = _write(tmp_path)
+    assert len(json.loads(companion.read_bytes())["compositions"]) == 1
+    loaded = load_preparation_report(ref, store.local_path(ref))
+    for name in ("composition", "requested_composition"):
+        resolved = loaded[name]["resolved"]
+        assert list(resolved["parts"]) == ["reconstruction", "detrending"]
+        assert resolved["branches"] == ["second", "first", "second"]
+        assert [type(value) for value in resolved["parts"]["reconstruction"]["values"]] == [bool, int, float, type(None)]
+    loaded["composition"]["resolved"]["parts"]["reconstruction"]["values"].append("changed")
+    loaded["composition"]["resolved"]["branches"].reverse()
+    assert loaded["requested_composition"] == composition
+    assert loaded["composition"]["redacted"] == composition["redacted"]
+
+
+def test_legacy_report_reads_original_plain_mapping_without_order_upgrade(tmp_path):
+    from loom.fingerprints import hash_bytes
+
+    logical, store, ref, companion = _write(tmp_path)
+    physical = store.load(ref)
+    physical["report_format"] = "loom.preparation_report.v1"
+    evidence = json.loads(companion.read_bytes())
+    evidence.update(schema="loom.preparation_composition.v1", schema_version=1)
+    for entry in evidence["compositions"].values():
+        for key in ("resolved", "redacted", "recipe_manifest"):
+            entry.pop(key)
+    companion.write_bytes(stable_json_bytes(evidence))
+    for name in ("composition", "requested_composition"):
+        for key in ("resolved", "redacted", "recipe_manifest"):
+            physical[name][key] = logical[name][key]
+        reference = physical[name]["evidence_ref"]
+        reference["metadata"]["document_schema_version"] = 1
+        reference["checksum"] = hash_bytes(companion.read_bytes())
+    legacy = store.save(physical, stage_name="prepare", name="legacy-report", artifact_type="json", codec_key="json.v1")
+    assert load_preparation_report(legacy, store.local_path(legacy)) == {
+        **logical, "report_format": "loom.preparation_report.v1",
+    }
+
+
+def test_project_inspection_cannot_reorder_captured_configuration():
+    from types import SimpleNamespace
+
+    from loom.preparation import _validate_project_result
+
+    original = {
+        "resolved": {"parts": {"reconstruction": {}, "detrending": {}}},
+        "redacted": {}, "recipe_manifest": [],
+    }
+    checked = deepcopy(original)
+    checked["resolved"]["parts"] = {"detrending": {}, "reconstruction": {}}
+    assert stable_json_bytes(original) == stable_json_bytes(checked)
+    binding = SimpleNamespace(project_preparation={
+        "target_run_uri": "file:///retained/run",
+        "processor": {"schema_version": 3, "evidence_namespace": "example"},
+    })
+    result = {"schema_version": 3, "evidence": {"namespace": "example", "payload": {}},
+              "reconciliation_key": None, "stage_contracts": {}}
+    with pytest.raises(QueueConflictError, match="changed the captured composition"):
+        _validate_project_result(original, checked, result, binding)
+
+
+@pytest.mark.parametrize("encoding", ["plain", "ordered", "mixed"])
+def test_historical_v2_composition_encodings(tmp_path, encoding):
+    from loom.fingerprints import hash_bytes
+    from weave.ordered import decode_ordered_config
+
+    logical, store, ref, companion = _write(tmp_path)
+    primary = store.load(ref)
+    primary["report_format"] = "loom.preparation_report.v2"
+    document = json.loads(companion.read_bytes())
+    document.update(schema="loom.preparation_composition.v2", schema_version=2)
+    for entry in document["compositions"].values():
+        for key in ("resolved", "redacted", "recipe_manifest"):
+            if encoding == "plain" or (encoding == "mixed" and key == "resolved"):
+                entry[key] = decode_ordered_config(entry[key])
+    companion.write_text(json.dumps(document))
+    for name in ("composition", "requested_composition"):
+        evidence = primary[name]["evidence_ref"]
+        evidence["metadata"]["document_schema_version"] = 2
+        evidence["checksum"] = hash_bytes(companion.read_bytes())
+    ref = store.save(primary, stage_name="prepare", name="report",
+                     artifact_type="json", codec_key="json.v1")
+    if encoding == "mixed":
+        with pytest.raises(QueueConflictError, match="ordered configuration"):
+            load_preparation_report(ref, store.local_path(ref))
+    else:
+        assert load_preparation_report(ref, store.local_path(ref)) == {
+            **logical, "report_format": "loom.preparation_report.v2",
+        }

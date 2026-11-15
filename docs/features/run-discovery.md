@@ -102,12 +102,64 @@ catalog `list` behavior and envelopes are unchanged.
 
 Pages use `live_keyset`, not snapshot consistency. New or newly matching records
 behind a cursor are not inserted retroactively. Default limit is 50, maximum
-200; at most 500 detailed candidates are acquired/evaluated per page. Local
-metadata enumeration for immutable ordering may exceed this count under the
-native request deadline; this never refreshes every run's authority. Limits are
+200; at most 500 detailed candidates are acquired/evaluated per page. Collection
+membership and creation-time ordering use the registered discovery index, with
+at most 501 candidate rows fetched before detailed acquisition. Limits are
 64 predicate nodes, depth 8 and 100 `in` operands. Missing sort times are last
 with incomplete coverage. Cursors bind query, order, scope and coordinator;
 they do not authorize access.
+
+Managed job and submission queries select at most 501 journal candidates in
+SQLite using the public keyset (500 candidates plus one continuation witness).
+Default run-identity ordering also pages distinct run URIs before authority
+acquisition; submission-time ordering pages submission facts with its private
+operation-ID continuation key, retaining initializer selection at acquisition. Supported journal string equality/`in` predicates narrow candidates;
+full typed evaluation still owns matching. Mixed predicates never discard an
+unsupported OR branch. Original submission context is read by exact operation
+identity for the selected run rather than loading the entire submission history.
+These bounds limit transferred rows and detailed acquisition, not all SQLite
+sorting/filtering work. Creation-time ordering joins registered immutable facts
+before paging; collection queries do not enumerate directories or read every
+run document. Exact admission observations use `CoordinatorClient.admission(admission_id)`
+and need no discovery query.
+
+### Registering and refreshing collection membership
+
+Loom run-document publication automatically registers run identity and creation
+time in `.loom_catalog/discovery.sqlite`. This derived index does not store live
+execution status or replace run authority. A registration intent is committed
+before publishing `run.json`, then acknowledged afterward; an interrupted write
+can leave an indexed but unavailable run, which must not be treated as successful
+execution. Ordinary creation and metadata updates need no manual registration.
+
+After upgrading an existing collection, or copying/deleting run directories
+outside Loom, refresh explicitly:
+
+```sh
+loom runs index /path/to/runs --discovery-only
+```
+
+The Python equivalent is `RunCatalog.open(path).rebuild(discovery_only=True)`.
+This explicit operation scans run documents, preserves concurrent registrations,
+and removes missing completed registrations. Missing pending publications remain
+visible rather than racing a writer that may still finish. Unreadable documents
+produce warnings and incomplete index coverage. Newly copied documents must use
+the correct destination run identity, as required by the run-store format.
+
+Search never rebuilds a missing index implicitly. It reports
+`discovery_index_unavailable`; an index that has not had a successful refresh
+reports `discovery_refresh_required`. Refresh after an upgrade establishes the
+initial collection coverage. Later external changes become discoverable only
+after another explicit refresh. Known indexed runs still obtain current status
+and missing-storage diagnostics from their authoritative readers.
+
+Discovery uses rollback-journal SQLite and memory-only temporary sorting, not
+WAL or implicit host temporary directories. The ordinary `runs index` command
+also rebuilds the legacy summary catalog; use `--discovery-only` when only search
+registration is needed, particularly on qualified shared storage. If the derived
+discovery database is corrupt, stop its writers, retain the damaged sidecar for
+diagnosis, remove only that derived database, and run the explicit refresh before
+resuming writers. Never remove run authority or execution journals for this repair.
 
 Empty pages may have `next_cursor` after exhausting the scan budget.
 `coverage.complete` qualifies the page independently of continuation;

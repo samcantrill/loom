@@ -35,6 +35,18 @@ class ReportedFailureStage:
             ) from cause
 
 
+class ConfigurationOrderStage:
+    """Fail visibly if constructor or runtime configuration was reordered in transit."""
+
+    def __init__(self, *, parts):
+        assert list(parts) == ["reconstruction", "detrending"]
+
+    def run(self, context, inputs):
+        assert list(context.stage_config["parts"]) == ["reconstruction", "detrending"]
+        assert tuple(context.stage_config["sequence"]) == ("z", "a", "z")
+        return JsonProducerStage().run(context, inputs)
+
+
 class JsonProducerStage:
     def run(
         self,

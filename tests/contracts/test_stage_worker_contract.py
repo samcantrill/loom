@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import pytest
 
 from loom.pipeline import PipelineSpec, ProcessContainmentOwner
 from loom.pipeline.execution import (
@@ -16,8 +17,9 @@ from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
 
 
+@pytest.mark.parametrize("target", ["JsonProducerStage", "ConfigurationOrderStage"])
 def test_resident_worker_returns_outputs_without_finalizing_canonical_state(
-    tmp_path: Path,
+    tmp_path: Path, target: str,
 ) -> None:
     store = LocalRunStore(tmp_path / "runs")
     run_uri = path_to_run_uri(tmp_path / "runs" / "run1")
@@ -29,7 +31,13 @@ def test_resident_worker_returns_outputs_without_finalizing_canonical_state(
                 {
                     "name": "build",
                     "factory": {
-                        "_target_": "tests.support.pipeline_execution_stages.JsonProducerStage"
+                        "_target_": "tests.support.pipeline_execution_stages." + target,
+                        "init": {"parts": {"reconstruction": {}, "detrending": {}}}
+                        if target == "ConfigurationOrderStage" else {},
+                    },
+                    "config": {
+                        "parts": {"reconstruction": {}, "detrending": {}},
+                        "sequence": ["z", "a", "z"],
                     },
                     "outputs": {
                         "data": {"artifact_type": "json", "codec_key": "json.v1"}

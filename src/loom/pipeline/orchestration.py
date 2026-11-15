@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from loom._sqlite_policy import SQLitePolicy, connect_existing, initialize_database
+
 import hashlib
 import json
 import sqlite3
@@ -433,7 +435,12 @@ class CoordinatorStageWorkStore(Protocol):
     def list_stage_work(self, *, admission_id: str | None = None) -> tuple[StageWorkRecord, ...]: ...
 
     def ready_window(
-        self, *, limit: int = READY_WINDOW_LIMIT
+        self, *, limit: int = READY_WINDOW_LIMIT,
+        after: StageWorkRecord | None = None,
+        rotate_after: int | None = None,
+        ready_through: int | None = None,
+        enqueue_through: int | None = None,
+        gpu_heads_only: bool = False,
     ) -> tuple[StageWorkRecord, ...]: ...
 
 
@@ -511,35 +518,50 @@ class InMemoryStageWorkStore:
                      if admission_id is None or self._work[key].admission_id == admission_id)
 
     def ready_window(
-        self, *, limit: int = READY_WINDOW_LIMIT
+        self, *, limit: int = READY_WINDOW_LIMIT,
+        after: StageWorkRecord | None = None,
+        rotate_after: int | None = None,
+        ready_through: int | None = None,
+        enqueue_through: int | None = None,
+        gpu_heads_only: bool = False,
     ) -> tuple[StageWorkRecord, ...]:
         _validate_ready_window_limit(limit)
-        return tuple(
-            sorted(
-                (
-                    record
-                    for record in self._work.values()
-                    if record.scheduling_state is SchedulingProjectionState.READY
-                ),
-                key=_ready_window_key,
-            )[:limit]
+        ready = sorted(
+            (row for row in self._work.values()
+             if row.scheduling_state is SchedulingProjectionState.READY),
+            key=lambda row: _ready_window_key(row, rotate_after),
         )
+        if gpu_heads_only and ready:
+            priority = ready[0].run_priority
+            heads = {}
+            for row in ready:
+                heads.setdefault(row.admission_id, row)
+            ready = [row for row in heads.values()
+                     if row.run_priority == priority
+                     and (gpu := row.placement.resource_request.entries.get("gpu")) is not None
+                     and gpu.amount > 0]
+        return tuple(row for row in ready
+                     if (ready_through is None or row.ready_at <= ready_through)
+                     and (enqueue_through is None or row.enqueue_sequence <= enqueue_through)
+                     and (after is None or _ready_window_key(row, rotate_after) > _ready_window_key(after, rotate_after)))[:limit]
 
 
 class SQLiteStageWorkStore:
     """Versioned SQLite projection store with semantic, non-CRUD operations."""
 
     def __init__(
-        self, database_path: str | Path, *, _allow_initialize: bool = True
+        self, database_path: str | Path, *, _allow_initialize: bool = True,
+        sqlite_policy: SQLitePolicy | None = None
     ) -> None:
         self.path = Path(database_path)
-        self._allow_initialize = _allow_initialize
+        self._sqlite_policy = sqlite_policy
+        self._allow_initialize = _allow_initialize and sqlite_policy is None
 
     def _initialize(self) -> None:
         """Create this store's current schema at an explicit owner boundary."""
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with _sqlite_connection(self.path) as conn:
+        with _sqlite_connection(self.path, sqlite_policy=self._sqlite_policy) as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
                 exists = conn.execute(
@@ -752,20 +774,60 @@ class SQLiteStageWorkStore:
             for row in rows
         )
 
+    def find_stage_work(self, stage_work_id: str) -> StageWorkRecord | None:
+        """Read the selected durable record without materializing the ready backlog."""
+        with self._read_connection() as conn:
+            row = conn.execute(
+                "SELECT record_json FROM stage_work WHERE stage_work_id = ?",
+                (stage_work_id,),
+            ).fetchone()
+        return None if row is None else StageWorkRecord.from_dict(_json_loads(row["record_json"]))
+
     def ready_window(
-        self, *, limit: int = READY_WINDOW_LIMIT
+        self, *, limit: int = READY_WINDOW_LIMIT,
+        after: StageWorkRecord | None = None,
+        rotate_after: int | None = None,
+        ready_through: int | None = None,
+        enqueue_through: int | None = None,
+        gpu_heads_only: bool = False,
     ) -> tuple[StageWorkRecord, ...]:
         _validate_ready_window_limit(limit)
         if not self.path.exists():
             if not self._allow_initialize:
                 raise CoordinatorStoreError("coordinator store is missing")
             return ()
+        # The complete immutable ordering key survives a released/deleted cursor
+        # row. Offset pagination would skip work when earlier rows disappear.
+        # Rotate equal-priority admissions only after successful reservations.
+        rotation = -1 if rotate_after is None else rotate_after
+        order_columns = (
+            f"-run_priority, (enqueue_sequence <= {int(rotation)}), enqueue_sequence, "
+            "ready_at, ready_order, stage_name, attempt, stage_work_id"
+        )
+        continuation = "" if after is None else (
+            f"AND ({order_columns}) > (?, ?, ?, ?, ?, ?, ?, ?) "
+        )
+        # A resource opportunity may select only the first authored READY stage
+        # of a run, and cannot overtake any higher-priority READY work. Filter in
+        # SQL before materializing payloads, including beyond a large CPU prefix.
+        gpu_filter = "" if not gpu_heads_only else (
+            "AND run_priority = (SELECT MAX(run_priority) FROM stage_work WHERE scheduling_state = 'ready') "
+            "AND json_extract(record_json, '$.placement.resource_request.entries.gpu.amount') > 0 "
+            "AND NOT EXISTS (SELECT 1 FROM stage_work AS earlier "
+            "WHERE earlier.scheduling_state = 'ready' AND earlier.admission_id = stage_work.admission_id "
+            "AND (earlier.ready_at, earlier.ready_order, earlier.stage_name, earlier.attempt, earlier.stage_work_id) "
+            "< (stage_work.ready_at, stage_work.ready_order, stage_work.stage_name, stage_work.attempt, stage_work.stage_work_id)) "
+        )
         with self._read_connection() as conn:
             rows = conn.execute(
                 "SELECT record_json FROM stage_work WHERE scheduling_state = ? "
-                "ORDER BY run_priority DESC, enqueue_sequence, ready_at, ready_order, "
-                "stage_name, attempt, stage_work_id LIMIT ?",
-                (SchedulingProjectionState.READY.value, limit),
+                "AND (? IS NULL OR ready_at <= ?) "
+                "AND (? IS NULL OR enqueue_sequence <= ?) "
+                + gpu_filter + continuation
+                + f"ORDER BY {order_columns} LIMIT ?",
+                (SchedulingProjectionState.READY.value, ready_through, ready_through,
+                 enqueue_through, enqueue_through,
+                 *(() if after is None else _ready_window_key(after, rotate_after)), limit),
             ).fetchall()
         return tuple(
             StageWorkRecord.from_dict(_json_loads(cast(str, row["record_json"])))
@@ -780,7 +842,7 @@ class SQLiteStageWorkStore:
             self.path.parent.mkdir(parents=True, exist_ok=True)
         initialize = not self.path.exists()
         with _sqlite_connection(
-            self.path, require_existing=not self._allow_initialize
+            self.path, sqlite_policy=self._sqlite_policy, require_existing=not self._allow_initialize
         ) as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
@@ -797,7 +859,7 @@ class SQLiteStageWorkStore:
     @contextmanager
     def _read_connection(self) -> Iterator[sqlite3.Connection]:
         with _sqlite_connection(
-            self.path, require_existing=not self._allow_initialize
+            self.path, sqlite_policy=self._sqlite_policy, require_existing=not self._allow_initialize
         ) as conn:
             _raise_for_store_schema(conn)
             yield conn
@@ -1421,10 +1483,11 @@ def _validate_ready_window_limit(limit: int) -> None:
 
 
 def _ready_window_key(
-    record: StageWorkRecord,
-) -> tuple[int, int, int, int, str, int, str]:
+    record: StageWorkRecord, rotate_after: int | None = None,
+) -> tuple[int, int, int, int, int, str, int, str]:
     return (
         -record.run_priority,
+        int(rotate_after is not None and record.enqueue_sequence <= rotate_after),
         record.enqueue_sequence,
         record.ready_at,
         record.ready_order,
@@ -1436,17 +1499,21 @@ def _ready_window_key(
 
 @contextmanager
 def _sqlite_connection(
-    path: Path, *, require_existing: bool = False
+    path: Path, *, require_existing: bool = False, sqlite_policy: SQLitePolicy | None = None
 ) -> Iterator[sqlite3.Connection]:
     target: str | Path = (
         f"{path.resolve().as_uri()}?mode=rw" if require_existing else path
     )
-    conn = sqlite3.connect(
-        target,
-        timeout=30.0,
-        isolation_level=None,
-        uri=require_existing,
-    )
+    if sqlite_policy is None:
+        conn = sqlite3.connect(
+            target,
+            timeout=30.0,
+            isolation_level=None,
+            uri=require_existing,
+        )
+    else:
+        connect = connect_existing if require_existing else initialize_database
+        conn = connect(path, policy=sqlite_policy, isolation_level=None)
     conn.row_factory = sqlite3.Row
     try:
         yield conn

@@ -7,7 +7,6 @@ from dataclasses import replace
 from functools import cmp_to_key
 from typing import Any
 
-from loom.pipeline.stores.errors import StoreError
 from .errors import QueueError
 
 from loom.runs._query_acquire import acquire_run, needs_notes
@@ -67,21 +66,6 @@ def validate_query_request(operation: str, payload: Any) -> dict[str, Any]:
     return {"query": model.from_dict(payload["query"])}
 
 
-def _journal(daemon: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    # Release the read transaction before any authority or filesystem access.
-    with daemon._connection() as conn:
-        operations = [
-            dict(row)
-            for row in conn.execute(
-                "SELECT operation_id, principal_id, accepted_at, state, kind, queue_item_id, json_extract(result_json, '$.prepared_run.run_uri') AS run_uri FROM preparation_operations"
-            )
-        ]
-        admissions = [
-            dict(row) for row in conn.execute("SELECT * FROM managed_admissions")
-        ]
-    return operations, admissions
-
-
 def _operation(row: dict[str, Any], owner: str) -> dict[str, Any]:
     return {
         key: row[key]
@@ -111,7 +95,36 @@ def search(daemon: Any, query: RunQuery) -> QueryPage:
             owner=owner,
             authority_factory=daemon.config.coordinator_authority_factory,
         )
-    operations, admissions = _journal(daemon)
+    bounded_candidates = None
+    discovery_warnings = []
+    if query.entity == "runs" and any(order.field == "created_at" for order in query.order_by):
+        from ._query_journal import run_creation_candidates
+        if any(order.field == "submitted_at" for order in query.order_by):
+            query = replace(query, order_by=(*query.order_by, Order("operation_id")))
+        bounded_candidates, discovery_warnings = run_creation_candidates(daemon, query, owner)
+        for candidate in bounded_candidates:
+            for field in ("created_at", "submitted_at"):
+                if field in candidate and candidate[field] is None:
+                    candidate[field] = UNAVAILABLE
+        operations, admissions = [], []
+    elif query.entity == "runs" and any(order.field == "submitted_at" for order in query.order_by):
+        from ._query_journal import run_submission_candidates
+        query = replace(query, order_by=(*query.order_by, Order("operation_id")))
+        bounded_candidates = run_submission_candidates(daemon, query, owner)
+        for candidate in bounded_candidates:
+            if candidate["submitted_at"] is None:
+                candidate["submitted_at"] = UNAVAILABLE
+        operations, admissions = [], []
+    elif query.entity == "runs":
+        if len(query.order_by) == 1 and query.order_by[0].field == "run_uri":
+            from ._query_journal import run_uri_candidates
+            operations, admissions = [], run_uri_candidates(daemon, query, owner)
+        else:
+            raise QueryError("unsupported run ordering")
+    else:
+        from ._query_journal import journal_candidates
+        rows = journal_candidates(daemon, query, owner)
+        operations, admissions = (rows, []) if query.entity == "submissions" else ([], rows)
     originals = {row["operation_id"]: row for row in operations}
     factory = daemon.config.coordinator_authority_factory
     cache: dict[str, QueryRecord] = {}
@@ -142,11 +155,20 @@ def search(daemon: Any, query: RunQuery) -> QueryPage:
             include_notes=needs_notes(query),
         )
         native = record.sources["native"]
-        original = (
-            originals.get(native.get("operation_id"))
-            if native.get("coordinator_id") == owner
-            else None
-        )
+        original = None
+        if native.get("coordinator_id") == owner:
+            operation_id = native.get("operation_id")
+            original = originals.get(operation_id)
+            if original is None and operation_id is not None:
+                from ._query_journal import _OPERATION_COLUMNS
+                with daemon._connection() as conn:
+                    row = conn.execute(
+                        f"SELECT {_OPERATION_COLUMNS} FROM preparation_operations WHERE operation_id = ?",
+                        (operation_id,),
+                    ).fetchone()
+                original = None if row is None else dict(row)
+                if original is not None:
+                    originals[operation_id] = original
         if original is not None:
             native.update(
                 submitted_at=original["accepted_at"] or UNAVAILABLE,
@@ -164,7 +186,9 @@ def search(daemon: Any, query: RunQuery) -> QueryPage:
     by_submission = query.entity == "runs" and any(
         order.field == "submitted_at" for order in query.order_by
     )
-    if query.entity == "runs":
+    if bounded_candidates is not None:
+        candidates = bounded_candidates
+    elif query.entity == "runs":
         uris = {row["run_uri"] for row in admissions}
         uris.update(
             native["run_uri"]
@@ -253,27 +277,12 @@ def search(daemon: Any, query: RunQuery) -> QueryPage:
                 )
         return record
 
-    warnings: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = list(discovery_warnings)
     keyed = []
     for candidate in candidates:
         keys = []
         for order in query.order_by:
             value = candidate.get(order.field, UNAVAILABLE)
-            if (
-                value is UNAVAILABLE
-                and order.field == "created_at"
-                and candidate.get("run_uri")
-            ):
-                from loom.pipeline.stores import LocalRunStore
-
-                try:
-                    value = (
-                        LocalRunStore(daemon.config.run_store_root)
-                        .read_run_document(candidate["run_uri"])
-                        .get("created_at", UNAVAILABLE)
-                    )
-                except (OSError, ValueError, LookupError, StoreError):
-                    pass
             if value is UNAVAILABLE and order.field == "submitted_at":
                 # Submission accepted_at is the operation's own immutable time.
                 value = candidate.get("accepted_at", UNAVAILABLE)

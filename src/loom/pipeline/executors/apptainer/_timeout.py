@@ -17,7 +17,10 @@ import subprocess
 import sys
 import tempfile
 from time import monotonic, sleep
-from typing import BinaryIO, Sequence
+from typing import BinaryIO, Mapping, Sequence
+
+from loom import _pidfd
+from loom._apptainer_guard import VERSION as _GUARD_VERSION
 
 from .build import MAX_APPTAINER_OUTPUT_CHARS, ApptainerOptionError
 
@@ -72,16 +75,21 @@ def namespace_argv(argv: Sequence[str]) -> tuple[str, ...]:
     return (argv[0], "exec", "--pid", "--no-init=false", *options, *argv[index:])
 
 
-def _require_runtime(command: str, deadline: float) -> None:
+def _require_runtime(command: str, deadline: float, *, host_environment: Mapping[str, str] | None = None) -> None:
     if (
         sys.platform != "linux"
-        or not all(hasattr(os, name) for name in ("pidfd_open", "waitid", "WNOWAIT"))
-        or not hasattr(signal, "pidfd_send_signal")
+        or not all(hasattr(os, name) for name in ("waitid", "WNOWAIT"))
     ):
         raise UnsupportedTimeoutError(
             "container timeouts require Linux pidfds and non-reaping child waits; "
             "use a supported execution host or explicitly disable the timeout"
         )
+    try:
+        _pidfd.require_pidfd_support()
+    except OSError as exc:
+        raise UnsupportedTimeoutError(
+            "container timeouts require working Linux pidfd operations"
+        ) from exc
     remaining = deadline - monotonic()
     if remaining <= 0:
         raise subprocess.TimeoutExpired(command, 0)
@@ -91,18 +99,22 @@ def _require_runtime(command: str, deadline: float) -> None:
         text=True,
         timeout=remaining,
         check=False,
+        env=host_environment,
     )
     if (
         version.returncode != 0
-        or re.fullmatch(
-            r"singularity(?:-ce)? version (?:3\.10\.4(?:-focal)?|4\.1\.(?:1|5))\s*",
-            version.stdout,
+        or (
+            version.stdout.strip() != _GUARD_VERSION
+            and re.fullmatch(
+                r"singularity(?:-ce)? version (?:3\.10\.4(?:-focal)?|4\.1\.(?:1|5))\s*",
+                version.stdout,
+            )
+            is None
         )
-        is None
     ):
         raise UnsupportedTimeoutError(
             "container timeout cleanup is currently verified for SingularityCE 3.10.4, 4.1.1 or 4.1.5 "
-            "foreground exec with its PID-namespace init; select that runtime or "
+            "foreground exec, or loom-apptainer-guard version 1; select a qualified command or "
             "explicitly disable the timeout"
         )
 
@@ -132,7 +144,7 @@ def _capture_init(process: subprocess.Popen[bytes], group: int) -> int | None:
             accepted = False
             try:
                 pid = int(value)
-                fd = os.pidfd_open(pid)
+                fd = _pidfd.open_pidfd(pid)
                 status = {
                     key: value.strip()
                     for key, value in (
@@ -141,10 +153,9 @@ def _capture_init(process: subprocess.Popen[bytes], group: int) -> int | None:
                     )
                 }
                 namespace_pids = status.get("NSpid", "").split()
-                # Singularity names this process sinit only after resolving and
-                # starting the selected executable. Capture the namespace init
-                # during startup too, so an incompatible image can fail without
-                # losing its already-created containment boundary.
+                # Capture the direct namespace init during startup too. Names
+                # are runtime-specific; the guard retains a stable outer shim
+                # while the runtime starts its own nested payload namespace.
                 accepted = (
                     status.get("PPid") == str(process.pid)
                     and len(namespace_pids) > 1
@@ -197,7 +208,7 @@ def _settle(process: subprocess.Popen[bytes], init: int | None) -> list[str]:
                     errors.append(f"launcher cleanup: {type(exc).__name__}")
             if init is not None and not _ready(init):
                 try:
-                    signal.pidfd_send_signal(init, signum)
+                    _pidfd.send_pidfd_signal(init, signum)
                 except ProcessLookupError:
                     pass
                 except OSError as exc:
@@ -226,20 +237,24 @@ def _output(stream: BinaryIO) -> str:
     return stream.read(MAX_APPTAINER_OUTPUT_CHARS * 4 + 1).decode(errors="replace")
 
 
-def run_timed_exec(argv: Sequence[str], timeout_seconds: float) -> TimedExecResult:
+def run_timed_exec(
+    argv: Sequence[str], timeout_seconds: float, *, host_environment: Mapping[str, str] | None = None,
+) -> TimedExecResult:
     """Run within one deadline, then use a separate bounded cleanup budget."""
     deadline = monotonic() + timeout_seconds
-    _require_runtime(argv[0], deadline)
+    _require_runtime(argv[0], deadline, host_environment=host_environment)
     init: int | None = None
     timed_out = False
     error: str | None = None
     interrupted: BaseException | None = None
     root_code: int | None = None
-    with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+    temporary_root = None if host_environment is None else host_environment.get("TMPDIR")
+    with tempfile.TemporaryFile(dir=temporary_root) as stdout, tempfile.TemporaryFile(dir=temporary_root) as stderr:
         process = subprocess.Popen(  # noqa: S603 - trusted configured exec argv.
             list(argv),
             stdout=stdout,
             stderr=stderr,
+            env=host_environment,
         )
         try:
             _root_status(process)

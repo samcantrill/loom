@@ -60,7 +60,8 @@ def test_slurm_shared_grant_and_start_use_exact_live_demand(tmp_path, monkeypatc
     monkeypatch.setattr(
         execution,
         "config",
-        SimpleNamespace(control_database=tmp_path / "actions.sqlite"),
+        SimpleNamespace(control_database=tmp_path / "actions.sqlite",
+                        connect_database=lambda path: actions.connection()),
         raising=False,
     )
     monkeypatch.setattr(execution, "_slurm_authorized_record", lambda *args: record)

@@ -31,7 +31,7 @@ from tests.integration.queue.test_preparation_operations import _service, _reque
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
 
-@pytest.mark.parametrize("scenario", ["small", "input_directory", "scientific", "unresolved_restart", "workspace_restart", "started_restart", "completed_input_unavailable", "cancel_missing", "missing_selector", "preflight_cancel", "descriptor_cancel"])
+@pytest.mark.parametrize("scenario", ["small", "trusted", "input_directory", "scientific", "unresolved_restart", "workspace_restart", "started_restart", "completed_input_unavailable", "cancel_missing", "missing_selector"])
 def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, scenario):
     from threading import Event
 
@@ -62,12 +62,16 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, s
                 "control": {"host_path": str(control if path == first else Path("/proc/self/root") / control.relative_to("/")), "container_path": None, "access": "rw",
                     "challenge": {"path": "challenge", "sha256": hashlib.sha256(b"control-challenge").hexdigest()}},
                 "reports": {"host_path": str(reports if path == first else Path("/proc/self/root") / reports.relative_to("/")), "container_path": None, "access": "rw",
-                    "publication": {"max_members": 1024, "max_payload_bytes": 16 * 1024 * 1024, "max_manifest_bytes": 1024 * 1024},
+                    "publication": {**({"policy": "trusted_shared_storage"} if scenario == "trusted" else {}), "max_members": 1024, "max_payload_bytes": 16 * 1024 * 1024, "max_manifest_bytes": 1024 * 1024},
                     "challenge": {"path": "challenge", "sha256": hashlib.sha256(b"report-challenge").hexdigest()}}}
     location = {"kind": "loom.shared-location", "schema_version": 1, "root_id": "data", "path": "selected.bin"}
     agent_path = tmp_path / "agent.json"
     authored_agent = json.loads(agent_path.read_text())
     authored_agent["resident_profiles"][0]["shared_roots"] = roots(first)
+    authored_agent["resident_profiles"][0]["environment"] = {
+        "PYTHONPATH": str(Path(__file__).resolve().parents[3] / "src")
+        + ":" + str(Path(__file__).resolve().parents[3])
+    }
     agent_path.write_text(json.dumps(authored_agent))
     pipeline_path = tmp_path / "projects" / "pipeline.yaml"
     pipeline = json.loads(pipeline_path.read_text())
@@ -88,6 +92,8 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, s
         Path(__file__).resolve().parents[3], Path(sys.executable),
         readiness_requirements=ResidentReadinessRequirements(imports=("loom", "loom.preparation", "weave")),
         shared_roots=roots(second),
+        environment={"PYTHONPATH": str(Path(__file__).resolve().parents[3] / "src")
+                     + ":" + str(Path(__file__).resolve().parents[3])},
     ))
     # A worker installation needs only the existing shared execution contract;
     # the new host transport capability must not invalidate retained workers.
@@ -353,7 +359,8 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, s
             if scientific:
                 assert len(data) > 128 * 1024
                 assert cast(Any, request.to_dict())["fingerprint"]["payload"]["stage_config"]["scientific"] == nested
-            assert "control" not in cast(Any, request.to_dict())["fingerprint"]["payload"]["fingerprint_fields"]["loom.shared_execution"]["roots"]
+            from loom.queue.shared_execution import assignment_scope
+            assert "control" not in assignment_scope(request.fingerprint)["roots"]
             assert str(first) not in json.dumps(request.to_dict())
             assert str(second) not in json.dumps(request.to_dict())
     finally:

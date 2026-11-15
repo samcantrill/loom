@@ -400,6 +400,22 @@ def test_subprocess_runner_uses_shell_free_argv() -> None:
     assert result.argv == (sys.executable, "-c", "print('ok')")
 
 
+def test_subprocess_runner_uses_selected_host_path_and_environment(tmp_path, monkeypatch):
+    import json
+
+    executable = tmp_path / "selected-python"
+    executable.symlink_to(sys.executable)
+    monkeypatch.setenv("PROBE_AMBIENT_SECRET", "must-not-inherit")
+    environment = {"PATH": str(tmp_path), "TMPDIR": str(tmp_path), "PROBE_SELECTED": "yes"}
+    command = ApptainerExecCommand.from_argv((
+        "selected-python", "-c",
+        "import json,os; print(json.dumps({'selected':os.environ['PROBE_SELECTED'], 'temporary':os.environ['TMPDIR'], 'ambient':'PROBE_AMBIENT_SECRET' in os.environ}))",
+    ))
+    result = SubprocessApptainerExecRunner().run(command, host_environment=environment)
+    assert result.ok
+    assert json.loads(result.stdout) == {"selected": "yes", "temporary": str(tmp_path), "ambient": False}
+
+
 def test_version_command_is_cheap() -> None:
     command = build_apptainer_version_command({"command": "singularity"})
 

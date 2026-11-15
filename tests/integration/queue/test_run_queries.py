@@ -281,6 +281,11 @@ def test_native_query_routes_context_text_scope_and_cli(
                 ] == [{"value": "v1"}]
             collection = client.search_runs(RunQuery(scope=CollectionScope()))
             assert uri in [item["identity"] for item in collection.items]
+            known = {item['identity'] for item in collect_pages(client.search_runs, RunQuery()).items}
+            for ordering in ((Order('created_at'),), (Order('created_at', True), Order('submitted_at'))):
+                indexed = collect_pages(client.search_runs, RunQuery(order_by=ordering, limit=1))
+                assert {item['identity'] for item in indexed.items} == known
+                assert len(indexed.items) == len(known)
             paged = RunQuery(limit=1)
             first = client.search_runs(paged)
             assert first.next_cursor

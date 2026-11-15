@@ -105,6 +105,11 @@ def execute_resident_stage_worker_request(
         invalidated_by=(),
     )
     artifact_store = LocalArtifactStore(root / "artifacts" if artifact_root is None else artifact_root, shared_roots=shared_roots)
+    from loom.pipeline.stores.shared_artifacts import publication_policy
+    selected_policy = next(
+        (publication_policy(facts["publication"]) for facts in (shared_roots or {}).values()
+         if "publication" in facts), "verified",
+    )
     worker_executor = LocalExecutor(capture_stdout_stderr=True)
     try:
         stage_object = construct_stage(
@@ -115,6 +120,7 @@ def execute_resident_stage_worker_request(
             run_uri=worker_request.run_uri,
             stage_name=worker_request.stage_name,
             process_containment_owner=process_containment_owner,
+            artifact_publication_policy=selected_policy,
             resolved_config=_minimal_resolved_config(stage),
             stage_config=stage.stage_config,
             inputs=worker_request.inputs,

@@ -452,8 +452,9 @@ def submitted_binding(
 def assignment_binding(
     fingerprint: Mapping[str, PlainData],
 ) -> tuple[SubmittedContainerExecution, SubmittedContainerCapability] | None:
-    payload = cast(Mapping[str, PlainData], fingerprint["payload"])
-    fields = cast(Mapping[str, PlainData], payload["fingerprint_fields"])
+    from loom.pipeline.planning import StageFingerprintRecord
+
+    fields = StageFingerprintRecord.from_dict(fingerprint).payload.fingerprint_fields
     if SUBMITTED_EXECUTION_SCOPE not in fields:
         return None
     return submitted_binding(fields[SUBMITTED_EXECUTION_SCOPE])

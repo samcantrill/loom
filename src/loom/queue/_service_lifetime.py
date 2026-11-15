@@ -12,6 +12,8 @@ import time
 from typing import TYPE_CHECKING
 from pathlib import Path
 
+from loom._sqlite_policy import SQLitePolicy, connect_existing
+
 from .errors import QueueServiceError
 
 if TYPE_CHECKING:
@@ -136,7 +138,7 @@ class CoordinatorLifetime:
                 "coordinator_id": coordinator_id,
                 "root_id": coordinator_id,
             }
-            _save(root, receipt)
+            _save(root, receipt, sqlite_policy=self.daemon.config.sqlite_policy)
             return receipt
 
 
@@ -146,6 +148,7 @@ def record_process(
     stopped: bool,
     coordinator_id: str | None = None,
     session_id: str | None = None,
+    sqlite_policy: SQLitePolicy | None = None,
 ) -> None:
     """Record process completion evidence, never an accepted-work predicate."""
     import os
@@ -153,7 +156,13 @@ def record_process(
 
     pid = os.getpid()
     started = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
-    with sqlite3.connect(root / "control.sqlite") as conn:
+    with (
+        sqlite3.connect(root / "control.sqlite")
+        if sqlite_policy is None
+        else connect_existing(
+            root / "control.sqlite", policy=sqlite_policy, isolation_level=""
+        )
+    ) as conn:
         conn.execute(
             "INSERT INTO root_metadata(key,value) VALUES ('service_process',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (
@@ -173,12 +182,20 @@ def record_process(
         conn.commit()
 
 
-def retained_lifetime(root: Path, requested: str | None) -> str:
+def retained_lifetime(
+    root: Path, requested: str | None, *, sqlite_policy: SQLitePolicy | None = None,
+) -> str:
     """Resolve immutable lifetime while the caller holds the native role lock."""
     import sqlite3
     from .errors import QueueConflictError
 
-    with sqlite3.connect(root / "control.sqlite") as conn:
+    with (
+        sqlite3.connect(root / "control.sqlite")
+        if sqlite_policy is None
+        else connect_existing(
+            root / "control.sqlite", policy=sqlite_policy, isolation_level=""
+        )
+    ) as conn:
         row = conn.execute(
             "SELECT value FROM root_metadata WHERE key = 'service_lifetime'"
         ).fetchone()

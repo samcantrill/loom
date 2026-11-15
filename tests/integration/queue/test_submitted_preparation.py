@@ -109,7 +109,7 @@ def test_selected_input_override_fails_before_report_publication(tmp_path, monke
     assert not list((tmp_path / "artifacts").rglob("*.json"))
 
 
-def test_selected_locations_survive_sorted_report_without_rewriting_retained_scope(tmp_path, monkeypatch):
+def test_selected_locations_preserve_authored_report_order_and_retained_scope(tmp_path, monkeypatch):
     from loom.queue.shared_execution import SHARED_EXECUTION_SCOPE
 
     def location(path):
@@ -119,12 +119,12 @@ def test_selected_locations_survive_sorted_report_without_rewriting_retained_sco
     _, binding, report = _run(tmp_path, monkeypatch, selected_inputs=True, stage_update={
         "config": {"value": 41, "z_first": location("left"), "a_second": location("right")},
     })
-    # The supported report writer sorts mapping keys, while preserving the
-    # location list bound by the worker before serialization.
+    # The report preserves authored mapping order and the exact location list
+    # bound by the worker before serialization.
     stage = report["composition"]["resolved"]["pipeline"]["stages"][0]
     retained = stage["fingerprint"][SHARED_EXECUTION_SCOPE]
     assert retained["locations"] == [location("left"), location("right")]
-    assert list(stage["config"]) == ["a_second", "value", "z_first"]
+    assert list(stage["config"]) == ["value", "z_first", "a_second"]
     before = json.dumps(report, sort_keys=True)
     composed, _, preflight = decode_preparation_report(report, expected=binding)
     assert preflight.status.value == "PASS"

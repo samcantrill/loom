@@ -48,8 +48,32 @@ def _selection(tmp_path: Path, *, lifetime: str = "run") -> Path:
     return path
 
 
-def test_cold_run_reopen_and_actual_owned_exit(tmp_path: Path) -> None:
+@pytest.mark.parametrize("rollback_storage", (False, True))
+def test_cold_run_reopen_and_actual_owned_exit(
+    tmp_path: Path, rollback_storage: bool,
+) -> None:
     selection = _selection(tmp_path)
+    # Exercise the selected source tree in the execution-only child as well.
+    # The test interpreter may have an older non-editable Loom installed.
+    agent_source = tmp_path / "agent.json"
+    agent_value = json.loads(agent_source.read_text())
+    repository = Path(__file__).resolve().parents[3]
+    agent_value["resident_profiles"][0]["environment"] = {
+        "PYTHONPATH": f"{repository / 'src'}:{repository}",
+    }
+    agent_source.write_text(json.dumps(agent_value))
+    if rollback_storage:
+        import socket
+        source = tmp_path / "coordinator.json"
+        value = json.loads(source.read_text())
+        (tmp_path / "authority").mkdir(mode=0o700)
+        value["authority"] = {"kind": "embedded", "state_root": "authority"}
+        value["storage"] = {
+            "owner_host": socket.gethostname(),
+            "sqlite": {"journal_mode": "delete", "synchronous": "extra", "busy_timeout_ms": 1234},
+            "durable_files": "strict",
+        }
+        source.write_text(json.dumps(value))
     request = RunRequest(_request(), "target-queue")
     result = loom.run(request, deployment=selection)
     assert result.observation.admission is not None
@@ -64,6 +88,20 @@ def test_cold_run_reopen_and_actual_owned_exit(tmp_path: Path) -> None:
     )
     assert _cleanup_state(again, "coordinator") == "stopped"
     assert json.loads((tmp_path / "binding.json").read_text()) == identity
+    if rollback_storage:
+        from loom.queue._remote_stage_execution import _ResidentAssignmentWorkspace
+        workspaces = tuple((tmp_path / "deployment/agent/assignments").glob("*/resident.sqlite"))
+        assert workspaces
+        for database in workspaces:
+            workspace = _ResidentAssignmentWorkspace(
+                database.parent.parent.parent, database.parent.name,
+                _allow_initialize=False,
+            )
+            assert workspace.durable_files == "strict"
+            with workspace._connect() as conn:
+                assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+                assert conn.execute("PRAGMA synchronous").fetchone()[0] == 3
+                assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 1234
 
 
 def test_bound_root_loss_never_initializes_replacement(tmp_path: Path) -> None:

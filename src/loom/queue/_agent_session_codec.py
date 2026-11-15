@@ -24,11 +24,19 @@ from ._remote_stage_execution import (
 
 _MAX_BODY_BYTES = 65_536
 
+# Ordered configuration envelopes expand native scientific deliveries. This
+# budget belongs only to the typed Slurm registration reply, not control traffic.
+_MAX_SLURM_REGISTRATION_BYTES = 262_144
+
 _MAX_QUERY_RESPONSE_BYTES = 1_048_576
 
 _MAX_JSON_DEPTH = 8
 
 _MAX_JSON_COLLECTION = 64
+
+# Authored scientific configurations are deeper than protocol control objects.
+# Keep this finite and scoped to the versioned delivery's plain semantic trees.
+_MAX_SEMANTIC_JSON_DEPTH = 64
 
 _MAX_FAILURE_JSON_DEPTH = 512
 
@@ -203,10 +211,12 @@ def _exact(value: Mapping[str, object], fields: set[str]) -> None:
         raise QueueServiceError("agent protocol fields are invalid")
 
 
-def _decode(raw: bytes, *, failure_report: bool = False, control_wait: bool = False) -> Mapping[str, object]:
-    if len(raw) > _MAX_BODY_BYTES:
+def _decode(raw: bytes, *, failure_report: bool = False, control_wait: bool = False,
+            slurm_registration: bool = False) -> Mapping[str, object]:
+    maximum = _MAX_SLURM_REGISTRATION_BYTES if slurm_registration else _MAX_BODY_BYTES
+    if len(raw) > maximum:
         raise QueueServiceError(
-            "agent protocol body is too large (maximum 65536 bytes); "
+            f"agent protocol body is too large (maximum {maximum} bytes); "
             "reduce the report or message size"
         )
     try:
@@ -230,6 +240,40 @@ def _decode(raw: bytes, *, failure_report: bool = False, control_wait: bool = Fa
         _bounded_json({**value, "received_operation_ids": None}, depth=0)
         return value
     result = value.get("result")
+    if slurm_registration and isinstance(result, Mapping):
+        from .slurm_ready_stage import SLURM_STAGE_DELIVERY_SCHEMA_VERSION
+
+        delivery = result.get("delivery")
+        if (isinstance(delivery, Mapping)
+            and type(delivery.get("schema_version")) is int
+            and delivery["schema_version"] == SLURM_STAGE_DELIVERY_SCHEMA_VERSION):
+            # A native delivery includes fingerprint-bound shared preparation
+            # scope. Its semantic fields retain their own finite depth budget;
+            # the HTTP and registration wrappers must not consume that budget.
+            envelope_delivery = dict(delivery)
+            for key in ("fingerprint", "resolved_runtime", "worker_metadata"):
+                _bounded_json(delivery.get(key), depth=0, plain_scalars=True,
+                              max_depth=_MAX_SEMANTIC_JSON_DEPTH)
+                envelope_delivery[key] = None
+            inputs = delivery.get("inputs")
+            if isinstance(inputs, list):
+                envelope_inputs = []
+                for artifact in inputs:
+                    if isinstance(artifact, Mapping) and "metadata" in artifact:
+                        # Input metadata has the artifact owner's plain-data
+                        # scalar contract, including checkpoint metric values.
+                        _bounded_json(artifact["metadata"], depth=3, plain_scalars=True)
+                        artifact = {**artifact, "metadata": None}
+                    envelope_inputs.append(artifact)
+                envelope_delivery["inputs"] = envelope_inputs
+            _bounded_json(envelope_delivery, depth=0)
+            envelope = {**value, "result": {**result, "delivery": envelope_delivery}}
+            if len(json.dumps(envelope, separators=(",", ":")).encode()) > _MAX_BODY_BYTES:
+                raise QueueServiceError("agent protocol control body is too large")
+            _bounded_json({**value, "result": {**result, "delivery": None}}, depth=0)
+            return value
+    if len(raw) > _MAX_BODY_BYTES:
+        raise QueueServiceError("agent protocol body is too large (maximum 65536 bytes)")
     if isinstance(result, Mapping) and result.get("result") == "assignment":
         request = result.get("request")
         if isinstance(request, Mapping) and type(request.get("schema_version")) is int and request["schema_version"] == RESIDENT_ASSIGNMENT_BUNDLE_SCHEMA_VERSION:
@@ -345,9 +389,9 @@ def _bounded_failure_json(value: object) -> None:
 
 def _bounded_json(
     value: object, *, depth: int, max_collection: int = _MAX_JSON_COLLECTION,
-    plain_scalars: bool = False,
+    plain_scalars: bool = False, max_depth: int = _MAX_JSON_DEPTH,
 ) -> None:
-    if depth > _MAX_JSON_DEPTH:
+    if depth > max_depth:
         raise QueueServiceError("agent protocol JSON is too deeply nested")
     if isinstance(value, Mapping):
         if len(value) > max_collection:
@@ -356,13 +400,13 @@ def _bounded_json(
             if not isinstance(key, str) or not key or len(key) > 160:
                 raise QueueServiceError("agent protocol object key is invalid")
             _bounded_json(item, depth=depth + 1, max_collection=max_collection,
-                          plain_scalars=plain_scalars)
+                          plain_scalars=plain_scalars, max_depth=max_depth)
     elif isinstance(value, list):
         if len(value) > max_collection:
             raise QueueServiceError("agent protocol collection is too large")
         for item in value:
             _bounded_json(item, depth=depth + 1, max_collection=max_collection,
-                          plain_scalars=plain_scalars)
+                          plain_scalars=plain_scalars, max_depth=max_depth)
     elif plain_scalars and is_plain_data(value):
         return
     elif value is not None and not isinstance(value, (str, int, bool)):

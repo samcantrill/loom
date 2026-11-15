@@ -42,14 +42,14 @@ if execution is not None:
                           "required": execution["worker_contract"]}))
         sys.exit(0)
 os.environ[PREPARATION_INPUT_CONTEXT_ENV] = json.dumps(request["context"])
-with tempfile.TemporaryDirectory(prefix="loom-preparation-probe-", dir="/tmp") as directory:
+with tempfile.TemporaryDirectory(prefix="loom-preparation-probe-") as directory:
     root = Path(directory)
     store = LocalArtifactStore(root / "artifacts")
     context = StageContext(
         run_uri=root.as_uri(), stage_name="prepare", resolved_config={},
         stage_config=request["binding"], artifact_store=store,
         output_specs={"report": OutputSpec("json", "json.v1")},
-        local_output_dir=root / "outputs", local_workspace_dir=root / "workspace",
+        local_output_dir=store.local_stage_dir(stage_name="prepare"), local_workspace_dir=root / "workspace",
     )
     try:
         outputs = PreparationStage().run(context, {})

@@ -49,6 +49,14 @@ _TEST_HELPER = (
 )
 
 
+_CAPABILITY_PATH = Path("/unconfigured-test-capability")
+
+
+@pytest.fixture(autouse=True)
+def _private_capability_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys.modules[__name__], "_CAPABILITY_PATH", tmp_path / "capability")
+
+
 def _profile(
     runner: FakeSlurmCommandRunner,
     *,
@@ -73,7 +81,7 @@ def _profile(
         executor_fingerprint="executor-v1",
         job_private_file_provider=provider
         or SlurmJobPrivateFileProvider(
-            fixed_path="/tmp/loom-unit-capability",
+            fixed_path=str(_CAPABILITY_PATH),
             descriptor="fake-prolog-v1",
             helper_argv=_TEST_HELPER,
         ),
@@ -88,8 +96,8 @@ def _ready_container_options() -> dict[str, object]:
         "image": {"reference": "analysis.sif"},
         "mounts": [
             {
-                "source": "/tmp/loom-unit-capability",
-                "target": "/tmp/loom-unit-capability",
+                "source": str(_CAPABILITY_PATH),
+                "target": str(_CAPABILITY_PATH),
                 "mode": "rw",
             }
         ],
@@ -120,6 +128,8 @@ def _request(
     profile: SlurmReadyStageProfile,
     *,
     resources: ResourceRequest | None = None,
+    operation_id: str = "operation-1",
+    stage_work_id: str = "work-1",
 ):  # type: ignore[no-untyped-def]
     placement = resolve_stage_placement(
         authored=(
@@ -141,8 +151,8 @@ def _request(
     return map_ready_stage(
         placement=placement,
         profile=profile,
-        operation_id="operation-1",
-        stage_work_id="work-1",
+        operation_id=operation_id,
+        stage_work_id=stage_work_id,
         run_uri="runs/example",
         attempt_id="attempt-1",
     )
@@ -187,11 +197,35 @@ def test_ready_stage_script_is_fixed_safe_and_deterministic() -> None:
             environment_fingerprint="environment-v1",
             executor_fingerprint="executor-v1",
             job_private_file_provider=SlurmJobPrivateFileProvider(
-                fixed_path="/tmp/loom-unit-capability",
+                fixed_path=str(_CAPABILITY_PATH),
                 descriptor="fake-prolog-v1",
                 helper_argv=_TEST_HELPER,
             ),
         )
+
+
+@pytest.mark.parametrize("requeue,directive", [(False, "no-requeue"), (True, "requeue")])
+def test_requeue_selection_binds_profile_request_and_script(requeue, directive):
+    original = _profile(FakeSlurmCommandRunner())
+    legacy = _request(original)
+    assert "--requeue" not in legacy.script and "--no-requeue" not in legacy.script
+    assert replace(original, requeue=None).configuration_fingerprint == original.configuration_fingerprint
+    selected = replace(original, requeue=requeue)
+    request = _request(selected)
+    assert selected.configuration_fingerprint != original.configuration_fingerprint
+    assert request.digest != legacy.digest
+    assert f"#SBATCH --{directive}\n" in request.script
+    assert [item.to_dict() for item in request.directives if item.name in {"requeue", "no-requeue"}] == [
+        {"name": directive, "value": True, "source": "profile"},
+    ]
+    assert type(request).from_dict(request.to_dict()) == request
+    assert _request(selected) == request
+
+
+@pytest.mark.parametrize("value", [0, 1, "false", "true"])
+def test_requeue_selection_rejects_ambiguous_nonboolean_values(value):
+    with pytest.raises(SlurmPlanningError, match="requeue"):
+        replace(_profile(FakeSlurmCommandRunner()), requeue=value)
 
 
 def test_retained_native_profile_uses_the_prior_identity_payload() -> None:
@@ -253,7 +287,7 @@ def test_ready_stage_selected_container_wraps_fixed_bootstrap_and_retains_receip
         'export APPTAINERENV_LOOM_SLURM_BOOTSTRAP_CONFIG="${LOOM_SLURM_BOOTSTRAP_CONFIG}"'
         in request.script
     )
-    assert "/tmp/loom-unit-capability" not in repr(request.container_metadata)
+    assert str(_CAPABILITY_PATH) not in repr(request.container_metadata)
     assert request.container_metadata["container_runtime"] == "apptainer"
     assert request.container_metadata["bootstrap_environment"] == (
         "LOOM_SLURM_BOOTSTRAP_CONFIG"
@@ -453,8 +487,8 @@ def test_ready_stage_profile_accepts_typed_container_options_after_replace() -> 
                 "image": {"reference": "analysis.sif"},
                 "mounts": [
                     {
-                        "source": "/tmp/loom-unit-capability",
-                        "target": "/tmp/loom-unit-capability",
+                        "source": str(_CAPABILITY_PATH),
+                        "target": str(_CAPABILITY_PATH),
                         "mode": "rw",
                     }
                 ],
@@ -487,13 +521,13 @@ def test_job_private_helper_is_verifier_only_and_replays_across_fresh_provider()
     None
 ):
     first = SlurmJobPrivateFileProvider(
-        fixed_path="/tmp/loom-unit-capability-replay",
+        fixed_path=str(_CAPABILITY_PATH.with_name("capability-replay")),
         descriptor="fake-prolog-v1",
         helper_argv=_TEST_HELPER,
     )
     prepared = first.prepare(operation_id="operation-1", request_digest="digest-1")
     second = SlurmJobPrivateFileProvider(
-        fixed_path="/tmp/loom-unit-capability-replay",
+        fixed_path=str(_CAPABILITY_PATH.with_name("capability-replay")),
         descriptor="fake-prolog-v1",
         helper_argv=_TEST_HELPER,
     )
@@ -671,7 +705,7 @@ def test_fresh_submission_store_never_reprepares_or_resubmits_after_submitting(
     reopened_profile = replace(
         profile,
         job_private_file_provider=FailingProvider(
-            fixed_path="/tmp/loom-unit-capability",
+            fixed_path=str(_CAPABILITY_PATH),
             descriptor="fake-prolog-v1",
             helper_argv=_TEST_HELPER,
         ),
@@ -728,7 +762,7 @@ def test_fresh_store_submits_retained_prepared_receipt_without_reprepare(
         profile,
         runner=fresh_runner,
         job_private_file_provider=FailingProvider(
-            fixed_path="/tmp/loom-unit-capability",
+            fixed_path=str(_CAPABILITY_PATH),
             descriptor="fake-prolog-v1",
             helper_argv=_TEST_HELPER,
         ),
@@ -763,7 +797,7 @@ def test_fresh_accepted_store_uses_neither_provider_nor_sbatch(tmp_path: Path) -
         profile,
         runner=fresh_runner,
         job_private_file_provider=FailingProvider(
-            fixed_path="/tmp/loom-unit-capability",
+            fixed_path=str(_CAPABILITY_PATH),
             descriptor="fake-prolog-v1",
             helper_argv=_TEST_HELPER,
         ),
@@ -809,7 +843,7 @@ def test_fresh_unknown_store_reconciles_without_reprepare_or_resubmit(
         profile,
         runner=fresh_runner,
         job_private_file_provider=FailingProvider(
-            fixed_path="/tmp/loom-unit-capability",
+            fixed_path=str(_CAPABILITY_PATH),
             descriptor="fake-prolog-v1",
             helper_argv=_TEST_HELPER,
         ),
@@ -1086,13 +1120,14 @@ def test_two_concurrent_bootstrap_handles_close_as_conflict(tmp_path: Path) -> N
     }
 
 
+@pytest.mark.parametrize("changes", [{"credential_reference": "changed-credential"}, {"requeue": False}])
 def test_changed_profile_and_script_bytes_are_rejected_before_sbatch(
-    tmp_path: Path,
+    tmp_path: Path, changes,
 ) -> None:
     runner = FakeSlurmCommandRunner()
     profile = _profile(runner)
     request = _request(profile)
-    changed = _profile(runner, credential_reference="changed-credential")
+    changed = replace(profile, **changes)
     path = _script(tmp_path, request)
 
     with pytest.raises(SlurmPlanningError, match="profile identity"):
@@ -1213,3 +1248,14 @@ def test_two_callers_cannot_both_claim_one_automatic_submission(
         )
     assert any(result.state is ReadyStageState.ACCEPTED for result in results)
     assert sum(call[0] == "sbatch" for call in runner.calls) == 1
+
+
+def test_profile_explicit_null_removes_count_limit_without_changing_integer_identity():
+    original = _profile(FakeSlurmCommandRunner())
+    assert replace(original, max_outstanding=1).configuration_fingerprint == original.configuration_fingerprint
+    unlimited = replace(original, max_outstanding=None)
+    assert unlimited.max_outstanding is None
+    assert unlimited.configuration_fingerprint != original.configuration_fingerprint
+    for value in (True, 0, -1, 1.5):
+        with pytest.raises(SlurmPlanningError, match="limit"):
+            replace(original, max_outstanding=value)

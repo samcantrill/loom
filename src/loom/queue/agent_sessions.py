@@ -77,6 +77,7 @@ PROTOCOL_VERSION = "13"
 CONTROL_WAIT_CAPABILITY = "agent-control-wait-v1"
 _MAX_RECEIVED_CONTROLS = 1025
 SLURM_SUBMISSION_CAPABILITY = "slurm-agent-jobs-v1"
+SLURM_PENDING_EFFECTS_CAPABILITY = "slurm-pending-effects-v1"
 _MAX_IDENTIFIER = 160
 _MAX_COLLECTION = 32
 _MAX_OFFER_TTL_SECONDS = 3600
@@ -140,6 +141,7 @@ class AgentControl:
     cancel_active: bool
     reason: str
     promotion: Mapping[str, PlainData] | None = None
+    startup_hold_id: str | None = None
 
     def __post_init__(self) -> None:
         for name in (
@@ -158,6 +160,10 @@ class AgentControl:
             object.__setattr__(self, "promotion", freeze_plain_data(self.promotion))
         elif self.promotion is not None:
             raise QueueServiceError("promotion binding requires promote control")
+        if self.startup_hold_id is not None:
+            _identifier(self.startup_hold_id, "startup_hold_id")
+            if self.kind is not AgentControlKind.RESUME:
+                raise QueueServiceError("startup hold binding requires resume control")
         if self.pool is not None:
             _identifier(self.pool, "pool")
         if not isinstance(self.cancel_active, bool):
@@ -180,6 +186,7 @@ class AgentControl:
             "cancel_active": self.cancel_active,
             "reason": self.reason,
             **({"promotion": thaw_plain_data(self.promotion)} if self.promotion is not None else {}),
+            **({"startup_hold_id": self.startup_hold_id} if self.startup_hold_id is not None else {}),
         }
 
     @classmethod
@@ -194,7 +201,7 @@ class AgentControl:
             "cancel_active",
             "reason",
         }
-        if set(value) not in (fields, fields | {"promotion"}):
+        if not fields <= set(value) or set(value) - fields - {"promotion", "startup_hold_id"}:
             raise QueueServiceError("agent control fields are invalid")
         pool = value["pool"]
         if pool is not None and not isinstance(pool, str):
@@ -221,6 +228,7 @@ class AgentControl:
             cast(bool, value["cancel_active"]),
             cast(str, value["reason"]),
             cast(Mapping[str, PlainData] | None, value.get("promotion")),
+            cast(str | None, value.get("startup_hold_id")),
         )
 
 
@@ -1980,6 +1988,55 @@ class AgentSessionService:
         evidence: Mapping[str, PlainData] | None = None,
         cursor: str | None = None,
     ) -> Mapping[str, PlainData]:
+        from .local_daemon_execution import _SlurmRetentionRequired, _SlurmPublicationRequired
+
+        with self._daemon._cycle_lock:
+            negotiated = self._slurm_work_locked(
+                session_id, coordinator_epoch, evidence, cursor, _pending_only=True,
+            )
+            if negotiated is not None:
+                return negotiated
+        publication = evidence is not None and evidence.get("result_operation") == "commit"
+        release = evidence is not None and evidence.get("provider_released") is True
+        if publication or release:
+            if publication:
+                assignment_id = evidence.get("assignment_id")
+            else:
+                assignment = evidence.get("assignment")
+                if not isinstance(assignment, Mapping):
+                    raise QueueServiceError("SLURM release assignment is invalid")
+                assignment_id = assignment.get("assignment_id")
+            _identifier(assignment_id, "assignment_id")
+            with self._daemon._publication_guards.hold(cast(str, assignment_id)):
+                pending = None
+                with self._daemon._cycle_lock:
+                    try:
+                        return self._slurm_work_locked(
+                            session_id, coordinator_epoch, evidence, cursor,
+                            **({"_defer_publication": True} if publication else {"_defer_retention": True}),
+                        )
+                    except (_SlurmRetentionRequired, _SlurmPublicationRequired) as continuation:
+                        pending = continuation
+                # No global lock or write transaction spans recursive verification.
+                # The assignment guard serializes publication and release retries.
+                if isinstance(pending, _SlurmPublicationRequired):
+                    pending.prepare()
+                    completed = {"_publication": pending}
+                else:
+                    pending.retain()
+                    completed = {"_retained": pending}
+                with self._daemon._cycle_lock:
+                    return self._slurm_work_locked(
+                        session_id, coordinator_epoch, evidence, cursor, **completed,
+                    )
+        with self._daemon._cycle_lock:
+            return self._slurm_work_locked(session_id, coordinator_epoch, evidence, cursor)
+
+    def _slurm_work_locked(
+        self, session_id: str, coordinator_epoch: str,
+        evidence: Mapping[str, PlainData] | None, cursor: str | None,
+        _pending_only: bool = False, **retention,
+    ) -> Mapping[str, PlainData] | None:
         rule, revision = self._authorize("poll")
         with self._daemon._state_guard(), self._daemon._connection() as conn:
             session = _session_from_row(
@@ -1997,11 +2054,21 @@ class AgentSessionService:
         execution = self._daemon._execution
         if execution is None:
             raise QueueServiceError("SLURM assignment owner is unavailable")
-        with self._daemon._publication_guards.hold("slurm:" + session_id):
-            if evidence is not None:
-                result = execution.acknowledge_slurm_agent(session.agent_id, session.agent_root_id, evidence)
+        if _pending_only and SLURM_PENDING_EFFECTS_CAPABILITY not in session.capabilities:
+            return None
+        if evidence is not None:
+            if _pending_only:
+                result = execution.acknowledge_slurm_pending(
+                    session.agent_id, session.agent_root_id, evidence,
+                )
             else:
-                result = self._slurm_task_page(execution, session, cursor)
+                result = execution.acknowledge_slurm_agent(
+                    session.agent_id, session.agent_root_id, evidence, **retention,
+                )
+        else:
+            result = execution.slurm_agent_task_page(
+                session.agent_id, session.agent_root_id, cursor=cursor,
+            )
         with self._daemon._state_guard(), self._daemon._connection() as conn:
             current_rule, current_revision = self._authorize("poll")
             current = _session_from_row(
@@ -2012,34 +2079,6 @@ class AgentSessionService:
             if current != session:
                 raise QueueConflictError("SLURM session changed during owner observation")
         return result
-
-    @staticmethod
-    def _slurm_task_page(execution, session: AgentSession, cursor: str | None) -> Mapping[str, PlainData]:
-        tasks = sorted(
-            execution.slurm_agent_tasks(session.agent_id, session.agent_root_id),
-            key=lambda task: cast(
-                str, cast(Mapping[str, PlainData], task["assignment"])["assignment_id"]
-            ),
-        )
-        if cursor is not None:
-            tasks = [
-                task
-                for task in tasks
-                if cast(
-                    str,
-                    cast(Mapping[str, PlainData], task["assignment"])["assignment_id"],
-                )
-                > cursor
-            ]
-        selected = tasks[:1]
-        return {
-            "tasks": cast(PlainData, selected),
-            "next_cursor": None
-            if len(tasks) <= 1
-            else cast(Mapping[str, PlainData], selected[0]["assignment"])[
-                "assignment_id"
-            ],
-        }
 
     def handshake(self) -> Mapping[str, PlainData]:
         self._authorize("handshake")
@@ -2054,6 +2093,8 @@ class AgentSessionService:
                     SUBMITTED_CONTAINER_CAPABILITY,
                     "shared-assignment-reference-v1",
                     SLURM_SUBMISSION_CAPABILITY,
+                    *([SLURM_PENDING_EFFECTS_CAPABILITY] if self._daemon._execution is not None
+                      and self._daemon._execution.slurm_assignments.schema_version >= 5 else []),
                     REMOTE_EXECUTION_CAPABILITY,
                     REGULAR_FILE_RELAY_CAPABILITY,
                 ],
@@ -4291,7 +4332,8 @@ class AgentSessionService:
             conn.commit()
         # The persisted provider proof and guarded terminal/containment checks
         # above are the sole seal trigger, including a supervisor-proven death
-        # without a worker result. Retention precedes reusable authority release.
+        # without a worker result. A sealed reference or known budget failure
+        # precedes reusable authority release.
         with self._daemon._connection() as conn:
             retained_row = self._require_remote_assignment(conn, session_id, assignment_id)
             delivery = conn.execute("SELECT request_json FROM agent_deliveries WHERE assignment_id = ?", (assignment_id,)).fetchone()

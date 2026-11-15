@@ -6,7 +6,7 @@ import argparse
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 
 class OutputFormat(StrEnum):
@@ -196,6 +196,19 @@ class PreflightCliOptions:
         )
 
 
+def parse_parallel_limit(value: str) -> int | None:
+    """Parse a positive stage ceiling or the explicit CLI word unlimited."""
+    if value == "unlimited":
+        return None
+    try:
+        limit = int(value)
+    except ValueError:
+        raise ValueError("expected a positive integer or unlimited") from None
+    if limit < 1:
+        raise ValueError("expected a positive integer or unlimited")
+    return limit
+
+
 @dataclass(frozen=True, slots=True)
 class RunCliOptions:
     """Run-command options."""
@@ -207,6 +220,7 @@ class RunCliOptions:
     resume: bool = False
     dry_run: bool = False
     max_parallel_stages: int | None = None
+    parallel_limit_explicit: bool = field(default=False, compare=False)
     failure_policy: str | None = None
     tags: tuple[tuple[str, str], ...] = ()
     notes: tuple[str, ...] = ()
@@ -224,6 +238,7 @@ class RunCliOptions:
             resume=bool(getattr(namespace, "resume", False)),
             dry_run=bool(getattr(namespace, "dry_run", False)),
             max_parallel_stages=getattr(namespace, "max_parallel_stages", None),
+            parallel_limit_explicit=hasattr(namespace, "max_parallel_stages"),
             failure_policy=_runtime_failure_policy(
                 getattr(namespace, "failure_policy", None)
             ),
@@ -244,7 +259,7 @@ class RunCliOptions:
             if self.executor_explicit or include_executor_default
             else None
         )
-        return _runtime_source(
+        result = _runtime_source(
             run_uri=self.run_uri,
             executor=executor,
             profile=self.profile,
@@ -256,6 +271,12 @@ class RunCliOptions:
             notes=self.notes,
             selectors=selectors,
         )
+
+        if self.parallel_limit_explicit:
+            execution = cast(dict[str, object], result.setdefault("execution", {}))
+            settings = cast(dict[str, object], execution.setdefault("settings", {}))
+            settings["max_parallel_stages"] = self.max_parallel_stages
+        return result
 
 
 def output_format_from_namespace(namespace: Any) -> OutputFormat:

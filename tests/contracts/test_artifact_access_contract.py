@@ -411,3 +411,31 @@ def test_directory_closure_successor_and_response_budget(tmp_path):
         client.describe_artifact(locator, scope=SCOPE)["outcome"]
         == "unsupported_closure"
     )
+
+
+def test_trusted_tree_fetch_refuses_incomplete_companion_export(tmp_path):
+    from loom._artifact_fetch import fetch_artifacts
+
+    daemon, authority, uri = fixture(tmp_path)
+    ref, tree = shared_ref(daemon, uri)
+    raw = dict(ref.metadata[shared.SHARED_PUBLICATION])
+    limits = {**dict(raw["budgets"]), "policy": "trusted_shared_storage"}
+    import json
+    receipt = json.loads((tree / shared.RECEIPT).read_bytes())
+    receipt["schema_version"] = 2
+    receipt["members"] = receipt["members"][:1]
+    data = shared.encoded(receipt)
+    (tree / shared.RECEIPT).write_bytes(data)
+    raw.update(schema_version=2, budgets=limits, receipt_digest=hashlib.sha256(data).hexdigest())
+    roots = dict(daemon.config.coordinator_shared_roots)
+    roots["shared"] = {**roots["shared"], "publication": limits}
+    if isinstance(daemon.config, SimpleNamespace):
+        daemon.config.coordinator_shared_roots = roots
+    else:
+        daemon.config = replace(daemon.config, shared_roots=roots)
+    ref = replace(ref, metadata={shared.SHARED_PUBLICATION: raw})
+    locator = publish(authority, uri, ref)
+    result = fetch_artifacts(LocalClient(daemon), [{"locator": locator.to_dict()}],
+        tmp_path / "download", scope=SCOPE, expected_coordinator_id=None)
+    assert result["items"][0]["outcome"] == "unsupported_backend"
+    assert not (tmp_path / "download").exists()

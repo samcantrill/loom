@@ -43,7 +43,6 @@ from loom.queue.agent_sessions import (
     TransportPrincipalPolicy,
 )
 from loom.pipeline.orchestration import (
-    CoordinatorStoreError,
     ExecutionRequirement,
     SchedulingProjectionState,
     StageWorkRecord,
@@ -308,6 +307,9 @@ def test_coordinator_client_unix_handshake_and_identity_guard(tmp_path: Path) ->
             "quiescent-configuration-retirement-v1",
             "quiescent-coordinator-retirement-v1",
             "quiescent-container-policy-addition-v1",
+            "quiescent-publication-budget-increase-v1",
+            "quiescent-agent-gpu-policy-contraction-v1",
+            "quiescent-agent-gpu-policy-expansion-v1",
             "maintenance-admission-v1",
             "maintenance-submitted-check-v1",
             "run-context-v1",
@@ -1087,6 +1089,47 @@ def test_scheduling_reload_is_local_atomic_and_durable(tmp_path: Path) -> None:
     restarted.stop()
 
 
+@pytest.mark.parametrize("selection", ["provider", "admission"])
+def test_scheduling_reload_refuses_new_execution_schema_before_mutation(tmp_path, selection):
+    from loom.pipeline.executors.slurm.commands import FakeSlurmCommandRunner
+    from loom.pipeline.executors.slurm.trusted_user import SlurmUserPrivateFileProvider
+    from tests.unit.loom.pipeline.executors.slurm.test_ready_stage import _profile
+    from loom.queue._slurm_admission import SlurmAdmissionPolicy
+
+    config = _config(tmp_path)
+    profile = _profile(FakeSlurmCommandRunner(), provider=SlurmUserPrivateFileProvider(
+        root=tmp_path / "credentials", descriptor="trusted-test-v1",
+    ))
+    replacement = (
+        replace(config, slurm_profiles=(profile,)) if selection == "provider"
+        else replace(config, slurm_admission=SlurmAdmissionPolicy(8))
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config, trusted_scheduling_loader=lambda: replacement)
+    before = daemon.start()
+    try:
+        operator = daemon.operator_view(LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR))
+        with pytest.raises(QueueConflictError, match="stopped-owner migration"):
+            daemon._execution.prepare_scheduling_reload(replacement, "candidate-epoch")
+        receipt = operator.reload_scheduling(CoordinatorSchedulingReload(
+            operation_id="reload-new-schema", expected_scheduling_epoch=before.scheduling_epoch,
+            reason="select trusted-user credentials",
+        ))
+        assert receipt["state"] == "failed"
+        assert receipt["code"] == "reload_rejected"
+        assert daemon.config is config
+        assert daemon.status().scheduling_epoch == before.scheduling_epoch
+        assert not (tmp_path / "credentials").exists()
+        with config.connect_database(config.execution_database) as conn:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+        conn.close()
+        with config.connect_database(config.control_database) as conn:
+            assert conn.execute("SELECT state FROM scheduling_reloads WHERE operation_id = 'reload-new-schema'").fetchone()[0] == "failed"
+        conn.close()
+    finally:
+        daemon.stop()
+
+
 def test_scheduling_reload_recovers_crash_after_prepared_intent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1797,6 +1840,7 @@ def test_fresh_admission_rejects_a_pre_reload_runtime_before_persistence(
     stale_intent = SimpleNamespace(
         digest="stale-intent",
         placements={"build": placement},
+        plan=SimpleNamespace(stage_plans=()),
     )
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config)
@@ -1896,6 +1940,7 @@ def test_reload_retains_the_exact_profile_for_nonterminal_slurm_work(
             lambda: (
                 SimpleNamespace(
                     request=SimpleNamespace(
+                        operation_id="submission-without-assignment",
                         profile_id=profile.profile_id,
                         profile_descriptor=profile.descriptor,
                     )
@@ -1968,8 +2013,9 @@ def test_slurm_dispatch_resolves_the_exact_retained_profile() -> None:
     subject = cast(
         Any,
         SimpleNamespace(
-            stage_work_store=SimpleNamespace(list_stage_work=lambda: (record,)),
+            stage_work_store=SimpleNamespace(find_stage_work=lambda work_id: record if work_id == record.stage_work_id else None),
             _slurm_profile=resolve_profile,
+            _cycle_context_epochs={},
         ),
     )
     with pytest.raises(QueueConflictError, match="exact profile lookup"):
@@ -2155,9 +2201,12 @@ def test_shutdown_logs_owner_failure_chain_without_discarding_retention_or_locks
         while failure is not None:
             causes.append(failure)
             failure = failure.__cause__
-        assert any(isinstance(cause, CoordinatorStoreError) for cause in causes)
+        assert any(
+            isinstance(cause, QueueServiceError) and str(cause) == "SLURM assignment store is missing"
+            for cause in causes[1:]
+        )
         assert "retained daemon owner state is unavailable" in caplog.text
-        assert "coordinator store is missing" in caplog.text
+        assert "SLURM assignment store is missing" in caplog.text
         assert "preserve the deployment and inspect the shutdown refusal" in caplog.text
         assert not store.exists()
         assert supervisor.status()["service_process_id"] == original_pid
@@ -2413,7 +2462,9 @@ def test_slurm_grant_and_start_are_blocked_by_the_durable_cancel_request(
     )
     execution = object.__new__(local_daemon_execution.LocalDaemonExecution)
     subject = cast(Any, execution)
-    subject.config = SimpleNamespace(control_database=control_database)
+    subject.config = SimpleNamespace(
+        control_database=control_database, connect_database=sqlite3.connect,
+    )
     subject._slurm_authorized_record = lambda *args, **kwargs: record
     subject._remote_authority = lambda run_uri: pytest.fail(
         "cancellation must block authority grant"

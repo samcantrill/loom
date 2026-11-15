@@ -14,26 +14,32 @@ from loom.queue.slurm_ready_stage import SlurmStageAssignment
 from tests.unit.loom.pipeline.executors.slurm.test_ready_stage import (
     _profile as _base_profile,
     _request,
+    _TEST_HELPER,
 )
 
 
-def _profile(runner, tmp_path):
+def _profile(runner, tmp_path, *, retention_bytes=128 * 1024 * 1024):
+    from loom.pipeline.executors.slurm.ready_stage import SlurmJobPrivateFileProvider
+
     root = tmp_path / "shared-results"
     root.mkdir(exist_ok=True)
     return replace(
-        _base_profile(runner),
+        _base_profile(runner, provider=SlurmJobPrivateFileProvider(
+            fixed_path=str(tmp_path / "capability"), descriptor="fake-prolog-v1",
+            helper_argv=_TEST_HELPER,
+        )),
         result_storage={
             "agent_root": str(root),
             "compute_root": str(root),
-            "retention_bytes": 128 * 1024 * 1024,
+            "retention_bytes": retention_bytes,
         },
     )
 
 
-def _task(profile, resources=None):
-    request = _request(profile, resources=resources)
+def _task(profile, resources=None, *, key="1"):
+    request = _request(profile, resources=resources, operation_id=f"operation-{key}", stage_work_id=f"work-{key}")
     assignment = SlurmStageAssignment(
-        assignment_id="assignment-1",
+        assignment_id=f"assignment-{key}",
         operation_id=request.operation_id,
         run_uri=request.run_uri,
         stage_work_id=request.stage_work_id,
@@ -58,13 +64,16 @@ def _task(profile, resources=None):
     }
 
 
+@pytest.mark.parametrize("rollback", [False, True])
 def test_agent_reopens_exact_journal_and_replays_lost_ack_without_sbatch(
-    tmp_path: Path,
+    tmp_path: Path, rollback,
 ):
+    from loom._sqlite_policy import SQLitePolicy
+    policy = SQLitePolicy("delete", "extra", 1234) if rollback else None
     runner = FakeSlurmCommandRunner()
     profile = _profile(runner, tmp_path)
-    AgentSlurmJobs.initialize(tmp_path)
-    agent = AgentSlurmJobs(tmp_path, (profile,))
+    AgentSlurmJobs.initialize(tmp_path, sqlite_policy=policy)
+    agent = AgentSlurmJobs(tmp_path, (profile,), sqlite_policy=policy)
     task = _task(profile)
     accepted = []
 
@@ -78,7 +87,7 @@ def test_agent_reopens_exact_journal_and_replays_lost_ack_without_sbatch(
         agent.step(task, acknowledge)
     assert agent.has_retained_work()
     assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
-    reopened = AgentSlurmJobs(tmp_path, (profile,))
+    reopened = AgentSlurmJobs(tmp_path, (profile,), sqlite_policy=policy)
     replayed = []
 
     def accept(value):
@@ -92,7 +101,7 @@ def test_agent_reopens_exact_journal_and_replays_lost_ack_without_sbatch(
     assert reopened.journal.read("operation-1").state is ReadyStageState.ACCEPTED
     (tmp_path / "slurm.sqlite").unlink()
     with pytest.raises(Exception, match="missing"):
-        AgentSlurmJobs(tmp_path, (profile,))
+        AgentSlurmJobs(tmp_path, (profile,), sqlite_policy=policy)
 
 
 def test_expected_agent_operation_cannot_be_reconstructed(tmp_path: Path):
@@ -253,6 +262,7 @@ def test_cancelled_published_result_waits_for_terminal_rejection_ack(
         "resolve_slurm_containment",
         lambda _profile, proof: SimpleNamespace(
             contained=True,
+            diagnostic_code=None,
             state="CONTAINED",
             evidence_id="proof",
             evidence_revision="1",
@@ -382,6 +392,7 @@ def test_interrupted_acknowledged_cleanup_replays_authority_before_retirement(
         "resolve_slurm_containment",
         lambda _profile, proof: SimpleNamespace(
             contained=True,
+            diagnostic_code=None,
             state="CONTAINED",
             evidence_id="proof",
             evidence_revision="1",
@@ -401,3 +412,470 @@ def test_interrupted_acknowledged_cleanup_replays_authority_before_retirement(
     assert operations == ["report", "commit", "commit"]
     assert not transport.path.exists()
     assert not reopened.has_retained_work()
+
+
+@pytest.mark.parametrize("uncertain", [False, True])
+def test_submit_pacing_does_not_block_observation_cancel_or_restart(tmp_path, monkeypatch, uncertain):
+    from loom.pipeline.executors.slurm.trusted_user import SlurmUserPrivateFileProvider
+    import loom.queue._agent_slurm as agent_module
+
+    clock = [100.0]
+    monkeypatch.setattr(agent_module, "monotonic", lambda: clock[0])
+    runner = FakeSlurmCommandRunner(scripted_results={
+        "sbatch": [TimeoutError("uncertain submission")],
+    } if uncertain else {})
+    profile = replace(
+        _profile(runner, tmp_path, retention_bytes=1024 ** 3), poll_interval_seconds=0.05,
+        job_private_file_provider=SlurmUserPrivateFileProvider(
+            root=tmp_path / "capabilities", descriptor="trusted-pacing-test",
+        ),
+    )
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,), submit_interval_seconds=1.0)
+    cancel = set()
+    seen = []
+
+    def acknowledge(value):
+        seen.append(value)
+        return {"sequence": value["sequence"], "cancel_requested": value["submission"]["request"]["operation_id"] in cancel}
+
+    first = _task(profile)
+    agent.step(first, acknowledge)
+    second = _task(profile, key="2")
+    agent.step(second, acknowledge)
+    assert agent.journal.read("operation-2").state is ReadyStageState.INTENT
+    assert not any(item["submission"]["state"] == "submitting" and item["submission"]["request"]["operation_id"] == "operation-2" for item in seen)
+    assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
+
+    # A due existing operation is still observed while new submission is paced.
+    clock[0] += 0.1
+    observed_before = len([call for call in runner.calls if call[0] in {"squeue", "sacct"}])
+    agent.step(first, acknowledge)
+    assert len([call for call in runner.calls if call[0] in {"squeue", "sacct"}]) > observed_before
+    assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
+
+    # Cancellation wins over the pacing wait and never calls sbatch.
+    cancel.add("operation-2")
+    agent.step(second, acknowledge)
+    assert agent.journal.read("operation-2").state is ReadyStageState.REJECTED
+    assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
+
+    third = _task(profile, key="3")
+    agent.step(third, acknowledge)
+    assert agent.journal.read("operation-3").state is ReadyStageState.INTENT
+    clock[0] = 101.0
+    agent.step(third, acknowledge)
+    assert len([call for call in runner.calls if call[0] == "sbatch"]) == 2
+    restarted = AgentSlurmJobs(tmp_path, (profile,), submit_interval_seconds=1.0)
+    restarted.step(first, acknowledge)
+    restarted.step(third, acknowledge)
+    assert len([call for call in runner.calls if call[0] == "sbatch"]) == 2
+    restarted.step(_task(profile, key="4"), acknowledge)
+    assert len([call for call in runner.calls if call[0] == "sbatch"]) == 3
+
+
+@pytest.mark.parametrize("finish", ["submit", "cancel"])
+def test_drained_intent_survives_restart_without_submitting(tmp_path, finish):
+    runner = FakeSlurmCommandRunner()
+    profile = _profile(runner, tmp_path)
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,))
+    task = _task(profile)
+    cancel = False
+
+    def acknowledge(value):
+        return {"sequence": value["sequence"], "cancel_requested": cancel}
+
+    def lose_ack(value):
+        raise OSError("lost intent acknowledgement")
+
+    with pytest.raises(OSError, match="lost intent"):
+        agent.step(task, lose_ack, allow_submission=False)
+    assert agent.has_started_or_unacknowledged_work()
+    agent.step(task, acknowledge, allow_submission=False)
+    original = agent.journal.read("operation-1")
+    assert original.state is ReadyStageState.INTENT
+    assert agent.has_retained_work()
+    assert not agent.has_started_or_unacknowledged_work()
+    reopened = AgentSlurmJobs(tmp_path, (profile,))
+    reopened.step(task, acknowledge, allow_submission=False)
+    assert reopened.journal.read("operation-1") == original
+    assert not any(call[0] == "sbatch" for call in runner.calls)
+    cancel = finish == "cancel"
+    reopened.step(task, acknowledge, allow_submission=not cancel)
+    result = reopened.journal.read("operation-1")
+    assert result.request == original.request
+    assert sum(call[0] == "sbatch" for call in runner.calls) == (0 if cancel else 1)
+    assert result.state is (ReadyStageState.REJECTED if cancel else ReadyStageState.ACCEPTED)
+    assert reopened.has_started_or_unacknowledged_work() is (not cancel)
+
+
+def test_live_job_resume_requires_current_epoch_task_and_acknowledged_handle(tmp_path):
+    runner = FakeSlurmCommandRunner()
+    profile = _profile(runner, tmp_path)
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,))
+    task = _task(profile)
+    binding = ("session-1", "epoch-1")
+    agent.begin_reconciliation(binding)
+
+    def acknowledge(value):
+        return {"sequence": value["sequence"], "cancel_requested": False}
+
+    def lose_ack(value):
+        if value["submission"]["state"] == "accepted":
+            raise OSError("lost accepted acknowledgement")
+        return acknowledge(value)
+
+    with pytest.raises(OSError, match="lost accepted"):
+        agent.step(task, lose_ack)
+    assert agent.has_unreconciled_work(binding)
+    saved = agent.journal.read("operation-1")
+    confirmed = {**task, "job_id": saved.job_id, "cluster": saved.cluster}
+    agent.replay_pending(acknowledge)
+    # An acknowledged handle still needs current task confirmation.
+    assert agent.has_unreconciled_work(binding)
+    agent.step(confirmed, acknowledge)
+    assert not agent.has_unreconciled_work(binding)
+    assert agent.has_retained_work() and agent.has_started_or_unacknowledged_work()
+    assert agent.has_unreconciled_work(("session-1", "epoch-2"))
+    agent.begin_reconciliation(("session-1", "epoch-2"))
+    assert agent.has_unreconciled_work(("session-1", "epoch-2"))
+    agent.step(confirmed, acknowledge)
+    assert not agent.has_unreconciled_work(("session-1", "epoch-2"))
+    agent.step({**confirmed, "job_id": "different-job"}, acknowledge)
+    assert agent.has_unreconciled_work(("session-1", "epoch-2"))
+    agent.step(confirmed, acknowledge)
+    agent.profiles.clear()
+    assert agent.has_unreconciled_work(("session-1", "epoch-2"))
+    reopened = AgentSlurmJobs(tmp_path, (profile,))
+    reopened.begin_reconciliation(binding)
+    assert reopened.has_unreconciled_work(binding)
+    reopened.step(confirmed, acknowledge)
+    assert not reopened.has_unreconciled_work(binding)
+    assert reopened.journal.read("operation-1").job_id == saved.job_id
+    assert sum(call[0] == "sbatch" for call in runner.calls) == 1
+    # A crash/yield between the scheduler effect and its outbox publication
+    # must not reuse the acknowledgement of the preceding observation.
+    reopened.journal.request_cancel("operation-1", profile)
+    assert reopened.has_unreconciled_work(binding)
+
+
+@pytest.mark.parametrize("recovering", [False, True])
+def test_frozen_containment_evidence_survives_lost_ack_and_restart(tmp_path, monkeypatch, recovering):
+    import json
+    from types import SimpleNamespace
+
+    import loom.queue._agent_slurm as owner
+    from loom.pipeline.executors.slurm.ready_stage import SlurmContainmentHelper
+    from loom.serialization import freeze_plain_data, thaw_plain_data
+
+    runner = FakeSlurmCommandRunner()
+    profile = replace(_profile(runner, tmp_path),
+                      containment_helper=SlurmContainmentHelper("fixture", ("true",)))
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,))
+    task = _task(profile)
+
+    def accept(value):
+        return {"sequence": value["sequence"], "cancel_requested": False}
+
+    agent.step(task, accept)
+    saved = agent.journal.read("operation-1")
+    proof = {"job_id": saved.job_id, "cluster_id": saved.cluster,
+             "accounting_identity": {"job_id": saved.job_id, "cluster": saved.cluster,
+                                     "steps": ["batch", "extern"], "name": "caf\u00e9"}}
+    monkeypatch.setattr(owner, "resolve_slurm_containment", lambda _profile, request: SimpleNamespace(
+        contained=True, diagnostic_code=None, state="CONTAINED",
+        evidence_id="proof", evidence_revision="1", echo=request,
+    ))
+    field = "recovery_evidence" if recovering else "release"
+    lost = []
+
+    def lose_ack(value):
+        # Match the real transport: it encodes the initial callback directly,
+        # whereas restart replay has already decoded the persisted JSON.
+        json.dumps(value, allow_nan=False)
+        if value[field] is not None:
+            lost.append(thaw_plain_data(value))
+            raise OSError("lost containment acknowledgement")
+        return accept(value)
+
+    request = {**task, "job_id": saved.job_id, "cluster": saved.cluster}
+    if recovering:
+        request["recovery_request"] = proof
+    else:
+        request.update(release_requested=True, containment_request=proof)
+    with pytest.raises(OSError, match="lost containment acknowledgement"):
+        agent.step(freeze_plain_data(request), lose_ack)
+    assert lost[0][field]["echo"] == proof
+    replayed = []
+
+    def replay_ack(value):
+        replayed.append(value)
+        return accept(value)
+
+    reopened = AgentSlurmJobs(tmp_path, (profile,))
+    reopened.replay_pending(replay_ack)
+    assert replayed == lost
+    assert reopened.journal.read("operation-1").job_id == saved.job_id
+    assert sum(call[0] == "sbatch" for call in runner.calls) == 1
+
+
+def test_known_job_awaiting_containment_does_not_block_recovery_admission(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import loom.queue._agent_slurm as owner
+
+    runner = FakeSlurmCommandRunner()
+    profile = _profile(runner, tmp_path)
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,))
+    binding = ("session-1", "epoch-1")
+    agent.begin_reconciliation(binding)
+    task = _task(profile)
+    acknowledgements = []
+
+    def acknowledge(value):
+        acknowledgements.append(value)
+        return {"sequence": value["sequence"], "cancel_requested": False}
+
+    agent.step(task, acknowledge)
+    saved = agent.journal.read("operation-1")
+    monkeypatch.setattr(owner, "resolve_slurm_containment", lambda *_: SimpleNamespace(contained=False, state="UNKNOWN", diagnostic_code=None))
+    agent.step({**task, "job_id": saved.job_id, "cluster": saved.cluster,
+                "release_requested": True, "containment_request": {}}, acknowledge)
+    assert not agent.has_unreconciled_work(binding)
+    # Admission is not containment: keep the exact operation and its capability
+    # until the ordinary positive release protocol completes.
+    assert agent.has_retained_work()
+    assert agent.has_started_or_unacknowledged_work()
+    assert agent.journal.read("operation-1").job_id == saved.job_id
+    assert all(value["release"] is None and not value["provider_released"] for value in acknowledgements)
+    assert sum(call[0] == "sbatch" for call in runner.calls) == 1
+    assert agent.has_unreconciled_work(("session-1", "epoch-2"))
+
+
+def test_uncertain_submission_cannot_qualify_live_job_resume(tmp_path):
+    runner = FakeSlurmCommandRunner(scripted_results={"sbatch": [TimeoutError("lost response")]})
+    profile = _profile(runner, tmp_path)
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,))
+    binding = ("session-1", "epoch-1")
+    agent.begin_reconciliation(binding)
+    agent.step(_task(profile), lambda value: {"sequence": value["sequence"], "cancel_requested": False})
+    assert agent.journal.read("operation-1").state is ReadyStageState.UNKNOWN
+    assert agent.has_unreconciled_work(binding)
+    assert agent.has_retained_work()
+
+
+def test_pacing_starts_after_submitting_acknowledgement(tmp_path, monkeypatch):
+    from loom.pipeline.executors.slurm.trusted_user import SlurmUserPrivateFileProvider
+    import loom.queue._agent_slurm as agent_module
+
+    clock = [10.0]
+    monkeypatch.setattr(agent_module, "monotonic", lambda: clock[0])
+    runner = FakeSlurmCommandRunner()
+    profile = replace(_profile(runner, tmp_path, retention_bytes=1024 ** 3), job_private_file_provider=SlurmUserPrivateFileProvider(
+        root=tmp_path / "capabilities", descriptor="trusted-pacing-test",
+    ))
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,), submit_interval_seconds=1.0)
+
+    def acknowledge(value):
+        if value["submission"]["state"] == "submitting":
+            clock[0] += 5.0
+        return {"sequence": value["sequence"], "cancel_requested": False}
+
+    agent.step(_task(profile), acknowledge)
+    assert clock[0] == 15.0
+    agent.step(_task(profile, key="2"), acknowledge)
+    assert agent.journal.read("operation-2").state is ReadyStageState.INTENT
+    assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
+
+
+def test_failed_pending_ack_does_not_hide_later_receipts_or_submit_again(tmp_path):
+    runner = FakeSlurmCommandRunner()
+    profile = _profile(runner, tmp_path, retention_bytes=512 * 1024 * 1024)
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,))
+
+    def unavailable(value):
+        raise OSError("ack unavailable")
+
+    for key in ("1", "2", "3"):
+        with pytest.raises(OSError, match="ack unavailable"):
+            agent.step(_task(profile, key=key), unavailable, allow_submission=False)
+    delivered = []
+
+    def selective(value):
+        identity = value["assignment"]["operation_id"]
+        delivered.append(identity)
+        if identity == "operation-1":
+            raise OSError("first receipt unavailable")
+        return {"sequence": value["sequence"], "cancel_requested": False}
+
+    with pytest.raises(OSError, match="first receipt"):
+        agent.replay_pending(selective)
+    agent.replay_pending(selective)
+    assert delivered == ["operation-1", "operation-2", "operation-3"]
+    with pytest.raises(OSError, match="first receipt"):
+        agent.replay_pending(selective)
+    assert not any(call[0] == "sbatch" for call in runner.calls)
+
+
+def test_pending_ack_replay_visits_at_most_32_receipts_per_iteration(tmp_path, monkeypatch):
+    monkeypatch.setattr("loom.queue._agent_slurm.monotonic", lambda: 1.0)
+    runner = FakeSlurmCommandRunner()
+    profile = _profile(runner, tmp_path, retention_bytes=8 * 1024**3)
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,))
+
+    def unavailable(value):
+        raise OSError("retain pending evidence")
+
+    for index in range(35):
+        with pytest.raises(OSError, match="retain pending"):
+            agent.step(_task(profile, key=f"{index:03d}"), unavailable, allow_submission=False)
+    received = []
+
+    def acknowledge(value):
+        received.append(value["assignment"]["operation_id"])
+        return {"sequence": value["sequence"], "cancel_requested": False}
+
+    agent.replay_pending(acknowledge)
+    assert received == [f"operation-{index:03d}" for index in range(32)]
+    agent.replay_pending(acknowledge)
+    assert received == [f"operation-{index:03d}" for index in range(35)]
+    AgentSlurmJobs(tmp_path, (profile,)).replay_pending(acknowledge)
+    assert len(received) == 35
+    assert not any(call[0] == "sbatch" for call in runner.calls)
+
+
+def test_pending_evidence_preserves_outbox_and_allows_peer_submission(tmp_path):
+    runner = FakeSlurmCommandRunner()
+    profile = _profile(runner, tmp_path, retention_bytes=256 * 1024 * 1024)
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,))
+    pending = []
+
+    def acknowledge(value):
+        if (value['assignment']['assignment_id'] == 'assignment-1'
+                and value['submission']['state'] == 'accepted'):
+            pending.append(value)
+            return {'sequence': value['sequence'], 'assignment_id': 'assignment-1',
+                    'disposition': 'pending', 'retry_after_seconds': 5}
+        return {'sequence': value['sequence'], 'cancel_requested': False}
+
+    agent.step(_task(profile), acknowledge)
+    with agent._connect() as conn:
+        assert conn.execute('SELECT acknowledged FROM agent_slurm_operations WHERE operation_id=?',
+                            ('operation-1',)).fetchone() == (0,)
+    agent.replay_pending(acknowledge)
+    agent.step(_task(profile, key='2'), acknowledge)
+    assert len(pending) == 1
+    assert len([call for call in runner.calls if call[0] == 'sbatch']) == 2
+    reopened = AgentSlurmJobs(tmp_path, (profile,))
+    receipts = []
+
+    def applied(value):
+        receipts.append(value)
+        return {'sequence': value['sequence'], 'disposition': 'applied', 'cancel_requested': False}
+
+    reopened.replay_pending(applied)
+    assert receipts == pending
+    with reopened._connect() as conn:
+        assert conn.execute('SELECT acknowledged FROM agent_slurm_operations WHERE operation_id=?',
+                            ('operation-1',)).fetchone() == (1,)
+    assert len([call for call in runner.calls if call[0] == 'sbatch']) == 2
+
+
+def test_uncertain_receipt_preserves_outbox_without_blocking_peer(tmp_path):
+    from loom.queue._slurm_result_transport import SlurmRequestUncertain
+
+    runner = FakeSlurmCommandRunner()
+    profile = _profile(runner, tmp_path, retention_bytes=256 * 1024 * 1024)
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,))
+    retained = []
+
+    def acknowledge(value):
+        if value["assignment"]["assignment_id"] == "assignment-1":
+            retained.append(value)
+            raise SlurmRequestUncertain("response lost")
+        return {"sequence": value["sequence"], "cancel_requested": False}
+
+    agent.step(_task(profile), acknowledge)
+    agent.step(_task(profile, key="2"), acknowledge)
+    assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
+    with agent._connect() as conn:
+        assert conn.execute(
+            "SELECT acknowledged FROM agent_slurm_operations WHERE operation_id='operation-1'",
+        ).fetchone() == (0,)
+    reopened = AgentSlurmJobs(tmp_path, (profile,))
+    replayed = []
+
+    def applied(value):
+        replayed.append(value)
+        return {"sequence": value["sequence"], "cancel_requested": False}
+
+    reopened.replay_pending(applied)
+    assert replayed == retained
+    assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
+
+
+def test_pending_release_confirms_ownership_only_for_current_session(tmp_path):
+    profile = _profile(FakeSlurmCommandRunner(), tmp_path)
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,))
+    binding = ("session-1", "epoch-1")
+    agent.begin_reconciliation(binding)
+
+    def acknowledge(value):
+        if value["provider_released"]:
+            return {
+                "assignment_id": value["assignment"]["assignment_id"],
+                "sequence": value["sequence"], "disposition": "pending",
+                "reason": "recovery_retention", "retry_after_seconds": 5,
+            }
+        return {"sequence": value["sequence"], "cancel_requested": True}
+
+    agent.step(_task(profile), acknowledge)
+    assert not agent.has_unreconciled_work(binding)
+    assert agent.has_retained_work()
+    assert agent.has_started_or_unacknowledged_work()
+    with agent._connect() as conn:
+        assert conn.execute("SELECT acknowledged, released FROM agent_slurm_operations").fetchone() == (0, 0)
+    next_binding = ("session-2", "epoch-2")
+    agent.begin_reconciliation(next_binding)
+    assert agent.has_unreconciled_work(next_binding)
+    agent.replay_pending(acknowledge)
+    assert not agent.has_unreconciled_work(next_binding)
+    reopened = AgentSlurmJobs(tmp_path, (profile,))
+    reopened.begin_reconciliation(next_binding)
+    assert reopened.has_unreconciled_work(next_binding)
+    reopened.replay_pending(acknowledge)
+    assert not reopened.has_unreconciled_work(next_binding)
+    assert reopened.has_retained_work()
+    assert not any(call[0] == "sbatch" for call in profile.runner.calls)
+
+
+def test_replay_time_budget_preserves_cursor_and_visits_later_receipts(tmp_path, monkeypatch):
+    profile = _profile(FakeSlurmCommandRunner(), tmp_path, retention_bytes=1024**3)
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,))
+    def unavailable(value):
+        raise OSError("retained request")
+    for key in ("1", "2", "3"):
+        with pytest.raises(OSError):
+            agent.step(_task(profile, key=key), unavailable, allow_submission=False)
+    clock = [10.0]
+    monkeypatch.setattr("loom.queue._agent_slurm.monotonic", lambda: clock[0])
+    received = []
+    def acknowledge(value):
+        received.append(value["assignment"]["operation_id"])
+        clock[0] += 2
+        return {"sequence": value["sequence"], "cancel_requested": False}
+    for count in (1, 2, 3):
+        agent.replay_pending(acknowledge)
+        assert len(received) == count
+    assert received == ["operation-1", "operation-2", "operation-3"]

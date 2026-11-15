@@ -110,7 +110,7 @@ def _service(
     clock=None,
 ):
     # Supervisor IPC has a platform path limit; all fixture-owned roots are short.
-    with TemporaryDirectory(prefix="la-", dir="/tmp") as temporary:
+    with TemporaryDirectory(prefix="la-") as temporary:
         root = Path(temporary)
         credentials = mutual_tls_credentials(root / "tls")
         descriptor = ResidentProfileDescriptor(
@@ -1437,6 +1437,7 @@ def test_gpu_admission_probe_keeps_control_receipt_responsive(monkeypatch):
 @pytest.mark.parametrize("ceiling,boundary", [
     (1, "input"), (2, "input"), (1, "output"), (2, "output"),
     (1, "shared_publication"), (2, "shared_publication"),
+    (2, "input_validation"),
     (2, "coordinator_publication"), (2, "coordinator_commit"),
 ])
 def test_serial_service_retains_cancel_while_real_transfer_is_held(
@@ -1524,9 +1525,24 @@ def test_serial_service_retains_cancel_while_real_transfer_is_held(
             monkeypatch.setattr(_shared_publication, "prepare_publication", prepare)
         else:
             monkeypatch.setattr(AgentSessionService, "_coordinator_output_refs", staticmethod(verify))
+    if boundary == "input_validation":
+        from loom.queue._remote_stage_execution import _ResidentAssignmentWorkspace
+        from loom.queue.shared_execution import assignment_scope
+
+        original_persist = _ResidentAssignmentWorkspace.persist_request
+
+        def hold_inspection(workspace, request, profile):
+            assert assignment_scope(request.fingerprint) is not None
+            if not entered.is_set():
+                held["assignment_id"] = request.assignment_id
+                entered.set()
+                assert unblock.wait(30)
+            return original_persist(workspace, request, profile)
+
+        monkeypatch.setattr(_ResidentAssignmentWorkspace, "persist_request", hold_inspection)
     with _service(
         monkeypatch, ceiling=ceiling, shared=boundary in {
-            "shared_publication", "coordinator_publication", "coordinator_commit"},
+            "shared_publication", "coordinator_publication", "coordinator_commit", "input_validation"},
     ) as case:
         try:
             held_uri, held_authority = _submit(case, "held", sequential=boundary == "input")

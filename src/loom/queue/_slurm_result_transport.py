@@ -18,7 +18,7 @@ from pathlib import Path
 import shutil
 from typing import Iterator, cast
 
-from loom.serialization import PlainData
+from loom.serialization import PlainData, thaw_plain_data
 from loom.pipeline.stores.shared_artifacts import binding as shared_binding
 from ._remote_stage_execution import (
     MAX_TRANSFER_BYTES,
@@ -44,8 +44,22 @@ def _json(value: object) -> bytes:
 
 
 def validate_identity(value: object, expected: Mapping[str, PlainData]) -> None:
-    if value != expected:
+    # Wire decoding freezes JSON arrays as tuples. Compare plain values at both
+    # transport ends without changing the retained identity or its exact fields.
+    if thaw_plain_data(value) != thaw_plain_data(expected):
         raise QueueConflictError("SLURM retained result identity conflicts")
+
+
+class SlurmRequestUncertain(Exception):
+    """One exchange ended without a known outcome; exact replay is required."""
+
+
+class SlurmEffectPending(Exception):
+    """An accepted effect must yield its assignment without retiring evidence."""
+
+    def __init__(self, retry_after_seconds: float):
+        super().__init__("SLURM effect remains pending")
+        self.retry_after_seconds = retry_after_seconds
 
 
 class SharedSlurmResult:
@@ -291,7 +305,7 @@ class SharedSlurmResult:
             ) from exc
         binding: dict[str, PlainData] = {
             "assignment_id": self.assignment_id,
-            "identity": dict(identity),
+            "identity": thaw_plain_data(identity),
         }
         call({**binding, "result_operation": "report", "report": report.to_dict()})
         for item in report.outputs:
@@ -335,10 +349,25 @@ class SharedSlurmResult:
         response = call(
             {
                 "assignment_id": self.assignment_id,
-                "identity": dict(identity),
+                "identity": thaw_plain_data(identity),
                 "result_operation": "commit",
             }
         )
+        disposition = response.get("disposition", "applied")
+        if disposition not in {"pending", "applied"}:
+            raise QueueConflictError("SLURM result disposition conflicts")
+        if disposition == "pending":
+            validate_identity(response.get("identity"), identity)
+            delay = response.get("retry_after_seconds")
+            if (
+                response.get("assignment_id") != self.assignment_id
+                or response.get("result_operation") != "commit"
+                or response.get("acknowledged") is True
+                or type(delay) not in (int, float)
+                or not 0 < delay <= 60
+            ):
+                raise QueueConflictError("SLURM pending result acknowledgement conflicts")
+            raise SlurmEffectPending(delay)
         if response.get("acknowledged") is not True:
             raise QueueConflictError(
                 "SLURM result final acknowledgement is unavailable"

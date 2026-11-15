@@ -32,7 +32,9 @@ def main(argv: list[str] | None = None) -> int:
     workspace_root = Path(arguments.workspace).resolve()
     assignment_id = workspace_root.name
     agent_root = workspace_root.parent.parent
-    workspace = _ResidentAssignmentWorkspace(agent_root, assignment_id)
+    workspace = _ResidentAssignmentWorkspace(
+        agent_root, assignment_id, _allow_initialize=False,
+    )
     gate = workspace_root / "run.grant"
     while not gate.is_file():
         time.sleep(0.01)
@@ -82,7 +84,10 @@ def main(argv: list[str] | None = None) -> int:
     result = replace(result, executor_metadata={
         **result.executor_metadata, "native_timings": timings.payload(),
     })
-    atomic_write_json(workspace_root / "worker-result.json", result.to_dict())
+    atomic_write_json(
+        workspace_root / "worker-result.json", result.to_dict(),
+        durability=workspace.durable_files,
+    )
     return 0
 
 

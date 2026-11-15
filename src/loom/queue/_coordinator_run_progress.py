@@ -19,6 +19,7 @@ from ._managed_local import ManagedLocalError
 from ._remote_stage_execution import ResidentProfileDescriptor
 from .errors import QueueServiceError
 from .local_daemon import LocalDaemonAdmissionState
+from ._phase_timing import phase
 
 if TYPE_CHECKING:
     from loom.pipeline.orchestration import ManagedExecutionRequirement, SQLiteStageWorkStore, StageWorkRecord
@@ -68,9 +69,10 @@ def reconcile_admission(
         return outcome
     if self._action_resolution is not None:
         self._action_resolution.reconcile_producers(admission.run_uri)
-    slurm_in_flight, slurm_diagnostic = self._reconcile_slurm_run(
-        admission.run_uri, scoped_authority
-    )
+    with phase("coordinator.reconcile_slurm_run"):
+        slurm_in_flight, slurm_diagnostic = self._reconcile_slurm_run(
+            admission.run_uri, scoped_authority
+        )
     return _settled_terminal_outcome(self,
         admission.run_uri,
         outcome,
@@ -104,9 +106,10 @@ def _reconcile_admission(
     )
     _decision_as_of, snapshot_time = self._daemon_owner()._accepted_snapshot()
     snapshot = scoped_authority.open_run(admission.run_uri)
-    slurm_in_flight, slurm_diagnostic = self._reconcile_slurm_run(
-        admission.run_uri, scoped_authority
-    )
+    with phase("coordinator.reconcile_slurm_run"):
+        slurm_in_flight, slurm_diagnostic = self._reconcile_slurm_run(
+            admission.run_uri, scoped_authority
+        )
     snapshot = scoped_authority.open_run(admission.run_uri)
     terminal = None if cancelling else self._terminal_outcome(
         admission,
@@ -122,30 +125,32 @@ def _reconcile_admission(
             return None if action_resolver is not None and action_resolver.store.producer_needed(admission.run_uri, stage_plan.stage_name) else revision
         return None if action_resolver is None else action_resolver.resolve(admission, intent, scoped_authority, stage_plan, readiness, revision)
 
-    orchestrator.reconcile(
-        admission_id=admission.admission_id,
-        plan=intent.plan,
-        authority_snapshot=snapshot,
-        placements=placements,
-        execution_requirements=intent.execution_requirements,
-        ready_action=resolve_ready,
-        ready_at=snapshot_time,
-        run_priority=admission.run_priority,
-        enqueue_sequence=admission.enqueue_sequence,
-        controller_action=None if cancelling else lambda stage_plan, readiness: (
-            self._apply_controller_action(
-                scoped_authority,
-                admission.run_uri,
-                stage_plan,
-                readiness,
-                admission=admission,
-            )
-        ),
-    )
+    with phase("coordinator.orchestrate_ready"):
+        orchestrator.reconcile(
+            admission_id=admission.admission_id,
+            plan=intent.plan,
+            authority_snapshot=snapshot,
+            placements=placements,
+            execution_requirements=intent.execution_requirements,
+            ready_action=resolve_ready,
+            ready_at=snapshot_time,
+            run_priority=admission.run_priority,
+            enqueue_sequence=admission.enqueue_sequence,
+            controller_action=None if cancelling else lambda stage_plan, readiness: (
+                self._apply_controller_action(
+                    scoped_authority,
+                    admission.run_uri,
+                    stage_plan,
+                    readiness,
+                    admission=admission,
+                )
+            ),
+        )
     snapshot = scoped_authority.open_run(admission.run_uri)
-    slurm_in_flight, slurm_diagnostic = self._reconcile_slurm_run(
-        admission.run_uri, scoped_authority
-    )
+    with phase("coordinator.reconcile_slurm_run"):
+        slurm_in_flight, slurm_diagnostic = self._reconcile_slurm_run(
+            admission.run_uri, scoped_authority
+        )
     snapshot = scoped_authority.open_run(admission.run_uri)
     terminal = None if cancelling else self._terminal_outcome(
         admission,
@@ -212,11 +217,19 @@ def _settled_terminal_outcome(
 
 
 def schedule_once(
-    self: LocalDaemonExecution, admissions: Mapping[str, LocalDaemonAdmission]
+    self: LocalDaemonExecution, admissions: Mapping[str, LocalDaemonAdmission], *,
+    waiting_outcomes: dict[str, LocalDaemonExecutionOutcome] | None = None,
 ) -> tuple[str, LocalDaemonExecutionOutcome] | None:
-    """Select and durably start one assignment from the global ready window."""
+    """Scan bounded pages, continuing beyond blocked work on the next cycle.
 
+    A fixed timestamp/admission boundary excludes arrivals during a sweep.
+    A complete sweep restarts at the priority head, as does process restart.
+    Cursor state is only an optimization: durable reservation remains authority.
+    """
     if not admissions:
+        self._ready_scan_after = None
+        self._ready_scan_boundary = None
+        self._gpu_scan_after = self._gpu_scan_boundary = None
         return None
     if self.daemon is not None:
         epochs = (self.daemon._epoch, self.daemon._scheduling_epoch)
@@ -224,8 +237,76 @@ def schedule_once(
                       if self._cycle_context_epochs.get(key) == epochs}
         if not admissions:
             return None
+    if self._ready_scan_boundary is None:
+        _, snapshot_time = self._daemon_owner()._accepted_snapshot()
+        self._ready_scan_boundary = (
+            snapshot_time, max(row.enqueue_sequence for row in admissions.values()),
+        )
+    if self._prefer_gpu_dispatch:
+        outcome = _schedule_gpu_opportunity(self, admissions, waiting_outcomes)
+        if outcome is not None:
+            self._ready_scan_after = self._ready_scan_boundary = None
+            self._last_dispatch_enqueue = admissions[outcome[0]].enqueue_sequence
+            self._prefer_gpu_dispatch = False
+            return outcome
+    for _ in range(4):
+        page = self.stage_work_store.ready_window(
+            after=self._ready_scan_after, rotate_after=self._last_dispatch_enqueue,
+            ready_through=self._ready_scan_boundary[0],
+            enqueue_through=self._ready_scan_boundary[1],
+        )
+        if not page:
+            self._ready_scan_after = None
+            self._ready_scan_boundary = None
+            return None
+        outcome = _schedule_window(self, admissions, page, waiting_outcomes=waiting_outcomes)
+        if outcome is not None:
+            self._ready_scan_after = None
+            self._ready_scan_boundary = None
+            self._last_dispatch_enqueue = admissions[outcome[0]].enqueue_sequence
+            self._prefer_gpu_dispatch = not self._prefer_gpu_dispatch
+            return outcome
+        self._ready_scan_after = page[-1]
+        if len(page) < 256:
+            self._ready_scan_after = None
+            self._ready_scan_boundary = None
+            return None
+    # Yield the global coordinator lock before continuing a large backlog.
+    self._daemon_owner()._wake.set()
+    return None
+
+
+def _schedule_gpu_opportunity(self, admissions, waiting_outcomes):
+    """One bounded GPU-head page, then fall back to ordinary fair dispatch.
+
+    Its cursor/rotation are independent: successful CPU admissions cannot reset
+    a blocked GPU prefix. Capacity and cancellation still use normal dispatch.
+    """
+    if self._gpu_scan_boundary is None:
+        self._gpu_scan_boundary = self._ready_scan_boundary
+    page = self.stage_work_store.ready_window(
+        after=self._gpu_scan_after, rotate_after=self._last_gpu_dispatch_enqueue,
+        ready_through=self._gpu_scan_boundary[0], enqueue_through=self._gpu_scan_boundary[1],
+        gpu_heads_only=True,
+    )
+    outcome = _schedule_window(self, admissions, page, waiting_outcomes=waiting_outcomes) if page else None
+    if outcome is not None:
+        self._last_gpu_dispatch_enqueue = admissions[outcome[0]].enqueue_sequence
+        self._gpu_scan_after = self._gpu_scan_boundary = None
+    elif len(page) < 256:
+        self._gpu_scan_after = self._gpu_scan_boundary = None
+    else:
+        self._gpu_scan_after = page[-1]
+    return outcome
+
+
+def _schedule_window(
+    self: LocalDaemonExecution, admissions: Mapping[str, LocalDaemonAdmission],
+    page: tuple[StageWorkRecord, ...], *,
+    waiting_outcomes: dict[str, LocalDaemonExecutionOutcome] | None = None,
+) -> tuple[str, LocalDaemonExecutionOutcome] | None:
     decision_as_of, snapshot_time = self._daemon_owner()._accepted_snapshot()
-    window = tuple(record for record in self.stage_work_store.ready_window()
+    window = tuple(record for record in page
                    if not self._attempt_cancel_requested(record.run_uri, record.attempt_id))
     if not window:
         return None
@@ -242,7 +323,8 @@ def schedule_once(
         if context is None:
             continue
         if (
-            self.coordinator.run_active_assignment_count(admission.run_uri)
+            context[0].max_parallel_stages is not None
+            and self.coordinator.run_active_assignment_count(admission.run_uri)
             >= context[0].max_parallel_stages
         ):
             exhausted_admissions.add(record.admission_id)
@@ -296,11 +378,18 @@ def schedule_once(
                 )
             ]
         )
-        decision = self._scheduling.kernel(managed_records).decide(
-            work=tuple(record.to_work_item() for record in managed_records),
-            candidates=candidates,
-            as_of=snapshot_time,
-        )
+        # Admission fairness belongs to this shared route selector. The native
+        # resident kernel still owns resource feasibility and stage selection.
+        groups = tuple(dict.fromkeys(record.admission_id for record in managed_records))
+        for admission_id in groups or (None,):
+            group = tuple(record for record in managed_records if record.admission_id == admission_id)
+            decision = self._scheduling.kernel(group).decide(
+                work=tuple(record.to_work_item() for record in group),
+                candidates=candidates,
+                as_of=snapshot_time,
+            )
+            if decision.state is PolicyDecisionState.SELECT:
+                break
         selected_id = (
             decision.stage_work_id
             if decision.state is PolicyDecisionState.SELECT
@@ -326,6 +415,16 @@ def schedule_once(
             attempted_slurm.add(record.stage_work_id)
             admission = admissions[record.admission_id]
             intent, authority = contexts[record.admission_id]
+            profile = self._slurm_profile(
+                cast(str, record.placement.route.profile_id),
+                cast(str, record.placement.route.profile_configuration_fingerprint),
+            )
+            if not profile.available:
+                if waiting_outcomes is not None and admission.admission_id in waiting_outcomes:
+                    waiting_outcomes[admission.admission_id] = LocalDaemonExecutionOutcome(
+                        LocalDaemonAdmissionState.WAITING, "slurm_route_unavailable_or_unmappable",
+                    )
+                continue
             snapshot = authority.open_run(admission.run_uri)
             if not self._failure_policy_allows_new_work(intent, snapshot):
                 exhausted_admissions.add(record.admission_id)
@@ -338,6 +437,15 @@ def schedule_once(
                     snapshot=snapshot,
                     stage_work_id=record.stage_work_id,
                 )
+            if (
+                outcome is not None
+                and outcome.state is LocalDaemonAdmissionState.WAITING
+                and waiting_outcomes is not None
+                and admission.admission_id in waiting_outcomes
+            ):
+                # Preserve a concrete deferral without returning early and
+                # starving other ready work. In-flight runs remain ACTIVE.
+                waiting_outcomes[admission.admission_id] = outcome
             if (
                 outcome is not None
                 and outcome.state is LocalDaemonAdmissionState.ACTIVE
@@ -376,8 +484,7 @@ def schedule_once(
                 excluded_work.add(record.stage_work_id)
             continue
         if remote_target is not None:
-            with _dispatch_offering(self, record, "preflight"):
-                eligible = self._remote_eligibility_async(intent=intent, snapshot=snapshot, record=record)
+            eligible = self._remote_eligible(intent=intent, snapshot=snapshot, record=record)
             if eligible is None:
                 excluded_work.add(record.stage_work_id)
                 continue
@@ -436,7 +543,7 @@ def _profile_satisfies_requirement(
 
 
 def _stage_work(store: SQLiteStageWorkStore, stage_work_id: str) -> StageWorkRecord:
-    for record in store.list_stage_work():
-        if record.stage_work_id == stage_work_id:
-            return record
-    raise QueueServiceError("selected stage work disappeared before reservation")
+    record = store.find_stage_work(stage_work_id)
+    if record is None:
+        raise QueueServiceError("selected stage work disappeared before reservation")
+    return record

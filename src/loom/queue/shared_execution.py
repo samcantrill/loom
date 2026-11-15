@@ -6,13 +6,17 @@ read-only access. Applications own input content identity.
 """
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from concurrent.futures import CancelledError
+from dataclasses import dataclass
+from time import monotonic
 from pathlib import Path, PurePosixPath
 import hashlib
 import os
 import stat
 from typing import cast
 
+from loom.timestamps import utc_timestamp
 from loom.fingerprints import hash_mapping
 from loom.serialization import PlainData, thaw_plain_data
 from .errors import QueueServiceError
@@ -110,12 +114,12 @@ def root_bindings(value: object) -> dict[str, PlainData]:
         result[alias] = {"host_path": raw["host_path"], "container_path": target,
                          "access": raw["access"], "challenge": {"path": _relative(challenge["path"]), "sha256": challenge["sha256"]}}
         if "publication" in raw:
-            from loom.pipeline.stores.shared_artifacts import budgets
+            from loom.pipeline.stores.shared_artifacts import publication_configuration
             if raw["access"] != "rw":
                 raise QueueServiceError("shared publication requires a writable root")
             from loom.pipeline.stores.errors import ArtifactStoreError
             try:
-                cast(dict[str, PlainData], result[alias])["publication"] = cast(PlainData, budgets(raw["publication"]))
+                cast(dict[str, PlainData], result[alias])["publication"] = publication_configuration(raw["publication"])
             except ArtifactStoreError as exc:
                 raise QueueServiceError(str(exc)) from exc
     if sum("publication" in cast(Mapping[str, PlainData], root) for root in result.values()) > 1:
@@ -231,37 +235,96 @@ def stage_scope(config: object, factory_init: object, permitted: Mapping[str, Pl
     return {"capability": SHARED_EXECUTION_CAPABILITY, "roots": {alias: roots[alias] for alias in sorted(aliases)}, "locations": cast(PlainData, locations)}
 
 
-@phase("input_root_validation")
-def require_bindings(required: Mapping[str, PlainData], roots: Mapping[str, PlainData]) -> None:
+@dataclass(frozen=True)
+class InputValidationProgress:
+    """Path-free observations; counts describe inspected entries, not a total."""
+
+    entries_examined: int
+    elapsed_seconds: float
+    last_progress_at: str
+
+
+class InputValidationIOError(QueueServiceError):
+    """The selected input could not be inspected because filesystem IO failed."""
+
+
+def _selected_input_paths(
+    required: Mapping[str, PlainData], roots: Mapping[str, PlainData],
+    checkpoint: Callable[[], None],
+) -> set[Path]:
     selected = cast(Mapping[str, PlainData], required["roots"])
     if not set(selected).issubset(roots):
         raise QueueServiceError("shared execution root is not mapped")
+    checkpoint()
     observed = qualifications({alias: roots[alias] for alias in selected})
     if observed != selected:
         raise QueueServiceError("shared execution qualification conflicts")
-    # Resolve every declared location, including descendants, before pruning
-    # overlapping traversals. Reuse never survives this mutable IO boundary.
-    paths = {
-        resolve(cast(Mapping[str, PlainData], roots[str(item["root_id"])]), str(item["path"]))
-        for item in cast(list[Mapping[str, PlainData]], required["locations"])
-    }
-    covered: list[Path] = []
+    # Resolve every declaration before pruning overlapping traversals, so a
+    # missing descendant cannot hide behind an existing selected parent.
+    paths = set()
+    for item in cast(list[Mapping[str, PlainData]], required["locations"]):
+        checkpoint()
+        paths.add(resolve(
+            cast(Mapping[str, PlainData], roots[str(item["root_id"])]), str(item["path"])
+        ))
+    return paths
 
-    def unreadable(error: OSError) -> None:
-        raise QueueServiceError("shared input tree cannot be inspected") from error
 
-    for selected_path in sorted(paths, key=lambda path: (len(path.parts), str(path))):
-        if any(selected_path.is_relative_to(parent) for parent in covered):
-            continue
-        if selected_path.is_dir():
-            for directory, names, files in os.walk(selected_path, onerror=unreadable):
-                for name in names + files:
-                    mode = (Path(directory) / name).lstat().st_mode
-                    if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
-                        raise QueueServiceError("shared input trees require regular files and directories")
-            covered.append(selected_path)
-        elif not selected_path.is_file():
-            raise QueueServiceError("shared input requires a regular file or directory")
+@phase("input_root_validation")
+def require_bindings(
+    required: Mapping[str, PlainData], roots: Mapping[str, PlainData], *,
+    cancelled: Callable[[], bool] | None = None,
+    progress: Callable[[InputValidationProgress], None] | None = None,
+) -> None:
+    """Inspect live inputs at this boundary, without caching prior success.
+
+    Cancellation is cooperative between filesystem operations. Progress is
+    emitted at most every five seconds, plus initial/final observations. Neither
+    callback receives paths. Callers must perform this IO outside scheduling
+    locks and retain responsibility for rejecting obsolete completed work.
+    """
+    start = monotonic()
+    reported = start
+    examined = 0
+
+    def checkpoint(*, force: bool = False) -> None:
+        nonlocal reported
+        if cancelled is not None and cancelled():
+            raise CancelledError("input validation cancelled")
+        now = monotonic()
+        if progress is not None and (force or now - reported >= 5):
+            progress(InputValidationProgress(examined, now - start, utc_timestamp()))
+            reported = now
+
+    checkpoint(force=True)
+    try:
+        paths = _selected_input_paths(required, roots, checkpoint)
+        covered: list[Path] = []
+
+        def unreadable(error: OSError) -> None:
+            raise error
+
+        for selected_path in sorted(paths, key=lambda path: (len(path.parts), str(path))):
+            checkpoint()
+            if any(selected_path.is_relative_to(parent) for parent in covered):
+                continue
+            if selected_path.is_dir():
+                for directory, names, files in os.walk(selected_path, onerror=unreadable):
+                    checkpoint()
+                    for name in names + files:
+                        checkpoint()
+                        mode = (Path(directory) / name).lstat().st_mode
+                        if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
+                            raise QueueServiceError("shared input trees require regular files and directories")
+                        examined += 1
+                covered.append(selected_path)
+            elif not selected_path.is_file():
+                raise QueueServiceError("shared input requires a regular file or directory")
+            else:
+                examined += 1
+    except OSError as error:
+        raise InputValidationIOError("shared input tree cannot be inspected") from error
+    checkpoint(force=True)
 
 
 def attributes(required: Mapping[str, PlainData] | None) -> dict[str, PlainData]:
@@ -269,9 +332,15 @@ def attributes(required: Mapping[str, PlainData] | None) -> dict[str, PlainData]
         return {}
     publication = any("publication" in cast(Mapping[str, PlainData], facts)
                       for facts in cast(Mapping[str, PlainData], required["roots"]).values())
-    from ._shared_publication import CAPABILITY
+    from ._shared_publication import CAPABILITY, TRUSTED_CAPABILITY
+    from loom.pipeline.stores.shared_artifacts import publication_policy, TRUSTED_SHARED_STORAGE
+    trusted = any(
+        "publication" in facts and publication_policy(facts["publication"]) == TRUSTED_SHARED_STORAGE
+        for facts in cast(Mapping[str, Mapping[str, PlainData]], required["roots"]).values()
+    )
     return {"shared_execution_capability": SHARED_EXECUTION_CAPABILITY,
             **({"shared_artifact_publication_capability": CAPABILITY} if publication else {}),
+            **({"trusted_shared_artifact_publication_capability": TRUSTED_CAPABILITY} if trusted else {}),
             **{"shared_root_" + alias: hash_mapping(facts) for alias, facts in cast(Mapping[str, PlainData], required["roots"]).items()}}
 
 
@@ -334,12 +403,14 @@ def bind_snapshot(snapshot: dict[str, PlainData], permitted: Mapping[str, PlainD
 
 
 def assignment_scope(fingerprint: Mapping[str, PlainData]) -> dict[str, PlainData] | None:
-    payload = cast(Mapping[str, PlainData], fingerprint["payload"])
-    fields = cast(Mapping[str, PlainData], payload["fingerprint_fields"])
+    from loom.pipeline.planning import StageFingerprintRecord
+
+    payload = StageFingerprintRecord.from_dict(fingerprint).payload
+    fields = payload.fingerprint_fields
     selected = scope(fields.get(SHARED_EXECUTION_SCOPE))
     from .preparation import PREPARATION_STAGE_TARGET, PreparationChildInput
-    if payload["factory_target"] == PREPARATION_STAGE_TARGET:
-        binding = PreparationChildInput.from_dict(payload["stage_config"])
+    if payload.factory_target == PREPARATION_STAGE_TARGET:
+        binding = PreparationChildInput.from_dict(payload.stage_config)
         if binding.shared_scope != selected:
             raise QueueServiceError("preparation shared scope conflicts with assignment")
     return selected

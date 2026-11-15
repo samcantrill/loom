@@ -76,7 +76,7 @@ def test_run_catalog_rebuild_recovers_corrupt_sidecar_without_touching_run_store
     run_json = root / "run-1" / "run.json"
     before = run_json.read_text(encoding="utf-8")
     db_path = catalog_db_path(root)
-    db_path.parent.mkdir(parents=True)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
     db_path.write_text("not a sqlite database", encoding="utf-8")
 
     result = RunCatalog.open(root).rebuild()

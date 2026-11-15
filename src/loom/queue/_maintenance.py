@@ -68,6 +68,37 @@ def _read(conn: sqlite3.Connection) -> dict[str, Any]:
     return cast(dict[str, Any], json.loads(row[0]))
 
 
+def hold_for_startup(conn: sqlite3.Connection, coordinator_id: str, *, applied_at: str) -> None:
+    """Close fresh acceptance inside the startup owner's transaction.
+
+    Preserve an existing maintenance owner. A new hold uses the normal control
+    receipt/intent shape so the existing revision-bound open command releases it.
+    No service progress or endpoint may start before this transaction commits.
+    """
+    from uuid import uuid4
+
+    state = _read(conn)
+    if state["state"] == "closed":
+        return
+    maintenance_id = "startup-" + str(uuid4())
+    intent = control_intent_digest({"maintenance_id": maintenance_id})
+    control = {
+        "operation_id": f"maintenance:{maintenance_id}:close",
+        "maintenance_id": maintenance_id, "maintenance_intent_digest": intent,
+        "action": "close", "expected_revision": state["revision"], "check": None,
+    }
+    state.update(state="closed", revision=state["revision"] + 1,
+                 maintenance_id=maintenance_id, intent_digest=intent, coordinator_id=coordinator_id)
+    receipt = {
+        "operation_id": control["operation_id"],
+        "intent_digest": control_intent_digest({**control, "expected_coordinator_id": coordinator_id}),
+        "control": control, "gate": state, "mutation_outcome": "applied", "applied_at": applied_at,
+    }
+    conn.execute("UPDATE daemon_metadata SET value=? WHERE key=?", (json.dumps(state), _KEY))
+    conn.execute("INSERT INTO daemon_metadata(key,value) VALUES (?,?)",
+                 (_PREFIX + control["operation_id"], json.dumps(receipt)))
+
+
 def observe(daemon: LocalDaemon) -> dict[str, PlainData]:
     from ._service_lifetime import _retained_coordinator_operations
     with daemon._cycle_lock, daemon._connection() as conn:

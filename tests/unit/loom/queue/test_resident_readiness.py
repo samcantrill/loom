@@ -536,3 +536,27 @@ def test_publication_qualification_rejects_an_installation_with_only_shared_inpu
                                                   environment={"PYTHONPATH": str(tmp_path)}))
     assert not unsupported.ok
     assert next(check for check in unsupported.checks if check.check_id == "packages.shared_publication").status == "FAIL"
+
+
+def test_trusted_publication_requires_selected_worker_capability(tmp_path):
+    import hashlib
+
+    root = tmp_path / "outputs"
+    root.mkdir()
+    (root / "challenge").write_bytes(b"fixture")
+    roots = {"outputs": {"host_path": str(root), "container_path": None, "access": "rw",
+        "challenge": {"path": "challenge", "sha256": hashlib.sha256(b"fixture").hexdigest()},
+        "publication": {"policy": "trusted_shared_storage", "max_members": 1024,
+                        "max_payload_bytes": 268435456, "max_manifest_bytes": 1048576}}}
+    source = str(Path(__file__).resolve().parents[4] / "src")
+    supported = qualify_resident_profile(replace(_profile(tmp_path), shared_roots=roots,
+        environment={"PYTHONPATH": source}))
+    assert supported.ok
+    (tmp_path / "sitecustomize.py").write_text(
+        "import loom.queue._shared_publication as publication\ndel publication.TRUSTED_CAPABILITY\n"
+    )
+    unsupported = qualify_resident_profile(replace(_profile(tmp_path), shared_roots=roots,
+        environment={"PYTHONPATH": str(tmp_path) + ":" + source}))
+    assert not unsupported.ok
+    assert next(check for check in unsupported.checks
+                if check.check_id == "packages.trusted_shared_publication").status == "FAIL"

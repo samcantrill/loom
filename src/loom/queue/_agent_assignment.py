@@ -13,7 +13,6 @@ from collections.abc import Callable, Generator, Mapping
 from dataclasses import replace
 import hashlib
 import json
-from pathlib import Path
 from time import monotonic
 from typing import TYPE_CHECKING, Any, cast
 
@@ -57,9 +56,7 @@ def _execute_delivered_assignment(
 ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
     """Drive one already durable delivery through the native input/grant path."""
     session = self._require_journal().session(session_id)
-    workspace = _ResidentAssignmentWorkspace(
-        cast(Path, self._config.agent_root), request.assignment_id
-    )
+    workspace = self._assignment_workspace(request.assignment_id)
     launch_profile = self._assignment_launch_profile(request, workspace)
     (yield from _external("bulk", workspace.persist_request, request, launch_profile))
     self._require_journal().retain_assignment_reference(
@@ -346,8 +343,7 @@ def _execute_delivered_assignment(
                         sort_keys=True,
                         separators=(",", ":"),
                         allow_nan=False,
-                    ).encode(),
-                )
+                    ).encode(), durability=workspace.durable_files)
                 workspace.persist_cancelled_before_start(result)
                 execution_journal.record_cancelled_before_start(
                     assignment.assignment_id, result.to_dict()
@@ -376,8 +372,7 @@ def _execute_delivered_assignment(
                             sort_keys=True,
                             separators=(",", ":"),
                             allow_nan=False,
-                        ).encode(),
-                    )
+                        ).encode(), durability=workspace.durable_files)
                     execution_journal.require_failed_before_start(
                         assignment.assignment_id, fence=fence
                     )
@@ -468,9 +463,7 @@ def _resume_retained_assignments(
     for session_id, assignment_id in references:
         _raise_if_application_suspended(suspend_requested)
         session = journal.session(session_id)
-        workspace = _ResidentAssignmentWorkspace(
-            cast(Path, self._config.agent_root), assignment_id
-        )
+        workspace = self._assignment_workspace(assignment_id)
         raw_delivery = journal.delivery_request(session_id, assignment_id)
         if not workspace.has_request():
             if raw_delivery is None:
@@ -605,8 +598,7 @@ def _resume_retained_assignments(
                 if not result_path.is_file():
                     atomic_write_bytes(
                         result_path,
-                        _canonical_json(retained_result.to_dict()).encode(),
-                    )
+                        _canonical_json(retained_result.to_dict()).encode(), durability=workspace.durable_files)
                 workspace.persist_failed_before_start(
                     retained_result, fence=retained_fence,
                     supervisor_rejected=launch_json is not None,
@@ -805,8 +797,7 @@ def _settle_supervised_worker_result(
                     sort_keys=True,
                     separators=(",", ":"),
                     allow_nan=False,
-                ).encode(),
-            )
+                ).encode(), durability=workspace.durable_files)
     contained = (yield from _steps(supervisor.contain, launch))
     self._observe_supervisor_ownership(contained)
     if contained.state is not SupervisorLaunchState.CONTAINED:

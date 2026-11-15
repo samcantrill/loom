@@ -7,6 +7,7 @@ import json
 import pytest
 
 from loom.pipeline.status import StageStatus
+from loom.serialization import freeze_plain_data, thaw_plain_data
 from loom.queue._remote_stage_execution import (
     MAX_TRANSFER_BYTES,
     _RemoteExecutionReport,
@@ -31,6 +32,7 @@ def _fixture(tmp_path, data=b"result"):
             "agent_root_id": "agent-root",
             "attempt_id": "attempt",
             "operation_id": "operation",
+            "profile_descriptor": {"supported_data_versions": [1]},
         },
         "fence": "fence",
         "incarnation": "bootstrap",
@@ -70,6 +72,37 @@ def _fixture(tmp_path, data=b"result"):
         return value, offset + len(value) == len(data)
 
     return owner, identity, report, chunk
+
+
+def test_authenticated_frozen_identity_delivers_with_exact_plain_receipt(tmp_path):
+    owner, identity, report, chunk = _fixture(tmp_path)
+    owner.publish(identity, report, chunk)
+    received = freeze_plain_data(identity)
+    assert received != identity  # The real descriptor array becomes a tuple.
+    assert owner.read(received)[0] == report
+    operations = []
+
+    def coordinator(value):
+        # Exercise the real JSON encode/decode boundary before authenticated
+        # decoding freezes the receiving coordinator's payload again.
+        evidence = freeze_plain_data(json.loads(json.dumps(value, allow_nan=False)))
+        transport_module.validate_identity(evidence["identity"], identity)
+        operations.append(evidence["result_operation"])
+        if evidence["result_operation"] == "output":
+            return {"received": 6}
+        return {"acknowledged": True}
+
+    changed = thaw_plain_data(received)
+    changed["assignment"]["profile_descriptor"]["supported_data_versions"] = [2]
+    with pytest.raises(QueueConflictError, match="retained result is invalid"):
+        owner.deliver(freeze_plain_data(changed), coordinator)
+    assert not operations and owner.path.exists()
+    assert owner.deliver(received, coordinator)
+    assert operations == ["report", "output", "commit"]
+    assert not owner.path.exists()
+    # A restart may only retain the pending commit, after byte cleanup.
+    assert owner.finish_delivery(received, coordinator)
+    assert operations[-1] == "commit"
 
 
 def test_manifest_last_partial_copy_and_lost_ack_preserve_bytes(tmp_path, monkeypatch):
@@ -167,3 +200,48 @@ def test_existing_aggregate_artifact_bound_at_and_over_limit(tmp_path):
     )
     with pytest.raises(QueueServiceError):
         replace(report, outputs=(*report.outputs, extra))
+
+
+def test_pending_commit_preserves_transport_until_exact_replay(tmp_path):
+    owner, identity, report, chunk = _fixture(tmp_path)
+    owner.publish(identity, report, chunk)
+    pending = {
+        "assignment_id": owner.assignment_id,
+        "identity": freeze_plain_data(identity),
+        "result_operation": "commit",
+        "disposition": "pending",
+        "retry_after_seconds": 5,
+    }
+    with pytest.raises(transport_module.SlurmEffectPending):
+        owner.finish_delivery(identity, lambda _: pending)
+    assert owner.read(identity)[0] == report
+    reopened = SharedSlurmResult(owner.storage, owner.assignment_id)
+    assert reopened.finish_delivery(identity, lambda _: {
+        "disposition": "applied", "acknowledged": True,
+    })
+    assert not owner.path.exists()
+
+
+@pytest.mark.parametrize("change", [
+    {"assignment_id": "different"},
+    {"identity": {}},
+    {"result_operation": "report"},
+    {"acknowledged": True},
+    {"retry_after_seconds": True},
+    {"retry_after_seconds": float("nan")},
+    {"disposition": "unknown"},
+])
+def test_conflicting_pending_commit_never_cleans_transport(tmp_path, change):
+    owner, identity, report, chunk = _fixture(tmp_path)
+    owner.publish(identity, report, chunk)
+    response = {
+        "assignment_id": owner.assignment_id,
+        "identity": identity,
+        "result_operation": "commit",
+        "disposition": "pending",
+        "retry_after_seconds": 5,
+        **change,
+    }
+    with pytest.raises(QueueConflictError):
+        owner.finish_delivery(identity, lambda _: response)
+    assert owner.read(identity)[0] == report

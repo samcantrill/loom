@@ -219,9 +219,10 @@ class SubprocessApptainerExecRunner:
             )
         self.clock = cast("Clock", clock)
 
-    def require(self, command: str) -> None:
+    def require(self, command: str, *, host_environment: Mapping[str, str] | None = None) -> None:
         command_text = _text(command, path="command")
-        if shutil.which(command_text) is None:
+        search_path = None if host_environment is None else host_environment.get("PATH", os.defpath)
+        if shutil.which(command_text, path=search_path) is None:
             raise ApptainerCommandUnavailableError(
                 f"required Apptainer command is not available on PATH: {command_text}"
             )
@@ -231,10 +232,22 @@ class SubprocessApptainerExecRunner:
         command: ApptainerExecCommand,
         *,
         timeout_seconds: int | float | None = None,
+        host_environment: Mapping[str, str] | None = None,
     ) -> ApptainerCommandResult:
+        """Execute with optional host settings, separate from container --env values."""
         run_command = _run_command(command)
         timeout = _optional_positive_number(timeout_seconds, path="timeout_seconds")
-        self.require(run_command.argv[0])
+        environment = None if host_environment is None else dict(host_environment)
+        if environment is not None and any(
+            not isinstance(key, str) or not key or "=" in key or "\x00" in key
+            or not isinstance(value, str) or "\x00" in value
+            for key, value in environment.items()
+        ):
+            raise ApptainerOptionError("host_environment requires valid string environment entries")
+        if environment is None:
+            self.require(run_command.argv[0])
+        else:
+            self.require(run_command.argv[0], host_environment=environment)
         started_at = self.clock()
         try:
             import subprocess
@@ -243,7 +256,7 @@ class SubprocessApptainerExecRunner:
                 from ._timeout import run_timed_exec
 
                 run_command = _with_timeout_namespace(run_command)
-                result = run_timed_exec(run_command.argv, float(timeout))
+                result = run_timed_exec(run_command.argv, float(timeout), host_environment=environment)
                 return ApptainerCommandResult(
                     command=run_command.argv[0],
                     argv=run_command.argv,
@@ -263,6 +276,7 @@ class SubprocessApptainerExecRunner:
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                env=environment,
             )
         except Exception as exc:  # noqa: BLE001 - command-launch facts are returned.
             if timeout is not None:

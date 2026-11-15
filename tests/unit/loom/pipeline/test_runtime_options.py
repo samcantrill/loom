@@ -331,3 +331,12 @@ def test_validate_stage_runtime_options_checks_supplied_known_stage_ids() -> Non
     validate_stage_runtime_options(options, known_stage_ids={"extract", "train"})
     with pytest.raises(RuntimeResourceError, match="unknown stage id"):
         validate_stage_runtime_options(options, known_stage_ids={"train"})
+
+
+def test_unlimited_parallel_policy_round_trips_without_changing_legacy_default() -> None:
+    assert parallel_execution_options(RunOptions()).max_parallel_stages == 1
+    options = RunOptions(execution={"settings": {"max_parallel_stages": None}})
+    restored = RunOptions.from_dict(options.to_dict())
+    policy = parallel_execution_options(restored)
+    assert policy.max_parallel_stages is None
+    assert policy.enabled

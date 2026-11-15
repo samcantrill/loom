@@ -11,8 +11,8 @@ from __future__ import annotations
 
 from .shared_execution import assignment_scope, require_bindings, validate_workload, SHARED_EXECUTION_SCOPE
 
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import asdict, dataclass, field, replace
 import base64
 import hashlib
 import json
@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 
 from loom.artifacts import ArtifactRef
 from loom._sqlite_inspection import inspect_sqlite_database
+from loom._sqlite_policy import SQLitePolicy, connect_existing, initialize_database
 from loom.pipeline.stores.errors import ArtifactStoreError
 from loom.pipeline.stores.shared_artifacts import SHARED_PUBLICATION, binding as _artifact_shared_binding, admits_budgets, file_identity, verify_ref
 from loom.io.uris import uri_to_path
@@ -663,7 +664,11 @@ class _RemoteArtifact:
             path = source.resolve(strict=True)
             if shared_binding(ref.metadata) is not None:
                 verify_ref(ref, path)
-                size, digest = file_identity(path)
+                publication = shared_binding(ref.metadata)
+                if publication["schema_version"] == 2 and ref.checksum is not None:
+                    size, digest = path.stat().st_size, ref.checksum.removeprefix("sha256:")
+                else:
+                    size, digest = file_identity(path)
                 if ref.checksum is not None and ref.checksum != f"sha256:{digest}":
                     raise QueueConflictError("shared input checksum conflicts with its bytes")
                 return (cls(transfer_id=transfer_id, logical_name=logical_name, digest=digest, size_bytes=size,
@@ -825,11 +830,16 @@ def _assignment_input_path(workspace_root: Path, logical_name: str) -> Path:
 def _preparation_worker_context(
     request: _ResidentAssignmentBundle | SlurmStageDelivery,
     launch_profile: ResidentWorkerLaunchProfile, workspace_root: Path,
+    *, input_path: Callable[[str], Path] | None = None,
 ) -> Mapping[str, PlainData] | None:
     """Materialize the fixed preparation child's admitted artifacts and capture."""
     preparation = request.preparation_input
     if preparation is None:
         return None
+    # Resident payloads have an isolated directory and primary file; Slurm's
+    # native relay retains its flat input layout. The workspace owns that path.
+    if input_path is None:
+        input_path = lambda name: _assignment_input_path(workspace_root, name)
     from .preparation import SharedInputReceipt, _require_local_binding
 
     _require_local_binding(preparation.local_scope, launch_profile)
@@ -848,7 +858,7 @@ def _preparation_worker_context(
     if candidate_report is not None:
         from ._shared_publication import resolve_input
         from .shared_execution import execution_roots
-        path = _assignment_input_path(workspace_root, candidate_report.logical_name)
+        path = input_path(candidate_report.logical_name)
         if shared_binding(candidate_report.metadata) is not None:
             path = resolve_input(candidate_report, execution_roots(launch_profile.shared_roots, container=launch_profile.container is not None))
         purpose["candidate_project_report"] = candidate_report.local_ref(path).to_dict()
@@ -862,7 +872,7 @@ def _preparation_worker_context(
             prefix = _ACTION_PROJECT_INPUT_PREFIX if item.logical_name.startswith(_ACTION_PROJECT_INPUT_PREFIX) else _ACTION_RESULT_INPUT_PREFIX
             if not item.logical_name.startswith(prefix):
                 continue
-            path = _assignment_input_path(workspace_root, item.logical_name)
+            path = input_path(item.logical_name)
             if shared_binding(item.metadata) is not None:
                 path = resolve_input(item, execution_roots(launch_profile.shared_roots, container=launch_profile.container is not None))
             destination = reports if prefix == _ACTION_PROJECT_INPUT_PREFIX else artifacts
@@ -874,7 +884,7 @@ def _preparation_worker_context(
         from .preparation import resolve_staged_input
         directory = resolve_staged_input(
             preparation.input_receipt,
-            archive_path=_assignment_input_path(workspace_root, _PREPARATION_ARCHIVE_INPUT),
+            archive_path=input_path(_PREPARATION_ARCHIVE_INPUT),
             workspace_root=workspace_root,
         )
         assert directory is not None
@@ -1652,7 +1662,12 @@ def _require_current_workspace_path(root: Path) -> None:
         raise QueueServiceError("resident assignment workspace layout is unsupported")
 
 
-def _require_resident_workspace_schema(conn: sqlite3.Connection) -> None:
+def _require_resident_workspace_schema(
+    conn: sqlite3.Connection,
+) -> tuple[SQLitePolicy | None, str]:
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    if version not in (0, 1):
+        raise QueueServiceError("resident assignment workspace schema is unsupported")
     expected = {
         "request": {
             "singleton", "value_json", "state", "fence", "process_execution_id",
@@ -1664,6 +1679,8 @@ def _require_resident_workspace_schema(conn: sqlite3.Connection) -> None:
         },
         "events": {"sequence", "event_id", "payload_json", "acknowledged"},
     }
+    if version == 1:
+        expected["storage_policy"] = {"singleton", "value_json"}
     tables = {
         str(row[0]) for row in conn.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
@@ -1674,30 +1691,77 @@ def _require_resident_workspace_schema(conn: sqlite3.Connection) -> None:
         for table, columns in expected.items()
     ):
         raise QueueServiceError("resident assignment workspace schema is unsupported")
+    if version == 0:
+        return None, "best_effort"
+    row = conn.execute(
+        "SELECT value_json FROM storage_policy WHERE singleton = 1"
+    ).fetchone()
+    try:
+        value = json.loads(row[0]) if row is not None else None
+        if not isinstance(value, dict) or set(value) != {
+            "journal_mode", "synchronous", "busy_timeout_ms", "durable_files",
+        }:
+            raise ValueError("missing workspace policy")
+        durability = value.pop("durable_files")
+        if durability not in ("best_effort", "strict"):
+            raise ValueError("invalid workspace file durability")
+        return SQLitePolicy(**value), durability
+    except (TypeError, ValueError) as exc:
+        raise QueueServiceError("resident assignment storage policy is invalid") from exc
 
 
 class _ResidentAssignmentWorkspace:
     """Agent-owned durable request, byte, start, result, and outbox gate."""
 
-    def __init__(self, agent_root: Path, assignment_id: str) -> None:
+    def __init__(
+        self, agent_root: Path, assignment_id: str, *,
+        sqlite_policy: SQLitePolicy | None = None,
+        durable_files: str | None = None,
+        _allow_initialize: bool | None = None,
+    ) -> None:
         _identifier(assignment_id, "assignment_id")
+        if durable_files not in (None, "best_effort", "strict"):
+            raise QueueServiceError("resident assignment file durability is invalid")
         root = Path(agent_root).resolve()
         self.root = root / "assignments" / assignment_id
         _require_current_workspace_path(self.root)
         self._db = self.root / "resident.sqlite"
+        self._sqlite_policy = sqlite_policy
+        self.durable_files = durable_files or "best_effort"
         if self._db.exists():
             with inspect_sqlite_database(self._db) as conn:
-                _require_resident_workspace_schema(conn)
+                retained = _require_resident_workspace_schema(conn)
+            if sqlite_policy is not None and retained != (sqlite_policy, self.durable_files):
+                raise QueueConflictError("resident assignment storage policy conflicts")
+            self._sqlite_policy, self.durable_files = retained
             self.root.chmod(0o700)
             self._db.chmod(0o600)
             return
+        if _allow_initialize is False or (
+            sqlite_policy is not None and _allow_initialize is not True
+        ):
+            raise QueueServiceError("resident assignment workspace is missing")
         self.root.mkdir(parents=True, exist_ok=True)
         self.root.chmod(0o700)
-        with self._connect() as conn:
+        with self._connect(initialize=True) as conn:
             conn.execute("BEGIN IMMEDIATE")
             if not conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchone():
                 self._initialize(conn)
-            _require_resident_workspace_schema(conn)
+                if sqlite_policy is not None:
+                    conn.execute(
+                        "CREATE TABLE storage_policy ("
+                        "singleton INTEGER PRIMARY KEY CHECK(singleton = 1), "
+                        "value_json TEXT NOT NULL)"
+                    )
+                    conn.execute(
+                        "INSERT INTO storage_policy VALUES (1, ?)",
+                        (_canonical_json({
+                            **asdict(sqlite_policy), "durable_files": self.durable_files,
+                        }),),
+                    )
+                    conn.execute("PRAGMA user_version = 1")
+            if _require_resident_workspace_schema(conn) != (sqlite_policy, self.durable_files):
+                raise QueueConflictError("resident assignment storage policy conflicts")
         self._db.chmod(0o600)
 
     @staticmethod
@@ -1741,8 +1805,12 @@ class _ResidentAssignmentWorkspace:
             """
         )
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db)
+    def _connect(self, *, initialize: bool = False) -> sqlite3.Connection:
+        if self._sqlite_policy is None:
+            conn = sqlite3.connect(self._db)
+        else:
+            connect = initialize_database if initialize else connect_existing
+            conn = connect(self._db, policy=self._sqlite_policy, isolation_level="")
         conn.row_factory = sqlite3.Row
         return conn
 
@@ -2211,7 +2279,9 @@ class _ResidentAssignmentWorkspace:
             ):
                 raise QueueConflictError("preparation input conflicts with the retained launch")
             launch_profile = launch.profile
-        return _preparation_worker_context(request, launch_profile, self.root)
+        return _preparation_worker_context(
+            request, launch_profile, self.root, input_path=self.input_path,
+        )
 
     def _prepare_staged_input(self) -> Path | None:
         from .preparation import StagedInputReceipt, resolve_staged_input
@@ -2745,8 +2815,7 @@ class _ResidentAssignmentWorkspace:
 def _assignment_local_scope(request: _ResidentAssignmentBundle) -> Mapping[str, PlainData] | None:
     from .preparation import LOCAL_PREPARATION_SCOPE, _local_scope
 
-    payload = cast(Mapping[str, PlainData], request.fingerprint["payload"])
-    fields = cast(Mapping[str, PlainData], payload["fingerprint_fields"])
+    fields = StageFingerprintRecord.from_dict(request.fingerprint).payload.fingerprint_fields
     scope = _local_scope(fields.get(LOCAL_PREPARATION_SCOPE))
     preparation = request.preparation_input
     if preparation is not None and scope != preparation.local_scope:
@@ -2800,49 +2869,39 @@ def _validate_remote_semantic_data(
     from loom.fingerprints import hash_mapping
     from .preparation import LOCAL_PREPARATION_SCOPE, _local_scope
 
-    payload = cast(Mapping[str, PlainData], fingerprint["payload"])
-    fields = cast(Mapping[str, PlainData], payload["fingerprint_fields"])
+    decoded = StageFingerprintRecord.from_dict(fingerprint).payload
+    fields = dict(decoded.fingerprint_fields)
     submitted = assignment_binding(fingerprint)
-    if submitted is not None:
-        # Only this typed container-internal field may carry an absolute Python
-        # path. Its decoder admits no host paths, mounts or executable authority.
-        payload = dict(payload)
-        payload["fingerprint_fields"] = {
-            **fields,
-            SUBMITTED_EXECUTION_SCOPE: {
-                "binding_digest": hash_mapping(fields[SUBMITTED_EXECUTION_SCOPE]),
-            },
-        }
-        fingerprint = {**fingerprint, "payload": payload}
     preparation = _preparation_input_from_fingerprint(fingerprint)
+    shared = assignment_scope(fingerprint)
+    # Path guards inspect decoded configuration, including mapping keys.
+    # This projection is inspection-only; retained bytes and identity stay encoded.
+    payload = {
+        **cast(Mapping[str, PlainData], fingerprint["payload"]),
+        "factory_init": thaw_plain_data(decoded.factory_init),
+        "stage_config": thaw_plain_data(decoded.stage_config),
+        "fingerprint_fields": fields,
+    }
+    fingerprint = {**fingerprint, "payload": payload}
+    if submitted is not None:
+        fields[SUBMITTED_EXECUTION_SCOPE] = {
+            "binding_digest": hash_mapping(fields[SUBMITTED_EXECUTION_SCOPE]),
+        }
     if (_local_scope(fields.get(LOCAL_PREPARATION_SCOPE)) is not None
         or (preparation is not None and preparation.local_scope is not None)):
         raise QueueServiceError("remote transport cannot export unresolved local preparation bindings")
     if preparation is not None:
-        # The fixed stage's only location-bearing data is a validated finite
-        # preparation reference. Every other semantic field keeps the same guard.
-        payload = cast(Mapping[str, PlainData], fingerprint["payload"])
-        fingerprint = {
-            **fingerprint,
-            "payload": {
-                **payload,
-                "stage_config": {
-                    "preparation_input_digest": hash_mapping(preparation.to_dict())
-                },
-            },
+        # The fixed stage's location-bearing data is a validated finite reference.
+        payload["stage_config"] = {
+            "preparation_input_digest": hash_mapping(preparation.to_dict())
         }
-    shared = assignment_scope(fingerprint) if preparation is None else preparation.shared_scope
     if shared is not None:
-        payload = dict(cast(Mapping[str, PlainData], fingerprint["payload"]))
-        fields = dict(cast(Mapping[str, PlainData], payload["fingerprint_fields"]))
         fields.pop(SHARED_EXECUTION_SCOPE, None)
         if preparation is None:
             validate_workload(payload["stage_config"], shared)
             validate_workload(payload["factory_init"], shared)
             payload["stage_config"] = {}
             payload["factory_init"] = {}
-        payload["fingerprint_fields"] = fields
-        fingerprint = {**fingerprint, "payload": payload}
     def validate_references(value: object) -> None:
         if isinstance(value, Mapping):
             if SHARED_PUBLICATION in value:
@@ -2941,7 +3000,8 @@ def _preparation_input_from_fingerprint(
         or payload.get("factory_target") != PREPARATION_STAGE_TARGET
     ):
         return None
-    return PreparationChildInput.from_dict(payload.get("stage_config"))
+    decoded = StageFingerprintRecord.from_dict(fingerprint).payload
+    return PreparationChildInput.from_dict(decoded.stage_config)
 
 
 def _canonical_json(value: Mapping[str, PlainData]) -> str:

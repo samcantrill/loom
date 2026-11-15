@@ -161,6 +161,74 @@ def test_agent_init_failed_post_init_report_preserves_root(tmp_path: Path, monke
     ) != 0  # No retry silently recreates the failed candidate.
 
 
+@pytest.mark.parametrize("retained_resident", [False, True])
+def test_slurm_only_preflight_distinguishes_absent_and_retained_supervisor(
+    tmp_path: Path, retained_resident: bool,
+) -> None:
+    config = _outbound_agent_service_config(tmp_path)
+    if retained_resident:
+        assert main(
+            ["queue", "agent-init", str(config), "--format", "json"],
+            stdout=io.StringIO(), stderr=io.StringIO(),
+        ) == 0
+        assert (tmp_path / "remote-agent/supervisor").is_dir()
+    payload = json.loads(config.read_text())
+    payload["resident_profiles"] = []
+    payload["registration"]["capabilities"] = ["slurm-agent-jobs-v1"]
+    payload["slurm_profiles"] = [{
+        "profile_id": "batch",
+        "partition": "cpu",
+        "max_outstanding": 2,
+        "runner": {"_target_": "loom.pipeline.executors.slurm.FakeSlurmCommandRunner"},
+        "command_adapter_fingerprint": "fake-slurm-v1",
+        "bootstrap_principal_id": "batch-principal",
+        "credential_reference": "batch-credential",
+        "coordinator_endpoint": "https://localhost:8443",
+        "project_fingerprint": "project-1",
+        "environment_fingerprint": "environment-1",
+        "executor_fingerprint": "executor-1",
+        "job_private_file_provider": {
+            "_target_": "loom.pipeline.executors.slurm.trusted_user.SlurmUserPrivateFileProvider",
+            "root": str(tmp_path / "credentials"),
+            "descriptor": "trusted-test-v1",
+        },
+    }]
+    config.write_text(json.dumps(payload))
+    stdout, stderr = io.StringIO(), io.StringIO()
+    if retained_resident:
+        assert main(
+            ["queue", "agent-check", str(config), "--format", "json"],
+            stdout=stdout, stderr=stderr,
+        ) == 3
+        report = json.loads(stdout.getvalue())
+        binding = next(
+            check for check in report["result"]["checks"]
+            if check["check_id"] == "execution.retained_binding"
+        )
+        assert binding["status"] == "FAIL"
+        return
+    result = main(
+        ["queue", "agent-init", str(config), "--check-report", "--format", "json"],
+        stdout=stdout, stderr=stderr,
+    )
+    assert result == 0, (stdout.getvalue(), stderr.getvalue())
+    report = json.loads(stdout.getvalue())
+    assert report["ok"] is True
+    assert report["result"]["check_report"]["status"] != "FAIL"
+    root = tmp_path / "remote-agent"
+    assert (root / "slurm.sqlite").is_file()
+    assert not (root / "supervisor").exists()
+    retained_binding = (root / "role-binding.json").read_bytes()
+    stdout, stderr = io.StringIO(), io.StringIO()
+    assert main(
+        ["queue", "agent-check", str(config), "--format", "json"],
+        stdout=stdout, stderr=stderr,
+    ) == 0, (stdout.getvalue(), stderr.getvalue())
+    assert json.loads(stdout.getvalue())["ok"] is True
+    assert (root / "role-binding.json").read_bytes() == retained_binding
+    assert not (root / "supervisor").exists()
+
+
 def test_queue_daemon_profile_flags_are_a_complete_hard_cut(tmp_path: Path) -> None:
     result = main(
         [

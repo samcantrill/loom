@@ -137,7 +137,7 @@ def test_direct_resume_flags_changed_policy_in_current_format(tmp_path: Path) ->
         eligible_to_run=True,
     )
 
-    assert prior.schema_version == current.schema_version == 2
+    assert prior.schema_version == current.schema_version == 3
     assert result.base_action == PlanAction.STALE
     assert result.final_action == PlanAction.RUN
     assert result.check.reasons[0].code == PlanReasonCode.FINGERPRINT_POLICY_CHANGED
@@ -156,7 +156,7 @@ def test_direct_resume_rejects_retired_fingerprint_without_changes(tmp_path: Pat
     run_store.write_stage_fingerprint(run_uri, "build", retired, attempt=1)
     before = {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
 
-    with pytest.raises(ResumeStateError, match="schema_version must be 2"):
+    with pytest.raises(ResumeStateError, match="schema_version must be 3"):
         check_stage_resume(
             stage,
             run_uri=run_uri,

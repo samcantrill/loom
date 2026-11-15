@@ -89,7 +89,8 @@ def test_unchanged_inputs_are_read_and_hashed_without_deep_decoding(tmp_path, mo
         pytest.fail("unchanged validated bytes were decoded again")
 
     monkeypatch.setattr(Path, "read_bytes", read)
-    for owner in (local_daemon_execution, local_daemon_runtime, local_runs):
+    monkeypatch.setattr(local_daemon_execution, "read_configuration_json", unexpected_decode)
+    for owner in (local_daemon_runtime, local_runs):
         monkeypatch.setattr(owner, "json_loads", unexpected_decode)
     assert load_managed_local_intent(config, uri, cache=cache) is first
     assert set(reads) == {

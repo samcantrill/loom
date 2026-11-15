@@ -8,6 +8,14 @@ or session selector from the HTTP path as transport identity.
 from __future__ import annotations
 
 from .errors import _AcceptedTimeError
+from ._slurm_admission import submit_interval
+from ._slurm_observation import SlurmObservationPolicy, parse_slurm_observation_policy
+
+from loom._sqlite_inspection import inspect_sqlite_database
+
+from loom._sqlite_policy import SQLitePolicy, connect_existing, initialize_database
+from ._storage_policy import StoragePolicy
+from loom.pipeline.stores.atomic import _fsync_path_strict
 
 from . import _agent_session_protocol as _session_protocol
 from . import _agent_assignment as _assignment_progress
@@ -24,6 +32,7 @@ from ._agent_session_codec import (
     _decode as _decode,
     _decode_run_inspection_response as _decode_run_inspection_response,
     _MAX_BODY_BYTES,
+    _MAX_SLURM_REGISTRATION_BYTES,
     _MAX_QUERY_RESPONSE_BYTES,
 )
 from ._agent_session_journal import (
@@ -254,7 +263,30 @@ class AgentTlsClientConfig:
     external_supervisor: bool = False
     container_policies: tuple[SubmittedContainerPolicy, ...] = ()
 
+    storage: StoragePolicy | None = None
+    slurm_submit_interval_seconds: float | None = None
+    slurm_observation_policy: SlurmObservationPolicy | None = None
+
+    @property
+    def sqlite_policy(self) -> SQLitePolicy | None:
+        return None if self.storage is None else self.storage.sqlite
+
+    @property
+    def durable_files(self) -> str:
+        return "best_effort" if self.storage is None else self.storage.durable_files
+
+    def connect_database(self, path: Path, *, initialize=False):
+        if self.storage is None:
+            return sqlite3.connect(path)
+        self.storage.require_owner()
+        connect = initialize_database if initialize else connect_existing
+        return connect(path, policy=self.storage.sqlite, isolation_level="")
+
     def __post_init__(self) -> None:
+        if self.storage is not None and not isinstance(self.storage, StoragePolicy):
+            raise QueueServiceError("storage policy is invalid")
+        object.__setattr__(self, "slurm_submit_interval_seconds", submit_interval(self.slurm_submit_interval_seconds))
+        object.__setattr__(self, "slurm_observation_policy", parse_slurm_observation_policy(self.slurm_observation_policy))
         if type(self.external_supervisor) is not bool:
             raise QueueServiceError("external_supervisor must be a boolean")
         if (
@@ -277,6 +309,9 @@ class AgentTlsClientConfig:
         if slurm_profiles and self.agent_root is None:
             raise QueueServiceError("SLURM submission requires an agent root")
         object.__setattr__(self, "slurm_profiles", slurm_profiles)
+        if self.slurm_observation_policy is not None:
+            for profile in slurm_profiles:
+                self.slurm_observation_policy.require_profile(profile)
         parsed = urlsplit(self.url)
         try:
             port = parsed.port
@@ -851,7 +886,12 @@ class LocalDaemonAgentHttpClient:
         prepare_role_reload: (
             Callable[[AgentTlsClientConfig], Callable[[], None]] | None
         ) = None,
+        start_held: bool = False,
     ) -> None:
+        if start_held and config.agent_root is None:
+            raise QueueServiceError("startup hold requires a retained agent root")
+        if config.storage is not None:
+            config.storage.require_owner()
         self._config = config
         self._slurm_cursor: str | None = None
         self._resource_maintenance_enabled = False
@@ -867,7 +907,12 @@ class LocalDaemonAgentHttpClient:
         self._mutation_gate = _Gate()
         self._suspend_requested: Callable[[], bool] | None = None
         self._slurm_agent = (
-            AgentSlurmJobs(Path(config.agent_root), config.slurm_profiles)
+            AgentSlurmJobs(
+                Path(config.agent_root), config.slurm_profiles,
+                sqlite_policy=config.sqlite_policy, durable_files=config.durable_files,
+                submit_interval_seconds=config.slurm_submit_interval_seconds,
+                observation_policy=config.slurm_observation_policy,
+            )
             if config.agent_root is not None and config.slurm_profiles
             else None
         )
@@ -886,7 +931,7 @@ class LocalDaemonAgentHttpClient:
                 expected_active_configuration_fingerprint=_agent_active_fingerprint(
                     config
                 ),
-            )
+             sqlite_policy=config.sqlite_policy, start_held=start_held)
             if config.agent_root
             else None
         )
@@ -896,7 +941,7 @@ class LocalDaemonAgentHttpClient:
                 SQLiteAgentJournal(
                     Path(config.agent_root) / "journal.sqlite",
                     _allow_initialize=False,
-                )
+                 sqlite_policy=config.sqlite_policy)
                 if config.agent_root is not None
                 else None
             )
@@ -990,11 +1035,11 @@ class LocalDaemonAgentHttpClient:
             config.agent_root,
             expected_configuration_fingerprint=config.deployment_configuration_fingerprint,
             expected_active_configuration_fingerprint=_agent_active_fingerprint(config),
-        )
+         sqlite_policy=config.sqlite_policy)
         try:
             execution = SQLiteAgentJournal(
                 Path(config.agent_root) / "journal.sqlite", _allow_initialize=False
-            )
+            , sqlite_policy=config.sqlite_policy)
             execution._open_existing()
             execution.retained_claim_commands()
             root = Path(config.agent_root).resolve() / "supervisor"
@@ -1012,7 +1057,7 @@ class LocalDaemonAgentHttpClient:
                     profiles=tuple(
                         item.launch_profile for item in config.resident_profiles
                     ),
-                    container_policies=config.container_policies,
+                    container_policies=config.container_policies, storage=config.storage,
                 )
                 return supervisor.recover_reboot(operation_id)
         except (AgentProcessSupervisorError, ManagedLocalError, sqlite3.Error) as exc:
@@ -1034,6 +1079,8 @@ class LocalDaemonAgentHttpClient:
             raise QueueServiceError(
                 "remote agent initialization requires resident profiles"
             )
+        if config.storage is not None:
+            config.storage.require_owner()
         target = Path(config.agent_root)
         if target.exists():
             raise QueueServiceError("remote agent requires a fresh root")
@@ -1041,10 +1088,10 @@ class LocalDaemonAgentHttpClient:
         staging = target.parent / f".{target.name}.staging-{secrets.token_hex(8)}"
         journal: _RemoteAgentJournal | None = None
         try:
-            LocalDaemon.initialize_agent_root(staging)
+            LocalDaemon.initialize_agent_root(staging, storage=config.storage)
             if config.slurm_profiles:
-                AgentSlurmJobs.initialize(staging)
-            with sqlite3.connect(staging / "control.sqlite") as conn:
+                AgentSlurmJobs.initialize(staging, sqlite_policy=config.sqlite_policy)
+            with config.connect_database(staging / "control.sqlite") as conn:
                 stable_row = conn.execute(
                     "SELECT value FROM root_metadata WHERE key = 'stable_id'"
                 ).fetchone()
@@ -1065,9 +1112,10 @@ class LocalDaemonAgentHttpClient:
                     separators=(",", ":"),
                     allow_nan=False,
                 ).encode("utf-8"),
+                durability=config.durable_files,
             )
             (staging / _AGENT_BINDING_FILE).chmod(0o600)
-            with sqlite3.connect(staging / "control.sqlite") as conn:
+            with config.connect_database(staging / "control.sqlite") as conn:
                 conn.execute(
                     "INSERT INTO root_metadata(key, value) VALUES (?, ?)",
                     ("active_configuration_revision", "1"),
@@ -1083,6 +1131,17 @@ class LocalDaemonAgentHttpClient:
                     "INSERT INTO root_metadata(key, value) VALUES "
                     "('availability_state', 'active')"
                 )
+                # Inspection must distinguish an intentionally absent supervisor
+                # from missing required state without instantiating profiles.
+                conn.execute(
+                    "INSERT INTO root_metadata(key, value) VALUES "
+                    "('execution_store_requirements', ?)",
+                    (json.dumps({
+                        "version": 1,
+                        "supervisor": bool(config.resident_profiles or config.container_policies),
+                        "slurm": bool(config.slurm_profiles),
+                    }, sort_keys=True, separators=(",", ":")),),
+                )
                 _record_agent_declaration_binding(conn, config, 1)
                 conn.commit()
             journal = _RemoteAgentJournal(
@@ -1093,12 +1152,12 @@ class LocalDaemonAgentHttpClient:
                 expected_active_configuration_fingerprint=_agent_active_fingerprint(
                     config
                 ),
-            )
+             sqlite_policy=config.sqlite_policy)
             if config.resident_profiles or config.container_policies:
                 profiles = tuple(
                     item.launch_profile for item in config.resident_profiles
                 )
-                configuration = SupervisorLaunchConfiguration(journal.root_id, profiles, config.container_policies)
+                configuration = SupervisorLaunchConfiguration(journal.root_id, profiles, config.container_policies, storage=config.storage)
                 AgentProcessSupervisorService.initialize_process_free(
                     staging, configuration=configuration, final_agent_root=target
                 )
@@ -1107,6 +1166,8 @@ class LocalDaemonAgentHttpClient:
             if target.exists():
                 raise QueueServiceError("remote agent requires a fresh root")
             staging.rename(target)
+            if config.durable_files == "strict":
+                _fsync_path_strict(target.parent)
         except AgentProcessSupervisorError as exc:
             raise QueueServiceError(str(exc)) from exc
         finally:
@@ -1140,7 +1201,7 @@ class LocalDaemonAgentHttpClient:
                     root_id,
                     tuple(item.launch_profile for item in config.resident_profiles),
                     config.container_policies,
-                ),
+                 storage=config.storage),
             ), False
         except AgentProcessSupervisorError as exc:
             if (not config.external_supervisor
@@ -1154,7 +1215,7 @@ class LocalDaemonAgentHttpClient:
                                 item.launch_profile for item in config.resident_profiles
                             ),
                             config.container_policies,
-                        ),
+                         storage=config.storage),
                     ), True
                 except AgentProcessSupervisorError as start_exc:
                     raise QueueServiceError(str(start_exc)) from start_exc
@@ -1410,6 +1471,8 @@ class LocalDaemonAgentHttpClient:
                 journal.complete_reload(control, plan.replacement, effect)
                 self._config = plan.replacement
                 if self._slurm_agent is not None:
+                    self._slurm_agent.submit_interval_seconds = plan.replacement.slurm_submit_interval_seconds
+                    self._slurm_agent.observation_policy = plan.replacement.slurm_observation_policy
                     self._slurm_agent.profiles = {
                         (item.profile_id, item.configuration_fingerprint): item
                         for item in plan.replacement.slurm_profiles
@@ -1424,7 +1487,16 @@ class LocalDaemonAgentHttpClient:
                 config_revision = session.config_revision
                 inventory_revision = session.inventory_revision
             if control.kind.value == "resume":
-                if self._has_retained_agent_work():
+                if self._service_progress:
+                    retained = self._slurm_recovery_pending() or _has_retained_agent_work(
+                        self._journal, self._execution_journal, None,
+                    )
+                else:
+                    retained = _has_retained_agent_work(
+                        self._journal, self._execution_journal, self._slurm_agent,
+                        allow_unsubmitted_slurm=True,
+                    )
+                if retained:
                     return self._unchanged_control_effect(
                         control, session, "retained_work"
                     )
@@ -1580,6 +1652,14 @@ class LocalDaemonAgentHttpClient:
             self._journal, self._execution_journal, self._slurm_agent
         )
 
+    def _slurm_recovery_pending(self) -> bool:
+        if self._slurm_agent is None or not self._slurm_agent.has_retained_work():
+            return False
+        session = self.active_session()
+        if session is None or self._epoch_reconciliation_pending:
+            return True
+        return self._slurm_agent.has_unreconciled_work((session.session_id, session.coordinator_epoch))
+
     def _observe_supervisor_ownership(self, receipt: SupervisorReceipt) -> None:
         assignment_id = receipt.launch.assignment_id
         reason = receipt.launch_reason
@@ -1656,10 +1736,12 @@ class LocalDaemonAgentHttpClient:
         self._restart_with_retained_work = True
         if self._drained or self._epoch_reconciliation_pending:
             return False
-        if self._slurm_agent is not None and self._slurm_agent.has_retained_work():
+        if self._slurm_recovery_pending():
             return False
         if not (self._config.resident_profiles or self._config.container_policies):
-            self._restart_with_retained_work = self._has_retained_agent_work()
+            self._restart_with_retained_work = _has_retained_agent_work(
+                self._journal, self._execution_journal, None,
+            )
             return not self._restart_with_retained_work
         execution = self._execution_journal
         supervisor = self._supervisor
@@ -1680,7 +1762,7 @@ class LocalDaemonAgentHttpClient:
         ):
             return False
         # A detached launch is not omitted just because its delivery disappeared.
-        with sqlite3.connect(supervisor._root / "supervisor.sqlite") as conn:
+        with inspect_sqlite_database(supervisor._root / "supervisor.sqlite") as conn:
             launches = tuple(conn.execute("SELECT launch_json, state FROM launches"))
         for encoded, state in launches:
             launch = _launch_from_value(json.loads(encoded))
@@ -1703,7 +1785,7 @@ class LocalDaemonAgentHttpClient:
         for session_id, assignment_id in references:
             if session_id != session.session_id:
                 return False
-            workspace = _ResidentAssignmentWorkspace(root, assignment_id)
+            workspace = self._assignment_workspace(assignment_id)
             if not workspace.has_request():
                 return False
             request = workspace.request()
@@ -1807,9 +1889,7 @@ class LocalDaemonAgentHttpClient:
             return True
         all_contained = True
         for _, assignment_id in journal.unresolved_assignment_references():
-            workspace = _ResidentAssignmentWorkspace(
-                cast(Path, self._config.agent_root), assignment_id
-            )
+            workspace = self._assignment_workspace(assignment_id)
             encoded_launch = workspace.supervisor_launch_json()
             if encoded_launch is None:
                 continue
@@ -1843,6 +1923,7 @@ class LocalDaemonAgentHttpClient:
                     separators=(",", ":"),
                     allow_nan=False,
                 ).encode(),
+                durability=self._config.durable_files,
             )
         self._cancelled_assignments.add(workspace.assignment_id)
 
@@ -1962,7 +2043,7 @@ class LocalDaemonAgentHttpClient:
             return control
         received = journal.next_received_assignment_control()
         if received is None:
-            if self._service_progress:
+            if self._service_progress or released_only:
                 return None
             result = (yield from _steps(self._call, "assignment_control", {"session_id": session_id}))
             raw = result.get("control")
@@ -2006,7 +2087,7 @@ class LocalDaemonAgentHttpClient:
                 "evidence": None if evidence is None else dict(evidence),
             },
         ))
-        workspace = _ResidentAssignmentWorkspace(cast(Path, self._config.agent_root), control.assignment_id)
+        workspace = self._assignment_workspace(control.assignment_id)
         if (code == "never_started" and not workspace.has_request()
             and self._execution_journal is not None
             and self._execution_journal.find_state(control.assignment_id) is None):
@@ -2024,7 +2105,7 @@ class LocalDaemonAgentHttpClient:
             journal = self._execution_journal
             if journal is None:
                 return "unknown", None
-            workspace = _ResidentAssignmentWorkspace(cast(Path, self._config.agent_root), control.assignment_id)
+            workspace = self._assignment_workspace(control.assignment_id)
             raw = self._require_journal().delivery_request(control.session_id, control.assignment_id)
             from ._shared_assignment import reference
             if (not workspace.has_request() and reference(raw) is not None
@@ -2037,9 +2118,7 @@ class LocalDaemonAgentHttpClient:
                 return "unknown", None
             if control.fence != fence:
                 return "unknown", None
-            workspace = _ResidentAssignmentWorkspace(
-                cast(Path, self._config.agent_root), control.assignment_id
-            )
+            workspace = self._assignment_workspace(control.assignment_id)
             encoded_launch = workspace.supervisor_launch_json()
             if encoded_launch is None:
                 if state in {
@@ -2295,9 +2374,7 @@ class LocalDaemonAgentHttpClient:
         ))
         if readiness.get("ready") is not True:
             raise QueueConflictError("contained assignment authority close is pending")
-        workspace = _ResidentAssignmentWorkspace(
-            cast(Path, self._config.agent_root), assignment_id
-        )
+        workspace = self._assignment_workspace(assignment_id)
         request = workspace.request()
         request.validate_remote_transport()
         profile = self._profile_for_descriptor(request.profile)
@@ -2375,22 +2452,25 @@ class LocalDaemonAgentHttpClient:
 
     @_cooperative
     def drive_slurm_jobs(self) -> Generator[_Progress, Any, None]:
+        from ._agent_slurm_progress import drive_operation
+
         if self._slurm_agent is None:
             return
         session = self.active_session()
         if session is None:
             return
+        self._slurm_agent.begin_reconciliation((session.session_id, session.coordinator_epoch))
         binding = {
             "session_id": session.session_id,
             "coordinator_epoch": session.coordinator_epoch,
             "cursor": self._slurm_cursor,
         }
-        self._slurm_agent.replay_pending(
-            lambda evidence: self._call(
-                "slurm_work", {**binding, "evidence": dict(evidence)}
-            )
-        )
-        response = (yield from _steps(self._call, "slurm_work", {**binding, "evidence": None}))
+        yield from drive_operation(self, self._slurm_agent.replay_pending, binding)
+        from ._slurm_result_transport import SlurmRequestUncertain
+        try:
+            response = (yield from _steps(self._call, "slurm_work", {**binding, "evidence": None}))
+        except SlurmRequestUncertain:
+            return
         cursor = response.get("next_cursor")
         if cursor is not None and not isinstance(cursor, str):
             raise QueueServiceError("SLURM task cursor is invalid")
@@ -2401,11 +2481,19 @@ class LocalDaemonAgentHttpClient:
         for task in tasks:
             if not isinstance(task, Mapping):
                 raise QueueServiceError("SLURM task is invalid")
-            self._slurm_agent.step(
-                task,
-                lambda evidence: self._call(
-                    "slurm_work", {**binding, "evidence": dict(evidence)}
-                ),
+        if (
+            self._slurm_agent.observation_policy is not None
+            and self._slurm_agent.observation_policy.max_jobs_per_query is not None
+        ):
+            yield from drive_operation(
+                self, self._slurm_agent.step_cycle, binding, tasks,
+                allow_submission=not self._drained,
+            )
+            return
+        for task in tasks:
+            yield from drive_operation(
+                self, self._slurm_agent.step, binding, task,
+                allow_submission=not self._drained,
             )
 
     @_cooperative
@@ -2519,6 +2607,20 @@ class LocalDaemonAgentHttpClient:
                     if encoded is not None and self._supervisor is not None:
                         yield from _external("control", self._supervisor.request_stop, _launch_from_value(json.loads(encoded)))
 
+    def _assignment_workspace(self, assignment_id: str) -> _ResidentAssignmentWorkspace:
+        policy = self._config.sqlite_policy
+        journal = self._execution_journal
+        # Only the pre-request delivery path can initialize fresh state. Once
+        # execution has retained a request, a lost workspace is a recovery error.
+        return _ResidentAssignmentWorkspace(
+            cast(Path, self._config.agent_root), assignment_id,
+            sqlite_policy=policy,
+            durable_files=self._config.durable_files,
+            _allow_initialize=None if policy is None else (
+                journal is not None and journal.find_state(assignment_id) is None
+            ),
+        )
+
     @_cooperative
     def _resolve_delivery(self, session_id: str, raw: object) -> Generator[_Progress, Any, _ResidentAssignmentBundle]:
         from ._shared_assignment import matches_reference, reference, resolve, verify_bundle
@@ -2533,7 +2635,7 @@ class LocalDaemonAgentHttpClient:
                 if matches_reference(policy.capability, ref)), None)
         if profile is None:
             raise QueueConflictError("shared assignment reference has no exact protected policy")
-        workspace = _ResidentAssignmentWorkspace(cast(Path, self._config.agent_root), str(ref["assignment_id"]))
+        workspace = self._assignment_workspace(str(ref["assignment_id"]))
         if workspace.has_request():
             request = workspace.request()
             verify_bundle(ref, request, session_id=session_id)
@@ -3006,6 +3108,9 @@ class LocalDaemonAgentHttpClient:
                 )
                 break
             except _IndeterminateAgentProtocolError as error:
+                if operation == "slurm_work":
+                    from ._slurm_result_transport import SlurmRequestUncertain
+                    raise SlurmRequestUncertain(str(error)) from error
                 if not self._service_progress:
                     raise
                 connection = None
@@ -3034,10 +3139,15 @@ def _has_retained_agent_work(
     journal: _RemoteAgentJournal | None,
     execution: SQLiteAgentJournal | None,
     slurm: AgentSlurmJobs | None,
+    *,
+    allow_unsubmitted_slurm: bool = False,
 ) -> bool:
     """One settlement predicate for execution and control-only native owners."""
     return (
-        bool(slurm is not None and slurm.has_retained_work())
+        bool(slurm is not None and (
+            slurm.has_started_or_unacknowledged_work()
+            if allow_unsubmitted_slurm else slurm.has_retained_work()
+        ))
         or bool(execution is not None and execution.retained_claim_commands())
         or bool(journal is not None and journal.has_unresolved_assignment_references())
     )
@@ -3146,6 +3256,8 @@ def _exchange_agent_request(
 def _read_agent_reply(
     connection: http.client.HTTPSConnection, operation: str, body: bytes, role: str
 ) -> Mapping[str, PlainData]:
+    slurm_registration = role == "slurm_bootstrap" and operation == "register"
+    maximum = _MAX_SLURM_REGISTRATION_BYTES if slurm_registration else _MAX_BODY_BYTES
     try:
         connection.request(
             "POST",
@@ -3154,17 +3266,21 @@ def _read_agent_reply(
             headers={"Content-Type": "application/json"},
         )
         response = connection.getresponse()
-        raw = response.read(_MAX_BODY_BYTES + 1)
+        raw = response.read(maximum + 1)
     except (OSError, ssl.SSLError, http.client.HTTPException) as exc:
         raise _IndeterminateAgentProtocolError(
             "agent protocol outcome is indeterminate"
         ) from exc
-    if len(raw) > _MAX_BODY_BYTES:
+    if len(raw) > maximum:
         raise _IndeterminateAgentProtocolError(
             "agent protocol outcome is indeterminate"
         )
     try:
-        payload = _decode(raw)
+        payload = (
+            _decode(raw, slurm_registration=True)
+            if slurm_registration
+            else _decode(raw)
+        )
     except QueueError as exc:
         raise _IndeterminateAgentProtocolError(
             "agent protocol outcome is indeterminate"
@@ -3216,8 +3332,10 @@ def _read_agent_reply(
 
 # The same classification owns client lane isolation and server admission.
 # These operations can read/hash artifacts or call external execution authority.
+# Slurm evidence has separate bounded admission and pending-effect replies; it
+# must not wait for the artifact-transfer lane to become free.
 _AGENT_BULK_OPERATIONS = frozenset({
-    "slurm_work", "authorize", "input", "accept", "start_permit", "started", "event",
+    "authorize", "input", "accept", "start_permit", "started", "event",
     "output_manifest", "output", "result", "release", "recovery_release_ready",
 })
 _CLIENT_SHORT_OPERATIONS = frozenset({
@@ -3225,6 +3343,8 @@ _CLIENT_SHORT_OPERATIONS = frozenset({
     "admissions", "admission_for_queue_item", "agents", "service_lifetime",
     "startup_attach", "startup_release",
 })
+class _SlurmWorkCapacityError(QueueServiceError):
+    """Request was not dispatched; retry its exact retained identity later."""
 
 
 class _MutualTlsHttpServer(ThreadingHTTPServer):
@@ -3246,12 +3366,18 @@ class _MutualTlsHttpServer(ThreadingHTTPServer):
         self.client_wait_slots = BoundedSemaphore(6)
         self.agent_bulk_slots = BoundedSemaphore(4)
         self.agent_work_wait_slots = BoundedSemaphore(32)
+        self.agent_slurm_work_slots = BoundedSemaphore(8)
         self.agent_control_wait_slots = BoundedSemaphore(32)
         super().__init__(address, _Handler)
 
     def acquire_agent_wait(self, role: str, operation: str) -> BoundedSemaphore | None:
-        if role != "agent" or operation not in {"poll", "control_wait"}:
+        if role != "agent" or operation not in {"poll", "control_wait", "slurm_work"}:
             return None
+        if operation == "slurm_work":
+            slot = self.agent_slurm_work_slots
+            if not slot.acquire(blocking=False):
+                raise _SlurmWorkCapacityError("SLURM request capacity is exhausted")
+            return slot
         slot = self.agent_work_wait_slots if operation == "poll" else self.agent_control_wait_slots
         if not slot.acquire(blocking=False):
             raise QueueServiceError("agent wait capacity is exhausted")
@@ -3469,6 +3595,8 @@ class _Handler(BaseHTTPRequestHandler):
                 self._reply_query_result(result)
             else:
                 self._reply(200, {"ok": True, "result": result})
+        except _SlurmWorkCapacityError:
+            self._reply(503, {"ok": False, "error": "slurm_work_capacity"})
         except _RunInspectionHttpError as exc:
             self._reply_query_failure(exc.code, exc.status)
         except AgentPollActiveError:
@@ -4267,7 +4395,7 @@ def _read_remote_agent_root_id(root: Path) -> str:
     """Read only the stable identity after protected-root validation."""
     path = Path(root).resolve() / "control.sqlite"
     try:
-        with sqlite3.connect(path) as conn:
+        with inspect_sqlite_database(path) as conn:
             row = conn.execute(
                 "SELECT value FROM root_metadata WHERE key = 'stable_id'"
             ).fetchone()

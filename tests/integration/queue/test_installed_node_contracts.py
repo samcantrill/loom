@@ -23,7 +23,87 @@ from tests.integration.queue.test_reconciled_runs import _reconciled_request
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
 
-def _text_service(tmp_path, *, delay=0, fail_once=False, opt_out=False, qualify_actions=False):
+def test_worker_projection_reuses_validation_but_rechecks_live_evidence(tmp_path, monkeypatch):
+    from dataclasses import replace
+    from loom.pipeline import _project_contracts as contracts
+    from loom.pipeline._project_contract_cache import WorkerContractCache
+    from loom.serialization.configuration import configuration_json, read_configuration_json
+
+    service = _text_service(tmp_path)
+    LocalDaemon.initialize_deployment(service.daemon)
+    daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
+    daemon.start()
+    try:
+        first = _start(daemon, "projection-cache")
+        assert daemon._wait(first["queue_item_id"], timeout_seconds=40).state.value == "SUCCEEDED"
+    finally:
+        daemon.stop()
+    uri = first["prepared_run"]["run_uri"]
+    store = LocalRunStore(service.daemon.run_store_root)
+    intent = load_managed_local_intent(service.daemon, uri)
+    original = contracts.load_contract_report
+    calls = []
+
+    def load(*args, **kwargs):
+        calls.append(args[1])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(contracts, "_worker_contract_cache", WorkerContractCache())
+    monkeypatch.setattr(contracts, "load_contract_report", load)
+
+    def metadata(name="author"):
+        return contracts.worker_contract_metadata(
+            store, uri, intent.pipeline.get_stage(name), config=store, local_paths=store,
+        )
+
+    expected = metadata()
+    assert metadata("reader")[contracts.CONTRACT] == store.read_stage_worker_request(uri, "reader", attempt=1)["metadata"][contracts.CONTRACT]
+    assert len(calls) == 1, "different stages must share checked report projection"
+    changed = metadata()
+    changed[contracts.CONTRACT]["payload"] = "caller mutation"
+    assert metadata() == expected
+    changed_stage = replace(intent.pipeline.get_stage("author"), stage_config={"delay": 999})
+    with pytest.raises(ValueError, match="node binding"):
+        contracts.worker_contract_metadata(store, uri, changed_stage, config=store, local_paths=store)
+    assert len(calls) == 1, "stage binding must be checked even on a projection hit"
+
+    ref = ArtifactRef.from_dict(store.read_prepared_run(uri)["metadata"][contracts.CONTRACTS]["data"]["report_ref"])
+    primary = LocalArtifactStore(store.local_artifact_root(uri)).local_path(ref)
+    primary_bytes = primary.read_bytes()
+    companion = primary.parent / json.loads(primary_bytes)["composition"]["evidence_ref"]["uri"]
+    companion_bytes = companion.read_bytes()
+    for path, content in ((primary, primary_bytes), (companion, companion_bytes)):
+        path.write_bytes(content + b" ")
+        with pytest.raises(QueueConflictError, match="checksum|identity"):
+            metadata()
+        path.write_bytes(content)
+        assert metadata() == expected
+    companion.unlink()
+    with pytest.raises(QueueConflictError, match="regular file"):
+        metadata()
+    companion.write_bytes(companion_bytes)
+
+    resolved = store.read_config_snapshot(uri, "resolved")
+    configuration = read_configuration_json(resolved)
+    # Reordering the same authored mapping is a semantic change even though
+    # ordinary dict equality would accept it.
+    reordered = dict(reversed(list(configuration.items())))
+    assert reordered == configuration
+    store.write_config_snapshot(uri, "resolved", configuration_json(reordered))
+    with pytest.raises(ValueError, match="captured declaration"):
+        metadata()
+    store.write_config_snapshot(uri, "resolved", resolved)
+    prepared = store.read_prepared_run(uri)
+    wrong = deepcopy(prepared)
+    wrong["metadata"][contracts.CONTRACTS]["data"]["namespace"] = "other-project"
+    store.write_prepared_run(uri, wrong)
+    with pytest.raises(ValueError, match="namespace"):
+        metadata()
+    store.write_prepared_run(uri, prepared)
+    assert metadata() == expected
+
+
+def _text_service(tmp_path, *, delay=0, fail_once=False, opt_out=False, qualify_actions=False, wait_for_release=False):
     _service(tmp_path, local=True)
     installation = tmp_path / "installed-project"
     installation.mkdir()
@@ -62,6 +142,8 @@ def _text_service(tmp_path, *, delay=0, fail_once=False, opt_out=False, qualify_
             "outputs": {"count": {"artifact_type": "json", "codec_key": "json.v1"}},
         },
     ]
+    if wait_for_release:
+        config["pipeline"]["stages"][0]["config"]["wait_for_release"] = True
     config_path.write_text(json.dumps(config))
     return load_coordinator_service_config(coordinator_path)
 
@@ -227,15 +309,17 @@ def test_v3_failed_run_retry_uses_original_run_and_new_attempt(tmp_path, qualify
 def test_v3_observes_already_owned_running_target(tmp_path):
     import time
 
-    service = _text_service(tmp_path, delay=15)
+    service = _text_service(tmp_path, wait_for_release=True)
     LocalDaemon.initialize_deployment(service.daemon)
     daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
     daemon.start()
+    release = None
     try:
         first = _start(daemon, "first")
         uri = first["prepared_run"]["run_uri"]
         store = cast(Any, LocalRunStore(service.daemon.run_store_root))
         marker = store.local_run_dir(uri) / "actions" / "author" / "started"
+        release = marker.with_name("release")
         deadline = time.monotonic() + 30
         while not marker.exists() and time.monotonic() < deadline:
             time.sleep(0.05)
@@ -249,9 +333,12 @@ def test_v3_observes_already_owned_running_target(tmp_path):
             Any, LocalArtifactStore(store.local_artifact_root(uri)).load(reference)
         )
         assert report["candidate"]["authority"]["status"] == "RUNNING"
+        release.touch()
         assert (
             daemon._wait(first["queue_item_id"], timeout_seconds=35).state.value
             == "SUCCEEDED"
         )
     finally:
+        if release is not None:
+            release.touch()
         daemon.stop()

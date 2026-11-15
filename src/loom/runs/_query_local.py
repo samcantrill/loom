@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from functools import cmp_to_key
+from functools import partial
 from pathlib import Path
 from typing import Any
 
-from loom.pipeline.stores import path_to_run_uri
 from loom.pipeline.stores.errors import StoreError
 
 from ._query_acquire import acquire_run, needs_notes
@@ -16,8 +15,6 @@ from .query import (
     QueryRecord,
     RunQuery,
     UNAVAILABLE,
-    compare_keys,
-    timestamp,
 )
 
 
@@ -69,43 +66,27 @@ def search_collection(
         cache[uri] = record
         return record
 
+    from loom.pipeline.stores._run_discovery_index import connection
+    from ._query_sql import ordered_rows
+
     try:
+        with connection(root) as conn:
+            refreshed = conn.execute("SELECT refreshed FROM discovery_metadata").fetchone()[0]
+        if not refreshed:
+            warnings.append({"code": "discovery_refresh_required"})
+        candidates = ordered_rows(
+            partial(connection, root), query, owner,
+            "(SELECT run_uri, created_at, NULL AS submitted_at FROM discovery_runs)",
+            "*", {"run_uri"},
+        )
+    except StoreError:
         candidates = []
-        for path in root.iterdir():
-            if path.name == ".loom_catalog":
-                continue
-            if not path.is_dir() or not (path / "run.json").exists():
-                warnings.append({"code": "partial_run", "path": str(path)})
-                continue
-            candidates.append(path_to_run_uri(path))
-    except OSError:
-        candidates = []
-        warnings.append({"code": "collection_unavailable"})
+        warnings.append({"code": "discovery_index_unavailable" if root.is_dir() else "collection_unavailable"})
     keyed = []
-    for uri in candidates:
-        keys = []
+    for row in candidates:
         for order in query.order_by:
-            value = uri if order.field == "run_uri" else UNAVAILABLE
-            if order.field == "created_at":
-                try:
-                    value = store.read_run_document(uri).get("created_at", UNAVAILABLE)
-                except (OSError, ValueError, LookupError, StoreError):
-                    pass
-            if order.field.endswith("_at") and value is not UNAVAILABLE:
-                try:
-                    timestamp(value)
-                except QueryError:
-                    value = UNAVAILABLE
-            if value is UNAVAILABLE:
-                warnings.append(
-                    {
-                        "code": "sort_fact_unavailable",
-                        "run_uri": uri,
-                        "field": order.field,
-                    }
-                )
-                value = None
-            keys.append(value)
-        keyed.append((tuple(keys), uri))
-    keyed.sort(key=cmp_to_key(lambda a, b: compare_keys(a[0], b[0], query.order_by)))
+            if row[order.field] is None:
+                warnings.append({'code': 'sort_fact_unavailable', 'run_uri': row['run_uri'],
+                                 'field': order.field})
+        keyed.append((tuple(row[order.field] for order in query.order_by), row['run_uri']))
     return search_page(query, owner, keyed, acquire, warnings=warnings)

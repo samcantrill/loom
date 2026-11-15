@@ -21,10 +21,15 @@ def test_resident_main_passes_outer_boundary_containment_owner(
     workspace_root.mkdir(parents=True)
     (workspace_root / "run.grant").write_text("granted", encoding="utf-8")
     captured: dict[str, object] = {}
+    from tests.unit.loom.queue.test_remote_stage_execution import _profile, _request
+
+    fingerprint = _request(_profile(tmp_path)).fingerprint
 
     class FakeWorkspace:
+        durable_files = "strict"
+
         def request(self):
-            return SimpleNamespace(fingerprint={"payload": {"factory_target": "pkg.Stage", "fingerprint_fields": {}}}, preparation_input=None, submitted_execution=None)
+            return SimpleNamespace(fingerprint=fingerprint, preparation_input=None, submitted_execution=None)
 
         def worker_request(self, *, resolve_shared: bool = False) -> object:
             assert resolve_shared
@@ -42,10 +47,14 @@ def test_resident_main_passes_outer_boundary_containment_owner(
     ticks = iter((1, 3, 5, 8, 10, 17))
     monkeypatch.setattr(phase_timing, "monotonic", lambda: next(ticks))
 
+    def reopen_workspace(_agent_root, _assignment_id, *, _allow_initialize):
+        assert _allow_initialize is False
+        return FakeWorkspace()
+
     monkeypatch.setattr(
         resident_stage_worker,
         "_ResidentAssignmentWorkspace",
-        lambda _agent_root, _assignment_id: FakeWorkspace(),
+        reopen_workspace,
     )
     monkeypatch.setattr(
         resident_stage_worker,
@@ -53,7 +62,10 @@ def test_resident_main_passes_outer_boundary_containment_owner(
         lambda **kwargs: captured.update(kwargs) or result,
     )
     saved = []
-    monkeypatch.setattr(resident_stage_worker, "atomic_write_json", lambda path, value: saved.append(value))
+    def save(path, value, *, durability):
+        assert durability == "strict"
+        saved.append(value)
+    monkeypatch.setattr(resident_stage_worker, "atomic_write_json", save)
 
     assert resident_stage_worker.main(["--workspace", str(workspace_root)]) == 0
     assert (

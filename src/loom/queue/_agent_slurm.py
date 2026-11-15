@@ -6,7 +6,10 @@ its outbox binds one protected profile and one external operation to that owner.
 
 from __future__ import annotations
 
+from loom._sqlite_policy import SQLitePolicy, connect_existing, initialize_database
+
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 import json
 from pathlib import Path
 import sqlite3
@@ -15,17 +18,24 @@ from time import monotonic
 from typing import cast
 
 from loom.pipeline.stores.atomic import atomic_write_bytes
+from loom.pipeline.executors.slurm.commands import SlurmCommandResult, ready_stage_command_policy
+from loom.pipeline.executors.slurm.errors import SlurmCommandOutputLimitError
+from loom.pipeline.executors.slurm.history import operation_job_name, partition_accounting_output
 from loom.pipeline.executors.slurm.ready_stage import (
     ReadyStageState,
     SQLiteReadyStageSubmissions,
     SlurmReadyStageProfile,
     SlurmReadyStageRequest,
     SlurmReadyStageSubmission,
+    SlurmContainmentReceipt,
     resolve_slurm_containment,
 )
-from loom.serialization import PlainData
+from loom.serialization import PlainData, thaw_plain_data
+from loom.timestamps import utc_timestamp
 
-from ._slurm_result_transport import SharedSlurmResult
+from ._slurm_result_transport import SharedSlurmResult, SlurmEffectPending, SlurmRequestUncertain
+from ._slurm_admission import submit_interval
+from ._slurm_observation import SlurmObservationPolicy, parse_slurm_observation_policy
 from .errors import QueueConflictError, QueueServiceError
 from .slurm_ready_stage import SlurmStageAssignment
 
@@ -33,20 +43,33 @@ from .slurm_ready_stage import SlurmStageAssignment
 class SlurmSubmissionProjection:
     """Read acknowledged agent evidence; never invoke a scheduler command."""
 
-    def __init__(self, path: Path, *, _allow_initialize: bool = False) -> None:
+    def __init__(
+        self, path: Path, *, _allow_initialize: bool = False,
+        sqlite_policy: SQLitePolicy | None = None, schema_version: int = 3,
+    ) -> None:
+        if type(schema_version) is not int or schema_version not in {3, 4, 5}:
+            raise QueueServiceError("SLURM submission projection schema selection is unsupported")
         self.path = path
+        self._sqlite_policy = sqlite_policy
+        self.schema_version = schema_version
         if _allow_initialize:
             path.parent.mkdir(parents=True, exist_ok=True)
-            with sqlite3.connect(path) as conn:
+            with (sqlite3.connect(path) if sqlite_policy is None else initialize_database(path, policy=sqlite_policy, isolation_level="")) as conn:
+                if conn.execute("PRAGMA user_version").fetchone()[0] not in {0, schema_version}:
+                    raise QueueServiceError("SLURM projection requires a stopped-owner schema migration")
                 conn.execute(
                     "CREATE TABLE IF NOT EXISTS ready_stage_submissions (operation_id TEXT PRIMARY KEY, state TEXT NOT NULL, value_json TEXT NOT NULL)"
                 )
-                conn.execute("PRAGMA user_version = 3")
+                conn.execute(f"PRAGMA user_version = {schema_version}")
 
     def _connect(self) -> sqlite3.Connection:
         if not self.path.is_file():
             raise QueueServiceError("SLURM submission projection is missing")
-        return sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=rw", uri=True)
+        return (
+            sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=rw", uri=True)
+            if self._sqlite_policy is None else
+            connect_existing(self.path, policy=self._sqlite_policy, isolation_level="")
+        )
 
     def _open_existing(self) -> None:
         with self._connect() as conn:
@@ -55,7 +78,7 @@ class SlurmSubmissionProjection:
                 for row in conn.execute("PRAGMA table_info(ready_stage_submissions)")
             }
             version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-        if version != 3 or columns != {"operation_id", "state", "value_json"}:
+        if version != self.schema_version or columns != {"operation_id", "state", "value_json"}:
             raise QueueServiceError("SLURM submission projection is incompatible")
 
     def find(self, operation_id: str) -> SlurmReadyStageSubmission | None:
@@ -99,13 +122,30 @@ class SlurmSubmissionProjection:
             )
 
 
+class _EvidencePending(Exception):
+    """This assignment must yield without acknowledging its durable outbox."""
+
+
 class AgentSlurmJobs:
     """Open-only exact-agent submission owner with a durable replayable outbox."""
 
-    def __init__(self, root: Path, profiles: Sequence[SlurmReadyStageProfile]) -> None:
+    def __init__(
+        self, root: Path, profiles: Sequence[SlurmReadyStageProfile], *,
+        sqlite_policy: SQLitePolicy | None = None, durable_files: str = "best_effort",
+        submit_interval_seconds: float | None = None,
+        observation_policy: SlurmObservationPolicy | None = None,
+    ) -> None:
+        self.submit_interval_seconds = submit_interval(submit_interval_seconds)
+        self.observation_policy = parse_slurm_observation_policy(observation_policy)
+        if self.observation_policy is not None:
+            for profile in profiles:
+                self.observation_policy.require_profile(profile)
+        self._last_submit: float | None = None
         self.root = root
+        self._sqlite_policy = sqlite_policy
+        self._durable_files = durable_files
         self.path = root / "slurm.sqlite"
-        self.journal = SQLiteReadyStageSubmissions(self.path, _allow_initialize=False)
+        self.journal = SQLiteReadyStageSubmissions(self.path, _allow_initialize=False, sqlite_policy=sqlite_policy)
         self.journal._open_existing()
         with self._connect() as conn:
             if {
@@ -127,16 +167,176 @@ class AgentSlurmJobs:
         }
         self._lock = RLock()
         self._next_poll: dict[str, float] = {}
+        self._ack_retry_at: dict[str, float] = {}
+        self._retry_at: dict[tuple[str, str], float] = {}
+        self._retry_failures: dict[tuple[str, str], int] = {}
+        self._batch_order: dict[str, int] = {}
+        self._batch_sequence = 0
+        self._replay_after: str | None = None
+        self._batch_limits: dict[tuple[str, str], int] = {}
+        self._containment_diagnostics: dict[str, str] = {}
+        self._containment_order: dict[str, int] = {}
+        self._containment_sequence = 0
+        self._containment_budget: int | None = None
+        self._containment_deadline: float | None = None
+        self._reconciliation_binding: tuple[str, str] | None = None
+        self._pending_effect_confirmations: dict[str, tuple[str, int]] = {}
+        self._reconciled_operations: dict[str, tuple[object, object, bool]] = {}
+
+    def begin_reconciliation(self, binding: tuple[str, str]) -> None:
+        """Scope transient task confirmation to one authenticated session epoch."""
+        with self._lock:
+            if binding != self._reconciliation_binding:
+                self._reconciliation_binding = binding
+                self._reconciled_operations.clear()
+                self._pending_effect_confirmations.clear()
+                self._ack_retry_at.clear()
+
+    def has_unreconciled_work(self, binding: tuple[str, str]) -> bool:
+        """Known live jobs may resume; uncertain effects must first reconcile.
+
+        This is an admission check, not a release/retirement proof. The current
+        coordinator must redeliver the exact task or confirm ownership of its
+        pending release effect. The local submission and outbox must agree
+        under the configured profile; confirmation never permits retirement.
+        """
+        with self._lock:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    "SELECT operation_id, assignment_json, evidence_json, released, acknowledged, sequence "
+                    "FROM agent_slurm_operations WHERE released=0 OR acknowledged=0"
+                ).fetchall()
+            for operation_id, encoded, evidence, released, acknowledged, sequence in rows:
+                if not acknowledged:
+                    if (
+                        binding == self._reconciliation_binding
+                        and self._pending_effect_confirmations.get(operation_id) == (evidence, sequence)
+                    ):
+                        retained = json.loads(evidence)
+                        assignment = SlurmStageAssignment.from_dict(json.loads(encoded))
+                        profile = self.profiles.get((assignment.profile_id, assignment.profile_configuration_fingerprint))
+                        submission = self.journal.find(operation_id)
+                        if (
+                            retained.get("provider_released") is True
+                            and retained.get("release") is not None
+                            and profile is not None and profile.descriptor == assignment.profile_descriptor
+                            and submission is not None
+                            and submission.state not in {ReadyStageState.SUBMITTING, ReadyStageState.UNKNOWN}
+                            and SlurmReadyStageSubmission.from_dict(retained["submission"]) == submission
+                        ):
+                            continue
+                    return True
+                if released:
+                    continue
+                if binding != self._reconciliation_binding or operation_id not in self._reconciled_operations:
+                    return True
+                assignment = SlurmStageAssignment.from_dict(json.loads(encoded))
+                profile = self.profiles.get((assignment.profile_id, assignment.profile_configuration_fingerprint))
+                submission = self.journal.find(operation_id)
+                if (
+                    profile is None or profile.descriptor != assignment.profile_descriptor
+                    or submission is None or submission.request.digest != assignment.request_digest
+                    or submission.state not in {ReadyStageState.INTENT, ReadyStageState.ACCEPTED}
+                    or submission.state is ReadyStageState.ACCEPTED and submission.job_id is None
+                ):
+                    return True
+                # A current coordinator may already be waiting for this known
+                # job's containment proof. That does not make its ownership
+                # uncertain or consume any additional local agent capacity.
+                # Keep its reservation and release protocol, but allow other
+                # work while the exact acknowledged handle awaits containment.
+                if self._reconciled_operations[operation_id][:2] != (submission.job_id, submission.cluster):
+                    return True
+                if evidence is None:
+                    return True
+                retained = json.loads(evidence)
+                if (
+                    retained.get("release") is not None
+                    or SlurmReadyStageSubmission.from_dict(retained["submission"]) != submission
+                ):
+                    return True
+            return False
+
+    def _retry_due(self, kind: str, operation_id: str) -> bool:
+        return self.observation_policy is None or monotonic() >= self._retry_at.get((kind, operation_id), 0)
+
+    def _retry_completed(
+        self, kind: str, operation_id: str, profile: SlurmReadyStageProfile, *, failed: bool,
+    ) -> None:
+        policy = self.observation_policy
+        if policy is None:
+            return
+        key = kind, operation_id
+        failures = min(self._retry_failures.get(key, 0) + 1, 33) if failed else 0
+        self._retry_failures[key] = failures
+        self._retry_at[key] = monotonic() + policy.delay(profile.poll_interval_seconds, failures)
+
+    def _observation_completed(
+        self, value: SlurmReadyStageSubmission, profile: SlurmReadyStageProfile,
+    ) -> None:
+        self._retry_completed(
+            "observation", value.request.operation_id, profile,
+            failed=value.scheduler_source == "unavailable" and value.evidence != "slurm_history_not_found",
+        )
+
+    def _containment(
+        self, profile: SlurmReadyStageProfile, operation_id: str, request: Mapping[str, PlainData],
+    ) -> SlurmContainmentReceipt:
+        if not self._retry_due("containment", operation_id):
+            return SlurmContainmentReceipt("UNKNOWN")
+        if self._containment_budget is not None:
+            if self._containment_budget == 0 or (
+                self._containment_deadline is not None and monotonic() >= self._containment_deadline
+            ):
+                return SlurmContainmentReceipt("UNKNOWN")
+            self._containment_budget -= 1
+        self._containment_sequence += 1
+        self._containment_order[operation_id] = self._containment_sequence
+        receipt = resolve_slurm_containment(profile, request)
+        if receipt.diagnostic_code is None:
+            self._containment_diagnostics.pop(operation_id, None)
+        else:
+            self._containment_diagnostics[operation_id] = receipt.diagnostic_code
+        expected_pending = (
+            receipt.state == "UNKNOWN"
+            and receipt.diagnostic_code == "terminal_controller_record_retained"
+        )
+        self._retry_completed(
+            "containment", operation_id, profile,
+            failed=not receipt.contained and not expected_pending,
+        )
+        return receipt
 
     @staticmethod
-    def initialize(root: Path) -> None:
+    def _deliver_result(
+        task: Mapping[str, PlainData], reply: Mapping[str, PlainData],
+        transport: SharedSlurmResult,
+        acknowledge: Callable[[Mapping[str, PlainData]], Mapping[str, PlainData]],
+    ) -> None:
+        if task.get("compute_release_requested") is True:
+            return
+        identity = task.get("result_identity")
+        if (
+            isinstance(identity, Mapping)
+            and identity.get("fence") is not None
+            and reply.get("cancel_requested") is not True
+        ):
+            if task.get("release_requested") is True:
+                # The authority retains the result; replay its exact commit even
+                # when shared cleanup was interrupted after removing some files.
+                transport.finish_delivery(cast(Mapping[str, PlainData], identity), acknowledge)
+            else:
+                transport.deliver(cast(Mapping[str, PlainData], identity), acknowledge)
+
+    @staticmethod
+    def initialize(root: Path, *, sqlite_policy: SQLitePolicy | None = None) -> None:
         path = root / "slurm.sqlite"
         if path.exists():
             raise QueueConflictError(
                 "agent SLURM initialization requires a fresh journal"
             )
-        SQLiteReadyStageSubmissions(path)
-        with sqlite3.connect(path) as conn:
+        SQLiteReadyStageSubmissions(path, sqlite_policy=sqlite_policy)
+        with (sqlite3.connect(path) if sqlite_policy is None else connect_existing(path, policy=sqlite_policy, isolation_level="")) as conn:
             conn.execute(
                 "CREATE TABLE agent_slurm_operations (operation_id TEXT PRIMARY KEY, "
                 "assignment_json TEXT NOT NULL, sequence INTEGER NOT NULL, "
@@ -144,7 +344,11 @@ class AgentSlurmJobs:
             )
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=rw", uri=True)
+        return (
+            sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=rw", uri=True)
+            if self._sqlite_policy is None else
+            connect_existing(self.path, policy=self._sqlite_policy, isolation_level="")
+        )
 
     def offered_profiles(self) -> tuple[tuple[str, str], ...]:
         """Qualify submission commands at the submit host, without a GPU debit."""
@@ -160,6 +364,25 @@ class AgentSlurmJobs:
                 ).fetchone()
                 is not None
             )
+
+    def has_started_or_unacknowledged_work(self) -> bool:
+        """Unsubmitted, acknowledged intents may resume under unchanged bindings.
+
+        They remain retained work for reload and retirement. Missing journals,
+        uncertain calls and unacknowledged effects cannot use this exception.
+        """
+        with self._lock:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    "SELECT operation_id, released, acknowledged FROM agent_slurm_operations "
+                    "WHERE released=0 OR acknowledged=0"
+                ).fetchall()
+            for operation_id, released, acknowledged in rows:
+                if not acknowledged:
+                    return True
+                if not released and self.journal.read(operation_id).state is not ReadyStageState.INTENT:
+                    return True
+            return False
 
     def _publish(
         self,
@@ -181,6 +404,12 @@ class AgentSlurmJobs:
             if recovery_evidence is None
             else dict(recovery_evidence),
         }
+        diagnostic = self._containment_diagnostics.get(assignment.operation_id)
+        if diagnostic is not None and release is None and recovery_evidence is None:
+            evidence["containment_diagnostic"] = diagnostic
+        # The journal and the first HTTP acknowledgement must see the same
+        # JSON-native tree, including nested frozen scheduler task identities.
+        evidence = cast(dict[str, PlainData], thaw_plain_data(evidence))
         encoded = _json(evidence)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -202,6 +431,20 @@ class AgentSlurmJobs:
         response = acknowledge({**evidence, "sequence": sequence})
         if response.get("sequence") != sequence:
             raise QueueConflictError("agent SLURM acknowledgement conflicts")
+        disposition = response.get("disposition", "applied")
+        if disposition not in {"pending", "applied"}:
+            raise QueueConflictError("agent SLURM acknowledgement disposition conflicts")
+        if disposition == "pending":
+            delay = response.get("retry_after_seconds")
+            if (response.get("assignment_id") != assignment.assignment_id
+                or type(delay) not in (int, float) or not 0 < delay <= 60):
+                raise QueueConflictError("agent SLURM pending acknowledgement conflicts")
+            self._ack_retry_at[assignment.operation_id] = monotonic() + delay
+            if self._reconciliation_binding is not None:
+                self._pending_effect_confirmations[assignment.operation_id] = (encoded, sequence)
+            raise _EvidencePending
+        self._ack_retry_at.pop(assignment.operation_id, None)
+        self._pending_effect_confirmations.pop(assignment.operation_id, None)
         if provider_released:
             profile = self.profiles[
                 (assignment.profile_id, assignment.profile_configuration_fingerprint)
@@ -211,6 +454,7 @@ class AgentSlurmJobs:
             )
             if transport.path.exists() and (
                 response.get("cancel_requested") is True
+                or response.get("result_committed") is True
                 or not (transport.path / "manifest.json").exists()
             ):
                 transport.cleanup()
@@ -221,41 +465,226 @@ class AgentSlurmJobs:
                 "UPDATE agent_slurm_operations SET acknowledged=1, released=? WHERE operation_id=? AND sequence=?",
                 (int(provider_released), assignment.operation_id, sequence),
             )
+        if provider_released:
+            self._reconciled_operations.pop(assignment.operation_id, None)
+            self._next_poll.pop(assignment.operation_id, None)
+            self._batch_order.pop(assignment.operation_id, None)
+            self._containment_order.pop(assignment.operation_id, None)
+            self._containment_diagnostics.pop(assignment.operation_id, None)
+            for kind in ("observation", "cancel", "containment"):
+                self._retry_at.pop((kind, assignment.operation_id), None)
+                self._retry_failures.pop((kind, assignment.operation_id), None)
         return response
 
     def replay_pending(
         self, acknowledge: Callable[[Mapping[str, PlainData]], Mapping[str, PlainData]]
     ) -> None:
-        """Replay even a final receipt whose assignment has already been released."""
+        """Replay a bounded page, including final receipts for released assignments.
+
+        Advance the transient scan before transport: a failing acknowledgement
+        stays durable but cannot hide all later receipts on every iteration.
+        """
         with self._lock:
             with self._connect() as conn:
                 rows = conn.execute(
-                    "SELECT evidence_json FROM agent_slurm_operations WHERE acknowledged=0 AND evidence_json IS NOT NULL"
+                    "SELECT operation_id, evidence_json FROM agent_slurm_operations "
+                    "WHERE acknowledged=0 AND evidence_json IS NOT NULL "
+                    "AND (? IS NULL OR operation_id > ?) ORDER BY operation_id LIMIT 32",
+                    (self._replay_after, self._replay_after),
                 ).fetchall()
+            deadline = monotonic() + 1.0
+            scanned = 0
             for row in rows:
-                pending = json.loads(str(row[0]))
-                self._publish(
-                    SlurmStageAssignment.from_dict(pending["assignment"]),
-                    SlurmReadyStageSubmission.from_dict(pending["submission"]),
-                    acknowledge,
-                    release=pending["release"],
-                    recovery_evidence=pending.get("recovery_evidence"),
-                    provider_released=pending.get("provider_released", False),
-                )
+                if scanned and monotonic() >= deadline:
+                    break
+                scanned += 1
+                self._replay_after = str(row[0])
+                pending = json.loads(str(row[1]))
+                if monotonic() < self._ack_retry_at.get(str(row[0]), 0):
+                    continue
+                try:
+                    self._publish(
+                        SlurmStageAssignment.from_dict(pending["assignment"]),
+                        SlurmReadyStageSubmission.from_dict(pending["submission"]),
+                        acknowledge,
+                        release=pending["release"],
+                        recovery_evidence=pending.get("recovery_evidence"),
+                        provider_released=pending.get("provider_released", False),
+                    )
+                except _EvidencePending:
+                    continue
+                except SlurmRequestUncertain:
+                    self._ack_retry_at[str(row[0])] = monotonic() + 5
+                    continue
+            if scanned == len(rows) and len(rows) < 32:
+                self._replay_after = None
+
+    def _before_submit(
+        self, assignment: SlurmStageAssignment, value: SlurmReadyStageSubmission,
+        acknowledge: Callable[[Mapping[str, PlainData]], Mapping[str, PlainData]],
+    ) -> bool:
+        if self._publish(assignment, value, acknowledge).get("cancel_requested") is True:
+            return False
+        # Timestamp the actual call boundary, after its durable acknowledgement.
+        # A failed acknowledgement never consumes a pacing interval.
+        self._last_submit = monotonic()
+        return True
 
     def step(
         self,
         task: Mapping[str, PlainData],
         acknowledge: Callable[[Mapping[str, PlainData]], Mapping[str, PlainData]],
+        *,
+        allow_submission: bool = True,
     ) -> None:
         """Drive one bounded observation cycle, replaying before any new effect."""
         with self._lock:
-            self._step(task, acknowledge)
+            self._step(task, acknowledge, allow_submission=allow_submission)
 
-    def _step(
+    def step_cycle(
+        self, tasks: Sequence[Mapping[str, PlainData]],
+        acknowledge: Callable[[Mapping[str, PlainData]], Mapping[str, PlainData]],
+        *, allow_submission: bool = True,
+    ) -> None:
+        """Deliver this page's results before bounded, fair accounting batches.
+
+        The shared budget covers ordinary accounting queries. Submission,
+        cancellation, transport and filesystem IO are separate. Containment
+        has its own equal-sized query/time budget and oldest-probed ordering;
+        one bounded helper may finish after that budget's deadline.
+        """
+        policy = self.observation_policy
+        if policy is None or policy.max_jobs_per_query is None:
+            for task in tasks:
+                self.step(task, acknowledge, allow_submission=allow_submission)
+            return
+        with self._lock:
+            for task in tasks:
+                self._step(task, acknowledge, allow_submission=False, _defer_observation=True, _delivery_only=True)
+            assert policy.max_queries_per_cycle is not None and policy.cycle_budget_seconds is not None
+            self._containment_budget = policy.max_queries_per_cycle
+            self._containment_deadline = monotonic() + policy.cycle_budget_seconds
+            try:
+                for task in sorted(tasks, key=lambda value: self._containment_order.get(
+                    SlurmStageAssignment.from_dict(value["assignment"]).operation_id, 0,
+                )):
+                    self._step(task, acknowledge, allow_submission=allow_submission, _defer_observation=True)
+            finally:
+                self._containment_budget = None
+                self._containment_deadline = None
+            self._observe_batches(tasks, acknowledge, policy)
+
+    def _observe_batches(self, tasks, acknowledge, policy: SlurmObservationPolicy) -> None:
+        assert policy.max_jobs_per_query is not None
+        assert policy.max_queries_per_cycle is not None and policy.cycle_budget_seconds is not None
+        due = {}
+        for task in tasks:
+            assignment = SlurmStageAssignment.from_dict(task["assignment"])
+            operation = assignment.operation_id
+            with self._connect() as conn:
+                released = conn.execute(
+                    "SELECT released, acknowledged FROM agent_slurm_operations WHERE operation_id=?", (operation,),
+                ).fetchone()
+            if released is None or released[0] or not released[1] or not self._retry_due("observation", operation):
+                continue
+            current = self.journal.read(operation)
+            if current.state in {ReadyStageState.ACCEPTED, ReadyStageState.SUBMITTING, ReadyStageState.UNKNOWN}:
+                key = assignment.profile_id, assignment.profile_configuration_fingerprint
+                due[operation] = (task, assignment, current, key)
+        remaining = sorted(due.values(), key=lambda item: self._batch_order.get(item[1].operation_id, 0))
+        deadline = monotonic() + policy.cycle_budget_seconds
+        calls = 0
+        while remaining and calls < policy.max_queries_per_cycle:
+            time_left = deadline - monotonic()
+            if time_left <= 0:
+                break
+            key = remaining[0][3]
+            profile = self.profiles[key]
+            history = profile.accounting_history
+            command_policy = ready_stage_command_policy(profile.runner)
+            assert history is not None and command_policy is not None
+            limit = min(policy.max_jobs_per_query, self._batch_limits.get(key, policy.max_jobs_per_query))
+            batch = [item for item in remaining if item[3] == key][:limit]
+            operations = {item[1].operation_id for item in batch}
+            remaining = [item for item in remaining if item[1].operation_id not in operations]
+            names = [operation_job_name(item[1].operation_id) for item in batch]
+            observed_at = utc_timestamp()
+            result: SlurmCommandResult | Exception
+            partitioned: dict[str, str] = {}
+            try:
+                windows = [history.window(item[2].created_at, observed_at) for item in batch]
+                time_left = deadline - monotonic()
+                if time_left <= 0:
+                    break
+                calls += 1
+                result = getattr(profile.runner, "discover_named_operations")(
+                    job_names=names, user_id=history.user_id, cluster=profile.cluster,
+                    started_after=min(window[0] for window in windows),
+                    ended_before=max(window[1] for window in windows),
+                    timeout_seconds=min(command_policy.observation_timeout_seconds, time_left),
+                )
+                if "...[truncated]" in result.stderr:
+                    raise SlurmCommandOutputLimitError("accounting batch stderr is truncated")
+                # Do not treat any captured prefix as a complete response.
+                partitioned = partition_accounting_output(result.stdout, names)
+            except Exception as exc:
+                result = exc
+                if isinstance(exc, SlurmCommandOutputLimitError):
+                    self._batch_limits[key] = max(1, len(batch) // 2)
+            for task, assignment, _current, _key in batch:
+                operation = assignment.operation_id
+                self._batch_sequence += 1
+                self._batch_order[operation] = self._batch_sequence
+                filtered = (
+                    replace(result, stdout=partitioned[operation_job_name(operation)])
+                    if isinstance(result, SlurmCommandResult) else result
+                )
+                current = self.journal._apply_accounting_observation(
+                    operation, profile, filtered, observed_at=observed_at,
+                )
+                self._retry_completed(
+                    "observation", operation, profile,
+                    failed=current.evidence not in {"slurm_history_observed", "slurm_history_not_found"},
+                )
+                try:
+                    reply = self._publish(assignment, current, acknowledge)
+                except _EvidencePending:
+                    continue
+                except SlurmRequestUncertain:
+                    self._ack_retry_at[operation] = monotonic() + 5
+                    continue
+                try:
+                    self._deliver_result(
+                        task, reply, SharedSlurmResult(profile.result_storage, assignment.assignment_id), acknowledge,
+                    )
+                except SlurmEffectPending as pending:
+                    self._ack_retry_at[operation] = monotonic() + pending.retry_after_seconds
+                except SlurmRequestUncertain:
+                    self._ack_retry_at[operation] = monotonic() + 5
+
+    def _step(self, task, acknowledge, **options):
+        operation_id = SlurmStageAssignment.from_dict(task["assignment"]).operation_id
+        if monotonic() < self._ack_retry_at.get(operation_id, 0):
+            return
+        try:
+            return self._advance_step(task, acknowledge, **options)
+        except _EvidencePending:
+            return
+        except SlurmRequestUncertain:
+            self._ack_retry_at[operation_id] = monotonic() + 5
+            return
+        except SlurmEffectPending as pending:
+            self._ack_retry_at[operation_id] = monotonic() + pending.retry_after_seconds
+            return
+
+    def _advance_step(
         self,
         task: Mapping[str, PlainData],
         acknowledge: Callable[[Mapping[str, PlainData]], Mapping[str, PlainData]],
+        *,
+        allow_submission: bool,
+        _defer_observation: bool = False,
+        _delivery_only: bool = False,
     ) -> None:
         if task.get("schema_version") != 1:
             raise QueueServiceError("agent SLURM task version is unsupported")
@@ -289,6 +718,10 @@ class AgentSlurmJobs:
                 )
             elif str(row[0]) != encoded_assignment:
                 raise QueueConflictError("agent SLURM assignment replay conflicts")
+        if self._reconciliation_binding is not None:
+            self._reconciled_operations[assignment.operation_id] = (
+                task.get("job_id"), task.get("cluster"), task.get("release_requested") is True,
+            )
         if row is not None and row[2] is not None and not row[3]:
             pending = json.loads(str(row[2]))
             self._publish(
@@ -300,12 +733,27 @@ class AgentSlurmJobs:
                 provider_released=pending.get("provider_released", False),
             )
         with self._connect() as conn:
-            released = conn.execute(
-                "SELECT released FROM agent_slurm_operations WHERE operation_id=?",
+            retained = conn.execute(
+                "SELECT released, evidence_json, acknowledged FROM agent_slurm_operations WHERE operation_id=?",
                 (request.operation_id,),
             ).fetchone()
-        if released is not None and released[0]:
+        if retained is not None and retained[0]:
+            self._reconciled_operations.pop(assignment.operation_id, None)
             return
+        if self.observation_policy is not None and retained is not None and retained[1] is not None and retained[2]:
+            last = json.loads(str(retained[1]))
+            if last["release"] is not None:
+                # A positive release acknowledgement already crossed the durable
+                # outbox. Finish the exact revoke/release without another query.
+                completed = SlurmReadyStageSubmission.from_dict(last["submission"])
+                if completed.capability is None:
+                    raise QueueConflictError("agent SLURM capability is unavailable")
+                profile.job_private_file_provider.revoke(completed.capability)
+                self._publish(
+                    assignment, completed, acknowledge,
+                    release=last["release"], provider_released=True,
+                )
+                return
         current = self.journal.find(request.operation_id)
         transport = SharedSlurmResult(profile.result_storage, assignment.assignment_id)
         if current is None and task.get("cancel_requested") is not True:
@@ -318,7 +766,8 @@ class AgentSlurmJobs:
             and task.get("cancel_requested") is True
         )
         if (
-            current is not None
+            self.observation_policy is None
+            and current is not None
             and current.state is not ReadyStageState.INTENT
             and now < self._next_poll.get(request.operation_id, 0)
             and not urgent_cancel
@@ -326,27 +775,33 @@ class AgentSlurmJobs:
             and task.get("release_requested") is not True
         ):
             return
-        self._next_poll[request.operation_id] = now + profile.poll_interval_seconds
+        if self.observation_policy is None:
+            self._next_poll[request.operation_id] = now + profile.poll_interval_seconds
+        observation_due = not _defer_observation and self._retry_due("observation", request.operation_id)
+        observed = False
         script = self.root / "slurm-scripts" / f"{assignment.assignment_id}.sh"
         if current is None:
-            atomic_write_bytes(script, request.script.encode("utf-8"))
+            atomic_write_bytes(script, request.script.encode("utf-8"), durability=self._durable_files)
             script.chmod(0o600)
         current = self.journal.prepare(request, profile, script)
         if current.state is ReadyStageState.INTENT:
             reply = self._publish(assignment, current, acknowledge)
             if reply.get("cancel_requested") is True:
                 current = self.journal.suppress_before_submit(request.operation_id)
+            elif not allow_submission:
+                return
+            elif (
+                self.submit_interval_seconds is not None
+                and self._last_submit is not None
+                and monotonic() < self._last_submit + self.submit_interval_seconds
+            ):
+                return
             else:
                 current = self.journal.submit(
                     request,
                     profile,
                     script,
-                    before_runner=lambda value: (
-                        self._publish(assignment, value, acknowledge).get(
-                            "cancel_requested"
-                        )
-                        is not True
-                    ),
+                    before_runner=lambda value: self._before_submit(assignment, value, acknowledge),
                 )
         elif current.state in {ReadyStageState.SUBMITTING, ReadyStageState.UNKNOWN}:
             job = task.get("job_id")
@@ -357,32 +812,48 @@ class AgentSlurmJobs:
                     job_id=job,
                     cluster=cast(str | None, task.get("cluster")),
                 )
-            else:
+            elif observation_due:
                 current = self.journal.reconcile(request.operation_id, profile)
-        reply = self._publish(assignment, current, acknowledge)
-        if current.job_id is not None:
-            if reply.get("cancel_requested") is True:
-                current = self.journal.request_cancel(request.operation_id, profile)
-            current = self.journal.observe(request.operation_id, profile)
-            self._publish(assignment, current, acknowledge)
-        identity = task.get("result_identity")
-        if (
-            isinstance(identity, Mapping)
-            and identity.get("fence") is not None
-            and reply.get("cancel_requested") is not True
-        ):
-            if task.get("release_requested") is True:
-                # The coordinator already retains the complete result. Obtain
-                # its exact fenced acknowledgement again; shared cleanup may
-                # have been interrupted after removing some transport files.
-                transport.finish_delivery(
-                    cast(Mapping[str, PlainData], identity), acknowledge
+                self._retry_completed(
+                    "observation", request.operation_id, profile,
+                    failed=current.evidence not in {
+                        "slurm_operation_reconciled", "slurm_operation_not_found", "slurm_history_not_found",
+                    },
                 )
-            else:
-                transport.deliver(cast(Mapping[str, PlainData], identity), acknowledge)
+                observed = self.observation_policy is not None
+        reply = self._publish(assignment, current, acknowledge)
+        if self.observation_policy is not None and task.get("compute_release_requested") is not True:
+            self._deliver_result(task, reply, transport, acknowledge)
+        if _delivery_only:
+            return
+        if current.job_id is not None:
+            published = current
+            if reply.get("cancel_requested") is True and (
+                self.observation_policy is None
+                or not current.cancel_requested and self._retry_due("cancel", request.operation_id)
+            ):
+                current = self.journal.request_cancel(
+                    request.operation_id, profile,
+                    _after_observation=(
+                        None if self.observation_policy is None
+                        else lambda value: self._observation_completed(value, profile)
+                    ),
+                )
+                self._retry_completed("cancel", request.operation_id, profile, failed=not current.cancel_requested)
+                if self.observation_policy is not None and profile.accounting_history is not None:
+                    observed = True  # Cancellation performs its own fresh identity observation.
+            if self.observation_policy is None or observation_due and not observed:
+                current = self.journal.observe(request.operation_id, profile)
+                self._observation_completed(current, profile)
+            if self.observation_policy is None or current != published:
+                updated = self._publish(assignment, current, acknowledge)
+                if self.observation_policy is not None:
+                    reply = updated
+        if self.observation_policy is None and task.get("compute_release_requested") is not True:
+            self._deliver_result(task, reply, transport, acknowledge)
         recovery_request = task.get("recovery_request")
         if isinstance(recovery_request, Mapping):
-            receipt = resolve_slurm_containment(profile, recovery_request)
+            receipt = self._containment(profile, request.operation_id, recovery_request)
             if receipt.contained:
                 assert profile.containment_helper is not None
                 self._publish(
@@ -404,6 +875,7 @@ class AgentSlurmJobs:
             release = {"kind": "definite_rejection"}
         elif current.job_id is not None and (
             task.get("release_requested") is True
+            or task.get("compute_release_requested") is True
             or reply.get("cancel_requested") is True
         ):
             proof = {
@@ -411,7 +883,7 @@ class AgentSlurmJobs:
                 "job_id": current.job_id,
                 "cluster_id": current.cluster,
             }
-            receipt = resolve_slurm_containment(profile, proof)
+            receipt = self._containment(profile, request.operation_id, proof)
             if receipt.contained:
                 release = {
                     "kind": "slurm_helper",

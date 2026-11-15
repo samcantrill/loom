@@ -204,3 +204,45 @@ def test_fingerprint_rejects_undeclared_bound_inputs() -> None:
         assert "undeclared bound input" in str(exc)
     else:
         raise AssertionError("undeclared bound input should fail fingerprinting")
+
+
+def test_configuration_mapping_order_survives_wire_and_changes_fingerprint():
+    import json
+    from loom.pipeline.planning import StageFingerprintRecord
+    from loom.serialization import stable_json_dumps
+
+    first = build_stage_fingerprint(
+        _stage(config={"parts": {"reconstruction": {}, "detrending": {}}}),
+        bound_inputs={"data": _input_ref()},
+    )
+    second = build_stage_fingerprint(
+        _stage(config={"parts": {"detrending": {}, "reconstruction": {}}}),
+        bound_inputs={"data": _input_ref()},
+    )
+    assert first.fingerprint != second.fingerprint
+    restored = StageFingerprintRecord.from_dict(json.loads(stable_json_dumps(first.to_dict())))
+    assert list(restored.payload.stage_config["parts"]) == ["reconstruction", "detrending"]
+    assert restored.fingerprint == first.fingerprint
+    assert restored.to_dict() == first.to_dict()
+
+
+def test_legacy_fingerprint_keeps_original_hash_and_schema_without_inferred_order():
+    import json
+    from dataclasses import replace
+    from loom.pipeline.planning import StageFingerprintRecord
+    from loom.serialization import stable_json_dumps
+
+    current = build_stage_fingerprint(
+        _stage(config={"parts": {"reconstruction": {}, "detrending": {}}}),
+        bound_inputs={"data": _input_ref()},
+    )
+    legacy = StageFingerprintRecord.create(
+        payload=replace(current.payload, schema_version=2, policy_version=2),
+        algorithm=current.algorithm, inputs_summary=current.inputs_summary,
+    )
+    original_wire = stable_json_dumps(legacy.to_dict())
+    restored = StageFingerprintRecord.from_dict(json.loads(original_wire))
+    assert restored.schema_version == restored.payload.schema_version == 2
+    assert restored.fingerprint == legacy.fingerprint != current.fingerprint
+    assert stable_json_dumps(restored.to_dict()) == original_wire
+    assert list(restored.payload.stage_config["parts"]) == ["detrending", "reconstruction"]

@@ -70,7 +70,7 @@ from loom.scheduling import (
     ResourceClaimContractDescriptor,
     SchedulingComponentDescriptor,
 )
-from loom.serialization import thaw_plain_data
+from loom.serialization import PlainData, thaw_plain_data
 
 
 def _provider_descriptors(*kinds: str) -> tuple[SchedulingComponentDescriptor, ...]:
@@ -127,6 +127,8 @@ def _request(
     *,
     stage_config: dict[str, str] | None = None,
     input_binding_state: str = "current",
+    fingerprint_schema: int = 2,
+    input_metadata: Mapping[str, PlainData] | None = None,
 ) -> _ResidentAssignmentBundle:
     worker = StageWorkerRequest(
         STAGE_WORKER_REQUEST_SCHEMA_VERSION,
@@ -135,13 +137,14 @@ def _request(
         1,
         "2020-01-01T00:00:00Z",
         "local",
-        {"source": ArtifactRef("source", "file:///coordinator/private", "bytes")},
+        {"source": ArtifactRef("source", "file:///coordinator/private", "bytes",
+                               metadata=input_metadata or {})},
         StageFingerprintRecord.create(
             algorithm="sha256",
             payload=StageFingerprintPayload(
-                schema_version=2,
+                schema_version=fingerprint_schema,
                 policy_name="loom.stage.semantic",
-                policy_version=2,
+                policy_version=fingerprint_schema,
                 stage_name="build",
                 factory_target="pkg.Stage",
                 factory_init={},
@@ -214,6 +217,7 @@ def _request(
                 len(data),
                 "seed.data",
                 "bytes",
+                metadata=input_metadata or {},
             ),
         ),
         declared_outputs=("result",),
@@ -347,6 +351,64 @@ def test_resident_workspace_current_reopen_preserves_retained_work(tmp_path):
     assert _workspace_bytes(workspace.root) == before
 
 
+def test_resident_workspace_retains_policy_for_worker_reopen(tmp_path):
+    from loom._sqlite_policy import SQLitePolicy
+    policy = SQLitePolicy("delete", "extra", 1234)
+    profile = _profile(tmp_path)
+    request = _request(profile)
+    workspace = _ResidentAssignmentWorkspace(
+        tmp_path, request.assignment_id, sqlite_policy=policy, durable_files="strict",
+        _allow_initialize=True,
+    )
+    workspace.persist_request(request, profile)
+    before = _workspace_bytes(workspace.root)
+    # The execution-only worker reopens the retained workspace without access
+    # to the parent's role configuration or its authority-host restriction.
+    reopened = _ResidentAssignmentWorkspace(
+        tmp_path, request.assignment_id, _allow_initialize=False,
+    )
+    assert reopened.request() == request
+    assert reopened.durable_files == "strict"
+    with reopened._connect() as conn:
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+        assert conn.execute("PRAGMA synchronous").fetchone()[0] == 3
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 1234
+    assert _workspace_bytes(workspace.root) == before
+    with pytest.raises(QueueConflictError, match="storage policy conflicts"):
+        _ResidentAssignmentWorkspace(
+            tmp_path, request.assignment_id,
+            sqlite_policy=SQLitePolicy("delete", "full"),
+        )
+
+
+def test_resident_explicit_policy_requires_initialization_and_existing_state(tmp_path):
+    import sqlite3
+    from loom._sqlite_policy import SQLitePolicy
+    policy = SQLitePolicy("delete", "extra")
+    with pytest.raises(QueueServiceError, match="workspace is missing"):
+        _ResidentAssignmentWorkspace(tmp_path, "missing", sqlite_policy=policy)
+    assert not (tmp_path / "assignments").exists()
+    workspace = _ResidentAssignmentWorkspace(
+        tmp_path, "fresh", sqlite_policy=policy, _allow_initialize=True,
+    )
+    workspace._db.unlink()
+    with pytest.raises(sqlite3.OperationalError):
+        workspace.has_request()
+    assert not workspace._db.exists()
+
+
+def test_resident_storage_policy_cannot_silently_adopt_legacy_workspace(tmp_path):
+    from loom._sqlite_policy import SQLitePolicy
+    workspace = _ResidentAssignmentWorkspace(tmp_path, "legacy")
+    before = _workspace_bytes(workspace.root)
+    with pytest.raises(QueueConflictError, match="storage policy conflicts"):
+        _ResidentAssignmentWorkspace(
+            tmp_path, "legacy", sqlite_policy=SQLitePolicy("delete", "extra"),
+            _allow_initialize=True,
+        )
+    assert _workspace_bytes(workspace.root) == before
+
+
 def test_delivered_poll_atomically_retains_an_unresolved_assignment(
     tmp_path: Path,
 ) -> None:
@@ -397,10 +459,12 @@ def test_delivered_poll_atomically_retains_an_unresolved_assignment(
     assert poll_state == ("DELIVERED",)
 
 
-def test_remote_semantic_request_rejects_path_bearing_fields(tmp_path: Path) -> None:
+@pytest.mark.parametrize("fingerprint_schema", [2, 3])
+def test_remote_semantic_request_rejects_path_bearing_fields(tmp_path: Path, fingerprint_schema) -> None:
     request = _request(
         _profile(tmp_path),
         stage_config={"cache_path": "/coordinator/private"},
+        fingerprint_schema=fingerprint_schema,
     )
     assert _ResidentAssignmentBundle.from_dict(request.to_dict()) == request
     with pytest.raises(QueueServiceError, match="path-bearing"):
@@ -424,11 +488,12 @@ def test_remote_semantic_request_rejects_path_bearing_fields(tmp_path: Path) -> 
         replace(portable_request.inputs[0], metadata={"index": {"path": "relative.json"}})
 
 
+@pytest.mark.parametrize("fingerprint_schema", [2, 3])
 def test_only_fixed_preparation_input_can_cross_the_semantic_path_guard(
-    tmp_path: Path,
+    tmp_path: Path, fingerprint_schema,
 ) -> None:
     profile = _profile(tmp_path)
-    request = _request(profile)
+    request = _request(profile, fingerprint_schema=fingerprint_schema)
     binding = PreparationChildInput(
         "prepare-1",
         "existing",
@@ -2151,7 +2216,7 @@ def test_native_preparation_transfer_publishes_pair_and_restores_original_primar
     primary = Path(uri_to_path(published.uri))
     assert load_preparation_report(published, primary) == {
         **logical,
-        "report_format": "loom.preparation_report.v2",
+        "report_format": "loom.preparation_report.v3",
     }
     prior = {
         path: (path.read_bytes(), path.stat().st_mtime_ns)

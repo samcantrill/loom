@@ -34,11 +34,11 @@ def submitted_command(
 ) -> ApptainerExecCommand:
     """Verify a new launch and project only its allocation and authorized mounts."""
     from ._container_worker import (
+        prepare_container_worker_paths,
         qualify_shared_worker_inputs,
         project_container_worker,
     )
     from ._shared_publication import worker_artifact_root
-    from ._temporary_storage import prepare_assignment_storage
     from .shared_execution import assignment_scope
     from .submitted_execution import assignment_binding
 
@@ -56,7 +56,9 @@ def submitted_command(
     )
     workspace.persist_execution_binding(agent_id=agent_id, fence=fence, profile=profile)
     worker_artifact_root(workspace)
-    prepare_assignment_storage(profile, workspace=workspace.root, agent_id=agent_id)
+    prepare_container_worker_paths(
+        profile, workspace=workspace.root, agent_id=agent_id, assignment=request,
+    )
     qualify_shared_worker_inputs(profile, request, agent_id=agent_id)
     workspace.accept_inputs(shared_roots=profile.shared_roots)
     resources = ResourceRequest.from_dict(request.resolved_runtime["resources"])
@@ -179,7 +181,10 @@ def main(argv: list[str] | None = None) -> int:
     from ._shared_publication import worker_artifact_root
 
     roots = execution_roots(profile.shared_roots, container=True)
-    preparation = _preparation_worker_context(request, profile, workspace.root)
+    preparation = _preparation_worker_context(
+        request, profile, workspace.root,
+        input_path=lambda name: workspace.root / "inputs" / name,
+    )
     os.environ.pop(PREPARATION_INPUT_CONTEXT_ENV, None)
     if preparation is not None:
         os.environ[PREPARATION_INPUT_CONTEXT_ENV] = json.dumps(

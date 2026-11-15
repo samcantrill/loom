@@ -8,18 +8,21 @@ from typing import cast
 
 from loom.artifacts import ArtifactRef
 from loom.fingerprints import hash_bytes
-from loom.pipeline.stores.atomic import atomic_write_json
+from loom.pipeline.stores.atomic import atomic_write_bytes
 from loom.queue.errors import QueueConflictError
 from loom.refs import ResourceRef
 from loom.serialization import PlainData, ensure_plain_data, stable_json_bytes
+from weave.ordered import encode_ordered_config, decode_ordered_config
+from weave.errors import ConfigError
 
 PREPARATION_REPORT_SCHEMA_VERSION = 10
 SUBMITTED_PREPARATION_REPORT_SCHEMA_VERSION = 11
-REPORT_FORMAT = "loom.preparation_report.v2"
-SUPPORTED_REPORT_FORMATS = ("loom.preparation_report.v1", REPORT_FORMAT)
-_COMPOSITION_SCHEMA = "loom.preparation_composition.v2"
+REPORT_FORMAT = "loom.preparation_report.v3"
+_LEGACY_REPORT_FORMAT = "loom.preparation_report.v1"
+SUPPORTED_REPORT_FORMATS = (_LEGACY_REPORT_FORMAT, "loom.preparation_report.v2", REPORT_FORMAT)
+_COMPOSITION_SCHEMA = "loom.preparation_composition.v3"
 _LOGICAL_FIELDS = {"resolved", "redacted", "recipe_manifest", "manifest", "provenance"}
-_LEGACY_PRIMARY_FIELDS = {"resolved", "redacted", "recipe_manifest", "evidence_ref"}
+_PRIMARY_FIELDS = {"resolved", "redacted", "recipe_manifest", "evidence_ref"}
 
 
 def _mapping(value: object) -> dict[str, PlainData]:
@@ -34,12 +37,8 @@ def _equal(left: PlainData, right: PlainData) -> bool:
 
 
 def _require_current_report(report: dict[str, PlainData]) -> None:
-    if type(report.get("schema_version")) is not int or report[
-        "schema_version"
-    ] not in {
-        PREPARATION_REPORT_SCHEMA_VERSION,
-        SUBMITTED_PREPARATION_REPORT_SCHEMA_VERSION,
-    }:
+    if (type(report.get("schema_version")) is not int
+        or report["schema_version"] not in {PREPARATION_REPORT_SCHEMA_VERSION, SUBMITTED_PREPARATION_REPORT_SCHEMA_VERSION}):
         raise QueueConflictError(
             "preparation report schema is unsupported; regenerate preparation"
         )
@@ -64,7 +63,10 @@ def save_composition_evidence(
                 "preparation logical composition fields are invalid"
             )
         identifier = next(
-            (f"c{i}" for i, prior in enumerate(logical) if _equal(prior, composition)),
+            (f"c{i}" for i, prior in enumerate(logical)
+             if _equal(prior, composition)
+             and all(encode_ordered_config(prior[key]) == encode_ordered_config(composition[key])
+                     for key in ("resolved", "redacted", "recipe_manifest"))),
             None,
         )
         if identifier is None:
@@ -90,12 +92,9 @@ def save_composition_evidence(
                     "fields": cast(list[PlainData], fields),
                 }
             compositions[identifier] = {
-                **{
-                    key: composition[key]
-                    for key in ("resolved", "redacted", "recipe_manifest")
-                },
-                "manifest": manifest,
-                "provenance": provenance,
+                "manifest": manifest, "provenance": provenance,
+                **{key: encode_ordered_config(composition[key])
+                   for key in ("resolved", "redacted", "recipe_manifest")},
             }
         primary[name] = {}
         cast(dict[str, PlainData], primary[name])["evidence_ref"] = ResourceRef(
@@ -103,18 +102,16 @@ def save_composition_evidence(
             resource_type="loom.preparation_composition",
             codec_key="json.v1",
             metadata={
-                "document_schema_version": 2,
+                "document_schema_version": 3,
                 "pointer": f"/compositions/{identifier}",
             },
         ).to_dict()
-    atomic_write_json(
-        path,
-        {
-            "schema": _COMPOSITION_SCHEMA,
-            "schema_version": 2,
-            "compositions": compositions,
-        },
-    )
+    # Deep tagged trees make indentation far larger than their content.
+    # Keep canonical compact bytes and share complete equal configurations once.
+    atomic_write_bytes(path, stable_json_bytes({
+        "schema": _COMPOSITION_SCHEMA, "schema_version": 3,
+        "compositions": compositions,
+    }))
     checksum = hash_bytes(path.read_bytes())
     for name in ("composition", "requested_composition"):
         if name in primary:
@@ -163,8 +160,8 @@ def load_report(
         raise QueueConflictError(
             "preparation report format is unsupported; regenerate preparation"
         )
-    legacy = report["report_format"] == "loom.preparation_report.v1"
-    version = 1 if legacy else 2
+    ordered = report["report_format"] != _LEGACY_REPORT_FORMAT
+    document_version = SUPPORTED_REPORT_FORMATS.index(report["report_format"]) + 1
     hydrated: dict[str, dict[str, PlainData]] = {}
     companion_path: Path | None = None
     companion_checksum: str | None = None
@@ -175,7 +172,7 @@ def load_report(
                 raise QueueConflictError("preparation composition evidence is missing")
             continue
         composition = _mapping(report[name])
-        if set(composition) != (_LEGACY_PRIMARY_FIELDS if legacy else {"evidence_ref"}):
+        if set(composition) != ({"evidence_ref"} if ordered else _PRIMARY_FIELDS):
             raise QueueConflictError(
                 "preparation primary composition fields are invalid"
             )
@@ -208,7 +205,7 @@ def load_report(
         if (
             set(metadata) != {"document_schema_version", "pointer"}
             or type(metadata["document_schema_version"]) is not int
-            or metadata["document_schema_version"] != version
+            or metadata["document_schema_version"] != document_version
             or not isinstance(pointer, str)
         ):
             raise QueueConflictError(
@@ -232,12 +229,9 @@ def load_report(
             companion = _decoded_mapping(companion_bytes)
             if (
                 set(companion) != {"schema", "schema_version", "compositions"}
-                or companion["schema"]
-                != (
-                    "loom.preparation_composition.v1" if legacy else _COMPOSITION_SCHEMA
-                )
+                or companion["schema"] != f"loom.preparation_composition.v{document_version}"
                 or type(companion["schema_version"]) is not int
-                or companion["schema_version"] != version
+                or companion["schema_version"] != document_version
             ):
                 raise QueueConflictError(
                     "preparation composition schema is unsupported"
@@ -252,10 +246,8 @@ def load_report(
             raise QueueConflictError("preparation addressed composition is missing")
         if identifier in hydrated:
             prior = hydrated[identifier]
-            if legacy and any(
-                not _equal(prior[key], composition[key])
-                for key in ("resolved", "redacted", "recipe_manifest")
-            ):
+            if not ordered and any(not _equal(prior[key], composition[key])
+                   for key in ("resolved", "redacted", "recipe_manifest")):
                 raise QueueConflictError(
                     "shared preparation composition logical meanings differ"
                 )
@@ -264,7 +256,7 @@ def load_report(
             report[name] = deepcopy(prior)
             continue
         entry = _mapping(entries[identifier])
-        if set(entry) != ({"manifest", "provenance"} if legacy else _LOGICAL_FIELDS):
+        if set(entry) != (_LOGICAL_FIELDS if ordered else {"manifest", "provenance"}):
             raise QueueConflictError("preparation composition entry fields are invalid")
         manifest = _mapping(entry["manifest"])
         provenance = _mapping(entry["provenance"])
@@ -295,10 +287,34 @@ def load_report(
                 },
             }
         full = {
-            key: (composition if legacy else entry)[key]
+            key: (entry if ordered else composition)[key]
             for key in ("resolved", "redacted", "recipe_manifest")
         }
         full.update(manifest=manifest, provenance=provenance)
+        if ordered:
+            # Decode each distinct composition before copying shared views.
+            # Copying the tagged transport first duplicates its larger tree and
+            # repeats decoding, although both references name identical bytes.
+            # Historical v2 existed with both plain and ordered payloads.
+            # A tagged field requires the whole ordered tuple to decode; never
+            # reinterpret a malformed/mixed envelope as legacy plain data.
+            tagged = document_version == 3 or any(
+                isinstance(full[key], dict)
+                and full[key].get("schema") == "weave.ordered-config.v1"
+                for key in ("resolved", "redacted", "recipe_manifest")
+            )
+            for key in ("resolved", "redacted", "recipe_manifest"):
+                try:
+                    if tagged:
+                        full[key] = decode_ordered_config(full[key])
+                except ConfigError as exc:
+                    raise QueueConflictError(
+                        f"preparation ordered configuration {key} is invalid"
+                    ) from exc
+            if not isinstance(full["resolved"], dict) or not isinstance(full["redacted"], dict):
+                raise QueueConflictError("preparation ordered configuration must decode to mappings")
+            if not isinstance(full["recipe_manifest"], list):
+                raise QueueConflictError("preparation recipe manifest must decode to a sequence")
         hydrated[identifier] = full
         report[name] = full
     return report

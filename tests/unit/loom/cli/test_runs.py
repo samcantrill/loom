@@ -41,6 +41,20 @@ from loom.runs import (
 )
 
 
+def test_runs_index_discovery_only_refreshes_without_summary_catalog(tmp_path):
+    from loom.pipeline.stores import LocalRunStore, path_to_run_uri
+
+    root = tmp_path / 'runs'
+    LocalRunStore(root).create_run(path_to_run_uri(root / 'one'))
+    stdout, stderr = io.StringIO(), io.StringIO()
+    assert main(['runs', 'index', str(root), '--discovery-only', '--format', 'json'],
+                stdout=stdout, stderr=stderr) == 0
+    assert not stderr.getvalue()
+    value = json.loads(stdout.getvalue())
+    assert value['result']['indexed_count'] == 1
+    assert not (root / '.loom_catalog/catalog.sqlite').exists()
+
+
 pytestmark = pytest.mark.unit
 
 

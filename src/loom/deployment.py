@@ -7,7 +7,7 @@ relative to its selected preparation project, identically for Unix and HTTPS.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import fcntl
 import json
 import math
@@ -60,6 +60,25 @@ class DeploymentSelection:
     startup_seconds: float
     wait_seconds: float | None
     worker_contract: str = SUBMITTED_CONTAINER_WORKER_CONTRACT
+    run_defaults: Mapping[str, Any] = field(default_factory=dict)
+
+    def resolve_run_options(self, explicit: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        """Resolve sparse policy before retaining a new request, never during replay.
+
+        Explicit invocation options override deployment defaults; preparation then
+        overlays these on recipe runtime settings. No scientific config is changed.
+        """
+        from copy import deepcopy
+        from loom.pipeline.runtime import RunOptions
+        from loom.serialization import thaw_plain_data
+
+        result = deepcopy(dict(thaw_plain_data(explicit or {})))
+        settings = self.run_defaults.get("execution", {}).get("settings", {})
+        if settings:
+            execution = result.setdefault("execution", {})
+            execution["settings"] = {**settings, **execution.get("settings", {})}
+        RunOptions.from_dict(result)
+        return result
 
 
 def load_deployment(path: str | Path) -> DeploymentSelection:
@@ -76,6 +95,7 @@ def load_deployment(path: str | Path) -> DeploymentSelection:
         "preparation",
         "startup_seconds",
         "wait_seconds",
+        "run_defaults",
     }:
         raise QueueConfigError("deployment selection fields are invalid")
 
@@ -143,6 +163,22 @@ def load_deployment(path: str | Path) -> DeploymentSelection:
     contract = preparation.get("worker_contract", SUBMITTED_CONTAINER_WORKER_CONTRACT)
     if not isinstance(contract, str) or contract not in SUPPORTED_WORKER_CONTRACTS:
         raise QueueConfigError("deployment preparation worker contract is unsupported")
+    defaults = value.get("run_defaults", {})
+    if (
+        not isinstance(defaults, Mapping)
+        or set(defaults) - {"execution"}
+        or not isinstance(defaults.get("execution", {}), Mapping)
+        or set(defaults.get("execution", {})) - {"settings"}
+        or not isinstance(defaults.get("execution", {}).get("settings", {}), Mapping)
+        or set(defaults.get("execution", {}).get("settings", {})) - {"max_parallel_stages"}
+    ):
+        raise QueueConfigError("deployment run_defaults supports only execution.settings.max_parallel_stages")
+    from loom.pipeline.runtime import RunOptions
+    from loom.pipeline.errors import RuntimeResourceError
+    try:
+        RunOptions.from_dict(defaults)
+    except RuntimeResourceError as exc:
+        raise QueueConfigError(f"deployment run_defaults is invalid: {exc}") from exc
     return DeploymentSelection(
         source,
         connection,
@@ -154,6 +190,7 @@ def load_deployment(path: str | Path) -> DeploymentSelection:
         cast(float, duration("startup_seconds", 30.0)),
         duration("wait_seconds", None),
         contract,
+        defaults,
     )
 
 
@@ -177,6 +214,7 @@ def export_connection_deployment(selection: DeploymentSelection, destination: st
                         **({"worker_contract": selection.worker_contract}
                            if selection.worker_contract != SUBMITTED_CONTAINER_WORKER_CONTRACT else {})},
         "startup_seconds": selection.startup_seconds, "wait_seconds": selection.wait_seconds,
+        **({"run_defaults": dict(selection.run_defaults)} if selection.run_defaults else {}),
     }
     try:
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -328,6 +366,9 @@ def _bind(
     # Pre-initialized native roots supply their real identity without requiring
     # an external creation binding. Recheck under the shared binding lock below.
     check_owner()
+    from loom.queue._storage_upgrade_state import require_storage_upgrade_ready
+    for name, config in configs.items():
+        require_storage_upgrade_ready(config.daemon.coordinator_root if name == "coordinator" else config.client.agent_root)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     lock_path = path.with_name(path.name + ".lock")
     descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
@@ -412,9 +453,8 @@ def _bind(
                 ids = {"agent": _open_root(root, role="local-agent")}
             if retained["ids"] is not None and retained["ids"] != ids:
                 raise QueueConflictError("bound service identity conflicts")
-            with sqlite3.connect(
-                f"{(role_root / 'control.sqlite').as_uri()}?mode=ro", uri=True
-            ) as conn:
+            from loom._sqlite_inspection import inspect_sqlite_database
+            with inspect_sqlite_database(role_root / "control.sqlite") as conn:
                 existing = conn.execute(
                     "SELECT value FROM root_metadata WHERE key = 'service_lifetime'"
                 ).fetchone()
@@ -432,7 +472,11 @@ def _bind(
                 role_lock = None
             if role_lock is not None:
                 try:
-                    with sqlite3.connect(role_root / "control.sqlite") as conn:
+                    require_storage_upgrade_ready(role_root, entering=True)
+                    from loom._sqlite_policy import connect_existing
+                    policy = config.daemon.sqlite_policy if name == "coordinator" else config.client.sqlite_policy
+                    with (sqlite3.connect(role_root / "control.sqlite") if policy is None else
+                          connect_existing(role_root / "control.sqlite", policy=policy, isolation_level="")) as conn:
                         existing = conn.execute(
                             "SELECT value FROM root_metadata WHERE key = 'service_lifetime'"
                         ).fetchone()

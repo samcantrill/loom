@@ -131,6 +131,8 @@ def register_subparser(
 
     index_parser = actions.add_parser("index", help="rebuild a run catalog index")
     index_parser.add_argument("collection", metavar="COLLECTION", help="run collection path")
+    index_parser.add_argument("--discovery-only", action="store_true",
+                              help="refresh membership and creation times without reading live run summaries")
     _add_output_options(index_parser)
     index_parser.set_defaults(handler=handle_index)
 
@@ -363,7 +365,7 @@ def handle_index(namespace: argparse.Namespace) -> int:
     """Handle ``loom runs index``."""
 
     collection = Path(namespace.collection)
-    result = build_runs_index_result(collection)
+    result = build_runs_index_result(collection, discovery_only=True) if getattr(namespace, "discovery_only", False) else build_runs_index_result(collection)
     warnings = catalog_warnings_for_cli(result.warnings)
     output_format = output_format_from_namespace(namespace)
     if output_format is OutputFormat.JSON:
@@ -525,13 +527,13 @@ def handle_import(namespace: argparse.Namespace) -> int:
     return int(ExitCode.SUCCESS if ok else ExitCode.RUN_STATE)
 
 
-def build_runs_index_result(collection: Path) -> "CatalogIndexResult":
+def build_runs_index_result(collection: Path, *, discovery_only: bool = False) -> "CatalogIndexResult":
     """Rebuild the catalog sidecar for a collection."""
 
     from loom.runs import CatalogError, RunCatalog
 
     try:
-        return RunCatalog.open(collection).rebuild()
+        return RunCatalog.open(collection).rebuild(discovery_only=discovery_only)
     except CatalogError as exc:
         raise _catalog_cli_error(exc) from exc
 

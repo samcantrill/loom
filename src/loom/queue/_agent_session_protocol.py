@@ -106,6 +106,13 @@ def register(self: LocalDaemonAgentHttpClient, request: AgentRegistration) -> Ge
     if self._config.agent_root is not None:
         require_unretired(self._config.agent_root)
 
+    from .agent_sessions import SLURM_PENDING_EFFECTS_CAPABILITY, SLURM_SUBMISSION_CAPABILITY
+    if SLURM_PENDING_EFFECTS_CAPABILITY in request.declared_capabilities:
+        if SLURM_SUBMISSION_CAPABILITY not in request.declared_capabilities:
+            raise QueueServiceError("pending SLURM effects require submission capability")
+        handshake = yield from _steps(self.handshake)
+        if SLURM_PENDING_EFFECTS_CAPABILITY not in handshake["capabilities"]:
+            raise QueueServiceError("coordinator lacks pending SLURM effects")
     from ._shared_assignment import CAPABILITY
     from .shared_execution import SHARED_EXECUTION_CAPABILITY, has_input_directories, qualifications
     if CAPABILITY in request.declared_capabilities:

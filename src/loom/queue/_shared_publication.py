@@ -29,6 +29,9 @@ from loom.pipeline.stores.shared_artifacts import (
     read_receipt,
     receipt_bytes,
     resolve_binding,
+    publication_policy,
+    publication_configuration,
+    TRUSTED_SHARED_STORAGE,
 )
 from loom.serialization import PlainData
 from .errors import QueueConflictError, QueueServiceError
@@ -49,6 +52,7 @@ if TYPE_CHECKING:
     PublicationWorkspace = _ResidentAssignmentWorkspace | SlurmBootstrapWorkspace
 
 CAPABILITY = "shared-artifact-publication-v1"
+TRUSTED_CAPABILITY = "trusted-shared-artifact-publication-v1"
 
 
 def selected(
@@ -193,6 +197,7 @@ def retain(
         assert selection is not None
         alias, facts = selection
         limits = budgets(facts["publication"])
+        trusted = publication_policy(facts["publication"]) == TRUSTED_SHARED_STORAGE
         launch, owner = workspace_facts(workspace)
         roots = launch["profile"]["shared_roots"]
         tree = staging_tree(request, roots, launch["agent_id"])
@@ -204,11 +209,34 @@ def retain(
         # Still verify the final primary bytes and complete receipt below.
         available = final if final.exists() else tree
         logs = _retain_execution_logs(workspace, result, available, sealed=available == final)
-        with phase("publication_inventory_hash", operation_id=request.assignment_id) as evidence:
-            evidence["publication_id"] = pub_id
-            members = inventory(available, limits)
-            evidence["member_count"] = len(members)
-            evidence["payload_bytes"] = sum(cast(int, member["size_bytes"]) for member in members)
+        if trusted:
+            # Declared primaries and logs enter the receipt. Companion files
+            # remain producer-owned; no recursive discovery or verification.
+            members_by_path = {}
+            for ref in result.outputs.values():
+                source = uri_to_path(ref.uri)
+                if not source.resolve().is_relative_to(tree.resolve()) and roots[alias]["container_path"] is not None:
+                    source = Path(roots[alias]["host_path"]) / source.relative_to(roots[alias]["container_path"])
+                relative = source.resolve().relative_to(tree.resolve()).as_posix()
+                primary = contained(available, relative)
+                if ref.checksum is not None and ref.checksum.startswith("sha256:"):
+                    size, digest = primary.stat().st_size, ref.checksum.removeprefix("sha256:")
+                else:
+                    # Create a primary identity when the producer supplied none;
+                    # this never inventories or hashes companion payloads.
+                    size, digest = file_identity(primary)
+                members_by_path[relative] = {"path": relative, "size_bytes": size, "digest": digest}
+            # Logs are a small declared set, not a payload tree inventory.
+            for relative in logs.values():
+                size, digest = file_identity(contained(available, relative))
+                members_by_path[relative] = {"path": relative, "size_bytes": size, "digest": digest}
+            members = sorted(members_by_path.values(), key=lambda item: item["path"])
+        else:
+            with phase("publication_inventory_hash", operation_id=request.assignment_id) as evidence:
+                evidence["publication_id"] = pub_id
+                members = inventory(available, limits)
+                evidence["member_count"] = len(members)
+                evidence["payload_bytes"] = sum(cast(int, member["size_bytes"]) for member in members)
         indexed = {str(member["path"]): member for member in members}
         outputs = {}
         for name, ref in result.outputs.items():
@@ -234,7 +262,7 @@ def retain(
                     load_preparation_report(ref, available / relative)
             outputs[name] = relative
         receipt = {
-            "schema_version": 1,
+            "schema_version": 2 if trusted else 1,
             "publication_id": pub_id,
             "identity": owner,
             "members": members,
@@ -261,13 +289,13 @@ def retain(
             primary = outputs[name]
             member = indexed[primary]
             reference: dict[str, PlainData] = {
-                "schema_version": 1,
+                "schema_version": 2 if trusted else 1,
                 "root_id": alias,
                 "tree": final_relative,
                 "publication_id": pub_id,
                 "receipt_digest": hashlib.sha256(data).hexdigest(),
                 "primary": primary,
-                "budgets": cast(PlainData, limits),
+                "budgets": publication_configuration(facts["publication"]),
             }
             descriptors.append(
                 _RemoteOutputArtifact(
@@ -310,6 +338,7 @@ def prepare_publication(
         alias, facts = selection
         root = cast(Mapping[str, PlainData], roots[alias])
         limits = budgets(facts["publication"])
+        trusted = publication_policy(facts["publication"]) == TRUSTED_SHARED_STORAGE
         if not admits_budgets(root.get("publication"), facts["publication"]):
             raise QueueConflictError("coordinator publication policy conflicts")
         owner = identity(request, agent_id=agent_id, fence=fence)
@@ -328,7 +357,8 @@ def prepare_publication(
                 or reference["root_id"] != alias
                 or reference["publication_id"] != pub_id
                 or reference["tree"] != final_relative
-                or reference["budgets"] != limits
+                or reference["budgets"] != publication_configuration(facts["publication"])
+                or reference["schema_version"] != (2 if trusted else 1)
             ):
                 raise QueueConflictError("shared output publication identity conflicts")
             if receipt is None:
@@ -375,7 +405,7 @@ def prepare_publication(
                 request.declared_outputs
             ):
                 raise QueueConflictError("shared output declaration is incomplete")
-            if available == staging:
+            if available == staging and not trusted:
                 from ._remote_stage_execution import _fsync_directory
 
                 audited_members = cast(list[Mapping[str, PlainData]], receipt["members"])

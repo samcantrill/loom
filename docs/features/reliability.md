@@ -566,11 +566,51 @@ Apptainer/Singularity:
 An enabled policy uses the built-in subprocess runner's foreground PID namespace
 (`--pid --no-init=false`). The currently verified path is Linux with pidfds and
 non-reaping child waits, running SingularityCE 3.10.4 (including the `-focal`
-build), 4.1.1 or 4.1.5. These are specific verified versions, not a version range.
+build), 4.1.1 or 4.1.5, or the explicit `loom-apptainer-guard` version 1 command described
+below. These are specific verified selections, not a version range.
 Other runtimes, injected runners, and instance/join modes are not admitted
 for enabled timeouts. Static capability diagnostics describe this supported
 path; they do not probe a remote execution host. Unsupported selections fail with
 an actionable message and an `unsupported` attempt outcome.
+
+Container supervision uses Python's standard pidfd wrappers when available.
+For portable Python builds without those optional wrappers, a private adapter
+supports the Linux x86-64 LP64 syscall ABI. Admission opens a descriptor for its
+own process and probes signaling through that descriptor before launching a
+payload. Unsupported kernels, ABIs or denied operations refuse admission. The
+adapter preserves kernel process identities and close-on-exec descriptors; it
+never substitutes numeric-PID signaling. This capability does not qualify a new
+container runtime or change the specific runtime versions above. Other service
+or fleet lifecycle paths retain their own interpreter capability requirements.
+
+`loom-apptainer-guard` is an opt-in foreground execution command for Apptainer
+1.5.3 with util-linux `unshare` 2.37.4. Select its installed absolute path as the
+Apptainer command; direct Apptainer 1.5.3 remains unqualified for these timeout
+claims. The guard's `--version` reports its own protocol identity. At execution,
+it checks both component versions inside a new owned user/mount/PID namespace
+before starting the payload. `LOOM_APPTAINER_GUARD_RUNTIME` and
+`LOOM_APPTAINER_GUARD_UNSHARE` can select executable paths; otherwise the selected
+host PATH resolves `apptainer` and `unshare`. Invalid explicit selections refuse
+without fallback. Only `exec` and `--version` are supported; use the real runtime
+for separately authorized image builds.
+
+The guard maps the caller's UID and primary GID to themselves and retains the
+original process group. Its
+stable PID-one Python shim stays alive while the runtime executes and retains
+unshare's parent-death kill behavior. It never execs the runtime or changes its
+credentials: either can otherwise lose that parent-death boundary. Namespace
+termination includes the runtime's host-side FUSE image helpers, even when they
+create another process group. Merely observing Apptainer's inner payload init
+does not cover those helpers. Version checks and payload children all remain
+inside the outer namespace. Existing direct Singularity commands and omitted
+guard selection keep their behavior.
+
+This requires permitted unprivileged user namespaces, the selected executable
+and helper paths, and a compatible host Python. It changes no host mount or
+network namespace and needs no sudo, daemon, cgroup delegation or external
+service. Host temp/cache paths and container temporary binds remain explicit
+deployment selections. Exact installed runtime, filesystem and GPU behavior
+still require site qualification; a version report alone does not supply it.
 
 The deadline includes runtime admission and launch. Expiry remains the primary
 failure, followed by at most two seconds of TERM grace and two seconds of KILL

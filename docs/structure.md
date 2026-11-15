@@ -611,6 +611,19 @@ interpolation, expands named recipes, validates stable boundaries, instantiates
 `_target_` object graphs, records config provenance, and redacts secrets for
 safe persisted output.
 
+Authored mapping and sequence order is semantic configuration data. Configuration
+snapshots use Weave's `weave.ordered-config.v1` encoding, whose arrays retain
+mapping entry order through canonical JSON. Preparation report v2 references a
+compact composition companion v2 that stores each complete equal configuration
+once, including resolved/redacted views and recipe evidence. Stage fingerprint
+payload v3 encodes configuration-bearing fields; consumers decode
+within the receiving process and re-encode before further transport. Preparation
+candidate v2 carries an encoded `configuration`; project verifiers decode that
+field for inspection while computing candidate digests over the unchanged wire
+candidate. Legacy snapshots and fingerprints retain their recorded meaning;
+readers cannot infer authored order that older serializers discarded. This
+contract does not impose sequential scheduling on independent DAG stages.
+
 Expected modules:
 
 ```text
@@ -1413,6 +1426,13 @@ transaction owns immutable output history and terminal success; replay after a
 lost response does not substitute the new head for the original predecessor.
 
 ## Outbound Agent Session Boundaries
+
+Control messages retain a 65,536-byte transport limit. The Slurm bootstrap
+registration reply permits up to 262,144 bytes for a recognized typed stage
+delivery, including ordered scientific configuration. Its control envelope
+still obeys the ordinary limit, and semantic fields retain bounded depth and
+collection sizes. Other operations and unrecognized delivery versions do not
+receive this larger budget. Artifact transfer limits are separate and unchanged.
 
 `queue/agent_session_transport.py` retains the public TLS configuration, HTTP
 client/server and application integration. Its private collaborators separate

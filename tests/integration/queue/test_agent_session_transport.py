@@ -220,6 +220,73 @@ def _request(handshake: Mapping[str, object], agent_root_id: str) -> AgentRegist
     )
 
 
+def test_repeated_pending_slurm_connections_retire_request_threads(tmp_path, monkeypatch):
+    """Transport lifetime coverage; real storage ownership is tested separately."""
+    from http.client import HTTPSConnection
+    from threading import Condition
+    from loom.queue.agent_sessions import AgentSessionService
+    from loom.queue.agent_session_transport import _Handler
+
+    credentials = _credentials(tmp_path / 'tls')
+    config = LocalDaemonConfig(
+        coordinator_root=tmp_path / 'coordinator', agent_root=None,
+        run_store_root=tmp_path / 'runs', resident_worker_launch_profile=None,
+        cpu_capacity=0, agent_policy=_policy(),
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    server = LocalDaemonAgentHttpServer(daemon, AgentTlsServerConfig(
+        'localhost', 0, credentials['server'].with_suffix('.crt'),
+        credentials['server'].with_suffix('.key'), credentials['ca'].with_suffix('.crt'),
+        {_fingerprint(credentials['agent'].with_suffix('.crt')): 'agent-credential'},
+    ))
+    condition = Condition()
+    active = completed = 0
+    original = _Handler.handle
+
+    def tracked(handler):
+        nonlocal active, completed
+        with condition:
+            active += 1
+        try:
+            return original(handler)
+        finally:
+            with condition:
+                active -= 1
+                completed += 1
+                condition.notify_all()
+
+    monkeypatch.setattr(_Handler, 'handle', tracked)
+    monkeypatch.setattr(AgentSessionService, 'slurm_work', lambda *args, **kwargs: {
+        'assignment_id': 'A', 'sequence': 1, 'disposition': 'pending',
+        'reason': 'recovery_retention', 'retry_after_seconds': 5,
+    })
+    server.start()
+    context = ssl.create_default_context(cafile=str(credentials['ca'].with_suffix('.crt')))
+    context.load_cert_chain(credentials['agent'].with_suffix('.crt'), credentials['agent'].with_suffix('.key'))
+    try:
+        for number in range(40):
+            connection = HTTPSConnection('localhost', server.port, context=context, timeout=5)
+            try:
+                connection.request('POST', '/v1/agent/slurm_work', body=json.dumps({
+                    'session_id': 'session', 'coordinator_epoch': 'epoch',
+                    'evidence': None, 'cursor': None,
+                }), headers={'Content-Type': 'application/json'})
+                response = connection.getresponse()
+                body = json.loads(response.read())
+                assert response.status == 200, body
+                assert body['result']['disposition'] == 'pending'
+            finally:
+                connection.close()
+            with condition:
+                assert condition.wait_for(lambda: completed == number + 1, timeout=5)
+                assert active == 0
+    finally:
+        server.stop()
+        daemon.stop()
+
+
 def test_agent_listener_prepares_tls_rotation_before_atomic_install(
     tmp_path: Path,
 ) -> None:
@@ -1294,11 +1361,13 @@ def test_agent_reload_recovers_crash_after_bound_replacement(
         recovered.close()
 
 
-@pytest.mark.parametrize("change", ["resources", "ceiling"])
+@pytest.mark.parametrize("change", ["resources", "ceiling", "slurm-pacing", "slurm-observation", "slurm-batching"])
 def test_agent_reload_allows_idle_capacity_change_but_not_retained_reinterpretation(
     tmp_path: Path,
     change: str,
 ) -> None:
+    from loom.queue._slurm_observation import SlurmObservationPolicy
+
     root = _fresh_remote_agent_root(tmp_path)
     original = ResidentExecutionProfile(
         ResidentProfileDescriptor(
@@ -1321,6 +1390,12 @@ def test_agent_reload_allows_idle_capacity_change_but_not_retained_reinterpretat
     replacement = (
         replace(base, resident_profiles=(replace(original, cpu_capacity=2),))
         if change == "resources"
+        else replace(base, slurm_submit_interval_seconds=1.0)
+        if change == "slurm-pacing"
+        else replace(base, slurm_observation_policy=SlurmObservationPolicy(300))
+        if change == "slurm-observation"
+        else replace(base, slurm_observation_policy=SlurmObservationPolicy(300, 8, 4, 10))
+        if change == "slurm-batching"
         else replace(base, max_concurrent_assignments=2)
     )
     try:

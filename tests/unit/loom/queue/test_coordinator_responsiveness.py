@@ -339,14 +339,15 @@ def test_slow_worker_preparation_cannot_reserve_after_authorization_changes(tmp_
     daemon = LocalDaemon(config, trusted_scheduling_loader=lambda: config)
     status = daemon.start()
     entered, release = Event(), Event()
-    original = local_daemon_execution.prepare_stage_attempt
+    from loom.pipeline import execution as pipeline_execution
+    original = pipeline_execution.prepare_stage_attempt
 
     def blocked(*args, **kwargs):
         entered.set()
         assert release.wait(10)
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(local_daemon_execution, "prepare_stage_attempt", blocked)
+    monkeypatch.setattr(pipeline_execution, "prepare_stage_attempt", blocked)
     try:
         client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
         client.submit(LocalDaemonAdmissionRequest("stale-reservation", uri))

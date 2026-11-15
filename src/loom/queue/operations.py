@@ -289,6 +289,8 @@ def inspect_native_service(
                 "coordinator_id": state.get("coordinator_id"),
                 "service_manager": "unavailable",
                 "capabilities": state.get("capabilities", []),
+                **({"startup_hold_id": metadata["startup_hold_id"]}
+                   if "startup_hold_id" in metadata else {}),
             },
             reason,
         )

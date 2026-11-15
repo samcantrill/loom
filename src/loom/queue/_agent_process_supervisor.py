@@ -9,6 +9,10 @@ private queue application infrastructure; pipeline execution never imports it.
 from __future__ import annotations
 
 from collections.abc import Generator
+from loom._sqlite_policy import connect_existing, initialize_database
+from loom.pipeline.stores.atomic import atomic_write_text, atomic_write_bytes
+from ._storage_policy import StoragePolicy, parse_storage_policy
+
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
@@ -189,8 +193,11 @@ class SupervisorLaunchConfiguration:
     agent_id: str
     profiles: tuple[ResidentWorkerLaunchProfile, ...]
     container_policies: tuple[SubmittedContainerPolicy, ...] = ()
+    storage: StoragePolicy | None = None
 
     def __post_init__(self) -> None:
+        if self.storage is not None and not isinstance(self.storage, StoragePolicy):
+            raise AgentProcessSupervisorError("supervisor storage policy is invalid")
         if not isinstance(self.agent_id, str) or not self.agent_id:
             raise AgentProcessSupervisorError("supervisor agent ID is invalid")
         profiles = tuple(sorted(self.profiles, key=lambda item: item.profile_id))
@@ -217,6 +224,7 @@ class SupervisorLaunchConfiguration:
     def fingerprint(self) -> str:
         return _digest(
             {
+                **({"storage": self.storage.to_dict()} if self.storage is not None else {}),
                 "agent_id": self.agent_id,
                 "profiles": [
                     {"profile_id": item.profile_id, "fingerprint": item.fingerprint}
@@ -451,9 +459,12 @@ class AgentProcessSupervisor:
         profiles: tuple[ResidentWorkerLaunchProfile, ...],
         container_policies: tuple[SubmittedContainerPolicy, ...] = (),
         initialize: bool = False,
+        storage: StoragePolicy | None = None,
     ) -> None:
+        if storage is not None:
+            storage.require_owner()
         self.root = Path(root).resolve()
-        self._configuration = SupervisorLaunchConfiguration(agent_id, profiles, container_policies)
+        self._configuration = SupervisorLaunchConfiguration(agent_id, profiles, container_policies, storage)
         self._agent_id = self._configuration.agent_id
         self._children: dict[str, OwnedProcessGroup] = {}
         self._namespace_inits: dict[str, int] = {}
@@ -479,23 +490,41 @@ class AgentProcessSupervisor:
         agent_id: str,
         profiles: tuple[ResidentWorkerLaunchProfile, ...],
         container_policies: tuple[SubmittedContainerPolicy, ...] = (),
+        storage: StoragePolicy | None = None,
     ) -> "AgentProcessSupervisor":
+        if storage is not None:
+            storage.require_owner()
         root = Path(agent_root).resolve() / "supervisor"
         if root.exists():
             raise AgentProcessSupervisorError("supervisor root already exists")
         root.mkdir(mode=0o700, parents=False)
         return cls(
             root, agent_id=agent_id, profiles=profiles,
-            container_policies=container_policies, initialize=True,
+            container_policies=container_policies, initialize=True, storage=storage,
         )
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._path)
+    def _connect(self, *, initialize=False) -> sqlite3.Connection:
+        storage = self._configuration.storage
+        if storage is None:
+            conn = sqlite3.connect(self._path)
+        else:
+            storage.require_owner()
+            connect = initialize_database if initialize else connect_existing
+            conn = connect(self._path, policy=storage.sqlite, isolation_level="")
         conn.row_factory = sqlite3.Row
         return conn
 
+    def _write_start_gate(self, gate: Path) -> None:
+        storage = self._configuration.storage
+        if storage is None:
+            gate.write_text("granted\n", encoding="utf-8")
+        else:
+            atomic_write_text(
+                gate, "granted\n", durability=storage.durable_files,
+            )
+
     def _initialize(self) -> None:
-        with self._connect() as conn:
+        with self._connect(initialize=True) as conn:
             conn.executescript("""
             CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE reboot_recoveries (
@@ -731,6 +760,15 @@ class AgentProcessSupervisor:
             ).fetchone()
         if existing is None:
             self._qualify_new_launch(launch)
+            if launch.backend_kind == "apptainer":
+                from loom._pidfd import require_pidfd_support
+
+                try:
+                    require_pidfd_support()
+                except OSError as exc:
+                    raise _SupervisorNoStartError(
+                        "container launch requires working Linux pidfd operations"
+                    ) from exc
             if launch.profile.container is not None and not launch.profile.temporary_mounts:
                 from ._container_worker import prepare_container_worker_paths
                 prepare_container_worker_paths(
@@ -782,7 +820,7 @@ class AgentProcessSupervisor:
                     launch.profile, workspace=launch.workspace_root, agent_id=launch.agent_id
                 )
             if launch.backend_kind != "apptainer":
-                gate.write_text("granted\n", encoding="utf-8")
+                self._write_start_gate(gate)
             child = subprocess.Popen(
                 launch.command_argv,
                 cwd=launch.profile.project_root,
@@ -1032,9 +1070,10 @@ class AgentProcessSupervisor:
             self._containment_success.setdefault(launch.launch_operation_id, successful_exit)
             if not _ready(namespace):
                 import signal
+                from loom._pidfd import send_pidfd_signal
 
                 try:
-                    signal.pidfd_send_signal(namespace, signal.SIGKILL)
+                    send_pidfd_signal(namespace, signal.SIGKILL)
                 except ProcessLookupError:
                     # Exit raced with the signal; positive containment is checked below.
                     pass
@@ -1168,9 +1207,7 @@ class AgentProcessSupervisor:
             )
             if row is None:
                 # Authority granted this exact new launch before acceptance.
-                (launch.workspace_root / "run.grant").write_text(
-                    "granted\n", encoding="utf-8"
-                )
+                self._write_start_gate(launch.workspace_root / "run.grant")
             observation = (owner.cancel() if cancel else
                            owner.launch() if row is None else owner.observe())
             state = {
@@ -1907,7 +1944,7 @@ class AgentProcessSupervisorClient(_SupervisorControlClient):
     def shutdown_clean(self) -> None:
         # Preserve clean shutdown's root-first descendant cleanup. Join through
         # ordinary bounded containment exchanges, outside request dispatch.
-        with sqlite3.connect(self._root / "supervisor.sqlite") as conn:
+        with inspect_sqlite_database(self._root / "supervisor.sqlite") as conn:
             launches = tuple(conn.execute(
                 "SELECT launch_json FROM launches WHERE state = 'exited'"
             ))
@@ -1921,7 +1958,7 @@ class AgentProcessSupervisorClient(_SupervisorControlClient):
         """Stop an initialized owner only before it has accepted any launch."""
 
         try:
-            with sqlite3.connect(self._root / "supervisor.sqlite") as conn:
+            with inspect_sqlite_database(self._root / "supervisor.sqlite") as conn:
                 launches = int(
                     conn.execute("SELECT COUNT(*) FROM launches").fetchone()[0]
                 )
@@ -1956,6 +1993,8 @@ class AgentProcessSupervisorService:
     ) -> None:
         """Durably initialize a supervisor root without starting a process."""
 
+        if configuration.storage is not None:
+            configuration.storage.require_owner()
         root = Path(agent_root).resolve() / "supervisor"
         if root.exists():
             raise AgentProcessSupervisorError("supervisor root already exists")
@@ -1964,7 +2003,7 @@ class AgentProcessSupervisorService:
             root,
             agent_id=configuration.agent_id,
             profiles=configuration.profiles,
-            container_policies=configuration.container_policies,
+            container_policies=configuration.container_policies, storage=configuration.storage,
             initialize=True,
         )
         if final_agent_root is not None:
@@ -1974,9 +2013,11 @@ class AgentProcessSupervisorService:
                     (str(Path(final_agent_root).resolve() / "supervisor"),),
                 )
         config_path = root / cls._CONFIG_NAME
-        config_path.write_text(
-            json.dumps(
+        durability = "best_effort" if configuration.storage is None else configuration.storage.durable_files
+        atomic_write_text(
+            config_path, json.dumps(
                 {
+                    **({"storage": configuration.storage.to_dict()} if configuration.storage is not None else {}),
                     "agent_id": configuration.agent_id,
                     "profiles": [
                         _profile_value(profile) for profile in configuration.profiles
@@ -1988,11 +2029,11 @@ class AgentProcessSupervisorService:
                 sort_keys=True,
                 separators=(",", ":"),
             ),
-            encoding="utf-8",
+            encoding="utf-8", durability=durability,
         )
         config_path.chmod(0o600)
         secret = root / "service.secret"
-        secret.write_bytes(secrets.token_bytes(32))
+        atomic_write_bytes(secret, secrets.token_bytes(32), durability=durability)
         secret.chmod(0o600)
 
     @classmethod
@@ -2016,7 +2057,7 @@ class AgentProcessSupervisorService:
             )
         supervisor = AgentProcessSupervisor(
             root, agent_id=configuration.agent_id, profiles=configuration.profiles,
-            container_policies=configuration.container_policies,
+            container_policies=configuration.container_policies, storage=configuration.storage,
         )
         supervisor.rotate_clean_continuity()
         return cls._start(agent_root, configuration)
@@ -2123,7 +2164,7 @@ def _service_configuration(root: Path) -> SupervisorLaunchConfiguration:
         ) from exc
     if (
         not isinstance(value, Mapping)
-        or set(value) - {"container_policies"} != {"agent_id", "profiles", "configuration_fingerprint"}
+        or set(value) - {"container_policies", "storage"} != {"agent_id", "profiles", "configuration_fingerprint"}
         or not isinstance(value["profiles"], list)
         or not isinstance(value.get("container_policies", []), list)
     ):
@@ -2134,6 +2175,7 @@ def _service_configuration(root: Path) -> SupervisorLaunchConfiguration:
         cast(str, value["agent_id"]),
         tuple(_profile_from_value(item) for item in value["profiles"]),
         tuple(SubmittedContainerPolicy.from_dict(item) for item in value.get("container_policies", [])),
+        storage=parse_storage_policy(value.get("storage")),
     )
     if value["configuration_fingerprint"] != configuration.fingerprint:
         raise AgentProcessSupervisorError(
@@ -2170,7 +2212,7 @@ def retained_supervisor_guard(agent_root: Path, *, agent_id: str):
         raw = json.loads(config.read_text(encoding="utf-8"))
         if (
             not isinstance(raw, dict)
-            or set(raw) - {"container_policies"} != {"agent_id", "profiles", "configuration_fingerprint"}
+            or set(raw) - {"container_policies", "storage"} != {"agent_id", "profiles", "configuration_fingerprint"}
             or raw["agent_id"] != agent_id
             or not isinstance(raw["profiles"], list)
             or not isinstance(raw.get("container_policies", []), list)
@@ -2179,8 +2221,12 @@ def retained_supervisor_guard(agent_root: Path, *, agent_id: str):
             raise AgentProcessSupervisorError("retained supervisor binding is invalid")
         # Profiles were normalized before being persisted. Hash their inert
         # serialized values; rebuilding executable objects would probe old IO.
+        storage = parse_storage_policy(raw.get("storage"))
+        if storage is not None:
+            storage.require_owner()
         fingerprint = _digest({
             "agent_id": agent_id,
+            **({"storage": storage.to_dict()} if storage is not None else {}),
             "profiles": [
                 {"profile_id": profile["descriptor"]["profile_id"],
                  "fingerprint": _digest(profile)}
@@ -2439,6 +2485,8 @@ def _serve(
     immutable_fingerprint: str | None = None, active_fingerprint: str | None = None,
 ) -> None:
     root = Path(root).resolve()
+    from ._storage_upgrade_state import require_storage_upgrade_ready
+    require_storage_upgrade_ready(root.parent)
     configuration = _service_configuration(root)
     _inspect_current_supervisor(
         root / "supervisor.sqlite", agent_id=configuration.agent_id,
@@ -2456,21 +2504,28 @@ def _serve(
     configuration = _service_configuration(root)
     if expected_configuration is not None and configuration != expected_configuration:
         raise AgentProcessSupervisorError("managed supervisor configuration changed")
+    try:
+        require_storage_upgrade_ready(root.parent, entering=True)
+    except Exception:
+        lock.close()
+        raise
     supervisor = AgentProcessSupervisor(
         root, agent_id=configuration.agent_id, profiles=configuration.profiles,
-        container_policies=configuration.container_policies,
+        container_policies=configuration.container_policies, storage=configuration.storage,
     )
     if managed_start:
         from ._agent_session_journal import _RemoteAgentJournal
 
         journal = _RemoteAgentJournal(root.parent,
             expected_configuration_fingerprint=immutable_fingerprint,
-            expected_active_configuration_fingerprint=active_fingerprint)
+            expected_active_configuration_fingerprint=active_fingerprint,
+            sqlite_policy=None if configuration.storage is None else configuration.storage.sqlite)
         try:
             from .retirement import require_unretired
             from ._managed_local import SQLiteAgentJournal
             require_unretired(root.parent)
-            SQLiteAgentJournal(root.parent / "journal.sqlite", _allow_initialize=False)._open_existing()
+            SQLiteAgentJournal(root.parent / "journal.sqlite", _allow_initialize=False,
+                sqlite_policy=None if configuration.storage is None else configuration.storage.sqlite)._open_existing()
             if journal.root_id != configuration.agent_id:
                 raise AgentProcessSupervisorError("supervisor agent identity changed")
             with supervisor._connect() as conn:

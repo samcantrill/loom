@@ -151,6 +151,7 @@ def test_project_metadata_exposes_loom_console_script_entry_point() -> None:
     assert project["scripts"] == {
         "loom": "loom.cli.main:main",
         "loom-mcp": "loom.mcp:main",
+        "loom-apptainer-guard": "loom._apptainer_guard:main",
     }
     assert "gui-scripts" not in project
 

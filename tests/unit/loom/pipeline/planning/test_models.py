@@ -223,8 +223,8 @@ def test_fingerprint_record_is_derived_verified_and_serialized_independently() -
         StageFingerprintRecord.from_dict(mismatched_policy)
 
 
-@pytest.mark.parametrize("version", [1, 3, True, "2"])
-def test_fingerprint_requires_current_schema_at_construction_and_decode(version: Any) -> None:
+@pytest.mark.parametrize("version", [1, 4, True, "2"])
+def test_fingerprint_requires_supported_schema_at_construction_and_decode(version: Any) -> None:
     record = _fingerprint()
     with pytest.raises(PlanSerializationError, match="schema_version"):
         replace(record, schema_version=version)

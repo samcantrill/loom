@@ -9,12 +9,51 @@ import pytest
 from loom.queue import _shared_recovery as recovery
 from loom.queue import _recovery_cleanup as cleanup
 from loom.queue._coordinator_control import validate_request, decode_result
-from tests.unit.loom.queue.test_shared_recovery import _workspace, _write
+from tests.unit.loom.queue.test_shared_recovery import _workspace, _write, _retention_database
+
+
+def test_budget_unavailable_is_not_retryable_or_cleanup_eligible(tmp_path, monkeypatch):
+    limits = {"max_payload_bytes": 1, "max_members": 100, "max_manifest_bytes": 4096}
+    workspace, profile, _ = _workspace(tmp_path, limits=limits)
+    current = _write(workspace)
+    with _retention_database(tmp_path / "retention.sqlite") as conn:
+        recovery.retain_released(
+            conn, {"provider_release_proof_json": "proof", "fence": "fence-1"},
+            workspace.request(), profile.shared_roots, agent_id="agent-1",
+        )
+        conn.execute("INSERT INTO remote_assignments VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (
+            workspace.assignment_id, "run", workspace.request().stage_name, 1, "attempt-1",
+            "RELEASED", "{}", None, "fence-1", 1,
+        ))
+        conn.execute("INSERT INTO agent_deliveries VALUES (?, ?)",
+                     (workspace.assignment_id, json.dumps(workspace.request().to_dict())))
+        daemon = SimpleNamespace(
+            _execution=SimpleNamespace(slurm_assignments=None),
+            config=SimpleNamespace(coordinator_shared_roots=profile.shared_roots),
+        )
+        monkeypatch.setattr(cleanup, "_authority", lambda *args: SimpleNamespace(
+            open_run=lambda uri: SimpleNamespace(stages=[])))
+        entry, = cleanup._preview(daemon, "run", conn)["entries"]
+        assert not entry["eligible"]
+        assert entry["retained_payload_bytes"] is None
+        assert entry["reclaimable_payload_bytes"] == 0
+        assert "recovery_unavailable_budget_exceeded" in entry["reasons"]
+        assert entry["retention_failure"]["reason"]["budget"] == "max_payload_bytes"
+        successor, _, _ = _workspace(tmp_path, attempt=2)
+        from loom.queue.errors import QueueConflictError
+        with pytest.raises(QueueConflictError, match="predecessor unavailable"):
+            recovery._bind_delivery(successor.request(), conn, "run", profile.shared_roots,
+                                    agent_id="agent-1", slurm_assignments=None)
+    conn.close()
+    assert (current / "partial").read_bytes() == b"partial"
 
 
 @pytest.mark.parametrize("status", ["FAILED", "SUCCEEDED"])
-def test_preview_keeps_existing_attempts_without_durable_diagnostics(tmp_path, monkeypatch, status):
-    workspace, profile, _ = _workspace(tmp_path)
+@pytest.mark.parametrize("trusted", [False, True])
+def test_preview_keeps_existing_attempts_without_durable_diagnostics(tmp_path, monkeypatch, status, trusted):
+    limits = {"policy": "trusted_shared_storage", "max_members": 1024,
+              "max_payload_bytes": 268435456, "max_manifest_bytes": 1048576} if trusted else None
+    workspace, profile, _ = _workspace(tmp_path, limits=limits)
     current = _write(workspace)
     ref = recovery.seal(
         workspace.request(), profile.shared_roots, agent_id="agent-1", fence="fence-1"
@@ -40,6 +79,7 @@ def test_preview_keeps_existing_attempts_without_durable_diagnostics(tmp_path, m
     ))
     admitted = []
     daemon = SimpleNamespace(
+        _execution=SimpleNamespace(slurm_assignments=None),
         admission_for_run_uri=admitted.append,
         _connection=lambda: conn,
         config=SimpleNamespace(coordinator_shared_roots=profile.shared_roots),
@@ -59,7 +99,7 @@ def test_preview_keeps_existing_attempts_without_durable_diagnostics(tmp_path, m
     assert admitted == ["run"]
     entry, = result["entries"]
     assert entry["eligible"] is False
-    assert entry["retained_payload_bytes"] == len(b"completepartial")
+    assert entry["retained_payload_bytes"] == (None if trusted else len(b"completepartial"))
     assert entry["reclaimable_payload_bytes"] == 0
     assert "complete_diagnostics_not_declared" in entry["reasons"]
     assert "logs_not_published" in entry["reasons"]
@@ -77,14 +117,17 @@ def test_preview_wire_requires_exact_managed_run_selection():
     assert decode_result("preview_recovery_cleanup", value) == value
 
 
-def test_settled_logs_share_publication_and_survive_assignment_removal(tmp_path):
+@pytest.mark.parametrize("trusted", [False, True])
+def test_settled_logs_share_publication_and_survive_assignment_removal(tmp_path, trusted):
     from dataclasses import replace
     from pathlib import Path
     import shutil
     from loom.queue._shared_publication import publish, RECOVERY_COMPLETE, EXECUTION_LOGS
     from tests.unit.loom.queue.test_remote_stage_execution import _shared_publication_workspace
 
-    workspace, profile, _, original = _shared_publication_workspace(tmp_path)
+    limits = {"policy": "trusted_shared_storage", "max_members": 1024,
+              "max_payload_bytes": 268435456, "max_manifest_bytes": 1048576} if trusted else None
+    workspace, profile, _, original = _shared_publication_workspace(tmp_path, limits=limits)
     output = original.outputs["result"]
     result = replace(original, outputs={"result": replace(output, metadata={
         **output.metadata,
@@ -195,6 +238,7 @@ def releasable_attempt(tmp_path, monkeypatch):
                                 append_cleanup_result=append_result)
     monkeypatch.setattr(cleanup, "_authority", lambda *args: authority)
     daemon = SimpleNamespace(
+        _execution=SimpleNamespace(slurm_assignments=None),
         admission_for_run_uri=lambda uri: None, _connection=connection,
         config=SimpleNamespace(coordinator_shared_roots=profile.shared_roots, control_database=database),
         _authorizer=lambda: SimpleNamespace(require_operator=lambda *args, **kwargs: checks.append((args, kwargs))),
@@ -301,6 +345,33 @@ def test_retry_after_successful_cleanup_does_not_acquire_retired_tree(releasable
                                          session_id="session")
     assert request.worker_metadata[recovery.WIRE]["predecessors"] == ()
     assert not case.tree.exists()
+
+
+def test_deferred_retry_inspection_keeps_live_integrity_checks(releasable_attempt, tmp_path, monkeypatch):
+    from loom.queue._ready_preparation import inspect_recovery_predecessors
+    from loom.queue.errors import QueueConflictError
+
+    case = releasable_attempt
+    (tmp_path / "retry").mkdir()
+    retry, _, _ = _workspace(tmp_path / "retry", attempt=2)
+    with case.daemon._connection() as conn:
+        # A contained execution without a committed report can retain progress.
+        conn.execute("UPDATE remote_assignments SET report_json = NULL")
+        with monkeypatch.context() as patch:
+            patch.setattr(recovery, "resolve", lambda *args: pytest.fail("filesystem inspection inside binding"))
+            delivery = recovery.bind_delivery(
+                retry.request(), conn, "run", case.profile.shared_roots,
+                session_id="session", verify_trees=False,
+            )
+    references = tuple(delivery.worker_metadata[recovery.WIRE]["predecessors"])
+    assert len(references) == 1
+    assert inspect_recovery_predecessors(references, case.profile.shared_roots)
+    payload = case.tree / "partial"
+    payload.chmod(0o600)  # Simulate owner-side modification of a sealed payload.
+    payload.write_bytes(b"changed after capture")
+    payload.chmod(0o400)
+    with pytest.raises(QueueConflictError, match="integrity"):
+        inspect_recovery_predecessors(references, case.profile.shared_roots)
 
 
 def test_release_operator_permission_is_required_before_reservation(releasable_attempt):

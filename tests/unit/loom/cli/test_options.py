@@ -144,3 +144,18 @@ def test_runtime_cli_tag_and_note_validation() -> None:
         PreflightCliOptions.from_namespace(Namespace(tag=["=value"], note=[]))
     with pytest.raises(ValueError, match="non-empty string"):
         PreflightCliOptions.from_namespace(Namespace(tag=[], note=[""]))
+
+
+def test_parallel_cli_distinguishes_omission_and_explicit_unlimited():
+    from argparse import Namespace
+    from loom.cli.options import parse_parallel_limit
+
+    assert "execution" not in RunCliOptions.from_namespace(Namespace()).to_runtime_source()
+    assert RunCliOptions.from_namespace(Namespace(max_parallel_stages=None)).to_runtime_source() == {
+        "execution": {"settings": {"max_parallel_stages": None}}
+    }
+    assert parse_parallel_limit("unlimited") is None
+    assert parse_parallel_limit("4") == 4
+    for value in ("0", "-1", "true", "1.5"):
+        with pytest.raises(ValueError):
+            parse_parallel_limit(value)

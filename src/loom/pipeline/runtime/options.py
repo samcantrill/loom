@@ -171,14 +171,14 @@ class RunStoreOptions:
 class ParallelExecutionOptions:
     """Validated controller policy for local bounded stage execution."""
 
-    max_parallel_stages: int = DEFAULT_MAX_PARALLEL_STAGES
+    max_parallel_stages: int | None = DEFAULT_MAX_PARALLEL_STAGES
     failure_policy: str = DEFAULT_FAILURE_POLICY
 
     def __post_init__(self) -> None:
         object.__setattr__(
             self,
             "max_parallel_stages",
-            _positive_int(
+            _parallel_limit(
                 self.max_parallel_stages,
                 path="ParallelExecutionOptions.max_parallel_stages",
             ),
@@ -194,7 +194,7 @@ class ParallelExecutionOptions:
 
     @property
     def enabled(self) -> bool:
-        return self.max_parallel_stages > 1
+        return self.max_parallel_stages is None or self.max_parallel_stages > 1
 
     @property
     def continue_independent(self) -> bool:
@@ -650,7 +650,7 @@ def parallel_execution_options(options: RunOptions) -> ParallelExecutionOptions:
     execution = cast(ExecutionOptions, options.execution)
     return ParallelExecutionOptions(
         max_parallel_stages=cast(
-            int,
+            int | None,
             execution.settings.get(
                 "max_parallel_stages",
                 DEFAULT_MAX_PARALLEL_STAGES,
@@ -815,7 +815,7 @@ def _plain_mapping(value: object, *, path: str) -> Mapping[str, PlainData]:
 def _normalize_execution_settings(value: object) -> Mapping[str, PlainData]:
     settings = dict(_plain_mapping(value, path="ExecutionOptions.settings"))
     if "max_parallel_stages" in settings:
-        settings["max_parallel_stages"] = _positive_int(
+        settings["max_parallel_stages"] = _parallel_limit(
             settings["max_parallel_stages"],
             path="ExecutionOptions.settings.max_parallel_stages",
         )
@@ -825,6 +825,12 @@ def _normalize_execution_settings(value: object) -> Mapping[str, PlainData]:
             path="ExecutionOptions.settings.failure_policy",
         )
     return settings
+
+
+def _parallel_limit(value: object, *, path: str) -> int | None:
+    if value is None:
+        return None
+    return _positive_int(value, path=path)
 
 
 def _positive_int(value: object, *, path: str) -> int:

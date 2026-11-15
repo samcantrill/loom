@@ -149,7 +149,7 @@ def _resolve(
         declaration = str(binding["receipt_digest"])
         members = cast(list[dict[str, Any]], receipt["members"])
         primary_name = str(binding["primary"])
-        verification = "recorded_sha256"
+        verification = "producer_declared" if binding["schema_version"] == 2 else "recorded_sha256"
     else:
         try:
             path = uri_to_path(ref.uri)
@@ -282,7 +282,7 @@ def artifact_operation(
         limit, format_ = value["limit"], value["format"]
         if format_ == "json" and member["size_bytes"] > limit:
             return {**description, "outcome": "too_large", "member": name}
-        data = _read(root, member, 0, limit, verify=True)
+        data = _read(root, member, 0, limit, verify=description["verification"] != "producer_declared")
         truncated = len(data) < member["size_bytes"]
         if format_ == "bytes":
             content = base64.b64encode(data).decode()

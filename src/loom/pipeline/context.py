@@ -47,6 +47,9 @@ class StageContext:
         default=ProcessContainmentOwner.STAGE,
         kw_only=True,
     )
+    # Selected by the worker's protected deployment roots, never stage config.
+    # Trusted storage admits producer declarations without a recursive payload audit.
+    artifact_publication_policy: str = field(default="verified", kw_only=True)
     artifact_store: InitVar[ArtifactStore | None] = None
     output_specs: InitVar[Mapping[str, OutputSpec] | None] = None
     local_output_dir: InitVar[str | Path | None] = None
@@ -76,6 +79,8 @@ class StageContext:
             raise PipelineValidationError(
                 "process_containment_owner must be a ProcessContainmentOwner"
             )
+        if self.artifact_publication_policy not in ("verified", "trusted_shared_storage"):
+            raise PipelineValidationError("artifact_publication_policy is unsupported")
         try:
             object.__setattr__(
                 self,

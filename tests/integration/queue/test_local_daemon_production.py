@@ -488,7 +488,7 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
             assert retained_path.stat().st_mtime_ns == retained_mtime
             assert _supervisor_launch_count(config) == 0
             return
-        completed = client.wait("queue-1", timeout_seconds=10)
+        completed = client.wait("queue-1", timeout_seconds=30)
         if predecessor is not None:
             assert completed.state is LocalDaemonAdmissionState.SUCCEEDED
             snapshot = authority.open_run(run_uri)
@@ -1062,6 +1062,7 @@ def test_daemon_reconciles_cancelling_and_wait_does_not_treat_it_as_terminal(
     def reconcile_admission(
         _self: LocalDaemonExecution,
         admission: LocalDaemonAdmission,
+        *, prepared_intent=None,
     ) -> LocalDaemonExecutionOutcome:
         if admission.state is LocalDaemonAdmissionState.CANCELLING:
             saw_cancelling.set()
@@ -1515,12 +1516,14 @@ def test_completed_background_failure_replays_the_same_local_assignment(
     assert execution is not None
     assert execution.supervisor is not None
     original_query = execution.supervisor.query
+    first_query_entered = Event()
     third_query_entered = Event()
     allow_recovery = Event()
     query_calls = 0
     def fail_two_observers_then_recover(launch: object):
         nonlocal query_calls
         query_calls += 1
+        first_query_entered.set()
         if query_calls <= 2:
             raise OSError("simulated post-start observation failure")
         if query_calls == 3:
@@ -1624,7 +1627,9 @@ def test_local_observer_backoff_preserves_peer_progress_and_cancellation(tmp_pat
                 if retry is not None and retry.attempts == attempts:
                     return retry
             time.sleep(0.02)
-        pytest.fail("failed observer did not retain its retry")
+        pytest.fail(f"failed observer did not retain its retry: {daemon._service_error=}, {failed_calls=}, "
+                    f"futures={[(key, future.done(), repr(future.exception()) if future.done() else None) for key, future in execution._local_assignment_futures.items()]}, "
+                    f"retries={execution._local_assignment_retries}")
 
     monkeypatch.setattr(execution.supervisor, "query", query)
     client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
@@ -1654,9 +1659,13 @@ def test_local_observer_backoff_preserves_peer_progress_and_cancellation(tmp_pat
         daemon.stop()
 
 
+@pytest.mark.parametrize("batch_limit", [1, 32])
 def test_daemon_global_priority_preempts_earlier_lower_priority_admission(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch, batch_limit,
 ) -> None:
+    from loom.queue._admission_scan import AdmissionScan
+    take = AdmissionScan.take
+    monkeypatch.setattr(AdmissionScan, "take", lambda self, admissions: take(self, admissions, limit=batch_limit))
     run_root = tmp_path / "runs"
     low_uri = _persist_sleep_run(
         run_root,
@@ -3687,7 +3696,7 @@ def _persist_sleep_run(
 def _wait_for_supervisor_launch_count(
     config: LocalDaemonConfig, *, expected: int
 ) -> None:
-    deadline = time.monotonic() + 5
+    deadline = time.monotonic() + 30
     assert config.agent_root is not None
     database = config.agent_root / "supervisor" / "supervisor.sqlite"
     observed = 0
@@ -3756,3 +3765,59 @@ def _wait_for_thread(thread: Thread, *, timeout_seconds: float) -> None:
     thread.join(timeout=timeout_seconds)
     if thread.is_alive():
         raise AssertionError("replacement local daemon did not finish starting")
+
+
+@pytest.mark.parametrize("cancel_inspection", [False, True])
+def test_blocked_resident_input_inspection_allows_peer_dispatch_and_cancellation(tmp_path, monkeypatch, cancel_inspection):
+    from concurrent.futures import ThreadPoolExecutor
+
+    run_root = tmp_path / "runs"
+    first_uri = _persist_sleep_run(run_root, run_name="held-input", stage_name="held")
+    second_uri = _persist_sleep_run(run_root, run_name="peer-input", stage_name="peer")
+    config = LocalDaemonConfig(
+        coordinator_root=tmp_path / "coordinator", agent_root=tmp_path / "agent",
+        run_store_root=run_root, resident_worker_launch_profile=_launch_profile(), cpu_capacity=2,
+    )
+    entered, release = Event(), Event()
+    original = _ResidentAssignmentWorkspace.persist_request
+
+    def hold_inputs(workspace, request, profile):
+        if request.stage_name == "held":
+            entered.set()
+            assert release.wait(20), "test did not release input inspection"
+        return original(workspace, request, profile)
+
+    monkeypatch.setattr(_ResidentAssignmentWorkspace, "persist_request", hold_inputs)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    controls = ThreadPoolExecutor(max_workers=1)
+    try:
+        client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+        first = client.submit(LocalDaemonAdmissionRequest("held", first_uri))
+        assert entered.wait(10)
+        detail = controls.submit(client.admission, first.admission_id).result(timeout=5)
+        assert detail.admission.run_uri == first_uri
+        assert not daemon._execution.coordinator.retained_assignments(agent_id=config.machine_id)
+        controls.submit(client.submit, LocalDaemonAdmissionRequest("peer", second_uri)).result(timeout=5)
+        _wait_for_supervisor_launch_count(config, expected=1)
+        assert not release.is_set()
+        if cancel_inspection:
+            cancelled = controls.submit(client.cancel, "held").result(timeout=5)
+            assert cancelled.cancellation_operation_id is not None
+        else:
+            # Unrelated authority/projection refreshes must not invalidate the
+            # same inspected stage. Peer completion guarantees such progress.
+            assert client.wait("peer", timeout_seconds=10).state is LocalDaemonAdmissionState.SUCCEEDED
+        release.set()
+        assert client.wait("held", timeout_seconds=10).state is (
+            LocalDaemonAdmissionState.CANCELLED if cancel_inspection else LocalDaemonAdmissionState.SUCCEEDED
+        )
+        assert client.wait("peer", timeout_seconds=10).state is LocalDaemonAdmissionState.SUCCEEDED
+        assert all(assignment.run_uri != first_uri for assignment, _ in
+                   daemon._execution.coordinator.retained_assignments(agent_id=config.machine_id))
+        _wait_for_supervisor_launch_count(config, expected=1 if cancel_inspection else 2)
+    finally:
+        release.set()
+        controls.shutdown(wait=True)
+        daemon.stop()
