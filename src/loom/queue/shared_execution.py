@@ -113,12 +113,12 @@ def root_bindings(value: object) -> dict[str, PlainData]:
         result[alias] = {"host_path": raw["host_path"], "container_path": target,
                          "access": raw["access"], "challenge": {"path": _relative(challenge["path"]), "sha256": challenge["sha256"]}}
         if "publication" in raw:
-            from loom.pipeline.stores.shared_artifacts import budgets
+            from loom.pipeline.stores.shared_artifacts import publication_configuration
             if raw["access"] != "rw":
                 raise QueueServiceError("shared publication requires a writable root")
             from loom.pipeline.stores.errors import ArtifactStoreError
             try:
-                cast(dict[str, PlainData], result[alias])["publication"] = cast(PlainData, budgets(raw["publication"]))
+                cast(dict[str, PlainData], result[alias])["publication"] = publication_configuration(raw["publication"])
             except ArtifactStoreError as exc:
                 raise QueueServiceError(str(exc)) from exc
     if sum("publication" in cast(Mapping[str, PlainData], root) for root in result.values()) > 1:
@@ -331,9 +331,15 @@ def attributes(required: Mapping[str, PlainData] | None) -> dict[str, PlainData]
         return {}
     publication = any("publication" in cast(Mapping[str, PlainData], facts)
                       for facts in cast(Mapping[str, PlainData], required["roots"]).values())
-    from ._shared_publication import CAPABILITY
+    from ._shared_publication import CAPABILITY, TRUSTED_CAPABILITY
+    from loom.pipeline.stores.shared_artifacts import publication_policy, TRUSTED_SHARED_STORAGE
+    trusted = any(
+        "publication" in facts and publication_policy(facts["publication"]) == TRUSTED_SHARED_STORAGE
+        for facts in cast(Mapping[str, Mapping[str, PlainData]], required["roots"]).values()
+    )
     return {"shared_execution_capability": SHARED_EXECUTION_CAPABILITY,
             **({"shared_artifact_publication_capability": CAPABILITY} if publication else {}),
+            **({"trusted_shared_artifact_publication_capability": TRUSTED_CAPABILITY} if trusted else {}),
             **{"shared_root_" + alias: hash_mapping(facts) for alias, facts in cast(Mapping[str, PlainData], required["roots"]).items()}}
 
 

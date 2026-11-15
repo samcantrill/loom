@@ -74,6 +74,13 @@ if request.get("input_directories", False):
         result["input_directories_available"] = INPUT_DIRECTORY_CAPABILITY == "input-directory-v1"
     except Exception:
         result["input_directories_available"] = False
+if request.get("trusted_shared_publication", False):
+    try:
+        with contextlib.redirect_stdout(sys.stderr):
+            from loom.queue._shared_publication import TRUSTED_CAPABILITY
+        result["trusted_shared_publication_available"] = TRUSTED_CAPABILITY == "trusted-shared-artifact-publication-v1"
+    except Exception:
+        result["trusted_shared_publication_available"] = False
 for name in request["imports"]:
     try:
         with contextlib.redirect_stdout(sys.stderr):
@@ -515,6 +522,11 @@ def qualify_resident_profile(
         request["shared_execution"] = True
         request["input_directories"] = has_input_directories(profile.shared_roots)
         request["shared_publication"] = any("publication" in cast(Mapping[str, PlainData], root) for root in profile.shared_roots.values())
+        from loom.pipeline.stores.shared_artifacts import publication_policy, TRUSTED_SHARED_STORAGE
+        request["trusted_shared_publication"] = any(
+            "publication" in root and publication_policy(root["publication"]) == TRUSTED_SHARED_STORAGE
+            for root in profile.shared_roots.values()
+        )
         if profile.container is not None:
             request["shared_container"] = True
     if requirements.preparation_staged:
@@ -615,6 +627,11 @@ def qualify_resident_profile(
         add("packages.input_directories", PreflightGroup.PACKAGES,
             observed.get("input_directories_available") is True,
             "Selected installation supports input directories." if observed.get("input_directories_available") is True else "Selected installation lacks input-directory-v1.",
+            "Install a compatible Loom in the selected interpreter or image.")
+    if request.get("trusted_shared_publication"):
+        add("packages.trusted_shared_publication", PreflightGroup.PACKAGES,
+            observed.get("trusted_shared_publication_available") is True,
+            "Selected installation supports trusted shared publication." if observed.get("trusted_shared_publication_available") is True else "Selected installation lacks trusted shared publication.",
             "Install a compatible Loom in the selected interpreter or image.")
     environment_ok = observed["environment"] == {
         name: True for name in requirements.required_environment

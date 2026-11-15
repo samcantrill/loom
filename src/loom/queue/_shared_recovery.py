@@ -20,6 +20,9 @@ from loom.pipeline.stores.shared_artifacts import (
     RECEIPT,
     SharedPublicationBudgetExceeded,
     budgets,
+    publication_policy,
+    publication_configuration,
+    TRUSTED_SHARED_STORAGE,
     admits_budgets,
     check_budget,
     contained,
@@ -57,13 +60,15 @@ def _reference(value: object) -> dict[str, Any]:
             "identity",
         }
         or type(value["schema_version"]) is not int
-        or value["schema_version"] != 1
+        or value["schema_version"] not in (1, 2)
     ):
         raise QueueConflictError("recovery reference schema conflicts")
     result = cast(dict[str, Any], thaw_plain_data(value))
     relative(result["root_id"])
     relative(result["tree"])
     budgets(result["budgets"])
+    if (result["schema_version"] == 2) != (publication_policy(result["budgets"]) == TRUSTED_SHARED_STORAGE):
+        raise QueueConflictError("recovery policy and schema conflict")
     for key in ("publication_id", "receipt_digest"):
         if (
             not isinstance(result[key], str)
@@ -344,7 +349,9 @@ def inspect(value: object, roots: Mapping[str, PlainData]) -> tuple[Path, dict[s
 
     Used for cleanup planning and byte estimates, not for admitting restart
     state. The coordinator seal pins the inventory digest and assignment owner.
-    Recovery consumers continue to use ``resolve`` for full byte verification.
+    Recovery consumers use ``resolve`` for the recorded policy: full byte
+    verification for schema 1, ownership-only admission for trusted schema 2.
+    Trusted receipts have ``members=None`` and no measured payload byte count.
     """
     ref = _reference(value)
     root = roots.get(ref["root_id"])
@@ -358,11 +365,14 @@ def inspect(value: object, roots: Mapping[str, PlainData]) -> tuple[Path, dict[s
     if (
         not isinstance(receipt, dict)
         or set(receipt) != {"schema_version", "publication_id", "identity", "members"}
-        or receipt["schema_version"] != 1
+        or receipt["schema_version"] != ref["schema_version"]
         or receipt["publication_id"] != ref["publication_id"]
         or receipt["identity"] != ref["identity"]
-        or not isinstance(receipt["members"], list)
-        or len(receipt["members"]) > ref["budgets"]["max_members"]
+        or (ref["schema_version"] == 2 and receipt["members"] is not None)
+        or (ref["schema_version"] == 1 and (
+            not isinstance(receipt["members"], list)
+            or len(receipt["members"]) > ref["budgets"]["max_members"]
+        ))
     ):
         raise QueueConflictError("recovery receipt ownership conflicts")
     # The bounded inventory was produced and pinned by the native seal owner.
@@ -373,7 +383,7 @@ def inspect(value: object, roots: Mapping[str, PlainData]) -> tuple[Path, dict[s
 def resolve(value: object, roots: Mapping[str, PlainData]) -> Path:
     ref = _reference(value)
     tree, receipt = inspect(ref, roots)
-    if receipt["members"] != inventory(tree, ref["budgets"]):
+    if ref["schema_version"] == 1 and receipt["members"] != inventory(tree, ref["budgets"]):
         raise QueueConflictError("recovery closure integrity conflicts")
     return tree
 
@@ -423,7 +433,8 @@ def seal(
         return None
     selection = selected(request)
     assert selection is not None
-    limits = budgets(selection[1]["publication"])
+    limits = publication_configuration(selection[1]["publication"])
+    trusted = publication_policy(limits) == TRUSTED_SHARED_STORAGE
     owner = _owner(request, agent_id, fence)
     pub_id = publication_id(owner)
     root = cast(Mapping[str, PlainData], roots[value["root_id"]])
@@ -435,14 +446,15 @@ def seal(
         # Proven no-start/early death can have no recovery files. Retain an empty
         # owned closure; absence alone never calls this positive-release path.
         available = current_tree(request, roots, owner=owner)
-    members = inventory(available, limits)
-    if available == staging and not (available / RECEIPT).exists() and not members:
+    members = None if trusted else inventory(available, limits)
+    if (available == staging and not (available / RECEIPT).exists()
+            and (not any(available.iterdir()) if trusted else not members)):
         # Container mount construction can create the directory before any child
         # starts. Positive settlement owns this empty, uninitialized case.
         current_tree(request, roots, owner=owner)
     data = encoded(
         {
-            "schema_version": 1,
+            "schema_version": 2 if trusted else 1,
             "publication_id": pub_id,
             "identity": owner,
             "members": members,
@@ -462,16 +474,17 @@ def seal(
     if available != final:
         from ._remote_stage_execution import _fsync_directory
 
-        for directory, _, files in os.walk(staging, topdown=False):
-            for name in files:
-                descriptor = os.open(
-                    Path(directory) / name, os.O_RDONLY | os.O_NOFOLLOW
-                )
-                try:
-                    os.fsync(descriptor)
-                finally:
-                    os.close(descriptor)
-            _fsync_directory(Path(directory))
+        if not trusted:
+            for directory, _, files in os.walk(staging, topdown=False):
+                for name in files:
+                    descriptor = os.open(
+                        Path(directory) / name, os.O_RDONLY | os.O_NOFOLLOW
+                    )
+                    try:
+                        os.fsync(descriptor)
+                    finally:
+                        os.close(descriptor)
+                _fsync_directory(Path(directory))
         final.parent.mkdir(parents=True, exist_ok=True)
         os.rename(staging, final)
     # The rename can have completed before an interrupted caller synced either
@@ -482,7 +495,7 @@ def seal(
     _fsync_directory(final.parent.parent)
     _fsync_directory(staging.parent)
     ref = {
-        "schema_version": 1,
+        "schema_version": 2 if trusted else 1,
         "root_id": value["root_id"],
         "tree": final_relative,
         "publication_id": pub_id,
@@ -491,6 +504,8 @@ def seal(
         "identity": owner,
     }
     resolve(ref, roots)
+    if trusted:
+        return ref
     # Container predecessors are mounted ro; ordinary host workers also receive
     # non-writable members. Deliberate same-UID chmod is outside the installed
     # worker trust boundary, just as deliberate publication tampering is.
@@ -560,7 +575,7 @@ def prepare_retention(
     selection = selected(request)
     assert selection is not None
     owner = _owner(request, agent_id, row["fence"])
-    limits = budgets(selection[1]["publication"])
+    limits = publication_configuration(selection[1]["publication"])
     binding = {
         "schema_version": 1, "root_id": value["root_id"], "tree": value["tree"],
         "identity": owner, "budgets": limits,

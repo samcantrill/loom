@@ -49,8 +49,11 @@ def test_budget_unavailable_is_not_retryable_or_cleanup_eligible(tmp_path, monke
 
 
 @pytest.mark.parametrize("status", ["FAILED", "SUCCEEDED"])
-def test_preview_keeps_existing_attempts_without_durable_diagnostics(tmp_path, monkeypatch, status):
-    workspace, profile, _ = _workspace(tmp_path)
+@pytest.mark.parametrize("trusted", [False, True])
+def test_preview_keeps_existing_attempts_without_durable_diagnostics(tmp_path, monkeypatch, status, trusted):
+    limits = {"policy": "trusted_shared_storage", "max_members": 1024,
+              "max_payload_bytes": 268435456, "max_manifest_bytes": 1048576} if trusted else None
+    workspace, profile, _ = _workspace(tmp_path, limits=limits)
     current = _write(workspace)
     ref = recovery.seal(
         workspace.request(), profile.shared_roots, agent_id="agent-1", fence="fence-1"
@@ -96,7 +99,7 @@ def test_preview_keeps_existing_attempts_without_durable_diagnostics(tmp_path, m
     assert admitted == ["run"]
     entry, = result["entries"]
     assert entry["eligible"] is False
-    assert entry["retained_payload_bytes"] == len(b"completepartial")
+    assert entry["retained_payload_bytes"] == (None if trusted else len(b"completepartial"))
     assert entry["reclaimable_payload_bytes"] == 0
     assert "complete_diagnostics_not_declared" in entry["reasons"]
     assert "logs_not_published" in entry["reasons"]
@@ -114,14 +117,17 @@ def test_preview_wire_requires_exact_managed_run_selection():
     assert decode_result("preview_recovery_cleanup", value) == value
 
 
-def test_settled_logs_share_publication_and_survive_assignment_removal(tmp_path):
+@pytest.mark.parametrize("trusted", [False, True])
+def test_settled_logs_share_publication_and_survive_assignment_removal(tmp_path, trusted):
     from dataclasses import replace
     from pathlib import Path
     import shutil
     from loom.queue._shared_publication import publish, RECOVERY_COMPLETE, EXECUTION_LOGS
     from tests.unit.loom.queue.test_remote_stage_execution import _shared_publication_workspace
 
-    workspace, profile, _, original = _shared_publication_workspace(tmp_path)
+    limits = {"policy": "trusted_shared_storage", "max_members": 1024,
+              "max_payload_bytes": 268435456, "max_manifest_bytes": 1048576} if trusted else None
+    workspace, profile, _, original = _shared_publication_workspace(tmp_path, limits=limits)
     output = original.outputs["result"]
     result = replace(original, outputs={"result": replace(output, metadata={
         **output.metadata,

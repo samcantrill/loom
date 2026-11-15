@@ -81,6 +81,13 @@ def fetch_artifacts(
             if description["outcome"] != "available":
                 results.append(result)
                 continue
+            if description["verification"] == "producer_declared":
+                # The receipt intentionally does not enumerate companion files.
+                # Do not return an incomplete download as a complete closure.
+                result["outcome"] = "unsupported_backend"
+                result["reason"] = "trusted_shared_storage_requires_shared_filesystem_access"
+                results.append(result)
+                continue
             declaration = description["declaration"]
             if declaration in completed:
                 result.update(completed[declaration])

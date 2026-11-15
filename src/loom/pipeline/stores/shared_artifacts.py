@@ -2,6 +2,8 @@
 
 The receipt is part of the immutable publication tree. References carry its
 identity and digest, rather than a second catalog or copied consumer payload.
+Schema 1 inventories verified closures; schema 2 trusts producer bytes and lists
+only declared primary outputs and logs, not the complete companion tree.
 """
 
 from __future__ import annotations
@@ -20,6 +22,23 @@ from .errors import ArtifactStoreError
 
 SHARED_PUBLICATION = "loom.shared_publication"
 RECEIPT = ".loom-publication.json"
+TRUSTED_SHARED_STORAGE = "trusted_shared_storage"
+
+
+def publication_policy(value: object) -> str:
+    """Protected publication policy; absence preserves legacy verification."""
+    if not isinstance(value, Mapping):
+        raise ArtifactStoreError("shared publication policy must be a mapping")
+    policy = value.get("policy", "verified")
+    if policy not in ("verified", TRUSTED_SHARED_STORAGE):
+        raise ArtifactStoreError("unsupported shared publication policy")
+    return str(policy)
+
+
+def publication_configuration(value: object) -> dict[str, PlainData]:
+    limits = budgets(value)
+    policy = publication_policy(value)
+    return {**limits, **({"policy": policy} if policy != "verified" else {})}
 
 
 def budgets(value: object) -> dict[str, int]:
@@ -27,12 +46,13 @@ def budgets(value: object) -> dict[str, int]:
     keys = {"max_members", "max_payload_bytes", "max_manifest_bytes"}
     if (
         not isinstance(value, Mapping)
-        or set(value) != keys
+        or set(value) - {"policy"} != keys
         or any(type(value[k]) is not int or value[k] <= 0 for k in keys)
     ):
         raise ArtifactStoreError(
             "shared publication requires positive integer member, payload and manifest budgets"
         )
+    publication_policy(value)
     return {key: value[key] for key in sorted(keys)}
 
 
@@ -45,7 +65,11 @@ def admits_budgets(current: object, recorded: object) -> bool:
     if current is None:
         return False
     admitted, required = budgets(current), budgets(recorded)
-    return all(required[key] <= admitted[key] for key in required)
+    return (
+        (publication_policy(recorded) != TRUSTED_SHARED_STORAGE
+         or publication_policy(current) == TRUSTED_SHARED_STORAGE)
+        and all(required[key] <= admitted[key] for key in required)
+    )
 
 
 class SharedPublicationBudgetExceeded(ArtifactStoreError):
@@ -169,7 +193,7 @@ def binding(metadata: Mapping[str, PlainData]) -> dict[str, PlainData] | None:
         not isinstance(raw, Mapping)
         or set(raw) != keys
         or type(raw["schema_version"]) is not int
-        or raw["schema_version"] != 1
+        or raw["schema_version"] not in (1, 2)
     ):
         raise ArtifactStoreError("shared publication reference schema is invalid")
     for key in ("root_id", "publication_id", "receipt_digest"):
@@ -182,6 +206,8 @@ def binding(metadata: Mapping[str, PlainData]) -> dict[str, PlainData] | None:
     relative(raw["tree"])
     relative(raw["primary"])
     budgets(raw["budgets"])
+    if (raw["schema_version"] == 2) != (publication_policy(raw["budgets"]) == TRUSTED_SHARED_STORAGE):
+        raise ArtifactStoreError("shared publication version and policy conflict")
     return cast(dict[str, PlainData], thaw_plain_data(raw))
 
 
@@ -236,7 +262,7 @@ def inspect_receipt(
         not isinstance(receipt, dict)
         or set(receipt)
         != {"schema_version", "publication_id", "identity", "members", "outputs"}
-        or receipt["schema_version"] != 1
+        or receipt["schema_version"] != reference["schema_version"]
         or receipt["publication_id"] != reference["publication_id"]
         or not isinstance(receipt["outputs"], dict)
         or reference["primary"] not in receipt["outputs"].values()
@@ -274,10 +300,10 @@ def read_receipt(
     *,
     limits: Mapping[str, int] | None = None,
 ) -> dict[str, PlainData]:
-    """Verify the inventory and every retained member for native consumption."""
+    """Admit the receipt and apply its recorded payload verification policy."""
     receipt = inspect_receipt(tree, reference, limits=limits)
     selected = budgets(reference["budgets"]) if limits is None else budgets(limits)
-    if receipt["members"] != inventory(tree, selected):
+    if reference["schema_version"] != 2 and receipt["members"] != inventory(tree, selected):
         raise ArtifactStoreError("shared publication closure integrity conflicts")
     return receipt
 

@@ -664,7 +664,11 @@ class _RemoteArtifact:
             path = source.resolve(strict=True)
             if shared_binding(ref.metadata) is not None:
                 verify_ref(ref, path)
-                size, digest = file_identity(path)
+                publication = shared_binding(ref.metadata)
+                if publication["schema_version"] == 2 and ref.checksum is not None:
+                    size, digest = path.stat().st_size, ref.checksum.removeprefix("sha256:")
+                else:
+                    size, digest = file_identity(path)
                 if ref.checksum is not None and ref.checksum != f"sha256:{digest}":
                     raise QueueConflictError("shared input checksum conflicts with its bytes")
                 return (cls(transfer_id=transfer_id, logical_name=logical_name, digest=digest, size_bytes=size,

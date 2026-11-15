@@ -15,6 +15,51 @@ from tests.unit.loom.queue.test_remote_stage_execution import (
 )
 
 
+def test_trusted_publication_does_not_inventory_sync_or_revalidate_payloads(tmp_path, monkeypatch):
+    from loom.queue import _shared_publication as publication
+    from loom.pipeline.stores import shared_artifacts as shared
+    from loom.queue._remote_stage_execution import _RemoteArtifact
+
+    policy = {"policy": "trusted_shared_storage", "max_members": 1024,
+              "max_payload_bytes": 256 * 1024 * 1024, "max_manifest_bytes": 1024 * 1024}
+    workspace, profile, _, _ = _shared_publication_workspace(tmp_path, limits=policy)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("trusted publication traversed or verified payloads")
+
+    monkeypatch.setattr(publication, "inventory", forbidden)
+    monkeypatch.setattr(shared, "inventory", forbidden)
+    monkeypatch.setattr(shared.os, "walk", forbidden)
+    report = workspace.retain_outputs()
+    refs = publish(workspace.request(), report, profile.shared_roots,
+                   agent_id="agent-1", fence="fence-1")
+    ref = refs["result"]
+    assert shared.binding(ref.metadata)["schema_version"] == 2
+    primary = Path(ref.uri.removeprefix("file://"))
+    # A later change is deliberately not detected by trusted consumers.
+    (primary.parent / "values.bin").write_bytes(b"changed companion")
+    primary.write_bytes(b'{"trusted":"changed"}')
+    store = LocalArtifactStore(tmp_path / "consumer", shared_roots=profile.shared_roots)
+    monkeypatch.setattr(store, "_verify_checksum_path", forbidden)
+    store.validate(ref)
+    _RemoteArtifact.from_local_ref(transfer_id="input-1", logical_name="result", ref=ref)
+    assert publish(workspace.request(), report, profile.shared_roots,
+                   agent_id="agent-1", fence="fence-1") == refs
+
+
+def test_trusted_policy_is_explicit_and_cannot_be_consumed_by_verified_root(tmp_path):
+    from loom.pipeline.stores.shared_artifacts import admits_budgets, publication_configuration
+
+    limits = {"max_members": 1024, "max_payload_bytes": 1024, "max_manifest_bytes": 1024}
+    trusted = {**limits, "policy": "trusted_shared_storage"}
+    assert publication_configuration(limits) == limits
+    assert publication_configuration(trusted) == trusted
+    assert not admits_budgets(limits, trusted)
+    assert admits_budgets(trusted, limits)
+    with pytest.raises(ArtifactStoreError, match="unsupported"):
+        publication_configuration({**limits, "policy": "typo"})
+
+
 @pytest.mark.parametrize("value", [0, -1, True, 1.5, "1024", None])
 @pytest.mark.parametrize(
     "key", ["max_members", "max_payload_bytes", "max_manifest_bytes"]
@@ -232,3 +277,21 @@ def test_receipt_budget_diagnostics_identify_inventory_bytes(tmp_path):
     assert receipt_bytes(path, 4) == b"1234"
     with pytest.raises(ArtifactStoreError, match="budget=max_manifest_bytes limit=3 observed_at_least=4"):
         receipt_bytes(path, 3)
+
+
+def test_trusted_registration_uses_producer_digest_without_reading_primary(tmp_path, monkeypatch):
+    from loom.fingerprints import hash_bytes
+
+    root = tmp_path / "published"
+    path = root / "stage" / "manifest.json"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"producer manifest")
+    limits = {"policy": "trusted_shared_storage", "max_members": 1024,
+              "max_payload_bytes": 1024, "max_manifest_bytes": 1024}
+    store = LocalArtifactStore(root, shared_roots={"out": {
+        "host_path": str(root), "publication": limits}})
+    checksum = hash_bytes(b"producer manifest")
+    monkeypatch.setattr(Path, "open", lambda *a, **kw: pytest.fail("read producer primary"))
+    ref = store.register(path, stage_name="stage", name="manifest", artifact_type="json",
+                         checksum=checksum)
+    assert ref.checksum == checksum

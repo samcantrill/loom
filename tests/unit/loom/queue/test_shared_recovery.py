@@ -467,3 +467,41 @@ def test_committed_retention_replay_validates_receipt_without_resealing(tmp_path
         recovery.retain_released(conn, row, workspace.request(), profile.shared_roots, agent_id="agent-1")
         with pytest.raises(QueueConflictError, match="binding conflicts"):
             recovery.retain_released(conn, {**row, "fence": "other"}, workspace.request(), profile.shared_roots, agent_id="agent-1")
+
+
+def test_trusted_recovery_rename_replays_without_payload_scan(tmp_path, monkeypatch):
+    limits = {"max_members": 1024, "max_payload_bytes": 1024 * 1024,
+              "max_manifest_bytes": 1024 * 1024, "policy": "trusted_shared_storage"}
+    workspace, profile, _ = _workspace(tmp_path, limits=limits)
+    current = _write(workspace)
+    inode = (current / "partial").stat().st_ino
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("trusted recovery traversed payloads")
+
+    monkeypatch.setattr(recovery, "inventory", forbidden)
+    monkeypatch.setattr(recovery.os, "walk", forbidden)
+    with pytest.raises(QueueConflictError):
+        recovery.seal(workspace.request(), profile.shared_roots,
+                      agent_id="agent-1", fence="wrong-fence")
+    rename = recovery.os.rename
+
+    def interrupted(source, target):
+        rename(source, target)
+        raise OSError("interrupted after rename")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(recovery.os, "rename", interrupted)
+        with pytest.raises(OSError, match="interrupted"):
+            recovery.seal(workspace.request(), profile.shared_roots,
+                          agent_id="agent-1", fence="fence-1")
+    ref = recovery.seal(workspace.request(), profile.shared_roots,
+                        agent_id="agent-1", fence="fence-1")
+    assert ref["schema_version"] == 2
+    tree, receipt = recovery.inspect(ref, profile.shared_roots)
+    assert receipt["members"] is None
+    assert (tree / "partial").stat().st_ino == inode
+    (tree / "partial").write_bytes(b"trusted bytes are not revalidated")
+    assert recovery.resolve(ref, profile.shared_roots) == tree
+    assert recovery.seal(workspace.request(), profile.shared_roots,
+                         agent_id="agent-1", fence="fence-1") == ref

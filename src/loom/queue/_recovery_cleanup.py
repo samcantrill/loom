@@ -72,7 +72,8 @@ def _preview(daemon: Any, run_uri: str, conn: Any, assignment_id: str | None = N
         else:
             reference = json.loads(row["recovery_json"])
             _, inventory = recovery.inspect(reference, daemon.config.coordinator_shared_roots)
-            size = sum(member["size_bytes"] for member in inventory["members"])
+            size = (None if inventory["members"] is None else
+                    sum(member["size_bytes"] for member in inventory["members"]))
             if (
                 reference["identity"]["assignment_id"] != row["assignment_id"]
                 or reference["identity"]["fence"] != row["fence"]
@@ -287,7 +288,7 @@ def _delete_reserved_recovery(daemon: Any, record: Any) -> dict[str, Any]:
         marker.unlink()
         from ._remote_stage_execution import _fsync_directory
         _fsync_directory(tree)
-    if tree.exists():
+    if tree.exists() and ref["schema_version"] == 1:
         # Sealing removed directory write bits. No file content needs modification.
         for directory, _, _ in os.walk(tree, followlinks=False):
             path = Path(directory)
