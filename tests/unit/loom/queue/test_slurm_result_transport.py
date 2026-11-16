@@ -13,7 +13,7 @@ from loom.queue._remote_stage_execution import (
     _RemoteExecutionReport,
     _RemoteOutputArtifact,
 )
-from loom.queue._slurm_result_transport import SharedSlurmResult
+from loom.queue._slurm_result_transport import SharedSlurmResult, SlurmTransportPending
 from loom.queue.errors import QueueConflictError, QueueServiceError
 import loom.queue._slurm_result_transport as transport_module
 
@@ -185,9 +185,35 @@ def test_retention_quota_never_evicts_unacknowledged_attempt(tmp_path):
     owner, identity, report, chunk = _fixture(tmp_path)
     owner.publish(identity, report, chunk)
     other = SharedSlurmResult(owner.storage, "assignment-2")
-    with pytest.raises(QueueServiceError, match="quota exhausted"):
+    with pytest.raises(SlurmTransportPending, match="result_transport_capacity"):
         other.reserve({"assignment_id": "assignment-2"})
     assert owner.read(identity)[0] == report
+    assert transport_module.result_transport_capacity(other.storage) == {
+        "capacity_bytes": 65 * 1024**2,
+        "reservation_bytes_per_attempt": 65 * 1024**2,
+        "maximum_outstanding_reservations": 1,
+    }
+    # Capacity deferral does not weaken exact replay checks.
+    with pytest.raises(QueueConflictError, match="reservation conflicts"):
+        owner.reserve({"assignment_id": "different"})
+    owner.finish_delivery(identity, lambda _: {"acknowledged": True})
+    other.reserve({"assignment_id": "assignment-2"})
+    assert other.path.is_dir()
+
+
+def test_contended_quota_lock_yields_and_preserves_existing_reservation(tmp_path):
+    import fcntl
+
+    owner, identity, report, chunk = _fixture(tmp_path)
+    owner.publish(identity, report, chunk)
+    with (tmp_path / ".retention.lock").open("rb") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        with pytest.raises(SlurmTransportPending, match="result_quota_lock_busy"):
+            owner.reserve(identity["assignment"])
+        with pytest.raises(SlurmTransportPending, match="result_quota_lock_busy"):
+            owner.finish_delivery(identity, lambda _: {"acknowledged": True})
+        assert owner.read(identity)[0] == report
+    assert owner.finish_delivery(identity, lambda _: {"acknowledged": True})
 
 
 def test_existing_aggregate_artifact_bound_at_and_over_limit(tmp_path):

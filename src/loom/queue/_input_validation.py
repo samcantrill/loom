@@ -62,16 +62,29 @@ class InputValidationPool:
     creates a fresh pool and repeats inspection; no result files are retained.
     """
 
-    def __init__(self, wake: Callable[[], None], *, workers: int = 2, max_pending: int = 8):
-        if workers < 1 or max_pending < workers:
+    def __init__(
+        self, wake: Callable[[], None], *, workers: int = 2,
+        max_pending: int = 8, max_owners: int = 32,
+    ):
+        if workers < 1 or max_pending < workers or max_owners < max_pending:
             raise ValueError("validation capacity must cover positive worker count")
         self._executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="loom-input-validation")
         self._max_pending = max_pending
+        self._max_owners = max_owners
         self._wake = wake
         self._current: dict[str, _Inspection] = {}
         self._retired: list[_Inspection] = []
         self._closed = False
         self._visible: tuple[_Inspection, ...] = ()
+
+    def _execution_full(self) -> bool:
+        # Finished evidence belongs to its consumer until explicitly consumed.
+        # It consumes an owner, but no longer consumes an execution slot.
+        running = sum(
+            item.future is not None and not item.future.done()
+            for item in (*self._current.values(), *self._retired)
+        )
+        return running >= self._max_pending
 
     def discard(self, work_id: str) -> None:
         item = self._current.pop(work_id, None)
@@ -107,12 +120,10 @@ class InputValidationPool:
         if self._closed:
             return ValidationObservation("input_validation_cancelled")
         if item is None:
-            if len(self._current) + len(self._retired) >= self._max_pending:
-                finished = next((key for key, old in self._current.items()
-                                 if old.future is not None and old.future.done()), None)
-                if finished is None:
-                    return ValidationObservation("input_validation_capacity")
-                self.discard(finished)
+            if len(self._current) >= self._max_owners:
+                return ValidationObservation("input_validation_ownership_capacity")
+            if self._execution_full():
+                return ValidationObservation("input_validation_capacity")
             worker = identity.get("worker_request", {})
             worker = worker if isinstance(worker, Mapping) else {}
             item = _Inspection(work_id, digest, worker.get("run_uri"), worker.get("stage_name"))
@@ -134,7 +145,7 @@ class InputValidationPool:
                 item.retry_at = monotonic() + min(60, 5 * 2 ** min(item.failures - 1, 4))
                 _LOGGER.warning("input inspection refused for stage work %s (attempt %s): %s",
                                 item.work_id, item.failures, error)
-            elif monotonic() >= item.retry_at:
+            elif monotonic() >= item.retry_at and not self._execution_full():
                 item.retry_at = 0
                 self._start(item, frozen_scope, frozen_roots)
             reason = (

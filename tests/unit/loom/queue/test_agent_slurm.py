@@ -301,7 +301,6 @@ def test_cancelled_published_result_waits_for_terminal_rejection_ack(
 
 def test_quota_refusal_cannot_prevent_cancellation_of_unissued_job(tmp_path):
     from loom.queue._slurm_result_transport import SharedSlurmResult
-    from loom.queue.errors import QueueServiceError
 
     runner = FakeSlurmCommandRunner()
     profile = _profile(runner, tmp_path)
@@ -319,8 +318,7 @@ def test_quota_refusal_cannot_prevent_cancellation_of_unissued_job(tmp_path):
     def acknowledge(value):
         return {"sequence": value["sequence"], "cancel_requested": True}
 
-    with pytest.raises(QueueServiceError, match="quota exhausted"):
-        agent.step(task, acknowledge)
+    agent.step(task, acknowledge)  # Ordinary capacity is assignment-local.
     assert not runner.calls
     agent.step({**task, "cancel_requested": True}, acknowledge)
     assert not agent.has_retained_work()

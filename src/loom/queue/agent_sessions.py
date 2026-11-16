@@ -37,7 +37,7 @@ from loom.timestamps import parse_timestamp
 
 from ._action_results import action_attempt_cancelled, attach_action_fence
 
-from .errors import QueueConflictError, QueueServiceError, QueueStorageError
+from .errors import QueueConflictError, QueueServiceError, QueueStorageError, _AgentRegistrationEpochRejected
 from ._managed_local import (
     GPU_DECLINE_REASONS,
     ResourceAvailabilityStatus,
@@ -2480,11 +2480,12 @@ class AgentSessionService:
                     )
                 conn.commit()
                 return replayed
-            if (
-                request.coordinator_id != coordinator_id
-                or request.coordinator_epoch != epoch
-            ):
-                raise QueueConflictError("coordinator identity or epoch is stale")
+            if request.coordinator_id != coordinator_id:
+                raise QueueConflictError("coordinator identity is stale")
+            if request.coordinator_epoch != epoch:
+                # Receipt replay above must run first: an old request may have
+                # succeeded before restart. Only this branch proves absence.
+                raise _AgentRegistrationEpochRejected("registration epoch was rejected without acceptance")
             previous = conn.execute(
                 "SELECT session_id, state FROM agent_sessions WHERE agent_id = ? "
                 "AND state NOT IN (?, ?) LIMIT 1",

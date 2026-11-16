@@ -587,7 +587,11 @@ class AgentSlurmJobs:
                 ).fetchone()
             if released is None or released[0] or not released[1] or not self._retry_due("observation", operation):
                 continue
-            current = self.journal.read(operation)
+            current = self.journal.find(operation)
+            if current is None:
+                # Reservation backpressure may defer this task before a
+                # submission intent exists. Its peers still need observation.
+                continue
             if current.state in {ReadyStageState.ACCEPTED, ReadyStageState.SUBMITTING, ReadyStageState.UNKNOWN}:
                 key = assignment.profile_id, assignment.profile_configuration_fingerprint
                 due[operation] = (task, assignment, current, key)
@@ -664,7 +668,10 @@ class AgentSlurmJobs:
 
     def _step(self, task, acknowledge, **options):
         operation_id = SlurmStageAssignment.from_dict(task["assignment"]).operation_id
-        if monotonic() < self._ack_retry_at.get(operation_id, 0):
+        if (
+            monotonic() < self._ack_retry_at.get(operation_id, 0)
+            and task.get("cancel_requested") is not True
+        ):
             return
         try:
             return self._advance_step(task, acknowledge, **options)

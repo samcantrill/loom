@@ -24,6 +24,13 @@ after an owner leaves. This bounds preparatory storage work, not CPU/GPU jobs
 or scheduler submissions. Running obsolete writers drain before slot reuse;
 restart recomputes this disposable preparation from durable run records.
 
+Completed input-directory inspection is another stage-owned prerequisite. Its
+separate execution pool has two workers/eight outstanding scans and at most 32
+unconsumed owners. Completion frees execution capacity, while the prepared stage
+retains the exact evidence until dispatch or invalidation. Neither completed
+success nor failure is silently evicted to admit an unrelated scan; failure
+retries also obey the execution bound.
+
 Implementation obligations:
 
 - Deterministic event/barrier regression tests against real slow dependencies.

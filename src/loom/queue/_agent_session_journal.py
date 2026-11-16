@@ -478,6 +478,47 @@ class _RemoteAgentJournal:
             conn.commit()
         return persisted
 
+    def pending_registration(self) -> AgentRegistration | None:
+        """Recover the one uncertain lifecycle before minting a successor ID."""
+        with self._connection() as conn:
+            rows = conn.execute(
+                "SELECT request_json, digest FROM agent_registration_intents "
+                "WHERE result_json IS NULL ORDER BY operation_id LIMIT 2"
+            ).fetchall()
+        if len(rows) > 1:
+            raise QueueConflictError("several unresolved registrations require operator reconciliation")
+        if not rows:
+            return None
+        value = json.loads(str(rows[0]["request_json"]))
+        if _canonical_digest(value) != str(rows[0]["digest"]):
+            raise QueueConflictError("retained registration digest conflicts")
+        # The verifier remains owned by persist_registration_intent; callers
+        # replay the authored fields and it restores that same retained value.
+        return replace(_registration(value), retirement_verifier=None)
+
+    def reject_registration_epoch(self, request: AgentRegistration) -> None:
+        """Retain a definitive no-acceptance receipt; never call on uncertainty."""
+        receipt = _canonical_json({
+            "registration_rejected": "stale_epoch",
+            "operation_id": request.idempotency_key,
+        })
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT digest, result_json FROM agent_registration_intents WHERE operation_id = ?",
+                (request.idempotency_key,),
+            ).fetchone()
+            if row is None or str(row["digest"]) != _canonical_digest(request.value()):
+                raise QueueConflictError("rejected registration does not match retained intent")
+            if row["result_json"] is not None and str(row["result_json"]) != receipt:
+                raise QueueConflictError("accepted registration cannot be rejected")
+            conn.execute(
+                "UPDATE agent_registration_intents SET result_json = ?, retirement_secret = NULL "
+                "WHERE operation_id = ?",
+                (receipt, request.idempotency_key),
+            )
+            conn.commit()
+
     def persist_session(
         self, operation_id: str, request: Mapping[str, PlainData], session: AgentSession
     ) -> None:

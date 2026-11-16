@@ -110,6 +110,33 @@ class ReadyPreparationPool:
                 item.future.cancel()
             self._reap_retired()
 
+    def poll_observation(
+        self, key: tuple[str, str], identity: str,
+        poll: Callable[[], tuple[Any, str | None]], *, phase: str,
+    ) -> tuple[Any | None, str | None]:
+        """Retain evidence from another bounded executor under this stage.
+
+        ``poll`` is nonblocking and transfers only completed evidence. Its
+        running operations keep their own execution capacity until they exit.
+        A stage must already own its request before admitting another phase.
+        """
+        stage = self._pending.get(key)
+        if self._closed or stage is None or stage.retiring:
+            return None, "stage_preparation_pending"
+        previous = stage.phases.get(phase)
+        if previous is not None:
+            if not previous.future.done():
+                return None, "stage_preparation_pending"
+            if previous.identity == identity:
+                return previous.future.result(), None
+            del stage.phases[phase]
+        value, reason = poll()
+        if reason is None:
+            completed: Future[Any] = Future()
+            completed.set_result(value)
+            stage.phases[phase] = _Pending(identity, completed)
+        return value, reason
+
     def retain_run(self, run_uri: str, stage_names: set[str]) -> None:
         """Drop preparations no longer eligible in this run's authority snapshot."""
         for key in tuple(self._pending):

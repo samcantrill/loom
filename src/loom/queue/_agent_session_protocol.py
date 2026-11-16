@@ -43,7 +43,7 @@ from ._remote_stage_execution import (
     REMOTE_EXECUTION_CAPABILITY,
 )
 
-from .errors import QueueConflictError, QueueServiceError
+from .errors import QueueConflictError, QueueServiceError, _AgentRegistrationEpochRejected
 from .submitted_execution import SUBMITTED_CONTAINER_CAPABILITY
 
 from ._agent_progress import _Progress, _steps, _external
@@ -95,6 +95,23 @@ def handshake(self: LocalDaemonAgentHttpClient, *, role: str = "agent") -> Gener
         if self._config.container_policies and SUBMITTED_CONTAINER_CAPABILITY not in capabilities:
             raise QueueServiceError("coordinator upgrade required: submitted containers unsupported")
     return result
+
+
+def register_service(self: LocalDaemonAgentHttpClient, request: AgentRegistration):
+    """Resume an uncertain generation, including its original coordinator epoch."""
+    pending = self._require_journal().pending_registration()
+    if pending is not None:
+        selected = replace(
+            request, idempotency_key=pending.idempotency_key,
+            coordinator_epoch=pending.coordinator_epoch,
+        )
+        if selected != pending:
+            raise QueueConflictError(
+                "unresolved registration belongs to another configuration; "
+                "restore its configuration to reconcile acceptance before replacement"
+            )
+        request = pending
+    return (yield from register(self, request))
 
 
 def register(self: LocalDaemonAgentHttpClient, request: AgentRegistration) -> Generator[_Progress, Any, AgentSession]:
@@ -162,7 +179,11 @@ def register(self: LocalDaemonAgentHttpClient, request: AgentRegistration) -> Ge
         )
     journal = self._require_journal()
     persisted = journal.persist_registration_intent(request)
-    session = _session_from_value((yield from _steps(self._call, "register", persisted.value())))
+    try:
+        session = _session_from_value((yield from _steps(self._call, "register", persisted.value())))
+    except _AgentRegistrationEpochRejected:
+        journal.reject_registration_epoch(persisted)
+        raise
     journal.persist_session(persisted.idempotency_key, persisted.value(), session)
     return session
 

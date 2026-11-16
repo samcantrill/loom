@@ -181,6 +181,17 @@ publishing an offer. A later phase that adds a session-scoped durable
 reference must extend the one authoritative clean-retirement query. The agent
 cannot mint a fresh identity to escape unresolved work.
 
+The foreground service creates a fresh registration generation after clean
+retirement, persisting its exact request before sending it. A process restart
+resumes the active session; an unresolved registration replays its original
+request, including its original coordinator epoch. The coordinator checks its
+receipt before epoch validation. If it proves that the old request was never
+accepted and that epoch can no longer accept it, the agent retains a definitive
+rejection receipt and may create a successor registration. An indeterminate
+response never permits that replacement. A pending registration under a different
+configuration is reported explicitly and retained for reconciliation. Reconnect
+failures include their error class and diagnostic in the service log.
+
 Resource-specific matching is explicitly composed trusted code behind
 `ResourcePlanner`; stored and wire values never load callables. The planner
 validates/canonicalizes each resource opportunity, owns intrinsic quantity/

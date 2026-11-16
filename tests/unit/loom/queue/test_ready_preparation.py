@@ -17,17 +17,17 @@ class ControlledExecutor:
     def __init__(self, **kwargs):
         self.jobs = []
 
-    def submit(self, function, *args):
+    def submit(self, function, *args, **kwargs):
         future = Future()
-        self.jobs.append((future, function, args))
+        self.jobs.append((future, function, args, kwargs))
         return future
 
     def complete(self):
         jobs, self.jobs = self.jobs, []
-        for future, function, args in jobs:
+        for future, function, args, kwargs in jobs:
             if future.set_running_or_notify_cancel():
                 try:
-                    future.set_result(function(*args))
+                    future.set_result(function(*args, **kwargs))
                 except Exception as exc:
                     future.set_exception(exc)
 
@@ -133,4 +133,58 @@ def test_cancellation_frees_only_its_runs_slots(monkeypatch):
         pool._workers.complete()
         assert pool.poll(("replacement", "c"), "c", lambda: None) == ("c", None)
     finally:
+        pool.close()
+
+
+def test_completed_inspection_transfers_to_stage_until_dispatch(monkeypatch):
+    from loom.queue import _input_validation as validation
+
+    monkeypatch.setattr("loom.queue._ready_preparation.ThreadPoolExecutor", ControlledExecutor)
+    monkeypatch.setattr(validation, "ThreadPoolExecutor", ControlledExecutor)
+    inspected = Counter()
+
+    def inspect(scope, _roots, **_kwargs):
+        inspected[scope["stage"]] += 1
+
+    monkeypatch.setattr(validation, "require_bindings", inspect)
+    pool = ReadyPreparationPool(lambda: None)
+    scans = validation.InputValidationPool(lambda: None)
+
+    def poll_scan(index):
+        result = scans.poll(str(index), {}, {"stage": index}, {})
+        if result.reason is None:
+            scans.discard(str(index))
+        return result, result.reason
+
+    try:
+        for index in range(32):
+            pool.poll(("run", str(index)), "request", lambda: True)
+        pool._workers.complete()
+        for _ in range(6):
+            scans._executor.complete()
+            for index in range(32):
+                pool.poll_observation(
+                    ("run", str(index)), "inputs", lambda index=index: poll_scan(index),
+                    phase="input-inspection",
+                )
+        # All consumers are still waiting on a later prerequisite/GPU budget.
+        assert inspected == Counter({index: 1 for index in range(32)})
+        assert scans.observations("run")["inspections"] == []
+        for index in range(32):
+            _, reason = pool.poll_observation(
+                ("run", str(index)), "inputs",
+                lambda: pytest.fail("completed inputs inspected again"), phase="input-inspection",
+            )
+            assert reason is None
+        # An identity change must not reuse that evidence.
+        value, reason = pool.poll_observation(
+            ("run", "0"), "changed-inputs", lambda: ("new-evidence", None), phase="input-inspection",
+        )
+        assert (value, reason) == ("new-evidence", None)
+        pool.discard(("run", "0"))
+        assert pool.poll_observation(
+            ("run", "0"), "changed-inputs", lambda: pytest.fail("owner retired"), phase="input-inspection",
+        )[1] == "stage_preparation_pending"
+    finally:
+        scans.close()
         pool.close()

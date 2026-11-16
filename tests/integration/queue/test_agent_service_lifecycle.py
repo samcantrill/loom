@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import json
 import os
 from pathlib import Path
@@ -474,6 +474,116 @@ def test_retirement_replay_stays_authorized_after_new_startup_hold(remote_owner:
     assert record["state"] == "closed"
     assert not work.daemon._lifetime.retire_if_idle()
     work.daemon._lifetime.release("racing-starter")
+
+
+@pytest.mark.parametrize("accepted", [False, True])
+def test_service_registration_recovers_uncertainty_across_coordinator_restart(
+    remote_owner: _RemoteWork, monkeypatch: pytest.MonkeyPatch, accepted: bool,
+) -> None:
+    from loom.queue.agent_sessions import AgentRegistration
+    from loom.queue.errors import QueueServiceError, QueueConflictError
+
+    work = remote_owner
+    registration = work.service_config.registration
+    client = LocalDaemonAgentHttpClient(work.service_config.client)
+    hello = client.handshake()
+    request = AgentRegistration(
+        "uncertain-service-registration", str(hello["coordinator_id"]), str(hello["coordinator_epoch"]),
+        client.agent_root_id, registration.config_revision, registration.inventory_revision,
+        registration.availability_revision, registration.pools, registration.capabilities,
+    )
+    original = client._call
+
+    def lose_registration(operation, value, **kwargs):
+        if operation == "register":
+            if accepted:
+                original(operation, value, **kwargs)
+            raise QueueServiceError("registration outcome is indeterminate")
+        return original(operation, value, **kwargs)
+
+    monkeypatch.setattr(client, "_call", lose_registration)
+    try:
+        with pytest.raises(QueueServiceError, match="indeterminate"):
+            client._register_service(request)
+        assert client._require_journal().pending_registration() == request
+        with pytest.raises(QueueConflictError, match="another configuration"):
+            client._register_service(replace(request, config_revision="changed"))
+        assert client._require_journal().pending_registration() == request
+    finally:
+        client.close()
+    work.daemon.stop()
+    work.daemon.start()
+    service = work.start_agent()
+
+    def registered_in_current_epoch():
+        with sqlite3.connect(work.daemon.config.control_database) as conn:
+            rows = conn.execute("SELECT coordinator_epoch FROM agent_sessions WHERE state = 'ACTIVE'").fetchall()
+        return len(rows) == 1 and rows[0][0] == work.daemon._epoch
+
+    _wait_until(registered_in_current_epoch)
+    service.stop.set()
+    service.thread.join(10)
+    assert not service.thread.is_alive() and not service.errors
+    root = work.service_config.client.agent_root
+    with sqlite3.connect(root / "control.sqlite") as conn:
+        intents = conn.execute("SELECT operation_id, result_json FROM agent_registration_intents").fetchall()
+        assert len(intents) == (1 if accepted else 2)
+        assert all(result is not None for _operation, result in intents)
+        if not accepted:
+            rejected = next(json.loads(value) for key, value in intents if key == request.idempotency_key)
+            assert rejected["registration_rejected"] == "stale_epoch"
+    with sqlite3.connect(work.daemon.config.control_database) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM agent_sessions").fetchone()[0] == 1
+
+
+def test_persistent_service_rotates_registration_only_after_clean_retirement(remote_owner: _RemoteWork, monkeypatch):
+    from loom.queue.agent_sessions import AgentRegistration
+
+    work = remote_owner
+    registration = work.service_config.registration
+    client = LocalDaemonAgentHttpClient(work.service_config.client)
+    hello = client.handshake()
+    request = AgentRegistration(
+        "retired-service-registration", str(hello["coordinator_id"]), str(hello["coordinator_epoch"]),
+        client.agent_root_id, registration.config_revision, registration.inventory_revision,
+        registration.availability_revision, registration.pools, registration.capabilities,
+    )
+    try:
+        session = client._register_service(request)
+        client.retire_clean(session.session_id, idempotency_key="retire-before-service-restart")
+    finally:
+        client.close()
+
+    def current_sessions():
+        with sqlite3.connect(work.daemon.config.control_database) as conn:
+            return conn.execute("SELECT session_id FROM agent_sessions WHERE state = 'ACTIVE'").fetchall()
+
+    active_id = None
+    resumed = Event()
+    active_session = LocalDaemonAgentHttpClient.active_session
+
+    def observe_session(self):
+        value = active_session(self)
+        if value is not None:
+            resumed.set()
+        return value
+
+    monkeypatch.setattr(LocalDaemonAgentHttpClient, "active_session", observe_session)
+    for _restart in range(2):
+        resumed.clear()
+        service = work.start_agent()
+        assert resumed.wait(10)
+        _wait_until(lambda: len(current_sessions()) == 1)
+        current = current_sessions()[0][0]
+        assert current != session.session_id
+        if active_id is not None:
+            assert current == active_id
+        active_id = current
+        service.stop.set()
+        service.thread.join(10)
+        assert not service.thread.is_alive() and not service.errors
+    with sqlite3.connect(work.daemon.config.control_database) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM agent_sessions").fetchone()[0] == 2
 
 
 @pytest.mark.parametrize("loss", ["absent", "later-absent", "fenced", "committed"])

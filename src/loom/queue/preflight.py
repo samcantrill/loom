@@ -120,6 +120,7 @@ def _check_loaded_role(
         if role == "coordinator":
             coordinator = cast("CoordinatorServiceConfig", service)
             storage = coordinator.daemon.storage
+            slurm_profiles = coordinator.daemon.slurm_profiles
             gpu_configuration = coordinator
             agent = coordinator.local_agent
             profiles = () if agent is None else (agent.profile,)
@@ -133,6 +134,7 @@ def _check_loaded_role(
         elif role == "agent":
             outbound = cast("OutboundAgentServiceConfig", service)
             storage = outbound.client.storage
+            slurm_profiles = outbound.client.slurm_profiles
             gpu_configuration = outbound
             profiles = outbound.client.resident_profiles
             container_policies = outbound.client.container_policies
@@ -189,6 +191,20 @@ def _check_loaded_role(
         repair="Start the configured roles and inspect their connection findings.",
         applicability="startup/reconnect boundary; no connection created by this check",
     )
+    from ._slurm_result_transport import result_transport_capacity
+
+    for index, profile in enumerate(slurm_profiles):
+        if profile.result_storage is None:
+            continue  # Profile qualification owns the required binding check.
+        transport_capacity = result_transport_capacity(profile.result_storage)
+        add(
+            f"resources.slurm_result_transport.{index}", Group.RESOURCES,
+            Status.PASS if transport_capacity["maximum_outstanding_reservations"] else Status.FAIL,
+            "Configured result-transport reservation budget; profiles sharing a root share reservations.",
+            owner="Slurm result transport",
+            repair="Select sufficient retained storage capacity; pending attempts are never evicted.",
+            evidence={"profile_id": profile.profile_id, **transport_capacity},
+        )
     if role == "coordinator":
         add(
             "python.service",

@@ -37,6 +37,16 @@ _REPORT_BYTES = 60 * 1024
 _MANIFEST_BYTES = 64 * 1024
 
 
+def result_transport_capacity(storage: Mapping[str, object]) -> dict[str, int]:
+    """Configured admission budget, without touching shared storage."""
+    capacity = cast(int, storage["retention_bytes"])
+    return {
+        "capacity_bytes": capacity,
+        "reservation_bytes_per_attempt": _RESERVATION_BYTES,
+        "maximum_outstanding_reservations": capacity // _RESERVATION_BYTES,
+    }
+
+
 def _json(value: object) -> bytes:
     return json.dumps(
         value, sort_keys=True, separators=(",", ":"), allow_nan=False
@@ -60,6 +70,15 @@ class SlurmEffectPending(Exception):
     def __init__(self, retry_after_seconds: float):
         super().__init__("SLURM effect remains pending")
         self.retry_after_seconds = retry_after_seconds
+
+
+class SlurmTransportPending(SlurmEffectPending):
+    """Ordinary storage backpressure, distinct from corrupt/conflicting data."""
+
+    def __init__(self, reason: str):
+        super().__init__(5)
+        self.reason = reason
+        self.args = (reason,)
 
 
 class SharedSlurmResult:
@@ -115,7 +134,10 @@ class SharedSlurmResult:
             self.root / ".retention.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600
         )
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise SlurmTransportPending("result_quota_lock_busy") from exc
             yield
         finally:
             os.close(fd)
@@ -132,9 +154,7 @@ class SharedSlurmResult:
             if (len(attempts) + 1) * _RESERVATION_BYTES > cast(
                 int, self.storage["retention_bytes"]
             ):
-                raise QueueServiceError(
-                    "SLURM result retention quota exhausted; retained attempts were not evicted"
-                )
+                raise SlurmTransportPending("result_transport_capacity")
             self.path.mkdir(mode=0o700)
             _atomic_regular_file(self.path / "binding.json", encoded)
             _fsync_directory(self.root)

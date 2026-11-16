@@ -3788,6 +3788,7 @@ class LocalDaemonExecution:
             from .submitted_execution import assignment_binding
             from ._submitted_container_policy import SubmittedContainerPolicy
             from .shared_execution import assignment_scope
+            from loom.fingerprints import hash_mapping
 
             fingerprint = cast(StageFingerprintRecord, worker_request.fingerprint).to_dict()
             submitted = assignment_binding(fingerprint)
@@ -3801,16 +3802,32 @@ class LocalDaemonExecution:
                 scope = assignment_scope(fingerprint)
                 if scope is None:
                     raise QueueConflictError("submitted SLURM work requires shared execution")
-                validation = self._input_validations.poll(
-                    record.stage_work_id,
-                    {"attempt_id": record.attempt_id,
-                     "profile_fingerprint": profile.configuration_fingerprint,
-                     "worker_request": worker_request.to_dict()},
-                    scope, self.config.coordinator_shared_roots,
+                inspection_identity = {
+                    "attempt_id": record.attempt_id,
+                    "profile_fingerprint": profile.configuration_fingerprint,
+                    "worker_request": worker_request.to_dict(),
+                }
+
+                def poll_inspection():
+                    validation = self._input_validations.poll(
+                        record.stage_work_id, inspection_identity,
+                        scope, self.config.coordinator_shared_roots,
+                    )
+                    if validation.reason is None:
+                        self._input_validations.discard(record.stage_work_id)
+                    return validation, validation.reason
+
+                _, validation_reason = self._ready_preparations.poll_observation(
+                    (record.run_uri, record.stage_name),
+                    hash_mapping({
+                        "identity": inspection_identity, "scope": scope,
+                        "roots": self.config.coordinator_shared_roots,
+                    }),
+                    poll_inspection, phase="input-inspection",
                 )
-                if validation.reason is not None:
+                if validation_reason is not None:
                     return LocalDaemonExecutionOutcome(
-                        LocalDaemonAdmissionState.WAITING, validation.reason,
+                        LocalDaemonAdmissionState.WAITING, validation_reason,
                     )
             inspected, preparation_reason = self._prepared_input_descriptors(record, worker_request)
             if inspected is None:

@@ -132,5 +132,62 @@ def test_completed_result_does_not_starve_new_work_and_repaired_inputs_retry(mon
         assert woke.wait(10)
         assert pool.poll("unrelated", {}, {}, {}).reason is None
         assert len(calls) == 3
+        # Another stage finishing must not evict this unconsumed success.
+        assert pool.poll("stage", {}, {}, {}).reason is None
+        assert len(calls) == 3
+    finally:
+        pool.close()
+
+
+def test_completed_inspections_wait_for_consumers_without_rescanning(monkeypatch):
+    from tests.unit.loom.queue.test_ready_preparation import ControlledExecutor
+
+    monkeypatch.setattr(owner, "ThreadPoolExecutor", ControlledExecutor)
+    calls = []
+    monkeypatch.setattr(owner, "require_bindings", lambda scope, *_args, **_kwargs: calls.append(scope))
+    pool = owner.InputValidationPool(lambda: None)
+    try:
+        # Each group exhausts the execution window, then finishes. None of its
+        # consumers can dispatch yet; the ninth and later scans must preserve it.
+        for index in range(32):
+            assert pool.poll(str(index), {}, {"dataset": index}, {}).reason == "input_validation_pending"
+            pool._executor.complete()
+        assert pool.poll("overflow", {}, {}, {}).reason == "input_validation_ownership_capacity"
+        for index in range(32):
+            assert pool.poll(str(index), {}, {"dataset": index}, {}).reason is None
+        pool._executor.complete()
+        assert len(calls) == 32
+        pool.discard("0")
+        pool.poll("overflow", {}, {}, {})
+        pool._executor.complete()
+        assert pool.poll("overflow", {}, {}, {}).reason is None
+        assert len(calls) == 33
+    finally:
+        pool.close()
+
+
+def test_failed_inspection_retry_respects_execution_capacity(monkeypatch):
+    from tests.unit.loom.queue.test_ready_preparation import ControlledExecutor
+
+    monkeypatch.setattr(owner, "ThreadPoolExecutor", ControlledExecutor)
+    clock = [0.0]
+    monkeypatch.setattr(owner, "monotonic", lambda: clock[0])
+
+    def inspect(*_args, **_kwargs):
+        raise OSError("temporarily unavailable")
+
+    monkeypatch.setattr(owner, "require_bindings", inspect)
+    pool = owner.InputValidationPool(lambda: None, workers=1, max_pending=1)
+    try:
+        pool.poll("failed", {}, {}, {})
+        pool._executor.complete()
+        assert pool.poll("failed", {}, {}, {}).reason == "input_validation_storage_unavailable"
+        pool.poll("peer", {}, {}, {})
+        clock[0] = 10.0
+        pool.poll("failed", {}, {}, {})
+        assert len(pool._executor.jobs) == 1
+        pool._executor.complete()
+        pool.poll("failed", {}, {}, {})
+        assert len(pool._executor.jobs) == 1
     finally:
         pool.close()

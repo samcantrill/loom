@@ -15,6 +15,7 @@ from dataclasses import asdict, dataclass, field, replace
 import hashlib
 from importlib import import_module
 import json
+import logging
 import math
 import os
 from pathlib import Path
@@ -1121,9 +1122,9 @@ def _outbound_service_steps(
                     "register",
                     client.agent_root_id,
                     active.registration.config_revision,
-                    *((generation,) if lifetime == "run" else ()),
+                    str(uuid4()),
                 )
-                session = (yield from _steps(client.register,
+                session = (yield from _steps(client._register_service,
                     AgentRegistration(
                         operation_id,
                         coordinator_id,
@@ -1136,7 +1137,7 @@ def _outbound_service_steps(
                         active.registration.capabilities,
                     )
                 ))
-            elif session.coordinator_epoch != coordinator_epoch:
+            if session.coordinator_epoch != coordinator_epoch:
                 session = (yield from _steps(client.reconcile,
                     session.session_id,
                     coordinator_epoch,
@@ -1256,9 +1257,12 @@ def _outbound_service_steps(
                     raise QueueServiceError("agent session ended without retirement")
         except _ManagedApplicationSuspended:
             return
-        except (QueueError, _SupervisorCommunicationError):
+        except (QueueError, _SupervisorCommunicationError) as exc:
             if stop.is_set():
                 return
+            logging.getLogger(__name__).warning(
+                "outbound agent reconnect deferred (%s): %s", type(exc).__name__, exc,
+            )
             # A lost process-owner reply retains its launch and claims. Reopen
             # the application and join that receipt through ordinary recovery.
             (yield from _delay(active.reconnect_seconds))

@@ -48,6 +48,25 @@ from tests.support.stage29_composition import (
 pytestmark = pytest.mark.unit
 
 
+def test_role_preflight_reports_slurm_result_reservation_capacity(tmp_path):
+    from dataclasses import replace
+    from loom.queue.preflight import check_loaded_agent
+    from tests.unit.loom.queue.test_agent_slurm import _profile
+
+    service = load_outbound_agent_service_config(_agent_config(tmp_path))
+    profile = _profile(FakeSlurmCommandRunner(), tmp_path, retention_bytes=2 * 1024**3)
+    selected = replace(service, client=replace(service.client, slurm_profiles=(profile,)))
+    report = check_loaded_agent(selected)
+    check = next(item for item in report.checks if item.check_id == "resources.slurm_result_transport.0")
+    assert check.status == "PASS"
+    assert check.details["evidence"] == {
+        "profile_id": profile.profile_id,
+        "capacity_bytes": 2 * 1024**3,
+        "reservation_bytes_per_attempt": 65 * 1024**2,
+        "maximum_outstanding_reservations": 31,
+    }
+
+
 def _rollback_storage():
     import socket
     return {"owner_host": socket.gethostname(), "sqlite": {

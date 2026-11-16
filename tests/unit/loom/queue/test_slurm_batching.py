@@ -115,6 +115,53 @@ def test_entire_page_delivers_before_accounting_or_fresh_submission(tmp_path, mo
     assert owner.has_retained_work()
 
 
+def test_full_result_quota_defers_only_new_assignment_and_drains_existing_work(tmp_path, monkeypatch):
+    from loom.pipeline.executors.slurm.ready_stage import SlurmContainmentReceipt
+
+    monkeypatch.setattr(
+        "loom.queue._agent_slurm.resolve_slurm_containment",
+        lambda *_args: SlurmContainmentReceipt("UNKNOWN"),
+    )
+    owner, clock, runner, original = _batch_owner(tmp_path, monkeypatch)
+    profile = replace(original, result_storage={
+        **original.result_storage, "retention_bytes": 2 * 65 * 1024**2,
+    })
+    owner = AgentSlurmJobs(tmp_path, (profile,), observation_policy=owner.observation_policy)
+    finished, cancelled, waiting = [_task(profile, key=str(i)) for i in (1, 2, 3)]
+    owner.step_cycle([finished, cancelled], _ack)
+    observe = runner.discover_named_operation
+
+    def exact_cancel_observation(**selection):
+        observe(**selection)
+        return SlurmCommandResult("sacct", ("sacct",), 0, stdout=_line(2))
+
+    monkeypatch.setattr(runner, "discover_named_operation", exact_cancel_observation)
+    identity, transport = _publish_result(finished, profile)
+    calls = []
+
+    def acknowledge(value):
+        if "result_operation" in value:
+            calls.append(value["result_operation"])
+            return {"acknowledged": True}
+        return {
+            "sequence": value["sequence"],
+            "cancel_requested": value["assignment"]["assignment_id"] == "assignment-2",
+        }
+
+    owner.step_cycle([
+        waiting, {**finished, "result_identity": identity},
+        {**cancelled, "cancel_requested": True, "containment_request": {}},
+    ], acknowledge)
+    assert calls == ["report", "commit"]
+    assert not transport.path.exists()
+    assert owner.journal.find("operation-3") is None
+    assert any(command == "scancel" for command, _args in runner.calls)
+    clock[0] += 5
+    owner.step_cycle([waiting], _ack)
+    assert owner.journal.read("operation-3").job_id is not None
+    assert sum(command == "sbatch" for command, _args in runner.calls) == 3
+
+
 def test_call_limit_and_rotation_do_not_starve_later_cpu_jobs(tmp_path, monkeypatch):
     owner, clock, runner, profile = _batch_owner(tmp_path, monkeypatch, size=2, calls=4)
     tasks = [_task(profile, key=str(i)) for i in range(1, 13)]

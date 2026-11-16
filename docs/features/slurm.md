@@ -507,6 +507,15 @@ scan is cooperative between filesystem operations. A thread blocked in kernel
 IO cannot be force-cancelled, and process exit may still wait for it. Restart
 repeats inspection under the existing attempt and submission identities.
 
+Inspection execution admits up to eight running/queued scans with two workers.
+Completed evidence is transferred to the existing prepared-stage owner and
+retained through later descriptor, predecessor and GPU-admission waits. It is
+not evicted to admit another scan. The transfer uses the complete attempt,
+worker request, protected profile, selected input scope and root bindings as its
+identity. Changed identity or cancellation invalidates it; a superseded scan
+continues counting against execution capacity until its thread exits. Unconsumed
+observations are independently bounded to 32 owners.
+
 Image bytes and selected shared inputs are verified before a new launch. The
 contained worker consumes those bindings without importing project code on the
 bootstrap host. CPU, memory and walltime remain delegated to Slurm; GPU work
@@ -813,7 +822,16 @@ performed. The entire binding and finite quota participate in the protected
 profile fingerprint. A changed binding requires new prepared work. The submit
 agent reserves 65 MiB per attempt before submission (64 MiB aggregate artifact
 limit plus bounded report/manifest overhead). Quota exhaustion retains existing
-attempts and blocks new submission; it never evicts unacknowledged output.
+attempts and defers only the affected submission; it never evicts unacknowledged
+output. A contended reservation/cleanup lock likewise yields that assignment.
+Existing result delivery, scheduler observation and cancellation remain eligible
+while another assignment reports capacity backpressure. In particular, cancelling
+an unsubmitted job does not wait for its reservation retry delay. Conflicting
+reservation bindings remain errors, not capacity waits. Role preflight reports
+configured bytes, reservation bytes and the resulting reservation count; for
+example 2 GiB permits 31 reservations. Profiles sharing a transport directory
+share that capacity, independently of GPU admission. These checks do not measure
+free filesystem space or certify physical execution.
 Submitted workloads with an admitted shared-publication root retain checkpoints
 and prediction trees directly on that storage, under its explicit payload,
 member-count and manifest budgets. These payloads do not cross the 64 MiB byte

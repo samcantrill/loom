@@ -50,6 +50,10 @@ class QueueConflictError(QueueStorageError):
     """Raised when a queue repository write conflicts with durable state."""
 
 
+class _AgentRegistrationEpochRejected(QueueConflictError):
+    """The exact registration has no receipt and its epoch cannot accept it."""
+
+
 class QueueSchemaError(QueueStorageError):
     """Raised when a queue repository schema is missing or incompatible."""
 

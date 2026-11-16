@@ -1258,6 +1258,11 @@ class LocalDaemonAgentHttpClient:
 
     @_cooperative
     @_serialized("_mutation_gate")
+    def _register_service(self, request: AgentRegistration) -> Generator[_Progress, Any, AgentSession]:
+        return (yield from _session_protocol.register_service(self, request))
+
+    @_cooperative
+    @_serialized("_mutation_gate")
     def _replay_pending_reconciliation(self):
         return (yield from _session_protocol._replay_pending_reconciliation(self))
 
@@ -3297,6 +3302,9 @@ def _read_agent_reply(
                 raise _AcceptedTimeError(str(diagnostic), revision)
         raise QueueServiceError("invalid accepted-time diagnostic")
     if response.status == 409:
+        if operation == "register" and payload.get("error") == "agent_registration_epoch_rejected":
+            from .errors import _AgentRegistrationEpochRejected
+            raise _AgentRegistrationEpochRejected("registration epoch was rejected without acceptance")
         if payload.get("error") == "agent_poll_active":
             raise AgentPollActiveError("work poll is already active")
         if payload.get("error") == "agent_poll_fenced":
@@ -3632,7 +3640,11 @@ class _Handler(BaseHTTPRequestHandler):
                     429 if exc.code == "capacity_exhausted" else 409 if exc.code == "conflict" else 403,
                     {"ok": False, "error": "capacity_exhausted" if exc.code == "capacity_exhausted" else "agent_protocol_rejected"},
                 )
-        except QueueConflictError:
+        except QueueConflictError as exc:
+            from .errors import _AgentRegistrationEpochRejected
+            if isinstance(exc, _AgentRegistrationEpochRejected):
+                self._reply(409, {"ok": False, "error": "agent_registration_epoch_rejected"})
+                return
             self._reply(409, {"ok": False, "error": "agent_protocol_conflict"})
         except QueueError as exc:
             self._reply_queue_failure(
