@@ -271,3 +271,19 @@ def test_conflicting_pending_commit_never_cleans_transport(tmp_path, change):
     with pytest.raises(QueueConflictError):
         owner.finish_delivery(identity, lambda _: response)
     assert owner.read(identity)[0] == report
+
+
+def test_terminal_probe_distinguishes_absence_from_unavailable_and_invalid(tmp_path):
+    owner, identity, report, chunk = _fixture(tmp_path)
+    assert owner.probe_terminal_result(identity["assignment"], identity) == "missing"
+    binding = owner.path / "binding.json"
+    retained = binding.read_bytes()
+    binding.unlink()
+    assert owner.probe_terminal_result(identity["assignment"], identity) == "unavailable"
+    binding.write_bytes(b"{}")
+    assert owner.probe_terminal_result(identity["assignment"], identity) == "invalid"
+    binding.write_bytes(retained)
+    owner.publish(identity, report, chunk)
+    assert owner.probe_terminal_result(identity["assignment"], identity) == "available"
+    (owner.path / "manifest.json").write_text("not JSON")
+    assert owner.probe_terminal_result(identity["assignment"], identity) == "invalid"

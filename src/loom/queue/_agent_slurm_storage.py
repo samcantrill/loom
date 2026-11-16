@@ -82,6 +82,12 @@ class SlurmStorageProgress:
         # Do not lose that fact when final release races a finite cleanup turn.
         discard_result = discard_result or delivery is not None and delivery.phase == "cleanup"
         self.forget_delivery(transport.assignment_id)
+        probe_key = transport.assignment_id, "terminal-probe"
+        probe = self._pending.get(probe_key)
+        if probe is not None:
+            if not probe.done():
+                raise SlurmEffectPending(0.05)
+            del self._pending[probe_key]
 
         def cleanup():
             transport._require_root()

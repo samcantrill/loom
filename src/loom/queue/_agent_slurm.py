@@ -48,7 +48,7 @@ class SlurmSubmissionProjection:
         self, path: Path, *, _allow_initialize: bool = False,
         sqlite_policy: SQLitePolicy | None = None, schema_version: int = 3,
     ) -> None:
-        if type(schema_version) is not int or schema_version not in {3, 4, 5, 6}:
+        if type(schema_version) is not int or schema_version not in {3, 4, 5, 6, 7}:
             raise QueueServiceError("SLURM submission projection schema selection is unsupported")
         self.path = path
         self._sqlite_policy = sqlite_policy
@@ -340,6 +340,29 @@ class AgentSlurmJobs:
                 self._storage.defer_delivery(transport.assignment_id, 5)
                 return
 
+    def _probe_terminal_result(
+        self, task: Mapping[str, PlainData], assignment: SlurmStageAssignment,
+        current: SlurmReadyStageSubmission, transport: SharedSlurmResult,
+        acknowledge: Callable[[Mapping[str, PlainData]], Mapping[str, PlainData]],
+    ) -> None:
+        """One bounded IO probe; pending inspection does not gate observation."""
+        probe = task.get("terminal_result_probe")
+        if (isinstance(probe, Mapping) and isinstance(task.get("result_identity"), Mapping)
+            and monotonic() >= self._retry_at.get(("terminal-probe", assignment.operation_id), 0)):
+            result_identity = cast(Mapping[str, PlainData], task["result_identity"])
+            try:
+                state = self._storage.poll(
+                    assignment.assignment_id, "terminal-probe",
+                    lambda: transport.probe_terminal_result(assignment.to_dict(), result_identity),
+                )
+            except SlurmEffectPending:
+                return
+            self._publish(
+                assignment, current, acknowledge,
+                terminal_result_probe={"request": dict(probe), "state": state},
+            )
+            self._retry_at[("terminal-probe", assignment.operation_id)] = monotonic() + 5
+
     @staticmethod
     def initialize(root: Path, *, sqlite_policy: SQLitePolicy | None = None) -> None:
         path = root / "slurm.sqlite"
@@ -404,6 +427,7 @@ class AgentSlurmJobs:
         *,
         release: Mapping[str, PlainData] | None = None,
         recovery_evidence: Mapping[str, PlainData] | None = None,
+        terminal_result_probe: Mapping[str, PlainData] | None = None,
         provider_released: bool = False,
     ) -> Mapping[str, PlainData]:
         evidence: dict[str, PlainData] = {
@@ -416,6 +440,8 @@ class AgentSlurmJobs:
             if recovery_evidence is None
             else dict(recovery_evidence),
         }
+        if terminal_result_probe is not None:
+            evidence["terminal_result_probe"] = dict(terminal_result_probe)
         diagnostic = self._containment_diagnostics.get(assignment.operation_id)
         if diagnostic is not None and release is None and recovery_evidence is None:
             evidence["containment_diagnostic"] = diagnostic
@@ -519,6 +545,7 @@ class AgentSlurmJobs:
                         acknowledge,
                         release=pending["release"],
                         recovery_evidence=pending.get("recovery_evidence"),
+                        terminal_result_probe=pending.get("terminal_result_probe"),
                         provider_released=pending.get("provider_released", False),
                     )
                 except _EvidencePending:
@@ -750,6 +777,7 @@ class AgentSlurmJobs:
                 acknowledge,
                 release=pending["release"],
                 recovery_evidence=pending.get("recovery_evidence"),
+                terminal_result_probe=pending.get("terminal_result_probe"),
                 provider_released=pending.get("provider_released", False),
             )
         with self._connect() as conn:
@@ -792,6 +820,7 @@ class AgentSlurmJobs:
             and now < self._next_poll.get(request.operation_id, 0)
             and not urgent_cancel
             and task.get("recovery_request") is None
+            and task.get("terminal_result_probe") is None
             and task.get("release_requested") is not True
         ):
             # Scheduler polling cadence must not throttle finite transfer turns.
@@ -848,6 +877,7 @@ class AgentSlurmJobs:
                 )
                 observed = self.observation_policy is not None
         reply = self._publish(assignment, current, acknowledge)
+        self._probe_terminal_result(task, assignment, current, transport, acknowledge)
         if self.observation_policy is not None and task.get("compute_release_requested") is not True:
             self._deliver_result(task, reply, transport, acknowledge)
         if _delivery_only:

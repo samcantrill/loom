@@ -147,7 +147,7 @@ from loom.serialization import (
     freeze_plain_data,
     thaw_plain_data,
 )
-from loom.timestamps import utc_timestamp
+from loom.timestamps import parse_timestamp, utc_timestamp
 
 from .errors import QueueConflictError, QueueServiceError
 from .coordinator_authority import (
@@ -2180,6 +2180,7 @@ class LocalDaemonExecution:
                         request, record, profile
                     )
         return {
+            "terminal_result_probe": self._terminal_result_probe(record) if recovery_proof is None and not recovery_closed else None,
             "result_identity": None if recovery_closed else self.slurm_result_identity(record),
             "recovery_request": recovery_proof,
             "schema_version": 1,
@@ -2331,7 +2332,7 @@ class LocalDaemonExecution:
                 _defer_publication=_defer_publication, _publication=_publication,
             )
         if (
-            set(evidence) - {"containment_diagnostic"}
+            set(evidence) - {"containment_diagnostic", "terminal_result_probe"}
             != {
                 "schema_version",
                 "provider_released",
@@ -2363,6 +2364,17 @@ class LocalDaemonExecution:
         submission = SlurmReadyStageSubmission.from_dict(evidence.get("submission"))
         if submission.request.to_dict() != dict(record.request):
             raise QueueConflictError("SLURM evidence request conflicts")
+        probe = evidence.get("terminal_result_probe")
+        if isinstance(probe, Mapping):
+            probe = thaw_plain_data(probe)
+        if probe is not None:
+            from ._slurm_terminal_recovery import probe_request
+
+            if (not isinstance(probe, Mapping) or set(probe) != {"request", "state"}
+                or record.terminal_observation is None
+                or probe["request"] != probe_request(record.terminal_observation)
+                or probe["state"] not in ("missing", "available", "unavailable", "invalid")):
+                raise QueueConflictError("SLURM terminal result probe conflicts")
         sequence = evidence.get("sequence")
         if isinstance(sequence, bool) or not isinstance(sequence, int):
             raise QueueServiceError("SLURM evidence sequence is invalid")
@@ -2392,6 +2404,8 @@ class LocalDaemonExecution:
         self.slurm_assignments.accept_agent_evidence(
             assignment.assignment_id, sequence, evidence
         )
+        if isinstance(probe, Mapping):
+            self.slurm_assignments.record_terminal_probe(assignment.assignment_id, probe)
         # Exact replay completes a crash between durable acceptance and projection.
         self.slurm_submissions.acknowledge(submission)
         capability = submission.capability
@@ -2802,6 +2816,7 @@ class LocalDaemonExecution:
             record = retained
             assignment_id = record.assignment.assignment_id
             if self._recovery_retains_assignment(assignment_id):
+                diagnostic = diagnostic or "slurm_guarded_recovery_pending"
                 continue
             if self._reconcile_slurm_terminal_assignment(record, authority):
                 record = self.slurm_assignments.read(assignment_id)
@@ -2833,10 +2848,107 @@ class LocalDaemonExecution:
                 )
                 record = self.slurm_assignments.read(assignment_id)
             self._drive_local_slurm(record)
-            if self.slurm_assignments.read(assignment_id).state == "released":
+            record = self.slurm_assignments.read(assignment_id)
+            if record.state == "released":
                 continue
+            terminal_diagnostic = self._reconcile_terminal_without_report(record, authority)
+            diagnostic = diagnostic or terminal_diagnostic
             in_flight = True
         return in_flight, diagnostic
+
+    def _terminal_accounting_identity(self, record: SlurmStageRecord) -> dict[str, PlainData] | None:
+        if (record.report is not None or record.state not in {"granted", "running", "unknown"}
+            or not record.start_consumed or record.fence is None or record.bootstrap_incarnation is None
+            or record.cluster is None):
+            return None
+        submission = self.slurm_submissions.find(record.assignment.operation_id)
+        if (submission is None or submission.scheduler_source != "sacct"
+            or submission.scheduler_state not in {"TIMEOUT", "FAILED", "CANCELLED", "COMPLETED"}
+            or submission.accounting_identity is None
+            or (submission.job_id, submission.cluster) != (record.job_id, record.cluster)):
+            return None
+        return {
+            "result": self.slurm_result_identity(record),
+            "accounting": submission.accounting_identity.to_dict(),
+            "scheduler_state": submission.scheduler_state,
+        }
+
+    def _terminal_accepted_time(self) -> str | None:
+        with self.config.connect_database(self.config.control_database) as conn:
+            state = dict(conn.execute(
+                "SELECT key, value FROM daemon_metadata WHERE key IN "
+                "('accepted_time_health', 'accepted_time_high_water')"
+            ))
+        return state.get("accepted_time_high_water") if state.get("accepted_time_health") == "healthy" else None
+
+    def _terminal_result_probe(self, record: SlurmStageRecord) -> dict[str, PlainData] | None:
+        from ._slurm_terminal_recovery import probe_request
+
+        policy = self.config.slurm_terminal_recovery
+        observation = record.terminal_observation
+        if policy is None or not policy.enabled or observation is None:
+            return None
+        identity = self._terminal_accounting_identity(record)
+        now = self._terminal_accepted_time()
+        if identity != observation["identity"] or now is None:
+            return None
+        if (parse_timestamp(now) - parse_timestamp(str(observation["first_observed_at"]))).total_seconds() < policy.terminal_result_grace_seconds:
+            return None
+        return probe_request(observation)
+
+    def _reconcile_terminal_without_report(
+        self, record: SlurmStageRecord, authority: _ScopedCoordinatorAuthority,
+    ) -> str | None:
+        """Initiate the existing guarded owner, never infer scientific success."""
+        if self.config.slurm_terminal_recovery is None or not self.config.slurm_terminal_recovery.enabled:
+            return None
+        identity = self._terminal_accounting_identity(record)
+        if identity is None:
+            return None
+        now = self._terminal_accepted_time()
+        if now is None:
+            return "slurm_terminal_clock_unhealthy"
+        self.slurm_assignments.observe_terminal_once(record.assignment.assignment_id, identity, now)
+        record = self.slurm_assignments.read(record.assignment.assignment_id)
+        if self._terminal_result_probe(record) is None:
+            return "slurm_terminal_result_grace"
+        observation = record.terminal_observation
+        assert observation is not None
+        probe = observation["probe"]
+        if not isinstance(probe, Mapping):
+            return "slurm_terminal_result_inspection_pending"
+        if probe["state"] != "missing":
+            return "slurm_terminal_result_" + str(probe["state"])
+        assignment = record.assignment
+        recovery_id = "terminal-" + hashlib.sha256(
+            json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        with self.config.connect_database(self.config.control_database) as conn:
+            prior = conn.execute("SELECT state FROM recovery_operations WHERE recovery_id=?", (recovery_id,)).fetchone()
+        if prior is not None:
+            return "slurm_terminal_recovery_" + str(prior[0])
+        snapshot = authority.open_run(assignment.run_uri)
+        attempt = next((
+            attempt for stage in snapshot.stages if stage.stage_name == assignment.stage_name
+            for attempt in stage.attempts if attempt.attempt_id == assignment.attempt_id
+        ), None)
+        if attempt is None or attempt.status not in {StageStatus.SUBMITTED, StageStatus.RUNNING}:
+            return None
+        from ._slurm_start import intended_execution_id
+
+        request = RecoverUnknownAssignment(
+            recovery_id=recovery_id, run_uri=assignment.run_uri,
+            stage_name=assignment.stage_name, attempt=assignment.attempt,
+            stage_work_id=assignment.stage_work_id, assignment_id=assignment.assignment_id,
+            process_execution_id=record.process_execution_id or intended_execution_id(assignment.assignment_id, cast(str, record.bootstrap_incarnation)),
+            execution_fence=cast(str, record.fence),
+            target=SlurmRecoveryTarget(assignment.profile_id, assignment.operation_id, cast(str, record.cluster), cast(str, record.job_id), cast(str, record.bootstrap_incarnation)),
+            expected_state_version=attempt.revision.sequence,
+            requested_outcome="failed", consider_retry=False,
+            reason="Exact terminal Slurm accounting; result absent after grace period",
+        )
+        self._daemon_owner()._accept_guarded_recovery("loom:terminal-recovery", request)
+        return "slurm_terminal_recovery_pending"
 
     def _reconcile_slurm_terminal_assignment(
         self,

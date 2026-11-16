@@ -48,7 +48,7 @@ def _profile():
 
 
 def _cohort(root, *, kind="slurm", explicit_wal=False, legacy=False, custom_provider=False,
-            pending_effects=False, replayable_start=False, bootstrap_upgrade=False):
+            pending_effects=False, replayable_start=False, bootstrap_upgrade=False, terminal_recovery=False):
     c, a = root / "c", root / "a"
     c.mkdir(mode=0o700)
     a.mkdir(mode=0o700)
@@ -114,6 +114,8 @@ def _cohort(root, *, kind="slurm", explicit_wal=False, legacy=False, custom_prov
     if replayable_start:
         payload["agent_policy"]["agents"][0]["capabilities"].append("slurm-replayable-start-v1")
         agent_payload["registration"]["capabilities"].append("slurm-replayable-start-v1")
+    if terminal_recovery:
+        payload["slurm_terminal_recovery"] = {"terminal_result_grace_seconds": 120}
     if bootstrap_upgrade:
         payload["slurm_profiles"][0]["bootstrap_executable"] = "/new/immutable/loom"
         agent_payload["slurm_profiles"][0]["bootstrap_executable"] = "/new/immutable/loom"
@@ -143,9 +145,9 @@ def _snapshot(root):
     return {str(path): (path.read_bytes(), path.stat().st_mtime_ns) for path in root.rglob("*") if path.is_file()}
 
 
-@pytest.mark.parametrize("version", [5, 6])
+@pytest.mark.parametrize("version", [5, 6, 7])
 def test_pending_effects_supported_upgrade_and_restore(root, version):
-    request, old_c, _, new_c, _ = _cohort(root, pending_effects=True, replayable_start=version == 6)
+    request, old_c, _, new_c, _ = _cohort(root, pending_effects=True, replayable_start=version >= 6, terminal_recovery=version == 7)
     assert old_c.daemon.slurm_schema_version == 4
     assert new_c.daemon.slurm_schema_version == version
     assert storage_upgrade(request)["state"] == "eligible"

@@ -10,6 +10,7 @@ from __future__ import annotations
 from loom._sqlite_policy import SQLitePolicy, connect_existing, initialize_database
 from loom.pipeline.stores.atomic import atomic_write_text, _fsync_path_strict
 from ._storage_policy import StoragePolicy
+from ._slurm_terminal_recovery import SlurmTerminalRecoveryPolicy
 from ._slurm_admission import SlurmAdmissionPolicy
 
 from .gpu.occupancy import GpuOccupancyPolicy, GpuOccupancyMonitor
@@ -734,6 +735,7 @@ class LocalDaemonConfig:
     container_capabilities: tuple[SubmittedContainerCapability, ...] = ()
     storage: StoragePolicy | None = None
     slurm_admission: SlurmAdmissionPolicy | None = None
+    slurm_terminal_recovery: SlurmTerminalRecoveryPolicy | None = None
 
     @property
     def sqlite_policy(self) -> SQLitePolicy | None:
@@ -746,6 +748,8 @@ class LocalDaemonConfig:
     @property
     def slurm_schema_version(self) -> int:
         """Select the shared execution schema before any co-owner initializes it."""
+        if self.slurm_terminal_recovery is not None:
+            return 7
         from .agent_sessions import SLURM_PENDING_EFFECTS_CAPABILITY
         from ._slurm_start import SLURM_REPLAYABLE_START_CAPABILITY
         if any(SLURM_REPLAYABLE_START_CAPABILITY in rule.capabilities for rule in self.agent_policy.agents):
@@ -788,6 +792,12 @@ class LocalDaemonConfig:
             raise QueueServiceError("storage policy is invalid")
         if self.slurm_admission is not None and not isinstance(self.slurm_admission, SlurmAdmissionPolicy):
             raise QueueServiceError("SLURM admission policy is invalid")
+
+        if self.slurm_terminal_recovery is not None:
+            if not isinstance(self.slurm_terminal_recovery, SlurmTerminalRecoveryPolicy):
+                raise QueueServiceError("SLURM terminal recovery policy is invalid")
+            if self.slurm_terminal_recovery.enabled and any(profile.containment_helper is None for profile in self.slurm_profiles):
+                raise QueueServiceError("automatic Slurm recovery requires containment helpers")
 
         roots = root_bindings(self.shared_roots)
         qualifications(roots)
@@ -3363,6 +3373,12 @@ class LocalDaemon:
         _public_operation_id(request.recovery_id)
         authorizer = self._authorizer()
         authorizer.require_operator(principal, "recover_unknown")
+        return self._accept_guarded_recovery(principal.subject, request)
+
+    def _accept_guarded_recovery(
+        self, principal_id: str, request: RecoverUnknownAssignment,
+    ) -> Mapping[str, PlainData]:
+        """Shared durable owner; internal callers must validate their policy first."""
         encoded = json.dumps(request.to_dict(), sort_keys=True, separators=(",", ":"))
         digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
         execution = self._execution
@@ -3378,7 +3394,7 @@ class LocalDaemon:
                 ).fetchone()
                 if prior is not None:
                     if (
-                        str(prior["principal_id"]) != principal.subject
+                        str(prior["principal_id"]) != principal_id
                         or str(prior["request_json"]) != encoded
                         or str(prior["request_digest"]) != digest
                     ):
@@ -3410,7 +3426,7 @@ class LocalDaemon:
                         "VALUES (?, ?, ?, ?, ?, 'pending', NULL, ?)",
                         (
                             request.recovery_id,
-                            principal.subject,
+                            principal_id,
                             encoded,
                             digest,
                             recorded_at,
@@ -3592,7 +3608,8 @@ class LocalDaemon:
             rows = tuple(
                 conn.execute(
                     "SELECT request_json FROM recovery_operations "
-                    "WHERE state IN ('pending', 'evidence_confirmed', 'closed')"
+                    "WHERE state IN ('pending', 'evidence_confirmed', 'closed') "
+                    "AND NOT (state='pending' AND principal_id='loom:terminal-recovery')"
                 )
             )
         for row in rows:
@@ -5408,6 +5425,7 @@ def _scheduling_fingerprint(config: LocalDaemonConfig) -> str:
         return config.active_configuration_fingerprint
     payload = {
         **({"slurm_admission": config.slurm_admission.to_dict()} if config.slurm_admission is not None else {}),
+        **({"slurm_terminal_recovery": config.slurm_terminal_recovery.to_dict()} if config.slurm_terminal_recovery is not None else {}),
         **({"shared_roots": thaw_plain_data(config.shared_roots)} if config.shared_roots else {}),
         **({"assignment_payload_root_id": config.assignment_payload_root_id} if config.assignment_payload_root_id is not None else {}),
         **(

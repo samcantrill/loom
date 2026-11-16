@@ -263,11 +263,60 @@ Additional tests cover bounded IO capacity, chunk response loss with and without
 agent restart, final-commit-before-cleanup and interrupted cleanup replay.
 These fake-scheduler tests do not qualify an installed Slurm deployment.
 
-Remaining timing/scale scope includes automatic terminal-without-result
-recovery; scheduler command isolation and reservation/preparation/provider IO;
+Remaining timing/scale scope includes scheduler command isolation and reservation/preparation/provider IO;
 short cleanup quota-lock ownership; immutable input policy and CPU/GPU
 preparation fairness; timeout/placement policy; paged reconciliation and
 large-population qualification. Finite delivery exchanges still use the
 existing bounded HTTP attempt path. This batch does not establish a hard
 scheduling-latency bound during slow commands or unavailable authoritative
 storage, nor does it replace the full deployment and regression gates.
+
+### Automatic terminal-result recovery
+
+Protected coordinator configuration can opt into automatic initiation of the
+existing guarded recovery owner:
+
+```yaml
+slurm_terminal_recovery:
+  enabled: true
+  terminal_result_grace_seconds: 120
+```
+
+This selects execution schema 7. Existing deployments require the supported
+stopped storage upgrade; opening a schema 6 database does not migrate it.
+Set `enabled: false` to stop initiating new automatic recoveries while retaining
+schema 7 and any already accepted recovery operations. Omitting the policy
+preserves the previous deployment behavior and schema selection.
+
+For a consumed execution grant with no report, exact terminal `sacct` evidence
+starts a persisted grace period. Its accounting incarnation, assignment,
+bootstrap incarnation and fence remain bound to the observation. Repeated
+polls and coordinator restarts do not reset its first accepted time. Degraded
+coordinator clock health prevents automatic initiation.
+
+After the grace period, a task asks the submit agent to inspect its qualified
+result directory through the bounded storage pool. The coordinator does not
+assume that it can access the agent's mount. A missing result requires the
+matching reservation binding; unavailable storage and invalid metadata are
+distinct waiting reasons. The exact requested probe travels through the
+existing durable evidence outbox, including lost-response replay.
+
+Only a confirmed missing result initiates a stable guarded recovery operation.
+The existing helper must still establish exact containment, the authority must
+still match the attempt/fence, and capability revocation and interrupted-output
+retention keep their existing owners. `COMPLETED` without a scientific result
+does not mean scientific success. Automatic initiation requests failure and
+does not request an automatic retry.
+
+An ordinary result can supersede automatic recovery while containment remains
+pending. Evidence-confirmed/closed recovery still fences subsequent ordinary
+mutation. Explicit operator recovery retains its existing fencing semantics.
+Jobs without a consumed execution grant remain outside this automatic path;
+the policy does not invent an execution fence or containment evidence.
+
+Waiting diagnostics distinguish the grace period, pending inspection,
+unavailable/invalid/available results, unhealthy time and guarded recovery.
+Source tests exercise restart during grace and pending containment, prestart
+failure after grant consumption, late results, migration and result-directory
+classification. These are source/protocol checks, not physical Slurm/GPU
+qualification; the installed deployment must be upgraded and qualified separately.

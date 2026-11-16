@@ -84,7 +84,7 @@ def _declarations(request: dict, *, qualify: bool) -> list[dict]:
     from . import deployment as d
 
     roles = []
-    allowed = {"storage", "slurm_profiles", "slurm_admission", "slurm_submit_interval_seconds", "slurm_observation_policy"}
+    allowed = {"storage", "slurm_profiles", "slurm_admission", "slurm_terminal_recovery", "slurm_submit_interval_seconds", "slurm_observation_policy"}
     for item in request["roles"]:
         selected = {"request": item}
         for side in ("source", "target"):
@@ -499,7 +499,7 @@ def _prepare_database(role: dict, owner: dict, original: Path, candidate: Path) 
             for key, value in updates.items():
                 conn.execute(f"INSERT INTO {table}(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
         elif owner["role"] == "coordinator" and original == Path(owner["root"]) / "execution.sqlite":
-            from .slurm_ready_stage import _require_schema, _upgrade_released_schema, _upgrade_pending_effects_schema, _upgrade_start_request_schema
+            from .slurm_ready_stage import _require_schema, _upgrade_released_schema, _upgrade_pending_effects_schema, _upgrade_start_request_schema, _upgrade_terminal_observation_schema
             version = conn.execute("PRAGMA user_version").fetchone()[0]
             if version == 3 and target.daemon.slurm_schema_version >= 4:
                 _upgrade_released_schema(conn)
@@ -507,8 +507,11 @@ def _prepare_database(role: dict, owner: dict, original: Path, candidate: Path) 
             if version == 4 and target.daemon.slurm_schema_version >= 5:
                 _upgrade_pending_effects_schema(conn)
                 version = 5
-            if version == 5 and target.daemon.slurm_schema_version == 6:
+            if version == 5 and target.daemon.slurm_schema_version >= 6:
                 _upgrade_start_request_schema(conn)
+                version = 6
+            if version == 6 and target.daemon.slurm_schema_version >= 7:
+                _upgrade_terminal_observation_schema(conn)
             _require_schema(conn, expected_version=target.daemon.slurm_schema_version)
             if {row[1] for row in conn.execute("PRAGMA table_info(ready_stage_submissions)")} != {"operation_id", "state", "value_json"}:
                 raise QueueServiceError("storage upgrade submission projection is incompatible")

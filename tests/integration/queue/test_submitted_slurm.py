@@ -46,7 +46,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 @pytest.mark.parametrize("outbound,cancel_publication", [(False, False), (True, False), (True, True)])
 def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
     tmp_path, monkeypatch, preparation, recovery, cancel_inspection, peer_inspection, outbound, cancel_publication,
-    slow_agent_storage=False,
+    slow_agent_storage=False, terminal_no_result=False,
 ):
     monkeypatch.setenv("PYTHONPATH", os.pathsep.join((
         str(Path(loom.__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[3]),
@@ -147,6 +147,29 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                 ),
             ),
         )
+        terminal_allocations = {}
+        if terminal_no_result:
+            from datetime import timedelta
+            from loom.timestamps import parse_timestamp, utc_timestamp
+            from loom.pipeline.executors.slurm.commands import SlurmCommandPolicy
+            from loom.pipeline.executors.slurm.history import SlurmHistoryPolicy
+
+            candidate = service.daemon.slurm_profiles[0]
+            candidate.runner.command_policy = SlurmCommandPolicy(10, 60, 10)
+            discover = candidate.runner.discover_named_operation
+
+            def terminal_history(**selection):
+                observed = discover(**selection)
+                job_id = terminal_allocations.get(selection["job_name"])
+                if job_id is None:
+                    return observed
+                submitted = utc_timestamp(parse_timestamp(selection["started_after"]) + timedelta(seconds=60))[:-1]
+                return replace(observed, stdout=f"{job_id}|{selection['job_name']}|1000|cluster-a|{submitted}|{job_id}|sFixture{job_id}|TIMEOUT\n")
+
+            monkeypatch.setattr(candidate.runner, "discover_named_operation", terminal_history)
+            candidate = replace(candidate, cluster="cluster-a", accounting_history=SlurmHistoryPolicy(1000),
+                                containment_helper=replace(candidate.containment_helper, process_policy="bounded-v1"))
+            service = replace(service, daemon=replace(service.daemon, slurm_profiles=(candidate,)))
         if preparation:
             prepared = prepare_child_run(
                 service, binding, "child", runtime_options=RunOptions(executor="local")
@@ -173,6 +196,9 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
             shared_roots=service.daemon.shared_roots,
             container_capabilities=service.daemon.container_capabilities,
         )
+        if terminal_no_result:
+            from loom.queue._slurm_terminal_recovery import SlurmTerminalRecoveryPolicy
+            config = replace(config, slurm_terminal_recovery=SlurmTerminalRecoveryPolicy(0))
         # Hold the first coordinator inspection only. Worker launch checks
         # remain real, and the restarted coordinator must inspect afresh.
         validation_started, validation_release = Event(), Event()
@@ -311,6 +337,37 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                 fence = view.grant(delivery.assignment_id, "compute-1")
                 assert view.start_permit(delivery.assignment_id, "compute-1", fence)
                 view.started(delivery.assignment_id, "compute-1", fence, "process-1")
+                if terminal_no_result:
+                    import sqlite3
+                    import loom.queue._agent_slurm as agent_module
+                    from loom.pipeline.executors.slurm.history import operation_job_name
+                    from loom.pipeline.executors.slurm.ready_stage import SlurmContainmentReceipt
+
+                    containment = agent_module.resolve_slurm_containment
+                    monkeypatch.setattr(agent_module, "resolve_slurm_containment", lambda *_: SlurmContainmentReceipt("UNKNOWN"))
+                    terminal_allocations[operation_job_name(record.assignment.operation_id)] = record.job_id
+                    deadline = monotonic() + 25
+                    while True:
+                        with sqlite3.connect(config.control_database) as conn:
+                            pending = conn.execute("SELECT recovery_id, state FROM recovery_operations").fetchall()
+                        if pending:
+                            break
+                        assert monotonic() < deadline, daemon.status()
+                        sleep(.05)
+                    assert len(pending) == 1 and pending[0][1] == "pending"
+                    daemon.stop()
+                    daemon = make_daemon(config)
+                    daemon.start()
+                    monkeypatch.setattr(agent_module, "resolve_slurm_containment", containment)
+                    deadline = monotonic() + 25
+                    while daemon._execution.slurm_assignments.read(delivery.assignment_id).state != "released":
+                        assert monotonic() < deadline, daemon.status()
+                        sleep(.05)
+                    with sqlite3.connect(config.control_database) as conn:
+                        assert conn.execute("SELECT recovery_id, state FROM recovery_operations").fetchall() == [(pending[0][0], "closed")]
+                    assert daemon._execution.slurm_assignments.read(delivery.assignment_id).report is None
+                    assert len([call for call in profile.runner.calls if call[0] == "sbatch"]) == 1
+                    return
                 result = run_submitted_stage(
                     workspace, policy, agent_id=record.assignment.agent_id, fence=fence
                 )
@@ -625,4 +682,12 @@ def test_agent_result_storage_stall_preserves_peer_scheduler_progress(tmp_path, 
         tmp_path, monkeypatch, preparation=False, recovery=False,
         cancel_inspection=False, peer_inspection=False, outbound=outbound,
         cancel_publication=False, slow_agent_storage=kind,
+    )
+
+
+def test_outbound_terminal_without_result_recovers_after_paired_restart(tmp_path, monkeypatch):
+    test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
+        tmp_path, monkeypatch, preparation=False, recovery=False,
+        cancel_inspection=False, peer_inspection=False, outbound=True,
+        cancel_publication=False, terminal_no_result=True,
     )

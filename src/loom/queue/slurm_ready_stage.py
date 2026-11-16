@@ -479,6 +479,7 @@ class SlurmStageRecord:
     publication_cancelled_at: str | None = None
     compute_released_at: str | None = None
     start_request_id: str | None = None
+    terminal_observation: Mapping[str, PlainData] | None = None
 
 
 class SQLiteSlurmStageAssignments:
@@ -493,7 +494,7 @@ class SQLiteSlurmStageAssignments:
         sqlite_policy: SQLitePolicy | None = None,
         schema_version: int = 3,
     ) -> None:
-        if type(schema_version) is not int or schema_version not in {3, 4, 5, 6}:
+        if type(schema_version) is not int or schema_version not in {3, 4, 5, 6, 7}:
             raise QueueServiceError("SLURM assignment schema selection is unsupported")
         self.schema_version = schema_version
         self.path = Path(path)
@@ -522,6 +523,44 @@ class SQLiteSlurmStageAssignments:
             raise QueueServiceError("SLURM GPU admission requires execution schema 4")
         with self._transaction() as conn:
             return _reserved_gpu_count(conn, self.schema_version)
+
+    def observe_terminal_once(
+        self, assignment_id: str, identity: Mapping[str, PlainData], accepted_at: str,
+    ) -> Mapping[str, PlainData]:
+        """Retain the first exact accounting observation across polls/restarts."""
+        if self.schema_version < 7:
+            raise QueueServiceError("automatic terminal recovery requires execution schema 7")
+        with self._transaction() as conn:
+            row = self._row(conn, assignment_id)
+            if row["terminal_observation_json"] is not None:
+                prior = json.loads(row["terminal_observation_json"])
+                if prior["identity"] != identity:
+                    raise QueueConflictError("SLURM terminal accounting identity conflicts")
+                return prior
+            observation = {"identity": dict(identity), "first_observed_at": accepted_at, "probe": None}
+            conn.execute(
+                f"UPDATE {_ASSIGNMENT_TABLE} SET terminal_observation_json=? WHERE assignment_id=?",
+                (_json(observation), assignment_id),
+            )
+            return observation
+
+    def record_terminal_probe(self, assignment_id: str, probe: Mapping[str, PlainData]) -> None:
+        from ._slurm_terminal_recovery import probe_request
+
+        with self._transaction() as conn:
+            row = self._row(conn, assignment_id)
+            if self.schema_version < 7 or row["terminal_observation_json"] is None:
+                raise QueueConflictError("SLURM terminal probe was not requested")
+            observation = json.loads(row["terminal_observation_json"])
+            if (set(probe) != {"request", "state"}
+                or probe["request"] != probe_request(observation)
+                or probe["state"] not in {"missing", "available", "unavailable", "invalid"}):
+                raise QueueConflictError("SLURM terminal result probe conflicts")
+            observation["probe"] = dict(probe)
+            conn.execute(
+                f"UPDATE {_ASSIGNMENT_TABLE} SET terminal_observation_json=? WHERE assignment_id=?",
+                (_json(observation), assignment_id),
+            )
 
     def reserve(
         self,
@@ -1644,6 +1683,8 @@ class SQLiteSlurmStageAssignments:
                 )
                 if self.schema_version >= 6:
                     effect_columns += ", start_request_id TEXT"
+                if self.schema_version >= 7:
+                    effect_columns += ", terminal_observation_json TEXT"
                 extra_columns = (
                     ", requested_gpu_count INTEGER CHECK ((requested_gpu_count IS NULL AND state = 'released') "
                     "OR (typeof(requested_gpu_count) = 'integer' AND requested_gpu_count >= 0)), "
@@ -1727,6 +1768,7 @@ class SQLiteSlurmStageAssignments:
             report=report,
             start_consumed=bool(row["start_consumed"]),
             start_request_id=(None if "start_request_id" not in row.keys() else row["start_request_id"]),
+            terminal_observation=(json.loads(row["terminal_observation_json"]) if "terminal_observation_json" in row.keys() and row["terminal_observation_json"] is not None else None),
             agent_evidence_accepted_at=cast(
                 str | None, row["agent_evidence_accepted_at"]
             ),
@@ -2167,6 +2209,16 @@ def _upgrade_start_request_schema(conn: sqlite3.Connection) -> None:
     _require_schema(conn, expected_version=6)
 
 
+def _upgrade_terminal_observation_schema(conn: sqlite3.Connection) -> None:
+    """Old assignments begin a grace period only after a new exact observation."""
+    _require_schema(conn, expected_version=6)
+    if not conn.in_transaction:
+        raise QueueServiceError("SLURM schema conversion requires an upgrade transaction")
+    conn.execute(f"ALTER TABLE {_ASSIGNMENT_TABLE} ADD COLUMN terminal_observation_json TEXT")
+    conn.execute("PRAGMA user_version = 7")
+    _require_schema(conn, expected_version=7)
+
+
 def _require_schema(
     conn: sqlite3.Connection, *, allow_unversioned: bool = False, expected_version: int = 3,
 ) -> None:
@@ -2203,6 +2255,8 @@ def _require_schema(
         expected |= {"publication_requested_at", "publication_completed_at", "publication_cancelled_at", "compute_released_at"}
     if expected_version >= 6:
         expected.add("start_request_id")
+    if expected_version >= 7:
+        expected.add("terminal_observation_json")
     columns = {
         str(row[1]) for row in conn.execute(f"PRAGMA table_info({_ASSIGNMENT_TABLE})")
     }

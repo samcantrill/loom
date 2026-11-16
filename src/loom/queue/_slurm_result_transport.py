@@ -316,6 +316,31 @@ class SharedSlurmResult:
             self.failure(str(exc))
             raise QueueConflictError("SLURM retained result is invalid; evidence retained") from exc
 
+    def probe_terminal_result(
+        self, assignment: Mapping[str, PlainData], identity: Mapping[str, PlainData],
+    ) -> str:
+        """Absence requires the exact reserved directory, not an unavailable mount."""
+        try:
+            if self._file("binding.json", bound=_MANIFEST_BYTES) != _json(assignment):
+                raise QueueConflictError("SLURM result reservation conflicts")
+            manifest = self._contained_file("manifest.json")
+            try:
+                manifest.stat()
+            except FileNotFoundError:
+                # Recheck the binding after the negative lookup. An unavailable
+                # reservation/root must never become evidence of missing output.
+                if self._file("binding.json", bound=_MANIFEST_BYTES) != _json(assignment):
+                    raise QueueConflictError("SLURM result reservation conflicts")
+                return "missing"
+            self.inspect(identity)
+            return "available"
+        except QueueConflictError as exc:
+            return "unavailable" if isinstance(exc.__cause__, OSError) else "invalid"
+        except (OSError, QueueServiceError):
+            return "unavailable"
+        except (ValueError, TypeError, KeyError):
+            return "invalid"
+
     def read_chunk(self, transfer_id: str, size_bytes: int, offset: int) -> bytes:
         """Read one bounded chunk without retaining a whole artifact in memory."""
         if not 0 <= offset <= size_bytes <= MAX_TRANSFER_BYTES:

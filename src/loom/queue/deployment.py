@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ._storage_policy import parse_storage_policy
+from ._slurm_terminal_recovery import parse_terminal_recovery
 from ._slurm_admission import parse_slurm_admission, submit_interval
 from ._slurm_observation import parse_slurm_observation_policy
 
@@ -283,7 +284,7 @@ def _read_coordinator_declaration(path, *, env_file=None):
             "agent_server",
             "authority",
         },
-        {"scheduling", "slurm_profiles", "preparation", "event_sinks", "shared_roots", "assignment_payload_root_id", "container_capabilities", "storage", "slurm_admission"},
+        {"scheduling", "slurm_profiles", "preparation", "event_sinks", "shared_roots", "assignment_payload_root_id", "container_capabilities", "storage", "slurm_admission", "slurm_terminal_recovery"},
         "coordinator service config",
     )
     _header(payload, "loom.coordinator-service")
@@ -436,6 +437,7 @@ def load_coordinator_service_config(
     )
     daemon = LocalDaemonConfig(
         slurm_admission=parse_slurm_admission(payload.get("slurm_admission")),
+        slurm_terminal_recovery=parse_terminal_recovery(payload.get("slurm_terminal_recovery")),
         storage=parse_storage_policy(payload.get("storage")),
         shared_roots=cast(Mapping[str, PlainData], payload.get("shared_roots", {})),
         assignment_payload_root_id=cast(str | None, payload.get("assignment_payload_root_id")),
@@ -1425,6 +1427,9 @@ def _normalize_coordinator_payload(
     """Normalize role-owned numeric values before identity projections."""
 
     normalized = dict(payload)
+    recovery = parse_terminal_recovery(payload.get("slurm_terminal_recovery"))
+    if recovery is not None:
+        normalized["slurm_terminal_recovery"] = recovery.to_dict()
     admission = parse_slurm_admission(payload.get("slurm_admission"))
     if admission is not None:
         normalized["slurm_admission"] = admission.to_dict()
@@ -2062,6 +2067,7 @@ def _coordinator_active_projection(
         _without_paths(
             {
                 **({"slurm_admission": payload["slurm_admission"]} if payload.get("slurm_admission") is not None else {}),
+                **({"slurm_terminal_recovery": payload["slurm_terminal_recovery"]} if payload.get("slurm_terminal_recovery") is not None else {}),
                 "poll_interval_seconds": payload["poll_interval_seconds"],
                 "max_accepted_time_step_seconds": payload[
                     "max_accepted_time_step_seconds"
@@ -2722,7 +2728,7 @@ def inspect_role_declaration(
         container_identities = [cast(PlainData, policy.capability.to_dict()) for policy in _submitted_container_policies(spec.declarations)]
     else:
         source, _, payload, _ = _load_protected_config(path, env_file=env_file)
-        _required_allowed(payload, {"schema_version", "kind", "deployment_root", "run_store_root", "machine_id", "poll_interval_seconds", "max_accepted_time_step_seconds", "local_agent", "remote_profiles", "agent_policy", "agent_server", "authority"}, {"scheduling", "slurm_profiles", "preparation", "event_sinks", "shared_roots", "assignment_payload_root_id", "container_capabilities", "storage", "slurm_admission"}, "coordinator service config")
+        _required_allowed(payload, {"schema_version", "kind", "deployment_root", "run_store_root", "machine_id", "poll_interval_seconds", "max_accepted_time_step_seconds", "local_agent", "remote_profiles", "agent_policy", "agent_server", "authority"}, {"scheduling", "slurm_profiles", "preparation", "event_sinks", "shared_roots", "assignment_payload_root_id", "container_capabilities", "storage", "slurm_admission", "slurm_terminal_recovery"}, "coordinator service config")
         _header(payload, "loom.coordinator-service")
         parse_storage_policy(payload.get("storage"))
         normalized = dict(_normalize_coordinator_payload(payload))

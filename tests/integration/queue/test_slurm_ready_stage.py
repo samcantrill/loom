@@ -493,6 +493,8 @@ def _exercise_mixed_route_run(
     slurm_output_size: int | None = None,
     lose_output_ack_at: int | None = None,
     guarded_recovery: bool = False,
+    automatic_recovery: bool = False,
+    late_terminal_result: bool = False,
     prestart_failure: bool = False,
     replayable_start: bool = False,
     recovery_terminal_state: str | None = None,
@@ -505,7 +507,7 @@ def _exercise_mixed_route_run(
     now = [utc_timestamp()]
     history_state = ["RUNNING"]
     def clock():
-        return now[0] if long_outage else utc_timestamp()
+        return now[0] if long_outage or automatic_recovery else utc_timestamp()
 
     command_policy = SlurmCommandPolicy(10, 60, 10) if long_outage or accounting_history else None
     runner = FakeSlurmCommandRunner(starting_job_id=1200, command_policy=command_policy)
@@ -655,11 +657,14 @@ def _exercise_mixed_route_run(
             "submit-credential", "submit", "submit", ("default",),
             ("slurm-agent-jobs-v1", "slurm-pending-effects-v1", "slurm-replayable-start-v1"),
         ),))
+    from loom.queue._slurm_terminal_recovery import SlurmTerminalRecoveryPolicy
+
     config = LocalDaemonConfig(
         coordinator_root=tmp_path / "daemon" / "coordinator",
         agent_root=tmp_path / "daemon" / "agent",
         run_store_root=run_root,
         resident_worker_launch_profile=_launch_profile(),
+        slurm_terminal_recovery=SlurmTerminalRecoveryPolicy() if automatic_recovery else None,
         agent_policy=agent_policy,
         slurm_profiles=(profile,),
     )
@@ -779,6 +784,7 @@ def _exercise_mixed_route_run(
             agent_root=tmp_path / "daemon" / "agent",
             run_store_root=run_root,
             resident_worker_launch_profile=_launch_profile(),
+            slurm_terminal_recovery=SlurmTerminalRecoveryPolicy() if automatic_recovery else None,
             agent_policy=agent_policy,
             slurm_profiles=(profile,),
         )
@@ -1005,6 +1011,79 @@ def _exercise_mixed_route_run(
             execution = daemon._execution
             assert execution is not None
             assert execution.slurm_assignments.read(assignment_id).process_execution_id is None
+        if automatic_recovery:
+            import loom.queue._agent_slurm as agent_module
+            from loom.pipeline.executors.slurm.ready_stage import SlurmContainmentReceipt
+
+            original_containment = agent_module.resolve_slurm_containment
+            monkeypatch.setattr(agent_module, "resolve_slurm_containment", lambda *_: SlurmContainmentReceipt("UNKNOWN"))
+            with daemon._cycle_lock:
+                history_state[0] = recovery_terminal_state
+                _agent_observation(
+                    execution, record.assignment.operation_id,
+                    expected_job_id="1200", scheduler_state=recovery_terminal_state,
+                    scheduler_source="sacct", observed_at=now[0],
+                )
+                diagnostic = execution._reconcile_terminal_without_report(
+                    execution.slurm_assignments.read(assignment_id), authority,
+                )
+                assert diagnostic == "slurm_terminal_result_grace"
+                observation = execution.slurm_assignments.read(assignment_id).terminal_observation
+                assert execution._slurm_task(execution.slurm_assignments.read(assignment_id))["terminal_result_probe"] is None
+            daemon.stop()
+            daemon = LocalDaemon(reopened_config, clock=clock)
+            daemon.start()
+            execution = daemon._execution
+            assert execution is not None
+            assert execution.slurm_assignments.read(assignment_id).terminal_observation == observation
+            with daemon._cycle_lock:
+                now[0] = (parse_timestamp(now[0]) + timedelta(seconds=121)).isoformat()
+                assert daemon._sample_clock_health()
+            deadline = time.monotonic() + 15
+            while True:
+                with sqlite3.connect(config.control_database) as conn:
+                    recoveries = conn.execute("SELECT recovery_id, state FROM recovery_operations").fetchall()
+                if recoveries:
+                    break
+                assert time.monotonic() < deadline, daemon.status()
+                time.sleep(.05)
+            assert len(recoveries) == 1 and recoveries[0][1] == "pending"
+            assert execution.slurm_assignments.read(assignment_id).state == ("granted" if prestart_failure else "running")
+            assert not daemon._recovery_fences_ordinary_terminal(assignment_id)
+            daemon.stop()
+            daemon = LocalDaemon(reopened_config, clock=clock)
+            daemon.start()
+            execution = daemon._execution
+            assert execution is not None
+            if late_terminal_result:
+                from loom.queue._slurm_result_transport import SharedSlurmResult
+
+                result = execute_resident_stage_worker_request(
+                    worker_request=workspace.worker_request(), workspace_root=workspace.root,
+                    process_containment_owner=ProcessContainmentOwner.OUTER_BOUNDARY,
+                )
+                report = workspace.retain_result(result)
+                transport = SharedSlurmResult(profile.result_storage, assignment_id)
+                transport.publish(execution.slurm_result_identity(execution.slurm_assignments.read(assignment_id)), report, workspace.output_chunk)
+                deadline = time.monotonic() + 15
+                while execution.slurm_assignments.read(assignment_id).report is None:
+                    assert time.monotonic() < deadline, daemon.status()
+                    time.sleep(.05)
+            monkeypatch.setattr(agent_module, "resolve_slurm_containment", original_containment)
+            deadline = time.monotonic() + 15
+            while execution.slurm_assignments.read(assignment_id).state != "released":
+                assert time.monotonic() < deadline, daemon.status()
+                time.sleep(.05)
+            assert authority.open_run(run_uri).stages[1].status is (StageStatus.SUCCEEDED if late_terminal_result else StageStatus.FAILED)
+            assert (execution.slurm_assignments.read(assignment_id).report is None) is not late_terminal_result
+            assert not capability_path(record.assignment.operation_id).exists()
+            with sqlite3.connect(config.control_database) as conn:
+                recovered = conn.execute("SELECT recovery_id, state, request_json FROM recovery_operations").fetchall()
+            assert len(recovered) == 1 and recovered[0][0] == recoveries[0][0]
+            assert recovered[0][1] in ({"unknown", "superseded"} if late_terminal_result else {"closed"})
+            assert json.loads(recovered[0][2])["consider_retry"] is False
+            assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
+            return
         recovery_receipt = None
         if guarded_recovery:
             before_recovery = authority.open_run(run_uri)
@@ -2723,4 +2802,12 @@ def test_replayable_start_survives_coordinator_restart_and_prestart_recovery(tmp
     _exercise_mixed_route_run(
         tmp_path, monkeypatch, guarded_recovery=True, prestart_failure=True,
         accounting_history=True, recovery_terminal_state="FAILED", replayable_start=True,
+    )
+
+
+@pytest.mark.parametrize("prestart,late_result", [(False, False), (True, False), (False, True)])
+def test_automatic_terminal_recovery_survives_grace_and_pending_restart(tmp_path, monkeypatch, prestart, late_result):
+    _exercise_mixed_route_run(
+        tmp_path, monkeypatch, accounting_history=True, automatic_recovery=True,
+        recovery_terminal_state="TIMEOUT", prestart_failure=prestart, late_terminal_result=late_result,
     )
