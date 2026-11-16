@@ -232,3 +232,42 @@ installation checks. Its descriptor SHA-256 is
 It supersedes the unactivated `loom-50079b52` candidate. The prepared native
 `responsiveness-release-recovery-20261105` operation selects this bundle and the
 verified image; deployment remains pending until the follow-up merges.
+
+### Slurm agent result storage and finite delivery turns
+
+Agent-side result inspection, chunk reads and transport cleanup use two IO
+workers, at most eight outstanding filesystem effects and at most 32 delivery
+owners. An unfinished worker remains counted until it exits. The agent owner
+alone advances report/chunk/commit state and writes its journals. A pending
+read or cleanup does not stop another assignment's submission, observation or
+cancellation. Both embedded and outbound Slurm use this path.
+
+Delivery reads bounded report/manifest metadata and one transport chunk at a
+time. The existing receiving assignment store checks the complete artifact
+digest before finalizing it; this removes the sender's extra whole-file read
+without dropping the receiver's integrity check. Lost chunk replies retain the
+exact pending chunk. After agent restart, report/offset replay reuses the
+receiver's durable acknowledged prefix. Cleanup requires acknowledged commit
+or the existing exact release/cancellation authorization. Interrupted cleanup
+can replay without reading already removed result files.
+
+Scheduler polling cadence does not throttle result delivery. During an outbound
+resident-work long poll, the same Slurm owner continues finite turns; the agent
+still owns only one durable resident poll. Session-changing controls wait for
+that poll's receipt, and offer maintenance resumes at its boundary. Slurm
+command observation retains its existing cadence and pacing.
+
+Fault tests hold an actual result read while the same owner submits, observes
+and cancels a peer, through embedded execution and the outbound TLS service.
+Additional tests cover bounded IO capacity, chunk response loss with and without
+agent restart, final-commit-before-cleanup and interrupted cleanup replay.
+These fake-scheduler tests do not qualify an installed Slurm deployment.
+
+Remaining timing/scale scope includes automatic terminal-without-result
+recovery; scheduler command isolation and reservation/preparation/provider IO;
+short cleanup quota-lock ownership; immutable input policy and CPU/GPU
+preparation fairness; timeout/placement policy; paged reconciliation and
+large-population qualification. Finite delivery exchanges still use the
+existing bounded HTTP attempt path. This batch does not establish a hard
+scheduling-latency bound during slow commands or unavailable authoritative
+storage, nor does it replace the full deployment and regression gates.

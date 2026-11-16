@@ -1484,6 +1484,8 @@ class LocalDaemonExecution:
 
         self._input_validations.close()
         self._ready_preparations.close()
+        if self._slurm_agent is not None:
+            self._slurm_agent.close()
         self._local_assignment_workers.shutdown(wait=True)
         self._slurm_storage_workers.shutdown(wait=True)
         self._local_assignment_futures.clear()

@@ -73,7 +73,8 @@ def drive_operation(client, operation, binding, *args, **kwargs):
             # effects are applied at the existing next scheduler boundary.
             if monotonic() >= next_renewal:
                 next_renewal = monotonic() + 5
-                if not client._drained and not client._restart_with_retained_work:
+                if (not client._drained and not client._restart_with_retained_work
+                    and not getattr(client, "_resident_poll_active", False)):
                     try:
                         yield from _steps(client.renew_current_offer, binding["session_id"])
                     except QueueError:

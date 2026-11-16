@@ -13,6 +13,7 @@ from loom.queue._slurm_observation import SlurmObservationPolicy, parse_slurm_ob
 from loom.queue.errors import QueueConfigError
 from tests.unit.loom.queue.test_agent_slurm import _task
 from tests.unit.loom.queue.test_slurm_observation import _owner, _ack, _publish_result, _queries
+from tests.unit.loom.queue.test_agent_slurm_storage import drive_until
 
 
 def _batch_owner(tmp_path, monkeypatch, *, size=8, calls=4, budget=10, submission=None):
@@ -87,32 +88,55 @@ def test_one_batch_associates_unknown_and_observes_known_without_resubmission(tm
     assert sum(command == "sbatch" for command, _argv in runner.calls) == 2
 
 
-def test_entire_page_delivers_before_accounting_or_fresh_submission(tmp_path, monkeypatch):
+def test_blocked_result_read_allows_peer_submission_observation_and_cancellation(tmp_path, monkeypatch):
+    from threading import Event
+    from loom.queue._slurm_result_transport import SharedSlurmResult
+
     owner, clock, runner, profile = _batch_owner(tmp_path, monkeypatch)
     one, two, new = [_task(profile, key=str(i)) for i in (1, 2, 3)]
     owner.step_cycle([one, two], _ack)
     identity, transport = _publish_result(one, profile)
     calls = []
-    original_query, original_submit = runner.discover_named_operations, runner.sbatch
-    def query(**selection):
-        assert calls == ["report", "commit"]
-        original_query(**selection)
-        raise subprocess.TimeoutExpired("sacct", 10)
-    def submit(*args, **kwargs):
-        assert calls == ["report", "commit"]
-        return original_submit(*args, **kwargs)
-    monkeypatch.setattr(runner, "discover_named_operations", query)
-    monkeypatch.setattr(runner, "sbatch", submit)
+    entered, release = Event(), Event()
+    inspect = SharedSlurmResult.inspect_if_available
+
+    def blocked(transport, selected):
+        entered.set()
+        assert release.wait(5)
+        return inspect(transport, selected)
+
+    monkeypatch.setattr(SharedSlurmResult, "inspect_if_available", blocked)
+    original = runner.discover_named_operation
+    def exact_cancel(**selection):
+        original(**selection)
+        return SlurmCommandResult("sacct", ("sacct",), 0, stdout=_line(2))
+    monkeypatch.setattr(runner, "discover_named_operation", exact_cancel)
+    cancel = False
     def acknowledge(value):
         if "result_operation" in value:
             calls.append(value["result_operation"])
             return {"acknowledged": True}
-        return _ack(value)
-    clock[0] = 30
-    owner.step_cycle([new, two, {**one, "result_identity": identity}], acknowledge)
-    assert calls == ["report", "commit"]
-    assert not transport.path.exists()
-    assert owner.has_retained_work()
+        return {"sequence": value["sequence"], "cancel_requested": cancel and value["assignment"]["assignment_id"] == "assignment-2"}
+    try:
+        owner.step_cycle([{**one, "result_identity": identity}], acknowledge)
+        assert entered.wait(1)
+        before = _queries(runner)
+        clock[0] = 30
+        cancel = True
+        owner.step_cycle([new, {**two, "cancel_requested": True, "containment_request": {}},
+                          {**one, "result_identity": identity}], acknowledge)
+        assert calls == [] and not release.is_set()
+        assert owner.journal.read("operation-3").job_id is not None
+        assert _queries(runner) > before
+        assert any(command == "scancel" for command, _argv in runner.calls)
+        release.set()
+        drive_until(lambda: owner.step_cycle([{**one, "result_identity": identity}], acknowledge),
+                    lambda: not transport.path.exists())
+        assert calls == ["report", "commit"]
+        assert sum(command == "sbatch" for command, _argv in runner.calls) == 3
+    finally:
+        release.set()
+        owner.close()
 
 
 def test_full_result_quota_defers_only_new_assignment_and_drains_existing_work(tmp_path, monkeypatch):
@@ -152,10 +176,11 @@ def test_full_result_quota_defers_only_new_assignment_and_drains_existing_work(t
         waiting, {**finished, "result_identity": identity},
         {**cancelled, "cancel_requested": True, "containment_request": {}},
     ], acknowledge)
-    assert calls == ["report", "commit"]
-    assert not transport.path.exists()
     assert owner.journal.find("operation-3") is None
     assert any(command == "scancel" for command, _args in runner.calls)
+    drive_until(lambda: owner.step_cycle([{**finished, "result_identity": identity}], acknowledge),
+                lambda: not transport.path.exists())
+    assert calls == ["report", "commit"]
     clock[0] += 5
     owner.step_cycle([waiting], _ack)
     assert owner.journal.read("operation-3").job_id is not None

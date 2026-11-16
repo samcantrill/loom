@@ -903,6 +903,7 @@ class LocalDaemonAgentHttpClient:
         self._closed = False
         self._service_progress = False
         self._service_control_due = True
+        self._resident_poll_active = False
         self._epoch_reconciliation_pending = False
         self._mutation_gate = _Gate()
         self._suspend_requested: Callable[[], bool] | None = None
@@ -1224,6 +1225,8 @@ class LocalDaemonAgentHttpClient:
     def close(self) -> None:
         self._closed = True
         self._close_connection()
+        if self._slurm_agent is not None:
+            self._slurm_agent.close()
         if self._journal is not None:
             self._journal.close()
             self._journal = None
@@ -1341,6 +1344,42 @@ class LocalDaemonAgentHttpClient:
         wait_timeout_ms: int,
     ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
         return (yield from _session_protocol.wait_for_work(self, session_id, availability_revision, sequence=sequence, wait_timeout_ms=wait_timeout_ms))
+
+    @_cooperative
+    def wait_for_work_with_slurm(
+        self, session_id: str, availability_revision: str, *, sequence: int, wait_timeout_ms: int,
+    ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
+        """Keep one durable resident poll while the Slurm owner makes turns."""
+        if self._slurm_agent is None or not self._service_progress:
+            return (yield from _steps(self.wait_for_work, session_id, availability_revision,
+                                     sequence=sequence, wait_timeout_ms=wait_timeout_ms))
+        from ._agent_progress import _Spawn
+
+        self._resident_poll_active = True
+
+        def receive_poll():
+            try:
+                return (yield from _steps(self.wait_for_work, session_id, availability_revision,
+                                         sequence=sequence, wait_timeout_ms=wait_timeout_ms))
+            finally:
+                # A long scheduler command may outlive the resident poll. Its
+                # offer renewals can resume as soon as the mutation gate opens.
+                self._resident_poll_active = False
+
+        poll = yield _Spawn(receive_poll())
+        try:
+            while not poll.complete:
+                yield from _steps(self.drive_slurm_jobs)
+                yield from _delay(0.1)
+            if poll.error is not None:
+                raise poll.error
+            return poll.value
+        finally:
+            # A changed session/transport must not overlap a still-owned poll.
+            # Its exact receipt is retained even when scheduler progress fails.
+            while not poll.complete:
+                yield from _delay(0.01)
+            self._resident_poll_active = False
 
     @_cooperative
     @_serialized("_mutation_gate")
@@ -2521,7 +2560,7 @@ class LocalDaemonAgentHttpClient:
 
         (yield from _steps(self.drive_slurm_jobs))
         _raise_if_application_suspended(suspend_requested)
-        delivery = (yield from _steps(self.wait_for_work,
+        delivery = (yield from _steps(self.wait_for_work_with_slurm,
             session_id,
             availability_revision,
             sequence=sequence,

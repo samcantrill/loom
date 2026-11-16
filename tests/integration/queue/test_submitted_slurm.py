@@ -45,7 +45,8 @@ pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 ])
 @pytest.mark.parametrize("outbound,cancel_publication", [(False, False), (True, False), (True, True)])
 def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
-    tmp_path, monkeypatch, preparation, recovery, cancel_inspection, peer_inspection, outbound, cancel_publication
+    tmp_path, monkeypatch, preparation, recovery, cancel_inspection, peer_inspection, outbound, cancel_publication,
+    slow_agent_storage=False,
 ):
     monkeypatch.setenv("PYTHONPATH", os.pathsep.join((
         str(Path(loom.__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[3]),
@@ -141,7 +142,7 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                     replace(
                         service.daemon.slurm_profiles[0],
                         containment_helper=_positive_containment_helper(),
-                        max_outstanding=None if outbound else service.daemon.slurm_profiles[0].max_outstanding,
+                        max_outstanding=None if outbound or slow_agent_storage else service.daemon.slurm_profiles[0].max_outstanding,
                     ),
                 ),
             ),
@@ -158,7 +159,7 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                 service, composed, "workload", execution_requirements=requirements
             )
         peer = None
-        if peer_inspection or (outbound and recovery):
+        if peer_inspection or (outbound and recovery) or slow_agent_storage:
             peer = prepare_managed_run(
                 service, composed, "independent-workload", execution_requirements=requirements
             )
@@ -177,6 +178,7 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
         validation_started, validation_release = Event(), Event()
         retention_started, retention_release = Event(), Event()
         publication_started, publication_release = Event(), Event()
+        storage_started, storage_release = Event(), Event()
         peer_submitted = False
         if not preparation and not recovery:
             from loom.queue import _input_validation
@@ -215,7 +217,7 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                         inspections = detail.owners["input_validation"]["inspections"]
                         assert len(inspections) == 1
                         assert inspections[0]["reason"] == "input_validation_pending"
-                        if peer is not None:
+                        if peer_inspection:
                             client.submit(LocalDaemonAdmissionRequest("independent", peer.run_uri))
                             deadline = monotonic() + 10
                             peer_records = ()
@@ -337,7 +339,80 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                 retained = workspace.retain_result(result)
                 if not failed:
                     assert retained.output_kind == "shared"
-                if outbound and (recovery or cancel_publication) and not failed:
+                if slow_agent_storage:
+                    from loom.queue._slurm_result_transport import SharedSlurmResult
+                    inspect = SharedSlurmResult.inspect_if_available
+                    cleanup = SharedSlurmResult.cleanup
+
+                    def held_inspection(transport, identity):
+                        if transport.assignment_id == delivery.assignment_id:
+                            storage_started.set()
+                            assert storage_release.wait(30)
+                        return inspect(transport, identity)
+
+                    def held_cleanup(transport):
+                        if transport.assignment_id == delivery.assignment_id:
+                            storage_started.set()
+                            assert storage_release.wait(30)
+                        return cleanup(transport)
+
+                    if slow_agent_storage == "cleanup":
+                        monkeypatch.setattr(SharedSlurmResult, "cleanup", held_cleanup)
+                    else:
+                        monkeypatch.setattr(SharedSlurmResult, "inspect_if_available", held_inspection)
+                    identity = daemon._execution.slurm_result_identity(
+                        daemon._execution.slurm_assignments.read(delivery.assignment_id),
+                    )
+                    transport = SharedSlurmResult(profile.result_storage, delivery.assignment_id, compute=True)
+                    transport.publish(identity, retained, lambda *args: pytest.fail("shared payload relay"))
+                    # Cleanup follows publication/release acknowledgements,
+                    # including their existing five-second pending retries.
+                    assert storage_started.wait(20 if slow_agent_storage == "cleanup" else 10)
+                    assert peer is not None
+                    peer_client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+                    original_squeue = profile.runner.squeue
+
+                    def running_peer(*, job_ids=()):
+                        response = original_squeue(job_ids=job_ids)
+                        return replace(response, stdout="".join(f"{job}|RUNNING|None\n" for job in job_ids))
+
+                    monkeypatch.setattr(profile.runner, "squeue", running_peer)
+                    peer_client.submit(LocalDaemonAdmissionRequest("storage-peer", peer.run_uri))
+                    peer_submitted = True
+                    deadline = monotonic() + 15
+                    peer_record = observed = None
+                    while monotonic() < deadline:
+                        candidates = daemon._execution.slurm_assignments.list_run_unreleased(peer.run_uri)
+                        if candidates and candidates[0].job_id:
+                            peer_record = candidates[0]
+                            observed = daemon._execution.slurm_submissions.read(peer_record.assignment.operation_id)
+                            if observed.scheduler_source == "squeue":
+                                break
+                        sleep(0.02)
+                    assert peer_record is not None and observed.scheduler_source == "squeue"
+                    peer_client.cancel("storage-peer")
+                    deadline = monotonic() + 10
+                    while monotonic() < deadline:
+                        if any(call[0] == "scancel" and peer_record.job_id in call[1] for call in profile.runner.calls):
+                            break
+                        sleep(0.02)
+                    assert any(call[0] == "scancel" and peer_record.job_id in call[1] for call in profile.runner.calls)
+                    assert not storage_release.is_set()
+                    assert transport.path.exists()
+                    if slow_agent_storage != "cleanup":
+                        assert daemon._execution.slurm_assignments.read(delivery.assignment_id).report is None
+                    storage_release.set()
+                    deadline = monotonic() + 15
+                    while monotonic() < deadline:
+                        completed = daemon._execution.slurm_assignments.read(delivery.assignment_id)
+                        if completed.state in {"terminal", "logical_released", "released"}:
+                            break
+                        sleep(0.02)
+                    assert completed.state in {"terminal", "logical_released", "released"}
+                    assert completed.report is not None and completed.report.status is StageStatus.SUCCEEDED
+                    if daemon._execution.slurm_assignments.schema_version >= 5:
+                        assert completed.publication_completed_at is not None
+                elif outbound and (recovery or cancel_publication) and not failed:
                     from loom.queue import _shared_publication
                     from loom.queue._slurm_result_transport import SharedSlurmResult
                     prepare_publication = _shared_publication.prepare_publication
@@ -540,4 +615,14 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
         finally:
             retention_release.set()
             publication_release.set()
+            storage_release.set()
             daemon.stop()
+
+
+@pytest.mark.parametrize("outbound,kind", [(False, "read"), (True, "read"), (True, "cleanup")])
+def test_agent_result_storage_stall_preserves_peer_scheduler_progress(tmp_path, monkeypatch, outbound, kind):
+    test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
+        tmp_path, monkeypatch, preparation=False, recovery=False,
+        cancel_inspection=False, peer_inspection=False, outbound=outbound,
+        cancel_publication=False, slow_agent_storage=kind,
+    )

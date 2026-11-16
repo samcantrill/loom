@@ -16,6 +16,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 from typing import Iterator, cast
 
 from loom.serialization import PlainData, thaw_plain_data
@@ -107,12 +108,18 @@ class SharedSlurmResult:
         self.root = Path(
             cast(str, storage["compute_root" if compute else "agent_root"])
         )
-        if self.root.is_symlink() or not self.root.is_dir():
-            raise QueueServiceError("SLURM qualified result root is unavailable")
         self.path = self.root / assignment_id
         self.assignment_id = assignment_id
 
+    def _require_root(self) -> None:
+        if self.root.is_symlink() or not self.root.is_dir():
+            raise QueueServiceError("SLURM qualified result root is unavailable")
+
     def _file(self, relative: str, *, bound: int) -> bytes:
+        return _read_regular_file_bytes(self._contained_file(relative), max_bytes=bound)
+
+    def _contained_file(self, relative: str) -> Path:
+        self._require_root()
         path = Path(relative)
         if (
             path.is_absolute()
@@ -126,10 +133,11 @@ class SharedSlurmResult:
                 current = current / part
             if current.is_symlink():
                 raise QueueConflictError("SLURM result path contains a link")
-        return _read_regular_file_bytes(current, max_bytes=bound)
+        return current
 
     @contextmanager
     def _quota_lock(self) -> Iterator[None]:
+        self._require_root()
         fd = os.open(
             self.root / ".retention.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600
         )
@@ -256,9 +264,10 @@ class SharedSlurmResult:
         }
         _atomic_regular_file(self.path / "manifest.json", _json(manifest))
 
-    def read(
+    def inspect(
         self, identity: Mapping[str, PlainData]
-    ) -> tuple[_RemoteExecutionReport, dict[str, bytes]]:
+    ) -> _RemoteExecutionReport:
+        """Read bounded metadata; the receiver verifies streamed payload digests."""
         manifest = json.loads(self._file("manifest.json", bound=_MANIFEST_BYTES))
         if (
             set(manifest) != {"schema_version", "identity", "report", "artifacts"}
@@ -285,7 +294,6 @@ class SharedSlurmResult:
             manifest["artifacts"]
         ) != len(relayed):
             raise QueueConflictError("SLURM retained output declaration conflicts")
-        outputs = {}
         for item, descriptor in zip(relayed, manifest["artifacts"], strict=True):
             if descriptor != {
                 "logical_name": item.logical_name,
@@ -294,10 +302,53 @@ class SharedSlurmResult:
                 "digest": item.digest,
             }:
                 raise QueueConflictError("SLURM retained output descriptor conflicts")
-            outputs[item.transfer_id] = checked(descriptor, item.size_bytes)
+        if sum(item.size_bytes for item in relayed) > MAX_TRANSFER_BYTES:
+            raise QueueConflictError("SLURM retained output exceeds transfer budget")
+        return report
+
+    def inspect_if_available(self, identity: Mapping[str, PlainData]) -> _RemoteExecutionReport | None:
+        self._require_root()
+        if not (self.path / "manifest.json").exists():
+            return None
+        try:
+            return self.inspect(identity)
+        except (ValueError, TypeError, KeyError, OSError, QueueServiceError, QueueConflictError) as exc:
+            self.failure(str(exc))
+            raise QueueConflictError("SLURM retained result is invalid; evidence retained") from exc
+
+    def read_chunk(self, transfer_id: str, size_bytes: int, offset: int) -> bytes:
+        """Read one bounded chunk without retaining a whole artifact in memory."""
+        if not 0 <= offset <= size_bytes <= MAX_TRANSFER_BYTES:
+            raise QueueConflictError("SLURM result chunk bounds conflict")
+        path = self._contained_file("outputs/" + transfer_id)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_size != size_bytes:
+                raise QueueConflictError("SLURM retained output size/type conflicts")
+            data = os.pread(fd, min(TRANSFER_CHUNK_BYTES, size_bytes - offset), offset)
+            if len(data) != min(TRANSFER_CHUNK_BYTES, size_bytes - offset):
+                raise QueueConflictError("SLURM retained output was truncated")
+            return data
+        finally:
+            os.close(fd)
+
+    def read(
+        self, identity: Mapping[str, PlainData]
+    ) -> tuple[_RemoteExecutionReport, dict[str, bytes]]:
+        report = self.inspect(identity)
+        outputs = {}
+        for item in report.outputs:
+            if shared_binding(item.metadata) is not None:
+                continue
+            data = self._file("outputs/" + item.transfer_id, bound=item.size_bytes)
+            if len(data) != item.size_bytes or hashlib.sha256(data).hexdigest() != item.digest:
+                raise QueueConflictError("SLURM retained result size/digest conflicts")
+            outputs[item.transfer_id] = data
         return report, outputs
 
     def failure(self, reason: str) -> None:
+        self._require_root()
         _atomic_regular_file(
             self.path / "delivery-failure.json", _json({"failure": reason[:1024]})
         )
@@ -307,6 +358,7 @@ class SharedSlurmResult:
         identity: Mapping[str, PlainData],
         call: Callable[[Mapping[str, PlainData]], Mapping[str, PlainData]],
     ) -> bool:
+        self._require_root()
         if not (self.path / "manifest.json").exists():
             return False
         try:
@@ -366,6 +418,18 @@ class SharedSlurmResult:
         call: Callable[[Mapping[str, PlainData]], Mapping[str, PlainData]],
     ) -> bool:
         """Reauthenticate commit/replay before retiring even partially cleaned bytes."""
+        self.acknowledge_commit(identity, call)
+        self._require_root()
+        if self.path.exists():
+            self.cleanup()
+        return True
+
+    def acknowledge_commit(
+        self,
+        identity: Mapping[str, PlainData],
+        call: Callable[[Mapping[str, PlainData]], Mapping[str, PlainData]],
+    ) -> None:
+        """Authenticate finalization without performing filesystem cleanup."""
         response = call(
             {
                 "assignment_id": self.assignment_id,
@@ -392,9 +456,6 @@ class SharedSlurmResult:
             raise QueueConflictError(
                 "SLURM result final acknowledgement is unavailable"
             )
-        if self.path.exists():
-            self.cleanup()
-        return True
 
     def cleanup(self) -> None:
         """Retire transport bytes only after the finalizer acknowledgement."""

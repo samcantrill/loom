@@ -16,6 +16,7 @@ from loom.queue._slurm_observation import SlurmObservationPolicy
 from loom.queue._slurm_result_transport import SharedSlurmResult
 from loom.queue.errors import QueueConfigError
 from tests.unit.loom.queue.test_agent_slurm import _profile, _task
+from tests.unit.loom.queue.test_agent_slurm_storage import drive_until
 
 
 def _row():
@@ -98,7 +99,7 @@ def _publish_result(task, profile):
 
 
 @pytest.mark.parametrize("query_due", [False, True])
-def test_retained_result_delivers_before_deferred_or_failing_observation(tmp_path, monkeypatch, query_due):
+def test_retained_result_and_failing_observation_progress_independently(tmp_path, monkeypatch, query_due):
     owner, task, clock, runner, profile = _owner(
         tmp_path, monkeypatch, accounting=[subprocess.TimeoutExpired("sacct", 10)] * 3,
     )
@@ -108,8 +109,6 @@ def test_retained_result_delivers_before_deferred_or_failing_observation(tmp_pat
     result_calls = []
     original = runner.discover_named_operation
     def observe(**selection):
-        assert result_calls == ["report", "commit"], "delivery waited for the failing query"
-        assert not transport.path.exists()
         return original(**selection)
     monkeypatch.setattr(runner, "discover_named_operation", observe)
     def acknowledge(value):
@@ -119,6 +118,8 @@ def test_retained_result_delivers_before_deferred_or_failing_observation(tmp_pat
         return _ack(value)
     clock[0] = 30 if query_due else 1
     owner.step({**task, "result_identity": identity}, acknowledge, allow_submission=False)
+    drive_until(lambda: owner.step({**task, "result_identity": identity}, acknowledge, allow_submission=False),
+                lambda: not transport.path.exists())
     assert result_calls == ["report", "commit"]
     assert _queries(runner) == (2 if query_due else 1)
     assert owner.has_retained_work(), "result delivery is not containment"
@@ -234,6 +235,10 @@ def test_acknowledged_cleanup_replays_revocation_without_new_helper_query(tmp_pa
         owner = AgentSlurmJobs(tmp_path, (profile,), observation_policy=SlurmObservationPolicy(300))
     clock[0] = 2
     owner.step(release, acknowledge)
+    def settle():
+        clock[0] += 0.1
+        owner.step(release, acknowledge)
+    drive_until(settle, lambda: not owner.has_retained_work())
     assert not owner.has_retained_work()
     assert len(calls) == 1
     assert not profile.job_private_file_provider.path_for("operation-1").exists()

@@ -5,6 +5,7 @@ from dataclasses import replace
 from typing import cast
 
 import pytest
+from tests.unit.loom.queue.test_agent_slurm_storage import drive_until
 
 from loom.pipeline.executors.slurm.commands import FakeSlurmCommandRunner
 from loom.pipeline.executors.slurm.ready_stage import ReadyStageState
@@ -131,6 +132,7 @@ def test_suppressed_call_releases_only_after_authority_acknowledges(tmp_path: Pa
     assert seen[-2]["provider_released"] is False
     assert seen[-1]["provider_released"] is True
     assert seen[-1]["release"] == {"kind": "definite_rejection"}
+    drive_until(lambda: agent.replay_pending(acknowledge), lambda: not agent.has_retained_work())
     assert not agent.has_retained_work()
 
 
@@ -228,10 +230,8 @@ def test_cancelled_published_result_waits_for_terminal_rejection_ack(
             "cancelled result must not block containment"
         )
         if value["provider_released"]:
-            assert transport.path.exists(), (
-                "evidence must survive the lost rejection acknowledgement"
-            )
             if not lost:
+                assert transport.path.exists(), "evidence must survive the lost rejection acknowledgement"
                 lost = True
                 if interruption == "acknowledgement":
                     raise OSError("lost terminal rejection acknowledgement")
@@ -283,7 +283,7 @@ def test_cancelled_published_result_waits_for_terminal_rejection_ack(
     monkeypatch.setattr(SharedSlurmResult, "cleanup", cleanup_with_interruption)
     cancel = True
     with pytest.raises(OSError, match="lost terminal rejection"):
-        agent.step(
+        drive_until(lambda: agent.step(
             {
                 **task,
                 "cancel_requested": True,
@@ -291,10 +291,12 @@ def test_cancelled_published_result_waits_for_terminal_rejection_ack(
                 "containment_request": {},
             },
             acknowledge,
-        )
+        ), lambda: False)
     assert transport.path.exists()
     assert agent.has_retained_work()
-    AgentSlurmJobs(tmp_path, (profile,)).replay_pending(acknowledge)
+    agent.close()
+    reopened = AgentSlurmJobs(tmp_path, (profile,))
+    drive_until(lambda: reopened.replay_pending(acknowledge), lambda: not reopened.has_retained_work())
     assert not transport.path.exists()
     assert not agent.has_retained_work()
 
@@ -321,6 +323,7 @@ def test_quota_refusal_cannot_prevent_cancellation_of_unissued_job(tmp_path):
     agent.step(task, acknowledge)  # Ordinary capacity is assignment-local.
     assert not runner.calls
     agent.step({**task, "cancel_requested": True}, acknowledge)
+    drive_until(lambda: agent.replay_pending(acknowledge), lambda: not agent.has_retained_work())
     assert not agent.has_retained_work()
     assert occupied.path.exists()
     assert not any(call[0] == "sbatch" for call in runner.calls)
@@ -378,10 +381,12 @@ def test_interrupted_acknowledged_cleanup_replays_authority_before_retirement(
         raise OSError("cleanup interrupted after acknowledged commit")
 
     monkeypatch.setattr(SharedSlurmResult, "cleanup", interrupted)
+    delivering = AgentSlurmJobs(tmp_path, (profile,))
     with pytest.raises(OSError, match="cleanup interrupted"):
-        AgentSlurmJobs(tmp_path, (profile,)).step(
+        drive_until(lambda: delivering.step(
             {**task, "result_identity": identity}, acknowledge
-        )
+        ), lambda: False)
+    delivering.close()
     assert operations == ["report", "commit"]
     assert transport.path.exists() and not (transport.path / "report.json").exists()
     monkeypatch.setattr(SharedSlurmResult, "cleanup", cleanup)
@@ -407,6 +412,7 @@ def test_interrupted_acknowledged_cleanup_replays_authority_before_retirement(
         },
         acknowledge,
     )
+    drive_until(lambda: reopened.replay_pending(acknowledge), lambda: not reopened.has_retained_work())
     assert operations == ["report", "commit", "commit"]
     assert not transport.path.exists()
     assert not reopened.has_retained_work()
@@ -502,6 +508,8 @@ def test_drained_intent_survives_restart_without_submitting(tmp_path, finish):
     cancel = finish == "cancel"
     reopened.step(task, acknowledge, allow_submission=not cancel)
     result = reopened.journal.read("operation-1")
+    if cancel:
+        drive_until(lambda: reopened.replay_pending(acknowledge), lambda: not reopened.has_retained_work())
     assert result.request == original.request
     assert sum(call[0] == "sbatch" for call in runner.calls) == (0 if cancel else 1)
     assert result.state is (ReadyStageState.REJECTED if cancel else ReadyStageState.ACCEPTED)

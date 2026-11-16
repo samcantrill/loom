@@ -1241,7 +1241,7 @@ def _outbound_service_steps(
                     yield from _delay(0.05)
                     continue
                 sequence = client.next_poll_sequence(session.session_id)
-                delivery = (yield from _steps(client.wait_for_work,
+                delivery = (yield from _steps(client.wait_for_work_with_slurm,
                     session.session_id,
                     session.availability_revision,
                     sequence=sequence,

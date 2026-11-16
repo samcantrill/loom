@@ -34,6 +34,7 @@ from loom.serialization import PlainData, thaw_plain_data
 from loom.timestamps import utc_timestamp
 
 from ._slurm_result_transport import SharedSlurmResult, SlurmEffectPending, SlurmRequestUncertain
+from ._agent_slurm_storage import SlurmStorageProgress
 from ._slurm_admission import submit_interval
 from ._slurm_observation import SlurmObservationPolicy, parse_slurm_observation_policy
 from .errors import QueueConflictError, QueueServiceError
@@ -182,6 +183,11 @@ class AgentSlurmJobs:
         self._reconciliation_binding: tuple[str, str] | None = None
         self._pending_effect_confirmations: dict[str, tuple[str, int]] = {}
         self._reconciled_operations: dict[str, tuple[object, object, bool]] = {}
+        self._storage = SlurmStorageProgress()
+
+    def close(self) -> None:
+        with self._lock:
+            self._storage.close()
 
     def begin_reconciliation(self, binding: tuple[str, str]) -> None:
         """Scope transient task confirmation to one authenticated session epoch."""
@@ -307,8 +313,8 @@ class AgentSlurmJobs:
         )
         return receipt
 
-    @staticmethod
     def _deliver_result(
+        self,
         task: Mapping[str, PlainData], reply: Mapping[str, PlainData],
         transport: SharedSlurmResult,
         acknowledge: Callable[[Mapping[str, PlainData]], Mapping[str, PlainData]],
@@ -321,12 +327,18 @@ class AgentSlurmJobs:
             and identity.get("fence") is not None
             and reply.get("cancel_requested") is not True
         ):
-            if task.get("release_requested") is True:
-                # The authority retains the result; replay its exact commit even
-                # when shared cleanup was interrupted after removing some files.
-                transport.finish_delivery(cast(Mapping[str, PlainData], identity), acknowledge)
-            else:
-                transport.deliver(cast(Mapping[str, PlainData], identity), acknowledge)
+            try:
+                self._storage.advance(
+                    transport, cast(Mapping[str, PlainData], identity), acknowledge,
+                    finish_only=task.get("release_requested") is True,
+                )
+            except SlurmEffectPending:
+                # Storage readiness does not gate even this job's observation
+                # or cancellation, let alone another assignment's submission.
+                return
+            except SlurmRequestUncertain:
+                self._storage.defer_delivery(transport.assignment_id, 5)
+                return
 
     @staticmethod
     def initialize(root: Path, *, sqlite_policy: SQLitePolicy | None = None) -> None:
@@ -452,12 +464,10 @@ class AgentSlurmJobs:
             transport = SharedSlurmResult(
                 profile.result_storage, assignment.assignment_id
             )
-            if transport.path.exists() and (
-                response.get("cancel_requested") is True
-                or response.get("result_committed") is True
-                or not (transport.path / "manifest.json").exists()
-            ):
-                transport.cleanup()
+            self._storage.retire(
+                transport, discard_result=(response.get("cancel_requested") is True
+                                           or response.get("result_committed") is True),
+            )
         # Preserve the pending outbox until acknowledged transport retirement
         # finishes, so a cleanup interruption can replay even a released task.
         with self._connect() as conn:
@@ -516,6 +526,9 @@ class AgentSlurmJobs:
                 except SlurmRequestUncertain:
                     self._ack_retry_at[str(row[0])] = monotonic() + 5
                     continue
+                except SlurmEffectPending as pending_effect:
+                    self._ack_retry_at[str(row[0])] = monotonic() + pending_effect.retry_after_seconds
+                    continue
             if scanned == len(rows) and len(rows) < 32:
                 self._replay_after = None
 
@@ -546,7 +559,7 @@ class AgentSlurmJobs:
         acknowledge: Callable[[Mapping[str, PlainData]], Mapping[str, PlainData]],
         *, allow_submission: bool = True,
     ) -> None:
-        """Deliver this page's results before bounded, fair accounting batches.
+        """Advance finite result turns before bounded, fair accounting batches.
 
         The shared budget covers ordinary accounting queries. Submission,
         cancellation, transport and filesystem IO are separate. Containment
@@ -781,6 +794,12 @@ class AgentSlurmJobs:
             and task.get("recovery_request") is None
             and task.get("release_requested") is not True
         ):
+            # Scheduler polling cadence must not throttle finite transfer turns.
+            # The coordinator rechecks result authority on each exact exchange.
+            self._deliver_result(
+                task, {"cancel_requested": task.get("cancel_requested") is True},
+                transport, acknowledge,
+            )
             return
         if self.observation_policy is None:
             self._next_poll[request.operation_id] = now + profile.poll_interval_seconds
