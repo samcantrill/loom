@@ -478,6 +478,7 @@ class SlurmStageRecord:
     publication_completed_at: str | None = None
     publication_cancelled_at: str | None = None
     compute_released_at: str | None = None
+    start_request_id: str | None = None
 
 
 class SQLiteSlurmStageAssignments:
@@ -492,7 +493,7 @@ class SQLiteSlurmStageAssignments:
         sqlite_policy: SQLitePolicy | None = None,
         schema_version: int = 3,
     ) -> None:
-        if type(schema_version) is not int or schema_version not in {3, 4, 5}:
+        if type(schema_version) is not int or schema_version not in {3, 4, 5, 6}:
             raise QueueServiceError("SLURM assignment schema selection is unsupported")
         self.schema_version = schema_version
         self.path = Path(path)
@@ -710,12 +711,28 @@ class SQLiteSlurmStageAssignments:
             )
         return "reserved"
 
-    def consume_start(self, assignment_id: str) -> bool:
-        """Consume the authority's one start permit, independently of job observation."""
+    def consume_start(self, assignment_id: str, *, request_id: str | None = None) -> bool:
+        """Consume once, replaying only the winning live invocation's request.
+
+        Legacy callers keep one-shot semantics. A consumed legacy grant cannot
+        be adopted by a new request, including after an explicit schema upgrade.
+        """
+        if request_id is not None:
+            _identifier(request_id, "SLURM start request ID")
+            if self.schema_version < 6:
+                raise QueueServiceError("replayable SLURM start requires schema 6")
         with self._transaction() as conn:
             row = self._row(conn, assignment_id)
             if row["job_id"] is None or row["fence"] is None:
                 raise QueueConflictError("SLURM start requires an exact granted handle")
+            if request_id is not None:
+                if row["start_consumed"]:
+                    return row["start_request_id"] == request_id
+                conn.execute(
+                    f"UPDATE {_ASSIGNMENT_TABLE} SET start_consumed=1, start_request_id=? WHERE assignment_id=?",
+                    (request_id, assignment_id),
+                )
+                return True
             return (
                 conn.execute(
                     f"UPDATE {_ASSIGNMENT_TABLE} SET start_consumed=1 WHERE assignment_id=? AND start_consumed=0",
@@ -1625,6 +1642,8 @@ class SQLiteSlurmStageAssignments:
                     ", publication_requested_at TEXT, publication_completed_at TEXT, publication_cancelled_at TEXT, compute_released_at TEXT"
                     if self.schema_version >= 5 else ""
                 )
+                if self.schema_version >= 6:
+                    effect_columns += ", start_request_id TEXT"
                 extra_columns = (
                     ", requested_gpu_count INTEGER CHECK ((requested_gpu_count IS NULL AND state = 'released') "
                     "OR (typeof(requested_gpu_count) = 'integer' AND requested_gpu_count >= 0)), "
@@ -1707,6 +1726,7 @@ class SQLiteSlurmStageAssignments:
             process_execution_id=cast(str | None, row["process_execution_id"]),
             report=report,
             start_consumed=bool(row["start_consumed"]),
+            start_request_id=(None if "start_request_id" not in row.keys() else row["start_request_id"]),
             agent_evidence_accepted_at=cast(
                 str | None, row["agent_evidence_accepted_at"]
             ),
@@ -2137,6 +2157,16 @@ def _upgrade_pending_effects_schema(conn: sqlite3.Connection) -> None:
     _require_schema(conn, expected_version=5)
 
 
+def _upgrade_start_request_schema(conn: sqlite3.Connection) -> None:
+    """Retain old consumed grants as legacy; never invent a request owner."""
+    _require_schema(conn, expected_version=5)
+    if not conn.in_transaction:
+        raise QueueServiceError("SLURM schema conversion requires an upgrade transaction")
+    conn.execute(f"ALTER TABLE {_ASSIGNMENT_TABLE} ADD COLUMN start_request_id TEXT")
+    conn.execute("PRAGMA user_version = 6")
+    _require_schema(conn, expected_version=6)
+
+
 def _require_schema(
     conn: sqlite3.Connection, *, allow_unversioned: bool = False, expected_version: int = 3,
 ) -> None:
@@ -2171,6 +2201,8 @@ def _require_schema(
         expected |= {"requested_gpu_count", "capability_delivery_kind", "capability_expires_at"}
     if expected_version >= 5:
         expected |= {"publication_requested_at", "publication_completed_at", "publication_cancelled_at", "compute_released_at"}
+    if expected_version >= 6:
+        expected.add("start_request_id")
     columns = {
         str(row[1]) for row in conn.execute(f"PRAGMA table_info({_ASSIGNMENT_TABLE})")
     }

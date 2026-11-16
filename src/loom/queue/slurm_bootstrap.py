@@ -424,21 +424,28 @@ def run_slurm_bootstrap(
             {"assignment_id": assignment_id, "incarnation": incarnation},
         )
         fence = _string(grant, "fence")
+        from ._slurm_start import SLURM_REPLAYABLE_START_CAPABILITY, intended_execution_id
+
+        # This nonce belongs to this live invocation, not the durable workspace
+        # incarnation. HTTP retries reuse it; a new process must get a new nonce.
+        start_request = (
+            {"request_id": "start-" + uuid4().hex}
+            if SLURM_REPLAYABLE_START_CAPABILITY in capabilities else {}
+        )
         permit = prestart(
             "start",
             {
                 "assignment_id": assignment_id,
                 "incarnation": incarnation,
                 "fence": fence,
+                **start_request,
             },
         )
         permitted = permit.get("permitted")
         if not isinstance(permitted, bool):
             raise QueueServiceError("SLURM start-permit response is invalid")
         if permitted:
-            process_execution_id = "slurm-root-" + _sha256(
-                assignment_id + "\0" + incarnation
-            )
+            process_execution_id = intended_execution_id(assignment_id, incarnation)
             try:
                 client.call_application(
                     _ROLE,

@@ -70,7 +70,7 @@ def test_large_retained_delivery_is_validated_without_caching(tmp_path, monkeypa
     assert module._retained_delivery(encoded) == delivery
 
 
-@pytest.mark.parametrize("version", [3, 4, 5])
+@pytest.mark.parametrize("version", [3, 4, 5, 6])
 def test_assignment_and_projection_share_one_version_on_initialize_and_reopen(tmp_path, version):
     from loom._sqlite_policy import SQLitePolicy
     from loom.queue._agent_slurm import SlurmSubmissionProjection
@@ -415,3 +415,66 @@ def test_pending_effect_upgrade_keeps_existing_gpu_reservations(tmp_path):
     )
     assert reopened.reserved_gpu_count() == 2
     assert reopened.read(assignment.assignment_id).state == "reserved"
+
+
+def _granted_fixture(root, *, version):
+    import base64
+    import hashlib
+    from tests.unit.loom.queue.test_slurm_admission import ReservationFixture
+
+    fixture = ReservationFixture(root, schema_version=version)
+    assignment, arguments = fixture.candidate("start-replay", 0)
+    store = fixture.store
+    store.reserve(assignment, **arguments)
+    store.advance(assignment.assignment_id, expected="reserved", next_state="bound")
+    store.mark_submission_eligible(
+        assignment.assignment_id, operation_id=assignment.operation_id,
+        request_digest=assignment.request_digest, profile_id=assignment.profile_id,
+        profile_descriptor=assignment.profile_descriptor,
+        verifier=hashlib.sha256(b"capability").hexdigest(),
+    )
+    store.record_submission(assignment.assignment_id, state="accepted", job_id="123", cluster="site")
+    store.register_bootstrap(
+        assignment.operation_id, request_digest=assignment.request_digest,
+        job_id="123", cluster="site", incarnation="bootstrap",
+        capability=base64.b64encode(b"capability").decode(),
+    )
+    assert store.mark_input_ready(assignment.assignment_id, "bootstrap")
+    store.mark_granted(assignment.assignment_id, "bootstrap", "fence")
+    return fixture, assignment.assignment_id
+
+
+def test_start_permit_exact_replay_survives_reopen_and_racing_other_invocation(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    fixture, assignment = _granted_fixture(tmp_path, version=6)
+    barrier = Barrier(2)
+    def start(request_id):
+        store = fixture.reopen()
+        barrier.wait(timeout=5)
+        return request_id, store.consume_start(assignment, request_id=request_id)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = dict(pool.map(start, ("process-a", "process-b")))
+    assert sorted(results.values()) == [False, True]
+    winner = next(key for key, accepted in results.items() if accepted)
+    reopened = fixture.reopen()
+    assert reopened.consume_start(assignment, request_id=winner)
+    assert not reopened.consume_start(assignment, request_id="restarted-process")
+    assert not reopened.consume_start(assignment)  # Old caller cannot adopt it.
+    assert reopened.read(assignment).start_request_id == winner
+
+
+def test_migrated_consumed_legacy_start_cannot_be_adopted(tmp_path):
+    from loom.queue.slurm_ready_stage import _upgrade_start_request_schema
+
+    fixture, assignment = _granted_fixture(tmp_path, version=5)
+    assert fixture.store.consume_start(assignment)
+    with sqlite3.connect(fixture.path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        _upgrade_start_request_schema(conn)
+    fixture.schema_version = 6
+    reopened = fixture.reopen()
+    assert reopened.read(assignment).start_request_id is None
+    assert not reopened.consume_start(assignment, request_id="new-process")
+    assert not reopened.consume_start(assignment)

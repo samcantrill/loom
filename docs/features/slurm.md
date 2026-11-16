@@ -8,9 +8,30 @@ whole-pipeline continuation is generated.
 
 ## Connected ready-stage execution
 
+### Replayable bootstrap start permission
+
+When coordinator policy selects `slurm-replayable-start-v1` (execution schema 6),
+the bootstrap handshake advertises it. A matching bootstrap generates one request
+ID per live invocation. The first accepted start records that ID atomically;
+retrying the same request after a lost reply returns the same permission. A new
+process generates a different ID, even when it reopens the same workspace and
+bootstrap incarnation, and cannot adopt the consumed permission. Current
+identity, fence, granted state and cancellation checks still apply to replay.
+Legacy callers retain one-shot semantics. Upgrading a previously consumed legacy
+grant does not assign it a new request owner.
+
+Use the stopped `queue storage-upgrade` workflow with protected snapshots to
+select schema 6 and add the capability to the coordinator's agent policy and
+matching agent registration. Upgrade the pinned bootstrap launcher as well as
+the coordinator. Existing profile authorizations may change only to the exact
+new fingerprint of the same declared profile; this does not grant new profiles.
+No live database edits or workspace resets are required.
+
 ### Terminal assignments without worker reports
 
-Guarded recovery also accepts a running assignment with no worker report when
+Guarded recovery accepts a running assignment, or a granted assignment whose
+start permit was consumed but whose start notification was never recorded,
+with no worker report when
 its retained accounting observation is `sacct` `TIMEOUT`, `FAILED`, `CANCELLED`
 or `COMPLETED`, with an immutable accounting identity and matching retained job
 handle. Terminal scheduler state only makes the assignment eligible: the exact

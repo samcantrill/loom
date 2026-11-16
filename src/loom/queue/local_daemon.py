@@ -747,6 +747,9 @@ class LocalDaemonConfig:
     def slurm_schema_version(self) -> int:
         """Select the shared execution schema before any co-owner initializes it."""
         from .agent_sessions import SLURM_PENDING_EFFECTS_CAPABILITY
+        from ._slurm_start import SLURM_REPLAYABLE_START_CAPABILITY
+        if any(SLURM_REPLAYABLE_START_CAPABILITY in rule.capabilities for rule in self.agent_policy.agents):
+            return 6
         if any(SLURM_PENDING_EFFECTS_CAPABILITY in rule.capabilities for rule in self.agent_policy.agents):
             return 5
         return 4 if self.slurm_admission is not None or any(
@@ -4605,13 +4608,17 @@ class LocalDaemonSlurmBootstrapView:
 
     def handshake(self) -> Mapping[str, PlainData]:
         execution = self._execution()
+        from ._slurm_start import SLURM_REPLAYABLE_START_CAPABILITY
         profile = execution._slurm_profile_for_principal(
             self._principal.subject, self._principal.credential_id
         )
         return freeze_plain_data(
             {
                 "protocol_version": "1",
-                "capabilities": ["slurm-ready-stage-bootstrap-v1"],
+                "capabilities": ["slurm-ready-stage-bootstrap-v1", *(
+                    [SLURM_REPLAYABLE_START_CAPABILITY]
+                    if execution.slurm_assignments.schema_version >= 6 else []
+                )],
                 "coordinator_id": self._daemon._require_started(),
                 "coordinator_epoch": self._daemon._epoch or "",
                 "role": LocalDaemonRole.SLURM_BOOTSTRAP.value,
@@ -4697,13 +4704,17 @@ class LocalDaemonSlurmBootstrapView:
             incarnation=incarnation,
         )
 
-    def start_permit(self, assignment_id: str, incarnation: str, fence: str) -> bool:
+    def start_permit(
+        self, assignment_id: str, incarnation: str, fence: str, *,
+        request_id: str | None = None,
+    ) -> bool:
         return self._execution().slurm_start_permit(
             principal_id=self._principal.subject,
             credential_id=self._principal.credential_id,
             assignment_id=assignment_id,
             incarnation=incarnation,
             fence=fence,
+            request_id=request_id,
         )
 
     def started(

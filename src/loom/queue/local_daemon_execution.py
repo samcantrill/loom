@@ -2960,12 +2960,17 @@ class LocalDaemonExecution:
                 return False
             if record.state == "unknown":
                 return True
-            if record.state != "running":
+            prestart = (
+                record.state == "granted" and record.start_consumed
+                and record.bootstrap_incarnation is not None and record.fence is not None
+                and record.process_execution_id is None
+            )
+            if record.state != "running" and not prestart:
                 return False
             submission = self.slurm_submissions.find(record.assignment.operation_id)
             return submission is not None and (
-                submission.scheduler_source == "unavailable"
-                or submission.scheduler_state == "UNKNOWN"
+                (not prestart and (submission.scheduler_source == "unavailable"
+                                   or submission.scheduler_state == "UNKNOWN"))
                 or (
                     submission.scheduler_source == "sacct"
                     and submission.scheduler_state in {
@@ -3297,6 +3302,19 @@ class LocalDaemonExecution:
         if isinstance(request.target, SlurmRecoveryTarget):
             record = self.slurm_assignments.read(request.assignment_id)
             target = request.target
+            process_execution_id = record.process_execution_id
+            if (
+                process_execution_id is None
+                and record.state in {"granted", "terminal", "logical_released", "released"}
+                and record.start_consumed and record.bootstrap_incarnation is not None
+            ):
+                from ._slurm_start import intended_execution_id
+
+                # A grant identifies a possible execution, not evidence of a
+                # started process. Exact allocation containment still gates close.
+                process_execution_id = intended_execution_id(
+                    record.assignment.assignment_id, record.bootstrap_incarnation,
+                )
             if (
                 record.assignment.operation_id != target.submission_operation_id
                 or record.assignment.profile_id != target.profile_id
@@ -3304,7 +3322,7 @@ class LocalDaemonExecution:
                 or record.cluster != target.cluster_id
                 or record.bootstrap_incarnation != target.bootstrap_incarnation_id
                 or record.fence != request.execution_fence
-                or record.process_execution_id != request.process_execution_id
+                or process_execution_id != request.process_execution_id
             ):
                 raise QueueConflictError("SLURM recovery target identity conflicts")
             binding = (
@@ -6409,6 +6427,7 @@ class LocalDaemonExecution:
         assignment_id: str,
         incarnation: str,
         fence: str,
+        request_id: str | None = None,
     ) -> bool:
         record = self._slurm_authorized_record(
             principal_id, credential_id, assignment_id, incarnation
@@ -6426,7 +6445,10 @@ class LocalDaemonExecution:
             if action_attempt_cancelled(conn, record.assignment.run_uri, record.assignment.attempt_id):
                 conn.commit()
                 return False
-            permitted = self.slurm_assignments.consume_start(assignment_id)
+            if request_id is not None and record.state != "granted":
+                conn.commit()
+                return False
+            permitted = self.slurm_assignments.consume_start(assignment_id, request_id=request_id)
             conn.commit()
             return permitted
 

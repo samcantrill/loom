@@ -4269,12 +4269,16 @@ def _dispatch_application(
                 )
             }
         if operation == "start":
-            _exact(value, {"assignment_id", "incarnation", "fence"})
+            fields = {"assignment_id", "incarnation", "fence"}
+            if "request_id" in value:
+                fields.add("request_id")
+            _exact(value, fields)
             return {
                 "permitted": view.start_permit(
                     _string(value, "assignment_id"),
                     _string(value, "incarnation"),
                     _string(value, "fence"),
+                    request_id=_string(value, "request_id") if "request_id" in value else None,
                 )
             }
         if operation == "started":

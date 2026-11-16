@@ -15,6 +15,7 @@ from pathlib import Path
 import shutil
 import sqlite3
 import stat
+from typing import cast
 from uuid import uuid4
 
 from loom._sqlite_inspection import inspect_sqlite_database
@@ -125,22 +126,41 @@ def _declarations(request: dict, *, qualify: bool) -> list[dict]:
         before, after = selected["source"], selected["target"]
         comparable_target = json.loads(json.dumps(after["payload"]))
         from .agent_sessions import SLURM_PENDING_EFFECTS_CAPABILITY, SLURM_SUBMISSION_CAPABILITY
+        from ._slurm_start import SLURM_REPLAYABLE_START_CAPABILITY
 
-        def allow_pending_capability(old, new):
+        def allow_protocol_capabilities(old, new):
             previous = old.get("capabilities", [])
             current = new.get("capabilities", [])
-            if (SLURM_SUBMISSION_CAPABILITY in previous
-                and SLURM_PENDING_EFFECTS_CAPABILITY not in previous
-                and SLURM_PENDING_EFFECTS_CAPABILITY in current):
-                new["capabilities"] = [value for value in current if value != SLURM_PENDING_EFFECTS_CAPABILITY]
+            if SLURM_SUBMISSION_CAPABILITY in previous:
+                added = {SLURM_PENDING_EFFECTS_CAPABILITY, SLURM_REPLAYABLE_START_CAPABILITY} - set(previous)
+                new["capabilities"] = [value for value in current if value not in added]
 
         if item["role"] == "coordinator":
             old_agents = before["payload"]["agent_policy"]["agents"]
             new_agents = comparable_target["agent_policy"]["agents"]
             for old, new in zip(old_agents, new_agents):
-                allow_pending_capability(old, new)
+                allow_protocol_capabilities(old, new)
+                old_bindings, new_bindings = old.get("external_slurm_profiles", []), new.get("external_slurm_profiles", [])
+                if old_bindings != new_bindings:
+                    from loom.pipeline.executors.slurm.ready_stage import SlurmReadyStageProfile
+
+                    # A pinned bootstrap update changes its profile fingerprint.
+                    # Remap existing grants only to the same declared profile;
+                    # never authorize additional profiles or arbitrary digests.
+                    old_profiles = {p.profile_id: p.configuration_fingerprint for p in cast(
+                        tuple[SlurmReadyStageProfile, ...],
+                        d._slurm_profile_composition(before["payload"].get("slurm_profiles")),
+                    )}
+                    new_profiles = {p.profile_id: p.configuration_fingerprint for p in cast(
+                        tuple[SlurmReadyStageProfile, ...],
+                        d._slurm_profile_composition(after["payload"].get("slurm_profiles")),
+                    )}
+                    expected = [[name, new_profiles.get(name)] for name, fingerprint in old_bindings
+                                if old_profiles.get(name) == fingerprint and name in new_profiles]
+                    if len(expected) == len(old_bindings) and new_bindings == expected:
+                        new["external_slurm_profiles"] = old_bindings
         else:
-            allow_pending_capability(before["payload"]["registration"], comparable_target["registration"])
+            allow_protocol_capabilities(before["payload"]["registration"], comparable_target["registration"])
         if before["root"] != after["root"] or {
             k: v for k, v in before["payload"].items() if k not in allowed
         } != {k: v for k, v in comparable_target.items() if k not in allowed}:
@@ -479,13 +499,16 @@ def _prepare_database(role: dict, owner: dict, original: Path, candidate: Path) 
             for key, value in updates.items():
                 conn.execute(f"INSERT INTO {table}(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
         elif owner["role"] == "coordinator" and original == Path(owner["root"]) / "execution.sqlite":
-            from .slurm_ready_stage import _require_schema, _upgrade_released_schema, _upgrade_pending_effects_schema
+            from .slurm_ready_stage import _require_schema, _upgrade_released_schema, _upgrade_pending_effects_schema, _upgrade_start_request_schema
             version = conn.execute("PRAGMA user_version").fetchone()[0]
             if version == 3 and target.daemon.slurm_schema_version >= 4:
                 _upgrade_released_schema(conn)
                 version = 4
-            if version == 4 and target.daemon.slurm_schema_version == 5:
+            if version == 4 and target.daemon.slurm_schema_version >= 5:
                 _upgrade_pending_effects_schema(conn)
+                version = 5
+            if version == 5 and target.daemon.slurm_schema_version == 6:
+                _upgrade_start_request_schema(conn)
             _require_schema(conn, expected_version=target.daemon.slurm_schema_version)
             if {row[1] for row in conn.execute("PRAGMA table_info(ready_stage_submissions)")} != {"operation_id", "state", "value_json"}:
                 raise QueueServiceError("storage upgrade submission projection is incompatible")

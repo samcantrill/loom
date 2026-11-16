@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from loom.queue.errors import QueueServiceError
+from loom.queue.errors import QueueConflictError, QueueServiceError
 from loom.queue.slurm_bootstrap import (
     SlurmBootstrapClientConfig,
     _read_job_private_capability,
@@ -146,6 +146,14 @@ def test_bootstrap_passes_outer_boundary_containment_owner(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pending_responses: int | None,
     durable_files: str, trusted_user: bool,
 ) -> None:
+    _exercise_bootstrap(tmp_path, monkeypatch, pending_responses, durable_files, trusted_user)
+
+
+def test_bootstrap_lost_start_reply_replays_live_nonce_but_new_invocation_cannot_adopt(tmp_path, monkeypatch):
+    _exercise_bootstrap(tmp_path, monkeypatch, 0, "strict", False, replay_start=True)
+
+
+def _exercise_bootstrap(tmp_path, monkeypatch, pending_responses, durable_files, trusted_user, *, replay_start=False):
     config_path = tmp_path / "bootstrap.json"
     config_value = _config_value(tmp_path)
     if trusted_user:
@@ -170,11 +178,13 @@ def test_bootstrap_passes_outer_boundary_containment_owner(
         slurm_bootstrap.time, "sleep", lambda delay: now.__setitem__(0, now[0] + delay)
     )
 
+    start_payloads = []
+
     class FakeClient:
         def handshake(self, *, role: str) -> dict[str, object]:
             assert role == "slurm_bootstrap"
             return {
-                "capabilities": ["slurm-ready-stage-bootstrap-v1"],
+                "capabilities": ["slurm-ready-stage-bootstrap-v1", *(["slurm-replayable-start-v1"] if replay_start else [])],
                 "profile_id": "training",
                 "profile_descriptor": {},
                 "credential_policy_revision": "slurm-policy-1",
@@ -204,7 +214,10 @@ def test_bootstrap_passes_outer_boundary_containment_owner(
             if action == "grant":
                 return {"fence": "fence-1"}
             if action == "start":
-                return {"permitted": True}
+                start_payloads.append(payload)
+                if replay_start and len(start_payloads) == 1:
+                    raise slurm_bootstrap._IndeterminateAgentProtocolError("lost start reply")
+                return {"permitted": not replay_start or payload["request_id"] == start_payloads[0]["request_id"]}
             return {}
 
         def close(self) -> None:
@@ -214,7 +227,7 @@ def test_bootstrap_passes_outer_boundary_containment_owner(
         def __init__(self, _root: Path, _assignment_id: str, **kwargs) -> None:
             assert kwargs == {"durable_files": durable_files}
             self.root = tmp_path / "resident-workspace"
-            self.root.mkdir()
+            self.root.mkdir(exist_ok=True)
 
         def persist_registration(self, registration: object) -> None:
             retained = SlurmBootstrapWorkspace(
@@ -234,6 +247,9 @@ def test_bootstrap_passes_outer_boundary_containment_owner(
 
         def accept_inputs(self) -> None:
             pass
+
+        def retained_report(self):
+            return None
 
         def worker_request(self) -> object:
             return object()
@@ -322,6 +338,15 @@ def test_bootstrap_passes_outer_boundary_containment_owner(
             captured["process_containment_owner"]
             is ProcessContainmentOwner.OUTER_BOUNDARY
         )
+    if replay_start:
+        assert len(start_payloads) == 2 and start_payloads[0] == start_payloads[1]
+        assert actions.count("started") == 1
+        captured.clear()
+        with pytest.raises(QueueConflictError, match="consumed without a retained result"):
+            run_slurm_bootstrap(operation_id="operation-1", request_digest="digest-1", config=config)
+        assert start_payloads[-1]["request_id"] != start_payloads[0]["request_id"]
+        assert start_payloads[-1]["incarnation"] == start_payloads[0]["incarnation"]
+        assert actions.count("started") == 1 and captured == {}
     if trusted_user:
         assert not Path(prepared.path).exists()
         assert provider.prepare(operation_id="operation-1", request_digest="digest-1") == prepared

@@ -2,6 +2,8 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 from loom.pipeline.stores.authority import (
     ActionProducerBinding,
     CancellationEpochRequest,
@@ -12,7 +14,8 @@ from tests.integration.authority.test_action_result_binding import _consumer
 from tests.integration.authority.test_action_producer_cancellation import _prepare
 
 
-def test_slurm_shared_grant_and_start_use_exact_live_demand(tmp_path, monkeypatch):
+@pytest.mark.parametrize("request_id", [None, "live-request"])
+def test_slurm_shared_grant_and_start_use_exact_live_demand(tmp_path, monkeypatch, request_id):
     actions = _store(tmp_path)
     with actions.connection() as conn:
         conn.execute(
@@ -76,7 +79,7 @@ def test_slurm_shared_grant_and_start_use_exact_live_demand(tmp_path, monkeypatc
         "slurm_assignments",
         SimpleNamespace(
             mark_granted=mark_granted,
-            consume_start=lambda assignment_id: consumed.append(assignment_id) or True,
+            consume_start=lambda assignment_id, **kwargs: consumed.append(assignment_id) or True,
         ),
         raising=False,
     )
@@ -89,10 +92,10 @@ def test_slurm_shared_grant_and_start_use_exact_live_demand(tmp_path, monkeypatc
     fence = execution.slurm_grant(**request)
     assert actions.claim(claim_id)["fencing_token"] == fence
     assert actions.claim(claim_id)["assignment_id"] == "slurm-assignment"
-    assert execution.slurm_start_permit(**request, fence=fence)
+    assert execution.slurm_start_permit(**request, fence=fence, request_id=request_id)
     actions.detach_graph("run://consumer", "cancel-final")
     authority.release_action_producer(uri, binding)
-    assert not execution.slurm_start_permit(**request, fence=fence)
+    assert not execution.slurm_start_permit(**request, fence=fence, request_id=request_id)
     assert consumed == ["slurm-assignment"]
     assert (
         execution.slurm_grant(**request) == fence

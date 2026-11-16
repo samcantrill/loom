@@ -47,7 +47,7 @@ class SlurmSubmissionProjection:
         self, path: Path, *, _allow_initialize: bool = False,
         sqlite_policy: SQLitePolicy | None = None, schema_version: int = 3,
     ) -> None:
-        if type(schema_version) is not int or schema_version not in {3, 4, 5}:
+        if type(schema_version) is not int or schema_version not in {3, 4, 5, 6}:
             raise QueueServiceError("SLURM submission projection schema selection is unsupported")
         self.path = path
         self._sqlite_policy = sqlite_policy

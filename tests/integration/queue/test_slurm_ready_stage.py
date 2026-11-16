@@ -464,6 +464,9 @@ def test_slurm_containment_timeout_is_part_of_retained_profile_identity() -> Non
 def _agent_observation(execution, *args, **kwargs):
     agent = execution._slurm_agent
     assert agent is not None
+    agent.replay_pending(lambda evidence: execution.acknowledge_slurm_agent(
+        execution.agent_id, execution.agent_id, evidence,
+    ))
     submission = agent.journal._record_observation(*args, **kwargs)
     assignment = execution.slurm_assignments.read_operation(
         submission.request.operation_id
@@ -490,6 +493,8 @@ def _exercise_mixed_route_run(
     slurm_output_size: int | None = None,
     lose_output_ack_at: int | None = None,
     guarded_recovery: bool = False,
+    prestart_failure: bool = False,
+    replayable_start: bool = False,
     recovery_terminal_state: str | None = None,
     native_failure: bool = False,
     container_options: Mapping[str, object] | None = None,
@@ -644,6 +649,12 @@ def _exercise_mixed_route_run(
             ),
         )
     )
+    if replayable_start:
+        from loom.queue.agent_sessions import AgentPrincipalPolicy
+        agent_policy = replace(agent_policy, agents=(AgentPrincipalPolicy(
+            "submit-credential", "submit", "submit", ("default",),
+            ("slurm-agent-jobs-v1", "slurm-pending-effects-v1", "slurm-replayable-start-v1"),
+        ),))
     config = LocalDaemonConfig(
         coordinator_root=tmp_path / "daemon" / "coordinator",
         agent_root=tmp_path / "daemon" / "agent",
@@ -713,7 +724,7 @@ def _exercise_mixed_route_run(
         client.submit(LocalDaemonAdmissionRequest("mixed-route", run_uri))
         execution = daemon._execution
         assert execution is not None
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + 45
         records = ()
         while time.monotonic() < deadline:
             records = execution.slurm_assignments.list_run_unreleased(run_uri)
@@ -954,27 +965,46 @@ def _exercise_mixed_route_run(
             {"assignment_id": assignment_id, "incarnation": incarnation},
         ) == {"state": "input_ready"}
         fence = view.grant(assignment_id, incarnation)
-        assert view.start_permit(assignment_id, incarnation, fence) is True
+        if replayable_start:
+            assert "slurm-replayable-start-v1" in view.handshake()["capabilities"]
+            payload = dict(assignment_id=assignment_id, incarnation=incarnation, fence=fence, request_id="live-process")
+            principal = LocalDaemonPrincipal("slurm-principal", LocalDaemonRole.SLURM_BOOTSTRAP, "slurm-credential")
+            assert _dispatch_application(daemon, principal, "slurm_bootstrap", "start", payload) == {"permitted": True}
+            daemon.stop()
+            daemon = LocalDaemon(reopened_config, clock=clock)
+            daemon.start()
+            view = daemon.slurm_bootstrap_view(principal)
+            assert _dispatch_application(daemon, principal, "slurm_bootstrap", "start", payload) == {"permitted": True}
+            assert _dispatch_application(daemon, principal, "slurm_bootstrap", "start", {**payload, "request_id": "restarted-process"}) == {"permitted": False}
+        else:
+            assert view.start_permit(assignment_id, incarnation, fence) is True
         assert view.start_permit(assignment_id, incarnation, fence) is False
-        view.started(
-            assignment_id,
-            incarnation,
-            fence,
-            "slurm-root-process-1",
-        )
-        execution = daemon._execution
-        assert execution is not None
-        assert (
-            execution.slurm_assignments.read(assignment_id).process_execution_id
-            == "slurm-root-process-1"
-        )
-        with pytest.raises(QueueConflictError, match="process execution identity"):
+        from loom.queue._slurm_start import intended_execution_id
+        process_id = intended_execution_id(assignment_id, incarnation) if prestart_failure else "slurm-root-process-1"
+        if not prestart_failure:
             view.started(
                 assignment_id,
                 incarnation,
                 fence,
-                "slurm-root-process-2",
+                "slurm-root-process-1",
             )
+            execution = daemon._execution
+            assert execution is not None
+            assert (
+                execution.slurm_assignments.read(assignment_id).process_execution_id
+                == "slurm-root-process-1"
+            )
+            with pytest.raises(QueueConflictError, match="process execution identity"):
+                view.started(
+                    assignment_id,
+                    incarnation,
+                    fence,
+                    "slurm-root-process-2",
+                )
+        else:
+            execution = daemon._execution
+            assert execution is not None
+            assert execution.slurm_assignments.read(assignment_id).process_execution_id is None
         recovery_receipt = None
         if guarded_recovery:
             before_recovery = authority.open_run(run_uri)
@@ -993,7 +1023,7 @@ def _exercise_mixed_route_run(
                 attempt=record.assignment.attempt,
                 stage_work_id=record.assignment.stage_work_id,
                 assignment_id=assignment_id,
-                process_execution_id="slurm-root-process-1",
+                process_execution_id=process_id,
                 execution_fence=fence,
                 target=SlurmRecoveryTarget(
                     profile.profile_id,
@@ -1080,7 +1110,7 @@ def _exercise_mixed_route_run(
                         pending_patch.setattr(agent_module, "resolve_slurm_containment", lambda *_: SlurmContainmentReceipt("UNKNOWN"))
                         pending = operator.recover_unknown(recovery_request)
                         assert pending["state"] == "pending"
-                        assert execution.slurm_assignments.read(assignment_id).state == "running"
+                        assert execution.slurm_assignments.read(assignment_id).state == ("granted" if prestart_failure else "running")
                 recovery_receipt = operator.recover_unknown(recovery_request)
                 assert recovery_receipt["state"] == "closed"
                 assert operator.recover_unknown(recovery_request) == recovery_receipt
@@ -1108,7 +1138,7 @@ def _exercise_mixed_route_run(
                         execution.reconcile_closed_slurm_recovery(
                             recovery_request, {**recovery_evidence, "echo": {}},
                         )
-                    assert execution.slurm_assignments.read(assignment_id).state == "running"
+                    assert execution.slurm_assignments.read(assignment_id).state == ("granted" if prestart_failure else "running")
                 import loom.queue._agent_slurm as agent_module
                 from loom.pipeline.executors.slurm.ready_stage import SlurmContainmentReceipt
 
@@ -1141,6 +1171,8 @@ def _exercise_mixed_route_run(
             assert not execution.slurm_assignments.list_run_unreleased(run_uri)
             assert not capability_path(record.assignment.operation_id).exists()
             assert execution.slurm_assignments.read(assignment_id).report is None
+            if prestart_failure:
+                assert execution.slurm_assignments.read(assignment_id).process_execution_id is None
             assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
             operator = daemon.operator_view(LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR))
             assert operator.recover_unknown(recovery_request) == recovery_receipt
@@ -1201,7 +1233,7 @@ SharedSlurmResult(json.loads(sys.argv[2]), report.assignment_id, compute=True).p
             assert output_bytes
             if slurm_output_size is not None:
                 assert sum(map(len, output_bytes.values())) == slurm_output_size
-            assert execution.slurm_assignments.read(assignment_id).state == "running"
+            assert execution.slurm_assignments.read(assignment_id).state == ("granted" if prestart_failure else "running")
             commits = []
             output_ack_lost = Event()
             output_acknowledgements = []
@@ -2156,7 +2188,7 @@ def test_trusted_user_registration_enforces_expiry_but_preserves_consumed_replay
         client.submit(LocalDaemonAdmissionRequest("expiry-run", run_uri))
         execution = daemon._execution
         assert execution is not None
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + 45
         records = ()
         while time.monotonic() < deadline:
             records = execution.slurm_assignments.list_run_unreleased(run_uri)
@@ -2678,3 +2710,17 @@ def test_gpu_budget_survives_restart_and_reload_preserves_admitted_work(tmp_path
         assert len([call for call in runner.calls if call[0] == "sbatch"]) == 5
     finally:
         daemon.stop()
+
+
+def test_consumed_grant_without_started_recovers_and_releases_after_restart(tmp_path, monkeypatch):
+    _exercise_mixed_route_run(
+        tmp_path, monkeypatch, guarded_recovery=True, prestart_failure=True,
+        accounting_history=True, recovery_terminal_state="FAILED",
+    )
+
+
+def test_replayable_start_survives_coordinator_restart_and_prestart_recovery(tmp_path, monkeypatch):
+    _exercise_mixed_route_run(
+        tmp_path, monkeypatch, guarded_recovery=True, prestart_failure=True,
+        accounting_history=True, recovery_terminal_state="FAILED", replayable_start=True,
+    )

@@ -48,14 +48,14 @@ def _profile():
 
 
 def _cohort(root, *, kind="slurm", explicit_wal=False, legacy=False, custom_provider=False,
-            pending_effects=False):
+            pending_effects=False, replayable_start=False, bootstrap_upgrade=False):
     c, a = root / "c", root / "a"
     c.mkdir(mode=0o700)
     a.mkdir(mode=0o700)
     source_c = _coordinator_config(c)
     payload = json.loads(source_c.read_text())
     payload["local_agent"] = None
-    if pending_effects:
+    if pending_effects or replayable_start:
         payload["slurm_admission"] = {"max_reserved_gpus": 8}
         payload["agent_policy"]["agents"] = [{
             "credential_id": "credential", "principal_id": "principal",
@@ -67,6 +67,12 @@ def _cohort(root, *, kind="slurm", explicit_wal=False, legacy=False, custom_prov
     if explicit_wal:
         payload["storage"] = _rollback_storage()
         payload["storage"]["sqlite"]["journal_mode"] = "wal"
+    if bootstrap_upgrade:
+        from loom.queue.deployment import _slurm_profile_composition
+        payload["slurm_profiles"] = [{**_profile(), "credential_reference": "bootstrap-credential"}]
+        profile, = _slurm_profile_composition(payload["slurm_profiles"])
+        payload["agent_policy"]["agents"][0]["external_slurm_profiles"] = [
+            [profile.profile_id, profile.configuration_fingerprint]]
     _write_protected(source_c, payload)
     coordinator = load_coordinator_service_config(source_c)
     LocalDaemon.initialize_deployment(coordinator.daemon)
@@ -86,7 +92,9 @@ def _cohort(root, *, kind="slurm", explicit_wal=False, legacy=False, custom_prov
         agent_payload["resident_profiles"] = []
     if kind != "resident":
         agent_payload["slurm_profiles"] = [_profile()]
-    if pending_effects:
+    if bootstrap_upgrade:
+        agent_payload["slurm_profiles"][0]["credential_reference"] = "bootstrap-credential"
+    if pending_effects or replayable_start:
         agent_payload["registration"]["capabilities"] = ["slurm-agent-jobs-v1"]
     if explicit_wal:
         agent_payload["storage"] = payload["storage"]
@@ -100,9 +108,18 @@ def _cohort(root, *, kind="slurm", explicit_wal=False, legacy=False, custom_prov
         conn.commit()
     payload["storage"] = _rollback_storage()
     payload["slurm_admission"] = {"max_reserved_gpus": 8}
-    if pending_effects:
+    if pending_effects or replayable_start:
         payload["agent_policy"]["agents"][0]["capabilities"].append("slurm-pending-effects-v1")
         agent_payload["registration"]["capabilities"].append("slurm-pending-effects-v1")
+    if replayable_start:
+        payload["agent_policy"]["agents"][0]["capabilities"].append("slurm-replayable-start-v1")
+        agent_payload["registration"]["capabilities"].append("slurm-replayable-start-v1")
+    if bootstrap_upgrade:
+        payload["slurm_profiles"][0]["bootstrap_executable"] = "/new/immutable/loom"
+        agent_payload["slurm_profiles"][0]["bootstrap_executable"] = "/new/immutable/loom"
+        profile, = _slurm_profile_composition(payload["slurm_profiles"])
+        payload["agent_policy"]["agents"][0]["external_slurm_profiles"] = [
+            [profile.profile_id, profile.configuration_fingerprint]]
     target_c = _write_protected(c / "target.yaml", payload)
     agent_payload["storage"] = _rollback_storage()
     target_a = _write_protected(a / "target.yaml", agent_payload)
@@ -126,22 +143,23 @@ def _snapshot(root):
     return {str(path): (path.read_bytes(), path.stat().st_mtime_ns) for path in root.rglob("*") if path.is_file()}
 
 
-def test_pending_effects_supported_upgrade_and_restore(root):
-    request, old_c, _, new_c, _ = _cohort(root, pending_effects=True)
+@pytest.mark.parametrize("version", [5, 6])
+def test_pending_effects_supported_upgrade_and_restore(root, version):
+    request, old_c, _, new_c, _ = _cohort(root, pending_effects=True, replayable_start=version == 6)
     assert old_c.daemon.slurm_schema_version == 4
-    assert new_c.daemon.slurm_schema_version == 5
+    assert new_c.daemon.slurm_schema_version == version
     assert storage_upgrade(request)["state"] == "eligible"
     assert storage_upgrade(request, action="apply")["state"] == "ready"
     _validate_deployment_binding(new_c.daemon)
     from loom.queue.slurm_ready_stage import SQLiteSlurmStageAssignments
     store = SQLiteSlurmStageAssignments(
-        new_c.daemon.execution_database, root / "transfers", schema_version=5,
+        new_c.daemon.execution_database, root / "transfers", schema_version=version,
         sqlite_policy=new_c.daemon.sqlite_policy, _allow_initialize=False,
     )
     store._open_existing()
     assert store.pending_storage_page() == ()
     SlurmSubmissionProjection(
-        new_c.daemon.execution_database, schema_version=5,
+        new_c.daemon.execution_database, schema_version=version,
         sqlite_policy=new_c.daemon.sqlite_policy,
     )._open_existing()
     assert storage_upgrade(request, action="restore")["state"] == "restored"
@@ -670,3 +688,22 @@ def test_activation_sync_failure(root, monkeypatch):
     journal = _RemoteAgentJournal(agent.client.agent_root, **options)
     journal.close()
     assert storage_upgrade(request)["entered"] is True
+
+
+@pytest.mark.parametrize("wrong_binding", [False, True])
+def test_bootstrap_upgrade_remaps_only_existing_exact_profile_authorization(root, wrong_binding):
+    request, _, _, new_c, _ = _cohort(root, replayable_start=True, bootstrap_upgrade=True)
+    if wrong_binding:
+        declaration = json.loads(request.read_text())["roles"][0]
+        target = Path(declaration["target_config"])
+        payload = json.loads(target.read_text())
+        payload["agent_policy"]["agents"][0]["external_slurm_profiles"][0][1] = "unrelated-digest"
+        _write_protected(target, payload)
+        before = _snapshot(root)
+        with pytest.raises(QueueError, match="other declarations must match"):
+            storage_upgrade(request)
+        assert _snapshot(root) == before
+    else:
+        assert storage_upgrade(request)["state"] == "eligible"
+        assert storage_upgrade(request, action="apply")["state"] == "ready"
+        _validate_deployment_binding(new_c.daemon)
