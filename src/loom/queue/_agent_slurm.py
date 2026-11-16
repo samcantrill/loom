@@ -128,14 +128,20 @@ class _EvidencePending(Exception):
 
 
 class AgentSlurmJobs:
-    """Open-only exact-agent submission owner with a durable replayable outbox."""
+    """Open-only exact-agent submission owner with a durable replayable outbox.
+
+    Service compositions select asynchronous preparation. The synchronous
+    adapter remains for direct journal/protocol callers using finite commands.
+    """
 
     def __init__(
         self, root: Path, profiles: Sequence[SlurmReadyStageProfile], *,
         sqlite_policy: SQLitePolicy | None = None, durable_files: str = "best_effort",
         submit_interval_seconds: float | None = None,
         observation_policy: SlurmObservationPolicy | None = None,
+        asynchronous_preparation: bool = False,
     ) -> None:
+        self._asynchronous_preparation = asynchronous_preparation
         self.submit_interval_seconds = submit_interval(submit_interval_seconds)
         self.observation_policy = parse_slurm_observation_policy(observation_policy)
         if self.observation_policy is not None:
@@ -182,7 +188,7 @@ class AgentSlurmJobs:
         self._containment_deadline: float | None = None
         self._reconciliation_binding: tuple[str, str] | None = None
         self._pending_effect_confirmations: dict[str, tuple[str, int]] = {}
-        self._reconciled_operations: dict[str, tuple[object, object, bool]] = {}
+        self._reconciled_operations: dict[str, tuple[object, object, bool, object]] = {}
         self._storage = SlurmStorageProgress()
 
     def close(self) -> None:
@@ -239,6 +245,16 @@ class AgentSlurmJobs:
                 assignment = SlurmStageAssignment.from_dict(json.loads(encoded))
                 profile = self.profiles.get((assignment.profile_id, assignment.profile_configuration_fingerprint))
                 submission = self.journal.find(operation_id)
+                if (sequence == 0 and evidence is None
+                    and (submission is None or submission.state is ReadyStageState.INTENT
+                         and submission.request.digest == assignment.request_digest)
+                    and profile is not None and profile.descriptor == assignment.profile_descriptor
+                    and self._reconciled_operations[operation_id][:2] == (None, None)
+                    and self._reconciled_operations[operation_id][3] == 0):
+                    # This exact current task has not crossed even the first
+                    # durable evidence boundary. Pending reservation/script IO
+                    # is known pre-submission work, not an uncertain sbatch.
+                    continue
                 if (
                     profile is None or profile.descriptor != assignment.profile_descriptor
                     or submission is None or submission.request.digest != assignment.request_digest
@@ -340,6 +356,43 @@ class AgentSlurmJobs:
                 self._storage.defer_delivery(transport.assignment_id, 5)
                 return
 
+    def _prepare_assignment(self, task, assignment, request, profile, transport, script):
+        current = self.journal.find(request.operation_id)
+
+        def prepare_files():
+            if task.get("cancel_requested") is not True:
+                transport.reserve(assignment.to_dict())
+            atomic_write_bytes(script, request.script.encode("utf-8"), durability=self._durable_files)
+            script.chmod(0o600)
+            if script.read_text(encoding="utf-8") != request.script:
+                raise QueueConflictError("agent SLURM script bytes conflict")
+
+        if not self._asynchronous_preparation:
+            if current is None:
+                prepare_files()
+            return self.journal.prepare(request, profile, script)
+        if current is None:
+            self._storage.poll(assignment.assignment_id, "preparation", prepare_files)
+            current = self.journal._prepare_intent(request, profile)
+        if current.capability is None:
+            prepared = self._storage.poll(
+                assignment.assignment_id, "credential-prepare",
+                lambda: profile.job_private_file_provider.prepare(
+                    operation_id=request.operation_id, request_digest=request.digest,
+                ),
+            )
+            current = self.journal._install_prepared_capability(request, profile, prepared)
+        return current
+
+    def _revoke_capability(self, assignment, profile, capability):
+        if self._asynchronous_preparation:
+            self._storage.poll(
+                assignment.assignment_id, "credential-revoke",
+                lambda: profile.job_private_file_provider.revoke(capability),
+            )
+        else:
+            profile.job_private_file_provider.revoke(capability)
+
     def _probe_terminal_result(
         self, task: Mapping[str, PlainData], assignment: SlurmStageAssignment,
         current: SlurmReadyStageSubmission, transport: SharedSlurmResult,
@@ -403,20 +456,29 @@ class AgentSlurmJobs:
     def has_started_or_unacknowledged_work(self) -> bool:
         """Unsubmitted, acknowledged intents may resume under unchanged bindings.
 
-        They remain retained work for reload and retirement. Missing journals,
-        uncertain calls and unacknowledged effects cannot use this exception.
+        They remain retained work for reload and retirement. A current task
+        confirming sequence zero also proves that unfinished preparation never
+        reached submission. Other missing journals and uncertain/unacknowledged
+        effects cannot use this exception.
         """
         with self._lock:
             with self._connect() as conn:
                 rows = conn.execute(
-                    "SELECT operation_id, released, acknowledged FROM agent_slurm_operations "
+                    "SELECT operation_id, released, acknowledged, sequence, evidence_json FROM agent_slurm_operations "
                     "WHERE released=0 OR acknowledged=0"
                 ).fetchall()
-            for operation_id, released, acknowledged in rows:
+            for operation_id, released, acknowledged, sequence, evidence in rows:
                 if not acknowledged:
                     return True
-                if not released and self.journal.read(operation_id).state is not ReadyStageState.INTENT:
-                    return True
+                if not released:
+                    current = self.journal.find(operation_id)
+                    confirmation = self._reconciled_operations.get(operation_id)
+                    if (current is None and sequence == 0 and evidence is None
+                        and confirmation is not None and confirmation[:2] == (None, None)
+                        and confirmation[3] == 0):
+                        continue
+                    if current is None or current.state is not ReadyStageState.INTENT:
+                        return True
             return False
 
     def _publish(
@@ -768,6 +830,7 @@ class AgentSlurmJobs:
         if self._reconciliation_binding is not None:
             self._reconciled_operations[assignment.operation_id] = (
                 task.get("job_id"), task.get("cluster"), task.get("release_requested") is True,
+                task.get("expected_sequence"),
             )
         if row is not None and row[2] is not None and not row[3]:
             pending = json.loads(str(row[2]))
@@ -796,7 +859,7 @@ class AgentSlurmJobs:
                 completed = SlurmReadyStageSubmission.from_dict(last["submission"])
                 if completed.capability is None:
                     raise QueueConflictError("agent SLURM capability is unavailable")
-                profile.job_private_file_provider.revoke(completed.capability)
+                self._revoke_capability(assignment, profile, completed.capability)
                 self._publish(
                     assignment, completed, acknowledge,
                     release=last["release"], provider_released=True,
@@ -804,8 +867,6 @@ class AgentSlurmJobs:
                 return
         current = self.journal.find(request.operation_id)
         transport = SharedSlurmResult(profile.result_storage, assignment.assignment_id)
-        if current is None and task.get("cancel_requested") is not True:
-            transport.reserve(assignment.to_dict())
         now = monotonic()
         urgent_cancel = (
             current is not None
@@ -835,10 +896,7 @@ class AgentSlurmJobs:
         observation_due = not _defer_observation and self._retry_due("observation", request.operation_id)
         observed = False
         script = self.root / "slurm-scripts" / f"{assignment.assignment_id}.sh"
-        if current is None:
-            atomic_write_bytes(script, request.script.encode("utf-8"), durability=self._durable_files)
-            script.chmod(0o600)
-        current = self.journal.prepare(request, profile, script)
+        current = self._prepare_assignment(task, assignment, request, profile, transport, script)
         if current.state is ReadyStageState.INTENT:
             reply = self._publish(assignment, current, acknowledge)
             if reply.get("cancel_requested") is True:
@@ -852,7 +910,7 @@ class AgentSlurmJobs:
             ):
                 return
             else:
-                current = self.journal.submit(
+                current = self.journal._submit_prepared(
                     request,
                     profile,
                     script,
@@ -952,7 +1010,7 @@ class AgentSlurmJobs:
             if current.capability is None:
                 raise QueueConflictError("agent SLURM capability is unavailable")
             self._publish(assignment, current, acknowledge, release=release)
-            profile.job_private_file_provider.revoke(current.capability)
+            self._revoke_capability(assignment, profile, current.capability)
             self._publish(
                 assignment,
                 current,

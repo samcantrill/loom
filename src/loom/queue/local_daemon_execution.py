@@ -1432,7 +1432,8 @@ class LocalDaemonExecution:
         self.local_profile_ready = True
         self._sync_slurm_agent_references()
         self._slurm_agent = (
-            AgentSlurmJobs(config.agent_root, config.slurm_profiles, sqlite_policy=config.sqlite_policy)
+            AgentSlurmJobs(config.agent_root, config.slurm_profiles, sqlite_policy=config.sqlite_policy,
+                           durable_files=config.durable_files, asynchronous_preparation=True)
             if config.agent_root is not None and config.slurm_profiles
             else None
         )

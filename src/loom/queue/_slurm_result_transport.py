@@ -484,8 +484,23 @@ class SharedSlurmResult:
 
     def cleanup(self) -> None:
         """Retire transport bytes only after the finalizer acknowledgement."""
+        self._require_root()
+        if self.path.is_symlink():
+            raise QueueConflictError("SLURM result cleanup path contains a link")
+        # Keep the reservation directory and binding until deletion really
+        # finishes. Traversal/unlink can be arbitrarily slow on shared storage;
+        # it must not own the global allocation lock. A restarted finalizer can
+        # repeat this pass over an already partially emptied directory.
+        for child in self.path.iterdir():
+            if child.name == "binding.json":
+                continue
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
         with self._quota_lock():
-            if self.path.is_symlink():
-                raise QueueConflictError("SLURM result cleanup path contains a link")
-            shutil.rmtree(self.path)
+            # Only the final bounded namespace update releases capacity. The
+            # same lock covers the directory durability barrier before reuse.
+            (self.path / "binding.json").unlink(missing_ok=True)
+            self.path.rmdir()
             _fsync_directory(self.root)

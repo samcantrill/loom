@@ -2500,6 +2500,10 @@ class LocalDaemonAgentHttpClient:
 
         if self._slurm_agent is None:
             return
+        # Direct clients keep their synchronous adapter contract. Persistent
+        # service turns always yield bounded preparation/provider IO; the same
+        # journal transition owners are used by both adapters.
+        self._slurm_agent._asynchronous_preparation = self._service_progress
         session = self.active_session()
         if session is None:
             return

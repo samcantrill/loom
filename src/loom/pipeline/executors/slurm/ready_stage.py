@@ -1234,17 +1234,26 @@ class SQLiteReadyStageSubmissions:
             raise SlurmPlanningError("ready-stage submission store is unsupported")
 
     def prepare(
-        self,
-        request: SlurmReadyStageRequest,
-        profile: SlurmReadyStageProfile,
+        self, request: SlurmReadyStageRequest, profile: SlurmReadyStageProfile,
         script_path: str | Path,
     ) -> SlurmReadyStageSubmission:
-        """Retain one replay-stable capability before the journal owner submits."""
-
+        """Synchronous adapter around the same intent and receipt owners."""
         self._require_profile(request, profile)
-        script = Path(script_path)
-        if script.read_text(encoding="utf-8") != request.script:
+        if Path(script_path).read_text(encoding="utf-8") != request.script:
             raise SlurmPlanningError("ready-stage script bytes conflict")
+        current = self._prepare_intent(request, profile)
+        if current.capability is not None or current.state is not ReadyStageState.INTENT:
+            return current
+        prepared = profile.job_private_file_provider.prepare(
+            operation_id=request.operation_id, request_digest=request.digest,
+        )
+        return self._install_prepared_capability(request, profile, prepared)
+
+    def _prepare_intent(
+        self, request: SlurmReadyStageRequest, profile: SlurmReadyStageProfile,
+    ) -> SlurmReadyStageSubmission:
+        """Journal-owner transition; filesystem effects are a separate boundary."""
+        self._require_profile(request, profile)
         with self._transaction() as conn:
             row = conn.execute(
                 f"SELECT value_json FROM {_SUBMISSION_TABLE} WHERE operation_id = ?",
@@ -1274,14 +1283,24 @@ class SQLiteReadyStageSubmissions:
                         _submission_json(current),
                     ),
                 )
+        return current
+
+    def _install_prepared_capability(
+        self, request: SlurmReadyStageRequest, profile: SlurmReadyStageProfile,
+        prepared: JobPrivateFilePrepared,
+    ) -> SlurmReadyStageSubmission:
+        self._require_profile(request, profile)
+        current = self.read(request.operation_id)
+        if current.request != request:
+            raise SlurmPlanningError("ready-stage capability request conflicts")
         if current.capability is not None:
+            if current.capability != prepared:
+                raise SlurmPlanningError("ready-stage capability receipt conflicts")
             return current
-        prepared = profile.job_private_file_provider.prepare(
-            operation_id=request.operation_id, request_digest=request.digest
-        )
+        if current.state is not ReadyStageState.INTENT:
+            raise SlurmPlanningError("ready-stage capability owner changed")
         return self._compare_and_set(
-            request.operation_id,
-            expected=ReadyStageState.INTENT,
+            request.operation_id, expected=ReadyStageState.INTENT,
             value=replace(current, capability=prepared),
         )
 
@@ -1295,9 +1314,23 @@ class SQLiteReadyStageSubmissions:
     ) -> SlurmReadyStageSubmission:
         """Persist intent and ``SUBMITTING`` before the one automatic call."""
 
-        current = self.prepare(request, profile, script_path)
+        self.prepare(request, profile, script_path)
+        return self._submit_prepared(request, profile, script_path, before_runner=before_runner)
+
+    def _submit_prepared(
+        self, request: SlurmReadyStageRequest, profile: SlurmReadyStageProfile,
+        script_path: str | Path, *,
+        before_runner: Callable[[SlurmReadyStageSubmission], bool | None] | None = None,
+    ) -> SlurmReadyStageSubmission:
+        """Submit after the agent's bounded IO owner prepared the exact script."""
+        self._require_profile(request, profile)
+        current = self.read(request.operation_id)
+        if current.request != request:
+            raise SlurmPlanningError("ready-stage submission request conflicts")
         if current.state is not ReadyStageState.INTENT:
             return current
+        if current.capability is None:
+            raise SlurmPlanningError("ready-stage submission is not prepared")
         submitting = replace(current, state=ReadyStageState.SUBMITTING)
         with self._transaction() as conn:
             claimed = (

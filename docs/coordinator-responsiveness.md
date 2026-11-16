@@ -263,8 +263,7 @@ Additional tests cover bounded IO capacity, chunk response loss with and without
 agent restart, final-commit-before-cleanup and interrupted cleanup replay.
 These fake-scheduler tests do not qualify an installed Slurm deployment.
 
-Remaining timing/scale scope includes scheduler command isolation and reservation/preparation/provider IO;
-short cleanup quota-lock ownership; immutable input policy and CPU/GPU
+Remaining timing/scale scope includes scheduler command isolation; immutable input policy and CPU/GPU
 preparation fairness; timeout/placement policy; paged reconciliation and
 large-population qualification. Finite delivery exchanges still use the
 existing bounded HTTP attempt path. This batch does not establish a hard
@@ -320,3 +319,28 @@ Source tests exercise restart during grace and pending containment, prestart
 failure after grant consumption, late results, migration and result-directory
 classification. These are source/protocol checks, not physical Slurm/GPU
 qualification; the installed deployment must be upgraded and qualified separately.
+
+### Reservation and credential IO
+
+Embedded and outbound service compositions select asynchronous reservation,
+script preparation, credential preparation and credential revocation using the
+same bounded storage owner as result IO. Workers return verifier-only provider
+receipts; only the agent owner records the submission intent, installs the
+receipt and advances the evidence outbox. The retained operation/assignment
+identity is rechecked when installing a returned receipt. Restart can replay a
+provider's receipt created before its agent-journal installation. Direct
+synchronous journal/protocol adapters remain available; they are not the
+service deployment path.
+
+Transport cleanup leaves its reservation directory and binding in place while
+deleting payloads outside the quota lock. Its final bounded namespace update
+and directory durability barrier run under that lock before capacity is
+reused. A stalled deletion therefore still counts against the quota but does
+not prevent another assignment from reserving spare capacity. A full quota
+continues to produce assignment-specific backpressure.
+
+Fault tests block reservation, credential creation or revocation while a peer
+submits; reservation/creation tests also cancel that peer before releasing the
+blocked worker. Other tests cover provider-receipt replay after restart and
+quota accounting during blocked payload deletion. These changes do not yet
+separate synchronous scheduler commands or exact containment-helper calls.

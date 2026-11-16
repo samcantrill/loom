@@ -212,8 +212,45 @@ def test_contended_quota_lock_yields_and_preserves_existing_reservation(tmp_path
             owner.reserve(identity["assignment"])
         with pytest.raises(SlurmTransportPending, match="result_quota_lock_busy"):
             owner.finish_delivery(identity, lambda _: {"acknowledged": True})
-        assert owner.read(identity)[0] == report
+        # Commit authorizes deletion, but the still-retained directory holds
+        # its reservation until the short final namespace update can run.
+        assert owner.path.is_dir()
+        assert (owner.path / "binding.json").exists()
     assert owner.finish_delivery(identity, lambda _: {"acknowledged": True})
+
+
+def test_slow_payload_deletion_keeps_its_reservation_without_blocking_peers(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    owner, identity, report, chunk = _fixture(tmp_path)
+    owner.storage = {**owner.storage, "retention_bytes": 2 * 65 * 1024**2}
+    owner.publish(identity, report, chunk)
+    entered, release = Event(), Event()
+    remove = transport_module.shutil.rmtree
+
+    def slow_delete(path, *args, **kwargs):
+        if path == owner.path / "outputs":
+            entered.set()
+            assert release.wait(5)
+        return remove(path, *args, **kwargs)
+
+    monkeypatch.setattr(transport_module.shutil, "rmtree", slow_delete)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        deletion = pool.submit(owner.finish_delivery, identity, lambda _: {"acknowledged": True})
+        try:
+            assert entered.wait(5)
+            peer = SharedSlurmResult(owner.storage, "peer")
+            peer.reserve({"assignment_id": "peer"})
+            overflow = SharedSlurmResult(owner.storage, "overflow")
+            with pytest.raises(SlurmTransportPending, match="result_transport_capacity"):
+                overflow.reserve({"assignment_id": "overflow"})
+            assert not deletion.done() and owner.path.is_dir()
+        finally:
+            release.set()
+        assert deletion.result(timeout=5)
+    overflow.reserve({"assignment_id": "overflow"})
+    assert peer.path.is_dir() and overflow.path.is_dir()
 
 
 def test_existing_aggregate_artifact_bound_at_and_over_limit(tmp_path):

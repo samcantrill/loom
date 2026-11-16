@@ -885,3 +885,143 @@ def test_replay_time_budget_preserves_cursor_and_visits_later_receipts(tmp_path,
         agent.replay_pending(acknowledge)
         assert len(received) == count
     assert received == ["operation-1", "operation-2", "operation-3"]
+
+
+@pytest.mark.parametrize("effect", ["reservation", "credential"])
+def test_async_preparation_stall_does_not_block_peer_submission_and_cancel(tmp_path, monkeypatch, effect):
+    from threading import Event
+    from loom.pipeline.executors.slurm.ready_stage import SlurmJobPrivateFileProvider
+    from loom.queue._slurm_result_transport import SharedSlurmResult
+
+    runner = FakeSlurmCommandRunner()
+    profile = _profile(runner, tmp_path, retention_bytes=4 * 65 * 1024**2)
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,), asynchronous_preparation=True)
+    entered, release = Event(), Event()
+    reserve = SharedSlurmResult.reserve
+    prepare = SlurmJobPrivateFileProvider.prepare
+
+    def reserve_with_stall(transport, assignment):
+        if assignment["assignment_id"] == "assignment-1" and effect == "reservation":
+            entered.set()
+            assert release.wait(10)
+        return reserve(transport, assignment)
+
+    def prepare_with_stall(provider, *, operation_id, request_digest):
+        if operation_id == "operation-1" and effect == "credential":
+            entered.set()
+            assert release.wait(10)
+        return prepare(provider, operation_id=operation_id, request_digest=request_digest)
+
+    monkeypatch.setattr(SharedSlurmResult, "reserve", reserve_with_stall)
+    monkeypatch.setattr(SlurmJobPrivateFileProvider, "prepare", prepare_with_stall)
+    first, second = _task(profile), _task(profile, key="2")
+    binding = ("session", "epoch")
+    agent.begin_reconciliation(binding)
+    cancel_peer = False
+
+    def acknowledge(value):
+        return {"sequence": value["sequence"], "cancel_requested": cancel_peer and value["assignment"]["assignment_id"] == "assignment-2"}
+
+    try:
+        drive_until(lambda: agent.step(first, acknowledge), entered.is_set)
+        assert not agent.has_unreconciled_work(binding)
+        assert not agent.has_started_or_unacknowledged_work()
+        # A new epoch must reconfirm that zero-evidence fact; the in-memory
+        # observation cannot authorize admission through a restart by itself.
+        binding = ("session", "new-epoch")
+        agent.begin_reconciliation(binding)
+        assert agent.has_unreconciled_work(binding)
+        agent.step(first, acknowledge)
+        assert not agent.has_unreconciled_work(binding)
+        drive_until(lambda: agent.step(second, acknowledge), lambda: (record := agent.journal.find("operation-2")) is not None and record.job_id is not None)
+        assert not release.is_set()
+        assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
+        peer = agent.journal.read("operation-2")
+        cancel_peer = True
+        drive_until(lambda: agent.step({**second, "cancel_requested": True, "job_id": peer.job_id, "cluster": peer.cluster, "containment_request": {}}, acknowledge),
+                    lambda: any(call[0] == "scancel" for call in runner.calls))
+        assert not release.is_set()
+    finally:
+        release.set()
+        agent.close()
+
+
+def test_async_credential_revocation_does_not_block_peer_submission(tmp_path, monkeypatch):
+    from threading import Event
+    import loom.queue._agent_slurm as owner_module
+    from loom.pipeline.executors.slurm.ready_stage import SlurmContainmentReceipt, SlurmJobPrivateFileProvider
+
+    runner = FakeSlurmCommandRunner()
+    profile = _profile(runner, tmp_path, retention_bytes=4 * 65 * 1024**2)
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,), asynchronous_preparation=True)
+    entered, release = Event(), Event()
+    revoke = SlurmJobPrivateFileProvider.revoke
+    calls = []
+
+    def slow_revoke(provider, capability):
+        calls.append(capability)
+        entered.set()
+        assert release.wait(10)
+        return revoke(provider, capability)
+
+    monkeypatch.setattr(SlurmJobPrivateFileProvider, "revoke", slow_revoke)
+    monkeypatch.setattr(owner_module, "resolve_slurm_containment", lambda _profile, proof: SlurmContainmentReceipt("CONTAINED", "proof", "1", proof))
+    def acknowledge(value):
+        return {"sequence": value["sequence"], "cancel_requested": False, "result_committed": True}
+    first, second = _task(profile), _task(profile, key="2")
+    try:
+        drive_until(lambda: agent.step(first, acknowledge), lambda: (record := agent.journal.find("operation-1")) is not None and record.job_id is not None)
+        closing = {**first, "release_requested": True, "containment_request": {}}
+        drive_until(lambda: agent.step(closing, acknowledge), entered.is_set)
+        drive_until(lambda: agent.step(second, acknowledge), lambda: (record := agent.journal.find("operation-2")) is not None and record.job_id is not None)
+        assert len(calls) == 1 and not release.is_set()
+        assert len([call for call in runner.calls if call[0] == "sbatch"]) == 2
+        release.set()
+        def released():
+            with agent._connect() as conn:
+                return conn.execute("SELECT released FROM agent_slurm_operations WHERE operation_id='operation-1'").fetchone()[0] == 1
+        drive_until(lambda: agent.step(closing, acknowledge), released)
+    finally:
+        release.set()
+        agent.close()
+
+
+def test_async_capability_receipt_replays_after_restart_before_installation(tmp_path, monkeypatch):
+    from threading import Event
+    from loom.pipeline.executors.slurm.ready_stage import SlurmJobPrivateFileProvider
+
+    runner = FakeSlurmCommandRunner()
+    profile = _profile(runner, tmp_path)
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,), asynchronous_preparation=True)
+    prepared, release = Event(), Event()
+    create = SlurmJobPrivateFileProvider.prepare
+    receipts = []
+
+    def prepare_then_pause(provider, **request):
+        receipt = create(provider, **request)
+        receipts.append(receipt)
+        prepared.set()
+        assert release.wait(10)
+        return receipt
+
+    monkeypatch.setattr(SlurmJobPrivateFileProvider, "prepare", prepare_then_pause)
+    task = _task(profile)
+    def acknowledge(value):
+        return {"sequence": value["sequence"], "cancel_requested": False}
+    try:
+        drive_until(lambda: agent.step(task, acknowledge), prepared.is_set)
+        assert agent.journal.read("operation-1").capability is None
+        assert not [call for call in runner.calls if call[0] == "sbatch"]
+    finally:
+        release.set()
+        agent.close()
+    reopened = AgentSlurmJobs(tmp_path, (profile,), asynchronous_preparation=True)
+    try:
+        drive_until(lambda: reopened.step(task, acknowledge), lambda: reopened.journal.read("operation-1").job_id is not None)
+        assert len(receipts) == 2 and receipts[0] == receipts[1]
+        assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
+    finally:
+        reopened.close()

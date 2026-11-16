@@ -369,7 +369,10 @@ def test_outbound_service_settles_slurm_while_drained(
                 else None
             ))
             control(AgentControlKind.RESUME, "resume-live", session_id, hold=owner.value["startup_hold_id"])
-            eventually(lambda: execution.slurm_submissions.read(held.assignment.operation_id).job_id is not None)
+            eventually(lambda: (
+                (value := execution.slurm_submissions.find(held.assignment.operation_id)) is not None
+                and value.job_id is not None
+            ))
             assert execution.slurm_submissions.read(record.assignment.operation_id).job_id == job_id
             assert execution.slurm_assignments.list_run_unreleased(run_uri)
             assert sum(call[0] == "sbatch" for call in runner.calls) == 2
