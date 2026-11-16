@@ -98,10 +98,11 @@ def test_missing_pidfd_support_refuses_new_container_before_launch(tmp_path, mon
         assert not (workspace / "run.grant").exists()
 
 
+@pytest.mark.parametrize("storage_mount_version", [1, 2])
 def test_saved_container_launch_and_receipt_decode_without_storage_access(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, storage_mount_version: int,
 ) -> None:
-    profile = replace(_profile(), container={
+    profile = replace(_profile(), storage_mount_version=storage_mount_version, container={
         "kind": "apptainer", "container": {"image": {"reference": "/original/image.sif"}},
         "options": {"command": "/usr/bin/singularity"},
         "python_executable": "/original/bin/python", "daemon_endpoint": None,
@@ -111,6 +112,7 @@ def test_saved_container_launch_and_receipt_decode_without_storage_access(
         "fence-A", "operation-A", "a" * 64, tmp_path, profile, {},
     )
     saved = _launch_value(launch)
+    assert ("storage_mount_version" in saved["profile"]) == (storage_mount_version == 2)
     digest = launch.spec_digest
     receipt = _receipt_value(SupervisorReceipt(SupervisorLaunchState.NOT_ACCEPTED, launch, 0))
 
@@ -2235,3 +2237,35 @@ def test_slow_gate_publication_does_not_block_unrelated_stop(
             finally:
                 release.set()
             assert launched.result(timeout=5).state is SupervisorLaunchState.RUNNING
+
+
+def test_mount_upgrade_reconciles_only_exact_retained_legacy_launch(tmp_path):
+    profile = replace(_profile(), storage_mount_version=2)
+    root = tmp_path / "agent"
+    root.mkdir()
+    supervisor = AgentProcessSupervisor.initialize(root, agent_id="agent-A", profiles=(profile,))
+    legacy = _launch(supervisor, tmp_path / "workspace")
+    with pytest.raises(AgentProcessSupervisorError, match="identity mismatch"):
+        supervisor.query(legacy)
+    # Model the durable terminal receipt written by the prior executable.
+    with supervisor._connect() as conn:
+        conn.execute(
+            "INSERT INTO launches(operation_id, digest, launch_json, state, revision) "
+            "VALUES (?, ?, ?, 'contained', 1)",
+            (legacy.launch_operation_id, legacy.spec_digest, json.dumps(_launch_value(legacy))),
+        )
+    assert supervisor.query(legacy).state is SupervisorLaunchState.CONTAINED
+    assert supervisor.launch(legacy).state is SupervisorLaunchState.CONTAINED
+    with pytest.raises(AgentProcessSupervisorError, match="identity mismatch"):
+        supervisor.query(replace(legacy, execution_fence="different"))
+    with pytest.raises(AgentProcessSupervisorError, match="identity mismatch"):
+        supervisor.query(replace(legacy, profile=replace(legacy.profile, environment={"changed": "yes"})))
+
+
+@pytest.mark.parametrize("version", [0, 3, True, "2"])
+def test_profile_decoder_rejects_unsupported_storage_mount_version(version):
+    from loom.queue._agent_process_supervisor import _profile_from_value, _profile_value
+    value = _profile_value(_profile())
+    value["storage_mount_version"] = version
+    with pytest.raises(AgentProcessSupervisorError, match="unsupported storage mount version"):
+        _profile_from_value(value)

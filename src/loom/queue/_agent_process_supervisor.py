@@ -127,8 +127,11 @@ class ResidentWorkerLaunchProfile:
     shared_roots: Mapping[str, PlainData] = field(default_factory=dict)
     temporary_mounts: tuple[str, ...] = ()
     submitted_execution: SubmittedContainerExecution | None = None
+    storage_mount_version: int = 1
 
     def __post_init__(self) -> None:
+        if type(self.storage_mount_version) is not int or self.storage_mount_version not in (1, 2):
+            raise AgentProcessSupervisorError("unsupported storage mount version")
         from .shared_execution import root_bindings
         object.__setattr__(self, "shared_roots", root_bindings(self.shared_roots))
         from ._container_worker import container_binding
@@ -1427,23 +1430,38 @@ class AgentProcessSupervisor:
     def _validate_launch(self, launch: ResidentWorkerLaunch) -> None:
         execution = launch.profile.submitted_execution
         if execution is None:
-            permitted = any(
-                item.profile_id == launch.profile.profile_id
-                and item.fingerprint == launch.profile.fingerprint
-                for item in self._configuration.profiles
-            )
+            candidates = self._configuration.profiles
         else:
             policy = next((
                 item for item in self._configuration.container_policies
                 if item.policy_id == launch.profile.profile_id
             ), None)
+            candidates = () if policy is None else (policy.launch_profile(
+                execution, workspace=launch.workspace_root,
+                selected_capability=SubmittedContainerCapability.from_dict(launch.profile.descriptor),
+            ),)
+        permitted = any(
+            item.profile_id == launch.profile.profile_id
+            and item.fingerprint == launch.profile.fingerprint
+            for item in candidates
+        )
+        if not permitted and launch.profile.storage_mount_version == 1:
+            # A layout upgrade may reconcile an exact previously accepted launch;
+            # it must not authorize creation of a new legacy launch.
+            with self._connect() as conn:
+                retained = conn.execute(
+                    "SELECT digest FROM launches WHERE operation_id = ?",
+                    (launch.launch_operation_id,),
+                ).fetchone()
             permitted = (
-                policy is not None
-                and policy.launch_profile(
-                    execution, workspace=launch.workspace_root,
-                    selected_capability=SubmittedContainerCapability.from_dict(launch.profile.descriptor),
-                ).fingerprint
-                == launch.profile.fingerprint
+                retained is not None
+                and retained["digest"] == launch.spec_digest
+                and any(
+                    item.storage_mount_version == 2
+                    and replace(item, storage_mount_version=1).fingerprint
+                        == launch.profile.fingerprint
+                    for item in candidates
+                )
             )
         if (
             launch.supervisor_id != self.supervisor_id
@@ -1527,6 +1545,8 @@ def _launch_json(launch: ResidentWorkerLaunch) -> str:
 
 def _profile_value(profile: ResidentWorkerLaunchProfile) -> dict[str, object]:
     return {
+        **({"storage_mount_version": profile.storage_mount_version}
+           if profile.storage_mount_version != 1 else {}),
         "project_root": str(profile.project_root),
         "python_executable": str(profile.python_executable),
         "descriptor": profile.descriptor,
@@ -1561,10 +1581,11 @@ def _profile_from_value(value: object) -> ResidentWorkerLaunchProfile:
     if (
         not isinstance(value, Mapping)
         or not required.issubset(value)
-        or not set(value).issubset(required | {"preparation_shared_roots", "container", "shared_roots", "temporary_mounts", "submitted_execution"})
+        or not set(value).issubset(required | {"preparation_shared_roots", "container", "shared_roots", "temporary_mounts", "submitted_execution", "storage_mount_version"})
     ):
         raise AgentProcessSupervisorError("supervisor profile state is invalid")
     return ResidentWorkerLaunchProfile(
+        storage_mount_version=cast(int, value.get("storage_mount_version", 1)),
         project_root=Path(cast(str, value["project_root"])),
         python_executable=Path(cast(str, value["python_executable"])),
         descriptor=cast(Mapping[str, PlainData], value["descriptor"]),

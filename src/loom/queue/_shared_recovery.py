@@ -33,7 +33,7 @@ from loom.pipeline.stores.shared_artifacts import (
 )
 from loom.serialization import PlainData, thaw_plain_data
 from .errors import QueueConflictError
-from ._shared_publication import identity, publication_id, selected, staging_relative
+from ._shared_publication import identity, publication_id, selected, attempt_relative
 
 WIRE = "loom.remote_recovery"
 BINDING = "loom.recovery_binding"
@@ -42,7 +42,7 @@ _PRINCIPAL = "native-shared-recovery"
 
 def current_relative(request: Any, agent_id: str) -> str:
     return str(
-        PurePosixPath(staging_relative(request, agent_id)).parent.parent / "recovery"
+        PurePosixPath(attempt_relative(request, agent_id)) / "recovery"
     )
 
 

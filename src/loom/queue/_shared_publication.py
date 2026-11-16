@@ -91,6 +91,11 @@ def staging_relative(request: PublicationRequest, agent_id: str) -> str:
     return f"loom-work/{machine}/{request.assignment_id}/{request.attempt_id}/artifacts/{request.stage_name}"
 
 
+def attempt_relative(request: PublicationRequest, agent_id: str) -> str:
+    """Project the exact assignment attempt owning publication and recovery."""
+    return str(PurePosixPath(staging_relative(request, agent_id)).parent.parent)
+
+
 def staging_tree(
     request: PublicationRequest,
     roots: Mapping[str, PlainData],

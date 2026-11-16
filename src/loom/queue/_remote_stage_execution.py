@@ -585,6 +585,7 @@ class ResidentExecutionProfile:
     def launch_profile(self) -> ResidentWorkerLaunchProfile:
         """The immutable process-launch binding, separate from capacity."""
         return ResidentWorkerLaunchProfile(
+            storage_mount_version=2,
             container=self.container,
             project_root=self.project_root,
             python_executable=self.python_executable,

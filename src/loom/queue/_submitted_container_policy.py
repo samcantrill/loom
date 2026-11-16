@@ -162,6 +162,7 @@ class SubmittedContainerPolicy:
         image = project_path(root, str(execution.image.location["path"]))
         container = ContainerOptions(image=str(image), mounts=self.mounts)
         return ResidentWorkerLaunchProfile(
+            storage_mount_version=2,
             project_root=workspace,
             python_executable=Path(execution.python_executable),
             descriptor=capability.to_dict(),

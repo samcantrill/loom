@@ -289,9 +289,18 @@ def project_container_worker(
             target = str(Path(str(root["container_path"])) / str(challenge["path"]))
             mounts[target] = ContainerMount(source=str(project_path(root, str(challenge["path"]))), target=target, mode="ro")
         if assignment is not None:
-            from ._shared_publication import selected, staging_relative
+            from ._shared_publication import selected, staging_relative, attempt_relative
             from loom.pipeline.stores.shared_artifacts import binding as shared_binding
+            from ._shared_recovery import validate_wire, current_relative
+            from loom.pipeline.stores.shared_artifacts import publication_policy, TRUSTED_SHARED_STORAGE
             selection = selected(assignment)
+            recovery = validate_wire(assignment)
+            common_attempt = (
+                profile.storage_mount_version == 2
+                and selection is not None
+                and recovery is not None
+                and publication_policy(selection[1]["publication"]) == TRUSTED_SHARED_STORAGE
+            )
             if selection is not None:
                 if agent_id is None:
                     raise ValueError("shared output mount requires the assignment machine identity")
@@ -299,20 +308,19 @@ def project_container_worker(
                 root = cast(Mapping[str, PlainData], profile.shared_roots[alias])
                 if root.get("publication") != selection[1]["publication"] or root["access"] != "rw":
                     raise ValueError("shared publication policy conflicts")
-                source = project_path(root, staging_relative(assignment, agent_id))
+                source = project_path(root, (attempt_relative if common_attempt else staging_relative)(assignment, agent_id))
                 target = Path(str(root["container_path"])) / source.relative_to(str(root["host_path"]))
                 mounts[str(target)] = ContainerMount(source=str(source), target=str(target), mode="rw")
-            from ._shared_recovery import validate_wire, current_relative
-            recovery = validate_wire(assignment)
             if recovery is not None:
                 root = cast(Mapping[str, PlainData], profile.shared_roots[recovery["root_id"]])
                 if agent_id is not None and recovery["tree"] != current_relative(assignment, agent_id):
                     raise ValueError("recovery destination machine ownership conflicts")
                 if root["access"] != "rw" or selection is None or root.get("publication") != selection[1]["publication"]:
                     raise ValueError("recovery root qualification conflicts")
-                source = project_path(root, recovery["tree"])
-                target = Path(str(root["container_path"])) / recovery["tree"]
-                mounts[str(target)] = ContainerMount(source=str(source), target=str(target), mode="rw")
+                if not common_attempt:
+                    source = project_path(root, recovery["tree"])
+                    target = Path(str(root["container_path"])) / recovery["tree"]
+                    mounts[str(target)] = ContainerMount(source=str(source), target=str(target), mode="rw")
                 for reference in recovery["predecessors"]:
                     predecessor = cast(Mapping[str, PlainData], profile.shared_roots[reference["root_id"]])
                     source = project_path(predecessor, reference["tree"])

@@ -382,3 +382,72 @@ def test_new_container_command_traverses_its_exact_assignment_inputs_once(tmp_pa
     build_container_worker(profile.launch_profile, workspace=workspace.root,
                            worker=("python3",), environment={}, shared_scope=selected, agent_id="agent-1")
     assert visits == [tmp_path / "data"]
+
+
+@pytest.mark.parametrize("runtime", ["apptainer", "docker"])
+@pytest.mark.parametrize("version, trusted", [(1, True), (2, True), (2, False)])
+def test_attempt_mount_preserves_rename_boundary(tmp_path, runtime, version, trusted):
+    from dataclasses import replace
+    from loom.queue._container_worker import project_container_worker
+    from loom.queue._shared_publication import attempt_relative, staging_relative, publication_id
+    from loom.queue._shared_recovery import WIRE, current_relative
+    from loom.queue.shared_execution import assignment_scope
+    from tests.unit.loom.queue.test_remote_stage_execution import _shared_publication_workspace
+
+    limits = {"max_members": 1024, "max_payload_bytes": 1024 * 1024,
+              "max_manifest_bytes": 1024 * 1024}
+    if trusted:
+        limits["policy"] = "trusted_shared_storage"
+    workspace, resident, _, _ = _shared_publication_workspace(
+        tmp_path, limits=limits, container=True, data=True)
+    profile = replace(resident.launch_profile, storage_mount_version=version)
+    if runtime == "docker":
+        profile = replace(profile, container=_binding())
+    request = workspace.request()
+    metadata = {**request.worker_metadata, "loom.execution_binding": {
+        **request.worker_metadata["loom.execution_binding"], "attempt": 2,
+    }}
+    request = replace(request, attempt=2, attempt_id="attempt-2", worker_metadata=metadata)
+    owner = {
+        "assignment_id": "previous-assignment", "attempt_id": "attempt-1",
+        "stage_name": request.stage_name, "attempt": 1, "agent_id": "agent-1",
+        "fence": "previous-fence",
+        "origin_run_id": request.worker_metadata["loom.execution_binding"]["origin_run_id"],
+    }
+    previous = "loom-recovery-retained/" + publication_id(owner)
+    reference = {
+        "schema_version": 2 if trusted else 1, "root_id": "outputs",
+        "tree": previous, "publication_id": publication_id(owner),
+        "receipt_digest": "a" * 64, "budgets": limits, "identity": owner,
+    }
+    request = replace(request, worker_metadata={**request.worker_metadata, WIRE: {
+        "schema_version": 1, "root_id": "outputs",
+        "tree": current_relative(request, "agent-1"), "predecessors": [reference],
+    }})
+    command = project_container_worker(
+        profile, workspace=workspace.root, worker=("python3",), environment={},
+        shared_scope=assignment_scope(request.fingerprint), agent_id="agent-1", assignment=request)
+    argv = " ".join(command.argv)
+    base = Path("/loom/outputs")
+    parent = str(base / attempt_relative(request, "agent-1"))
+    recovery = str(base / current_relative(request, "agent-1"))
+    publication = str(base / staging_relative(request, "agent-1"))
+    if version == 2 and trusted:
+        assert parent in argv
+        assert recovery not in argv
+        assert publication not in argv
+    else:
+        assert recovery in argv
+        assert publication in argv
+    previous_target = str(base / previous)
+    for target in ("/loom/data", previous_target):
+        if runtime == "apptainer":
+            assert target + ":ro" in argv
+        else:
+            assert "target=" + target + ",readonly" in argv
+    # The attempt is the widest new writable output binding.
+    if version == 2 and trusted:
+        if runtime == "apptainer":
+            assert str(tmp_path / "shared") + ":/loom/outputs:" not in argv
+        else:
+            assert "target=/loom/outputs," not in argv
