@@ -563,6 +563,9 @@ def wait_for_work(
         raise
     except AgentPollFencedError:
         journal.fence_poll(session_id, sequence)
+        if self._service_progress:
+            self._service_control_due = True
+            return {"result": "idle"}
         raise
     # Other rejection and indeterminate responses leave the exact request
     # pending. Only native outcome evidence proves sequence consumption.

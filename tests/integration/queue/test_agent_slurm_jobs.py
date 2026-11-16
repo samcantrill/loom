@@ -194,6 +194,17 @@ def test_outbound_service_settles_slurm_while_drained(
     drained_progress = Event()
     retries = []
     original_steps = deployment._steps
+    from loom.queue import agent_session_transport as transport_module
+    original_dispatch = transport_module._dispatch
+
+    def observed_dispatch(view, operation, payload):
+        try:
+            return original_dispatch(view, operation, payload)
+        except QueueConflictError as error:
+            retries.append((f"server:{operation}", str(error)))
+            raise
+
+    monkeypatch.setattr(transport_module, "_dispatch", observed_dispatch)
 
     def observed_steps(function, *args, **kwargs):
         if function.__name__ == "drive_slurm_jobs":
@@ -207,9 +218,12 @@ def test_outbound_service_settles_slurm_while_drained(
             if (
                 not restart_with_job
                 and function.__name__ == "drive_slurm_jobs"
-                and any(call[0] == "sbatch" for call in runner.calls)
+                and any(value.job_id is not None for value in
+                        function.__self__._slurm_agent.journal.list_nonterminal())
             ):
                 # Receive drain between the scheduler step and the next poll.
+                # A command worker can finish before its owner consumes the
+                # handle; let that owner publish it before this test barrier.
                 # Application belongs to the next manager boundary; waiting
                 # here for its effect would prevent that boundary from running.
                 while (

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from loom._sqlite_policy import SQLitePolicy, connect_existing, initialize_database
 
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
+from functools import partial
 import hashlib
 import json
 import math
@@ -66,6 +67,23 @@ _PROFILE_IMPLEMENTATION_FINGERPRINT = "loom.slurm.ready-stage-profile.v1"
 _OPERATION_MARKER_PREFIX = "loom-op-v1:"
 _SUBMISSION_TABLE = "ready_stage_submissions"
 _SLURM_BOOTSTRAP_CONFIG_ENV = "LOOM_SLURM_BOOTSTRAP_CONFIG"
+
+
+def _run_command_steps[T](
+    steps: Generator[Callable[[], SlurmCommandResult], SlurmCommandResult, T],
+) -> T:
+    """Synchronous adapter; async owners advance the same journal transitions."""
+    try:
+        effect = next(steps)
+        while True:
+            try:
+                result = effect()
+            except BaseException as error:
+                effect = steps.throw(error)
+            else:
+                effect = steps.send(result)
+    except StopIteration as done:
+        return done.value
 
 
 @dataclass(frozen=True, slots=True)
@@ -1322,6 +1340,13 @@ class SQLiteReadyStageSubmissions:
         script_path: str | Path, *,
         before_runner: Callable[[SlurmReadyStageSubmission], bool | None] | None = None,
     ) -> SlurmReadyStageSubmission:
+        return _run_command_steps(self._submit_prepared_steps(request, profile, script_path, before_runner=before_runner))
+
+    def _submit_prepared_steps(
+        self, request: SlurmReadyStageRequest, profile: SlurmReadyStageProfile,
+        script_path: str | Path, *,
+        before_runner: Callable[[SlurmReadyStageSubmission], bool | None] | None = None,
+    ) -> Generator[Callable[[], SlurmCommandResult], SlurmCommandResult, SlurmReadyStageSubmission]:
         """Submit after the agent's bounded IO owner prepared the exact script."""
         self._require_profile(request, profile)
         current = self.read(request.operation_id)
@@ -1356,7 +1381,7 @@ class SQLiteReadyStageSubmissions:
             )
         script = Path(script_path)
         try:
-            result = profile.runner.sbatch(
+            result = yield partial(profile.runner.sbatch,
                 script,
                 comment=operation_marker(request.operation_id),
                 environment={},
@@ -1416,12 +1441,17 @@ class SQLiteReadyStageSubmissions:
     def reconcile(
         self, operation_id: str, profile: SlurmReadyStageProfile
     ) -> SlurmReadyStageSubmission:
+        return _run_command_steps(self._reconcile_steps(operation_id, profile))
+
+    def _reconcile_steps(
+        self, operation_id: str, profile: SlurmReadyStageProfile
+    ) -> Generator[Callable[[], SlurmCommandResult], SlurmCommandResult, SlurmReadyStageSubmission]:
         current = self.read(operation_id)
         self._require_profile(current.request, profile)
         if current.state not in {ReadyStageState.SUBMITTING, ReadyStageState.UNKNOWN}:
             return current
         if profile.accounting_history is not None:
-            identity, _state, diagnostic = self._named_accounting(current, profile)
+            identity, _state, diagnostic = yield from self._named_accounting_steps(current, profile)
             if identity is None:
                 return self._record_outcome(operation_id, ReadyStageState.UNKNOWN, evidence=diagnostic)
             return self._record_outcome(
@@ -1431,8 +1461,8 @@ class SQLiteReadyStageSubmissions:
             )
         marker = operation_marker(operation_id)
         try:
-            live = profile.runner.discover_live_operations()
-            retained = profile.runner.discover_accounted_operations(
+            live = yield profile.runner.discover_live_operations
+            retained = yield partial(profile.runner.discover_accounted_operations,
                 started_after=current.created_at
             )
             if not live.ok or not retained.ok:
@@ -1475,6 +1505,12 @@ class SQLiteReadyStageSubmissions:
         self, current: SlurmReadyStageSubmission, profile: SlurmReadyStageProfile,
         *, result: SlurmCommandResult | Exception | None = None, observed_at: str | None = None,
     ) -> tuple[SlurmAccountingIdentity | None, str | None, str]:
+        return _run_command_steps(self._named_accounting_steps(current, profile, result=result, observed_at=observed_at))
+
+    def _named_accounting_steps(
+        self, current: SlurmReadyStageSubmission, profile: SlurmReadyStageProfile,
+        *, result: SlurmCommandResult | Exception | None = None, observed_at: str | None = None,
+    ) -> Generator[Callable[[], SlurmCommandResult], SlurmCommandResult, tuple[SlurmAccountingIdentity | None, str | None, str]]:
         policy = profile.accounting_history
         assert policy is not None
         try:
@@ -1487,7 +1523,7 @@ class SQLiteReadyStageSubmissions:
             if isinstance(result, Exception):
                 raise result
             if result is None:
-                result = getattr(profile.runner, "discover_named_operation")(**selection)
+                result = yield partial(getattr(profile.runner, "discover_named_operation"), **selection)
             if not result.ok:
                 return None, None, "slurm_history_command_failed"
             rows = parse_accounting_rows(result.stdout, **selection)
@@ -1660,6 +1696,12 @@ class SQLiteReadyStageSubmissions:
         self, operation_id: str, profile: SlurmReadyStageProfile, *,
         _after_observation: Callable[[SlurmReadyStageSubmission], None] | None = None,
     ) -> SlurmReadyStageSubmission:
+        return _run_command_steps(self._request_cancel_steps(operation_id, profile, _after_observation=_after_observation))
+
+    def _request_cancel_steps(
+        self, operation_id: str, profile: SlurmReadyStageProfile, *,
+        _after_observation: Callable[[SlurmReadyStageSubmission], None] | None = None,
+    ) -> Generator[Callable[[], SlurmCommandResult], SlurmCommandResult, SlurmReadyStageSubmission]:
         current = self.read(operation_id)
         self._require_profile(current.request, profile)
         if current.job_id is None:
@@ -1667,7 +1709,7 @@ class SQLiteReadyStageSubmissions:
         if current.cancel_requested:
             return current
         if profile.accounting_history is not None:
-            current = self.observe(operation_id, profile)
+            current = yield from self._observe_steps(operation_id, profile)
             # The agent schedules observation independently from cancellation.
             # Report this retained fact before a cancel diagnostic replaces it.
             if _after_observation is not None:
@@ -1678,10 +1720,10 @@ class SQLiteReadyStageSubmissions:
                     requested=False, evidence="slurm_cancel_identity_unavailable",
                 )
         try:
-            result = (
-                profile.runner.scancel(job_ids=(cast(str, current.job_id),))
+            result = yield (
+                partial(profile.runner.scancel, job_ids=(cast(str, current.job_id),))
                 if profile.accounting_history is None else
-                getattr(profile.runner, "scancel_named_operation")(current.accounting_identity)
+                partial(getattr(profile.runner, "scancel_named_operation"), current.accounting_identity)
             )
         except subprocess.TimeoutExpired:
             return self._record_cancel(
@@ -1715,6 +1757,11 @@ class SQLiteReadyStageSubmissions:
     def observe(
         self, operation_id: str, profile: SlurmReadyStageProfile
     ) -> SlurmReadyStageSubmission:
+        return _run_command_steps(self._observe_steps(operation_id, profile))
+
+    def _observe_steps(
+        self, operation_id: str, profile: SlurmReadyStageProfile
+    ) -> Generator[Callable[[], SlurmCommandResult], SlurmCommandResult, SlurmReadyStageSubmission]:
         """Retain one bounded exact-handle scheduler fact without lifecycle inference."""
 
         current = self.read(operation_id)
@@ -1722,7 +1769,7 @@ class SQLiteReadyStageSubmissions:
         if current.job_id is None:
             raise SlurmPlanningError("SLURM observation requires an exact known handle")
         if profile.accounting_history is not None:
-            identity, state, diagnostic = self._named_accounting(current, profile)
+            identity, state, diagnostic = yield from self._named_accounting_steps(current, profile)
             return self._record_observation(
                 operation_id, expected_job_id=current.job_id,
                 scheduler_state=state, scheduler_source="sacct" if identity is not None else "unavailable",
@@ -1731,7 +1778,7 @@ class SQLiteReadyStageSubmissions:
         source = "unavailable"
         state: str | None = None
         try:
-            live = profile.runner.squeue(job_ids=(current.job_id,))
+            live = yield partial(profile.runner.squeue, job_ids=(current.job_id,))
             if live.ok:
                 state = _exact_scheduler_state(
                     live, job_id=current.job_id, source="squeue"
@@ -1739,7 +1786,7 @@ class SQLiteReadyStageSubmissions:
                 if state is not None:
                     source = "squeue"
             if state is None:
-                retained = profile.runner.sacct(job_ids=(current.job_id,))
+                retained = yield partial(profile.runner.sacct, job_ids=(current.job_id,))
                 if retained.ok:
                     state = _exact_scheduler_state(
                         retained, job_id=current.job_id, source="sacct"

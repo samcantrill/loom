@@ -3342,8 +3342,15 @@ class AgentSessionService:
                 "AND sequence = ? AND digest = ?",
                 (rule.principal_id, session_id, sequence, digest),
             ).fetchone()
-            if row is None or not bool(row["active"]):
+            if row is None:
                 raise QueueConflictError("work poll was fenced")
+            if not bool(row["active"]):
+                if row["result_json"] is not None:
+                    return 0.0, _plain_result(row["result_json"], "agent poll receipt")
+                # Exact retained identity, inactive, and no delivery: a control
+                # fence consumed this sequence. Give the agent that evidence
+                # instead of a generic rejection requiring reconnection.
+                raise AgentPollFencedError("work poll was fenced")
             session = _session_from_row(
                 conn.execute(
                     "SELECT * FROM agent_sessions WHERE session_id = ?",

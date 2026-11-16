@@ -263,7 +263,7 @@ Additional tests cover bounded IO capacity, chunk response loss with and without
 agent restart, final-commit-before-cleanup and interrupted cleanup replay.
 These fake-scheduler tests do not qualify an installed Slurm deployment.
 
-Remaining timing/scale scope includes scheduler command isolation; immutable input policy and CPU/GPU
+Remaining timing/scale scope includes immutable input policy and CPU/GPU
 preparation fairness; timeout/placement policy; paged reconciliation and
 large-population qualification. Finite delivery exchanges still use the
 existing bounded HTTP attempt path. This batch does not establish a hard
@@ -342,5 +342,36 @@ continues to produce assignment-specific backpressure.
 Fault tests block reservation, credential creation or revocation while a peer
 submits; reservation/creation tests also cancel that peer before releasing the
 blocked worker. Other tests cover provider-receipt replay after restart and
-quota accounting during blocked payload deletion. These changes do not yet
-separate synchronous scheduler commands or exact containment-helper calls.
+quota accounting during blocked payload deletion.
+
+### Scheduler command isolation
+
+Persistent embedded and outbound services run external scheduler calls through
+bounded continuations: one submission worker/slot, two observation/cancellation
+workers with at most eight queued or running operations, and an independent
+containment helper worker with at most eight outstanding calls. Journal reads,
+state transitions, accounting validation and response publication stay on the
+single agent owner. The synchronous public adapters advance those same journal
+transitions directly. Command deadlines retain their existing configured meaning.
+
+Submission capacity is acquired before claiming SUBMITTING. Restart discards
+the in-memory continuation and reconciles the durable uncertain submission;
+it never repeats sbatch because a reply was lost. A batch accounting snapshot
+excludes competing transitions for its own assignments until its actual query
+finishes. Other assignments and the submission slot continue independently.
+Each helper request retains its exact captured proof; a superseded proof is
+drained and discarded before a replacement starts. Closing an owner waits for
+its actual commands and helpers, without declaring their effects absent.
+
+A drain that fences an in-flight work poll now returns the exact typed fence
+receipt. The service records sequence consumption and applies control on its
+next turn, instead of reconnecting because of a generic protocol conflict.
+Missing or conflicting poll identities still cannot authorize that transition.
+
+Fault tests block sbatch, accounting or containment and require the same agent
+to observe and cancel an independent assignment. They also assert that journal
+transitions stay on the owner thread. Actual outbound service drain/restart and
+embedded terminal-recovery checks cover the composed paths. HTTP acknowledgements
+still have a finite synchronous attempt inside the Slurm bridge; removing that
+last per-call dependency remains separate work. No physical Slurm qualification
+or live deployment upgrade is implied by these source tests.

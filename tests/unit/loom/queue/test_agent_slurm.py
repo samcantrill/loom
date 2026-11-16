@@ -1025,3 +1025,67 @@ def test_async_capability_receipt_replays_after_restart_before_installation(tmp_
         assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
     finally:
         reopened.close()
+
+
+@pytest.mark.parametrize("blocked_effect", ["submit", "containment"])
+def test_slow_scheduler_effect_does_not_block_peer_observation_or_cancel(tmp_path, monkeypatch, blocked_effect):
+    from threading import Event, get_ident
+    import loom.queue._agent_slurm as owner_module
+    from loom.pipeline.executors.slurm.ready_stage import SlurmContainmentReceipt
+
+    runner = FakeSlurmCommandRunner()
+    profile = _profile(runner, tmp_path, retention_bytes=4 * 65 * 1024**2)
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,), asynchronous_preparation=True)
+    entered, release = Event(), Event()
+    submit = runner.sbatch
+    owner_thread = get_ident()
+    journal_threads = []
+    record_outcome = agent.journal._record_outcome
+
+    def record(*args, **kwargs):
+        journal_threads.append(get_ident())
+        return record_outcome(*args, **kwargs)
+
+    def slow_submit(script, **kwargs):
+        if script.name == "assignment-1.sh" and blocked_effect == "submit":
+            entered.set()
+            assert release.wait(10)
+        return submit(script, **kwargs)
+
+    def slow_containment(_profile, proof):
+        if proof.get("slow") is True and blocked_effect == "containment":
+            entered.set()
+            assert release.wait(10)
+        return SlurmContainmentReceipt("UNKNOWN")
+
+    monkeypatch.setattr(runner, "sbatch", slow_submit)
+    monkeypatch.setattr(owner_module, "resolve_slurm_containment", slow_containment)
+    monkeypatch.setattr(agent.journal, "_record_outcome", record)
+    cancel_peer = False
+    def acknowledge(value):
+        assert get_ident() == owner_thread
+        return {"sequence": value["sequence"], "cancel_requested": cancel_peer and value["assignment"]["assignment_id"] == "assignment-2"}
+
+    first, peer = _task(profile), _task(profile, key="2")
+    if blocked_effect == "containment":
+        first = {**first, "release_requested": True, "containment_request": {"slow": True}}
+    try:
+        drive_until(lambda: agent.step(peer, acknowledge), lambda: (value := agent.journal.find("operation-2")) is not None and value.job_id is not None)
+        drive_until(lambda: agent.step(first, acknowledge), entered.is_set)
+        calls_before = len(runner.calls)
+        cancel_peer = True
+        closing = {**peer, "cancel_requested": True, "containment_request": {}}
+        drive_until(lambda: agent.step(closing, acknowledge), lambda: agent.journal.read("operation-2").cancel_requested)
+        assert any(call[0] in {"squeue", "sacct"} for call in runner.calls[calls_before:])
+        assert any(call[0] == "scancel" for call in runner.calls[calls_before:])
+        assert not release.is_set()
+        for _ in range(10):
+            agent.step(first, acknowledge)
+        assert journal_threads and set(journal_threads) == {owner_thread}
+        release.set()
+        drive_until(lambda: agent.step(first, acknowledge), lambda: agent.journal.read("operation-1").job_id is not None)
+        assert sum(call[0] == "sbatch" for call in runner.calls) == 2
+    finally:
+        release.set()
+        agent.close()

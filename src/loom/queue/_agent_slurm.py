@@ -10,6 +10,7 @@ from loom._sqlite_policy import SQLitePolicy, connect_existing, initialize_datab
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
+from functools import partial
 import json
 from pathlib import Path
 import sqlite3
@@ -29,12 +30,14 @@ from loom.pipeline.executors.slurm.ready_stage import (
     SlurmReadyStageSubmission,
     SlurmContainmentReceipt,
     resolve_slurm_containment,
+    _run_command_steps,
 )
 from loom.serialization import PlainData, thaw_plain_data
 from loom.timestamps import utc_timestamp
 
 from ._slurm_result_transport import SharedSlurmResult, SlurmEffectPending, SlurmRequestUncertain
 from ._agent_slurm_storage import SlurmStorageProgress
+from ._agent_slurm_commands import SlurmCommandProgress
 from ._slurm_admission import submit_interval
 from ._slurm_observation import SlurmObservationPolicy, parse_slurm_observation_policy
 from .errors import QueueConflictError, QueueServiceError
@@ -179,6 +182,8 @@ class AgentSlurmJobs:
         self._retry_failures: dict[tuple[str, str], int] = {}
         self._batch_order: dict[str, int] = {}
         self._batch_sequence = 0
+        self._batch_pending: dict[str, set[str]] = {}
+        self._batch_completed: list[tuple[Mapping[str, PlainData], SlurmStageAssignment, SlurmReadyStageSubmission, SlurmReadyStageProfile]] = []
         self._replay_after: str | None = None
         self._batch_limits: dict[tuple[str, str], int] = {}
         self._containment_diagnostics: dict[str, str] = {}
@@ -190,9 +195,14 @@ class AgentSlurmJobs:
         self._pending_effect_confirmations: dict[str, tuple[str, int]] = {}
         self._reconciled_operations: dict[str, tuple[object, object, bool, object]] = {}
         self._storage = SlurmStorageProgress()
+        self._commands = SlurmCommandProgress()
+        self._helpers = SlurmStorageProgress(workers=1, outstanding=8, owners=8)
+        self._helper_requests: dict[str, tuple[str, SlurmReadyStageProfile, dict[str, PlainData]]] = {}
 
     def close(self) -> None:
         with self._lock:
+            self._commands.close()
+            self._helpers.close()
             self._storage.close()
 
     def begin_reconciliation(self, binding: tuple[str, str]) -> None:
@@ -314,7 +324,23 @@ class AgentSlurmJobs:
             self._containment_budget -= 1
         self._containment_sequence += 1
         self._containment_order[operation_id] = self._containment_sequence
-        receipt = resolve_slurm_containment(profile, request)
+        if self._asynchronous_preparation:
+            identity = _json(thaw_plain_data(request))
+            retained = self._helper_requests.get(operation_id)
+            if retained is None:
+                retained = (identity, profile, json.loads(identity))
+                self._helper_requests[operation_id] = retained
+            receipt = self._helpers.poll(
+                operation_id, "containment",
+                lambda: resolve_slurm_containment(retained[1], retained[2]),
+            )
+            del self._helper_requests[operation_id]
+            if retained[0] != identity:
+                # A late result can supersede recovery while the helper runs.
+                # Drain the actual old call before evaluating the new proof.
+                raise SlurmEffectPending(0.05)
+        else:
+            receipt = resolve_slurm_containment(profile, request)
         if receipt.diagnostic_code is None:
             self._containment_diagnostics.pop(operation_id, None)
         else:
@@ -676,10 +702,70 @@ class AgentSlurmJobs:
                 self._containment_deadline = None
             self._observe_batches(tasks, acknowledge, policy)
 
+    def _finish_batch_queries(self, acknowledge):
+        for key in tuple(self._batch_pending):
+            try:
+                self._commands.resume(key)
+            except SlurmEffectPending:
+                continue
+            del self._batch_pending[key]
+        ready, self._batch_completed = self._batch_completed, []
+        for task, assignment, current, profile in ready:
+            operation = assignment.operation_id
+            try:
+                reply = self._publish(assignment, current, acknowledge)
+                self._deliver_result(
+                    task, reply, SharedSlurmResult(profile.result_storage, assignment.assignment_id), acknowledge,
+                )
+            except _EvidencePending:
+                continue
+            except SlurmEffectPending as pending:
+                self._ack_retry_at[operation] = monotonic() + pending.retry_after_seconds
+            except SlurmRequestUncertain:
+                self._ack_retry_at[operation] = monotonic() + 5
+
+    def _batch_query_steps(self, batch, profile, key, timeout):
+        history = profile.accounting_history
+        assert history is not None
+        names = [operation_job_name(item[1].operation_id) for item in batch]
+        observed_at = utc_timestamp()
+        result: SlurmCommandResult | Exception
+        partitioned: dict[str, str] = {}
+        try:
+            windows = [history.window(item[2].created_at, observed_at) for item in batch]
+            result = yield partial(getattr(profile.runner, "discover_named_operations"),
+                job_names=names, user_id=history.user_id, cluster=profile.cluster,
+                started_after=min(window[0] for window in windows),
+                ended_before=max(window[1] for window in windows), timeout_seconds=timeout,
+            )
+            if "...[truncated]" in result.stderr:
+                raise SlurmCommandOutputLimitError("accounting batch stderr is truncated")
+            partitioned = partition_accounting_output(result.stdout, names)
+        except Exception as exc:
+            result = exc
+            if isinstance(exc, SlurmCommandOutputLimitError):
+                self._batch_limits[key] = max(1, len(batch) // 2)
+        for task, assignment, _current, _key in batch:
+            operation = assignment.operation_id
+            filtered = (
+                replace(result, stdout=partitioned[operation_job_name(operation)])
+                if isinstance(result, SlurmCommandResult) else result
+            )
+            current = self.journal._apply_accounting_observation(
+                operation, profile, filtered, observed_at=observed_at,
+            )
+            self._retry_completed(
+                "observation", operation, profile,
+                failed=current.evidence not in {"slurm_history_observed", "slurm_history_not_found"},
+            )
+            self._batch_completed.append((task, assignment, current, profile))
+
     def _observe_batches(self, tasks, acknowledge, policy: SlurmObservationPolicy) -> None:
         assert policy.max_jobs_per_query is not None
         assert policy.max_queries_per_cycle is not None and policy.cycle_budget_seconds is not None
+        self._finish_batch_queries(acknowledge)
         due = {}
+        busy = set().union(*self._batch_pending.values())
         for task in tasks:
             assignment = SlurmStageAssignment.from_dict(task["assignment"])
             operation = assignment.operation_id
@@ -687,13 +773,14 @@ class AgentSlurmJobs:
                 released = conn.execute(
                     "SELECT released, acknowledged FROM agent_slurm_operations WHERE operation_id=?", (operation,),
                 ).fetchone()
-            if released is None or released[0] or not released[1] or not self._retry_due("observation", operation):
+            if (released is None or released[0] or not released[1] or operation in busy
+                or task.get("release_requested") is True or task.get("compute_release_requested") is True
+                or task.get("cancel_requested") is True or task.get("recovery_request") is not None
+                or self._commands.contains(operation) or not self._retry_due("observation", operation)):
                 continue
             current = self.journal.find(operation)
             if current is None:
-                # Reservation backpressure may defer this task before a
-                # submission intent exists. Its peers still need observation.
-                continue
+                continue  # Preparation backpressure has not produced an intent.
             if current.state in {ReadyStageState.ACCEPTED, ReadyStageState.SUBMITTING, ReadyStageState.UNKNOWN}:
                 key = assignment.profile_id, assignment.profile_configuration_fingerprint
                 due[operation] = (task, assignment, current, key)
@@ -706,67 +793,30 @@ class AgentSlurmJobs:
                 break
             key = remaining[0][3]
             profile = self.profiles[key]
-            history = profile.accounting_history
             command_policy = ready_stage_command_policy(profile.runner)
-            assert history is not None and command_policy is not None
+            assert command_policy is not None
             limit = min(policy.max_jobs_per_query, self._batch_limits.get(key, policy.max_jobs_per_query))
             batch = [item for item in remaining if item[3] == key][:limit]
             operations = {item[1].operation_id for item in batch}
             remaining = [item for item in remaining if item[1].operation_id not in operations]
-            names = [operation_job_name(item[1].operation_id) for item in batch]
-            observed_at = utc_timestamp()
-            result: SlurmCommandResult | Exception
-            partitioned: dict[str, str] = {}
-            try:
-                windows = [history.window(item[2].created_at, observed_at) for item in batch]
-                time_left = deadline - monotonic()
-                if time_left <= 0:
-                    break
-                calls += 1
-                result = getattr(profile.runner, "discover_named_operations")(
-                    job_names=names, user_id=history.user_id, cluster=profile.cluster,
-                    started_after=min(window[0] for window in windows),
-                    ended_before=max(window[1] for window in windows),
-                    timeout_seconds=min(command_policy.observation_timeout_seconds, time_left),
-                )
-                if "...[truncated]" in result.stderr:
-                    raise SlurmCommandOutputLimitError("accounting batch stderr is truncated")
-                # Do not treat any captured prefix as a complete response.
-                partitioned = partition_accounting_output(result.stdout, names)
-            except Exception as exc:
-                result = exc
-                if isinstance(exc, SlurmCommandOutputLimitError):
-                    self._batch_limits[key] = max(1, len(batch) // 2)
-            for task, assignment, _current, _key in batch:
-                operation = assignment.operation_id
+            steps = self._batch_query_steps(
+                batch, profile, key, min(command_policy.observation_timeout_seconds, time_left),
+            )
+            calls += 1
+            if self._asynchronous_preparation:
+                query = f"batch:{self._batch_sequence + 1}"
+                try:
+                    self._commands.start(query, "control", steps, kind="batch")
+                except SlurmEffectPending:
+                    if not self._commands.contains(query):
+                        break  # Capacity, not a scheduled query; preserve fairness.
+                    self._batch_pending[query] = operations
+            else:
+                _run_command_steps(steps)
+            for operation in sorted(operations):
                 self._batch_sequence += 1
                 self._batch_order[operation] = self._batch_sequence
-                filtered = (
-                    replace(result, stdout=partitioned[operation_job_name(operation)])
-                    if isinstance(result, SlurmCommandResult) else result
-                )
-                current = self.journal._apply_accounting_observation(
-                    operation, profile, filtered, observed_at=observed_at,
-                )
-                self._retry_completed(
-                    "observation", operation, profile,
-                    failed=current.evidence not in {"slurm_history_observed", "slurm_history_not_found"},
-                )
-                try:
-                    reply = self._publish(assignment, current, acknowledge)
-                except _EvidencePending:
-                    continue
-                except SlurmRequestUncertain:
-                    self._ack_retry_at[operation] = monotonic() + 5
-                    continue
-                try:
-                    self._deliver_result(
-                        task, reply, SharedSlurmResult(profile.result_storage, assignment.assignment_id), acknowledge,
-                    )
-                except SlurmEffectPending as pending:
-                    self._ack_retry_at[operation] = monotonic() + pending.retry_after_seconds
-                except SlurmRequestUncertain:
-                    self._ack_retry_at[operation] = monotonic() + 5
+        self._finish_batch_queries(acknowledge)
 
     def _step(self, task, acknowledge, **options):
         operation_id = SlurmStageAssignment.from_dict(task["assignment"]).operation_id
@@ -865,6 +915,13 @@ class AgentSlurmJobs:
                     release=last["release"], provider_released=True,
                 )
                 return
+        if any(request.operation_id in batch for batch in self._batch_pending.values()):
+            self._deliver_result(
+                task, {"cancel_requested": task.get("cancel_requested") is True},
+                SharedSlurmResult(profile.result_storage, assignment.assignment_id), acknowledge,
+            )
+            return
+        completed_command = self._commands.resume(request.operation_id)
         current = self.journal.find(request.operation_id)
         transport = SharedSlurmResult(profile.result_storage, assignment.assignment_id)
         now = monotonic()
@@ -876,6 +933,7 @@ class AgentSlurmJobs:
         )
         if (
             self.observation_policy is None
+            and completed_command is None
             and current is not None
             and current.state is not ReadyStageState.INTENT
             and now < self._next_poll.get(request.operation_id, 0)
@@ -894,7 +952,7 @@ class AgentSlurmJobs:
         if self.observation_policy is None:
             self._next_poll[request.operation_id] = now + profile.poll_interval_seconds
         observation_due = not _defer_observation and self._retry_due("observation", request.operation_id)
-        observed = False
+        observed = completed_command in {"observe", "cancel", "reconcile"}
         script = self.root / "slurm-scripts" / f"{assignment.assignment_id}.sh"
         current = self._prepare_assignment(task, assignment, request, profile, transport, script)
         if current.state is ReadyStageState.INTENT:
@@ -910,12 +968,22 @@ class AgentSlurmJobs:
             ):
                 return
             else:
-                current = self.journal._submit_prepared(
-                    request,
-                    profile,
-                    script,
-                    before_runner=lambda value: self._before_submit(assignment, value, acknowledge),
-                )
+                if self._asynchronous_preparation:
+                    self._commands.start(
+                        request.operation_id, "submit",
+                        self.journal._submit_prepared_steps(
+                            request, profile, script,
+                            before_runner=lambda value: self._before_submit(assignment, value, acknowledge),
+                        ), kind="submit",
+                    )
+                    current = self.journal.read(request.operation_id)
+                else:
+                    current = self.journal._submit_prepared(
+                        request,
+                        profile,
+                        script,
+                        before_runner=lambda value: self._before_submit(assignment, value, acknowledge),
+                    )
         elif current.state in {ReadyStageState.SUBMITTING, ReadyStageState.UNKNOWN}:
             job = task.get("job_id")
             if isinstance(job, str):
@@ -926,13 +994,27 @@ class AgentSlurmJobs:
                     cluster=cast(str | None, task.get("cluster")),
                 )
             elif observation_due:
-                current = self.journal.reconcile(request.operation_id, profile)
-                self._retry_completed(
-                    "observation", request.operation_id, profile,
-                    failed=current.evidence not in {
-                        "slurm_operation_reconciled", "slurm_operation_not_found", "slurm_history_not_found",
-                    },
-                )
+                def reconcile():
+                    value = yield from self.journal._reconcile_steps(request.operation_id, profile)
+                    self._retry_completed(
+                        "observation", request.operation_id, profile,
+                        failed=value.evidence not in {
+                            "slurm_operation_reconciled", "slurm_operation_not_found", "slurm_history_not_found",
+                        },
+                    )
+                    return value
+
+                if self._asynchronous_preparation:
+                    self._commands.start(request.operation_id, "control", reconcile(), kind="reconcile")
+                    current = self.journal.read(request.operation_id)
+                else:
+                    current = self.journal.reconcile(request.operation_id, profile)
+                    self._retry_completed(
+                        "observation", request.operation_id, profile,
+                        failed=current.evidence not in {
+                            "slurm_operation_reconciled", "slurm_operation_not_found", "slurm_history_not_found",
+                        },
+                    )
                 observed = self.observation_policy is not None
         reply = self._publish(assignment, current, acknowledge)
         self._probe_terminal_result(task, assignment, current, transport, acknowledge)
@@ -946,19 +1028,43 @@ class AgentSlurmJobs:
                 self.observation_policy is None
                 or not current.cancel_requested and self._retry_due("cancel", request.operation_id)
             ):
-                current = self.journal.request_cancel(
-                    request.operation_id, profile,
-                    _after_observation=(
-                        None if self.observation_policy is None
-                        else lambda value: self._observation_completed(value, profile)
-                    ),
-                )
-                self._retry_completed("cancel", request.operation_id, profile, failed=not current.cancel_requested)
+                def cancel():
+                    value = yield from self.journal._request_cancel_steps(
+                        request.operation_id, profile,
+                        _after_observation=(
+                            None if self.observation_policy is None
+                            else lambda value: self._observation_completed(value, profile)
+                        ),
+                    )
+                    self._retry_completed("cancel", request.operation_id, profile, failed=not value.cancel_requested)
+                    return value
+
+                if self._asynchronous_preparation:
+                    self._commands.start(request.operation_id, "control", cancel(), kind="cancel")
+                    current = self.journal.read(request.operation_id)
+                else:
+                    current = self.journal.request_cancel(
+                        request.operation_id, profile,
+                        _after_observation=(
+                            None if self.observation_policy is None
+                            else lambda value: self._observation_completed(value, profile)
+                        ),
+                    )
+                    self._retry_completed("cancel", request.operation_id, profile, failed=not current.cancel_requested)
                 if self.observation_policy is not None and profile.accounting_history is not None:
                     observed = True  # Cancellation performs its own fresh identity observation.
-            if self.observation_policy is None or observation_due and not observed:
-                current = self.journal.observe(request.operation_id, profile)
-                self._observation_completed(current, profile)
+            if not observed and (self.observation_policy is None or observation_due):
+                def observe():
+                    value = yield from self.journal._observe_steps(request.operation_id, profile)
+                    self._observation_completed(value, profile)
+                    return value
+
+                if self._asynchronous_preparation:
+                    self._commands.start(request.operation_id, "control", observe(), kind="observe")
+                    current = self.journal.read(request.operation_id)
+                else:
+                    current = self.journal.observe(request.operation_id, profile)
+                    self._observation_completed(current, profile)
             if self.observation_policy is None or current != published:
                 updated = self._publish(assignment, current, acknowledge)
                 if self.observation_policy is not None:
