@@ -3642,8 +3642,9 @@ class LocalDaemonExecution:
         from loom.fingerprints import hash_mapping
         from ._ready_preparation import describe_inputs
         return self._ready_preparations.poll(
-            (record.stage_work_id, "input-descriptors"),
+            (record.run_uri, record.stage_name),
             hash_mapping(worker_request.to_dict()), partial(describe_inputs, worker_request),
+            phase="input-descriptors",
         )
 
     @staticmethod
@@ -3669,8 +3670,9 @@ class LocalDaemonExecution:
         identity = hash_mapping({"attempt_id": record.attempt_id,
                                  "predecessors": list(references), "roots": roots})
         return self._ready_preparations.poll(
-            (record.stage_work_id, "recovery-predecessors"), identity,
+            (record.run_uri, record.stage_name), identity,
             partial(inspect_recovery_predecessors, references, roots),
+            phase="recovery-predecessors",
         )
 
     def _dispatch_slurm_ready(
@@ -3850,6 +3852,7 @@ class LocalDaemonExecution:
             self.slurm_assignments.advance(
                 assignment_id, expected="reserved", next_state="bound"
             )
+            self._ready_preparations.discard((record.run_uri, record.stage_name))
             self._drive_local_slurm(self.slurm_assignments.read(assignment_id))
             submission = self.slurm_submissions.find(operation_id)
         except SlurmAdmissionDeferred as exc:
@@ -5848,6 +5851,7 @@ class LocalDaemonExecution:
                 )
             except (QueueConflictError, QueueServiceError):
                 if self._remote_delivery_retained(assignment.assignment_id):
+                    self._ready_preparations.discard((record.run_uri, record.stage_name))
                     execution_started()
                     return True
                 authority.unbind_prepared_attempt(
@@ -5860,6 +5864,7 @@ class LocalDaemonExecution:
                     reopen_offer=True,
                 )
                 return False
+            self._ready_preparations.discard((record.run_uri, record.stage_name))
             execution_started()
             return True
         if self._attempt_cancel_requested(record.run_uri, record.attempt_id):
@@ -5945,7 +5950,10 @@ class LocalDaemonExecution:
             self._local_preparing[record.stage_work_id] = assignment.assignment_id
         # The saga may still be inspecting inputs. Its guarded reservation is
         # the only launch authorization; do not hold scheduling while waiting.
-        return accepted.is_set()
+        if accepted.is_set():
+            self._ready_preparations.discard((record.run_uri, record.stage_name))
+            return True
+        return False
 
     def _remote_delivery_retained(self, assignment_id: str) -> bool:
         with self.config.connect_database(self.config.control_database) as conn:

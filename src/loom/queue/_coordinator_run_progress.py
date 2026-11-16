@@ -67,6 +67,7 @@ def reconcile_admission(
         LocalDaemonAdmissionState.CANCELLED,
     }:
         return outcome
+    self._ready_preparations.retain_run(admission.run_uri, set())
     if self._action_resolution is not None:
         self._action_resolution.reconcile_producers(admission.run_uri)
     with phase("coordinator.reconcile_slurm_run"):
@@ -92,6 +93,7 @@ def _reconcile_admission(
     if cancelling:
         outcome = self._cancel(admission, scoped_authority, intent.plan.stage_order)
         if action_resolver is None or not any(action_resolver.store.producer_needed(admission.run_uri, node) for node in intent.plan.stage_order):
+            self._ready_preparations.retain_run(admission.run_uri, set())
             return outcome
     else:
         if action_resolver is not None:
@@ -106,6 +108,15 @@ def _reconcile_admission(
     )
     _decision_as_of, snapshot_time = self._daemon_owner()._accepted_snapshot()
     snapshot = scoped_authority.open_run(admission.run_uri)
+    eligible = {
+        stage.stage_name for stage in snapshot.stages
+        if stage.status is StageStatus.PENDING
+        and (not cancelling or (action_resolver is not None
+             and action_resolver.store.producer_needed(admission.run_uri, stage.stage_name)))
+    }
+    if not cancelling and not self._failure_policy_allows_new_work(intent, snapshot):
+        eligible.clear()
+    self._ready_preparations.retain_run(admission.run_uri, eligible)
     with phase("coordinator.reconcile_slurm_run"):
         slurm_in_flight, slurm_diagnostic = self._reconcile_slurm_run(
             admission.run_uri, scoped_authority

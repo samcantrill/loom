@@ -1,5 +1,7 @@
-"""An obsolete writer cannot overwrite a newer attempt's stage workspace."""
+"""Preparation owns prerequisites through dispatch without capacity eviction."""
 
+from collections import Counter
+from concurrent.futures import Future
 from threading import Event
 
 import pytest
@@ -9,10 +11,79 @@ from loom.queue._ready_preparation import ReadyPreparationPool
 pytestmark = pytest.mark.unit
 
 
-def test_successor_waits_for_old_writer_and_finished_work_is_bounded():
+class ControlledExecutor:
+    """Complete one tick's work before the scheduler's next observation."""
+
+    def __init__(self, **kwargs):
+        self.jobs = []
+
+    def submit(self, function, *args):
+        future = Future()
+        self.jobs.append((future, function, args))
+        return future
+
+    def complete(self):
+        jobs, self.jobs = self.jobs, []
+        for future, function, args in jobs:
+            if future.set_running_or_notify_cancel():
+                try:
+                    future.set_result(function(*args))
+                except Exception as exc:
+                    future.set_exception(exc)
+
+    def shutdown(self, **kwargs):
+        self.complete()
+
+
+@pytest.mark.parametrize("stages", [5, 100])
+def test_prerequisites_survive_capacity_until_dispatch(monkeypatch, stages):
+    monkeypatch.setattr("loom.queue._ready_preparation.ThreadPoolExecutor", ControlledExecutor)
+    pool = ReadyPreparationPool(lambda: None)
+    prepared = Counter()
+    dispatched = set()
+    capacity_observed = False
+
+    def prepare(index, phase):
+        prepared[index, phase] += 1
+        return (index, phase)
+
+    try:
+        for _ in range(30):
+            pool._workers.complete()
+            for index in range(stages):
+                if index in dispatched:
+                    continue
+                key = ("run", str(index))
+                for phase in ("request", "input-descriptors", "recovery-predecessors"):
+                    result, reason = pool.poll(
+                        key, "identity-" + phase,
+                        lambda index=index, phase=phase: prepare(index, phase), phase=phase,
+                    )
+                    capacity_observed |= reason == "stage_preparation_capacity"
+                    if reason is not None:
+                        break
+                    assert result == (index, phase)
+                else:
+                    dispatched.add(index)
+                    pool.discard(key)
+            assert len(pool._pending) <= 32
+            if len(dispatched) == stages:
+                break
+        assert dispatched == set(range(stages))
+        assert len(prepared) == stages * 3
+        assert set(prepared.values()) == {1}
+        assert capacity_observed == (stages > 32)
+        assert not pool._pending
+    finally:
+        pool.close()
+
+
+@pytest.mark.parametrize("change", ["supersede", "cancel"])
+def test_successor_waits_for_old_phase_writer(change):
     entered, release, woke = Event(), Event(), Event()
     writes = []
-    pool = ReadyPreparationPool(woke.set)
+    pool = ReadyPreparationPool(woke.set, max_active_stages=1)
+    key = ("run", "stage")
 
     def first():
         entered.set()
@@ -25,22 +96,41 @@ def test_successor_waits_for_old_writer_and_finished_work_is_bounded():
         return "new"
 
     try:
-        assert pool.poll(("run", "stage"), "old", first) == (None, "stage_preparation_pending")
+        pool.poll(key, "old-request", lambda: True)
+        assert woke.wait(10)
+        woke.clear()
+        # Even after the request completes, its descriptor phase still owns a
+        # slot/writer. Neither cancellation nor a new generation may reuse it.
+        assert pool.poll(key, "old-input", first, phase="input-descriptors") == (None, "stage_preparation_pending")
         assert entered.wait(10)
-        assert pool.poll(("run", "stage"), "new", second) == (None, "stage_preparation_superseded")
+        if change == "cancel":
+            pool.retain_run("run", set())
+            assert pool.poll(("other", "stage"), "new", second) == (None, "stage_preparation_capacity")
+        assert pool.poll(key, "new", second) == (None, "stage_preparation_superseded")
         assert writes == []
         release.set()
         assert woke.wait(10)
         woke.clear()
-        pool.poll(("run", "stage"), "new", second)
+        pool.poll(key, "new", second)
         assert woke.wait(10)
-        assert pool.poll(("run", "stage"), "new", second) == ("new", None)
+        assert pool.poll(key, "new", second) == ("new", None)
         assert writes == ["old", "new"]
-        for index in range(10):
-            woke.clear()
-            pool.poll(("run", str(index)), str(index), second)
-            assert woke.wait(10)
-        assert len(pool._pending) == 8
     finally:
         release.set()
+        pool.close()
+
+
+def test_cancellation_frees_only_its_runs_slots(monkeypatch):
+    monkeypatch.setattr("loom.queue._ready_preparation.ThreadPoolExecutor", ControlledExecutor)
+    pool = ReadyPreparationPool(lambda: None, max_active_stages=2)
+    try:
+        pool.poll(("cancelled", "a"), "a", lambda: "a")
+        pool.poll(("peer", "b"), "b", lambda: "b")
+        pool._workers.complete()
+        pool.retain_run("cancelled", set())
+        pool.poll(("replacement", "c"), "c", lambda: "c")
+        assert pool.poll(("peer", "b"), "b", lambda: pytest.fail("repeated preparation")) == ("b", None)
+        pool._workers.complete()
+        assert pool.poll(("replacement", "c"), "c", lambda: None) == ("c", None)
+    finally:
         pool.close()

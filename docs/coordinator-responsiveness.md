@@ -15,6 +15,15 @@ execution authority. Offer expiry never releases running ownership. Session
 replacement, cancellation and scheduling changes fence incompatible prepared
 work. Keep the existing 30-second offer lifetime.
 
+Ready-stage preparation retains up to 32 stage owners with two I/O workers.
+Request construction, input descriptors and recovery-predecessor inspection
+share one slot keyed by run/stage. A completed prerequisite is retained until
+dispatch, cancellation or supersession; it is never evicted to admit another
+stage. At capacity, later stages report `stage_preparation_capacity` and retry
+after an owner leaves. This bounds preparatory storage work, not CPU/GPU jobs
+or scheduler submissions. Running obsolete writers drain before slot reuse;
+restart recomputes this disposable preparation from durable run records.
+
 Implementation obligations:
 
 - Deterministic event/barrier regression tests against real slow dependencies.

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextvars import copy_context
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from time import monotonic
 from pathlib import Path
 from typing import Any, TYPE_CHECKING, cast
@@ -31,41 +31,65 @@ class _Pending:
     retry_at: float = 0
 
 
+@dataclass
+class _StagePreparation:
+    identity: str
+    phases: dict[str, _Pending] = field(default_factory=dict)
+    retiring: bool = False
+
+    def finished(self) -> bool:
+        return all(item.future.done() for item in self.phases.values())
+
+
 class ReadyPreparationPool:
     """Only the scheduling thread mutates membership; workers return evidence.
 
     Each callable owns its filesystem readers and immutable admitted inputs.
     Request/workspace writes are permitted, never attempts, claims or submission.
-    A changed request waits for an old writer before preparing its successor.
+    A changed request waits for all old phases before preparing its successor.
+    Capacity counts stages, not phases. Completed prerequisites stay owned until
+    dispatch, cancellation or supersession; evicting them can livelock dispatch.
     """
 
-    def __init__(self, wake: Callable[[], None]):
-        self._workers = ThreadPoolExecutor(max_workers=2, thread_name_prefix="loom-ready-inputs")
-        self._pending: dict[tuple[str, str], _Pending] = {}
+    def __init__(self, wake: Callable[[], None], *, max_active_stages: int = 32, max_workers: int = 2):
+        if max_active_stages < 1:
+            raise ValueError("max_active_stages must be positive")
+        self._workers = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="loom-ready-inputs")
+        self._pending: dict[tuple[str, str], _StagePreparation] = {}
+        self._capacity = max_active_stages
         self._wake = wake
         self._closed = False
 
     def poll(
         self, key: tuple[str, str], identity: str,
-        prepare: Callable[[], Any],
+        prepare: Callable[[], Any], *, phase: str = "request",
     ) -> tuple[Any | None, str | None]:
         if self._closed:
             return None, "stage_preparation_cancelled"
-        pending = self._pending.get(key)
+        self._reap_retired()
+        stage = self._pending.get(key)
+        if stage is not None and (stage.retiring or (phase == "request" and stage.identity != identity)):
+            self.discard(key)
+            if key in self._pending:
+                return None, "stage_preparation_superseded"
+            stage = None
+        if stage is None:
+            if phase != "request":
+                return None, "stage_preparation_pending"
+            if len(self._pending) >= self._capacity:
+                return None, "stage_preparation_capacity"
+            stage = _StagePreparation(identity)
+            self._pending[key] = stage
+        pending = stage.phases.get(phase)
         if pending is not None and pending.identity != identity:
             if not pending.future.done():
                 return None, "stage_preparation_superseded"
-            del self._pending[key]
+            del stage.phases[phase]
             pending = None
         if pending is None:
-            if len(self._pending) >= 8:
-                finished = next((k for k, item in self._pending.items() if item.future.done()), None)
-                if finished is None:
-                    return None, "stage_preparation_capacity"
-                del self._pending[finished]
             future = self._workers.submit(copy_context().run, prepare)
             pending = _Pending(identity, future)
-            self._pending[key] = pending
+            stage.phases[phase] = pending
             future.add_done_callback(lambda _: self._wake())
         if not pending.future.done():
             return None, "stage_preparation_pending"
@@ -75,13 +99,28 @@ class ReadyPreparationPool:
             if not pending.retry_at:
                 pending.retry_at = monotonic() + 5
             elif monotonic() >= pending.retry_at:
-                del self._pending[key]
+                del stage.phases[phase]
             raise
 
     def discard(self, key: tuple[str, str]) -> None:
-        pending = self._pending.get(key)
-        if pending is not None and pending.future.done():
-            del self._pending[key]
+        stage = self._pending.get(key)
+        if stage is not None:
+            stage.retiring = True
+            for item in stage.phases.values():
+                item.future.cancel()
+            self._reap_retired()
+
+    def retain_run(self, run_uri: str, stage_names: set[str]) -> None:
+        """Drop preparations no longer eligible in this run's authority snapshot."""
+        for key in tuple(self._pending):
+            if key[0] == run_uri and key[1] not in stage_names:
+                self.discard(key)
+        self._reap_retired()
+
+    def _reap_retired(self) -> None:
+        for key, stage in tuple(self._pending.items()):
+            if stage.retiring and stage.finished():
+                del self._pending[key]
 
     def close(self) -> None:
         self._closed = True

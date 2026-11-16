@@ -1969,10 +1969,10 @@ def test_unavailable_slurm_root_does_not_starve_independent_managed_root(
         daemon.stop()
 
 
-@pytest.mark.parametrize("parallel_limit", [2, None])
 @pytest.mark.parametrize(
-    ("max_outstanding", "expected_submissions"),
-    ((1, 1), (2, 2), (None, 2)),
+    ("parallel_limit", "max_outstanding", "expected_submissions"),
+    ((2, 1, 1), (2, 2, 2), (2, None, 2),
+     (None, 1, 1), (None, 2, 2), (None, None, 2), (None, None, 40)),
 )
 def test_parallel_slurm_stages_honor_the_profile_outstanding_limit(
     tmp_path: Path,
@@ -1983,6 +1983,11 @@ def test_parallel_slurm_stages_honor_the_profile_outstanding_limit(
 ) -> None:
     runner = FakeSlurmCommandRunner(starting_job_id=1300)
     profile = _profile(runner, max_outstanding=max_outstanding)
+    # This dispatch test leaves assignments active. Give their separate result
+    # reservations enough quota; the small default fixture only fits 15 jobs.
+    profile = replace(profile, result_storage={
+        **profile.result_storage, "retention_bytes": 8 * 1024 * 1024 * 1024,
+    })
     later_limit_decision = Event()
     original_reserve = slurm_ready_stage.SQLiteSlurmStageAssignments.reserve
 
@@ -2015,7 +2020,9 @@ def test_parallel_slurm_stages_honor_the_profile_outstanding_limit(
                     "execution_route": {"kind": "slurm", "profile": "training"}
                 },
             }
-            for stage_name, value in (("left", 1), ("right", 2))
+            for stage_name, value in (
+                (f"stage_{index}", index) for index in range(max(2, expected_submissions))
+            )
         ],
     }
     pipeline = PipelineSpec.from_config(pipeline_config)
@@ -2068,7 +2075,9 @@ def test_parallel_slurm_stages_honor_the_profile_outstanding_limit(
         client.submit(LocalDaemonAdmissionRequest("parallel-slurm", run_uri))
         execution = daemon._execution
         assert execution is not None
-        deadline = time.monotonic() + 5
+        # The >capacity case persists forty real per-stage sagas, including
+        # authority and Slurm journals, on the test filesystem.
+        deadline = time.monotonic() + (180 if expected_submissions > 32 else 30)
         while time.monotonic() < deadline:
             submissions = [call for call in runner.calls if call[0] == "sbatch"]
             records = execution.slurm_assignments.list_run_unreleased(run_uri)
@@ -2088,6 +2097,8 @@ def test_parallel_slurm_stages_honor_the_profile_outstanding_limit(
         assert len(submissions) == expected_submissions
         assert len(records) == expected_submissions
         assert all(record.state == "accepted" for record in records)
+        if expected_submissions == len(pipeline.stages):
+            assert not execution._ready_preparations._pending
         if expected_submissions == 1:
             assert later_limit_decision.is_set()
         snapshot = authority.open_run(run_uri)
