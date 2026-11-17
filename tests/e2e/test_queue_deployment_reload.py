@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -16,6 +17,11 @@ import pytest
 
 from loom.queue import DaemonStatus
 from loom.coordinator import CoordinatorClient
+from loom.queue._agent_process_supervisor import (
+    AgentProcessSupervisorClient,
+    _endpoint_for_root,
+    _service_configuration,
+)
 from loom.queue._remote_stage_execution import (
     REGULAR_FILE_RELAY_CAPABILITY,
     REMOTE_EXECUTION_CAPABILITY,
@@ -196,6 +202,16 @@ def test_outbound_agent_service_reloads_exact_source_and_restarts_active_revisio
         if restarted_agent is not None:
             _stop_service(restarted_agent)
         _stop_service(coordinator)
+        # A stopped app may preserve its independent owner for pending replay.
+        # Finish fixture cleanup before its temporary namespace disappears.
+        agent_root = tmp_path / "remote-agent"
+        if _endpoint_for_root(agent_root / "supervisor").exists():
+            supervisor = AgentProcessSupervisorClient(
+                agent_root, _service_configuration(agent_root / "supervisor")
+            )
+            supervisor.shutdown_clean()
+        with (agent_root / "supervisor/service.lock").open("r+") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
 def _coordinator_payload(tmp_path: Path, *, cpu_capacity: int) -> dict[str, object]:
