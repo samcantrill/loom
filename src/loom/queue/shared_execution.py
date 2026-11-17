@@ -252,6 +252,28 @@ def stage_scope(config: object, factory_init: object, permitted: Mapping[str, Pl
     return result
 
 
+def staging_continuation_required(
+    factory_target: str, stage_config: Mapping[str, PlainData],
+    fingerprint_fields: Mapping[str, PlainData],
+) -> bool:
+    """Require support for a continuing stage or preparation carrying its intent."""
+    from .preparation import PREPARATION_STAGE_TARGET, PreparationChildInput
+
+    selected = scope(fingerprint_fields.get(SHARED_EXECUTION_SCOPE))
+    if factory_target == PREPARATION_STAGE_TARGET:
+        return bool(PreparationChildInput.from_dict(stage_config).staging_continuation_stages)
+    return selected is not None and "staging_continuation" in selected
+
+
+def assignment_requires_staging_continuation(fingerprint: Mapping[str, PlainData]) -> bool:
+    from loom.pipeline.planning import StageFingerprintRecord
+
+    payload = StageFingerprintRecord.from_dict(fingerprint).payload
+    return staging_continuation_required(
+        payload.factory_target, payload.stage_config, payload.fingerprint_fields,
+    )
+
+
 @dataclass(frozen=True)
 class InputValidationProgress:
     """Path-free observations; counts describe inspected entries, not a total."""
@@ -358,6 +380,8 @@ def attributes(required: Mapping[str, PlainData] | None) -> dict[str, PlainData]
     return {"shared_execution_capability": SHARED_EXECUTION_CAPABILITY,
             **({"shared_artifact_publication_capability": CAPABILITY} if publication else {}),
             **({"trusted_shared_artifact_publication_capability": TRUSTED_CAPABILITY} if trusted else {}),
+            **({"staging_continuation_capability": STAGING_CONTINUATION_CAPABILITY}
+               if publication and "staging_continuation" in required else {}),
             **{"shared_root_" + alias: hash_mapping(facts) for alias, facts in cast(Mapping[str, PlainData], required["roots"]).items()}}
 
 

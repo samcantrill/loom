@@ -367,6 +367,10 @@ def run_slurm_bootstrap(
         workspace.persist_registration(registration)
         _unlink_job_private_capability(capability_path, durable_files=selected.durable_files)
         workspace.persist_delivery(delivery)
+        from .shared_execution import STAGING_CONTINUATION_CAPABILITY, assignment_requires_staging_continuation
+
+        if assignment_requires_staging_continuation(delivery.fingerprint) and STAGING_CONTINUATION_CAPABILITY not in capabilities:
+            raise QueueServiceError(f"coordinator lacks {STAGING_CONTINUATION_CAPABILITY}")
         container_policy = None
         shared_roots = None
         if delivery.submitted_execution is not None:

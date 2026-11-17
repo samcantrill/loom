@@ -17,7 +17,7 @@ from ._action_results import action_attempt_cancelled, action_attempt_needed, at
 from ._recovery_retry import _RecoveryRetry
 from ._slurm_admission import SlurmAdmissionDeferred
 
-from .shared_execution import SHARED_EXECUTION_CAPABILITY, attributes as shared_attributes, qualifications
+from .shared_execution import SHARED_EXECUTION_CAPABILITY, STAGING_CONTINUATION_CAPABILITY, attributes as shared_attributes, qualifications
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -3740,7 +3740,12 @@ class LocalDaemonExecution:
             # An expired offer must not trigger preparation/report IO while the
             # agent is trying to reconnect through this same coordinator. This
             # is only a preflight; select again below after worker validation.
-            self._select_slurm_agent(profile)
+            from .shared_execution import staging_continuation_required
+
+            stage = intent.pipeline.get_stage(record.stage_name)
+            continuing = staging_continuation_required(stage.factory.target_path, stage.stage_config, stage.fingerprint_fields)
+            continuation_options = {"require_continuation": True} if continuing else {}
+            self._select_slurm_agent(profile, **continuation_options)
             if profile.result_storage is None:
                 raise QueueServiceError(
                     "SLURM requires qualified durable result storage"
@@ -3754,7 +3759,6 @@ class LocalDaemonExecution:
                 run_uri=record.run_uri,
                 attempt_id=record.attempt_id,
             )
-            stage = intent.pipeline.get_stage(record.stage_name)
             worker_request, preparation_reason = self._prepared_ready_request(record, snapshot, intent)
             if worker_request is None:
                 return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.WAITING, preparation_reason)
@@ -3769,7 +3773,7 @@ class LocalDaemonExecution:
                 worker_request.resolved_runtime,
                 _worker_runtime(intent, record.stage_name),
             )
-            owner_id, owner_root_id = self._select_slurm_agent(profile)
+            owner_id, owner_root_id = self._select_slurm_agent(profile, **continuation_options)
             assignment = SlurmStageAssignment(
                 agent_id=owner_id,
                 agent_root_id=owner_root_id,
@@ -3923,7 +3927,7 @@ class LocalDaemonExecution:
             ),
         )
 
-    def _select_slurm_agent(self, profile: SlurmReadyStageProfile) -> tuple[str, str]:
+    def _select_slurm_agent(self, profile: SlurmReadyStageProfile, *, require_continuation: bool = False) -> tuple[str, str]:
         if (
             self.agent_id is not None
             and self._slurm_agent is not None
@@ -3940,11 +3944,13 @@ class LocalDaemonExecution:
         )
         with self.config.connect_database(self.config.control_database) as conn:
             rows = conn.execute(
-                "SELECT s.agent_id, s.agent_root_id, o.offer_json FROM agent_sessions s JOIN agent_offers o ON o.session_id=s.session_id "
+                "SELECT s.agent_id, s.agent_root_id, o.offer_json, s.capabilities_json FROM agent_sessions s JOIN agent_offers o ON o.session_id=s.session_id "
                 "WHERE s.state='ACTIVE' AND s.policy_revision=? AND o.current=1 AND o.coordinator_epoch=? AND o.expires_at>=? ORDER BY s.agent_id",
                 (policy.revision, self.coordinator_epoch, utc_timestamp()),
             ).fetchall()
-        for agent_id, root_id, raw in rows:
+        for agent_id, root_id, raw, capabilities in rows:
+            if require_continuation and STAGING_CONTINUATION_CAPABILITY not in json.loads(capabilities):
+                continue
             offer = AgentOffer.from_value(json.loads(raw))
             if (
                 profile.profile_id,
@@ -5324,7 +5330,10 @@ class LocalDaemonExecution:
                         "outstanding_assignments": outstanding.get(str(row["session_id"]), 0),
                         **identity,
                         "artifact_capability": "regular-file-relay-v1",
-                        **(shared_attributes({"roots": dict(profile.shared_roots)})
+                        **(shared_attributes({"roots": dict(profile.shared_roots),
+                            **({"staging_continuation": {"capability": STAGING_CONTINUATION_CAPABILITY}}
+                               if STAGING_CONTINUATION_CAPABILITY in json.loads(str(row["capabilities_json"])) else {}),
+                           })
                            if profile.shared_roots and self._shared_assignment_candidate(profile, json.loads(str(row["capabilities_json"]))) else {}),
                         **(
                             {

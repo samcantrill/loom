@@ -1509,8 +1509,22 @@ selection and rejects missing/unknown targets or a changed scope. The preparatio
 worker carries downstream intent but cannot select continuation for itself.
 Omitting the sequence preserves existing request, child and invocation bytes.
 
-Installation/provider capability qualification and physical launch tests remain
-prerequisites to application activation. The grant tests exercise native handlers, serialized
+Native agent and Slurm bootstrap handshakes advertise
+`released-output-staging-v1`. A selected downstream stage, and preparation
+carrying that selection, require the negotiated capability in resident scheduling
+and targeted delivery; Slurm submit-agent selection checks the same capability.
+Agent registration and the allocation bootstrap refuse an unsupported coordinator.
+The capability describes native protocol support. Before a new selected worker
+launch, `resident_readiness.require_staging_continuation_support` uses the existing
+contained probe to check the actual interpreter/image's native contracts. The
+probe is bounded, imports no project configuration, and is omitted for unselected
+work. Submitted probes own the launch's image verification, avoiding a duplicate
+SIF hash. Saved supervisor launch replay does not perform new-launch qualification.
+The embedded local managed path does not advertise continuation: it still lacks
+the native staging handoff used by remote resident acceptance and Slurm grants.
+
+Physical provider/container/shared-storage qualification and application
+integration remain prerequisites to activation. The grant tests exercise native handlers, serialized
 delivery, SQLite receipts and real filesystem handoffs with controlled provider
 release/run-authority facts. They are not physical provider fencing evidence.
 `_phase_timing.py` bounds diagnostic collection independently of authority.

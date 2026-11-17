@@ -2081,6 +2081,8 @@ class AgentSessionService:
         return result
 
     def handshake(self) -> Mapping[str, PlainData]:
+        from .shared_execution import STAGING_CONTINUATION_CAPABILITY
+
         self._authorize("handshake")
         coordinator_id = self._daemon._require_started()  # type: ignore[attr-defined]
         return freeze_plain_data(
@@ -2092,6 +2094,7 @@ class AgentSessionService:
                     "concurrent-resident-assignments-v1",
                     SUBMITTED_CONTAINER_CAPABILITY,
                     "shared-assignment-reference-v1",
+                    STAGING_CONTINUATION_CAPABILITY,
                     SLURM_SUBMISSION_CAPABILITY,
                     *([SLURM_PENDING_EFFECTS_CAPABILITY] if self._daemon._execution is not None
                       and self._daemon._execution.slurm_assignments.schema_version >= 5 else []),
@@ -5985,9 +5988,14 @@ def _require_target_session(daemon, conn, session_id, request):
         StagedInputReceipt,
     )
 
-    from .shared_execution import SHARED_EXECUTION_CAPABILITY, assignment_scope
+    from .shared_execution import (
+        SHARED_EXECUTION_CAPABILITY, STAGING_CONTINUATION_CAPABILITY,
+        assignment_scope, assignment_requires_staging_continuation,
+    )
     if assignment_scope(request.fingerprint) is not None and SHARED_EXECUTION_CAPABILITY not in session.capabilities:
         raise QueueServiceError("agent session lacks shared-execution-v1")
+    if assignment_requires_staging_continuation(request.fingerprint) and STAGING_CONTINUATION_CAPABILITY not in session.capabilities:
+        raise QueueServiceError(f"agent session lacks {STAGING_CONTINUATION_CAPABILITY}")
     preparation = request.preparation_input
     if preparation is not None:
         supported = (
