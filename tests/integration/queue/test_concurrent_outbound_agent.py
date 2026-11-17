@@ -2043,8 +2043,13 @@ def test_rejected_poll_does_not_skip_sequence_and_work_still_runs(monkeypatch, r
     boundary = "_check_work_poll" if reserved else "_require_current_offer"
     original_boundary = getattr(AgentSessionService, boundary)
     polls = []
+    recovered = []
 
     def dispatch(view, operation, value):
+        if operation == "recover_poll":
+            result = original(view, operation, value)
+            recovered.append((dict(value), dict(result)))
+            return result
         if operation != "poll":
             return original(view, operation, value)
         polls.append(dict(value))
@@ -2063,7 +2068,16 @@ def test_rejected_poll_does_not_skip_sequence_and_work_still_runs(monkeypatch, r
     monkeypatch.setattr(transport, "_dispatch", dispatch)
     with _service(monkeypatch) as case:
         _eventually(lambda: len(polls) >= 2)
-        assert polls[0] == polls[1]
+        assert recovered
+        request, outcome = recovered[0]
+        assert {key: request[key] for key in polls[0]} == polls[0]
+        if reserved:
+            # Only the coordinator's exact fence consumes the reserved sequence.
+            assert outcome == {"state": "fenced"}
+            assert polls[1] == {**polls[0], "sequence": polls[0]["sequence"] + 1}
+        else:
+            assert outcome == {"state": "absent", "predecessor_sequence": 0}
+            assert polls[0] == polls[1]
         _submit(case, "after-rejection")
         assert case.client.wait("after-rejection", timeout_seconds=30).state is LocalDaemonAdmissionState.SUCCEEDED
 

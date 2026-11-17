@@ -371,7 +371,10 @@ def test_outbound_service_retries_lost_pregrant_control_response_before_grant(
                 ("default",),
                 capabilities,
             ),
-        )
+        ),
+        principals=(TransportPrincipalPolicy(
+            "operator", "operator", "operator", ("drain",), ("agent-a",),
+        ),),
     )
     store = LocalRunStore(tmp_path / "runs")
     run_uri, authority = _prepare_remote_producer_run(
@@ -623,6 +626,36 @@ def test_outbound_service_retries_lost_pregrant_control_response_before_grant(
         # One composition at most per client incarnation, never one
         # reconstruction per offer. Additional transport reconnects are valid.
         assert 1 <= provider_factory.calls <= client_incarnations
+        # Stopping an active long poll intentionally preserves its uncertain
+        # owner. Drain and settle before requiring a clean supervisor shutdown.
+        with sqlite3.connect(daemon_config.control_database) as conn:
+            current_session = conn.execute(
+                "SELECT session_id, config_revision FROM agent_sessions WHERE state = 'ACTIVE'"
+            ).fetchone()
+        assert current_session is not None
+        operator = daemon.operator_view(
+            LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+        )
+        operator.control_agent(AgentControl(
+            "pregrant-test-drain", AgentControlKind.DRAIN, "agent-a",
+            current_session[0], current_session[1], None, False,
+            "settle the completed service before clean shutdown",
+        ))
+        deadline = monotonic() + 10
+        while True:
+            with sqlite3.connect(cast(Path, client_config.agent_root) / "control.sqlite") as conn:
+                unresolved = conn.execute(
+                    "SELECT COUNT(*) FROM agent_session_references "
+                    "WHERE reference_kind = 'delivery' AND resolved = 0"
+                ).fetchone()[0]
+                pending_poll = conn.execute(
+                    "SELECT COUNT(*) FROM agent_poll_state_local "
+                    "WHERE state IN ('PENDING', 'FENCED') AND result_json IS NULL"
+                ).fetchone()[0]
+            if operator.observe_control("pregrant-test-drain")["acknowledged"] and not unresolved and not pending_poll:
+                break
+            assert monotonic() < deadline
+            sleep(0.01)
     finally:
         release_pregrant_poll.set()
         stop.set()

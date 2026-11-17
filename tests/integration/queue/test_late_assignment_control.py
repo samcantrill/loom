@@ -43,8 +43,8 @@ def test_control_received_after_release_is_acknowledged_and_peer_work_progresses
             stopped.set()
         return result
 
-    def uncertain_ack(config, operation, *args):
-        result = exchange(config, operation, *args)
+    def uncertain_ack(config, operation, *args, **kwargs):
+        result = exchange(config, operation, *args, **kwargs)
         if recovery == "lost_ack_reply" and operation == "assignment_control_ack" and not lost_reply.is_set():
             lost_reply.set()
             raise transport._IndeterminateAgentProtocolError("acknowledgement reply lost")

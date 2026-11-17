@@ -587,7 +587,7 @@ def _resume_pending_poll(
     wait_timeout_ms: int,
     suspend_requested: Callable[[], bool] | None = None,
 ) -> Generator[_Progress, Any, None]:
-    """Replay the service's exact outstanding delivery before new capacity.
+    """Recover the service's exact outstanding delivery before new capacity.
 
     The retained request digest validates the configured timeout as well as
     session/revision/sequence. An incompatible restart keeps work retained.
@@ -600,41 +600,28 @@ def _resume_pending_poll(
     if pending is None:
         return
     _raise_if_application_suspended(suspend_requested)
-    state, value = pending
+    _, value = pending
     session_id, sequence = str(value["session_id"]), int(cast(int, value["sequence"]))
     prior_epoch = journal.session(session_id).coordinator_epoch
-    result: Mapping[str, PlainData] | None = None
-    recover = state == "FENCED" or (yield from _steps(self.handshake))["coordinator_epoch"] != prior_epoch
-    if not recover:
-        try:
-            result = (yield from _steps(self._call, "poll", value))
-        except AgentPollActiveError:
-            raise
-        except AgentPollFencedError:
-            journal.fence_poll(session_id, sequence)
-            return
-        except _IndeterminateAgentProtocolError:
-            raise
-        except (QueueConflictError, QueueServiceError):
-            recover = True
-    if recover:
-        recovery = (yield from _steps(self._call,
-            "recover_poll", {**value, "coordinator_epoch": prior_epoch}
-        ))
-        if recovery.get("state") == "absent":
-            journal.discard_absent_poll(
-                session_id, sequence,
-                predecessor_sequence=recovery.get("predecessor_sequence"),
-                predecessor_delivery=recovery.get("predecessor_delivery"),
-            )
-            return
-        if recovery.get("state") == "fenced":
-            journal.fence_poll(session_id, sequence)
-            return
-        if recovery.get("state") != "committed":
-            raise QueueServiceError("retained poll recovery result is invalid")
-        result = {key: item for key, item in recovery.items() if key != "state"}
-    assert result is not None
+    # Even in the same coordinator epoch, replaying an unreceived poll can
+    # reserve fresh work before retained execution ownership is qualified.
+    # Recover its outcome through the read-only endpoint in every epoch.
+    recovery = (yield from _steps(self._call,
+        "recover_poll", {**value, "coordinator_epoch": prior_epoch}
+    ))
+    if recovery.get("state") == "absent":
+        journal.discard_absent_poll(
+            session_id, sequence,
+            predecessor_sequence=recovery.get("predecessor_sequence"),
+            predecessor_delivery=recovery.get("predecessor_delivery"),
+        )
+        return
+    if recovery.get("state") == "fenced":
+        journal.fence_poll(session_id, sequence)
+        return
+    if recovery.get("state") != "committed":
+        raise QueueServiceError("retained poll recovery result is invalid")
+    result = {key: item for key, item in recovery.items() if key != "state"}
     journal.complete_poll(session_id, sequence, result, recovered=True)
     if result.get("result") == "assignment" and not self._service_progress:
         request = (yield from _steps(self._resolve_delivery, session_id, result.get("request")))
