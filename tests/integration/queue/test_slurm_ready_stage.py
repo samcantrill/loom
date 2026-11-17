@@ -671,6 +671,7 @@ def _exercise_mixed_route_run(
         slurm_terminal_recovery=SlurmTerminalRecoveryPolicy() if automatic_recovery else None,
         agent_policy=agent_policy,
         slurm_profiles=(profile,),
+        poll_interval_seconds=0.05,
     )
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config, clock=clock)
@@ -791,6 +792,7 @@ def _exercise_mixed_route_run(
             slurm_terminal_recovery=SlurmTerminalRecoveryPolicy() if automatic_recovery else None,
             agent_policy=agent_policy,
             slurm_profiles=(profile,),
+            poll_interval_seconds=0.05,
         )
         daemon = LocalDaemon(reopened_config, clock=clock)
         daemon.start()
@@ -1196,6 +1198,11 @@ def _exercise_mixed_route_run(
                         assert pending["state"] == "pending"
                         assert execution.slurm_assignments.read(assignment_id).state == ("granted" if prestart_failure else "running")
                 recovery_receipt = operator.recover_unknown(recovery_request)
+                deadline = time.monotonic() + 10
+                while recovery_receipt["state"] == "pending":
+                    assert time.monotonic() < deadline, recovery_receipt
+                    time.sleep(.01)
+                    recovery_receipt = operator.recover_unknown(recovery_request)
                 assert recovery_receipt["state"] == "closed"
                 assert operator.recover_unknown(recovery_request) == recovery_receipt
                 assert recovery_receipt["retry_allowed"] is (False if recovery_terminal_state is None else None)
@@ -1412,7 +1419,7 @@ SharedSlurmResult(json.loads(sys.argv[2]), report.assignment_id, compute=True).p
                     assert output_acknowledgements[:3] == [
                         (0, 32768),
                         (32768, 65536),
-                        (0, 65536),
+                        (32768, 65536),
                     ]
                     if slurm_output_size == 98304:
                         assert output_acknowledgements[3:] == [(65536, 98304)]
@@ -1634,6 +1641,7 @@ SharedSlurmResult(json.loads(sys.argv[2]), report.assignment_id, compute=True).p
 
         def mark_terminal_at_crash_boundary(candidate_assignment_id: str) -> None:
             nonlocal terminal_crash_injected
+            assert execution is not None
             if terminal_boundary == "authority_result" and not terminal_crash_injected:
                 terminal_crash_injected = True
                 raise OSError("simulated crash after authority result commit")
@@ -1912,10 +1920,14 @@ def test_definite_slurm_rejection_restarts_after_every_release_arrow(
             LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
         )
         client.submit(LocalDaemonAdmissionRequest("rejected-stage", run_uri))
-        try:
-            daemon.reconcile_once()
-        except OSError as exc:
-            assert "crash" in str(exc)
+        deadline = time.monotonic() + 10
+        while not injected:
+            try:
+                daemon.reconcile_once()
+            except OSError as exc:
+                assert "crash" in str(exc)
+            assert time.monotonic() < deadline, "asynchronous release did not reach crash boundary"
+            time.sleep(.01)
 
         assert injected
         with sqlite3.connect(config.execution_database) as conn:
@@ -2623,6 +2635,8 @@ def test_slow_shared_publication_allows_unrelated_gpu_dispatch_and_cancellation(
     # Exercise the real lock/continuation and filesystem owners; unrelated work
     # goes through the real daemon client, scheduler and Slurm assignment store.
     def locked(session, epoch, evidence, cursor, **options):
+        if options.get("_pending_only"):
+            return None
         if options.get("_defer_publication"):
             raise _SlurmPublicationRequired(execution, record, "fence-1")
         token = options["_publication"]

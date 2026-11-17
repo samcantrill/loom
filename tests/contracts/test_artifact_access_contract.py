@@ -2,7 +2,9 @@
 
 from dataclasses import replace
 import hashlib
+import os
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
 from typing import Any, cast
@@ -20,6 +22,19 @@ from tests.contracts.test_output_selection_contract import fixture
 
 pytestmark = pytest.mark.contract
 SCOPE = {"kind": "collection", "name": "run_store"}
+
+
+@pytest.fixture
+def download_root(tmp_path):
+    """Select an actual publish-if-absent filesystem for download contracts."""
+    configured = os.environ.get("LOOM_TEST_ARTIFACT_DOWNLOAD_ROOT")
+    if configured is None:
+        yield tmp_path
+        return
+    root = Path(configured)
+    assert root.is_absolute() and root.is_dir(), "download test root must already exist"
+    with TemporaryDirectory(prefix="loom-fetch-contract-", dir=root) as directory:
+        yield Path(directory)
 
 
 def publish(authority, uri, ref, stage="produce"):
@@ -213,7 +228,7 @@ def test_local_exact_preview_corruption_legacy_and_authorization(tmp_path, backe
     assert client.describe_artifact(legacy, scope=SCOPE)["outcome"] == "unavailable"
 
 
-def test_complete_inventory_mixed_batch_dedup_conflict_and_receipt_changes(tmp_path):
+def test_complete_inventory_mixed_batch_dedup_conflict_and_receipt_changes(tmp_path, download_root):
     daemon, authority, uri = fixture(tmp_path)
     ref, tree = shared_ref(daemon, uri, count=205)
     locator = publish(authority, uri, ref)
@@ -260,7 +275,7 @@ def test_complete_inventory_mixed_batch_dedup_conflict_and_receipt_changes(tmp_p
         duplicate,
         {"outcome": "no_matching_output", "matched_run_uri": "empty"},
     ]
-    batch = client.fetch_artifacts(rows, tmp_path / "fetch", scope=SCOPE)
+    batch = client.fetch_artifacts(rows, download_root / "fetch", scope=SCOPE)
     assert (
         batch["complete"]
         and batch["success_count"] == 2
@@ -279,7 +294,7 @@ def test_complete_inventory_mixed_batch_dedup_conflict_and_receipt_changes(tmp_p
     for source in tree.rglob("*.bin"):
         assert (target / source.relative_to(tree)).read_bytes() == source.read_bytes()
     assert (
-        client.fetch_artifacts([selected], tmp_path / "fetch", scope=SCOPE)["items"][0][
+        client.fetch_artifacts([selected], download_root / "fetch", scope=SCOPE)["items"][0][
             "outcome"
         ]
         == "destination_exists"
@@ -315,10 +330,10 @@ def test_complete_inventory_mixed_batch_dedup_conflict_and_receipt_changes(tmp_p
     )
 
 
-def test_no_overwrite_even_empty_concurrent_target(tmp_path):
+def test_no_overwrite_even_empty_concurrent_target(download_root):
     from loom._artifact_fetch import _publish
 
-    pending, target = tmp_path / "pending", tmp_path / "target"
+    pending, target = download_root / "pending", download_root / "target"
     pending.mkdir()
     (pending / "data").write_text("complete")
     target.mkdir()
@@ -328,7 +343,7 @@ def test_no_overwrite_even_empty_concurrent_target(tmp_path):
 
 
 def test_interrupted_retry_cleanup_corrupt_member_and_unavailable_authority(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, download_root
 ):
     from loom.coordinator import CoordinatorClientError
 
@@ -350,7 +365,7 @@ def test_interrupted_retry_cleanup_corrupt_member_and_unavailable_authority(
         return result
 
     monkeypatch.setattr(client, "read_artifact_chunk", lost_reply)
-    result = client.fetch_artifacts([selected], tmp_path / "retry", scope=SCOPE)
+    result = client.fetch_artifacts([selected], download_root / "retry", scope=SCOPE)
     assert result["success_count"] == 1
     assert calls[0] == calls[1]
 
@@ -364,9 +379,9 @@ def test_interrupted_retry_cleanup_corrupt_member_and_unavailable_authority(
         return result
 
     monkeypatch.setattr(client, "read_artifact_chunk", corrupt_chunk)
-    result = client.fetch_artifacts([selected], tmp_path / "corrupt", scope=SCOPE)
+    result = client.fetch_artifacts([selected], download_root / "corrupt", scope=SCOPE)
     assert result["items"][0]["outcome"] == "integrity_failed"
-    assert list((tmp_path / "corrupt").iterdir()) == []
+    assert list((download_root / "corrupt").iterdir()) == []
     monkeypatch.setattr(client, "read_artifact_chunk", original)
     (tree / "nested/001.bin").write_bytes(b"corrupted")
     assert (

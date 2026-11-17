@@ -748,8 +748,8 @@ class SQLiteSlurmStageAssignments:
                 }
             )
             conn.execute(
-                "UPDATE stage_work SET record_json = ? WHERE stage_work_id = ?",
-                (_json(decided.to_dict()), assignment.stage_work_id),
+                "UPDATE stage_work SET scheduling_state = ?, record_json = ? WHERE stage_work_id = ?",
+                (decided.scheduling_state.value, _json(decided.to_dict()), assignment.stage_work_id),
             )
         return "reserved"
 

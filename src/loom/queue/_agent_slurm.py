@@ -836,11 +836,14 @@ class AgentSlurmJobs:
         """Bounded completed IO owners, independent of run-context loading."""
         with self._lock:
             assignments = {
-                key[0] for pool in (self._storage, self._helpers)
-                for key, future in pool._pending.items() if future.done()
+                key[0] for key, future in self._storage._pending.items() if future.done()
             }
-            operations = [key for key, command in self._commands._pending.items()
-                          if (command.future is None or command.future.done()) and command.kind != "batch"]
+            # Containment uses the submission operation as its identity, just
+            # like scheduler commands. Resolve both through the retained
+            # journal before asking the coordinator to advance an assignment.
+            operations = {key[0] for key, future in self._helpers._pending.items() if future.done()}
+            operations.update(key for key, command in self._commands._pending.items()
+                              if (command.future is None or command.future.done()) and command.kind != "batch")
             with self._connect() as conn:
                 for operation in operations:
                     row = conn.execute(

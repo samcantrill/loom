@@ -1470,7 +1470,7 @@ def test_serial_service_retains_cancel_while_real_transfer_is_held(
             retained.set()
         return result
 
-    def isolated(config, operation, body, role, connection, keep_alive):
+    def isolated(config, operation, body, role, connection, keep_alive, **kwargs):
         # Service exchanges create a fresh exclusive connection, even when the
         # bulk peer is still holding an earlier authenticated request.
         assert connection is None
@@ -1478,7 +1478,7 @@ def test_serial_service_retains_cancel_while_real_transfer_is_held(
         try:
             if entered.is_set() and not unblock.is_set():
                 exchanged.append(operation)
-            result = exchange(config, operation, body, role, connection, keep_alive)
+            result = exchange(config, operation, body, role, connection, keep_alive, **kwargs)
             if entered.is_set() and not unblock.is_set():
                 exchanged.append(operation)
             return result
@@ -2200,9 +2200,9 @@ def test_indeterminate_poll_replays_exact_bytes_before_due_offer_and_next_poll(
     clock_offset = [0.0]
     monkeypatch.setattr(deployment, "monotonic", lambda: monotonic() + clock_offset[0])
 
-    def record(config, operation, body, role, connection, keep_alive):
+    def record(config, operation, body, role, connection, keep_alive, **kwargs):
         requests.append((operation, body))
-        return exchange(config, operation, body, role, connection, keep_alive)
+        return exchange(config, operation, body, role, connection, keep_alive, **kwargs)
 
     def dispatch(view, operation, value):
         if operation != "poll":
@@ -2455,9 +2455,9 @@ def test_lost_release_blocks_new_availability_but_not_control_receipts(monkeypat
     exchange = transport._exchange_agent_request
     requests = []
 
-    def record(config, operation, body, role, connection, keep_alive):
+    def record(config, operation, body, role, connection, keep_alive, **kwargs):
         requests.append((operation, body))
-        return exchange(config, operation, body, role, connection, keep_alive)
+        return exchange(config, operation, body, role, connection, keep_alive, **kwargs)
 
     def lose_release(view, operation, value):
         result = dispatch(view, operation, value)
@@ -2927,7 +2927,12 @@ def test_container_option_rejection_releases_claims_while_peer_progresses(monkey
                     is LocalDaemonAdmissionState.FAILED
                 )
                 assert not (gpu / "build.started").exists()
-                assert len(launches) == 1
+                # Finite launch polling repeats one exact supervisor request;
+                # it must never attempt a process for the rejected assignment.
+                assert launches and all(launch == launches[0] for launch in launches)
+                assert launches[0].assignment_id == held[0][0]
+                assert _rows(case.agent_root / "supervisor/supervisor.sqlite",
+                             "SELECT COUNT(*) FROM launches") == [(1,)]
                 _eventually(
                     lambda: _rows(
                         case.database,

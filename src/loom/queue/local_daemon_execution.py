@@ -5922,7 +5922,10 @@ class LocalDaemonExecution:
             offer_snapshot = ManagedOfferSnapshot(
                 agent_id=self.config.machine_id,
                 session_id=self.coordinator_epoch,
-                offer_revision=offer_id,
+                # Slow preparation can outlive a peer's claim/release without
+                # changing this stage's projection. Bind the offer identity to
+                # the observed capacity so retry can publish fresh evidence.
+                offer_revision=offer_id + "-" + availability_revision,
                 snapshot_revision=self.coordinator_epoch,
                 inventory_revision=f"inventory-{self.coordinator_epoch}",
                 availability_revision=availability_revision,

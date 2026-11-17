@@ -122,7 +122,7 @@ class _RemoteWork:
 
 
 @pytest.fixture
-def remote_owner(tmp_path: Path) -> Iterator[_RemoteWork]:
+def remote_owner(tmp_path: Path, request: pytest.FixtureRequest) -> Iterator[_RemoteWork]:
     credentials = mutual_tls_credentials(tmp_path / "tls")
     descriptor = ResidentProfileDescriptor(
         "resident-1", "revision-1", "project-1", "environment-1", "executor-1"
@@ -145,7 +145,7 @@ def remote_owner(tmp_path: Path) -> Iterator[_RemoteWork]:
     )
     store = LocalRunStore(tmp_path / "runs")
     run_uri, authority = _prepare_remote_sleep_run(
-        store, run_name="lifecycle", machine_id="agent-a"
+        store, run_name="lifecycle", machine_id="agent-a", seconds=getattr(request, "param", 30)
     )
     config = LocalDaemonConfig(
         tmp_path / "coordinator",
@@ -590,9 +590,12 @@ def test_persistent_service_rotates_registration_only_after_clean_retirement(rem
 
 
 @pytest.mark.parametrize("loss", ["absent", "later-absent", "fenced", "committed"])
+@pytest.mark.parametrize("remote_owner", [0.1], indirect=True)
 def test_outstanding_poll_recovery_across_coordinator_epoch(
     remote_owner: _RemoteWork, monkeypatch: pytest.MonkeyPatch, loss: str,
 ) -> None:
+    from loom.queue._agent_progress import _cooperative, _steps
+
     work = remote_owner
     lost = Event()
     original_call = LocalDaemonAgentHttpClient._call
@@ -600,23 +603,24 @@ def test_outstanding_poll_recovery_across_coordinator_epoch(
     class LostApplication(BaseException):
         pass
 
+    @_cooperative
     def lose_response(client, operation, value, **kwargs):
         if operation == "poll" and not lost.is_set():
             if loss == "later-absent" and value["sequence"] == 1:
-                result = original_call(client, operation, value, **kwargs)
+                result = yield from _steps(original_call, client, operation, value, **kwargs)
                 assert result["result"] == "wait"
                 coordinator.submit(LocalDaemonAdmissionRequest("lifecycle", work.run_uri))
                 return result
             if loss == "fenced":
                 with pytest.raises(QueueServiceError):
-                    original_call(client, operation, value, **kwargs)
+                    yield from _steps(original_call, client, operation, value, **kwargs)
             if loss == "committed":
-                result = original_call(client, operation, value, **kwargs)
+                result = yield from _steps(original_call, client, operation, value, **kwargs)
                 if result.get("result") != "assignment":
                     return result
             lost.set()
             raise LostApplication()
-        return original_call(client, operation, value, **kwargs)
+        return (yield from _steps(original_call, client, operation, value, **kwargs))
 
     from loom.queue.agent_sessions import AgentSessionService
     from loom.queue.errors import QueueServiceError

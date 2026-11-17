@@ -679,7 +679,16 @@ def _resume_retained_assignments(
             from ._agent_process_supervisor import _SupervisorNoStartError
 
             try:
-                receipt = (yield from _external("bulk", supervisor.launch_once, launch))
+                while True:
+                    receipt = (yield from _external("bulk", supervisor.launch_once, launch))
+                    if receipt.state is not SupervisorLaunchState.NOT_ACCEPTED:
+                        break
+                    # A finite supervisor call can return before its queued
+                    # launch is accepted. Keep joining this exact operation;
+                    # returning now would strand synchronous restart recovery.
+                    _raise_if_application_suspended(suspend_requested)
+                    yield from _steps(self.poll_assignment_control, session_id)
+                    yield from _delay(0.05)
             except _SupervisorNoStartError as exc:
                 if not (yield from _external("control", supervisor.reject_unstarted_assignment,
                                             assignment_id)):

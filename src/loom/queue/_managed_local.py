@@ -2654,8 +2654,8 @@ class SQLiteCoordinatorAssignments:
                 },
             )
             conn.execute(
-                "UPDATE stage_work SET record_json = ? WHERE stage_work_id = ?",
-                (_json(decided.to_dict()), assignment.stage_work_id),
+                "UPDATE stage_work SET scheduling_state = ?, record_json = ? WHERE stage_work_id = ?",
+                (decided.scheduling_state.value, _json(decided.to_dict()), assignment.stage_work_id),
             )
             if claims:
                 conn.execute(
@@ -2740,8 +2740,8 @@ class SQLiteCoordinatorAssignments:
                 projection_revision=stage_work.projection_revision + 1,
             )
             conn.execute(
-                "UPDATE stage_work SET record_json = ? WHERE stage_work_id = ?",
-                (_json(reopened.to_dict()), reopened.stage_work_id),
+                "UPDATE stage_work SET scheduling_state = ?, record_json = ? WHERE stage_work_id = ?",
+                (reopened.scheduling_state.value, _json(reopened.to_dict()), reopened.stage_work_id),
             )
             if reopen_offer:
                 conn.execute(

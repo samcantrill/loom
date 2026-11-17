@@ -257,6 +257,18 @@ still owns only one durable resident poll. Session-changing controls wait for
 that poll's receipt, and offer maintenance resumes at its boundary. Slurm
 command observation retains its existing cadence and pacing.
 
+Stopping or reconnecting an outbound service interrupts its owned resident-work
+and control long polls without waiting for their idle timeout. The existing
+bounded HTTP monitor shuts down the socket; the occupied slot is released only
+when the exchange returns. The original poll intent remains durable and is
+recovered on restart. An interrupted exchange does not prove that the coordinator
+rejected it, and it does not release a worker or its resource claims.
+
+Recovery follows an exact retained supervisor launch while finite calls report
+that acceptance is still pending. Cooperative service callers yield between
+observations; synchronous recovery callers join the same operation. Neither path
+creates a replacement launch identity.
+
 Fault tests hold an actual result read while the same owner submits, observes
 and cancels a peer, through embedded execution and the outbound TLS service.
 Additional tests cover bounded IO capacity, chunk response loss with and without
@@ -392,6 +404,8 @@ Completed observations likewise survive an unfinished acknowledgement so they
 can reach containment and release rather than continually starting new queries.
 
 Embedded execution consumes completed assignment I/O before loading run contexts.
+Containment helpers and scheduler commands retain submission-operation identities;
+their completions resolve through the agent journal to the owning assignment.
 Unchanged, authority-confirmed preparation projections do not repeat the original
 preparation write transaction. Runs without project contracts record that absence
 in their validated context and bypass per-stage action-reuse inspection; changed
@@ -489,7 +503,7 @@ transport_policy:
 
 Both values must be finite, positive and at most 300 seconds. The response budget
 covers the entire exchange, including connection setup. Socket deadlines and one
-timer per occupied HTTP slot prevent trickled headers/body bytes from resetting
+deadline monitor per occupied HTTP slot prevent trickled headers/body bytes from resetting
 that budget. A resolver or TLS setup blocked in OS IO still occupies its bounded
 worker; it cannot send after expiry. No unbounded replacement workers are created.
 An expired exchange retains an uncertain result and its exact replay identity.
@@ -512,6 +526,13 @@ head without repeating acknowledged preparation. Built-in work stores fetch the
 run's preparation intents once per pass instead of opening a connection for every
 projected stage. The public orchestrator's `max_work_items` and `after_stage`
 parameters bound a pass; `next_stage` provides its next cursor.
+
+Reservation and definitive decline update the stored stage record and its indexed
+scheduling state in the same transaction. A declined assignment therefore returns
+to the ready scan immediately. Local capacity offers include the observed
+availability revision in their identity: a peer's claim or release during slow
+input preparation cannot make a fresh offer conflict with an older offer for the
+same stage. Reservation still checks the current offer and capacity before launch.
 
 Preparation event reporting uses the exact native attempt receipt instead of
 retaining two whole-run snapshots per stage. Native replay lookup selects its

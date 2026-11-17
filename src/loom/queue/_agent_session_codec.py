@@ -250,23 +250,7 @@ def _decode(raw: bytes, *, failure_report: bool = False, control_wait: bool = Fa
             # A native delivery includes fingerprint-bound shared preparation
             # scope. Its semantic fields retain their own finite depth budget;
             # the HTTP and registration wrappers must not consume that budget.
-            envelope_delivery = dict(delivery)
-            for key in ("fingerprint", "resolved_runtime", "worker_metadata"):
-                _bounded_json(delivery.get(key), depth=0, plain_scalars=True,
-                              max_depth=_MAX_SEMANTIC_JSON_DEPTH)
-                envelope_delivery[key] = None
-            inputs = delivery.get("inputs")
-            if isinstance(inputs, list):
-                envelope_inputs = []
-                for artifact in inputs:
-                    if isinstance(artifact, Mapping) and "metadata" in artifact:
-                        # Input metadata has the artifact owner's plain-data
-                        # scalar contract, including checkpoint metric values.
-                        _bounded_json(artifact["metadata"], depth=3, plain_scalars=True)
-                        artifact = {**artifact, "metadata": None}
-                    envelope_inputs.append(artifact)
-                envelope_delivery["inputs"] = envelope_inputs
-            _bounded_json(envelope_delivery, depth=0)
+            envelope_delivery = _bounded_stage_delivery(delivery)
             envelope = {**value, "result": {**result, "delivery": envelope_delivery}}
             if len(json.dumps(envelope, separators=(",", ":")).encode()) > _MAX_BODY_BYTES:
                 raise QueueServiceError("agent protocol control body is too large")
@@ -279,7 +263,7 @@ def _decode(raw: bytes, *, failure_report: bool = False, control_wait: bool = Fa
         if isinstance(request, Mapping) and type(request.get("schema_version")) is int and request["schema_version"] == RESIDENT_ASSIGNMENT_BUNDLE_SCHEMA_VERSION:
             # Keep the current assignment's finite body budget independent of
             # the polling response, including fingerprint-bound shared scope.
-            _bounded_json(request, depth=0)
+            _bounded_stage_delivery(request)
             _bounded_json({**value, "result": {**result, "request": None}}, depth=0)
             return value
     evidence = value.get("evidence")
@@ -385,6 +369,28 @@ def _bounded_failure_json(value: object) -> None:
                 raise QueueServiceError("agent report failure JSON value is non-finite")
         elif item is not None and not isinstance(item, (str, int, bool)):
             raise QueueServiceError("agent report failure JSON value is invalid")
+
+
+def _bounded_stage_delivery(delivery: Mapping[str, object]) -> dict[str, object]:
+    """Separate authored plain data from a versioned delivery's control fields."""
+    envelope = dict(delivery)
+    for key in ("fingerprint", "resolved_runtime", "worker_metadata"):
+        _bounded_json(delivery.get(key), depth=0, plain_scalars=True,
+                      max_depth=_MAX_SEMANTIC_JSON_DEPTH)
+        envelope[key] = None
+    inputs = delivery.get("inputs")
+    if isinstance(inputs, list):
+        envelope_inputs = []
+        for artifact in inputs:
+            if isinstance(artifact, Mapping) and "metadata" in artifact:
+                # Artifact metadata permits checkpoint metrics and other finite
+                # plain-data values; allocation/control descriptors do not.
+                _bounded_json(artifact["metadata"], depth=3, plain_scalars=True)
+                artifact = {**artifact, "metadata": None}
+            envelope_inputs.append(artifact)
+        envelope["inputs"] = envelope_inputs
+    _bounded_json(envelope, depth=0)
+    return envelope
 
 
 def _bounded_json(

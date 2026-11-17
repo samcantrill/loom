@@ -97,6 +97,15 @@ qualification follows the opt-in hooks below and cannot be inferred from fixture
 Reuse evidence across handoffs; broaden or repeat only for a concrete failure,
 affected consumer, missing assertion, or change invalidating the previous result.
 
+Artifact-download success contracts require a destination filesystem supporting
+Linux `renameat2(RENAME_NOREPLACE)`. When the ordinary test workspace lacks that
+operation, set `LOOM_TEST_ARTIFACT_DOWNLOAD_ROOT` to an existing absolute directory
+on a supporting filesystem. Only those download destinations and the atomic
+no-overwrite check use private temporary children there; other fixtures keep
+pytest's selected temporary base. This setting neither mocks publication nor
+skips tests, and does not change application storage behavior. A runtime fetch
+to an unsupported filesystem still fails as documented.
+
 ## Opt-in runtime acceptance hooks
 
 Real container and cluster smoke tests are skipped by default. Use them only in

@@ -49,13 +49,13 @@ def test_slow_cycle_diagnostics_are_bounded_and_cannot_change_lifecycle_result(m
     expected = (row(1),)
     from threading import RLock
     owner: Any = SimpleNamespace(_reconcile_once=lambda: expected, _reconcile_guard=RLock())
-    ticks = iter([0.0, 2.0])
-    monkeypatch.setattr(local_daemon.time, "monotonic", lambda: next(ticks))
+    ticks = iter([0.0, 0.0, 2.0, 2.0])
+    monkeypatch.setattr(_phase_timing, "monotonic", lambda: next(ticks))
     monkeypatch.setattr(_phase_timing, "log_phases", diagnostics.append)
     assert local_daemon.LocalDaemon.reconcile_once(owner) is expected
     assert len(diagnostics) == 1
     assert diagnostics[0]["spans"][0]["action"] == "coordinator.reconcile_cycle"
-    ticks = iter([0.0, 2.0])
+    ticks = iter([0.0, 0.0, 2.0, 2.0])
 
     def unavailable_log(value):
         raise OSError("log unavailable")

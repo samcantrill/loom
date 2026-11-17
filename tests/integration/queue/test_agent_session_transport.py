@@ -980,7 +980,7 @@ def _crash_remote_agent_application(
         supervisor = agent._supervisor  # noqa: SLF001 - crash barrier evidence
         assert supervisor is not None
         if barrier in {"before_supervisor_accept", "after_supervisor_accept"}:
-            original_launch = supervisor.launch
+            original_launch = supervisor.launch_once
 
             def interrupt_launch(launch: ResidentWorkerLaunch) -> SupervisorReceipt:
                 if barrier == "before_supervisor_accept":
@@ -988,7 +988,7 @@ def _crash_remote_agent_application(
                 original_launch(launch)
                 raise RuntimeError("simulated fresh agent application restart")
 
-            setattr(cast(Any, supervisor), "launch", interrupt_launch)
+            setattr(cast(Any, supervisor), "launch_once", interrupt_launch)
         elif barrier == "before_result_commit":
 
             def interrupt_result(*args: object, **kwargs: object) -> object:
@@ -1839,12 +1839,18 @@ def test_remote_candidate_ceiling_and_reflected_remaining_resources(
             )
             if len(claims) >= ceiling:
                 assert execution._remote_candidates() == {}
-            daemon.reconcile_once()
-            with sqlite3.connect(config.control_database) as conn:
-                requests = [
-                    json.loads(row[0])
-                    for row in conn.execute("SELECT request_json FROM agent_deliveries")
-                ]
+            deadline = monotonic() + 5
+            while True:
+                daemon.reconcile_once()
+                with sqlite3.connect(config.control_database) as conn:
+                    requests = [
+                        json.loads(row[0])
+                        for row in conn.execute("SELECT request_json FROM agent_deliveries")
+                    ]
+                if len(requests) >= min(index + 1, expected):
+                    break
+                assert monotonic() < deadline, "asynchronous preparation did not dispatch"
+                sleep(0.01)
             assert len(requests) == min(index + 1, expected)
             # A target absent from the current report withholds its whole candidate.
             if index < expected:
@@ -1972,8 +1978,11 @@ def test_rejected_remote_target_unbinds_attempt_and_releases_reservation(
         daemon.client_view(
             LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
         ).submit(LocalDaemonAdmissionRequest("item", run_uri))
-        daemon.reconcile_once()
-        assert rejected
+        deadline = monotonic() + 5
+        while not rejected:
+            daemon.reconcile_once()
+            assert monotonic() < deadline, "prepared target was not attempted"
+            sleep(0.01)
         with sqlite3.connect(config.control_database) as conn:
             assert (
                 conn.execute("SELECT COUNT(*) FROM agent_deliveries").fetchone()[0] == 0
@@ -2195,7 +2204,7 @@ def _prepare_mixed_local_remote_sleep_run(
 
 
 def _prepare_remote_sleep_run(
-    store: LocalRunStore, *, run_name: str, machine_id: str
+    store: LocalRunStore, *, run_name: str, machine_id: str, seconds: float = 30
 ) -> tuple[str, SQLitePerRunAuthorityStore]:
     run_uri = path_to_run_uri(store.root / run_name)
     store.create_run(run_uri)
@@ -2207,7 +2216,7 @@ def _prepare_remote_sleep_run(
                 "factory": {
                     "_target_": "tests.support.pipeline_execution_stages.SleepStage"
                 },
-                "config": {"seconds": 30},
+                "config": {"seconds": seconds},
                 "resources": {
                     "entries": {"cpu": {"kind": "cpu", "amount": 1, "unit": "count"}}
                 },
@@ -3294,7 +3303,7 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
             pytest.fail("failed control setup must not reach the supervisor")
 
         if no_start:
-            monkeypatch.setattr(supervisor, "launch", forbidden_launch)
+            monkeypatch.setattr(supervisor, "launch_once", forbidden_launch)
         if restart_barrier in {
             "launch_construction_before_result_commit", "legacy_launch_construction",
             "rejection_before_result",
@@ -3337,7 +3346,7 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
             "before_dispatch_timeout",
             "accepted_reply_timeout",
         }:
-            original_launch = supervisor.launch
+            original_launch = supervisor.launch_once
 
             def interrupt_launch(value: ResidentWorkerLaunch) -> SupervisorReceipt:
                 if restart_barrier == "before_supervisor_accept":
@@ -3349,7 +3358,7 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
                     raise _SupervisorCommunicationError(possibly_dispatched=True)
                 raise RuntimeError("simulated agent application restart")
 
-            monkeypatch.setattr(supervisor, "launch", interrupt_launch)
+            monkeypatch.setattr(supervisor, "launch_once", interrupt_launch)
         elif restart_barrier == "binding_failure_after_no_start_commit":
             assert agent._execution_journal is not None
             original_no_start_commit = agent._execution_journal._set_start_failed
@@ -3478,7 +3487,7 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
         assert replacement_supervisor is not None
         assert replacement_supervisor.supervisor_id == supervisor_id
         if no_start:
-            monkeypatch.setattr(replacement_supervisor, "launch", forbidden_launch)
+            monkeypatch.setattr(replacement_supervisor, "launch_once", forbidden_launch)
         with pytest.raises(QueueConflictError, match="cannot advertise"):
             replacement.publish_offer(offer, idempotency_key="offer-before-replay")
         if restart_barrier == "rejection_before_result":
@@ -7343,7 +7352,10 @@ def test_loopback_exposes_client_and_operator_views_only_to_configured_roles(
             "authenticated-application-v1", "daemon-control-v1",
             "operator-observations-v1", "conditional-agent-control-v1",
             "quiescent-profile-promotion-v2", "quiescent-source-promotion-v1",
-            "maintenance-admission-v1", "run-context-v1", "run-query-v1",
+            "quiescent-configuration-retirement-v1", "quiescent-coordinator-retirement-v1",
+            "quiescent-container-policy-addition-v1", "quiescent-publication-budget-increase-v1",
+            "quiescent-agent-gpu-policy-contraction-v1", "quiescent-agent-gpu-policy-expansion-v1",
+            "maintenance-admission-v1", "maintenance-submitted-check-v1", "run-context-v1", "run-query-v1",
             "output-query-v1", "lineage-query-v1", "artifact-read-v1",
             "bounded-run-logs-v1",
         )

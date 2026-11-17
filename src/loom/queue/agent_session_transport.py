@@ -79,6 +79,7 @@ from loom.queue._managed_local import (
     ClaimCommand,
     ManagedAssignment,
     ManagedLocalError,
+    _ManagedApplicationSuspended,
     ObserveRequest,
     SQLiteAgentJournal,
     GpuResourceProvider,
@@ -3152,11 +3153,16 @@ class LocalDaemonAgentHttpClient:
         retry = _RecoveryRetry()
         while True:
             try:
+                wait_options = (
+                    {"cancel_requested": self._suspend_requested}
+                    if self._service_progress and operation in {"poll", "control_wait"}
+                    else {}
+                )
                 reply = yield from _external(
                     "slurm_http" if operation == "slurm_work" and value.get("evidence") is not None
                     else "control_wait" if operation == "control_wait" else "poll" if operation == "poll" else "bulk" if operation in _AGENT_BULK_OPERATIONS else "control",
                     _exchange_agent_request, self._config, operation, body, role, connection,
-                    not self._service_progress,
+                    not self._service_progress, **wait_options,
                 )
                 break
             except _IndeterminateAgentProtocolError as error:
@@ -3289,9 +3295,10 @@ def _exchange_agent_request(
     config: AgentTlsClientConfig, operation: str, body: bytes, role: str,
     connection: http.client.HTTPSConnection | None,
     keep_alive: bool,
+    *, cancel_requested: Callable[[], bool] | None = None,
 ) -> _AgentHttpReply:
     """Exchange exact prepared bytes using one exclusively owned connection."""
-    from threading import Event, Timer
+    from threading import Event, Thread
     import socket
 
     policy = config.transport_policy
@@ -3303,6 +3310,8 @@ def _exchange_agent_request(
         timeout=min(policy.connect_timeout_seconds, policy.response_timeout_seconds),
     )
     expired = Event()
+    interrupted = Event()
+    finished = Event()
 
     def expire():
         expired.set()
@@ -3313,30 +3322,53 @@ def _exchange_agent_request(
             except OSError:
                 pass
 
-    # One timer per occupied HTTP slot bounds trickled headers as well as body
-    # reads. A blocked resolver/TLS setup still owns its worker slot; it cannot
-    # send after expiry or create an unbounded replacement thread.
-    timer = Timer(max(0, deadline - monotonic()), expire)
-    timer.daemon = True
-    timer.start()
+    def monitor():
+        while not finished.is_set():
+            if cancel_requested is not None and cancel_requested():
+                interrupted.set()
+                expire()
+                return
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                expire()
+                return
+            finished.wait(min(0.05, remaining) if cancel_requested is not None else remaining)
+
+    def require_uninterrupted():
+        if interrupted.is_set():
+            raise _ManagedApplicationSuspended("agent wait interrupted with its request retained")
+
+    # One monitor per occupied HTTP slot also interrupts idle long polls on
+    # service stop/reconnect. Their durable request remains unresolved for replay;
+    # an interrupted socket never proves non-acceptance or frees a worker early.
+    monitor_thread = Thread(target=monitor, name="loom-agent-http-deadline", daemon=True)
+    monitor_thread.start()
     try:
+        require_uninterrupted()
         if connection.sock is None:
             connection.connect()
+        require_uninterrupted()
         if expired.is_set() or monotonic() >= deadline:
             raise TimeoutError("agent response deadline exceeded before send")
         value = _read_agent_reply(connection, operation, body, role, deadline=deadline)
+        require_uninterrupted()
         if expired.is_set():
             raise TimeoutError("agent response deadline exceeded")
         return _AgentHttpReply(connection, value)
     except (OSError, ssl.SSLError, http.client.HTTPException) as error:
         connection.close()
+        require_uninterrupted()
         raise _IndeterminateAgentProtocolError("agent protocol outcome is indeterminate") from error
+    except _IndeterminateAgentProtocolError:
+        connection.close()
+        require_uninterrupted()
+        raise
     except BaseException:
         connection.close()
         raise
     finally:
-        timer.cancel()
-        timer.join()
+        finished.set()
+        monitor_thread.join()
         if not keep_alive or expired.is_set():
             connection.close()
 

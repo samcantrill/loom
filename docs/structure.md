@@ -1434,6 +1434,14 @@ still obeys the ordinary limit, and semantic fields retain bounded depth and
 collection sizes. Other operations and unrecognized delivery versions do not
 receive this larger budget. Artifact transfer limits are separate and unchanged.
 
+Recognized resident polling assignments and Slurm deliveries use the same
+plain-data rules for fingerprints, resolved runtime, worker metadata and input
+artifact metadata. These fields preserve finite decimal values, including
+authored model parameters and checkpoint metrics. Authored semantic trees have
+a finite depth budget independent of protocol wrappers; control fields retain
+their stricter scalar and depth limits. Resident polling retains the ordinary
+65,536-byte message limit.
+
 `queue/agent_session_transport.py` retains the public TLS configuration, HTTP
 client/server and application integration. Its private collaborators separate
 current responsibilities without adding processes or durable formats:

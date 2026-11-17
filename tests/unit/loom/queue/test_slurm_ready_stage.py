@@ -20,7 +20,9 @@ def test_repeated_delivery_reads_preserve_live_state_and_revalidate_changed_byte
 
     fixture = ReservationFixture(tmp_path)
     assignment, arguments = fixture.candidate("delivery-cache", 1)
+    assert [record.stage_work_id for record in fixture.work.ready_window()] == [assignment.stage_work_id]
     fixture.store.reserve(assignment, **arguments)
+    assert fixture.work.ready_window() == ()
     module._cached_retained_delivery.cache_clear()
     original = module.SlurmStageDelivery.from_dict
     validations = []

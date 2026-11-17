@@ -923,6 +923,10 @@ def test_unaccepted_release_can_reopen_the_same_availability_offer(tmp_path) -> 
     )
     coordinator.advance(first.assignment_id, expected="reserved", next_state="bound")
 
+    assert {record.stage_work_id for record in SQLiteStageWorkStore(path).ready_window()} == {
+        second.stage_work_id,
+    }
+
     assert (
         coordinator.release_unaccepted(first.assignment_id, reopen_offer=True)
         == "released"
@@ -935,6 +939,9 @@ def test_unaccepted_release_can_reopen_the_same_availability_offer(tmp_path) -> 
     assert reopened.scheduling_state is SchedulingProjectionState.READY
     assert reopened.scheduling_diagnostics == {}
     assert reopened.projection_revision == 2
+    assert {record.stage_work_id for record in SQLiteStageWorkStore(path).ready_window()} == {
+        first.stage_work_id, second.stage_work_id,
+    }
     assert (
         coordinator.reserve(
             second,

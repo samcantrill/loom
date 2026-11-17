@@ -2710,23 +2710,12 @@ class LocalDaemon:
         )
 
     def reconcile_once(self) -> tuple[LocalDaemonAdmission, ...]:
-        """Advance a finite admission batch and report bounded slow-cycle timings."""
-        from ._phase_timing import PhaseTimings, log_phases, observe_phases
+        """Advance a finite batch and sample bounded cycle/dispatch timings."""
+        from ._phase_timing import reported_phases
 
-        timing = PhaseTimings()
-        started = time.monotonic()
-        try:
-            with observe_phases(timing.observe), timing.measure("coordinator.reconcile_cycle"):
-                with self._reconcile_guard:
-                    return self._reconcile_once()
-        finally:
-            # One local diagnostic for slow cycles; no metrics service or network.
-            # Timing failures cannot replace durable lifecycle outcomes.
-            try:
-                if time.monotonic() - started >= 1:
-                    log_phases(timing.payload())
-            except Exception:
-                pass
+        with reported_phases("coordinator.reconcile_cycle"):
+            with self._reconcile_guard:
+                return self._reconcile_once()
 
 
     def _reconcile_once(self) -> tuple[LocalDaemonAdmission, ...]:
