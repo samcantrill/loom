@@ -179,6 +179,7 @@ def test_changed_ttl_conflicts_for_provider_but_compute_uses_retained_expiry(tmp
 def test_private_root_is_not_adopted_by_chmod_or_following_symlink(tmp_path):
     root = tmp_path / "credentials"
     root.mkdir(mode=0o755)
+    root.chmod(0o755)
     with pytest.raises(SlurmPlanningError, match="0700"):
         _provider(tmp_path).prepare(operation_id="operation", request_digest="request")
     assert root.stat().st_mode & 0o777 == 0o755

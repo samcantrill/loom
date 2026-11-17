@@ -1346,6 +1346,8 @@ def test_thirty_two_live_workers_fair_observation_and_five_renewal_cycles(monkey
                 "loom-agent-control": 2,
                 "loom-agent-poll": 1,
                 "loom-agent-control_wait": 1,
+                "loom-agent-slurm": 1,
+                "loom-agent-slurm_http": 2,
             }
             assert all(pool.maximum <= pool._max_workers for pool in pools)
         finally:

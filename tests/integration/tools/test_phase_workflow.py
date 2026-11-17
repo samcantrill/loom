@@ -30,6 +30,11 @@ def git(root: Path, *args: str) -> str:
 
 @pytest.fixture
 def repository(tmp_path, monkeypatch):
+    # These repositories are disposable local fixtures. User URL rewrites and
+    # signing/hooks must not change their declared fetch/push identity.
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "0")
     remote = tmp_path / "remote.git"
     root = tmp_path / "control"
     subprocess.run(

@@ -26,6 +26,7 @@ def cli(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("format", ["json", "text"])
+@pytest.mark.optional_dependency
 def test_cli_progress_is_explicit_stderr_and_final_result_unchanged(cli, monkeypatch, format):
     result = {"outcome": "waiting", "reason": "PRIVATE-result", "operation_id": "window"}
     def native(**options):
@@ -51,6 +52,7 @@ def test_cli_progress_is_explicit_stderr_and_final_result_unchanged(cli, monkeyp
     assert "PRIVATE" not in errors.getvalue() and "window" not in errors.getvalue()
 
 
+@pytest.mark.optional_dependency
 def test_retry_control_routes_existing_ids_with_progress(cli, monkeypatch):
     calls = []
     def native(**options):
@@ -65,6 +67,7 @@ def test_retry_control_routes_existing_ids_with_progress(cli, monkeypatch):
     assert json.loads(err.getvalue().splitlines()[-1])["action"] == "retry-control"
 
 
+@pytest.mark.optional_dependency
 def test_progress_rejects_preview_and_nonupgrade_before_mutation(cli, monkeypatch):
     from loom.fleet._host import atomic
     from loom.fleet import ssh_operations
@@ -131,6 +134,7 @@ def test_heartbeat_advances_while_native_call_is_held_and_is_rate_bounded(monkey
     assert not any(t.name == "loom-upgrade-progress" and t.is_alive() for t in threading.enumerate())
 
 
+@pytest.mark.optional_dependency
 def test_broken_stderr_preserves_native_result_and_requests(cli, monkeypatch):
     calls = []
     def native(**options):
@@ -147,6 +151,7 @@ def test_broken_stderr_preserves_native_result_and_requests(cli, monkeypatch):
 
 
 @pytest.mark.parametrize("blocked", [False, True], ids=["healthy-pipe", "full-pipe"])
+@pytest.mark.optional_dependency
 def test_descriptor_progress_preserves_successful_process_exit(tmp_path, blocked):
     script = textwrap.dedent('''
         import json

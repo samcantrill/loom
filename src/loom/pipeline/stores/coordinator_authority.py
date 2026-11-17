@@ -239,6 +239,13 @@ def embedded_coordinator_authority(run_uri: str):
     return authority
 
 
+def _require_embedded_schema(conn: sqlite3.Connection) -> None:
+    """Validate an existing embedded owner's schema during stopped migration."""
+    from .sqlite_authority import _raise_for_schema
+
+    _raise_for_schema(conn)
+
+
 def coordinator_authority_identity(factory: object) -> dict[str, PlainData]:
     """Return credential-free protected owner identity for preparation recovery."""
     if isinstance(factory, EmbeddedCoordinatorAuthorityFactory):

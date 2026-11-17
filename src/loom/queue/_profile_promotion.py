@@ -7,10 +7,10 @@ control replay never revisits bindings, including after a later promotion.
 
 from __future__ import annotations
 
-from loom._sqlite_inspection import inspect_sqlite_database
+from loom._sqlite_policy import connect_existing
 
 from collections.abc import Mapping
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import fields, replace
 import fcntl
 import json
@@ -721,7 +721,11 @@ def recover(config: Any) -> Any:
 
     with _acquire_lock(root), _supervisor_lock(root):
         root_id = _open_root(root, role="local-agent")
-        with inspect_sqlite_database(database) as conn:
+        # Inspection recovers only a private copy. These native locks authorize
+        # opening the real owner so SQLite rolls back its abandoned transaction.
+        with closing(connect_existing(
+            database, policy=config.sqlite_policy, isolation_level=None,
+        )) as conn:
             row = conn.execute(
                 "SELECT value FROM root_metadata WHERE key=?", (_PENDING,)
             ).fetchone()

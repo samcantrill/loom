@@ -842,7 +842,7 @@ def test_retirement_recovers_authored_source_before_loading_deleted_predecessor(
         monkeypatch.setattr(cli, "_emit_daemon_payload", lambda *args, **kwargs: None)
         monkeypatch.setattr(deployment, "run_outbound_agent_service",
                             lambda service, **kwargs: started.append(service))
-        assert cli.handle_agent_serve(Namespace(config=str(canonical), env_file=None)) == 0
+        assert cli.handle_agent_serve(Namespace(config=str(canonical), env_file=None, start_held=False)) == 0
         assert len(started) == 1
         recovered = started[0].client
         assert recovered.deployment_configuration_fingerprint == new.deployment_configuration_fingerprint

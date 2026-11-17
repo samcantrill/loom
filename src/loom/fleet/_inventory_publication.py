@@ -5,8 +5,6 @@ import json
 import os
 from pathlib import Path
 
-import yaml
-
 from loom.fleet._host import atomic, read
 from loom.fleet.configuration import protected_directory
 from loom.queue.errors import QueueConflictError
@@ -14,6 +12,8 @@ from loom.queue.errors import QueueConflictError
 
 def bind(inventory, target, expected_hash):
     """Capture the exact inventory replacement before native maintenance begins."""
+    import yaml
+
     before = inventory.path.read_bytes()
     if hashlib.sha256(before).hexdigest() != expected_hash:
         raise QueueConflictError("Fleet inventory changed while retaining upgrade intent")

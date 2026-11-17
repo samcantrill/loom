@@ -14,7 +14,6 @@ import math
 import os
 from pathlib import Path
 import sqlite3
-import subprocess
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, cast
 
@@ -1358,6 +1357,8 @@ class SQLiteReadyStageSubmissions:
         defer_authorization: bool = False,
     ) -> Generator[Callable[[], SlurmCommandResult] | _SubmissionAuthorization, Any, SlurmReadyStageSubmission]:
         """Submit after the agent's bounded IO owner prepared the exact script."""
+        import subprocess
+
         self._require_profile(request, profile)
         current = self.read(request.operation_id)
         if current.request != request:
@@ -1524,6 +1525,8 @@ class SQLiteReadyStageSubmissions:
         self, current: SlurmReadyStageSubmission, profile: SlurmReadyStageProfile,
         *, result: SlurmCommandResult | Exception | None = None, observed_at: str | None = None,
     ) -> Generator[Callable[[], SlurmCommandResult], SlurmCommandResult, tuple[SlurmAccountingIdentity | None, str | None, str]]:
+        import subprocess
+
         policy = profile.accounting_history
         assert policy is not None
         try:
@@ -1715,6 +1718,8 @@ class SQLiteReadyStageSubmissions:
         self, operation_id: str, profile: SlurmReadyStageProfile, *,
         _after_observation: Callable[[SlurmReadyStageSubmission], None] | None = None,
     ) -> Generator[Callable[[], SlurmCommandResult], SlurmCommandResult, SlurmReadyStageSubmission]:
+        import subprocess
+
         current = self.read(operation_id)
         self._require_profile(current.request, profile)
         if current.job_id is None:

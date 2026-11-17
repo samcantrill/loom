@@ -203,7 +203,7 @@ def _authority_inventory(source: dict, identity: str) -> list[Path]:
     """
     from loom.pipeline.stores.authority import CoordinatorAdmissionRequest, CoordinatorAdmissionReceipt
     from loom.pipeline.stores.run_uri import run_uri_to_path
-    from loom.pipeline.stores.sqlite_authority import _raise_for_schema
+    from loom.pipeline.stores.coordinator_authority import _require_embedded_schema
     from loom.runs.context import RunAnnotations
 
     def canonical(uri):
@@ -251,7 +251,7 @@ def _authority_inventory(source: dict, identity: str) -> list[Path]:
                 raise QueueServiceError("embedded authority inventory contains an unrecognized owner")
             database = child / "authority.sqlite3"
             with inspect_sqlite_database(database) as conn:
-                _raise_for_schema(conn)
+                _require_embedded_schema(conn)
                 annotations = conn.execute("SELECT run_uri, annotations_json, initialization_json FROM run_annotations").fetchall()
                 receipts = conn.execute("SELECT operation_id, request_json, receipt_json FROM coordinator_admission_receipts").fetchall()
             bound = set()

@@ -16,7 +16,7 @@ def recovery(tmp_path, monkeypatch):
     operation.directory = tmp_path
     operation.receipts = tmp_path / "steps"
     operation.inventory = SimpleNamespace(path=tmp_path / "fleet.json")
-    operation.intent = {"operation_id": "upgrade", "agents": {"worker": {"drained": False}}}
+    operation.intent = {"kind": "runtime-upgrade", "operation_id": "upgrade", "agents": {"worker": {"drained": False}}}
     key = "worker-checks-capacity"
     directory = operation.receipts / key
     protected_directory(directory)

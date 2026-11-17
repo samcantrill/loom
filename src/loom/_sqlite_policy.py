@@ -8,23 +8,32 @@ Unconfigured stores keep their existing connection paths and defaults.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
-import sqlite3
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    import sqlite3
 
 
 _JOURNAL = {"wal": "WAL", "delete": "DELETE"}
 _SYNC = {"full": ("FULL", 2), "extra": ("EXTRA", 3)}
 
 
-class _ClosingConnection(sqlite3.Connection):
-    """Store-owned transactional contexts must release their file descriptors."""
+@cache
+def _closing_connection_type() -> type[sqlite3.Connection]:
+    import sqlite3
 
-    def __exit__(self, *args):
-        try:
-            return super().__exit__(*args)
-        finally:
-            self.close()
+    class ClosingConnection(sqlite3.Connection):
+        """Store-owned contexts must release their file descriptors."""
+
+        def __exit__(self, *args):
+            try:
+                return super().__exit__(*args)
+            finally:
+                self.close()
+
+    return ClosingConnection
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +77,8 @@ def initialize_database(
 
 
 def _connect(path, *, policy, isolation_level, initialize, factory):
+    import sqlite3
+
     if policy is not None and not isinstance(policy, SQLitePolicy):
         raise TypeError("sqlite_policy must be a SQLitePolicy")
     mode = "rwc" if initialize else "rw"
@@ -76,7 +87,7 @@ def _connect(path, *, policy, isolation_level, initialize, factory):
         uri=True,
         timeout=5.0 if policy is None else policy.busy_timeout_ms / 1000,
         isolation_level=isolation_level,
-        factory=factory or (_ClosingConnection if policy is not None else sqlite3.Connection),
+        factory=factory or (_closing_connection_type() if policy is not None else sqlite3.Connection),
     )
     try:
         if policy is not None:

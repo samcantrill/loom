@@ -292,6 +292,7 @@ def test_cli_accepts_explicit_submitted_check_selection():
     assert setup.grant_operator_access == "existing-operator"
 
 
+@pytest.mark.optional_dependency
 def test_cli_setup_passes_exact_execution_and_explicit_operator_scope(tmp_path, monkeypatch):
     import io
     import json

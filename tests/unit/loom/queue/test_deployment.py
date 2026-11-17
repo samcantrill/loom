@@ -3019,6 +3019,7 @@ def test_embedded_state_root_is_private_resolved_and_retained(tmp_path: Path) ->
         load_coordinator_service_config(source)
     root = tmp_path / "local-authority"
     root.mkdir(mode=0o755)
+    root.chmod(0o755)
     with pytest.raises(QueueConfigError, match="owner-protected"):
         load_coordinator_service_config(source)
     root.chmod(0o700)
