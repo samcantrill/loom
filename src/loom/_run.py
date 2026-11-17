@@ -16,7 +16,7 @@ from loom.coordinator import CoordinatorClientError, RunObservation, RunRequest
 from loom.deployment import AvailableDeployment, DeploymentSelection, ensure_available, load_deployment
 from loom.queue.errors import QueueConfigError, QueueError
 from loom.queue._coordinator_control import control_error
-from loom.queue.local_daemon import LocalDaemonAdmissionState
+from loom.queue.local_daemon import LocalDaemonAdmissionDetail, LocalDaemonAdmissionState
 from loom.serialization import PlainData
 
 
@@ -59,6 +59,44 @@ def _process_receipt(root: Path) -> tuple[str, dict[str, PlainData]]:
     return "running", value
 
 
+def _owned_assignments_pending(
+    available: AvailableDeployment, observation: RunObservation, deadline: float
+) -> bool:
+    """Distinguish this invocation's release from another run's retained work.
+
+    Terminal science can precede assignment release. Read only the target and
+    its preparation admission; global retention alone cannot distinguish them.
+    These observations never authorize service shutdown.
+    """
+    admission_ids = []
+    if observation.admission is not None:
+        admission_ids.append(observation.admission.admission_id)
+    if observation.operation is not None and isinstance(observation.operation.result, Mapping):
+        preparation_id = observation.operation.result.get("preparation_admission_id")
+        if isinstance(preparation_id, str) and preparation_id not in admission_ids:
+            admission_ids.append(preparation_id)
+    for admission_id in admission_ids:
+        detail = cast(LocalDaemonAdmissionDetail, available.client._native_call(
+            "admission", {"admission_id": admission_id}, available.connection_id,
+            deadline=deadline,
+        ))
+        for name in ("assignment", "slurm"):
+            owner = detail.owners.get(name)
+            if not isinstance(owner, Mapping) or owner.get("availability") != "available":
+                return True  # Unavailable release evidence stays bounded by cleanup's deadline.
+            rows = owner.get("assignments", ())
+            if any(isinstance(row, Mapping) and row.get("state") != "released"
+                   for row in cast(tuple[PlainData, ...], rows)):
+                return True
+        agent = detail.owners.get("execution")
+        if isinstance(agent, Mapping) and agent.get("availability") == "available":
+            if any(isinstance(row, Mapping) and row.get("state") not in {
+                "declined", "providers_released", "released",
+            } for row in cast(tuple[PlainData, ...], agent.get("journal", ()))):
+                return True
+    return False
+
+
 def _cleanup(
     available: AvailableDeployment, observation: RunObservation, deadline: float
 ) -> dict[str, PlainData]:
@@ -70,11 +108,16 @@ def _cleanup(
         pending = False
         retained = None
         blocked = None
+        own_pending = True
         try:
             projection = available.client._native_call(
                 "service_lifetime", {}, available.connection_id, deadline=deadline
             )
             retained, blocked = projection["retained"], projection["cleanup_blocked"]
+            if retained and blocked is None and any(
+                role["identity"]["lifetime"] == "run" for role in roles.values()
+            ):
+                own_pending = _owned_assignments_pending(available, observation, deadline)
         except CoordinatorClientError:
             pass
         for name, role in roles.items():
@@ -89,7 +132,7 @@ def _cleanup(
                 if blocked is not None:
                     state = "cleanup-blocked"
                     evidence = {**evidence, "diagnostic": blocked}
-                elif retained:
+                elif retained and not own_pending:
                     state = "retained-for-other-work"
                 elif time.monotonic() >= deadline:
                     state = "cleanup-blocked"

@@ -647,7 +647,10 @@ The returned `RunOutcome.observation` contains native operation/admission and
 inspection facts. `RunOutcome.cleanup` reports each role as `stopped`,
 `persistent/borrowed`, `retained-for-other-work`, or `cleanup-blocked`, with
 native/process evidence where available. Embedded roles identify their shared
-process. Another run's work transfers remaining cleanup responsibility back to
+process. A terminal scientific result can precede release of its assignments.
+Cleanup observes the target and preparation admissions within the caller's
+cleanup deadline before classifying retained work as belonging to another run.
+Another run's work transfers remaining cleanup responsibility back to
 the service, allowing this caller to return. Cleanup failure never changes a
 committed scientific result or triggers an unrequested kill. Independent
 run-owned agents require a coordinator decision bound to the current session
