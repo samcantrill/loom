@@ -1480,6 +1480,15 @@ wait hints. `_result_verification.py` retains producer audit futures; action
 resolution and preparation/dispatch owners retain their own captured tokens and
 apply only current completions. Workers do not own lifecycle transitions.
 `_shared_publication.py` groups exact publication audits within one operation.
+`_shared_staging_continuation.py` implements an internal continuation operation
+for unsealed output staging after a predecessor's positive native release.
+It requires an admitted predecessor and the caller's live assignment authority,
+renames the tree without a payload-copy fallback, and carries durable handoff
+intents inside that tree across successive interruptions. It never changes
+sealed recovery trees or accepted publications, and does not grant an assignment
+or admit application-specific assembly contents. Provider launch dispatch does
+not yet invoke it; launch integration and its capability admission remain
+required before exposing continuation to applications.
 `_phase_timing.py` bounds diagnostic collection independently of authority.
 
 `_coordinator_run_authority.py` owns the existing scoped adapter for one accepted
