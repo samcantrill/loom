@@ -401,14 +401,18 @@ def materialize(value: object, roots: Mapping[str, PlainData], *, container: boo
     return value
 
 
-def bind_snapshot(snapshot: dict[str, PlainData], permitted: Mapping[str, PlainData], *, redacted: dict[str, PlainData] | None = None) -> None:
+def bind_snapshot(snapshot: dict[str, PlainData], permitted: Mapping[str, PlainData], *, redacted: dict[str, PlainData] | None = None, staging_continuation_stages: tuple[str, ...] = ()) -> None:
     """Retain each stage's selected roots independently of the preparation union."""
     pipeline = cast(Mapping[str, PlainData], snapshot["pipeline"])
     stages = cast(list[dict[str, PlainData]], pipeline["stages"])
+    continuing = set(staging_continuation_stages)
+    if continuing - {cast(str, stage["name"]) for stage in stages}:
+        raise QueueServiceError("staging_continuation_stages contains an unknown captured node")
     diagnostics = dict(diagnostic_stages(redacted))
     for index, stage in enumerate(stages):
         factory = cast(Mapping[str, PlainData], stage["factory"])
-        selected = stage_scope(stage.get("config", {}), factory.get("init", {}), permitted)
+        selected = stage_scope(stage.get("config", {}), factory.get("init", {}), permitted,
+                               continue_staging=cast(str, stage["name"]) in continuing)
         validate_workload(stage.get("config", {}), selected)
         validate_workload(factory.get("init", {}), selected)
         fingerprint = cast(Mapping[str, PlainData], stage.get("fingerprint", {}))

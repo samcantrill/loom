@@ -141,6 +141,13 @@ class PreparationPolicy:
             selected["container_capability"] = profile.capability.select_roots(roots).to_dict()
         if request.execution is not None:
             selected["project_processor"] = thaw_plain_data(request.execution.project_integration)
+        if request.staging_continuation_stages:
+            from .shared_execution import stage_scope
+
+            permitted = selected.get("shared_scope")
+            if not isinstance(permitted, Mapping):
+                raise QueueServiceError("staging continuation requires shared preparation")
+            stage_scope({}, {}, permitted, continue_staging=True)
         return {"source_root": root.to_dict(), "profile": selected}
 
     def safe_identity(self) -> dict[str, object]:

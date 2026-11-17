@@ -154,6 +154,14 @@ def _invocation(instance: object) -> None:
                 "preparation stage executor/adapter inputs are obsolete"
             )
     object.__setattr__(instance, "run_options", freeze_plain_data(options))
+    stages = getattr(instance, "staging_continuation_stages")
+    if not isinstance(stages, (tuple, list)):
+        raise QueueServiceError("staging_continuation_stages must be a sequence")
+    for name in stages:
+        validate_queue_id(name, "staging continuation stage")
+    if len(set(stages)) != len(stages):
+        raise QueueServiceError("staging_continuation_stages contains duplicate stages")
+    object.__setattr__(instance, "staging_continuation_stages", tuple(sorted(stages)))
 
 
 def _invocation_data(instance: object) -> dict[str, PlainData]:
@@ -161,6 +169,8 @@ def _invocation_data(instance: object) -> dict[str, PlainData]:
         "overlays": list(getattr(instance, "overlays")),
         "overrides": list(getattr(instance, "overrides")),
         "run_options": thaw_plain_data(getattr(instance, "run_options")),
+        **({"staging_continuation_stages": list(getattr(instance, "staging_continuation_stages"))}
+           if getattr(instance, "staging_continuation_stages") else {}),
     }
 
 
@@ -181,6 +191,9 @@ class PrepareRunRequest:
     omission preserves the profile's static selection. Locations are normalized,
     deduplicated and retained in intent, including across replay. Composed stages
     may narrow this selection but cannot widen it through config or overrides.
+    ``staging_continuation_stages`` names captured downstream stages allowed to
+    continue positively released output staging. It requires protected shared
+    publication and never selects continuation for the preparation worker itself.
     """
 
     operation_id: str
@@ -194,6 +207,7 @@ class PrepareRunRequest:
     context: SubmissionContext | None = None
     execution: SubmittedContainerExecution | None = None
     input_locations: tuple[Mapping[str, PlainData], ...] | None = None
+    staging_continuation_stages: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         from .managed_local_preparation import _validate_run_name
@@ -255,7 +269,7 @@ class PrepareRunRequest:
     def from_dict(cls, data: Mapping[str, object]) -> "PrepareRunRequest":
         if "input_locations" in data and data["input_locations"] is None:
             raise QueueServiceError("input_locations must be a sequence when present")
-        if set(data) - {"overlays", "overrides", "run_options", "context", "execution", "input_locations"} != {
+        if set(data) - {"overlays", "overrides", "run_options", "context", "execution", "input_locations", "staging_continuation_stages"} != {
             "operation_id",
             "run_name",
             "source",
@@ -279,6 +293,7 @@ class PrepareRunRequest:
                 data["execution"]
             ),
             cast(tuple[Mapping[str, PlainData], ...] | None, data.get("input_locations")),
+            cast(tuple[str, ...], data.get("staging_continuation_stages", ())),
         )
 
     def intent_digest(self, principal_id: str) -> str:
@@ -539,6 +554,7 @@ class PreparationChildInput:
     action_verification: Mapping[str, PlainData] | None = None
     execution: SubmittedContainerExecution | None = None
     container_capability: SubmittedContainerCapability | None = None
+    staging_continuation_stages: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         from types import MappingProxyType
@@ -576,6 +592,14 @@ class PreparationChildInput:
             raise QueueServiceError("project preparation requires protected local policy")
         object.__setattr__(self, "project_preparation", project)
         _invocation(self)
+        if self.shared_scope is not None and "staging_continuation" in self.shared_scope:
+            raise QueueServiceError("preparation worker cannot continue output staging")
+        if self.staging_continuation_stages:
+            from .shared_execution import stage_scope
+
+            if self.shared_scope is None:
+                raise QueueServiceError("staging continuation requires shared preparation")
+            stage_scope({}, {}, self.shared_scope, continue_staging=True)
         validate_queue_id(self.operation_id, "preparation operation_id")
         validate_queue_id(self.preparation_profile, "preparation_profile")
         object.__setattr__(
@@ -653,7 +677,7 @@ class PreparationChildInput:
         if (not isinstance(value, Mapping)
             or type(value.get("schema_version")) is not int
             or value["schema_version"] != (11 if submitted else PREPARATION_CHILD_INPUT_SCHEMA_VERSION)
-            or not required <= set(value) or set(value) - required - {"generations"}
+            or not required <= set(value) or set(value) - required - {"generations", "staging_continuation_stages"}
             or not isinstance(value["input_receipt"], Mapping)):
             raise QueueServiceError("preparation child input fields or schema are unsupported")
         local, shared = _decode_scope(value["scope"])
@@ -685,6 +709,7 @@ class PreparationChildInput:
             action_verification=cast(Mapping[str, PlainData] | None, purpose.get("request")),
             execution=SubmittedContainerExecution.from_dict(value["execution"]) if submitted else None,
             container_capability=SubmittedContainerCapability.from_dict(value["container_capability"]) if submitted else None,
+            staging_continuation_stages=cast(tuple[str, ...], value.get("staging_continuation_stages", ())),
         )
         if result.to_dict() != thaw_plain_data(value):
             raise QueueServiceError("preparation child input is not current canonical data")

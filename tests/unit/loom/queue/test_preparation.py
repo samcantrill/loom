@@ -60,6 +60,54 @@ def test_fresh_run_intent_preserves_optional_wire_and_rejects_duplicates():
         RunRequest.from_dict({**original.to_dict(), "fresh_stages": "author"})
 
 
+def test_staging_continuation_intent_is_explicit_canonical_and_replay_bound():
+    from loom.queue.run import RunRequest
+
+    original = _request()
+    assert "staging_continuation_stages" not in original.to_dict()
+    selected = replace(original, staging_continuation_stages=("predict", "assemble"))
+    assert selected.staging_continuation_stages == ("assemble", "predict")
+    assert selected.to_dict()["staging_continuation_stages"] == ["assemble", "predict"]
+    assert PrepareRunRequest.from_dict(selected.to_dict()) == selected
+    assert selected.intent_digest("owner") != original.intent_digest("owner")
+    assert replace(selected, staging_continuation_stages=("assemble", "predict")) == selected
+    run = RunRequest(selected, "queue")
+    assert RunRequest.from_dict(run.to_dict()) == run
+    for invalid in (None, "predict", ("predict", "predict"), ("../predict",), (False,)):
+        with pytest.raises((QueueServiceError, ValueError)):
+            PrepareRunRequest.from_dict({**original.to_dict(), "staging_continuation_stages": invalid})
+
+
+def test_staging_continuation_child_requires_publication_and_keeps_worker_unselected():
+    from loom.queue.preparation import PreparationChildInput
+    from loom.queue.shared_execution import STAGING_CONTINUATION_CAPABILITY
+
+    roots = {"output": {"container_path": None, "access": "rw",
+                        "challenge": {"path": "challenge", "sha256": "a" * 64},
+                        "publication": {"max_payload_bytes": 10000, "max_manifest_bytes": 10000, "max_members": 100}}}
+    shared = {"capability": "shared-execution-v1", "roots": roots, "locations": []}
+    descriptor = ResidentProfileDescriptor("shared", "v1", "project", "env", "executor", roots)
+    binding = PreparationChildInput(
+        "operation", "profile", "pipeline.yaml",
+        SharedInputReceipt("sha256:" + "a" * 64, "projects", "capture"),
+        descriptor.to_dict(), shared_scope=shared,
+        staging_continuation_stages=("predict",),
+    )
+    assert PreparationChildInput.from_dict(binding.to_dict()) == binding
+    assert binding.shared_scope == shared
+    ordinary = replace(binding, staging_continuation_stages=())
+    assert "staging_continuation_stages" not in ordinary.to_dict()
+    assert PreparationChildInput.from_dict(ordinary.to_dict()) == ordinary
+    with pytest.raises(QueueServiceError, match="shared preparation"):
+        replace(binding, shared_scope=None)
+    with pytest.raises(QueueServiceError, match="shared publication"):
+        replace(binding, shared_scope={**shared, "roots": {}})
+    with pytest.raises(QueueServiceError, match="preparation worker"):
+        replace(binding, shared_scope={**shared, "staging_continuation": {
+            "capability": STAGING_CONTINUATION_CAPABILITY,
+        }})
+
+
 def test_fresh_generation_roundtrip_and_target_identity(tmp_path):
     from loom.queue.preparation import PreparationChildInput, project_target_from_key
 

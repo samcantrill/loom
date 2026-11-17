@@ -23,9 +23,15 @@ from tests.integration.queue.test_submitted_container_agents import _fixture
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
 
-def _run(tmp_path, monkeypatch, *, stage_update=None, selected_inputs=False, slurm=False, configuration_update=None):
+def _run(tmp_path, monkeypatch, *, stage_update=None, selected_inputs=False, slurm=False, configuration_update=None, staging_continuation_stages=()):
     service = _service(tmp_path)
     policy, execution, _ = _fixture(tmp_path)
+    if staging_continuation_stages:
+        policy = replace(policy, shared_roots={**policy.shared_roots, "control": {
+            **policy.shared_roots["control"],
+            "container_path": "/loom/output",
+            "publication": {"max_payload_bytes": 1000000, "max_manifest_bytes": 1000000, "max_members": 1000},
+        }})
     if selected_inputs:
         from loom.queue.submitted_execution import SELECTED_INPUT_WORKER_CONTRACT
         execution = replace(execution, worker_contract=SELECTED_INPUT_WORKER_CONTRACT)
@@ -60,12 +66,14 @@ def _run(tmp_path, monkeypatch, *, stage_update=None, selected_inputs=False, slu
         configuration_update(configuration)
         path.write_text(json.dumps(configuration))
     request = PrepareRunRequest("submitted", "target", PreparationSource("shared", "projects", ".", ("pipeline.yaml",)),
-                                "pipeline.yaml", "containers", execution=execution)
+                                "pipeline.yaml", "containers", execution=execution,
+                                staging_continuation_stages=staging_continuation_stages)
     receipt = capture_shared_input(request, source_root=tmp_path / "projects", snapshot_root=tmp_path / "captures")
     locations = [{"kind": "loom.shared-location", "schema_version": 1, "root_id": "data", "path": "."}] if selected_inputs else []
     binding = PreparationChildInput(request.operation_id, request.preparation_profile, request.config_path, receipt,
         None, shared_scope={"capability": "shared-execution-v1", "roots": policy.capability.workload_roots, "locations": locations},
-        execution=execution, container_capability=policy.capability)
+        execution=execution, container_capability=policy.capability,
+        staging_continuation_stages=request.staging_continuation_stages)
     assert binding.shared_scope is not None
     monkeypatch.setenv(PREPARATION_INPUT_CONTEXT_ENV, json.dumps({
         "schema_version": 7, **binding.execution_data(), "scope": {"kind": "shared", "binding": dict(binding.shared_scope)},
@@ -78,6 +86,58 @@ def _run(tmp_path, monkeypatch, *, stage_update=None, selected_inputs=False, slu
     outputs = PreparationStage().run(context, {})
     report = load_preparation_report(outputs["report"], store.local_path(outputs["report"]))
     return service, binding, cast(dict[str, Any], report)
+
+
+@pytest.mark.parametrize("selected_inputs", [False, True])
+def test_staging_continuation_survives_preparation_without_selecting_preparation_worker(tmp_path, monkeypatch, selected_inputs):
+    from loom.queue.shared_execution import SHARED_EXECUTION_SCOPE, STAGING_CONTINUATION_CAPABILITY
+
+    def configure(config):
+        other = deepcopy(config["pipeline"]["stages"][0])
+        other["name"] = "other"
+        config["pipeline"]["stages"].append(other)
+
+    service, binding, report = _run(
+        tmp_path, monkeypatch, selected_inputs=selected_inputs,
+        staging_continuation_stages=("produce",), configuration_update=configure,
+    )
+    composed, _, preflight = decode_preparation_report(report, expected=binding)
+    assert preflight.status.value == "PASS"
+    selected, other = composed.resolved["pipeline"]["stages"]
+    retained = selected["fingerprint"][SHARED_EXECUTION_SCOPE]
+    assert retained["staging_continuation"] == {"capability": STAGING_CONTINUATION_CAPABILITY}
+    assert "staging_continuation" not in other["fingerprint"][SHARED_EXECUTION_SCOPE]
+    assert report["invocation"]["staging_continuation_stages"] == ["produce"]
+    assert "staging_continuation" not in binding.shared_scope
+    child = prepare_child_run(service, binding, "continued-child", runtime_options=RunOptions(executor="local"))
+    intent = load_managed_local_intent(service.daemon, child.run_uri)
+    preparation = intent.pipeline.stages[0]
+    assert "staging_continuation" not in preparation.fingerprint_fields[SHARED_EXECUTION_SCOPE]
+    assert list(preparation.stage_config["staging_continuation_stages"]) == ["produce"]
+
+    for stage_index, remove in ((0, True), (1, False)):
+        changed = deepcopy(report)
+        scope = changed["composition"]["resolved"]["pipeline"]["stages"][stage_index]["fingerprint"][SHARED_EXECUTION_SCOPE]
+        if remove:
+            scope.pop("staging_continuation")
+        else:
+            scope["staging_continuation"] = {"capability": STAGING_CONTINUATION_CAPABILITY}
+        with pytest.raises(QueueConflictError, match="shared selection conflicts"):
+            decode_preparation_report(changed, expected=binding)
+    with pytest.raises(QueueConflictError, match="identity conflicts"):
+        decode_preparation_report(report, expected=replace(binding, staging_continuation_stages=()))
+    changed = deepcopy(report)
+    changed["composition"]["resolved"]["pipeline"]["stages"][0]["name"] = "renamed"
+    with pytest.raises(QueueConflictError, match="unknown prepared node"):
+        decode_preparation_report(changed, expected=binding)
+
+
+def test_unknown_staging_continuation_stage_fails_before_report_publication(tmp_path, monkeypatch):
+    from loom.queue.errors import QueueServiceError
+
+    with pytest.raises(QueueServiceError, match="unknown captured node"):
+        _run(tmp_path, monkeypatch, staging_continuation_stages=("missing",))
+    assert not list((tmp_path / "artifacts").rglob("*.json"))
 
 
 def test_selected_inputs_are_narrowed_per_action_and_retained_for_replay(tmp_path, monkeypatch):

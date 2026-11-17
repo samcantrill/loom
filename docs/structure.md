@@ -1500,10 +1500,17 @@ requires that receipt; grant replay with an existing receipt never mutates live
 staging. Cancellation independently prevents a new start. Both worker adapters
 remove the native continuation metadata when projecting application requests.
 
-The unselected scope preserves its existing wire shape. Preparation does not
-yet emit the new selection or qualify the required installation/provider path;
-those admission changes and physical launch tests remain prerequisites to
-application activation. The grant tests exercise native handlers, serialized
+The unselected scope preserves its existing wire shape. Managed preparation
+accepts an optional `staging_continuation_stages` sequence, canonicalized as
+unique sorted stage names and retained in invocation identity. Protected policy
+requires shared publication before accepting the selection. Snapshot construction
+binds it only to named downstream stages; report validation reconstructs that
+selection and rejects missing/unknown targets or a changed scope. The preparation
+worker carries downstream intent but cannot select continuation for itself.
+Omitting the sequence preserves existing request, child and invocation bytes.
+
+Installation/provider capability qualification and physical launch tests remain
+prerequisites to application activation. The grant tests exercise native handlers, serialized
 delivery, SQLite receipts and real filesystem handoffs with controlled provider
 release/run-authority facts. They are not physical provider fencing evidence.
 `_phase_timing.py` bounds diagnostic collection independently of authority.
