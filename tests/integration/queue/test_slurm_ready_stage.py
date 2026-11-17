@@ -1346,8 +1346,8 @@ SharedSlurmResult(json.loads(sys.argv[2]), report.assignment_id, compute=True).p
             )
             assert completed_compute.returncode == 0, completed_compute.stderr
             shutil.rmtree(tmp_path / "compute")
-            retained = SharedSlurmResult(profile.result_storage, assignment_id)
-            retained_report, output_bytes = retained.read(identity)
+            retained_result = SharedSlurmResult(profile.result_storage, assignment_id)
+            retained_report, output_bytes = retained_result.read(identity)
             assert retained_report.schema_version == 6
             assert output_bytes
             if slurm_output_size is not None:
@@ -1371,7 +1371,7 @@ SharedSlurmResult(json.loads(sys.argv[2]), report.assignment_id, compute=True).p
                         and not output_ack_lost.is_set()
                     ):
                         assert not commits
-                        assert retained.path.exists()
+                        assert retained_result.path.exists()
                         assert (
                             owner.slurm_assignments.read(assignment_id).state
                             == "running"
@@ -1396,7 +1396,7 @@ SharedSlurmResult(json.loads(sys.argv[2]), report.assignment_id, compute=True).p
                 assert committed is not None
                 commits.append(committed.commit_id)
                 if lose_output_ack_at is None and len(commits) == 1:
-                    assert retained.path.exists()
+                    assert retained_result.path.exists()
                     raise OSError("lost final result acknowledgement")
 
             monkeypatch.setattr(
@@ -1467,7 +1467,7 @@ SharedSlurmResult(json.loads(sys.argv[2]), report.assignment_id, compute=True).p
                     uri_to_path(ref.uri).read_bytes()
                     == output_bytes[artifact.transfer_id]
                 )
-            assert not retained.path.exists()
+            assert not retained_result.path.exists()
             assert daemon._execution is not None
             assert (
                 daemon._execution.slurm_assignments.read(assignment_id).state
