@@ -112,7 +112,9 @@ def test_clock_health_diagnostic_survives_agent_reply_and_retry_log(caplog):
         "ok": False, "error": "accepted_time_degraded",
         "details": {"diagnostic": "clock_regressed", "time_revision": 7},
     }
-    response = SimpleNamespace(status=400, read=lambda limit: json.dumps(payload).encode())
+    import io
+    body = io.BytesIO(json.dumps(payload).encode())
+    response = SimpleNamespace(status=400, isclosed=lambda: body.tell() == len(body.getvalue()), read1=body.read1)
     connection = SimpleNamespace(request=lambda *a, **kw: None, getresponse=lambda: response)
     with pytest.raises(_AcceptedTimeError) as caught:
         _read_agent_reply(connection, "authorize", b"{}", "agent")

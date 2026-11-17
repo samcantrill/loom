@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import base64
 import hashlib
 import json
+from math import isfinite
 import os
 from pathlib import Path
 import stat
@@ -23,6 +24,7 @@ from loom.pipeline.stores.atomic import _ensure_durable_parent, atomic_write_byt
 from loom.scheduling import SchedulingComponentDescriptor
 from loom.serialization import PlainData, thaw_plain_data
 
+from ._agent_transport_policy import AgentTransportPolicy, parse_transport_policy
 from ._remote_stage_execution import _decode_chunk
 from .agent_session_transport import (
     AgentTlsClientConfig,
@@ -58,10 +60,12 @@ class SlurmBootstrapClientConfig:
     capability_file_path: Path | None = None
     bootstrap_deadline_seconds: float = 300.0
     reconnect_seconds: float = 1.0
+    transport_policy: AgentTransportPolicy | None = None
     durable_files: Literal["best_effort", "strict"] = "best_effort"
     credential_delivery: Mapping[str, str] | None = None
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "transport_policy", parse_transport_policy(self.transport_policy))
         if not isinstance(self.durable_files, str) or self.durable_files not in {"best_effort", "strict"}:
             raise QueueServiceError("SLURM bootstrap durable_files is invalid")
         if any(
@@ -124,6 +128,7 @@ class SlurmBootstrapClientConfig:
     @property
     def tls(self) -> AgentTlsClientConfig:
         return AgentTlsClientConfig(
+            transport_policy=self.transport_policy,
             url=self.url,
             server_ca_path=self.server_ca_path,
             certificate_path=self.certificate_path,
@@ -163,7 +168,7 @@ class SlurmBootstrapClientConfig:
         string_fields = expected - {"schema_version", "credential_delivery"}
         if (
             not isinstance(value, Mapping)
-            or set(value) - {"bootstrap_deadline_seconds", "reconnect_seconds", "durable_files"}
+            or set(value) - {"bootstrap_deadline_seconds", "reconnect_seconds", "durable_files", "transport_policy"}
             != expected
             or any(
                 not isinstance(value[key], str) or not value[key] for key in string_fields
@@ -191,6 +196,7 @@ class SlurmBootstrapClientConfig:
                 float, value.get("bootstrap_deadline_seconds", 300.0)
             ),
             reconnect_seconds=cast(float, value.get("reconnect_seconds", 1.0)),
+            transport_policy=parse_transport_policy(value.get("transport_policy")),
             durable_files=cast(Literal["best_effort", "strict"], value.get("durable_files", "strict" if tagged else "best_effort")),
             credential_delivery=cast(Mapping[str, str] | None, value.get("credential_delivery")),
         )
@@ -212,7 +218,7 @@ def _before_start_retry(
     durable_files: Literal["best_effort", "strict"] = "best_effort",
 ) -> Mapping[str, PlainData]:
     while True:
-        if time.time() >= deadline:
+        if time.monotonic() >= deadline:
             atomic_write_bytes(
                 diagnostic,
                 b'{"failure":"slurm_bootstrap_deadline_expired","offline_grant":false}',
@@ -222,9 +228,12 @@ def _before_start_retry(
                 "SLURM bootstrap deadline expired; no offline grant"
             )
         try:
-            return operation()
+            value = operation()
+            if time.monotonic() >= deadline:
+                continue
+            return value
         except _IndeterminateAgentProtocolError:
-            remaining = deadline - time.time()
+            remaining = deadline - time.monotonic()
             if remaining <= 0:
                 atomic_write_bytes(
                     diagnostic,
@@ -278,7 +287,14 @@ def run_slurm_bootstrap(
         raise QueueConflictError("SLURM bootstrap deadline identity conflicts")
     if retained_deadline and selected.durable_files == "strict":
         atomic_write_bytes(deadline_path, deadline_path.read_bytes(), durability="strict")
-    deadline = float(deadline_value["deadline"])
+    retained_until = float(deadline_value["deadline"])
+    if not isfinite(retained_until):
+        raise QueueServiceError("SLURM bootstrap deadline is invalid")
+    # Wall time only bridges restarts. Elapsed time in this invocation cannot
+    # be extended by an NTP step or by a slow/repeated transport attempt.
+    deadline = time.monotonic() + min(
+        selected.bootstrap_deadline_seconds, max(0, retained_until - time.time()),
+    )
     diagnostic = selected.workspace_root / (
         "bootstrap-failure-" + _sha256(operation_id) + ".json"
     )
@@ -418,7 +434,7 @@ def run_slurm_bootstrap(
             if readiness.get("state") != "awaiting_submission_ack":
                 raise QueueServiceError("SLURM input-readiness response is invalid")
             # A fast job can register before sbatch returns to its owning agent.
-            time.sleep(min(selected.reconnect_seconds, max(0, deadline - time.time())))
+            time.sleep(min(selected.reconnect_seconds, max(0, deadline - time.monotonic())))
         grant = prestart(
             "grant",
             {"assignment_id": assignment_id, "incarnation": incarnation},

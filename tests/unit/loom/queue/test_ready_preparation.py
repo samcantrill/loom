@@ -188,3 +188,26 @@ def test_completed_inspection_transfers_to_stage_until_dispatch(monkeypatch):
     finally:
         scans.close()
         pool.close()
+
+
+@pytest.mark.parametrize("blocked_class,peer_class", [("gpu", "cpu"), ("cpu", "gpu")])
+def test_completed_waiting_class_keeps_preparation_capacity_for_peer(monkeypatch, blocked_class, peer_class):
+    monkeypatch.setattr("loom.queue._ready_preparation.ThreadPoolExecutor", ControlledExecutor)
+    pool = ReadyPreparationPool(lambda: None)
+    try:
+        for index in range(32):
+            pool.poll(("blocked", str(index)), "request", lambda: True, resource_class=blocked_class)
+        pool._workers.complete()
+        assert len(pool._pending) == 31
+        # Waiting prerequisites stay retained; the peer can prepare and leave
+        # repeatedly without waiting for any allocation in the blocked class.
+        for index in range(100):
+            key = ("peer", str(index))
+            pool.poll(key, "request", lambda: True, resource_class=peer_class)
+            pool._workers.complete()
+            assert pool.poll(key, "request", lambda: pytest.fail("repeated preparation"), resource_class=peer_class) == (True, None)
+            pool.discard(key)
+        for index in range(31):
+            assert pool.poll(("blocked", str(index)), "request", lambda: pytest.fail("evicted prerequisite"), resource_class=blocked_class) == (True, None)
+    finally:
+        pool.close()

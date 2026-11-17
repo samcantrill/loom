@@ -16,7 +16,7 @@ from pathlib import Path
 import sqlite3
 import subprocess
 from types import MappingProxyType
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from loom.pipeline.executors.apptainer import ApptainerExecOptions
 from loom.pipeline.executors.containers import (
@@ -70,12 +70,14 @@ _SLURM_BOOTSTRAP_CONFIG_ENV = "LOOM_SLURM_BOOTSTRAP_CONFIG"
 
 
 def _run_command_steps[T](
-    steps: Generator[Callable[[], SlurmCommandResult], SlurmCommandResult, T],
+    steps: Generator[Callable[[], SlurmCommandResult] | _SubmissionAuthorization, Any, T],
 ) -> T:
     """Synchronous adapter; async owners advance the same journal transitions."""
     try:
         effect = next(steps)
         while True:
+            if isinstance(effect, _SubmissionAuthorization):
+                raise SlurmPlanningError("deferred submission requires an acknowledgement owner")
             try:
                 result = effect()
             except BaseException as error:
@@ -1204,6 +1206,13 @@ class SlurmReadyStageSubmission:
         )
 
 
+@dataclass(frozen=True)
+class _SubmissionAuthorization:
+    """A journal-owner acknowledgement boundary before the external command."""
+
+    submission: SlurmReadyStageSubmission
+
+
 class SQLiteReadyStageSubmissions:
     """The sole durable owner of one ready-stage ``sbatch`` invocation."""
 
@@ -1346,7 +1355,8 @@ class SQLiteReadyStageSubmissions:
         self, request: SlurmReadyStageRequest, profile: SlurmReadyStageProfile,
         script_path: str | Path, *,
         before_runner: Callable[[SlurmReadyStageSubmission], bool | None] | None = None,
-    ) -> Generator[Callable[[], SlurmCommandResult], SlurmCommandResult, SlurmReadyStageSubmission]:
+        defer_authorization: bool = False,
+    ) -> Generator[Callable[[], SlurmCommandResult] | _SubmissionAuthorization, Any, SlurmReadyStageSubmission]:
         """Submit after the agent's bounded IO owner prepared the exact script."""
         self._require_profile(request, profile)
         current = self.read(request.operation_id)
@@ -1373,7 +1383,10 @@ class SQLiteReadyStageSubmissions:
             )
         if not claimed:
             return self.read(request.operation_id)
-        if before_runner is not None and before_runner(submitting) is False:
+        authorized = (yield _SubmissionAuthorization(submitting)) if defer_authorization else (
+            None if before_runner is None else before_runner(submitting)
+        )
+        if authorized is False:
             return self._record_outcome(
                 request.operation_id,
                 ReadyStageState.REJECTED,

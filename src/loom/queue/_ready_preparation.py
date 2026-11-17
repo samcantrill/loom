@@ -8,7 +8,7 @@ from contextvars import copy_context
 from dataclasses import dataclass, field
 from time import monotonic
 from pathlib import Path
-from typing import Any, TYPE_CHECKING, cast
+from typing import Any, TYPE_CHECKING, Literal, cast
 
 from loom.pipeline.execution import StageWorkerRequest
 from loom.serialization import PlainData
@@ -34,6 +34,7 @@ class _Pending:
 @dataclass
 class _StagePreparation:
     identity: str
+    resource_class: Literal["cpu", "gpu"] | None = None
     phases: dict[str, _Pending] = field(default_factory=dict)
     retiring: bool = False
 
@@ -63,12 +64,14 @@ class ReadyPreparationPool:
     def poll(
         self, key: tuple[str, str], identity: str,
         prepare: Callable[[], Any], *, phase: str = "request",
+        resource_class: Literal["cpu", "gpu"] | None = None,
     ) -> tuple[Any | None, str | None]:
         if self._closed:
             return None, "stage_preparation_cancelled"
         self._reap_retired()
         stage = self._pending.get(key)
-        if stage is not None and (stage.retiring or (phase == "request" and stage.identity != identity)):
+        if stage is not None and (stage.retiring or (phase == "request" and
+                (stage.identity != identity or stage.resource_class != resource_class))):
             self.discard(key)
             if key in self._pending:
                 return None, "stage_preparation_superseded"
@@ -78,7 +81,13 @@ class ReadyPreparationPool:
                 return None, "stage_preparation_pending"
             if len(self._pending) >= self._capacity:
                 return None, "stage_preparation_capacity"
-            stage = _StagePreparation(identity)
+            if (resource_class is not None and self._capacity > 1
+                and sum(item.resource_class == resource_class for item in self._pending.values()) >= self._capacity - 1):
+                # Preserve one owner for the other resource class. Completed
+                # GPU prerequisites cannot otherwise be evicted while their
+                # allocation budget is full. This bounds preparation, not jobs.
+                return None, "stage_preparation_capacity"
+            stage = _StagePreparation(identity, resource_class)
             self._pending[key] = stage
         pending = stage.phases.get(phase)
         if pending is not None and pending.identity != identity:

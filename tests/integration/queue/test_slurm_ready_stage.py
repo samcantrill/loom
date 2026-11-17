@@ -2488,6 +2488,11 @@ def test_actual_native_preparation_pair_crosses_slurm_ready_helpers_and_ack_repl
 
             def after_publish(part, target):
                 original_publish(part, target)
+                # Another assignment's durable work is writable even while
+                # this filesystem effect has not returned/been acknowledged.
+                with sqlite3.connect(owner.path, timeout=0.05) as independent:
+                    independent.execute("BEGIN IMMEDIATE")
+                    independent.rollback()
                 raise OSError("native pair lost acknowledgement")
 
             monkeypatch.setattr(
@@ -2709,7 +2714,15 @@ def test_gpu_budget_survives_restart_and_reload_preserves_admitted_work(tmp_path
             if predicate():
                 return
             time.sleep(0.02)
-        pytest.fail("coordinator did not reach the expected admission outcome")
+        execution = daemon._execution
+        agent = execution._slurm_agent
+        pytest.fail(f"coordinator did not reach the expected admission outcome: "
+                    f"service_error={daemon._service_error!r}; "
+                    f"commands={[(key, value.kind, value.future is None or value.future.done()) for key, value in agent._commands._pending.items()]}; "
+                    f"preparing={[(key, list(value.phases)) for key, value in execution._ready_preparations._pending.items()]}; "
+                    f"retry={agent._ack_retry_at}; "
+                    f"admission_retry={daemon._admission_retries}; "
+                    f"records={[(record.assignment.run_uri, record.state) for record in execution.slurm_assignments.list_unreleased()]}")
 
     def accepted(key):
         records = daemon._execution.slurm_assignments.list_run_unreleased(runs[key])

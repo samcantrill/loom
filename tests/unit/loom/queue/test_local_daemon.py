@@ -832,6 +832,50 @@ def test_recovery_persists_exact_evidence_before_close_and_replays_it(
         replacement_operator.recover_unknown(replace(request, reason="changed replay"))
 
 
+def test_recovery_pages_skip_busy_and_failed_owners_without_starving_later_rows(tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    requests = [RecoverUnknownAssignment(
+        recovery_id=f"recovery-{index:03d}", run_uri="file:///run", stage_name="train",
+        attempt=1, stage_work_id=f"work-{index}", assignment_id=f"assignment-{index}",
+        process_execution_id=f"process-{index}", execution_fence=f"fence-{index}",
+        target=ManagedRecoveryTarget("agent-1", "session-1"), expected_state_version=7,
+        requested_outcome="failed", consider_retry=False, reason="page qualification",
+    ) for index in range(40)]
+    with sqlite3.connect(config.control_database) as conn:
+        conn.executemany(
+            "INSERT INTO recovery_operations VALUES (?, 'operator', ?, 'fixture', '2026-11-17T00:00:00Z', 'pending', NULL, '{}')",
+            [(request.recovery_id, json.dumps(request.to_dict())) for request in requests],
+        )
+    visited = []
+
+    def advance(execution, request, recorded_at):
+        if request.recovery_id == requests[1].recovery_id:
+            raise QueueServiceError("unavailable first recovery")
+        visited.append(request.recovery_id)
+        return daemon._finish_recovery(request.recovery_id, {"state": "closed"})
+
+    monkeypatch.setattr(daemon, "_advance_recovery", advance)
+    with daemon._publication_guards.hold("recovery:" + requests[0].recovery_id):
+        daemon._resume_pending_recoveries(cast(Any, None))
+        assert 0 < len(visited) <= 30
+        for _ in range(10):
+            daemon._resume_pending_recoveries(cast(Any, None))
+            if len(visited) == 38:
+                break
+        assert set(visited) == {request.recovery_id for request in requests[2:]}
+        assert daemon._recovery_is_settling(requests[0].assignment_id)
+        assert not daemon._recovery_is_settling(requests[2].assignment_id)
+        assert daemon._recovery_fences_ordinary_terminal(requests[0].assignment_id)
+        assert daemon._recovery_retains_assignment(requests[0].assignment_id)
+        assert not daemon._recovery_retains_assignment("absent")
+    for _ in range(3):
+        daemon._resume_pending_recoveries(cast(Any, None))
+    assert requests[0].recovery_id in visited
+    assert len(visited) == len(set(visited))
+
+
 class _TargetEvaluatorV2(TargetConstraintEvaluator):
     descriptor = replace(
         TargetConstraintEvaluator.descriptor,

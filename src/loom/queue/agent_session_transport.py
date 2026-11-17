@@ -7,6 +7,7 @@ or session selector from the HTTP path as transport identity.
 
 from __future__ import annotations
 
+from ._agent_transport_policy import AgentTransportPolicy, parse_transport_policy
 from .errors import _AcceptedTimeError
 from ._slurm_admission import submit_interval
 from ._slurm_observation import SlurmObservationPolicy, parse_slurm_observation_policy
@@ -264,6 +265,7 @@ class AgentTlsClientConfig:
     container_policies: tuple[SubmittedContainerPolicy, ...] = ()
 
     storage: StoragePolicy | None = None
+    transport_policy: AgentTransportPolicy | None = None
     slurm_submit_interval_seconds: float | None = None
     slurm_observation_policy: SlurmObservationPolicy | None = None
 
@@ -283,6 +285,7 @@ class AgentTlsClientConfig:
         return connect(path, policy=self.storage.sqlite, isolation_level="")
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "transport_policy", parse_transport_policy(self.transport_policy))
         if self.storage is not None and not isinstance(self.storage, StoragePolicy):
             raise QueueServiceError("storage policy is invalid")
         object.__setattr__(self, "slurm_submit_interval_seconds", submit_interval(self.slurm_submit_interval_seconds))
@@ -3150,7 +3153,8 @@ class LocalDaemonAgentHttpClient:
         while True:
             try:
                 reply = yield from _external(
-                    "control_wait" if operation == "control_wait" else "poll" if operation == "poll" else "bulk" if operation in _AGENT_BULK_OPERATIONS else "control",
+                    "slurm_http" if operation == "slurm_work" and value.get("evidence") is not None
+                    else "control_wait" if operation == "control_wait" else "poll" if operation == "poll" else "bulk" if operation in _AGENT_BULK_OPERATIONS else "control",
                     _exchange_agent_request, self._config, operation, body, role, connection,
                     not self._service_progress,
                 )
@@ -3287,34 +3291,92 @@ def _exchange_agent_request(
     keep_alive: bool,
 ) -> _AgentHttpReply:
     """Exchange exact prepared bytes using one exclusively owned connection."""
+    from threading import Event, Timer
+    import socket
+
+    policy = config.transport_policy
+    assert policy is not None  # Normalized by the protected constructor.
+    deadline = monotonic() + policy.response_timeout_seconds
     connection = connection or https_connection(
         config.url, config.server_ca_path, config.certificate_path,
-        config.private_key_path, timeout=_HTTP_TIMEOUT_SECONDS,
+        config.private_key_path,
+        timeout=min(policy.connect_timeout_seconds, policy.response_timeout_seconds),
     )
+    expired = Event()
+
+    def expire():
+        expired.set()
+        sock = connection.sock
+        if sock is not None:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+    # One timer per occupied HTTP slot bounds trickled headers as well as body
+    # reads. A blocked resolver/TLS setup still owns its worker slot; it cannot
+    # send after expiry or create an unbounded replacement thread.
+    timer = Timer(max(0, deadline - monotonic()), expire)
+    timer.daemon = True
+    timer.start()
     try:
-        return _AgentHttpReply(connection, _read_agent_reply(connection, operation, body, role))
+        if connection.sock is None:
+            connection.connect()
+        if expired.is_set() or monotonic() >= deadline:
+            raise TimeoutError("agent response deadline exceeded before send")
+        value = _read_agent_reply(connection, operation, body, role, deadline=deadline)
+        if expired.is_set():
+            raise TimeoutError("agent response deadline exceeded")
+        return _AgentHttpReply(connection, value)
+    except (OSError, ssl.SSLError, http.client.HTTPException) as error:
+        connection.close()
+        raise _IndeterminateAgentProtocolError("agent protocol outcome is indeterminate") from error
     except BaseException:
         connection.close()
         raise
     finally:
-        if not keep_alive:
+        timer.cancel()
+        timer.join()
+        if not keep_alive or expired.is_set():
             connection.close()
 
 
 def _read_agent_reply(
-    connection: http.client.HTTPSConnection, operation: str, body: bytes, role: str
+    connection: http.client.HTTPSConnection, operation: str, body: bytes, role: str,
+    *, deadline: float | None = None,
 ) -> Mapping[str, PlainData]:
     slurm_registration = role == "slurm_bootstrap" and operation == "register"
     maximum = _MAX_SLURM_REGISTRATION_BYTES if slurm_registration else _MAX_BODY_BYTES
+    def refresh_timeout():
+        if deadline is not None:
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                raise TimeoutError("agent response deadline exceeded")
+            if connection.sock is not None:
+                connection.sock.settimeout(remaining)
+
     try:
+        refresh_timeout()
         connection.request(
             "POST",
             f"/v1/{role}/{operation}",
             body=body,
             headers={"Content-Type": "application/json"},
         )
+        refresh_timeout()
         response = connection.getresponse()
-        raw = response.read(maximum + 1)
+        parts = []
+        size = 0
+        while True:
+            refresh_timeout()
+            part = response.read1(min(65_536, maximum + 1 - size))
+            if not part:
+                break
+            parts.append(part)
+            size += len(part)
+            if size > maximum:
+                break
+        raw = b"".join(parts)
     except (OSError, ssl.SSLError, http.client.HTTPException) as exc:
         raise _IndeterminateAgentProtocolError(
             "agent protocol outcome is indeterminate"

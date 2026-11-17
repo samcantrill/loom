@@ -143,6 +143,7 @@ class AgentSlurmJobs:
         submit_interval_seconds: float | None = None,
         observation_policy: SlurmObservationPolicy | None = None,
         asynchronous_preparation: bool = False,
+        wake: Callable[[], None] | None = None,
     ) -> None:
         self._asynchronous_preparation = asynchronous_preparation
         self.submit_interval_seconds = submit_interval(submit_interval_seconds)
@@ -184,6 +185,7 @@ class AgentSlurmJobs:
         self._batch_sequence = 0
         self._batch_pending: dict[str, set[str]] = {}
         self._batch_completed: list[tuple[Mapping[str, PlainData], SlurmStageAssignment, SlurmReadyStageSubmission, SlurmReadyStageProfile]] = []
+        self._completed_observations: set[str] = set()
         self._replay_after: str | None = None
         self._batch_limits: dict[tuple[str, str], int] = {}
         self._containment_diagnostics: dict[str, str] = {}
@@ -194,9 +196,9 @@ class AgentSlurmJobs:
         self._reconciliation_binding: tuple[str, str] | None = None
         self._pending_effect_confirmations: dict[str, tuple[str, int]] = {}
         self._reconciled_operations: dict[str, tuple[object, object, bool, object]] = {}
-        self._storage = SlurmStorageProgress()
-        self._commands = SlurmCommandProgress()
-        self._helpers = SlurmStorageProgress(workers=1, outstanding=8, owners=8)
+        self._storage = SlurmStorageProgress(wake=wake)
+        self._commands = SlurmCommandProgress(wake=wake)
+        self._helpers = SlurmStorageProgress(workers=1, outstanding=8, owners=8, wake=wake)
         self._helper_requests: dict[str, tuple[str, SlurmReadyStageProfile, dict[str, PlainData]]] = {}
 
     def close(self) -> None:
@@ -591,6 +593,7 @@ class AgentSlurmJobs:
             )
         if provider_released:
             self._reconciled_operations.pop(assignment.operation_id, None)
+            self._completed_observations.discard(assignment.operation_id)
             self._next_poll.pop(assignment.operation_id, None)
             self._batch_order.pop(assignment.operation_id, None)
             self._containment_order.pop(assignment.operation_id, None)
@@ -642,7 +645,7 @@ class AgentSlurmJobs:
                     self._ack_retry_at[str(row[0])] = monotonic() + 5
                     continue
                 except SlurmEffectPending as pending_effect:
-                    self._ack_retry_at[str(row[0])] = monotonic() + pending_effect.retry_after_seconds
+                    self._defer_effect(str(row[0]), pending_effect)
                     continue
             if scanned == len(rows) and len(rows) < 32:
                 self._replay_after = None
@@ -650,8 +653,9 @@ class AgentSlurmJobs:
     def _before_submit(
         self, assignment: SlurmStageAssignment, value: SlurmReadyStageSubmission,
         acknowledge: Callable[[Mapping[str, PlainData]], Mapping[str, PlainData]],
+        *, cancel_requested: bool = False,
     ) -> bool:
-        if self._publish(assignment, value, acknowledge).get("cancel_requested") is True:
+        if self._publish(assignment, value, acknowledge).get("cancel_requested") is True or cancel_requested:
             return False
         # Timestamp the actual call boundary, after its durable acknowledgement.
         # A failed acknowledgement never consumes a pacing interval.
@@ -720,7 +724,7 @@ class AgentSlurmJobs:
             except _EvidencePending:
                 continue
             except SlurmEffectPending as pending:
-                self._ack_retry_at[operation] = monotonic() + pending.retry_after_seconds
+                self._defer_effect(operation, pending)
             except SlurmRequestUncertain:
                 self._ack_retry_at[operation] = monotonic() + 5
 
@@ -818,6 +822,34 @@ class AgentSlurmJobs:
                 self._batch_order[operation] = self._batch_sequence
         self._finish_batch_queries(acknowledge)
 
+    def _defer_effect(self, operation_id: str, pending: SlurmEffectPending) -> None:
+        if pending.retry_after_seconds > 0.05:
+            self._ack_retry_at[operation_id] = monotonic() + pending.retry_after_seconds
+        else:
+            # IO completion wakes embedded reconciliation. A soft polling
+            # delay must not suppress that one notification and leave the
+            # completed continuation waiting for an unrelated timer.
+            self._ack_retry_at.pop(operation_id, None)
+
+    def completed_assignments(self) -> tuple[str, ...]:
+        """Bounded completed IO owners, independent of run-context loading."""
+        with self._lock:
+            assignments = {
+                key[0] for pool in (self._storage, self._helpers)
+                for key, future in pool._pending.items() if future.done()
+            }
+            operations = [key for key, command in self._commands._pending.items()
+                          if (command.future is None or command.future.done()) and command.kind != "batch"]
+            with self._connect() as conn:
+                for operation in operations:
+                    row = conn.execute(
+                        "SELECT assignment_json FROM agent_slurm_operations WHERE operation_id=?",
+                        (operation,),
+                    ).fetchone()
+                    if row is not None:
+                        assignments.add(str(json.loads(row[0])["assignment_id"]))
+            return tuple(sorted(assignments))
+
     def _step(self, task, acknowledge, **options):
         operation_id = SlurmStageAssignment.from_dict(task["assignment"]).operation_id
         if (
@@ -833,7 +865,7 @@ class AgentSlurmJobs:
             self._ack_retry_at[operation_id] = monotonic() + 5
             return
         except SlurmEffectPending as pending:
-            self._ack_retry_at[operation_id] = monotonic() + pending.retry_after_seconds
+            self._defer_effect(operation_id, pending)
             return
 
     def _advance_step(
@@ -901,7 +933,7 @@ class AgentSlurmJobs:
         if retained is not None and retained[0]:
             self._reconciled_operations.pop(assignment.operation_id, None)
             return
-        if self.observation_policy is not None and retained is not None and retained[1] is not None and retained[2]:
+        if retained is not None and retained[1] is not None and retained[2]:
             last = json.loads(str(retained[1]))
             if last["release"] is not None:
                 # A positive release acknowledgement already crossed the durable
@@ -921,7 +953,14 @@ class AgentSlurmJobs:
                 SharedSlurmResult(profile.result_storage, assignment.assignment_id), acknowledge,
             )
             return
-        completed_command = self._commands.resume(request.operation_id)
+        completed_command = self._commands.resume(
+            request.operation_id,
+            authorize=lambda value: self._before_submit(
+                assignment, value, acknowledge, cancel_requested=task.get("cancel_requested") is True,
+            ),
+        )
+        if completed_command in {"observe", "cancel", "reconcile"}:
+            self._completed_observations.add(request.operation_id)
         current = self.journal.find(request.operation_id)
         transport = SharedSlurmResult(profile.result_storage, assignment.assignment_id)
         now = monotonic()
@@ -952,12 +991,12 @@ class AgentSlurmJobs:
         if self.observation_policy is None:
             self._next_poll[request.operation_id] = now + profile.poll_interval_seconds
         observation_due = not _defer_observation and self._retry_due("observation", request.operation_id)
-        observed = completed_command in {"observe", "cancel", "reconcile"}
+        observed = request.operation_id in self._completed_observations
         script = self.root / "slurm-scripts" / f"{assignment.assignment_id}.sh"
         current = self._prepare_assignment(task, assignment, request, profile, transport, script)
         if current.state is ReadyStageState.INTENT:
             reply = self._publish(assignment, current, acknowledge)
-            if reply.get("cancel_requested") is True:
+            if reply.get("cancel_requested") is True or task.get("cancel_requested") is True:
                 current = self.journal.suppress_before_submit(request.operation_id)
             elif not allow_submission:
                 return
@@ -973,8 +1012,10 @@ class AgentSlurmJobs:
                         request.operation_id, "submit",
                         self.journal._submit_prepared_steps(
                             request, profile, script,
-                            before_runner=lambda value: self._before_submit(assignment, value, acknowledge),
-                        ), kind="submit",
+                            defer_authorization=True,
+                        ), kind="submit", authorize=lambda value: self._before_submit(
+                            assignment, value, acknowledge, cancel_requested=task.get("cancel_requested") is True,
+                        ),
                     )
                     current = self.journal.read(request.operation_id)
                 else:
@@ -1017,6 +1058,8 @@ class AgentSlurmJobs:
                     )
                 observed = self.observation_policy is not None
         reply = self._publish(assignment, current, acknowledge)
+        if task.get("cancel_requested") is True:
+            reply = {**reply, "cancel_requested": True}
         self._probe_terminal_result(task, assignment, current, transport, acknowledge)
         if self.observation_policy is not None and task.get("compute_release_requested") is not True:
             self._deliver_result(task, reply, transport, acknowledge)
@@ -1024,10 +1067,8 @@ class AgentSlurmJobs:
             return
         if current.job_id is not None:
             published = current
-            if reply.get("cancel_requested") is True and (
-                self.observation_policy is None
-                or not current.cancel_requested and self._retry_due("cancel", request.operation_id)
-            ):
+            if (reply.get("cancel_requested") is True and not current.cancel_requested
+                and self._retry_due("cancel", request.operation_id)):
                 def cancel():
                     value = yield from self.journal._request_cancel_steps(
                         request.operation_id, profile,
@@ -1089,6 +1130,7 @@ class AgentSlurmJobs:
                         "echo": dict(recovery_request),
                     },
                 )
+            self._completed_observations.discard(request.operation_id)
             return
         release: Mapping[str, PlainData] | None = None
         if current.state is ReadyStageState.REJECTED:
@@ -1124,6 +1166,7 @@ class AgentSlurmJobs:
                 release=release,
                 provider_released=True,
             )
+        self._completed_observations.discard(request.operation_id)
 
 
 def _json(value: object) -> str:

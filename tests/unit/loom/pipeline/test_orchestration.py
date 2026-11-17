@@ -225,7 +225,7 @@ def test_reconcile_replays_exact_attempt_and_stable_stage_work(
     assert replay.stage_work_id == first.stage_work_id
     assert replay.attempt_id == first.attempt_id == "train-1"
     assert replay.ready_at == first.ready_at == 10
-    assert replay.projection_revision == 2
+    assert replay.projection_revision == first.projection_revision
     assert len(authority.open_run(run_uri).stages[0].attempts) == 1
     assert replay_store.list_stage_work() == (replay,)
     assert replay.placement.hard_constraints == (constraint,)
@@ -941,9 +941,10 @@ def test_257_stage_pipeline_drains_across_bounded_ready_windows(
     store = SQLiteStageWorkStore(tmp_path / "coordinator.sqlite")
     stages = tuple(_stage(f"stage-{index:03d}") for index in range(257))
     plan = _plan(run_uri, *stages)
-    records = RunOrchestrator(
+    orchestrator = RunOrchestrator(
         authority=authority, store=store, owner_id="coordinator"
-    ).reconcile(
+    )
+    records = orchestrator.reconcile(
         admission_id="admission-1",
         plan=plan,
         authority_snapshot=authority.open_run(run_uri),
@@ -953,8 +954,15 @@ def test_257_stage_pipeline_drains_across_bounded_ready_windows(
         run_priority=9,
         enqueue_sequence=3,
     )
-
-    assert len(records) == 257
+    assert len(records) == 256
+    assert orchestrator.next_stage == "stage-255"
+    orchestrator.reconcile(
+        admission_id="admission-1", plan=plan, authority_snapshot=authority.open_run(run_uri),
+        placements={stage.stage_name: _placement() for stage in stages},
+        execution_requirements=_requirements(plan), ready_at=10, run_priority=9, enqueue_sequence=3,
+        after_stage=orchestrator.next_stage,
+    )
+    assert len(store.list_stage_work()) == 257
     window = store.ready_window()
     assert len(window) == 256
     assert [record.stage_name for record in window] == [
@@ -1066,6 +1074,7 @@ def test_ready_keyset_continues_past_blocked_prefix_and_disappearing_cursor(tmp_
         admission_id="admission", plan=plan, authority_snapshot=authority.open_run(run_uri),
         placements={stage.stage_name: _placement() for stage in stages},
         execution_requirements=_requirements(plan), ready_at=10, run_priority=9, enqueue_sequence=3,
+        max_work_items=258,
     )
     first = store.ready_window()
     assert len(first) == 256
@@ -1092,7 +1101,7 @@ def test_ready_rotation_preserves_priority_and_authored_order(tmp_path, kind):
             admission_id=name, plan=plan, authority_snapshot=authority.open_run(run_uri),
             placements={stage.stage_name: _placement() for stage in stages},
             execution_requirements=_requirements(plan), ready_at=10,
-            run_priority=priority, enqueue_sequence=sequence,
+            run_priority=priority, enqueue_sequence=sequence, max_work_items=258,
         )
     rows = store.ready_window(rotate_after=1)
     assert [row.admission_id for row in rows] == ["urgent", "urgent", "newer", "newer", "older", "older"]

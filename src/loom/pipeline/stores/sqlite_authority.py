@@ -2597,7 +2597,11 @@ class SQLitePerRunAuthorityStore:
         if not isinstance(event, PipelineEvent):
             raise AuthorityStoreError("event must be a PipelineEvent")
         with self._transaction(run_uri) as conn:
-            for row in conn.execute("SELECT * FROM audit_events ORDER BY sequence"):
+            for row in conn.execute(
+                "SELECT * FROM audit_events WHERE event_json IS NULL "
+                "OR json_extract(event_json, '$.event_id') = ? ORDER BY sequence",
+                (event.event_id,),
+            ):
                 existing = _audit_event_from_row(row)
                 if existing.event_id == event.event_id:
                     if not existing.matches_event(event):
@@ -2635,6 +2639,26 @@ class SQLitePerRunAuthorityStore:
             )
             _touch_run(conn, revision)
             return record
+
+    def _find_audit_event(
+        self, run_uri: str, event_id: str
+    ) -> PipelineEventRecord | None:
+        """Look up native observer replay without decoding the run's history."""
+        self._bind_run_uri(run_uri)
+        with self._read_connection_for_run(run_uri) as conn:
+            _raise_for_schema(conn)
+            _require_run_status(conn)
+            rows = conn.execute(
+                "SELECT * FROM audit_events WHERE event_json IS NULL "
+                "OR json_extract(event_json, '$.event_id') = ? ORDER BY sequence",
+                (event_id,),
+            )
+            match = None
+            for row in rows:
+                record = _audit_event_from_row(row)
+                if record.event_id == event_id:
+                    match = record
+            return match
 
     def list_audit_events(self, run_uri: str) -> tuple[PipelineEventRecord, ...]:
         """Read retained event identities without changing run state."""

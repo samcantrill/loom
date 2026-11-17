@@ -1714,6 +1714,8 @@ class LocalDaemon:
         self._admission_retries: dict[str, _RecoveryRetry] = {}
         self._context_invalidations: set[str] = set()
         self._cancelled_admission_repairs: deque[str] | None = None
+        self._recovery_cursor: str | None = None
+        self._recovery_retries: dict[str, _RecoveryRetry] = {}
         self._agent_policy = config.agent_policy
         self._verified_local_owner_subject: str | None = None
         from ._preparation_operations import CoordinatorPreparations
@@ -2733,7 +2735,8 @@ class LocalDaemon:
         for provider in self._local_resource_providers():
             if isinstance(provider, GpuResourceProvider):
                 provider.refresh_occupancy()
-        self._event_observers.flush_prepared()
+        if self._event_observers.flush_prepared():
+            self._wake.set()
         # A reload may replace providers while the bounded query runs.
         # Its new provider starts unknown and is refreshed next cycle.
         with self._state_guard():
@@ -3583,80 +3586,81 @@ class LocalDaemon:
         with self._connection() as conn:
             rows = tuple(
                 conn.execute(
-                    "SELECT request_json, recorded_at, state, evidence_json FROM recovery_operations "
-                    "WHERE state IN ('pending', 'evidence_confirmed') OR "
-                    "(state = 'closed' AND json_extract(request_json, '$.target.kind') = 'slurm') "
-                    "ORDER BY recorded_at, recovery_id"
+                    "SELECT recovery_id, request_json, recorded_at, state, evidence_json FROM recovery_operations "
+                    "WHERE (state IN ('pending', 'evidence_confirmed') OR "
+                    "(state = 'closed' AND json_extract(request_json, '$.target.kind') = 'slurm')) "
+                    "AND (? IS NULL OR recovery_id > ?) ORDER BY recovery_id LIMIT 32",
+                    (self._recovery_cursor, self._recovery_cursor),
                 )
             )
+        deadline = time.monotonic() + 0.25
+        scanned = 0
         for row in rows:
+            if scanned and time.monotonic() >= deadline:
+                break
+            scanned += 1
+            self._recovery_cursor = str(row["recovery_id"])
             request = RecoverUnknownAssignment.from_dict(
                 json.loads(str(row["request_json"]))
             )
-            with self._publication_guards.hold("recovery:" + request.recovery_id):
-                if row["state"] == "closed":
-                    execution.reconcile_closed_slurm_recovery(
-                        request, json.loads(str(row["evidence_json"]))
-                    )
+            progress = (row["state"], row["evidence_json"])
+            retry = self._recovery_retries.get(request.recovery_id)
+            if retry is not None and not retry.ready(progress):
+                continue
+            with self._publication_guards.try_hold("recovery:" + request.recovery_id) as acquired:
+                if not acquired:
                     continue
-                self._advance_recovery(execution, request, str(row["recorded_at"]))
+                try:
+                    if row["state"] == "closed":
+                        execution.reconcile_closed_slurm_recovery(
+                            request, json.loads(str(row["evidence_json"]))
+                        )
+                    else:
+                        self._advance_recovery(execution, request, str(row["recorded_at"]))
+                except Exception as error:
+                    if request.recovery_id not in self._recovery_retries and len(self._recovery_retries) >= 256:
+                        self._recovery_retries.pop(next(iter(self._recovery_retries)))
+                    retry = self._recovery_retries.setdefault(request.recovery_id, _RecoveryRetry())
+                    retry.failed(error, operation_id=request.recovery_id,
+                                 assignment_id=request.assignment_id, state=progress)
+                else:
+                    self._recovery_retries.pop(request.recovery_id, None)
+        if scanned == len(rows) and len(rows) < 32:
+            self._recovery_cursor = None
+        elif rows:
+            self._wake.set()
 
     def _recovery_fences_ordinary_terminal(self, assignment_id: str) -> bool:
         """Whether recovery has permanently fenced ordinary terminal mutation."""
 
         with self._connection() as conn:
-            rows = tuple(
-                conn.execute(
-                    "SELECT request_json FROM recovery_operations "
+            return conn.execute(
+                    "SELECT 1 FROM recovery_operations "
                     "WHERE state IN ('pending', 'evidence_confirmed', 'closed') "
-                    "AND NOT (state='pending' AND principal_id='loom:terminal-recovery')"
-                )
-            )
-        for row in rows:
-            value = json.loads(str(row["request_json"]))
-            if (
-                isinstance(value, Mapping)
-                and value.get("assignment_id") == assignment_id
-            ):
-                return True
-        return False
+                    "AND NOT (state='pending' AND principal_id='loom:terminal-recovery') "
+                    "AND json_extract(request_json, '$.assignment_id') = ? LIMIT 1",
+                    (assignment_id,),
+            ).fetchone() is not None
 
     def _recovery_is_settling(self, assignment_id: str) -> bool:
         """Whether close and its existing-policy retry decision are incomplete."""
 
         with self._connection() as conn:
-            rows = tuple(
-                conn.execute(
-                    "SELECT request_json FROM recovery_operations "
-                    "WHERE state IN ('pending', 'evidence_confirmed')"
-                )
-            )
-        return any(
-            isinstance(value := json.loads(str(row["request_json"])), Mapping)
-            and value.get("assignment_id") == assignment_id
-            for row in rows
-        )
+            return conn.execute(
+                "SELECT 1 FROM recovery_operations WHERE state IN ('pending', 'evidence_confirmed') "
+                "AND json_extract(request_json, '$.assignment_id') = ? LIMIT 1", (assignment_id,),
+            ).fetchone() is not None
 
     def _recovery_retains_assignment(self, assignment_id: str) -> bool:
         """Whether recovery intentionally keeps this physical owner retained."""
 
         with self._connection() as conn:
-            rows = tuple(
-                conn.execute(
-                    "SELECT request_json, state FROM recovery_operations "
-                    "WHERE state IN ('pending', 'evidence_confirmed', 'closed')"
-                )
-            )
-        return any(
-            isinstance(value := json.loads(str(row["request_json"])), Mapping)
-            and value.get("assignment_id") == assignment_id
-            and not (
-                row["state"] == "closed"
-                and isinstance(value.get("target"), Mapping)
-                and value["target"].get("kind") == "slurm"
-            )
-            for row in rows
-        )
+            return conn.execute(
+                "SELECT 1 FROM recovery_operations WHERE state IN ('pending', 'evidence_confirmed', 'closed') "
+                "AND json_extract(request_json, '$.assignment_id') = ? "
+                "AND NOT (state = 'closed' AND json_extract(request_json, '$.target.kind') = 'slurm') LIMIT 1",
+                (assignment_id,),
+            ).fetchone() is not None
 
     def _record_scheduling_reload_intent(
         self,

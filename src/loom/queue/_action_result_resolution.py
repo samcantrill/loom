@@ -210,6 +210,11 @@ class ActionResultResolution:
         self, admission: Any, intent: Any, authority: Any, stage_plan: Any,
         readiness: Any, revision: Any, timings: PhaseTimings,
     ) -> Any:
+        # Context loading already captured this retained document, including
+        # its absence. Runs without project contracts cannot use action reuse;
+        # they need no per-stage bulk operation merely to rediscover that fact.
+        if not getattr(intent, "project_contracts_present", True):
+            return None
         run_uri, node = admission.run_uri, stage_plan.stage_name
         key = (run_uri, node)
         readiness_binding = (

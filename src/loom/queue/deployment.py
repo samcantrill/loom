@@ -60,6 +60,7 @@ from .agent_sessions import (
     LocalOwnerOperatorPolicy,
     TransportPrincipalPolicy,
 )
+from ._agent_transport_policy import parse_transport_policy
 from .errors import QueueConfigError, QueueConflictError, QueueError, QueueServiceError
 from .local_daemon import (
     ConfiguredGpuDevice,
@@ -561,6 +562,7 @@ def read_agent_spec(
             "max_concurrent_assignments",
             "container_policies",
             "storage",
+            "transport_policy",
             "slurm_submit_interval_seconds",
             "slurm_observation_policy",
         },
@@ -594,6 +596,7 @@ def read_agent_spec(
         declarations[name] = str(_path(payload, name, base))
     # The transport constructor is inert with no execution profiles or factory.
     AgentTlsClientConfig(
+        transport_policy=parse_transport_policy(payload.get("transport_policy")),
         url=_string(payload, "url"),
         server_ca_path=Path(cast(str, declarations["server_ca_path"])),
         certificate_path=Path(cast(str, declarations["certificate_path"])),
@@ -804,6 +807,7 @@ def qualify_agent_spec(
         slurm_observation_policy=parse_slurm_observation_policy(payload.get("slurm_observation_policy")),
         storage=parse_storage_policy(payload.get("storage")),
         max_concurrent_assignments=max_concurrent_assignments,
+        transport_policy=parse_transport_policy(payload.get("transport_policy")),
         url=_string(payload, "url"),
         server_ca_path=_path(payload, "server_ca_path", base),
         certificate_path=_path(payload, "certificate_path", base),
@@ -1533,6 +1537,8 @@ def _normalize_outbound_agent_payload(
     """Normalize outbound role values before identity projections."""
 
     normalized = dict(payload)
+    if payload.get("transport_policy") is not None:
+        normalized["transport_policy"] = parse_transport_policy(payload["transport_policy"]).to_dict()
     interval = submit_interval(payload.get("slurm_submit_interval_seconds"))
     if interval is not None:
         normalized["slurm_submit_interval_seconds"] = interval
@@ -2171,6 +2177,7 @@ def _outbound_active_projection(payload: Mapping[str, object]) -> dict[str, obje
             {
                 "registration": payload["registration"],
                 "reconnect_seconds": payload["reconnect_seconds"],
+                **({"transport_policy": payload["transport_policy"]} if payload.get("transport_policy") is not None else {}),
                 **({"slurm_submit_interval_seconds": payload["slurm_submit_interval_seconds"]} if payload.get("slurm_submit_interval_seconds") is not None else {}),
                 **({"slurm_observation_policy": payload["slurm_observation_policy"]} if payload.get("slurm_observation_policy") is not None else {}),
                 "resident_profiles": profiles,

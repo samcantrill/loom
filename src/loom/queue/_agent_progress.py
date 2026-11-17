@@ -183,7 +183,7 @@ def _run_manager(
     primary: Generator[_Progress, Any, Any], controls: Generator[_Progress, Any, Any]
 ) -> Any:
     """Rotate ready views with no executor queue beyond the occupied slots."""
-    budgets = {"bulk": 2, "control": 2, "poll": 1, "control_wait": 1, "slurm": 1}
+    budgets = {"bulk": 2, "control": 2, "poll": 1, "control_wait": 1, "slurm": 1, "slurm_http": 2}
     pools = {
         lane: ThreadPoolExecutor(
             max_workers=limit, thread_name_prefix=f"loom-agent-{lane}"
@@ -226,6 +226,10 @@ def _run_manager(
                         )
                     except StopIteration as complete:
                         view.value = complete.value
+                        # The generator may have handled a failed external
+                        # call and returned normally. Do not leak that caught
+                        # exception to a parent observing this completed view.
+                        view.error = None
                         view.complete = True
                         continue
                     except BaseException as error:

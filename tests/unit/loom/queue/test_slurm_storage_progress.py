@@ -18,6 +18,7 @@ def test_storage_pending_deduplicates_and_allows_peer_commit(monkeypatch):
     owner = SimpleNamespace(
         slurm_assignments=SimpleNamespace(schema_version=5, read=lambda _: SimpleNamespace(publication_completed_at=None)),
         config=SimpleNamespace(coordinator_shared_roots={}),
+        _slurm_chunk_futures={},
         _slurm_storage_futures={}, _slurm_storage_errors={},
         _slurm_storage_failures={}, _slurm_storage_retry_at={}, _slurm_storage_failed_publications=set(),
         _slurm_storage_progress={}, _slurm_storage_progress_lock=Lock(),
@@ -39,6 +40,7 @@ def test_storage_pending_deduplicates_and_allows_peer_commit(monkeypatch):
         assert release.wait(10)
         continuation.completed = True
 
+    owner._slurm_storage_count = MethodType(LocalDaemonExecution._slurm_storage_count, owner)
     owner.acknowledge_slurm_agent = acknowledge
     owner._perform_slurm_storage = MethodType(LocalDaemonExecution._perform_slurm_storage, owner)
     monkeypatch.setattr(_SlurmRetentionRequired, 'retain_guarded', retain)
@@ -93,6 +95,7 @@ def test_failed_storage_releases_worker_slot_and_retains_error(monkeypatch, erro
     owner = SimpleNamespace(
         slurm_assignments=SimpleNamespace(schema_version=5, read=lambda _: SimpleNamespace(publication_completed_at=None)),
         config=SimpleNamespace(coordinator_shared_roots={}),
+        _slurm_chunk_futures={},
         _slurm_storage_futures={'A': (future, None)}, _slurm_storage_errors={},
         _slurm_storage_failures={}, _slurm_storage_retry_at={}, _slurm_storage_failed_publications=set(),
         _slurm_storage_progress={}, _slurm_storage_progress_lock=Lock(),
@@ -100,6 +103,7 @@ def test_failed_storage_releases_worker_slot_and_retains_error(monkeypatch, erro
     evidence = {'assignment': {'assignment_id': 'A'}, 'sequence': 1, 'provider_released': True, 'release': {'state': 'CONTAINED'}}
     def acknowledge(*args, **kwargs):
         raise _SlurmRetentionRequired(owner, record, evidence)
+    owner._slurm_storage_count = MethodType(LocalDaemonExecution._slurm_storage_count, owner)
     owner.acknowledge_slurm_agent = acknowledge
     monkeypatch.setattr(module, 'monotonic', lambda: 10)
     if isinstance(error, OSError):
@@ -141,6 +145,7 @@ def test_observations_distinguish_compute_release_from_pending_publication():
     owner = SimpleNamespace(
         slurm_assignments=SimpleNamespace(list_run_unreleased=lambda _: [record],
                                          agent_evidence=lambda _: (1, {'provider_released': True})),
+        _slurm_chunk_futures={},
         _slurm_storage_futures={}, _slurm_storage_errors={}, _slurm_storage_retry_at={},
         _slurm_storage_progress={}, _slurm_storage_progress_lock=Lock(),
     )
@@ -192,3 +197,46 @@ def test_prepared_retention_cannot_commit_after_ownership_changes(changed):
     current = copy(original)
     setattr(current, changed, {'changed': True} if changed == 'delivery' else 'changed')
     assert not continuation.validates(owner, current, evidence)
+
+
+def test_pending_chunk_deduplicates_and_does_not_block_peer_storage():
+    from loom.queue._publication_guards import PublicationGuards
+    from time import monotonic, sleep
+
+    entered, release, wake = Event(), Event(), Event()
+    calls = []
+
+    def write(assignment, *args, **kwargs):
+        calls.append(assignment)
+        if assignment == "A":
+            entered.set()
+            assert release.wait(5)
+        return 3
+
+    owner = SimpleNamespace(
+        slurm_assignments=SimpleNamespace(write_output_chunk=write),
+        _slurm_chunk_futures={}, _slurm_storage_futures={},
+        _daemon_owner=lambda: SimpleNamespace(_wake=wake, _publication_guards=guards),
+    )
+    guards = PublicationGuards()
+    owner._slurm_storage_count = MethodType(LocalDaemonExecution._slurm_storage_count, owner)
+    record = lambda name: SimpleNamespace(assignment=SimpleNamespace(assignment_id=name), bootstrap_incarnation="boot")
+    evidence = {"identity": {}, "transfer_id": "transfer", "offset": 0, "data": "YWJj", "final": True}
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        owner._slurm_storage_workers = pool
+        try:
+            assert LocalDaemonExecution._poll_slurm_output(owner, record("A"), evidence)["disposition"] == "pending"
+            assert entered.wait(1)
+            for _ in range(20):
+                assert LocalDaemonExecution._poll_slurm_output(owner, record("A"), evidence)["disposition"] == "pending"
+            deadline = monotonic() + 2
+            while LocalDaemonExecution._poll_slurm_output(owner, record("B"), evidence).get("received") != 3:
+                assert monotonic() < deadline
+                sleep(0.005)
+            assert calls == ["A", "B"]
+            assert not release.is_set()
+        finally:
+            release.set()
+        owner._slurm_chunk_futures["A"][1].result(timeout=2)
+        assert LocalDaemonExecution._poll_slurm_output(owner, record("A"), evidence) == {"received": 3}
+        assert calls == ["A", "B"]

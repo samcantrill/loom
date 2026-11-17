@@ -78,6 +78,62 @@ def location(value: object) -> dict[str, PlainData]:
             "root_id": value["root_id"], "path": _relative(value["path"])}
 
 
+
+_INPUT_MANIFEST_BYTES = 64 * 1024 * 1024
+
+
+def _input_validation_policy(value: object) -> dict[str, PlainData]:
+    if not isinstance(value, Mapping):
+        raise QueueServiceError("input validation policy must be a protected mapping")
+    if value == {"policy": "recursive"}:
+        return {"policy": "recursive"}
+    if (set(value) != {"policy", "version", "manifest", "entry_points"}
+        or value.get("policy") != "trusted_immutable_dataset"
+        or not isinstance(value["version"], str) or not value["version"].strip()
+        or len(value["version"]) > 256):
+        raise QueueServiceError("immutable input validation identity is invalid")
+    manifest = value["manifest"]
+    if (not isinstance(manifest, Mapping) or set(manifest) != {"path", "sha256"}
+        or not isinstance(manifest["sha256"], str) or len(manifest["sha256"]) != 64
+        or any(c not in "0123456789abcdef" for c in manifest["sha256"])):
+        raise QueueServiceError("immutable input manifest identity is invalid")
+    entries = value["entry_points"]
+    if not isinstance(entries, (list, tuple)) or not entries or len(entries) > 256:
+        raise QueueServiceError("immutable inputs require bounded entry points")
+    entries = [_relative(entry) for entry in entries]
+    if len(entries) != len(set(entries)):
+        raise QueueServiceError("immutable input entry points must be unique")
+    return {"policy": "trusted_immutable_dataset", "version": value["version"],
+            "manifest": {"path": _relative(manifest["path"]), "sha256": manifest["sha256"]},
+            "entry_points": cast(PlainData, entries)}
+
+
+def _require_immutable_inputs(root: Mapping[str, PlainData]) -> bool:
+    policy = root.get("input_validation")
+    if not isinstance(policy, Mapping) or policy["policy"] != "trusted_immutable_dataset":
+        return False
+    manifest = cast(Mapping[str, PlainData], policy["manifest"])
+    path = resolve(root, str(manifest["path"]))
+    if not path.is_file() or path.stat().st_size > _INPUT_MANIFEST_BYTES:
+        raise QueueServiceError("immutable input manifest must be a bounded regular file")
+    digest = hashlib.sha256()
+    consumed = 0
+    with path.open("rb") as stream:
+        while chunk := stream.read(min(1024 * 1024, _INPUT_MANIFEST_BYTES - consumed + 1)):
+            consumed += len(chunk)
+            if consumed > _INPUT_MANIFEST_BYTES:
+                raise QueueServiceError("immutable input manifest exceeds its size bound")
+            digest.update(chunk)
+    if digest.hexdigest() != manifest["sha256"]:
+        raise QueueServiceError("immutable input manifest bytes mismatch")
+    for entry in cast(list[str], policy["entry_points"]):
+        selected = resolve(root, entry)
+        if (not (selected.is_dir() or selected.is_file())
+            or not os.access(selected, os.R_OK | (os.X_OK if selected.is_dir() else 0))):
+            raise QueueServiceError("immutable input entry point is unavailable")
+    return True
+
+
 def root_bindings(value: object) -> dict[str, PlainData]:
     """Decode challenged storage or explicitly read-only external directories.
 
@@ -92,7 +148,7 @@ def root_bindings(value: object) -> dict[str, PlainData]:
             raise QueueServiceError("protected shared root is invalid")
         external = "qualification" in raw
         fields = {"host_path", "container_path", "access", "qualification" if external else "challenge"}
-        if set(raw) - (set() if external else {"publication"}) != fields:
+        if set(raw) - ({"input_validation"} if external else {"publication"}) != fields:
             raise QueueServiceError("protected shared root is invalid")
         if not isinstance(raw["host_path"], str) or not Path(raw["host_path"]).is_absolute():
             raise QueueServiceError("shared root host_path must be absolute")
@@ -105,6 +161,8 @@ def root_bindings(value: object) -> dict[str, PlainData]:
                 raise QueueServiceError("input_directory qualification requires read-only access")
             result[alias] = {"host_path": raw["host_path"], "container_path": target,
                              "access": "ro", "qualification": {"kind": "input_directory"}}
+            if "input_validation" in raw:
+                cast(dict[str, PlainData], result[alias])["input_validation"] = _input_validation_policy(raw["input_validation"])
             continue
         challenge = raw["challenge"]
         if (raw["access"] not in ("ro", "rw") or not isinstance(challenge, Mapping)
@@ -251,7 +309,7 @@ class InputValidationIOError(QueueServiceError):
 def _selected_input_paths(
     required: Mapping[str, PlainData], roots: Mapping[str, PlainData],
     checkpoint: Callable[[], None],
-) -> set[Path]:
+) -> dict[Path, bool]:
     selected = cast(Mapping[str, PlainData], required["roots"])
     if not set(selected).issubset(roots):
         raise QueueServiceError("shared execution root is not mapped")
@@ -261,12 +319,17 @@ def _selected_input_paths(
         raise QueueServiceError("shared execution qualification conflicts")
     # Resolve every declaration before pruning overlapping traversals, so a
     # missing descendant cannot hide behind an existing selected parent.
-    paths = set()
+    immutable = {}
+    for alias in selected:
+        checkpoint()
+        immutable[alias] = _require_immutable_inputs(cast(Mapping[str, PlainData], roots[alias]))
+    paths: dict[Path, bool] = {}
     for item in cast(list[Mapping[str, PlainData]], required["locations"]):
         checkpoint()
-        paths.add(resolve(
-            cast(Mapping[str, PlainData], roots[str(item["root_id"])]), str(item["path"])
-        ))
+        alias = str(item["root_id"])
+        path = resolve(cast(Mapping[str, PlainData], roots[alias]), str(item["path"]))
+        # An overlapping recursive binding keeps its stronger traversal rule.
+        paths[path] = paths.get(path, False) or not immutable[alias]
     return paths
 
 
@@ -276,7 +339,12 @@ def require_bindings(
     cancelled: Callable[[], bool] | None = None,
     progress: Callable[[InputValidationProgress], None] | None = None,
 ) -> None:
-    """Inspect live inputs at this boundary, without caching prior success.
+    """Inspect selected inputs under their protected validation policy.
+
+    Recursive inspection is the default. Trusted immutable roots instead verify
+    their version-bound manifest, entry points and every selected location. This
+    assumes publisher immutability; it does not detect in-place payload changes.
+    Neither policy caches success across this call boundary.
 
     Cancellation is cooperative between filesystem operations. Progress is
     emitted at most every five seconds, plus initial/final observations. Neither
@@ -307,6 +375,11 @@ def require_bindings(
         for selected_path in sorted(paths, key=lambda path: (len(path.parts), str(path))):
             checkpoint()
             if any(selected_path.is_relative_to(parent) for parent in covered):
+                continue
+            if not paths[selected_path]:
+                if not (selected_path.is_dir() or selected_path.is_file()):
+                    raise QueueServiceError("shared input requires a regular file or directory")
+                examined += 1
                 continue
             if selected_path.is_dir():
                 for directory, names, files in os.walk(selected_path, onerror=unreadable):

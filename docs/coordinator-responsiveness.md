@@ -371,7 +371,154 @@ Missing or conflicting poll identities still cannot authorize that transition.
 Fault tests block sbatch, accounting or containment and require the same agent
 to observe and cancel an independent assignment. They also assert that journal
 transitions stay on the owner thread. Actual outbound service drain/restart and
-embedded terminal-recovery checks cover the composed paths. HTTP acknowledgements
-still have a finite synchronous attempt inside the Slurm bridge; removing that
-last per-call dependency remains separate work. No physical Slurm qualification
-or live deployment upgrade is implied by these source tests.
+embedded terminal-recovery checks cover the composed paths. No physical Slurm
+qualification or live deployment upgrade is implied by these source tests.
+
+The outbound bridge now advances HTTP acknowledgements independently, with two
+HTTP workers, at most eight unfinished attempts and 32 transient exact-response
+entries. Pending attempts deduplicate by session, epoch and exact evidence bytes;
+task pagination does not change that identity. The durable outbox owns replay
+after restart. Short-lived completed replies allow an assignment to finish its
+current turn without repeating the same exchange. Fresh cancellation tasks take
+precedence over a cached negative cancellation reply. Pending-storage replies
+are never retained as completed effects.
+
+Submission pauses at an explicit owner-thread authorization gate after its
+durable SUBMITTING claim and before sbatch. An unfinished acknowledgement leaves
+that gate retained; a fresh callback advances it on a later turn. It cannot
+unwind the generator and accidentally authorize a second submission. Restart
+still reconciles the retained uncertain submission through exact accounting.
+Completed observations likewise survive an unfinished acknowledgement so they
+can reach containment and release rather than continually starting new queries.
+
+Embedded execution consumes completed assignment I/O before loading run contexts.
+Unchanged, authority-confirmed preparation projections do not repeat the original
+preparation write transaction. Runs without project contracts record that absence
+in their validated context and bypass per-stage action-reuse inspection; changed
+retained documents invalidate that context through the existing byte-bound cache.
+
+Recovery reconciliation scans up to 32 rows with a rotating identity cursor and
+a cooperative quarter-second budget. Busy per-recovery guards are skipped, and a
+failed recovery has its own paced retry. Assignment-fence queries select the exact
+assignment in SQL rather than decoding the entire recovery population. The budget
+does not interrupt an individual filesystem call. Slurm output chunk IO now
+uses the separate bounded path described below.
+
+### Input trust and preparation fairness
+
+Read-only `input_directory` roots may select an explicit validation policy in
+protected coordinator and execution-profile configuration. Omission (or
+`input_validation: {policy: recursive}`) preserves recursive inspection.
+
+```yaml
+datasets:
+  host_path: /site/datasets/formatted
+  container_path: /loom/inputs/formatted
+  access: ro
+  qualification: {kind: input_directory}
+  input_validation:
+    policy: trusted_immutable_dataset
+    version: publisher-version-1
+    manifest:
+      path: manifest.json
+      sha256: "<sha256 of the selected existing manifest>"
+    entry_points: [records, manifest.json]
+```
+
+The trusted policy verifies the exact protected root facts, the manifest digest,
+every declared entry point and every selected location. It does not walk payload
+directories. Manifest hashing streams chunks of at most one MiB with a 64 MiB
+total bound; at most 256 explicit entry points are admitted. Relative paths
+retain the existing no-escape/no-symbolic-link checks. The policy, version,
+manifest and ordered entry points participate in portable root identity, so a
+different policy/version cannot reuse another root's inspection evidence.
+
+This is a publisher-immutability contract: changing payloads while retaining
+the pinned manifest is not detected. Applications retain their semantic input
+checks. The policy travels with shared root qualifications through preparation,
+agent and compute/container decoding; it is not an output-publication setting.
+Select it only with matching installed workers and existing publisher manifests.
+Retained assignments preserve their originally admitted root identities.
+
+Coordinator preparation tags CPU and GPU work and reserves one of its 32 owner
+slots for each class. A class can hold at most 31 owners while the other class
+can repeatedly prepare and dispatch. Completed prerequisites remain retained;
+there is no eviction or CPU-job concurrency ceiling. The existing two preparation
+workers and their actual in-flight ownership remain bounded. Slurm additionally
+checks GPU-budget availability before starting new preparation, then rechecks
+atomically when reserving the assignment. Already reserved operations bypass
+this advisory preflight and retain their original replay path.
+
+
+### Output transfer and transaction boundaries
+
+New outbound agents may declare `slurm-pending-output-v1` alongside
+`slurm-pending-effects-v1`. The coordinator advertises and checks this extension
+before returning pending chunk acknowledgements. Existing registrations retain
+their negotiated protocol; select the extension in protected registration and
+principal policy during the supported upgrade. Embedded Slurm uses the same
+finite output turns. Older agents retain their synchronous compatibility path.
+
+At most eight assignments own a chunk future, sharing the existing two storage
+workers and aggregate 32-operation bound with publication and retention.
+Repeated exact requests observe the same future. Completed entries may be
+reclaimed because persisted transfer offsets, verified staging/published bytes
+and the sender's retained chunk own replay. A pending chunk never advances the
+sender's offset, accepts scientific output, or authorizes cleanup. Status exposes
+its process-local queued/running/received/failed state.
+
+A stable advisory lock under the receiver's private `transfer-locks` directory
+serializes each transfer across store instances and restarts. Filesystem writes,
+fsync, checksums and publication occur outside SQLite write transactions. A short
+transaction then rechecks incarnation, fence, descriptor and previous offset
+before recording receipt. The lock files must not be unlinked while this receiver
+is active. The deployment must support advisory locking on its selected storage.
+A crash after append or rename but before receipt is recovered by exact replay;
+whole-artifact checksums remain enforced for relayed payloads.
+
+### Elapsed-time policies
+
+The protected outbound agent declaration and bootstrap JSON accept an optional
+policy (omission retains ten-second defaults):
+
+```yaml
+transport_policy:
+  connect_timeout_seconds: 10
+  response_timeout_seconds: 10
+```
+
+Both values must be finite, positive and at most 300 seconds. The response budget
+covers the entire exchange, including connection setup. Socket deadlines and one
+timer per occupied HTTP slot prevent trickled headers/body bytes from resetting
+that budget. A resolver or TLS setup blocked in OS IO still occupies its bounded
+worker; it cannot send after expiry. No unbounded replacement workers are created.
+An expired exchange retains an uncertain result and its exact replay identity.
+It does not terminate a workload or authorize another scheduler submission.
+
+Startup persists its original wall-clock deadline across restart and converts
+the remaining allowance, capped at the configured startup budget, into a
+monotonic deadline for each invocation. Wall-clock changes cannot extend retries
+within that invocation. Coordinator accepted-time checks still govern grants;
+this local deadline is an abandonment policy, not execution authority.
+Terminal-result grace and Slurm command deadlines remain separate settings.
+Workload walltime remains a protected placement/profile setting and must include
+startup and final publication as well as computation.
+
+### Large readiness graphs and lifecycle observations
+
+Run orchestration advances 32 authored stages per turn with a rotating stage
+cursor, preserving their original ready-order values. Restart may rescan from the
+head without repeating acknowledged preparation. Built-in work stores fetch the
+run's preparation intents once per pass instead of opening a connection for every
+projected stage. The public orchestrator's `max_work_items` and `after_stage`
+parameters bound a pass; `next_stage` provides its next cursor.
+
+Preparation event reporting uses the exact native attempt receipt instead of
+retaining two whole-run snapshots per stage. Native replay lookup selects its
+exact event rather than decoding all prior events. Observer flushing alternates
+its fact queues and yields after 32 facts or a cooperative 100 ms budget. One
+slow callback may exceed that budget; later facts retain their original identity
+for another turn. Observation remains best effort, with no new durable queue.
+The 257-stage unavailable-Slurm/independent-resident regression passes with its
+unchanged 45-second completion bound. This is source/fake-scheduler evidence,
+not physical Slurm or GPU qualification.

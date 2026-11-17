@@ -3361,3 +3361,18 @@ def test_observation_policy_refuses_invalid_selection_before_qualification(tmp_p
     for read in (deployment.read_agent_spec, deployment.load_outbound_agent_service_config):
         with pytest.raises(QueueConfigError):
             read(source)
+
+
+def test_outbound_transport_budgets_are_read_without_probes_and_bind_policy(tmp_path):
+    from loom.queue.deployment import read_agent_spec
+    source = _agent_config(tmp_path)
+    before = read_agent_spec(source)
+    payload = json.loads(source.read_text())
+    payload["transport_policy"] = {
+        "connect_timeout_seconds": 3, "response_timeout_seconds": 15,
+    }
+    _write_protected(source, payload)
+    after = read_agent_spec(source)
+    assert after.declaration_digest != before.declaration_digest
+    service = load_outbound_agent_service_config(source)
+    assert service.client.transport_policy.to_dict() == payload["transport_policy"]

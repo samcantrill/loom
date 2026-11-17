@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from hashlib import sha256
 import logging
 from threading import RLock
+from time import monotonic
 from typing import Any, cast
 
 from loom.pipeline.event_sinks import (
@@ -78,6 +79,7 @@ class LifecycleObservers:
             tuple[Any, AuthoritativeRunSnapshot, AuthoritativeRunSnapshot]
         ] = []
         self._observations: list[tuple[Any, str, dict[str, Any]]] = []
+        self._flush_observation_next = False
 
     def start(self) -> None:
         """Construct only after the coordinator's root and identity guards."""
@@ -110,36 +112,45 @@ class LifecycleObservers:
         )
         return wrapper(store, self, run_uri)
 
-    def flush_prepared(self, run_uri: str | None = None) -> None:
+    def flush_prepared(self, run_uri: str | None = None) -> bool:
         # Emit on the coordinator between readiness windows: observer revisions
         # must not invalidate an in-flight preparation cursor. The transient
         # facts carry their original commit revision and time; crash loss is
         # intentionally best effort, with no durable delivery queue.
+        deadline = monotonic() + 0.1
+        for _ in range(32):
+            with self._lock:
+                queues: tuple[tuple[list[Any], Callable[[Any], str]], ...] = (
+                    (self._observations, lambda item: item[1]),
+                    (self._prepared, lambda item: item[2].run_uri),
+                )
+                if not self._flush_observation_next:
+                    queues = tuple(reversed(queues))
+                selected = None
+                observation = False
+                for queue, uri_of in queues:
+                    index = next((i for i, item in enumerate(queue)
+                                  if run_uri is None or uri_of(item) == run_uri), None)
+                    if index is not None:
+                        selected = queue.pop(index)
+                        observation = queue is self._observations
+                        self._flush_observation_next = not observation
+                        break
+            if selected is None:
+                break
+            if observation:
+                store, uri, fact = selected
+                self.emit(store, uri, **fact)
+            else:
+                store, before, after = selected
+                self.transitions(store, before, after)
+            # Cooperative budget: do not start another callback/history read
+            # after slow storage consumed this turn. One callback cannot be
+            # interrupted; the remaining facts keep their original identity.
+            if monotonic() >= deadline:
+                break
         with self._lock:
-            pending = [
-                item
-                for item in self._prepared
-                if run_uri is None or item[2].run_uri == run_uri
-            ]
-            self._prepared = [
-                item
-                for item in self._prepared
-                if run_uri is not None and item[2].run_uri != run_uri
-            ]
-            observations = [
-                item
-                for item in self._observations
-                if run_uri is None or item[1] == run_uri
-            ]
-            self._observations = [
-                item
-                for item in self._observations
-                if run_uri is not None and item[1] != run_uri
-            ]
-        for store, before, after in pending:
-            self.transitions(store, before, after)
-        for store, uri, fact in observations:
-            self.emit(store, uri, **fact)
+            return bool(self._prepared or self._observations)
 
     def defer_emit(self, store: Any, run_uri: str, **fact: Any) -> None:
         with self._lock:
@@ -163,10 +174,14 @@ class LifecycleObservers:
         ).hexdigest()
         try:
             with self._lock:
-                if any(
-                    item.event_id == event_id
-                    for item in store.list_audit_events(run_uri)
-                ):
+                find = getattr(store, "_find_audit_event", None)
+                existing = (
+                    find(run_uri, event_id) if callable(find) else next(
+                        (item for item in store.list_audit_events(run_uri)
+                         if item.event_id == event_id), None,
+                    )
+                )
+                if existing is not None:
                     return
                 if revision.created_at is None:
                     raise QueueServiceError(
@@ -286,7 +301,11 @@ class _ObservedAuthority:
                     "selected authority lacks native observer capability"
                 )
         # Authenticate/probe before admission or execution mutations, including empty runs.
-        store.list_audit_events(run_uri)
+        find = getattr(store, "_find_audit_event", None)
+        if callable(find):
+            find(run_uri, "")
+        else:
+            store.list_audit_events(run_uri)
 
     def __getattr__(self, name: str) -> Any:
         method = getattr(self._store, name)
@@ -295,6 +314,20 @@ class _ObservedAuthority:
 
         def commit(*args: Any, **kwargs: Any) -> Any:
             with self._observers._lock:
+                if name == "ensure_prepared_attempt":
+                    # This operation only prepares one PENDING attempt. Its
+                    # durable receipt already carries the exact stage/revision;
+                    # two whole-run snapshots per stage made large independent
+                    # graphs quadratic and retained all those snapshots in RAM.
+                    result = method(*args, **kwargs)
+                    attempt = result.attempt
+                    self._observers.defer_emit(
+                        self._store, self._run_uri,
+                        event_type="stage.planned", stage_name=attempt.stage_name,
+                        revision=attempt.revision,
+                        payload={"status": attempt.status.value, "reason": None},
+                    )
+                    return result
                 before = self._store.open_run(self._run_uri)
                 result = method(*args, **kwargs)
                 after = self._store.open_run(self._run_uri)

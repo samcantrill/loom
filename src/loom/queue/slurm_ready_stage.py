@@ -8,6 +8,9 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass, replace
 import base64
+import fcntl
+import os
+import stat
 from datetime import datetime, timezone
 from functools import lru_cache
 import hashlib
@@ -1481,71 +1484,78 @@ class SQLiteSlurmStageAssignments:
         record = self.read(assignment_id)
         if record.bootstrap_incarnation != incarnation:
             raise QueueConflictError("SLURM bootstrap incarnation conflicts")
-        with self._transaction() as conn:
+        # Serialize retries across store instances/processes without holding a
+        # SQLite writer through shared-storage IO. Never unlink these locks:
+        # waiters must continue to name the same inode after a restart.
+        lock_root = self.transfer_root / "transfer-locks"
+        lock_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        lock_name = hashlib.sha256((assignment_id + "\0" + transfer_id).encode()).hexdigest()
+        fd = os.open(lock_root / lock_name, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise QueueConflictError("SLURM output lock is unsafe")
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            return self._write_locked_output_chunk(
+                record, incarnation, transfer_id, offset, data, final=final,
+            )
+        finally:
+            os.close(fd)
+
+    def _write_locked_output_chunk(
+        self, record: SlurmStageRecord, incarnation: str, transfer_id: str,
+        offset: int, data: bytes, *, final: bool,
+    ) -> int:
+        assignment_id = record.assignment.assignment_id
+        with _connect(self.path, sqlite_policy=self._sqlite_policy, require_existing=True) as conn:
+            conn.row_factory = sqlite3.Row
             row = conn.execute(
                 f"SELECT descriptor_json, received_bytes, finalized FROM {_OUTPUT_TABLE} "
                 "WHERE assignment_id = ? AND transfer_id = ?",
                 (assignment_id, transfer_id),
             ).fetchone()
-            if row is None:
-                raise QueueConflictError("SLURM output transfer is not declared")
-            descriptor = _RemoteOutputArtifact.from_dict(json.loads(str(row[0])))
-            target = (
-                self.transfer_root / assignment_id / "outputs" / descriptor.logical_name
-            )
-            part = (
-                self.transfer_root / assignment_id / "staging" / f"{transfer_id}.part"
-            )
-
-            def publish_pair():
-                if descriptor.preparation_report_transfer is not None:
-                    from ._preparation_report_transfer import publish
-
-                    publish(descriptor, target)
-
-            received = int(row["received_bytes"])
-            if bool(row["finalized"]):
-                existing = _read_regular_file_range(target, offset, len(data))
-                if existing != data:
-                    raise QueueConflictError("SLURM output replay conflicts")
-                publish_pair()
-                return descriptor.size_bytes
-            if _published_file_matches(
-                target,
-                size_bytes=descriptor.size_bytes,
-                digest=descriptor.digest,
-            ):
-                if offset + len(data) > descriptor.size_bytes:
-                    raise QueueConflictError("SLURM output replay exceeds its size")
-                existing = _read_regular_file_range(target, offset, len(data))
-                if existing != data:
-                    raise QueueConflictError("SLURM output replay conflicts")
-                conn.execute(
-                    f"UPDATE {_OUTPUT_TABLE} SET received_bytes = ?, finalized = 1 "
-                    "WHERE assignment_id = ? AND transfer_id = ?",
-                    (descriptor.size_bytes, assignment_id, transfer_id),
-                )
-                publish_pair()
-                return descriptor.size_bytes
+        if row is None:
+            raise QueueConflictError("SLURM output transfer is not declared")
+        descriptor = _RemoteOutputArtifact.from_dict(json.loads(str(row[0])))
+        if offset + len(data) > descriptor.size_bytes:
+            raise QueueConflictError("SLURM output replay exceeds its size")
+        target = self.transfer_root / assignment_id / "outputs" / descriptor.logical_name
+        part = self.transfer_root / assignment_id / "staging" / f"{transfer_id}.part"
+        received = int(row["received_bytes"])
+        finalized = bool(row["finalized"])
+        if finalized or _published_file_matches(
+            target, size_bytes=descriptor.size_bytes, digest=descriptor.digest,
+        ):
+            if _read_regular_file_range(target, offset, len(data)) != data:
+                raise QueueConflictError("SLURM output replay conflicts")
+            received, finalized = descriptor.size_bytes, True
+        else:
             received = _append_exact_chunk(part, offset, received, data)
             if received > descriptor.size_bytes:
                 raise QueueConflictError("SLURM output exceeds its declared size")
-            should_finalize = final or received == descriptor.size_bytes
-            if should_finalize:
-                if (
-                    received != descriptor.size_bytes
-                    or _file_digest(part) != descriptor.digest
-                ):
-                    raise QueueConflictError(
-                        "SLURM output bytes conflict with manifest"
-                    )
+            finalized = final or received == descriptor.size_bytes
+            if finalized:
+                if received != descriptor.size_bytes or _file_digest(part) != descriptor.digest:
+                    raise QueueConflictError("SLURM output bytes conflict with manifest")
                 _publish_staged_file(part, target)
-                publish_pair()
-            conn.execute(
+        if finalized and descriptor.preparation_report_transfer is not None:
+            from ._preparation_report_transfer import publish
+
+            publish(descriptor, target)
+        # Crash before this commit leaves exact staging/published bytes. Replay
+        # verifies those bytes before acknowledging the original chunk.
+        with self._transaction() as conn:
+            current = self._row(conn, assignment_id)
+            if current["bootstrap_incarnation"] != incarnation or current["fence"] != record.fence:
+                raise QueueConflictError("SLURM output authorization changed")
+            updated = conn.execute(
                 f"UPDATE {_OUTPUT_TABLE} SET received_bytes = ?, finalized = ? "
-                "WHERE assignment_id = ? AND transfer_id = ?",
-                (received, int(should_finalize), assignment_id, transfer_id),
+                "WHERE assignment_id = ? AND transfer_id = ? "
+                "AND descriptor_json = ? AND received_bytes = ? AND finalized = ?",
+                (received, int(finalized), assignment_id, transfer_id,
+                 row["descriptor_json"], row["received_bytes"], row["finalized"]),
             )
+            if updated.rowcount != 1:
+                raise QueueConflictError("SLURM output transfer changed during IO")
         return received
 
     def committed_result(

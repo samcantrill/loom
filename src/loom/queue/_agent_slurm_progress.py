@@ -1,21 +1,69 @@
 """Single scheduler writer with acknowledgements on the service owner thread."""
 
 from concurrent.futures import Future
+from collections import OrderedDict
+import json
 from queue import Empty, Queue
 from threading import Lock
 from time import monotonic
 
 from ._agent_progress import _Spawn, _delay, _external, _steps
 from .errors import QueueError, QueueServiceError
-from ._slurm_result_transport import SlurmRequestUncertain
+from ._slurm_result_transport import SlurmEffectPending
+
+
+class SlurmAcknowledgements:
+    """Manager-owned finite HTTP attempts; journals remain the replay authority."""
+
+    def __init__(self):
+        self._views = OrderedDict()
+
+    def exchange(self, client, binding, evidence):
+        # A task-page cursor is not part of evidence identity. In particular,
+        # pagination must not turn an exact replay into another HTTP operation.
+        body = {key: value for key, value in binding.items() if key != "cursor"}
+        body["cursor"] = None
+        body["evidence"] = evidence
+        key = json.dumps(body, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        now = monotonic()
+        for old, (view, expires) in tuple(self._views.items()):
+            if view.complete and now >= expires:
+                del self._views[old]
+        existing = self._views.get(key)
+        if existing is None:
+            if sum(not view.complete for view, _ in self._views.values()) >= 8:
+                raise SlurmEffectPending(0.05)
+            while len(self._views) >= 32:
+                old = next((item for item, (view, _) in self._views.items() if view.complete), None)
+                if old is None:
+                    raise SlurmEffectPending(0.05)
+                del self._views[old]
+            view = yield _Spawn(_steps(client._call, "slurm_work", body))
+            self._views[key] = view, float("inf")
+            raise SlurmEffectPending(0.05)
+        view, _ = existing
+        self._views.move_to_end(key)
+        if not view.complete:
+            raise SlurmEffectPending(0.05)
+        if view.error is not None:
+            del self._views[key]
+            raise view.error
+        value = view.value
+        if value.get("disposition") == "pending":
+            # A completed receipt for unfinished storage must be polled again.
+            del self._views[key]
+        else:
+            self._views[key] = view, now + 30
+        return value
 
 
 def drive_operation(client, operation, binding, *args, **kwargs):
-    """Yield scheduler IO while retaining ordered, synchronous acknowledgements.
+    """Yield scheduler IO and each exact acknowledgement independently.
 
     Only AgentSlurmJobs state crosses into the dedicated worker. HTTP/session
     mutations stay on the manager. A worker cannot pass its next journal effect
-    until the manager returns that exact acknowledgement. Shutdown closes the
+    until the manager returns that exact acknowledgement. Pending HTTP ends
+    only that assignment's turn. Shutdown closes the
     bridge so an outstanding callback cannot deadlock executor shutdown.
     """
     def acknowledge(evidence):
@@ -23,6 +71,10 @@ def drive_operation(client, operation, binding, *args, **kwargs):
 
     if not client._service_progress:
         return operation(*args, acknowledge=acknowledge, **kwargs)
+
+    acknowledgements = getattr(client, "_slurm_acknowledgements", None)
+    if acknowledgements is None:
+        acknowledgements = client._slurm_acknowledgements = SlurmAcknowledgements()
 
     pending = Queue(maxsize=1)
     lock = Lock()
@@ -57,11 +109,10 @@ def drive_operation(client, operation, binding, *args, **kwargs):
                 pass
             else:
                 try:
-                    value = yield from _steps(
-                        client._call, "slurm_work", {**binding, "evidence": evidence},
-                    )
-                except SlurmRequestUncertain as error:
-                    # The scheduler yields only this assignment, preserving its outbox.
+                    value = yield from acknowledgements.exchange(client, binding, evidence)
+                except Exception as error:
+                    # Pending/uncertain attempts preserve the durable outbox.
+                    # Protocol errors are still delivered to the journal owner.
                     reply.set_exception(error)
                 except BaseException as error:
                     reply.set_exception(error)

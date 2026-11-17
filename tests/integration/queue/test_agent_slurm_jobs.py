@@ -97,8 +97,8 @@ def test_outbound_service_settles_slurm_while_drained(
             return accounting(**selection)
         monkeypatch.setattr(runner, "discover_named_operations", batch)
         monkeypatch.setattr(runner, "discover_named_operation", accounting)
-    from loom.queue.agent_sessions import SLURM_PENDING_EFFECTS_CAPABILITY
-    capabilities = (SLURM_SUBMISSION_CAPABILITY,) + ((SLURM_PENDING_EFFECTS_CAPABILITY,) if pending_effects else ())
+    from loom.queue.agent_sessions import SLURM_PENDING_EFFECTS_CAPABILITY, SLURM_ASYNC_OUTPUT_CAPABILITY
+    capabilities = (SLURM_SUBMISSION_CAPABILITY,) + ((SLURM_PENDING_EFFECTS_CAPABILITY, SLURM_ASYNC_OUTPUT_CAPABILITY) if pending_effects else ())
     config = LocalDaemonConfig(
         coordinator_root=tmp_path / "coordinator",
         agent_root=None,

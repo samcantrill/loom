@@ -483,6 +483,10 @@ class InMemoryStageWorkStore:
         )
         return next(matches, None)
 
+    def _list_intents(self, admission_id: str) -> tuple[PreparationIntent, ...]:
+        return tuple(intent for intent in self._intents.values()
+                     if intent.request.admission_id == admission_id)
+
     def replace_unaccepted_intent(
         self, previous: PreparationIntent, replacement: PreparationIntent
     ) -> PreparationIntent:
@@ -679,6 +683,17 @@ class SQLiteStageWorkStore:
             if row is None
             else PreparationIntent.from_dict(_json_loads(cast(str, row["intent_json"])))
         )
+
+    def _list_intents(self, admission_id: str) -> tuple[PreparationIntent, ...]:
+        if not self.path.exists():
+            if not self._allow_initialize:
+                raise CoordinatorStoreError("coordinator store is missing")
+            return ()
+        with self._read_connection() as conn:
+            rows = conn.execute(
+                "SELECT intent_json FROM preparation_intents WHERE admission_id=?", (admission_id,),
+            ).fetchall()
+        return tuple(PreparationIntent.from_dict(_json_loads(row[0])) for row in rows)
 
     def create_or_refresh(self, record: StageWorkRecord) -> StageWorkRecord:
         with self._transaction() as conn:
@@ -899,6 +914,7 @@ class RunOrchestrator:
         self.authority = authority
         self.store = store
         self.owner_id = _non_empty(owner_id, "owner_id")
+        self.next_stage: str | None = None
 
     def reconcile(
         self,
@@ -912,6 +928,7 @@ class RunOrchestrator:
         run_priority: int = 0,
         enqueue_sequence: int = 0,
         max_work_items: int = 256,
+        after_stage: str | None = None,
         controller_action: ControllerActionHandler | None = None,
         ready_action: ReadyActionHandler | None = None,
     ) -> tuple[StageWorkRecord, ...]:
@@ -946,7 +963,17 @@ class RunOrchestrator:
             RunStatus.INTERRUPTED,
             RunStatus.SUCCEEDED,
         }
-        self._refresh_projection_eligibility(
+        ordered = tuple(enumerate(plan.ordered_stage_plans))
+        start = next((i + 1 for i, stage in ordered if stage.stage_name == after_stage), 0)
+        scan = (ordered[start:] + ordered[:start])[:max_work_items]
+        self.next_stage = (
+            scan[-1][1].stage_name if scan and len(scan) < len(ordered) else None
+        )
+        intents = None
+        if isinstance(self.store, (SQLiteStageWorkStore, InMemoryStageWorkStore)):
+            intents = {(item.request.stage_name, item.request.next_attempt): item
+                       for item in self.store._list_intents(admission_id)}
+        retained_projection = self._refresh_projection_eligibility(
             admission_id=admission_id,
             run_uri=plan.run_uri,
             plan=plan,
@@ -954,10 +981,11 @@ class RunOrchestrator:
             completed_stages=completed,
             committed_outputs=commits,
             run_cancelled=cancelled,
+            intents=intents,
         )
         current_revision = authority_snapshot.revision
         projected: list[StageWorkRecord] = []
-        for ready_order, stage_plan in enumerate(plan.ordered_stage_plans):
+        for ready_order, stage_plan in scan:
             stage = stage_facts.get(stage_plan.stage_name)
             if stage is not None and stage.result_binding is not None:
                 continue
@@ -976,6 +1004,7 @@ class RunOrchestrator:
             prior_intent = (
                 None
                 if intent_attempt is None
+                else intents.get((stage_plan.stage_name, intent_attempt)) if intents is not None
                 else self.store.find_intent(
                     admission_id=admission_id,
                     stage_name=stage_plan.stage_name,
@@ -1020,6 +1049,22 @@ class RunOrchestrator:
                 raise CoordinatorStoreError(
                     f"ready stage {stage_plan.stage_name!r} has no resolved placement"
                 )
+            # The authority snapshot already confirms this prepared attempt.
+            # Replaying its original preparation transaction on every poll is
+            # unnecessary, and costly when many ready stages await capacity.
+            # A missing projection, changed readiness or placement still takes
+            # the normal receipt replay/revalidation path below.
+            existing = retained_projection.get(stage_plan.stage_name)
+            if (existing is not None and prior_intent is not None
+                and existing.scheduling_state is SchedulingProjectionState.READY
+                and _record_matches_intent(existing, prior_intent)
+                and existing.placement == placement
+                and existing.execution_requirement == execution_requirements[stage_plan.stage_name]
+                and (existing.ready_order, existing.run_priority, existing.enqueue_sequence)
+                    == (ready_order, run_priority, enqueue_sequence)):
+                current_revision = _advance_revision_cursor(current_revision, existing.authority_revision)
+                projected.append(existing)
+                continue
             record, receipt = self._reconcile_ready(
                 stage_facts=stage_facts,
                 admission_id=admission_id,
@@ -1070,8 +1115,10 @@ class RunOrchestrator:
         completed_stages: set[str],
         committed_outputs: Mapping[str, str],
         run_cancelled: bool,
-    ) -> None:
+        intents: Mapping[tuple[str, int], PreparationIntent] | None = None,
+    ) -> dict[str, StageWorkRecord]:
         stage_plans = {stage.stage_name: stage for stage in plan.stage_plans}
+        retained: dict[str, StageWorkRecord] = {}
         for record in self.store.list_stage_work(admission_id=admission_id):
             if record.run_uri != run_uri:
                 continue
@@ -1085,7 +1132,7 @@ class RunOrchestrator:
                 else replace(attempts[-1], status=stage.status)
             )
             current_attempt_id = attempts[-1].attempt_id if attempts else None
-            intent = self.store.find_intent(
+            intent = intents.get((record.stage_name, record.attempt)) if intents is not None else self.store.find_intent(
                 admission_id=admission_id,
                 stage_name=record.stage_name,
                 next_attempt=record.attempt,
@@ -1141,14 +1188,16 @@ class RunOrchestrator:
                 record.scheduling_state is desired_state
                 and record.scheduling_diagnostics == diagnostics
             ):
+                retained[record.stage_name] = record
                 continue
-            self.store.create_or_refresh(
+            retained[record.stage_name] = self.store.create_or_refresh(
                 replace(
                     record,
                     scheduling_state=desired_state,
                     scheduling_diagnostics=diagnostics,
                 )
             )
+        return retained
 
     def _reconcile_ready(
         self,

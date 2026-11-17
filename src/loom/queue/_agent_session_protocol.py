@@ -123,13 +123,21 @@ def register(self: LocalDaemonAgentHttpClient, request: AgentRegistration) -> Ge
     if self._config.agent_root is not None:
         require_unretired(self._config.agent_root)
 
-    from .agent_sessions import SLURM_PENDING_EFFECTS_CAPABILITY, SLURM_SUBMISSION_CAPABILITY
-    if SLURM_PENDING_EFFECTS_CAPABILITY in request.declared_capabilities:
-        if SLURM_SUBMISSION_CAPABILITY not in request.declared_capabilities:
+    from .agent_sessions import (
+        SLURM_PENDING_EFFECTS_CAPABILITY, SLURM_SUBMISSION_CAPABILITY,
+        SLURM_ASYNC_OUTPUT_CAPABILITY,
+    )
+    declared = request.declared_capabilities
+    if SLURM_PENDING_EFFECTS_CAPABILITY in declared or SLURM_ASYNC_OUTPUT_CAPABILITY in declared:
+        if SLURM_SUBMISSION_CAPABILITY not in declared:
             raise QueueServiceError("pending SLURM effects require submission capability")
+        if SLURM_PENDING_EFFECTS_CAPABILITY not in declared:
+            raise QueueServiceError("pending SLURM output requires pending effects capability")
         handshake = yield from _steps(self.handshake)
         if SLURM_PENDING_EFFECTS_CAPABILITY not in handshake["capabilities"]:
             raise QueueServiceError("coordinator lacks pending SLURM effects")
+        if SLURM_ASYNC_OUTPUT_CAPABILITY in declared and SLURM_ASYNC_OUTPUT_CAPABILITY not in handshake["capabilities"]:
+            raise QueueServiceError("coordinator lacks pending SLURM output")
     from ._shared_assignment import CAPABILITY
     from .shared_execution import SHARED_EXECUTION_CAPABILITY, has_input_directories, qualifications
     if CAPABILITY in request.declared_capabilities:

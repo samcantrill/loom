@@ -36,7 +36,8 @@ class _Delivery:
 class SlurmStorageProgress:
     """Scheduling-owner state, with independently bounded IO and metadata owners."""
 
-    def __init__(self, *, workers: int = 2, outstanding: int = 8, owners: int = 32):
+    def __init__(self, *, workers: int = 2, outstanding: int = 8, owners: int = 32,
+                 wake: Callable[[], None] | None = None):
         if not 0 < workers <= outstanding <= owners:
             raise ValueError("Slurm storage capacities must be positive and ordered")
         self._executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="loom-agent-slurm-io")
@@ -46,6 +47,7 @@ class SlurmStorageProgress:
         self._deliveries: dict[str, _Delivery] = {}
         self._retry_at: dict[str, float] = {}
         self._closed = False
+        self._wake = wake
 
     def poll(self, assignment: str, kind: str, operation: Callable[[], Any]) -> Any:
         if self._closed:
@@ -57,6 +59,9 @@ class SlurmStorageProgress:
                 raise SlurmEffectPending(0.05)
             future = self._executor.submit(operation)
             self._pending[key] = future
+            wake = self._wake
+            if wake is not None:
+                future.add_done_callback(lambda _: wake())
         if not future.done():
             raise SlurmEffectPending(0.05)
         del self._pending[key]
@@ -156,6 +161,20 @@ class SlurmStorageProgress:
                 "offset": offset, "data": base64.b64encode(chunk).decode(),
                 "final": offset + len(chunk) == item.size_bytes,
             })
+            if response.get("disposition") == "pending":
+                from ._slurm_result_transport import validate_identity
+
+                validate_identity(response.get("identity"), identity)
+                delay = response.get("retry_after_seconds")
+                if (response.get("assignment_id") != assignment
+                    or response.get("result_operation") != "output"
+                    or response.get("transfer_id") != item.transfer_id
+                    or response.get("offset") != offset
+                    or "received" in response
+                    or type(delay) not in (int, float) or not 0 < delay <= 60):
+                    raise QueueConflictError("SLURM pending output acknowledgement conflicts")
+                self.defer_delivery(assignment, delay)
+                raise SlurmEffectPending(delay)
             received = response.get("received")
             if type(received) is not int or not offset + len(chunk) <= received <= item.size_bytes:
                 raise QueueConflictError("SLURM result output acknowledgement conflicts")

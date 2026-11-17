@@ -18,16 +18,30 @@ class PublicationGuards:
 
     @contextmanager
     def hold(self, assignment_id: str) -> Iterator[None]:
+        with self._hold(assignment_id, blocking=True):
+            yield
+
+    @contextmanager
+    def try_hold(self, assignment_id: str) -> Iterator[bool]:
+        """Observe a busy owner without queuing another reconciliation waiter."""
+        with self._hold(assignment_id, blocking=False) as acquired:
+            yield acquired
+
+    @contextmanager
+    def _hold(self, assignment_id: str, *, blocking: bool) -> Iterator[bool]:
         with self._condition:
             if self._closed:
                 raise QueueServiceError("coordinator is stopping")
             guard, count = self._pending.get(assignment_id, (Lock(), 0))
             self._pending[assignment_id] = guard, count + 1
+        acquired = False
         try:
             # Never wait for assignment work while holding the coordinator lock.
-            with guard:
-                yield
+            acquired = guard.acquire(blocking=blocking)
+            yield acquired
         finally:
+            if acquired:
+                guard.release()
             with self._condition:
                 _, count = self._pending[assignment_id]
                 if count == 1:

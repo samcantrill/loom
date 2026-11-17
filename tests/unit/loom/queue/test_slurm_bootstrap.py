@@ -173,7 +173,8 @@ def _exercise_bootstrap(tmp_path, monkeypatch, pending_responses, durable_files,
     captured: dict[str, object] = {}
     actions: list[str] = []
     now = [10.0]
-    monkeypatch.setattr(slurm_bootstrap.time, "time", lambda: now[0])
+    monkeypatch.setattr(slurm_bootstrap.time, "time", lambda: 1_000_000 - now[0])
+    monkeypatch.setattr(slurm_bootstrap.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(
         slurm_bootstrap.time, "sleep", lambda delay: now.__setitem__(0, now[0] + delay)
     )
@@ -399,7 +400,8 @@ def test_prestart_reconnect_deadline_never_grants_offline(
 
     now = [10.0]
     calls = []
-    monkeypatch.setattr(slurm_bootstrap.time, "time", lambda: now[0])
+    monkeypatch.setattr(slurm_bootstrap.time, "time", lambda: 1_000_000 - now[0])
+    monkeypatch.setattr(slurm_bootstrap.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(
         slurm_bootstrap.time, "sleep", lambda delay: now.__setitem__(0, now[0] + delay)
     )

@@ -94,3 +94,41 @@ def test_swallowed_failure_record_write_is_diagnostic_and_not_scientific(
     assert store.open_run(uri).status == snapshot.status
     assert len(store.list_audit_events(uri)) == 1
     assert store.read_event_sink_failures(uri) == ()
+
+
+def test_slow_observation_yields_and_drains_both_fact_queues(monkeypatch):
+    from types import SimpleNamespace
+    import loom.queue._lifecycle_observers as module
+
+    now = [0.0]
+    monkeypatch.setattr(module, "monotonic", lambda: now[0])
+    owner = LifecycleObservers()
+    observed = []
+
+    def record(kind):
+        observed.append(kind)
+        now[0] += 0.2
+
+    monkeypatch.setattr(owner, "emit", lambda *a, **kw: record("event"))
+    monkeypatch.setattr(owner, "transitions", lambda *a: record("transition"))
+    for _ in range(3):
+        owner._prepared.append((None, None, SimpleNamespace(run_uri="run")))
+        owner.defer_emit(None, "run", event_type="stage.planned")
+    for index in range(6):
+        assert owner.flush_prepared() is (index < 5)
+        assert len(observed) == index + 1
+    assert observed == ["transition", "event"] * 3
+
+
+def test_native_event_replay_does_not_read_entire_history(tmp_path, monkeypatch):
+    uri = (tmp_path / "run").as_uri()
+    store = SQLitePerRunAuthorityStore(uri)
+    store.create_run(uri)
+    revision = store.open_run(uri).revision
+    observers = LifecycleObservers()
+    monkeypatch.setattr(store, "list_audit_events", lambda *_: pytest.fail("full history read"))
+    observers.authority(store, uri)
+    observers.emit(store, uri, event_type="run.created", revision=revision)
+    first = store.open_run(uri).revision
+    observers.emit(store, uri, event_type="run.created", revision=revision)
+    assert store.open_run(uri).revision == first

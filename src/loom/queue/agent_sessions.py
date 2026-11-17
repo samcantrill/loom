@@ -78,6 +78,7 @@ CONTROL_WAIT_CAPABILITY = "agent-control-wait-v1"
 _MAX_RECEIVED_CONTROLS = 1025
 SLURM_SUBMISSION_CAPABILITY = "slurm-agent-jobs-v1"
 SLURM_PENDING_EFFECTS_CAPABILITY = "slurm-pending-effects-v1"
+SLURM_ASYNC_OUTPUT_CAPABILITY = "slurm-pending-output-v1"
 _MAX_IDENTIFIER = 160
 _MAX_COLLECTION = 32
 _MAX_OFFER_TTL_SECONDS = 3600
@@ -2060,6 +2061,7 @@ class AgentSessionService:
             if _pending_only:
                 result = execution.acknowledge_slurm_pending(
                     session.agent_id, session.agent_root_id, evidence,
+                    _defer_output=SLURM_ASYNC_OUTPUT_CAPABILITY in session.capabilities,
                 )
             else:
                 result = execution.acknowledge_slurm_agent(
@@ -2093,7 +2095,7 @@ class AgentSessionService:
                     SUBMITTED_CONTAINER_CAPABILITY,
                     "shared-assignment-reference-v1",
                     SLURM_SUBMISSION_CAPABILITY,
-                    *([SLURM_PENDING_EFFECTS_CAPABILITY] if self._daemon._execution is not None
+                    *([SLURM_PENDING_EFFECTS_CAPABILITY, SLURM_ASYNC_OUTPUT_CAPABILITY] if self._daemon._execution is not None
                       and self._daemon._execution.slurm_assignments.schema_version >= 5 else []),
                     REMOTE_EXECUTION_CAPABILITY,
                     REGULAR_FILE_RELAY_CAPABILITY,

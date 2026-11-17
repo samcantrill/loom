@@ -110,6 +110,34 @@ def test_chunk_reply_loss_replays_exact_bytes_and_receiver_offset(tmp_path, rest
         owner.close()
 
 
+def test_pending_receiver_retains_exact_chunk_and_defers_cleanup(tmp_path):
+    transport, identity, report, output = _fixture(tmp_path)
+    transport.publish(identity, report, output)
+    owner = SlurmStorageProgress()
+    chunks = []
+    applied = False
+
+    def call(value):
+        if value["result_operation"] == "output":
+            chunks.append(value)
+            if not applied:
+                return {**{key: value[key] for key in (
+                    "assignment_id", "identity", "result_operation", "transfer_id", "offset",
+                )}, "disposition": "pending", "retry_after_seconds": 0.01}
+            return {"received": report.outputs[0].size_bytes}
+        return {"acknowledged": True}
+
+    try:
+        drive_until(lambda: owner.advance(transport, identity, call), lambda: len(chunks) >= 3)
+        assert chunks[0] == chunks[1] == chunks[2]
+        assert transport.path.exists()
+        applied = True
+        drive_until(lambda: owner.advance(transport, identity, call), lambda: not transport.path.exists())
+        assert chunks[-1] == chunks[0]
+    finally:
+        owner.close()
+
+
 def test_cleanup_waits_for_commit_and_does_not_block_other_storage(tmp_path, monkeypatch):
     from loom.queue._slurm_result_transport import SharedSlurmResult
 

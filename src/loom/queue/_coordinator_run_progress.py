@@ -68,6 +68,7 @@ def reconcile_admission(
     }:
         return outcome
     self._ready_preparations.retain_run(admission.run_uri, set())
+    self._orchestration_after.pop(admission.admission_id, None)
     if self._action_resolution is not None:
         self._action_resolution.reconcile_producers(admission.run_uri)
     with phase("coordinator.reconcile_slurm_run"):
@@ -147,6 +148,8 @@ def _reconcile_admission(
             ready_at=snapshot_time,
             run_priority=admission.run_priority,
             enqueue_sequence=admission.enqueue_sequence,
+            max_work_items=32,
+            after_stage=self._orchestration_after.get(admission.admission_id),
             controller_action=None if cancelling else lambda stage_plan, readiness: (
                 self._apply_controller_action(
                     scoped_authority,
@@ -157,6 +160,11 @@ def _reconcile_admission(
                 )
             ),
         )
+    if orchestrator.next_stage is None:
+        self._orchestration_after.pop(admission.admission_id, None)
+    else:
+        self._orchestration_after[admission.admission_id] = orchestrator.next_stage
+        self._daemon_owner()._wake.set()
     snapshot = scoped_authority.open_run(admission.run_uri)
     with phase("coordinator.reconcile_slurm_run"):
         slurm_in_flight, slurm_diagnostic = self._reconcile_slurm_run(
@@ -317,8 +325,14 @@ def _schedule_window(
     waiting_outcomes: dict[str, LocalDaemonExecutionOutcome] | None = None,
 ) -> tuple[str, LocalDaemonExecutionOutcome] | None:
     decision_as_of, snapshot_time = self._daemon_owner()._accepted_snapshot()
-    window = tuple(record for record in page
-                   if not self._attempt_cancel_requested(record.run_uri, record.attempt_id))
+    # One short read connection for the bounded page, rather than opening and
+    # validating the same control database for every candidate. Launch still
+    # rechecks cancellation at its existing authoritative mutation boundary.
+    from ._action_results import action_attempt_cancelled
+
+    with self.config.connect_database(self.config.control_database) as conn:
+        window = tuple(record for record in page
+                       if not action_attempt_cancelled(conn, record.run_uri, record.attempt_id))
     if not window:
         return None
     contexts = self._cycle_contexts

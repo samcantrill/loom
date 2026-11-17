@@ -318,6 +318,7 @@ class ManagedLocalIntent:
     digest: str
     max_parallel_stages: int | None
     continue_independent: bool = False
+    project_contracts_present: bool = True
 
 
 
@@ -1110,6 +1111,8 @@ def load_managed_local_intent(
             != record["max_parallel_stages"]
         ):
             raise QueueServiceError("exact runtime record concurrency conflicts")
+        from loom.pipeline._project_contracts import prepared_contracts_digest
+
         return ManagedLocalIntent(
             plan,
             runtime,
@@ -1119,6 +1122,7 @@ def load_managed_local_intent(
             str(record["digest"]),
             cast(int | None, record["max_parallel_stages"]),
             parallel_execution_options(runtime_options).continue_independent,
+            prepared_contracts_digest(store, run_uri) is not None,
         )
 
 
@@ -1433,7 +1437,8 @@ class LocalDaemonExecution:
         self._sync_slurm_agent_references()
         self._slurm_agent = (
             AgentSlurmJobs(config.agent_root, config.slurm_profiles, sqlite_policy=config.sqlite_policy,
-                           durable_files=config.durable_files, asynchronous_preparation=True)
+                           durable_files=config.durable_files, asynchronous_preparation=True,
+                           wake=lambda: self._daemon_owner()._wake.set())
             if config.agent_root is not None and config.slurm_profiles
             else None
         )
@@ -1459,6 +1464,7 @@ class LocalDaemonExecution:
         )
         self._local_assignment_futures: dict[str, Future[None]] = {}
         self._local_preparing: dict[str, str] = {}
+        self._slurm_chunk_futures: dict[str, tuple[str, Future[int]]] = {}
         self._slurm_storage_cursor = None
         self._slurm_storage_progress = {}
         self._slurm_storage_progress_lock = Lock()
@@ -1479,6 +1485,7 @@ class LocalDaemonExecution:
         self._cycle_contexts: dict[
             str, tuple[ManagedLocalIntent, _ScopedCoordinatorAuthority]
         ] = {}
+        self._orchestration_after: dict[str, str] = {}
 
     def close(self) -> None:
         """Stop only assignment observers after their durable owners settle."""
@@ -1491,6 +1498,7 @@ class LocalDaemonExecution:
         self._slurm_storage_workers.shutdown(wait=True)
         self._local_assignment_futures.clear()
         self._slurm_storage_futures.clear()
+        self._slurm_chunk_futures.clear()
         self._pending_local_assignment_reconciliation.clear()
         self._local_assignment_retries.clear()
         self._cycle_contexts.clear()
@@ -1598,6 +1606,19 @@ class LocalDaemonExecution:
                 del self._transfer_inputs[key]
 
         self.reconcile_slurm_storage()
+        if self._slurm_agent is not None:
+            # IO completion is already bound to an exact retained assignment.
+            # Consuming it must not await a whole run's context/preparation turn.
+            for assignment_id in self._slurm_agent.completed_assignments():
+                record = self.slurm_assignments.read(assignment_id)
+                if record.state in {"reserved", "released"} or self._recovery_retains_assignment(assignment_id):
+                    continue
+                try:
+                    self._drive_local_slurm(record)
+                except Exception:
+                    # The normal run reconciliation owns error pacing and
+                    # diagnostics. Its durable outbox/command remains replayable.
+                    self._record_assignment_health(record.assignment.run_uri, "unavailable")
         self._input_validations.retain(
             lambda work_id: (
                 (record := self.stage_work_store.find_stage_work(work_id)) is not None
@@ -2255,6 +2276,7 @@ class LocalDaemonExecution:
     def relay_slurm_result(
         self, agent_id: str, agent_root_id: str, evidence: Mapping[str, PlainData],
         *, _defer_publication: bool = False, _publication: _SlurmPublicationRequired | None = None,
+        _defer_output: bool = False,
     ) -> Mapping[str, PlainData]:
         from ._slurm_result_transport import validate_identity
         from ._remote_stage_execution import _decode_chunk
@@ -2292,6 +2314,8 @@ class LocalDaemonExecution:
             )
             return {"accepted": True}
         if operation == "output":
+            if _defer_output:
+                return self._poll_slurm_output(record, evidence)
             received = self.slurm_assignments.write_output_chunk(
                 assignment_id,
                 record.bootstrap_incarnation,
@@ -2310,6 +2334,60 @@ class LocalDaemonExecution:
             return {"acknowledged": True}
         raise QueueServiceError("SLURM result operation is invalid")
 
+    def _poll_slurm_output(self, record, evidence):
+        """Bounded chunk IO; durable received offsets own restart/replay."""
+        from ._remote_stage_execution import _decode_chunk
+
+        assignment_id = record.assignment.assignment_id
+        encoded = json.dumps(thaw_plain_data(evidence), sort_keys=True, separators=(",", ":"))
+        key = hashlib.sha256(encoded.encode()).hexdigest()
+        pending = self._slurm_chunk_futures.get(assignment_id)
+        reason = "output_transfer"
+        if pending is not None and pending[0] != key and pending[1].done():
+            del self._slurm_chunk_futures[assignment_id]
+            pending = None
+        if pending is None:
+            # Finished entries are disposable: replay can recover the same
+            # acknowledgement from durable offsets and exact published bytes.
+            for old, (_, future) in tuple(self._slurm_chunk_futures.items()):
+                if len(self._slurm_chunk_futures) < 8:
+                    break
+                if future.done():
+                    del self._slurm_chunk_futures[old]
+            if len(self._slurm_chunk_futures) >= 8 or self._slurm_storage_count() >= _SLURM_STORAGE_LIMIT:
+                reason = "storage_capacity"
+            else:
+                data = _decode_chunk(evidence.get("data"))
+
+                def write():
+                    with self._daemon_owner()._publication_guards.hold(assignment_id):
+                        return self.slurm_assignments.write_output_chunk(
+                            assignment_id, record.bootstrap_incarnation,
+                            str(evidence.get("transfer_id")), evidence.get("offset"), data,
+                            final=evidence.get("final"),
+                        )
+
+                future = self._slurm_storage_workers.submit(write)
+                self._slurm_chunk_futures[assignment_id] = pending = key, future
+                future.add_done_callback(lambda _: self._daemon_owner()._wake.set())
+        if pending is not None and pending[0] == key and pending[1].done():
+            try:
+                return {"received": pending[1].result()}
+            except Exception:
+                del self._slurm_chunk_futures[assignment_id]
+                raise
+        return {
+            "assignment_id": assignment_id, "identity": evidence["identity"],
+            "result_operation": "output", "transfer_id": evidence.get("transfer_id"),
+            "offset": evidence.get("offset"), "disposition": "pending",
+            "reason": reason, "retry_after_seconds": 0.05,
+        }
+
+    def _slurm_storage_count(self):
+        return len(self._slurm_storage_futures) + sum(
+            not future.done() for _, future in self._slurm_chunk_futures.values()
+        )
+
     def slurm_result_identity(self, record: SlurmStageRecord) -> dict[str, PlainData]:
         return {
             "coordinator_id": self.coordinator_id,
@@ -2322,6 +2400,7 @@ class LocalDaemonExecution:
         self, agent_id: str, agent_root_id: str, evidence: Mapping[str, PlainData],
         *, _defer_retention: bool = False, _retained: _SlurmRetentionRequired | None = None,
         _defer_publication: bool = False, _publication: _SlurmPublicationRequired | None = None,
+        _defer_output: bool = False,
     ) -> Mapping[str, PlainData]:
         if "result_operation" in evidence:
             if self._daemon_owner()._recovery_fences_ordinary_terminal(str(evidence.get("assignment_id"))):
@@ -2331,6 +2410,7 @@ class LocalDaemonExecution:
             return self.relay_slurm_result(
                 agent_id, agent_root_id, evidence,
                 _defer_publication=_defer_publication, _publication=_publication,
+                _defer_output=_defer_output,
             )
         if (
             set(evidence) - {"containment_diagnostic", "terminal_result_probe"}
@@ -2596,8 +2676,14 @@ class LocalDaemonExecution:
                      else "pending" if retention or publication else "idle")
             with self._slurm_storage_progress_lock:
                 progress = dict(self._slurm_storage_progress.get(key, {}))
+            chunk = self._slurm_chunk_futures.get(key)
             observations.append({
                 "assignment_id": key,
+                "result_transfer": {
+                    "state": "idle" if chunk is None else "received" if chunk[1].done() and chunk[1].exception() is None
+                    else "failed" if chunk[1].done() else "running" if chunk[1].running() else "queued",
+                    "worker_state_consistency": "process_local",
+                },
                 "compute": {"state": "released" if record.compute_released_at else "reserved",
                             "released_at": record.compute_released_at},
                 "publication": {"state": "cancelled" if record.publication_cancelled_at else "applied" if record.publication_completed_at else
@@ -2645,7 +2731,7 @@ class LocalDaemonExecution:
         if len(records) < 32:
             self._slurm_storage_cursor = None
 
-    def acknowledge_slurm_pending(self, agent_id, agent_root_id, evidence):
+    def acknowledge_slurm_pending(self, agent_id, agent_root_id, evidence, *, _defer_output=False):
         """Accept exact evidence and poll bounded storage without waiting on IO.
 
         Called under the cycle lock by authenticated sessions or reconciliation
@@ -2655,7 +2741,7 @@ class LocalDaemonExecution:
             raise QueueServiceError("pending SLURM effects require execution schema 5")
         publication = evidence.get("result_operation") == "commit"
         if not publication and evidence.get("provider_released") is not True:
-            return self.acknowledge_slurm_agent(agent_id, agent_root_id, evidence)
+            return self.acknowledge_slurm_agent(agent_id, agent_root_id, evidence, _defer_output=_defer_output)
         assignment_id = (evidence.get("assignment_id") if publication
                          else evidence.get("assignment", {}).get("assignment_id"))
         pending = self._slurm_storage_futures.get(assignment_id)
@@ -2703,7 +2789,7 @@ class LocalDaemonExecution:
                     raise QueueConflictError(f"SLURM storage effect failed: {failure}") from failure
                 if monotonic() < self._slurm_storage_retry_at.get(assignment_id, 0):
                     reason = "storage_retry"
-                elif len(self._slurm_storage_futures) >= _SLURM_STORAGE_LIMIT:
+                elif self._slurm_storage_count() >= _SLURM_STORAGE_LIMIT:
                     reason = "storage_capacity"
                 else:
                     future = self._slurm_storage_workers.submit(
@@ -2747,7 +2833,7 @@ class LocalDaemonExecution:
                 self._slurm_task(record),
                 lambda evidence: self.acknowledge_slurm_agent(
                     record.assignment.agent_id, record.assignment.agent_root_id, evidence,
-                    _defer_retention=True,
+                    _defer_retention=True, _defer_output=True,
                     _retained=retained if isinstance(retained, _SlurmRetentionRequired) else None,
                     _defer_publication=True,
                     _publication=retained if isinstance(retained, _SlurmPublicationRequired) else None,
@@ -2757,7 +2843,7 @@ class LocalDaemonExecution:
             # Embedded Slurm has no HTTP request thread to yield the cycle lock.
             # Its durable unacknowledged receipt is retried after bounded worker
             # verification/retention completes; no acknowledgement is released early.
-            if identity not in self._slurm_storage_futures and len(self._slurm_storage_futures) < _SLURM_STORAGE_LIMIT:
+            if identity not in self._slurm_storage_futures and self._slurm_storage_count() < _SLURM_STORAGE_LIMIT:
                 future = self._slurm_storage_workers.submit(
                     continuation.prepare_guarded if isinstance(continuation, _SlurmPublicationRequired)
                     else continuation.retain_guarded,
@@ -3768,7 +3854,11 @@ class LocalDaemonExecution:
             fingerprint_context=intent.plan.fingerprint_context, runtime=runtime,
             produced=_produced_outputs(snapshot),
         )
-        return self._ready_preparations.poll((record.run_uri, record.stage_name), identity, prepare)
+        gpu = record.placement.resource_request.entries.get("gpu")
+        return self._ready_preparations.poll(
+            (record.run_uri, record.stage_name), identity, prepare,
+            resource_class="gpu" if gpu is not None and gpu.amount > 0 else "cpu",
+        )
 
     def _prepared_input_descriptors(self, record, worker_request):
         from functools import partial
@@ -3859,6 +3949,16 @@ class LocalDaemonExecution:
             if profile.result_storage is None:
                 raise QueueServiceError(
                     "SLURM requires qualified durable result storage"
+                )
+            budget = self.config.slurm_admission
+            requested_gpus = _slurm_requested_gpu_count(record.placement.resource_request)
+            if (requested_gpus and budget is not None and budget.max_reserved_gpus is not None
+                and self.slurm_assignments.find_operation(operation_id) is None
+                and self.slurm_assignments.reserved_gpu_count() + requested_gpus > budget.max_reserved_gpus):
+                # Advisory preparation preflight. reserve() remains the atomic
+                # admission owner and rechecks the same budget at commit.
+                raise SlurmAdmissionDeferred(
+                    "slurm_gpu_capacity_reserved", "SLURM GPU reservation budget is full",
                 )
             request = map_ready_stage(
                 _check_commands=False,

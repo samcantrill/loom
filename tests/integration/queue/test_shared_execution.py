@@ -31,12 +31,13 @@ from tests.integration.queue.test_preparation_operations import _service, _reque
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
 
-@pytest.mark.parametrize("scenario", ["small", "trusted", "input_directory", "scientific", "unresolved_restart", "workspace_restart", "started_restart", "completed_input_unavailable", "cancel_missing", "missing_selector"])
+@pytest.mark.parametrize("scenario", ["small", "trusted", "input_directory", "immutable_inputs", "scientific", "unresolved_restart", "workspace_restart", "started_restart", "completed_input_unavailable", "cancel_missing", "missing_selector"])
 def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, scenario):
     from threading import Event
 
     preflight_entered, preflight_release, preflight_finished = Event(), Event(), Event()
     scientific = scenario == "scientific"
+    input_directory = scenario in {"input_directory", "immutable_inputs"}
     _service(tmp_path)
     first = tmp_path / "nas" / "data"
     second = tmp_path / "mnt" / "lab" / "data"
@@ -44,10 +45,13 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, s
     second.mkdir(parents=True)
     payload = b"the same admitted immutable shared bytes"
     (first / "selected.bin").write_bytes(payload)
-    if scenario != "input_directory":
+    if not input_directory:
         (first / "challenge").write_bytes(b"bounded-shared-challenge")
-    for name in (("selected.bin",) if scenario == "input_directory" else ("selected.bin", "challenge")):
+    for name in (("selected.bin",) if input_directory else ("selected.bin", "challenge")):
         os.link(first / name, second / name)
+    if scenario == "immutable_inputs":
+        for root in (first, second):
+            (root / "version.json").write_bytes(b"immutable-fixture-v1")
     challenge = hashlib.sha256(b"bounded-shared-challenge").hexdigest()
     control = tmp_path / "control-payloads"
     control.mkdir()
@@ -57,8 +61,11 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, s
     (reports / "challenge").write_bytes(b"report-challenge")
     def roots(path):
         return {"data": {"host_path": str(path), "container_path": "/loom/data", "access": "ro",
-                         **({"qualification": {"kind": "input_directory"}} if scenario == "input_directory"
-                            else {"challenge": {"path": "challenge", "sha256": challenge}})},
+                         **({"qualification": {"kind": "input_directory"}} if input_directory
+                            else {"challenge": {"path": "challenge", "sha256": challenge}}),
+                         **({"input_validation": {"policy": "trusted_immutable_dataset", "version": "fixture-v1",
+                              "manifest": {"path": "version.json", "sha256": hashlib.sha256(b"immutable-fixture-v1").hexdigest()},
+                              "entry_points": ["selected.bin"]}} if scenario == "immutable_inputs" else {})},
                 "control": {"host_path": str(control if path == first else Path("/proc/self/root") / control.relative_to("/")), "container_path": None, "access": "rw",
                     "challenge": {"path": "challenge", "sha256": hashlib.sha256(b"control-challenge").hexdigest()}},
                 "reports": {"host_path": str(reports if path == first else Path("/proc/self/root") / reports.relative_to("/")), "container_path": None, "access": "rw",

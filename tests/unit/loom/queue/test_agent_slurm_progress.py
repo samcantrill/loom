@@ -7,8 +7,35 @@ import pytest
 
 from loom.queue._agent_progress import _run_manager, _steps, _delay
 from loom.queue.agent_session_transport import LocalDaemonAgentHttpClient
+from loom.queue._slurm_result_transport import SlurmEffectPending
 
 pytestmark = pytest.mark.unit
+
+
+def test_completed_child_does_not_rethrow_an_external_error_it_handled():
+    from loom.queue._agent_progress import _Spawn, _external
+
+    def unavailable():
+        raise OSError("temporary observation failure")
+
+    def child():
+        try:
+            yield from _external("control", unavailable)
+        except OSError:
+            return "pending"
+
+    def primary():
+        view = yield _Spawn(child())
+        while not view.complete:
+            yield from _delay(0.001)
+        assert view.error is None
+        return view.value
+
+    def controls():
+        while True:
+            yield from _delay(0.001)
+
+    assert _run_manager(primary(), controls()) == "pending"
 
 
 @pytest.mark.parametrize("acknowledgement_fails", [False, True])
@@ -20,7 +47,10 @@ def test_blocked_scheduler_preserves_control_renewal_and_acknowledgement_owner(a
         worker_threads.append(get_ident())
         started.set()
         assert release.wait(10)
-        results.append(acknowledge({"sequence": 1}))
+        try:
+            results.append(acknowledge({"sequence": 1}))
+        except SlurmEffectPending:
+            pass
 
     def call(operation, body):
         owner_threads.append(get_ident())
@@ -40,7 +70,9 @@ def test_blocked_scheduler_preserves_control_renewal_and_acknowledgement_owner(a
     )
 
     def primary():
-        yield from _steps(LocalDaemonAgentHttpClient.drive_slurm_jobs, agent)
+        while not results:
+            yield from _steps(LocalDaemonAgentHttpClient.drive_slurm_jobs, agent)
+            yield from _delay(0.001)
 
     def controls():
         while True:
@@ -96,6 +128,81 @@ def test_slurm_request_capacity_does_not_consume_control_or_poll_slots():
     slots.append(acquire("slurm_work"))
     for slot in slots:
         slot.release()
+
+
+def test_slow_http_ack_allows_same_agent_peer_submission_observation_and_cancel(tmp_path):
+    from loom.queue._agent_progress import _cooperative, _external
+    from loom.queue._agent_slurm import AgentSlurmJobs
+    from loom.queue._agent_slurm_progress import drive_operation
+    from loom.pipeline.executors.slurm import FakeSlurmCommandRunner
+    from tests.unit.loom.queue.test_agent_slurm import _profile, _task
+
+    runner = FakeSlurmCommandRunner()
+    profile = _profile(runner, tmp_path, retention_bytes=4 * 65 * 1024**2)
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,), asynchronous_preparation=True)
+    entered, release, peer_cancelled = Event(), Event(), Event()
+    failures, slow_requests = [], []
+
+    def exchange(body):
+        evidence = body["evidence"]
+        if evidence["assignment"]["assignment_id"] == "assignment-1":
+            slow_requests.append(evidence["sequence"])
+            entered.set()
+            assert release.wait(10)
+        return {"sequence": evidence["sequence"], "cancel_requested": False}
+
+    @_cooperative
+    def call(operation, body):
+        return (yield from _external("slurm_http", exchange, body))
+
+    client = SimpleNamespace(
+        _service_progress=True, _drained=False, _restart_with_retained_work=False,
+        _call=call, renew_current_offer=lambda session: None,
+    )
+    binding = {"session_id": "session", "coordinator_epoch": "epoch"}
+    first, peer = _task(profile), _task(profile, key="2")
+
+    def primary():
+        while True:
+            yield from drive_operation(client, agent.replay_pending, binding)
+            current = agent.journal.find("operation-2")
+            observed = any(call[0] in {"squeue", "sacct"} for call in runner.calls)
+            tasks = [first, {**peer, "cancel_requested": observed and current is not None and current.job_id is not None}]
+            yield from drive_operation(client, agent.step_cycle, binding, tasks)
+            current = agent.journal.find("operation-2")
+            if current is not None and current.cancel_requested:
+                peer_cancelled.set()
+                if release.is_set():
+                    return
+            yield from _delay(0.001)
+
+    def controls():
+        while True:
+            yield from _delay(0.001)
+
+    def run():
+        try:
+            _run_manager(primary(), controls())
+        except BaseException as error:
+            failures.append(error)
+
+    thread = Thread(target=run)
+    thread.start()
+    try:
+        assert entered.wait(5)
+        assert peer_cancelled.wait(5), failures
+        assert not release.is_set()
+        assert len(slow_requests) == 1, "pending HTTP must deduplicate exact outbox replay"
+        assert sum(call[0] == "sbatch" for call in runner.calls) == 1
+        assert any(call[0] in {"squeue", "sacct"} for call in runner.calls)
+        assert any(call[0] == "scancel" for call in runner.calls)
+    finally:
+        release.set()
+        thread.join(10)
+        agent.close()
+    assert not thread.is_alive()
+    assert not failures
 
 
 def test_slurm_capacity_reply_is_retryable_without_acknowledgement():
