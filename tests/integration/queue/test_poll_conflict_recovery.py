@@ -20,6 +20,12 @@ def test_conflicting_poll_requires_terminal_wait_and_preserves_history(monkeypat
         owner = LocalDaemonAgentHttpClient(case.config.client)
         try:
             owner._resume_pending_poll(wait_timeout_ms=100)
+            # Stopping the service can leave an unanswered WAIT poll. The
+            # synchronous recovery owner remains admission-restricted even
+            # after resolving it; reopen to assess the now-settled journal
+            # before creating this test's distinct conflicting poll.
+            owner.close()
+            owner = LocalDaemonAgentHttpClient(case.config.client)
             journal = owner._require_journal()
             session = journal.active_session()
             assert session is not None
