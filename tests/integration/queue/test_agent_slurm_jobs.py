@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from contextlib import closing
 import json
+from typing import Any, cast
 from pathlib import Path
 import sqlite3
 from threading import Event, Thread
@@ -48,6 +49,12 @@ from tests.integration.queue.test_slurm_ready_stage import (
     _persist_rejected_slurm_run,
     _positive_containment_helper,
 )
+
+def _execution(daemon: LocalDaemon):
+    execution = daemon._execution
+    assert execution is not None
+    return execution
+
 
 pytestmark = pytest.mark.integration
 
@@ -176,6 +183,8 @@ def test_outbound_service_settles_slurm_while_drained(
     )
     LocalDaemonAgentHttpClient.initialize_agent_root(agent_config)
     stop, failures = Event(), []
+    agent_root = agent_config.agent_root
+    assert agent_root is not None
     service = OutboundAgentServiceConfig(
         agent_config,
         OutboundAgentRegistrationConfig(
@@ -265,8 +274,8 @@ def test_outbound_service_settles_slurm_while_drained(
 
     thread = Thread(target=serve)
     client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
-    execution = daemon._execution
-    assert execution is not None
+    held = None
+    execution = _execution(daemon)
     try:
         if restart_with_job:
             # Produce retained ownership through the supported direct client,
@@ -294,14 +303,16 @@ def test_outbound_service_settles_slurm_while_drained(
                 assert agent._has_retained_agent_work()
                 # Retain a second assignment before it reaches sbatch, then
                 # restart drained. Observation/release must still progress.
+                assert held_uri is not None
                 client.submit(LocalDaemonAdmissionRequest("held", held_uri))
                 held = eventually(lambda: execution.slurm_assignments.list_run_unreleased(held_uri))[0]
                 session = agent.active_session()
-                page = agent._call("slurm_work", {
+                assert session is not None
+                page = cast(dict[str, Any], agent._call("slurm_work", {
                     "session_id": session.session_id,
                     "coordinator_epoch": session.coordinator_epoch,
                     "cursor": None, "evidence": None,
-                })
+                }))
                 assert len(page["tasks"]) == 2
                 assert page["next_cursor"] is None
                 assert held.assignment.assignment_id in {
@@ -310,23 +321,24 @@ def test_outbound_service_settles_slurm_while_drained(
                 if start_held:
                     # This queued command has never reached the agent. A held
                     # restart must not interpret its later delivery as permission.
-                    control(AgentControlKind.RESUME, "old-resume", agent.active_session().session_id)
+                    control(AgentControlKind.RESUME, "old-resume", session.session_id)
                 else:
-                    control(AgentControlKind.DRAIN, "before-restart", agent.active_session().session_id)
-                    agent.poll_control(agent.active_session().session_id)
+                    control(AgentControlKind.DRAIN, "before-restart", session.session_id)
+                    agent.poll_control(session.session_id)
                     def retain_held():
                         agent.drive_slurm_jobs()
+                        assert agent._slurm_agent is not None
                         return agent._slurm_agent.journal.find(held.assignment.operation_id)
 
                     eventually(retain_held)
+                    assert agent._slurm_agent is not None
                     assert agent._slurm_agent.journal.read(held.assignment.operation_id).state.value == "intent"
                 with pytest.raises(QueueConflictError, match="retained"):
                     agent.shutdown_clean()
             # Exercise session epoch recovery before the serial driver too.
             daemon.stop()
             daemon.start(start_held=start_held)
-            execution = daemon._execution
-            assert execution is not None
+            execution = _execution(daemon)
         thread.start()
         if not restart_with_job:
             client.submit(LocalDaemonAdmissionRequest("job", run_uri))
@@ -362,24 +374,26 @@ def test_outbound_service_settles_slurm_while_drained(
                 return state and applied
 
         eventually(drained)
+        assert agent_root is not None
         agent_settlement = inspect_service_settlement(
-            agent_config.agent_root, expected_root_id=record.assignment.agent_root_id,
+            agent_root, expected_root_id=record.assignment.agent_root_id,
             include_pending_poll=False,
         )
         assert agent_settlement.availability == "available", agent_settlement.to_dict()
-        assert "slurm_submission_or_release" in agent_settlement.value["wait_reasons"]
+        assert "slurm_submission_or_release" in cast(list[str], agent_settlement.value["wait_reasons"])
         coordinator_settlement = inspect_service_settlement(
             config.coordinator_root, expected_root_id=daemon.status().coordinator_id,
         )
         assert coordinator_settlement.availability == "available", coordinator_settlement.to_dict()
-        assert "slurm_assignment_or_release" in coordinator_settlement.value["wait_reasons"]
+        assert "slurm_assignment_or_release" in cast(list[str], coordinator_settlement.value["wait_reasons"])
         if not restart_with_job:
             eventually(drained_progress.is_set)
         if resume_before_completion:
+            assert held is not None
             from loom.queue.operations import inspect_native_service
 
             owner = eventually(lambda: (
-                value if (value := inspect_native_service(agent_config.agent_root)).value.get("session_id") == session_id
+                value if (value := inspect_native_service(agent_root)).value.get("session_id") == session_id
                 else None
             ))
             control(AgentControlKind.RESUME, "resume-live", session_id, hold=owner.value["startup_hold_id"])
@@ -412,10 +426,11 @@ def test_outbound_service_settles_slurm_while_drained(
         assert sum(call[0] == "sbatch" for call in runner.calls) == (2 if resume_before_completion else 1)
         assert any(call[0] == "scancel" and job_id in call[1] for call in runner.calls)
         if restart_with_job:
+            assert held is not None and held_uri is not None
             held_before = execution.slurm_submissions.read(held.assignment.operation_id)
             assert held_before.state.value == ("accepted" if resume_before_completion else "intent")
             from loom.queue.operations import inspect_native_service
-            hold = inspect_native_service(agent_config.agent_root).value.get("startup_hold_id")
+            hold = inspect_native_service(agent_root).value.get("startup_hold_id")
             assert bool(hold) == (start_held and not resume_before_completion)
             control(AgentControlKind.RESUME, "resume-held", session_id, hold=hold)
             held_after = eventually(lambda: (
@@ -434,7 +449,7 @@ def test_outbound_service_settles_slurm_while_drained(
         def settled():
             facts = (
                 inspect_service_settlement(
-                    agent_config.agent_root, expected_root_id=record.assignment.agent_root_id,
+                    agent_root, expected_root_id=record.assignment.agent_root_id,
                     include_pending_poll=False,
                 ),
                 inspect_service_settlement(
@@ -466,8 +481,7 @@ def test_outbound_service_settles_slurm_while_drained(
             )
             before = daemon.start(start_held=True)
             try:
-                execution = daemon._execution
-                assert execution is not None
+                execution = _execution(daemon)
                 receipt = execution.slurm_submissions.read(record.assignment.operation_id)
                 assert receipt.state.value == "accepted"
                 released = execution.slurm_assignments.find_operation(
@@ -591,8 +605,9 @@ def test_two_authenticated_submit_agents_share_quota_and_recover_cancel(tmp_path
                     },
                 )
             assert not agent_config.resident_profiles
-            assert agent_config.agent_root is not None
-            assert not (agent_config.agent_root / "supervisor").exists()
+            agent_root = agent_config.agent_root
+            assert agent_root is not None
+            assert not (agent_root / "supervisor").exists()
             agents.append(agent)
             configs.append(agent_config)
         client = daemon.client_view(
@@ -600,8 +615,7 @@ def test_two_authenticated_submit_agents_share_quota_and_recover_cancel(tmp_path
         )
         client.submit(LocalDaemonAdmissionRequest("first", first))
         client.submit(LocalDaemonAdmissionRequest("second", second))
-        execution = daemon._execution
-        assert execution is not None
+        execution = _execution(daemon)
         deadline = time.monotonic() + 10
         while (
             not execution.slurm_assignments.list_unreleased()
@@ -668,13 +682,13 @@ def test_two_authenticated_submit_agents_share_quota_and_recover_cancel(tmp_path
                 agents[0].close()
             daemon.stop()
             daemon.start()
-            execution = daemon._execution
-            assert execution is not None
+            execution = _execution(daemon)
             if joint:
                 agents[0] = LocalDaemonAgentHttpClient(configs[0])
                 agents[0].resume_retained_work()
             for agent in agents:
                 session = agent.active_session()
+                assert session is not None
                 handshake = agent.handshake()
                 agent.reconcile(
                     session.session_id,

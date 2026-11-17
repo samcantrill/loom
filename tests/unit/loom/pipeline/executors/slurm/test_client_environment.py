@@ -6,6 +6,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+from typing import cast
+
 import pytest
 
 from loom.pipeline.executors.slurm.commands import (
@@ -187,9 +189,10 @@ def test_environment_is_immutable_and_bound_only_when_selected(tmp_path):
         assert changed.configuration_fingerprint != profile.configuration_fingerprint
     selected["PATH"] = "/mutated/bin"
     for runner in (real, fake):
+        assert runner.client_environment is not None
         assert runner.client_environment["PATH"] != selected["PATH"]
         with pytest.raises(TypeError):
-            runner.client_environment["PATH"] = "/also-mutated/bin"
+            cast(dict[str, str], runner.client_environment)["PATH"] = "/also-mutated/bin"
 
 
 def test_ready_stage_submits_once_with_selected_client_environment(tmp_path, monkeypatch):

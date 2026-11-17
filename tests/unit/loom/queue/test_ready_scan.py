@@ -1,7 +1,9 @@
 """Bounded scheduler traversal must not repeatedly inspect a blocked prefix."""
 
+from contextlib import nullcontext
 from threading import Lock
 from types import SimpleNamespace
+from typing import Any
 
 from loom.queue import _coordinator_run_progress as progress
 from loom.queue.local_daemon import LocalDaemonAdmissionState
@@ -26,7 +28,7 @@ def test_blocked_prefix_continues_across_cycles_and_rotates_only_after_dispatch(
         return None
 
     monkeypatch.setattr(progress, "_schedule_window", dispatch)
-    owner = SimpleNamespace(
+    owner: Any = SimpleNamespace(
         daemon=None,
         _launch_lock=Lock(), stage_work_store=Store(), _ready_scan_after=None,
         _last_dispatch_enqueue=7, _ready_scan_boundary=None, _prefer_gpu_dispatch=False,
@@ -35,7 +37,7 @@ def test_blocked_prefix_continues_across_cycles_and_rotates_only_after_dispatch(
             _accepted_snapshot=lambda: ("revision", 10),
         ),
     )
-    admissions = {"next-run": SimpleNamespace(enqueue_sequence=8)}
+    admissions: dict[str, Any] = {"next-run": SimpleNamespace(enqueue_sequence=8)}
     assert progress.schedule_once(owner, admissions) is None
     assert visited == list(range(1024))
     assert wakes == [True]
@@ -43,19 +45,23 @@ def test_blocked_prefix_continues_across_cycles_and_rotates_only_after_dispatch(
     assert owner._ready_scan_boundary == (10, 8)
     # A new admission cannot move the in-progress sweep's boundary.
     admissions["new-arrival"] = SimpleNamespace(enqueue_sequence=9)
-    assert progress.schedule_once(owner, admissions)[0] == "next-run"
+    selected = progress.schedule_once(owner, admissions)
+    assert selected is not None and selected[0] == "next-run"
     assert visited == list(records)
     assert owner._ready_scan_after is None
     assert owner._ready_scan_boundary is None
     assert owner._last_dispatch_enqueue == 8
 
 
-def test_ready_gpu_work_waits_for_its_prepared_context_then_dispatches():
+def test_ready_gpu_work_waits_for_its_prepared_context_then_dispatches(monkeypatch):
     from loom.pipeline.runtime import ExecutionRouteKind
     from loom.scheduling import PolicyDecisionState
+    from loom.queue import _action_results
 
-    admission = SimpleNamespace(admission_id="gpu-run", run_uri="file:///gpu", cancellation_operation_id=None)
-    record = SimpleNamespace(
+    monkeypatch.setattr(_action_results, "action_attempt_cancelled", lambda *args: False)
+
+    admission: Any = SimpleNamespace(admission_id="gpu-run", run_uri="file:///gpu", cancellation_operation_id=None)
+    record: Any = SimpleNamespace(
         admission_id=admission.admission_id, run_uri=admission.run_uri,
         attempt_id="fit-1", stage_work_id="fit-work",
         placement=SimpleNamespace(route=SimpleNamespace(
@@ -75,14 +81,15 @@ def test_ready_gpu_work_waits_for_its_prepared_context_then_dispatches():
         dispatched.append(selection["stage_work_id"])
         return progress.LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.ACTIVE)
 
-    owner = SimpleNamespace(
+    owner: Any = SimpleNamespace(
         daemon=None,
         _daemon_owner=lambda: SimpleNamespace(_accepted_snapshot=lambda: ("revision", "time")),
         _attempt_cancel_requested=lambda *args: False,
         _cycle_contexts={}, _admission_context=open_context,
         cancellation_operation=lambda identity: None,
         _remote_candidates=lambda: {}, agent_id=None,
-        config=SimpleNamespace(resident_worker_launch_profile=None),
+        config=SimpleNamespace(resident_worker_launch_profile=None, control_database=None,
+                               connect_database=lambda _: nullcontext(None)),
         _scheduling=SimpleNamespace(kernel=lambda records: SimpleNamespace(
             decide=lambda **kwargs: SimpleNamespace(state=PolicyDecisionState.WAIT),
         )),
@@ -93,7 +100,8 @@ def test_ready_gpu_work_waits_for_its_prepared_context_then_dispatches():
     assert progress._schedule_window(owner, {admission.admission_id: admission}, (record,)) is None
     assert opened == [] and dispatched == []
     owner._cycle_contexts[admission.admission_id] = context
-    assert progress._schedule_window(owner, {admission.admission_id: admission}, (record,))[0] == "gpu-run"
+    selected = progress._schedule_window(owner, {admission.admission_id: admission}, (record,))
+    assert selected is not None and selected[0] == "gpu-run"
     assert opened == [] and dispatched == ["fit-work"]
     owner._cycle_contexts.clear()
     admission.cancellation_operation_id = "cancel"
@@ -116,7 +124,7 @@ def test_gpu_opportunities_alternate_with_cpu_and_failed_reservation_falls_back(
         return page[0], progress.LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.ACTIVE)
 
     monkeypatch.setattr(progress, "_schedule_window", dispatch)
-    owner = SimpleNamespace(
+    owner: Any = SimpleNamespace(
         daemon=None,
         _launch_lock=Lock(), stage_work_store=Store(), _ready_scan_after=None,
         _ready_scan_boundary=None, _last_dispatch_enqueue=None,
@@ -124,11 +132,14 @@ def test_gpu_opportunities_alternate_with_cpu_and_failed_reservation_falls_back(
         _last_gpu_dispatch_enqueue=None,
         _daemon_owner=lambda: SimpleNamespace(_accepted_snapshot=lambda: ("revision", 10)),
     )
-    admissions = {"score": SimpleNamespace(enqueue_sequence=1), "fit": SimpleNamespace(enqueue_sequence=2)}
-    assert progress.schedule_once(owner, admissions)[0] == "fit"
-    assert progress.schedule_once(owner, admissions)[0] == "score"
+    admissions: dict[str, Any] = {"score": SimpleNamespace(enqueue_sequence=1), "fit": SimpleNamespace(enqueue_sequence=2)}
+    selected = progress.schedule_once(owner, admissions)
+    assert selected is not None and selected[0] == "fit"
+    selected = progress.schedule_once(owner, admissions)
+    assert selected is not None and selected[0] == "score"
     gpu_available[0] = False
-    assert progress.schedule_once(owner, admissions)[0] == "score"
+    selected = progress.schedule_once(owner, admissions)
+    assert selected is not None and selected[0] == "score"
     assert owner._last_gpu_dispatch_enqueue == 2
     assert calls == ["gpu", "ordinary", "gpu", "ordinary"]
 
@@ -153,7 +164,7 @@ def test_cpu_dispatch_does_not_reset_blocked_gpu_opportunity_scan(monkeypatch):
         return None
 
     monkeypatch.setattr(progress, "_schedule_window", dispatch)
-    owner = SimpleNamespace(
+    owner: Any = SimpleNamespace(
         daemon=None,
         _launch_lock=Lock(), stage_work_store=Store(), _ready_scan_after=None,
         _ready_scan_boundary=None, _last_dispatch_enqueue=None,
@@ -161,11 +172,14 @@ def test_cpu_dispatch_does_not_reset_blocked_gpu_opportunity_scan(monkeypatch):
         _last_gpu_dispatch_enqueue=None,
         _daemon_owner=lambda: SimpleNamespace(_accepted_snapshot=lambda: ("revision", 10)),
     )
-    admissions = {"score": SimpleNamespace(enqueue_sequence=1), "fit": SimpleNamespace(enqueue_sequence=2)}
-    assert progress.schedule_once(owner, admissions)[0] == "score"
+    admissions: dict[str, Any] = {"score": SimpleNamespace(enqueue_sequence=1), "fit": SimpleNamespace(enqueue_sequence=2)}
+    selected = progress.schedule_once(owner, admissions)
+    assert selected is not None and selected[0] == "score"
     assert owner._gpu_scan_after == 255
-    assert progress.schedule_once(owner, admissions)[0] == "score"
-    assert progress.schedule_once(owner, admissions)[0] == "fit"
+    selected = progress.schedule_once(owner, admissions)
+    assert selected is not None and selected[0] == "score"
+    selected = progress.schedule_once(owner, admissions)
+    assert selected is not None and selected[0] == "fit"
     assert visited == list(range(257))
     assert owner._gpu_scan_after is None and owner._gpu_scan_boundary is None
     assert owner._last_gpu_dispatch_enqueue == 2

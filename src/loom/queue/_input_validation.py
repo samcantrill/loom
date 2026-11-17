@@ -126,7 +126,12 @@ class InputValidationPool:
                 return ValidationObservation("input_validation_capacity")
             worker = identity.get("worker_request", {})
             worker = worker if isinstance(worker, Mapping) else {}
-            item = _Inspection(work_id, digest, worker.get("run_uri"), worker.get("stage_name"))
+            run_uri, stage_name = worker.get("run_uri"), worker.get("stage_name")
+            item = _Inspection(
+                work_id, digest,
+                run_uri if isinstance(run_uri, str) else None,
+                stage_name if isinstance(stage_name, str) else None,
+            )
             self._current[work_id] = item
             self._visible = tuple(self._current.values())
             self._start(item, frozen_scope, frozen_roots)

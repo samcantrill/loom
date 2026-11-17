@@ -52,12 +52,12 @@ def test_worker_projection_reuses_validation_but_rechecks_live_evidence(tmp_path
     monkeypatch.setattr(contracts, "load_contract_report", load)
 
     def metadata(name="author"):
-        return contracts.worker_contract_metadata(
+        return cast(dict[str, Any], contracts.worker_contract_metadata(
             store, uri, intent.pipeline.get_stage(name), config=store, local_paths=store,
-        )
+        ))
 
     expected = metadata()
-    assert metadata("reader")[contracts.CONTRACT] == store.read_stage_worker_request(uri, "reader", attempt=1)["metadata"][contracts.CONTRACT]
+    assert metadata("reader")[contracts.CONTRACT] == cast(dict[str, Any], store.read_stage_worker_request(uri, "reader", attempt=1))["metadata"][contracts.CONTRACT]
     assert len(calls) == 1, "different stages must share checked report projection"
     changed = metadata()
     changed[contracts.CONTRACT]["payload"] = "caller mutation"
@@ -67,7 +67,7 @@ def test_worker_projection_reuses_validation_but_rechecks_live_evidence(tmp_path
         contracts.worker_contract_metadata(store, uri, changed_stage, config=store, local_paths=store)
     assert len(calls) == 1, "stage binding must be checked even on a projection hit"
 
-    ref = ArtifactRef.from_dict(store.read_prepared_run(uri)["metadata"][contracts.CONTRACTS]["data"]["report_ref"])
+    ref = ArtifactRef.from_dict(cast(dict[str, Any], store.read_prepared_run(uri))["metadata"][contracts.CONTRACTS]["data"]["report_ref"])
     primary = LocalArtifactStore(store.local_artifact_root(uri)).local_path(ref)
     primary_bytes = primary.read_bytes()
     companion = primary.parent / json.loads(primary_bytes)["composition"]["evidence_ref"]["uri"]
@@ -84,6 +84,7 @@ def test_worker_projection_reuses_validation_but_rechecks_live_evidence(tmp_path
     companion.write_bytes(companion_bytes)
 
     resolved = store.read_config_snapshot(uri, "resolved")
+    assert resolved is not None
     configuration = read_configuration_json(resolved)
     # Reordering the same authored mapping is a semantic change even though
     # ordinary dict equality would accept it.
@@ -94,7 +95,8 @@ def test_worker_projection_reuses_validation_but_rechecks_live_evidence(tmp_path
         metadata()
     store.write_config_snapshot(uri, "resolved", resolved)
     prepared = store.read_prepared_run(uri)
-    wrong = deepcopy(prepared)
+    assert prepared is not None
+    wrong = cast(dict[str, Any], deepcopy(prepared))
     wrong["metadata"][contracts.CONTRACTS]["data"]["namespace"] = "other-project"
     store.write_prepared_run(uri, wrong)
     with pytest.raises(ValueError, match="namespace"):

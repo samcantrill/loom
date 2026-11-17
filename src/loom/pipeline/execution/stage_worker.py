@@ -107,7 +107,7 @@ def execute_resident_stage_worker_request(
     artifact_store = LocalArtifactStore(root / "artifacts" if artifact_root is None else artifact_root, shared_roots=shared_roots)
     from loom.pipeline.stores.shared_artifacts import publication_policy
     selected_policy = next(
-        (publication_policy(facts["publication"]) for facts in (shared_roots or {}).values()
+        (publication_policy(facts["publication"]) for facts in cast(Mapping[str, Mapping[str, PlainData]], shared_roots or {}).values()
          if "publication" in facts), "verified",
     )
     worker_executor = LocalExecutor(capture_stdout_stderr=True)

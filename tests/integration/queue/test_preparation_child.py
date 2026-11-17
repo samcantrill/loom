@@ -427,6 +427,7 @@ def test_preparation_report_requires_its_exact_selected_profile(tmp_path: Path) 
     _service, binding, result, workspace, _counter = _child(tmp_path)
     assert result.status is StageStatus.SUCCEEDED
     report = load_report(workspace.root / "artifacts", result.outputs["report"])
+    assert binding.profile_descriptor is not None
     other = replace(
         binding, profile_descriptor={**binding.profile_descriptor, "revision": "v2"}
     )

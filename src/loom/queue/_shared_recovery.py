@@ -434,6 +434,7 @@ def seal(
     selection = selected(request)
     assert selection is not None
     limits = publication_configuration(selection[1]["publication"])
+    numeric_limits = budgets(limits)
     trusted = publication_policy(limits) == TRUSTED_SHARED_STORAGE
     owner = _owner(request, agent_id, fence)
     pub_id = publication_id(owner)
@@ -446,7 +447,7 @@ def seal(
         # Proven no-start/early death can have no recovery files. Retain an empty
         # owned closure; absence alone never calls this positive-release path.
         available = current_tree(request, roots, owner=owner)
-    members = None if trusted else inventory(available, limits)
+    members = None if trusted else inventory(available, numeric_limits)
     if (available == staging and not (available / RECEIPT).exists()
             and (not any(available.iterdir()) if trusted else not members)):
         # Container mount construction can create the directory before any child
@@ -460,10 +461,10 @@ def seal(
             "members": members,
         }
     )
-    check_budget("max_manifest_bytes", limits["max_manifest_bytes"], len(data))
+    check_budget("max_manifest_bytes", numeric_limits["max_manifest_bytes"], len(data))
     marker = available / RECEIPT
     existing = receipt_bytes(
-        contained(available, RECEIPT), limits["max_manifest_bytes"]
+        contained(available, RECEIPT), numeric_limits["max_manifest_bytes"]
     )
     if existing != data:
         if available == final or existing != encoded(
@@ -576,6 +577,7 @@ def prepare_retention(
     assert selection is not None
     owner = _owner(request, agent_id, row["fence"])
     limits = publication_configuration(selection[1]["publication"])
+    numeric_limits = budgets(limits)
     binding = {
         "schema_version": 1, "root_id": value["root_id"], "tree": value["tree"],
         "identity": owner, "budgets": limits,
@@ -613,7 +615,7 @@ def prepare_retention(
             raise QueueConflictError("recovery retained receipt binding conflicts")
         root = cast(Mapping[str, PlainData], roots[value["root_id"]])
         final = contained(Path(str(root["host_path"])), ref["tree"])
-        manifest = receipt_bytes(contained(final, RECEIPT), limits["max_manifest_bytes"])
+        manifest = receipt_bytes(contained(final, RECEIPT), numeric_limits["max_manifest_bytes"])
         if hashlib.sha256(manifest).hexdigest() != ref["receipt_digest"]:
             raise QueueConflictError("recovery retained receipt digest conflicts")
         marker = json.loads(manifest)

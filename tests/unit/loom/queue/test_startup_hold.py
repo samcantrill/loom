@@ -4,6 +4,7 @@ from contextlib import closing
 from dataclasses import replace
 import io
 import json
+from typing import Any, cast
 import multiprocessing
 import sqlite3
 from threading import Event
@@ -63,6 +64,7 @@ def _kill_owner(config, role):
     def child():
         owner = LocalDaemon(config) if role == "coordinator" else LocalDaemonAgentHttpClient(config)
         if role == "coordinator":
+            assert isinstance(owner, LocalDaemon)
             owner.start()
         sender.send("ready")
         Event().wait()
@@ -117,7 +119,7 @@ def test_coordinator_hold_precedes_effects_and_uses_existing_open(root, monkeypa
             "action": "open", "expected_revision": current["revision"], "check": None,
         }
         result = operator(daemon).maintenance(request, expected_coordinator_id=daemon.status().coordinator_id)
-        assert result["gate"]["state"] == "open"
+        assert cast(dict[str, Any], result["gate"])["state"] == "open"
         assert operator(daemon).maintenance(request, expected_coordinator_id=daemon.status().coordinator_id) == result
         assert daemon.prepare_run(_request(), principal_id="caller").operation_id == _request().operation_id
     finally:
@@ -160,8 +162,10 @@ def test_held_agent_fences_old_resume_and_replays_exact_results(root, prior):
         journal = client._require_journal()
         hold = journal.startup_hold_id()
         assert hold and client._drained
+        assert config.agent_root is not None
         assert inspect_native_service(config.agent_root).value["startup_hold_id"] == hold
         effect = journal.prepare_control(old)
+        assert effect is not None
         assert effect.code == ("applied" if prior == "applied" else "startup_hold")
         journal.record_control_effect(old, effect)
         journal.acknowledge_control(old.operation_id)
@@ -173,7 +177,8 @@ def test_held_agent_fences_old_resume_and_replays_exact_results(root, prior):
         current = journal.startup_hold_id()
         assert current != hold
         obsolete = _resume("obsolete", hold=hold)
-        assert journal.prepare_control(obsolete).code == "startup_hold"
+        obsolete_effect = journal.prepare_control(obsolete)
+        assert obsolete_effect is not None and obsolete_effect.code == "startup_hold"
         journal.acknowledge_control(obsolete.operation_id)
         resume = _resume("current", hold=current)
         assert journal.prepare_control(resume) is None

@@ -63,6 +63,7 @@ def test_stopped_tls_delivery_retries_lost_reply_and_preserves_acknowledgement(t
                                           declared_capabilities=capabilities))
         change(daemon, "close", owner="upgrade")
         control = request(old, old, client.agent_root_id, session=session.session_id, revision=session.config_revision)
+        assert control.promotion is not None
         control = replace(control, promotion={
             **{key: value for key, value in control.promotion.items()
                if key not in {"profile_id", "target_profile", "target_immutable", "target_active"}},
@@ -87,6 +88,7 @@ def test_stopped_tls_delivery_retries_lost_reply_and_preserves_acknowledgement(t
     spec = read_agent_spec(source)
     with pytest.raises(QueueConflictError, match="session or native identity"):
         promotion.receive_stopped(spec, control, expected_coordinator_id="wrong")
+    assert control.promotion is not None
     changed = replace(control, promotion={**control.promotion, "target_active": "f" * 64})
     with pytest.raises(QueueConflictError, match="authorized coordinator control"):
         promotion.receive_stopped(spec, changed, expected_coordinator_id=session.coordinator_id)

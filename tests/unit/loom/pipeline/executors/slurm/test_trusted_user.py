@@ -99,6 +99,7 @@ def test_sync_failure_retains_only_published_identity(tmp_path, monkeypatch, pub
     receipt = provider.prepare(operation_id="operation", request_digest="request")
     if published:
         assert (final / "receipt.json").read_bytes() == before
+        assert before is not None
         assert json.loads(before)["prepared"] == asdict(receipt)
 
 

@@ -10,7 +10,7 @@ import selectors
 import signal
 import subprocess
 from time import monotonic
-from typing import Literal, overload
+from typing import Literal, cast, overload
 
 
 class ProcessOutputLimitError(RuntimeError):
@@ -38,7 +38,7 @@ def run_bounded_process(
 def run_bounded_process(
     argv, *, timeout, environment, output_limit, text=False, input=None, executable=None,
     start_new_session=True,
-):
+) -> subprocess.CompletedProcess[str] | subprocess.CompletedProcess[bytes]:
     """Capture each stream in bytes, or decoded characters with text=True.
 
     Input and output progress concurrently under one monotonic deadline. On
@@ -64,7 +64,7 @@ def run_bounded_process(
         lengths = [0, 0]
         decoders = tuple(
             io.IncrementalNewlineDecoder(
-                codecs.getincrementaldecoder(pipe.encoding)(), translate=True,
+                codecs.getincrementaldecoder(cast(io.TextIOWrapper, pipe).encoding)(), translate=True,
             ) for pipe in pipes
         ) if text else None
         offset = 0
@@ -84,6 +84,7 @@ def run_bounded_process(
                         raise subprocess.TimeoutExpired(list(argv), timeout)
                     for key, _events in selector.select(remaining):
                         if key.data == "input":
+                            assert input is not None and process.stdin is not None
                             try:
                                 offset += os.write(key.fd, input[offset:offset + 4096])
                             except BlockingIOError:
@@ -117,7 +118,12 @@ def run_bounded_process(
                     pipe.close()
             process.wait()
             raise
-        empty = "" if text else b""
+        if text:
+            return subprocess.CompletedProcess(
+                list(argv), returncode,
+                "".join(cast(list[str], output[0])), "".join(cast(list[str], output[1])),
+            )
         return subprocess.CompletedProcess(
-            list(argv), returncode, empty.join(output[0]), empty.join(output[1]),
+            list(argv), returncode,
+            b"".join(cast(list[bytes], output[0])), b"".join(cast(list[bytes], output[1])),
         )

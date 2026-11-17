@@ -1,6 +1,8 @@
 """Recovered GPUs require an explicit, settled policy expansion."""
 from dataclasses import replace
 
+from typing import Any, cast
+
 import pytest
 
 from loom.coordinator import CoordinatorClientError, CoordinatorOperatorClient
@@ -63,6 +65,7 @@ def test_expansion_rejects_unsafe_changes(site, case):  # noqa: F811
     daemon._trusted_scheduling_loader = lambda: new
     reload = expansion(daemon)
     if case in {"owner", "revision"}:
+        assert reload.gpu_policy_expansion is not None
         binding = dict(reload.gpu_policy_expansion)
         binding["maintenance_id" if case == "owner" else "expected_gate_revision"] = "other" if case == "owner" else 99
         reload = replace(reload, gpu_policy_expansion=binding)
@@ -95,7 +98,7 @@ def test_expansion_negotiates_before_mutation(site, monkeypatch):  # noqa: F811
     calls, dispatch = [], unix.dispatch_control
     def old_peer(*args, **kwargs):
         calls.append(args[2])
-        result = dict(dispatch(*args, **kwargs))
+        result = cast(dict[str, Any], dict(dispatch(*args, **kwargs)))
         if args[2] == "operator_handshake":
             result["capabilities"] = [v for v in result["capabilities"] if v != EXPANSION_CAPABILITY]
         return result

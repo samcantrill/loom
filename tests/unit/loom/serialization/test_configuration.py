@@ -1,5 +1,7 @@
 """Persisted configuration wire version and authored-order preservation."""
 
+from typing import cast
+
 import json
 
 import pytest
@@ -14,7 +16,7 @@ def test_nested_order_and_duplicates_survive_snapshot_wire():
     assert json.loads(wire)["schema"] == "weave.ordered-config.v1"
     decoded = read_configuration_json(wire)
     assert list(decoded) == ["z", "a"]
-    assert list(decoded["z"]) == ["reconstruction", "detrending"]
+    assert list(cast(dict[str, object], decoded["z"])) == ["reconstruction", "detrending"]
     assert decoded["a"] == [3, 1, 3]
     assert configuration_json(decoded) == wire
 

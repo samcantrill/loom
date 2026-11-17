@@ -1,6 +1,7 @@
 """Additive maintenance cannot redirect retained execution selections."""
 
 from dataclasses import replace
+from typing import Any, cast
 
 import pytest
 
@@ -43,6 +44,7 @@ def test_coordinator_additions_preserve_existing_selections(tmp_path, change):
     selected = service(tmp_path, local=False)
     policy, _, _, _ = _submitted(tmp_path)
     preparation = selected.daemon.preparation_policy
+    assert preparation is not None
     installed = preparation.profiles["existing-project"]
     profile = SubmittedPreparationProfile(
         policy.capability, installed.allowed_source_roots, ("shared",),
@@ -55,10 +57,12 @@ def test_coordinator_additions_preserve_existing_selections(tmp_path, change):
         shared_roots=policy.shared_roots,
         container_capabilities=(policy.capability,),
         preparation_policy=replace(preparation, profiles={"submitted": profile}))
+    assert before.preparation_policy is not None
     added = replace(policy.capability, policy_id="new")
     after = replace(before, container_capabilities=(policy.capability, added),
         preparation_policy=replace(before.preparation_policy,
             profiles={"submitted": profile, "new": replace(profile, capability=added)}))
+    assert after.preparation_policy is not None
     if change == "capability":
         after = replace(after, container_capabilities=(added,))
     elif change == "preparation":
@@ -97,7 +101,7 @@ def test_selected_catalog_extension_preserves_retained_authority(tmp_path, chang
     policy, _, _, _ = _submitted(tmp_path)
     if change != "legacy":
         policy = replace(policy, worker_contracts=(SELECTED_INPUT_WORKER_CONTRACT,))
-    alias, root = next((key, value) for key, value in policy.shared_roots.items()
+    alias, root = next((key, value) for key, value in cast(dict[str, dict[str, Any]], policy.shared_roots).items()
                       if value["container_path"] is not None and value["access"] == "ro")
     roots = {**policy.shared_roots, "additional": {**root, "container_path": "/loom/additional"}}
     if change == "host_rebind":
@@ -117,6 +121,7 @@ def test_selected_catalog_extension_preserves_retained_authority(tmp_path, chang
 
     selected = service(tmp_path, local=False)
     preparation = selected.daemon.preparation_policy
+    assert preparation is not None
     installed = preparation.profiles["existing-project"]
     profile = SubmittedPreparationProfile(policy.capability, installed.allowed_source_roots,
         ("shared",), installed.runtime_options,
@@ -140,6 +145,7 @@ def test_selected_catalog_extension_preserves_retained_authority(tmp_path, chang
         widened = replace(expanded, shared_scope={**expanded.shared_scope, "locations": [
             {"kind": "loom.shared-location", "schema_version": 1, "root_id": "additional", "path": "."}]})
         with pytest.raises(QueueConflictError, match="preparation selection"):
+            assert after.preparation_policy is not None
             validate_coordinator(before, replace(after,
                 preparation_policy=replace(after.preparation_policy, profiles={"selected": widened})))
     else:

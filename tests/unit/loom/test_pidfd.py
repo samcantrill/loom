@@ -43,6 +43,7 @@ def test_syscall_fallback_preserves_owned_process_identity(direct_syscalls):
         _pidfd.send_pidfd_signal(descriptor, signal.SIGTERM)
         assert select.select([descriptor], [], [], 5)[0]
         observed = os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOWAIT)
+        assert observed is not None
         assert observed.si_pid == child.pid
         assert child.wait(timeout=5) == -signal.SIGTERM
         with pytest.raises(ProcessLookupError):

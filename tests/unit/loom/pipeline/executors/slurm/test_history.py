@@ -3,6 +3,8 @@
 from dataclasses import replace
 import subprocess
 
+from typing import Any
+
 import pytest
 
 from loom.pipeline.executors.slurm.commands import (
@@ -105,6 +107,7 @@ def test_lost_reply_reconciles_from_name_without_comments_and_retains_identity(t
     accepted = reopened.reconcile(request.operation_id, profile)
     assert accepted.state is ReadyStageState.ACCEPTED
     assert accepted.job_id == "17"
+    assert accepted.accounting_identity is not None
     assert accepted.accounting_identity.db_index == "42"
     assert accepted.accounting_identity.sluid == "s5YDM6CNYGSP00"
     assert accepted.schema_version == 4
@@ -157,6 +160,7 @@ def test_known_handle_gains_accounting_identity_without_inferring_completion(tmp
     accepted = store.submit(request, profile, _script(tmp_path, request))
     assert accepted.accounting_identity is None
     observed = store.observe(request.operation_id, profile)
+    assert observed.accounting_identity is not None
     assert observed.accounting_identity.job_id == "1000"
     assert observed.scheduler_state == "COMPLETED"
     assert observed.state is ReadyStageState.ACCEPTED
@@ -234,8 +238,9 @@ def test_selected_containment_requires_retained_exact_accounting_identity(tmp_pa
         calls.append(request)
         return {"state": "CONTAINED", "evidence_id": "fixture", "evidence_revision": "v1", "echo": dict(request)}
     monkeypatch.setattr(SlurmContainmentHelper, "resolve", resolve)
-    proof = {"job_id": "17", "cluster_id": "cluster-a", "submission_operation_id": request.operation_id}
+    proof: dict[str, Any] = {"job_id": "17", "cluster_id": "cluster-a", "submission_operation_id": request.operation_id}
     assert not resolve_slurm_containment(profile, proof).contained
+    assert accepted.accounting_identity is not None
     proof["accounting_identity"] = {**accepted.accounting_identity.to_dict(), "user_id": 1001}
     assert not resolve_slurm_containment(profile, proof).contained
     assert not calls

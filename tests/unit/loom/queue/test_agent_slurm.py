@@ -862,6 +862,7 @@ def test_pending_release_confirms_ownership_only_for_current_session(tmp_path):
     reopened.replay_pending(acknowledge)
     assert not reopened.has_unreconciled_work(next_binding)
     assert reopened.has_retained_work()
+    assert isinstance(profile.runner, FakeSlurmCommandRunner)
     assert not any(call[0] == "sbatch" for call in profile.runner.calls)
 
 

@@ -472,7 +472,7 @@ class SharedSlurmResult:
                 response.get("assignment_id") != self.assignment_id
                 or response.get("result_operation") != "commit"
                 or response.get("acknowledged") is True
-                or type(delay) not in (int, float)
+                or not (type(delay) is int or type(delay) is float)
                 or not 0 < delay <= 60
             ):
                 raise QueueConflictError("SLURM pending result acknowledgement conflicts")

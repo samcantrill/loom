@@ -1,6 +1,7 @@
 """Combined retirement through installed runtimes, SSH and native services."""
 
 from dataclasses import replace
+from typing import Any
 import hashlib
 import json
 import os
@@ -118,7 +119,7 @@ def test_runtime_retirement_with_deleted_inputs_preserves_identity_and_publicati
         candidate_path = write(tmp_path / "candidate-fleet.json", candidate)
         (obsolete / "challenge").unlink()
         obsolete.rmdir()
-        options = dict(runtime_release=target_bundle(replace(inventory, runtime_release=bundle), tmp_path), retire_configuration=True,
+        options: dict[str, Any] = dict(runtime_release=target_bundle(replace(inventory, runtime_release=bundle), tmp_path), retire_configuration=True,
             workload_inventory=candidate_path, check_execution=execution,
             deployment=submitted_deployment, connection=Path(setup["operator_connection"]),
             config=selection["config"], hold_admission=True)

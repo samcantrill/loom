@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from pathlib import Path
 import sqlite3
 import json
+from typing import Any, cast
 import os
 import subprocess
 import hashlib
@@ -1560,7 +1561,7 @@ def test_serial_service_retains_cancel_while_real_transfer_is_held(
                 assert observed["result_progress"]["result_retention"] == (
                     "retained" if boundary == "coordinator_commit" else "pending")
                 assert observed["result_progress"]["result_acknowledgement"] == "agent_local_evidence_required"
-                local = inspect_local_assignment(case.agent_root, held["assignment_id"]).value
+                local = cast(dict[str, Any], inspect_local_assignment(case.agent_root, held["assignment_id"]).value)
                 assert local["result_progress"]["worker_execution"] == "SUCCEEDED"
                 assert local["result_progress"]["result_acknowledgement"] == "pending_or_retrying"
             later_uri, later_authority = _submit(case, "later")

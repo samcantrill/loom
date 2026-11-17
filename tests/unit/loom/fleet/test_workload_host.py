@@ -435,7 +435,10 @@ def retirement_candidate(tmp_path, monkeypatch):
     _write_protected(source, before)
     service = load_outbound_agent_service_config(source)
     LocalDaemonAgentHttpClient.initialize_agent_root(service.client)
+    assert service.client.agent_root is not None
+    assert service.client.declaration_digest is not None
     accepted = read_agent_declaration_binding(service.client.agent_root, service.client.declaration_digest)
+    assert accepted is not None
     (missing / "challenge").unlink()
     missing.rmdir()
     after = copy.deepcopy(before)
@@ -462,6 +465,7 @@ def test_retirement_probe_qualifies_container_only_target_with_deleted_predecess
     from loom.queue.retirement import read_agent_declaration_binding
     spec = read_agent_spec(source)
     accepted = read_agent_declaration_binding(spec.agent_root, spec.declaration_digest)
+    assert accepted is not None
     assert result["source"]["immutable"] == accepted.immutable_fingerprint
     assert result["source"]["active"] == accepted.active_fingerprint
     assert result["native_owner"] == {"owner": accepted.root_id}

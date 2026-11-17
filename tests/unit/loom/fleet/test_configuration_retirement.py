@@ -3,6 +3,7 @@
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -58,7 +59,7 @@ def test_policy_publication_exports_required_worker_contract_without_rewriting_o
 def test_stopped_promotion_reconciles_publication_before_control_replay(tmp_path, interruption):
     from loom.fleet._host import atomic
 
-    operation = object.__new__(workload_upgrades.WorkloadUpgrade)
+    operation = cast(Any, object.__new__(workload_upgrades.WorkloadUpgrade))
     operation.receipts = tmp_path
     operation.intent = {"retire_configuration": True,
         "hosts": {"worker": {"expected_root_id": "root", "source_release": "old"}},
@@ -114,7 +115,7 @@ def test_stopped_promotion_reconciles_publication_before_control_replay(tmp_path
 def test_promotion_acceptance_retains_exact_control_before_acknowledgement(tmp_path):
     from loom.fleet._host import atomic
 
-    operation = object.__new__(workload_upgrades.WorkloadUpgrade)
+    operation = cast(Any, object.__new__(workload_upgrades.WorkloadUpgrade))
     operation.receipts = tmp_path
     operation.intent = {"operation_id": "upgrade", "retire_configuration": True,
         "candidates": {"worker": {"source": {"immutable": "a" * 64, "active": "b" * 64},
@@ -190,7 +191,7 @@ def test_configuration_preview_uses_bound_predecessors_and_preserves_profile_ali
 
     monkeypatch.setattr(workload_upgrades.sshops, "_ssh_many", probe)
     monkeypatch.setattr(workload_upgrades.sshops, "ssh", lambda *args: {"active": "target-coordinator"})
-    kwargs = dict(workload_inventory=tmp_path / "candidate.json", deployment=None, connection=None,
+    kwargs: dict[str, Any] = dict(workload_inventory=tmp_path / "candidate.json", deployment=None, connection=None,
                   config="check.yaml", check_execution=object(), env_file=None, add_container_policies=addition)
     inventory = SimpleNamespace(runtime_release=Path("/runtime.json"))
     if unsupported:
@@ -208,7 +209,7 @@ def test_configuration_preview_uses_bound_predecessors_and_preserves_profile_ali
 
 @pytest.mark.parametrize("missing", ["workload_inventory", "check_execution"])
 def test_retirement_requires_explicit_candidate_and_submitted_execution(missing):
-    kwargs = dict(workload_inventory="/candidate.json", check_execution=object(), deployment=None,
+    kwargs: dict[str, Any] = dict(workload_inventory="/candidate.json", check_execution=object(), deployment=None,
                   connection=None, config="check.yaml", env_file=None)
     kwargs[missing] = None
     with pytest.raises(QueueConfigError, match="candidate inventory and submitted"):
@@ -266,16 +267,16 @@ def test_candidate_capability_retirement_narrows_permissions(tmp_path, change):
     old = replace(policy.capability, project_integration_versions=())
     current = replace(old, shared_roots={"workloads": old.shared_roots["workloads"]},
                       environment_fingerprint="sha256:" + "b" * 64)
-    before = {"container_capabilities": [old.to_dict()]}
-    after = {"container_capabilities": [current.to_dict()]}
+    before = {"container_capabilities": [cast(dict[str, Any], old.to_dict())]}
+    after = {"container_capabilities": [cast(dict[str, Any], current.to_dict())]}
     if change == "policy":
         after["container_capabilities"][0]["policy_id"] = "new-policy"
     elif change == "root":
-        after["container_capabilities"][0]["shared_roots"]["new-root"] = old.to_dict()["shared_roots"]["data"]
+        after["container_capabilities"][0]["shared_roots"]["new-root"] = cast(dict[str, Any], old.to_dict())["shared_roots"]["data"]
     elif change == "challenge":
         after["container_capabilities"][0]["shared_roots"]["workloads"]["challenge"]["sha256"] = "c" * 64
     elif change == "image":
-        after["container_capabilities"][0]["shared_roots"] = old.to_dict()["shared_roots"]
+        after["container_capabilities"][0]["shared_roots"] = cast(dict[str, Any], old.to_dict())["shared_roots"]
         after["container_capabilities"][0]["allowed_image_roots"].append("data")
     elif change == "integration":
         after["container_capabilities"][0]["project_integration_versions"] = [3]
@@ -288,7 +289,7 @@ def test_candidate_capability_retirement_narrows_permissions(tmp_path, change):
 
 @pytest.mark.parametrize("name", ["coordinator", "worker"])
 def test_retirement_resume_rechecks_peer_support_before_staging(tmp_path, monkeypatch, name):
-    operation = object.__new__(workload_upgrades.WorkloadUpgrade)
+    operation = cast(Any, object.__new__(workload_upgrades.WorkloadUpgrade))
     operation.directory = tmp_path
     operation.intent = {
         "retire_configuration": True, "release": "release",
@@ -310,7 +311,7 @@ def test_retirement_resume_rechecks_peer_support_before_staging(tmp_path, monkey
 
 @pytest.mark.parametrize("changed", ["availability", "freshness", "owner"])
 def test_retirement_resume_requires_current_coordinator_observation(tmp_path, monkeypatch, changed):
-    operation = object.__new__(workload_upgrades.WorkloadUpgrade)
+    operation = cast(Any, object.__new__(workload_upgrades.WorkloadUpgrade))
     operation.directory = tmp_path
     operation.intent = {
         "retire_configuration": True, "release": "release",

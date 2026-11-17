@@ -112,6 +112,7 @@ def test_saved_container_launch_and_receipt_decode_without_storage_access(
         "fence-A", "operation-A", "a" * 64, tmp_path, profile, {},
     )
     saved = _launch_value(launch)
+    assert isinstance(saved["profile"], dict)
     assert ("storage_mount_version" in saved["profile"]) == (storage_mount_version == 2)
     digest = launch.spec_digest
     receipt = _receipt_value(SupervisorReceipt(SupervisorLaunchState.NOT_ACCEPTED, launch, 0))

@@ -7,7 +7,7 @@ import hashlib
 
 from loom.pipeline.runtime import CpuResourcePlanner
 from loom.queue._managed_local import AgentResourceProvider, AtomResourceProvider
-from loom.queue._remote_stage_execution import ResidentExecutionProfile
+from loom.queue._remote_stage_execution import ResidentExecutionProfile, AgentResourceInventory
 from loom.scheduling import CapacityAtom, ExactQuantity, SchedulingComponentDescriptor
 
 
@@ -47,7 +47,7 @@ class ResidentProviderFactory:
         self.calls = 0
 
     def __call__(
-        self, agent_id: str, _profile: ResidentExecutionProfile
+        self, agent_id: str, _profile: ResidentExecutionProfile | AgentResourceInventory
     ) -> Sequence[AgentResourceProvider]:
         self.calls += 1
         return (

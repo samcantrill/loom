@@ -3,6 +3,8 @@
 from dataclasses import replace
 from types import SimpleNamespace
 
+from typing import Any
+
 import pytest
 
 from loom.coordinator import CoordinatorConnectionDescription, RunObservation
@@ -51,10 +53,12 @@ def test_pending_preparation_and_absent_execution_are_distinct():
 
 def test_blocked_native_admission_is_not_reported_as_capacity_wait(tmp_path, monkeypatch):
     observed = observation()
+    assert observed.admission is not None
     observed = replace(observed, admission=replace(observed.admission, state=LocalDaemonAdmissionState.BLOCKED, blocked_reason="stage_failed"))
     monkeypatch.setattr(self_tests.RunRequest, "from_dict", lambda _: SimpleNamespace(preparation=SimpleNamespace(operation_id="check-id")))
-    client = SimpleNamespace(observe_run=lambda *a, **k: observed)
-    result = self_tests._observe_check(client, None, tmp_path, {"requests": {"cpu": {}}}, "cpu", self_tests.time.monotonic() + 10)
+    operator: Any = None  # These observation-only cases cannot call an operator.
+    client: Any = SimpleNamespace(observe_run=lambda *a, **k: observed)
+    result = self_tests._observe_check(client, operator, tmp_path, {"requests": {"cpu": {}}}, "cpu", self_tests.time.monotonic() + 10)
     assert result["outcome"] == "failed" and result["code"] == "native_check_failed"
     assert result["native"]["admission"]["blocked_reason"] == "stage_failed"
 
@@ -67,10 +71,11 @@ def test_upgrade_observation_is_bounded_while_standalone_waits(tmp_path, monkeyp
     def observe(identity, **kwargs):
         calls.append((identity, kwargs))
         return observation(preparing=True)
-    client = SimpleNamespace(observe_run=observe)
+    operator: Any = None  # These observation-only cases cannot call an operator.
+    client: Any = SimpleNamespace(observe_run=observe)
     for _ in range(2):
         result = self_tests._observe_check(
-            client, None, tmp_path, {"requests": {"cpu": {}}}, "cpu",
+            client, operator, tmp_path, {"requests": {"cpu": {}}}, "cpu",
             self_tests.time.monotonic() + 120, **({} if wait else {"wait": False}),
         )
         assert result["outcome"] == "waiting"

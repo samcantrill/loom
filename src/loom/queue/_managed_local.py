@@ -26,7 +26,7 @@ from fractions import Fraction
 from pathlib import Path
 from threading import RLock
 from time import sleep
-from typing import Any, Protocol, cast, runtime_checkable
+from typing import Any, Literal, Protocol, cast, runtime_checkable
 
 from loom.artifacts import ArtifactRef
 from loom.serialization._diagnostic_capture import _capture_exception_details
@@ -3482,7 +3482,7 @@ def run_managed_local_assignment(
     agent_root: Path,
     supervisor: AgentProcessSupervisorClient,
     resident_launch_profile: ResidentWorkerLaunchProfile,
-    durable_files: str = "best_effort",
+    durable_files: Literal["best_effort", "strict"] = "best_effort",
     cancellation_requested: Callable[[], bool] | None = None,
     suspend_requested: Callable[[], bool] | None = None,
     execution_started: Callable[[], None] | None = None,

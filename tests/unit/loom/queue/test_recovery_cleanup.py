@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+from typing import Any, cast
 from types import SimpleNamespace
 
 import pytest
@@ -145,7 +146,7 @@ def test_settled_logs_share_publication_and_survive_assignment_removal(tmp_path,
     consumer, _ = _RemoteArtifact.from_local_ref(
         transfer_id="consumer-input", logical_name="result", ref=refs["result"]
     )
-    assert _RemoteArtifact.from_dict(consumer.to_dict()).metadata["diagnostic_index"]["path"] == "primary.json"
+    assert cast(dict[str, str], _RemoteArtifact.from_dict(consumer.to_dict()).metadata["diagnostic_index"])["path"] == "primary.json"
     fact = SimpleNamespace(artifact_name="result", artifact=refs["result"])
     assert cleanup._complete_outputs([fact])
     assert cleanup._published_logs([fact], profile.shared_roots)
@@ -154,8 +155,8 @@ def test_settled_logs_share_publication_and_survive_assignment_removal(tmp_path,
     assert workspace._retain_outputs(result) == report
     root = Path(refs["result"].uri.removeprefix("file://")).parent
     shutil.rmtree(workspace.root)
-    assert (root / refs["result"].metadata[EXECUTION_LOGS]["stdout"]).read_bytes() == b"completed output\n"
-    assert (root / refs["result"].metadata[EXECUTION_LOGS]["stderr"]).read_bytes() == b"diagnostic warning\n"
+    assert (root / cast(dict[str, str], refs["result"].metadata[EXECUTION_LOGS])["stdout"]).read_bytes() == b"completed output\n"
+    assert (root / cast(dict[str, str], refs["result"].metadata[EXECUTION_LOGS])["stderr"]).read_bytes() == b"diagnostic warning\n"
     assert cleanup._published_logs([fact], profile.shared_roots)
 
 
@@ -168,13 +169,16 @@ def releasable_attempt(tmp_path, monkeypatch):
     workspace, profile, _ = _workspace(tmp_path)
     _write(workspace)
     reference = recovery.seal(workspace.request(), profile.shared_roots, agent_id="agent-1", fence="fence-1")
+    assert reference is not None
     tree, _ = recovery.inspect(reference, profile.shared_roots)
     from loom.artifacts import ArtifactRef
     from loom.pipeline.execution.models import StageWorkerResult
     from loom.pipeline.status import StageStatus
     from loom.queue._shared_publication import worker_artifact_root
 
-    output = worker_artifact_root(workspace) / workspace.request().stage_name / "primary.json"
+    artifact_root = worker_artifact_root(workspace)
+    assert artifact_root is not None
+    output = artifact_root / workspace.request().stage_name / "primary.json"
     output.write_bytes(b"scientific output")
     result = StageWorkerResult(
         schema_version=1, run_uri=f"loom-agent:{workspace.assignment_id}",
@@ -255,7 +259,7 @@ def test_release_preserves_outputs_and_records_cleanup_idempotently(releasable_a
     from loom.pipeline.stores.local_artifacts import LocalArtifactStore
     if increase_limits:
         from loom.serialization import thaw_plain_data
-        roots = thaw_plain_data(releasable_attempt.profile.shared_roots)
+        roots = cast(dict[str, Any], thaw_plain_data(releasable_attempt.profile.shared_roots))
         roots["outputs"]["publication"] = {
             "max_members": 1_000_000, "max_payload_bytes": 274_877_906_944,
             "max_manifest_bytes": 536_870_912,

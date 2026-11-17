@@ -6,6 +6,7 @@ from pathlib import Path
 import socket
 import sqlite3
 import sys
+from typing import cast
 
 import pytest
 
@@ -40,6 +41,7 @@ def _agent(root, *, kind="slurm", rollback=False):
         storage=StoragePolicy(socket.gethostname(), SQLitePolicy("delete", "extra")) if rollback else None,
     )
     LocalDaemonAgentHttpClient.initialize_agent_root(config)
+    assert config.agent_root is not None
     return config, profile, _read_remote_agent_root_id(config.agent_root)
 
 
@@ -61,6 +63,7 @@ def _inspect(config, root_id):
 @pytest.mark.parametrize("rollback", [False, True])
 def test_fresh_agent_settlement_uses_retained_execution_inventory(tmp_path, kind, rollback):
     config, _, identity = _agent(tmp_path / "case", kind=kind, rollback=rollback)
+    assert config.agent_root is not None
     observation = _inspect(config, identity)
     assert observation.availability == "available", observation.to_dict()
     assert observation.to_dict()["value"] == {"settled": True, "wait_reasons": []}
@@ -73,6 +76,7 @@ def test_fresh_agent_settlement_uses_retained_execution_inventory(tmp_path, kind
 ])
 def test_missing_required_store_refuses_without_recreation(tmp_path, kind, missing):
     config, _, identity = _agent(tmp_path / "case", kind=kind)
+    assert config.agent_root is not None
     (config.agent_root / missing).unlink()
     observation = _inspect(config, identity)
     assert observation.availability == "unavailable"
@@ -83,6 +87,7 @@ def test_missing_required_store_refuses_without_recreation(tmp_path, kind, missi
 @pytest.mark.parametrize("kind", ["resident", "slurm"])
 def test_legacy_roots_do_not_infer_missing_supervisor_is_intentional(tmp_path, kind):
     config, _, identity = _agent(tmp_path / "case", kind=kind)
+    assert config.agent_root is not None
     with closing(sqlite3.connect(config.agent_root / "control.sqlite")) as conn, conn:
         conn.execute("DELETE FROM root_metadata WHERE key = 'execution_store_requirements'")
     observation = _inspect(config, identity)
@@ -94,6 +99,7 @@ def test_legacy_roots_do_not_infer_missing_supervisor_is_intentional(tmp_path, k
 @pytest.mark.parametrize("failure", ["before_submit", "provider_revoke", "release_ack"])
 def test_agent_settlement_waits_for_full_slurm_release(tmp_path, monkeypatch, failure):
     config, profile, identity = _agent(tmp_path / "case", rollback=True)
+    assert config.agent_root is not None
     agent = AgentSlurmJobs(config.agent_root, (profile,), sqlite_policy=config.sqlite_policy)
     task = _task(profile)
     task["assignment"]["agent_root_id"] = identity
@@ -121,7 +127,7 @@ def test_agent_settlement_waits_for_full_slurm_release(tmp_path, monkeypatch, fa
     pending = _inspect(config, identity)
     assert pending.availability == "available", pending.to_dict()
     assert pending.value["settled"] is False
-    assert "slurm_submission_or_release" in pending.value["wait_reasons"]
+    assert "slurm_submission_or_release" in cast(list[str], pending.value["wait_reasons"])
     failing = False
     agent.close()
     agent = AgentSlurmJobs(config.agent_root, (profile,), sqlite_policy=config.sqlite_policy)
@@ -134,6 +140,7 @@ def test_agent_settlement_waits_for_full_slurm_release(tmp_path, monkeypatch, fa
         agent.close()
     settled = _inspect(config, identity)
     assert settled.value["settled"] is True, settled.to_dict()
+    assert isinstance(profile.runner, FakeSlurmCommandRunner)
     assert not any(call[0] == "sbatch" for call in profile.runner.calls)
 
 
@@ -143,6 +150,7 @@ def test_agent_settlement_waits_for_full_slurm_release(tmp_path, monkeypatch, fa
 ])
 def test_retained_cleanup_and_acknowledgements_prevent_settlement(tmp_path, database, statement, reason):
     config, _, identity = _agent(tmp_path / "case")
+    assert config.agent_root is not None
     # These retained states model interruptions before provider/evidence ack.
     with closing(sqlite3.connect(config.agent_root / database)) as conn, conn:
         conn.execute(statement)
@@ -156,16 +164,17 @@ def test_local_assignment_and_event_are_owned_until_acknowledged(tmp_path):
     from loom.queue._managed_local import ManagedAssignment, SQLiteAgentJournal
 
     config, _, identity = _agent(tmp_path / "case", kind="resident")
+    assert config.agent_root is not None
     journal = SQLiteAgentJournal(config.agent_root / "journal.sqlite", _allow_initialize=False)
     assignment = ManagedAssignment(
         "assignment", "file:///run", "work", "stage", 1, "attempt", identity,
         "session", "offer", "claim",
     )
     journal.persist_request(assignment, {})
-    assert "local_execution_release" in _inspect(config, identity).value["wait_reasons"]
+    assert "local_execution_release" in cast(list[str], _inspect(config, identity).value["wait_reasons"])
     journal.decline_before_prepare(assignment.assignment_id)
     sequence = journal.append_event(assignment.assignment_id, "decline", {"state": "declined"})
-    assert "local_execution_evidence" in _inspect(config, identity).value["wait_reasons"]
+    assert "local_execution_evidence" in cast(list[str], _inspect(config, identity).value["wait_reasons"])
     journal.acknowledge(assignment.assignment_id, sequence)
     assert _inspect(config, identity).value["settled"] is True
 
@@ -177,6 +186,7 @@ def test_supervisor_terminal_state_does_not_skip_temporary_cleanup(tmp_path, sta
     from loom.queue._agent_process_supervisor import ResidentWorkerLaunch, _launch_value
 
     config, _, identity = _agent(tmp_path / "case", kind="resident")
+    assert config.agent_root is not None
     database = config.agent_root / "supervisor/supervisor.sqlite"
     with closing(sqlite3.connect(database)) as conn, conn:
         metadata = dict(conn.execute("SELECT key, value FROM metadata"))
@@ -194,7 +204,7 @@ def test_supervisor_terminal_state_does_not_skip_temporary_cleanup(tmp_path, sta
             "temporary_storage_pending,temporary_storage_error) VALUES (?,?,?,?,1,?,?)",
             (launch.launch_operation_id, launch.spec_digest, json.dumps(_launch_value(launch)), state, pending, error),
         )
-    assert "supervisor_containment" in _inspect(config, identity).value["wait_reasons"]
+    assert "supervisor_containment" in cast(list[str], _inspect(config, identity).value["wait_reasons"])
     with closing(sqlite3.connect(database)) as conn, conn:
         conn.execute("UPDATE launches SET state='contained',temporary_storage_pending=0,temporary_storage_error=NULL")
     assert _inspect(config, identity).value["settled"] is True
@@ -202,6 +212,7 @@ def test_supervisor_terminal_state_does_not_skip_temporary_cleanup(tmp_path, sta
 
 def test_malformed_retained_inventory_does_not_skip_required_stores(tmp_path):
     config, _, identity = _agent(tmp_path / "case")
+    assert config.agent_root is not None
     with closing(sqlite3.connect(config.agent_root / "control.sqlite")) as conn, conn:
         conn.execute(
             "UPDATE root_metadata SET value=? WHERE key='execution_store_requirements'",
@@ -216,14 +227,15 @@ def test_acknowledged_assignment_control_needs_no_optional_containment_payload(t
     from loom.queue.agent_sessions import AgentAssignmentControl
 
     config, _, identity = _agent(tmp_path / "case", kind="resident")
+    assert config.agent_root is not None
     control = AgentAssignmentControl("cancel", "session", "assignment", None, None)
     with closing(_RemoteAgentJournal(config.agent_root)) as journal:
         assert journal.prepare_assignment_control(control) is None
         # A premature acknowledgement cannot resolve an incomplete result.
         journal.acknowledge_assignment_control(control.operation_id)
-        assert "local_control_settlement" in _inspect(config, identity).value["wait_reasons"]
+        assert "local_control_settlement" in cast(list[str], _inspect(config, identity).value["wait_reasons"])
         journal.record_assignment_control_result(control, code, None)
-        assert "local_control_settlement" in _inspect(config, identity).value["wait_reasons"]
+        assert "local_control_settlement" in cast(list[str], _inspect(config, identity).value["wait_reasons"])
         journal.acknowledge_assignment_control(control.operation_id)
         observation = _inspect(config, identity)
         assert observation.availability == "available", observation.to_dict()
@@ -281,7 +293,7 @@ def test_schema_seven_settlement_refuses_unreleased_or_incompatible_state(tmp_pa
     if condition == "reserved":
         assert observation.availability == "available", observation.to_dict()
         assert observation.value["settled"] is False
-        assert observation.value["wait_reasons"] == ["slurm_assignment_or_release"]
+        assert observation.value["wait_reasons"] == ("slurm_assignment_or_release",)
     else:
         assert observation.availability == "unavailable"
         assert observation.reason == "settlement_evidence_unavailable"

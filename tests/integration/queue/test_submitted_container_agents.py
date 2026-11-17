@@ -79,12 +79,15 @@ def test_selected_catalog_survives_agent_launch_and_shared_reference_delivery(tm
                                            if alias != "unused"})
     request = _bound(request, execution, narrowed)
     assert policy.qualify() == narrowed.capability
+    from loom.queue.submitted_execution import SubmittedContainerCapability
+    assert isinstance(request.profile, SubmittedContainerCapability)
     assert policy.available_capability().satisfies(request.profile.requirement(execution))
     assert policy.capability.satisfies(request.profile.requirement(execution))
     config = _config(tmp_path, policy)
     LocalDaemonAgentHttpClient.initialize_agent_root(config)
     client = LocalDaemonAgentHttpClient(config)
     try:
+        assert config.agent_root is not None
         workspace = _ResidentAssignmentWorkspace(config.agent_root, request.assignment_id)
         launch = client._assignment_launch_profile(request, workspace)
         assert launch.descriptor == request.profile.to_dict()
@@ -138,6 +141,7 @@ def test_container_only_agent_images_share_resource_owners_and_exclusive_gpu(tmp
                         }),
                     ).to_dict())
             from loom.queue._remote_stage_execution import _ResidentAssignmentWorkspace
+            assert config.agent_root is not None
             workspace = _ResidentAssignmentWorkspace(config.agent_root, f"work-{index}")
             launch = client._assignment_launch_profile(selected, workspace)
             assert launch.submitted_execution == (None if installed_first and index == 0 else image)

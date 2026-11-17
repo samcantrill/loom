@@ -712,7 +712,7 @@ def bind_principal(request, directory):
     }
 
 
-def execute(request, repeated, directory):
+def execute(request, repeated, directory) -> dict[str, Any]:
     action = request["action"]
     if action == "repair-gpu-policy":
         from .gpu_policy_repair import repair_host

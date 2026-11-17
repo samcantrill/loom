@@ -4640,7 +4640,7 @@ def test_gpu_model_preference_selects_exact_private_local_or_remote_binding(
     provider_members: dict[str, tuple[AgentResourceProvider, ...]] = {}
 
     def provider_factory(
-        agent_id: str, resident_profile: ResidentExecutionProfile
+        agent_id: str, resident_profile: ResidentExecutionProfile | AgentResourceInventory
     ) -> tuple[AgentResourceProvider, ...]:
         configured = provider_members.get(agent_id)
         if configured is not None:
@@ -5288,7 +5288,7 @@ def test_report_output_inventory_metadata_uses_message_byte_budget(output_kind):
 
 
 def test_report_output_metadata_does_not_widen_control_fields():
-    report = _successful_output_report({"metric_value": 0.25}).to_dict()
+    report = cast(dict[str, Any], _successful_output_report({"metric_value": 0.25}).to_dict())
     report["outputs"][0]["size_bytes"] = 1.5
     with pytest.raises(QueueServiceError):
         _decode(json.dumps({"report": report}).encode(), failure_report=True)

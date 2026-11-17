@@ -663,9 +663,9 @@ class _RemoteArtifact:
             if source.is_symlink():
                 raise QueueConflictError("remote transfer source is a link")
             path = source.resolve(strict=True)
-            if shared_binding(ref.metadata) is not None:
+            publication = shared_binding(ref.metadata)
+            if publication is not None:
                 verify_ref(ref, path)
-                publication = shared_binding(ref.metadata)
                 if publication["schema_version"] == 2 and ref.checksum is not None:
                     size, digest = path.stat().st_size, ref.checksum.removeprefix("sha256:")
                 else:
@@ -1667,7 +1667,7 @@ def _require_current_workspace_path(root: Path) -> None:
 
 def _require_resident_workspace_schema(
     conn: sqlite3.Connection,
-) -> tuple[SQLitePolicy | None, str]:
+) -> tuple[SQLitePolicy | None, Literal["best_effort", "strict"]]:
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version not in (0, 1):
         raise QueueServiceError("resident assignment workspace schema is unsupported")
@@ -1719,7 +1719,7 @@ class _ResidentAssignmentWorkspace:
     def __init__(
         self, agent_root: Path, assignment_id: str, *,
         sqlite_policy: SQLitePolicy | None = None,
-        durable_files: str | None = None,
+        durable_files: Literal["best_effort", "strict"] | None = None,
         _allow_initialize: bool | None = None,
     ) -> None:
         _identifier(assignment_id, "assignment_id")
@@ -1730,7 +1730,7 @@ class _ResidentAssignmentWorkspace:
         _require_current_workspace_path(self.root)
         self._db = self.root / "resident.sqlite"
         self._sqlite_policy = sqlite_policy
-        self.durable_files = durable_files or "best_effort"
+        self.durable_files: Literal["best_effort", "strict"] = durable_files or "best_effort"
         if self._db.exists():
             with inspect_sqlite_database(self._db) as conn:
                 retained = _require_resident_workspace_schema(conn)

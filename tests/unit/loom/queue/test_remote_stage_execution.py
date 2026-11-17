@@ -125,7 +125,7 @@ def test_preparation_profile_preserves_its_binding_across_process_serialization(
 def _request(
     profile: ResidentExecutionProfile,
     *,
-    stage_config: dict[str, str] | None = None,
+    stage_config: dict[str, PlainData] | None = None,
     input_binding_state: str = "current",
     fingerprint_schema: int = 2,
     input_metadata: Mapping[str, PlainData] | None = None,
@@ -695,7 +695,7 @@ def test_workspace_joins_actual_launch_controls_without_rewriting_worker_bytes(
     workspace.persist_worker_result(result)
     assert workspace.retain_outputs().to_dict() == report.to_dict()
     assert result_path.read_bytes() == original_bytes
-    timings = [payload for _, _, payload in workspace.pending_events() if payload.get("kind") == "native_timing"]
+    timings = [cast(dict[str, Any], payload) for _, _, payload in workspace.pending_events() if payload.get("kind") == "native_timing"]
     assert len(timings) == 2
     assert all(item["spans"][0]["action"] == "output_retention" for item in timings)
     assert all(item["spans"][0]["elapsed_nanoseconds"] >= 0 for item in timings)
@@ -1773,8 +1773,9 @@ def test_shared_commit_verifies_one_closure_and_every_output_association(tmp_pat
         verify(outputs)
     assert len(checked) == 1
     reference = binding(outputs["result"].metadata)
-    receipt = original(checked[0], reference)
-    span, = timings.spans
+    assert reference is not None
+    receipt = cast(dict[str, Any], original(checked[0], reference))
+    span, = cast(list[dict[str, Any]], timings.spans)
     assert span["attributes"] == {
         "publication_id": reference["publication_id"],
         "member_count": len(receipt["members"]),
@@ -1853,7 +1854,7 @@ def test_shared_publication_replay_keeps_complete_closure_and_native_identity(tm
     retention_events = [payload for _, _, payload in workspace.pending_events()
                         if payload.get("kind") == "native_timing"]
     assert len(retention_events) == 1
-    timings.observe(retention_events[0])
+    timings.observe(dict(retention_events[0]))
     assert report.schema_version == 6
     assert report.output_kind == "shared"
     assert _RemoteExecutionReport.from_dict(report.to_dict()) == report
@@ -1877,8 +1878,8 @@ def test_shared_publication_replay_keeps_complete_closure_and_native_identity(tm
     assert publication["primary"] == "primary.json"
     from loom.pipeline.stores.shared_artifacts import read_receipt
 
-    receipt = read_receipt(tree, publication)
-    audited = [span for span in timings.spans if span["action"] in {
+    receipt = cast(dict[str, Any], read_receipt(tree, publication))
+    audited = [span for span in cast(list[dict[str, Any]], timings.spans) if span["action"] in {
         "publication_inventory_hash", "publication_sync",
     }]
     assert [span["action"] for span in audited] == [
@@ -1994,7 +1995,7 @@ def test_remote_input_admits_historical_publication_under_increased_root_budget(
     ref = publish(workspace.request(), workspace.retain_outputs(), profile.shared_roots,
                   agent_id="agent-1", fence="fence-1")["result"]
     descriptor, _ = _RemoteArtifact.from_local_ref(transfer_id="historical-input", logical_name="source", ref=ref)
-    roots = thaw_plain_data(profile.shared_roots)
+    roots = cast(dict[str, Any], thaw_plain_data(profile.shared_roots))
     roots["outputs"]["publication"] = {
         "max_members": 1_000_000, "max_payload_bytes": 274_877_906_944,
         "max_manifest_bytes": 536_870_912,

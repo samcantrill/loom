@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from collections.abc import Mapping
+from typing import Any, cast
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,7 +19,7 @@ from loom.queue.slurm_bootstrap import (
 import loom.queue.slurm_bootstrap as slurm_bootstrap
 from loom.pipeline import ProcessContainmentOwner
 from loom.queue.slurm_ready_stage import SlurmBootstrapWorkspace
-from loom.serialization import freeze_plain_data
+from loom.serialization import PlainData, freeze_plain_data
 
 
 def test_fixed_bootstrap_cli_loads_explicit_private_configuration(tmp_path, monkeypatch):
@@ -38,7 +40,7 @@ def test_fixed_bootstrap_cli_loads_explicit_private_configuration(tmp_path, monk
     assert observed[0]["operation_id"] == "operation"
 
 
-def _config_value(tmp_path: Path) -> dict[str, str]:
+def _config_value(tmp_path: Path) -> dict[str, Any]:
     project = tmp_path / "project"
     project.mkdir()
     return {
@@ -156,6 +158,7 @@ def test_bootstrap_lost_start_reply_replays_live_nonce_but_new_invocation_cannot
 def _exercise_bootstrap(tmp_path, monkeypatch, pending_responses, durable_files, trusted_user, *, replay_start=False):
     config_path = tmp_path / "bootstrap.json"
     config_value = _config_value(tmp_path)
+    provider = prepared = expected_token = None
     if trusted_user:
         from loom.pipeline.executors.slurm.trusted_user import SlurmUserPrivateFileProvider
 
@@ -192,7 +195,7 @@ def _exercise_bootstrap(tmp_path, monkeypatch, pending_responses, durable_files,
             }
 
         def call_application(
-            self, role: str, action: str, payload: dict[str, object]
+            self, role: str, action: str, payload: dict[str, PlainData]
         ) -> dict[str, object]:
             assert role == "slurm_bootstrap"
             actions.append(action)
@@ -206,7 +209,7 @@ def _exercise_bootstrap(tmp_path, monkeypatch, pending_responses, durable_files,
             if action == "register":
                 if trusted_user:
                     import base64
-                    assert base64.b64decode(payload["capability"]) == expected_token
+                    assert base64.b64decode(cast(str, payload["capability"])) == expected_token
                 return freeze_plain_data({
                     "assignment_id": "assignment-1",
                     "delivery": {"nested": {"sequence": [1, 2]}},
@@ -230,7 +233,7 @@ def _exercise_bootstrap(tmp_path, monkeypatch, pending_responses, durable_files,
             self.root = tmp_path / "resident-workspace"
             self.root.mkdir(exist_ok=True)
 
-        def persist_registration(self, registration: object) -> None:
+        def persist_registration(self, registration: Mapping[str, PlainData]) -> None:
             retained = SlurmBootstrapWorkspace(
                 tmp_path / "protocol", "assignment-1", durable_files=durable_files,
             )
@@ -349,6 +352,7 @@ def _exercise_bootstrap(tmp_path, monkeypatch, pending_responses, durable_files,
         assert start_payloads[-1]["incarnation"] == start_payloads[0]["incarnation"]
         assert actions.count("started") == 1 and captured == {}
     if trusted_user:
+        assert prepared is not None and provider is not None
         assert not Path(prepared.path).exists()
         assert provider.prepare(operation_id="operation-1", request_digest="digest-1") == prepared
         assert not Path(prepared.path).exists()

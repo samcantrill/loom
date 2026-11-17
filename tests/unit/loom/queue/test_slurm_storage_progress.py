@@ -2,6 +2,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event, Lock
+from typing import Any
 from types import SimpleNamespace, MethodType
 
 import pytest
@@ -15,7 +16,7 @@ def test_storage_pending_deduplicates_and_allows_peer_commit(monkeypatch):
 
     started, release, wake = Event(), Event(), Event()
     calls = []
-    owner = SimpleNamespace(
+    owner: Any = SimpleNamespace(
         slurm_assignments=SimpleNamespace(schema_version=5, read=lambda _: SimpleNamespace(publication_completed_at=None)),
         config=SimpleNamespace(coordinator_shared_roots={}),
         _slurm_chunk_futures={},
@@ -29,7 +30,7 @@ def test_storage_pending_deduplicates_and_allows_peer_commit(monkeypatch):
         key = evidence['assignment']['assignment_id']
         if key == 'B' or options['_retained'] is not None:
             return {'sequence': evidence['sequence']}
-        record = SimpleNamespace(
+        record: Any = SimpleNamespace(
             assignment=SimpleNamespace(assignment_id=key), fence='fence', delivery={}, report=None, publication_cancelled_at=None,
         )
         raise _SlurmRetentionRequired(owner, record, evidence)
@@ -91,8 +92,8 @@ def test_failed_storage_releases_worker_slot_and_retains_error(monkeypatch, erro
 
     future = Future()
     future.set_exception(error)
-    record = SimpleNamespace(assignment=SimpleNamespace(assignment_id='A'), fence='fence', delivery={}, report=None, publication_cancelled_at=None)
-    owner = SimpleNamespace(
+    record: Any = SimpleNamespace(assignment=SimpleNamespace(assignment_id='A'), fence='fence', delivery={}, report=None, publication_cancelled_at=None)
+    owner: Any = SimpleNamespace(
         slurm_assignments=SimpleNamespace(schema_version=5, read=lambda _: SimpleNamespace(publication_completed_at=None)),
         config=SimpleNamespace(coordinator_shared_roots={}),
         _slurm_chunk_futures={},
@@ -118,12 +119,12 @@ def test_failed_storage_releases_worker_slot_and_retains_error(monkeypatch, erro
 
 def test_completed_publication_replay_reauthenticates_without_storage_work():
     identity = {'fence': 'fence', 'incarnation': 'bootstrap'}
-    record = SimpleNamespace(
+    record: Any = SimpleNamespace(
         assignment=SimpleNamespace(agent_id='agent', agent_root_id='root'),
         fence='fence', bootstrap_incarnation='bootstrap', start_consumed=True,
         publication_completed_at='2026-11-15T00:00:00Z', publication_cancelled_at=None,
     )
-    owner = SimpleNamespace(
+    owner: Any = SimpleNamespace(
         slurm_assignments=SimpleNamespace(read=lambda _: record),
         slurm_result_identity=lambda _: identity,
         _slurm_finalize_record=lambda *args, **kwargs: pytest.fail('completed replay repeated storage work'),
@@ -137,12 +138,12 @@ def test_completed_publication_replay_reauthenticates_without_storage_work():
 
 
 def test_observations_distinguish_compute_release_from_pending_publication():
-    record = SimpleNamespace(
+    record: Any = SimpleNamespace(
         assignment=SimpleNamespace(assignment_id='A'), compute_released_at='released-at',
         publication_requested_at='requested-at', publication_completed_at=None, publication_cancelled_at=None,
         agent_evidence_accepted_at='accepted-at',
     )
-    owner = SimpleNamespace(
+    owner: Any = SimpleNamespace(
         slurm_assignments=SimpleNamespace(list_run_unreleased=lambda _: [record],
                                          agent_evidence=lambda _: (1, {'provider_released': True})),
         _slurm_chunk_futures={},
@@ -163,14 +164,14 @@ def test_observations_distinguish_compute_release_from_pending_publication():
 def test_reconciliation_replays_cancelled_release_before_missing_publication_marker():
     """Authority cancellation may commit before its assignment marker does."""
     evidence = {'provider_released': True, 'release': {'state': 'CONTAINED'}}
-    record = SimpleNamespace(
+    record: Any = SimpleNamespace(
         assignment=SimpleNamespace(assignment_id='A', run_uri='run', attempt_id='attempt',
                                    agent_id='agent', agent_root_id='root'),
         publication_requested_at='requested', publication_completed_at=None,
         publication_cancelled_at=None,
     )
     calls = []
-    owner = SimpleNamespace(
+    owner: Any = SimpleNamespace(
         slurm_assignments=SimpleNamespace(pending_storage_page=lambda **_: [record],
                                          agent_evidence=lambda _: (7, evidence)),
         _slurm_storage_cursor=None, _slurm_storage_errors={},
@@ -187,8 +188,8 @@ def test_reconciliation_replays_cancelled_release_before_missing_publication_mar
 def test_prepared_retention_cannot_commit_after_ownership_changes(changed):
     from copy import copy
 
-    owner = SimpleNamespace(config=SimpleNamespace(coordinator_shared_roots={}))
-    original = SimpleNamespace(assignment='assignment', fence='fence',
+    owner: Any = SimpleNamespace(config=SimpleNamespace(coordinator_shared_roots={}))
+    original: Any = SimpleNamespace(assignment='assignment', fence='fence',
                                bootstrap_incarnation='incarnation', delivery={})
     evidence = {'provider_released': True}
     continuation = _SlurmRetentionRequired(owner, original, evidence)

@@ -20,7 +20,7 @@ from pathlib import Path
 import re
 import sqlite3
 from time import monotonic
-from typing import TYPE_CHECKING, Concatenate, ParamSpec, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Concatenate, Literal, ParamSpec, TypeVar, cast, overload
 from uuid import uuid4
 
 from loom.artifacts import ArtifactRef
@@ -2000,6 +2000,7 @@ class AgentSessionService:
         publication = evidence is not None and evidence.get("result_operation") == "commit"
         release = evidence is not None and evidence.get("provider_released") is True
         if publication or release:
+            assert evidence is not None
             if publication:
                 assignment_id = evidence.get("assignment_id")
             else:
@@ -2014,7 +2015,7 @@ class AgentSessionService:
                     try:
                         return self._slurm_work_locked(
                             session_id, coordinator_epoch, evidence, cursor,
-                            **({"_defer_publication": True} if publication else {"_defer_retention": True}),
+                            _pending_only=False, **({"_defer_publication": True} if publication else {"_defer_retention": True}),
                         )
                     except (_SlurmRetentionRequired, _SlurmPublicationRequired) as continuation:
                         pending = continuation
@@ -2022,16 +2023,30 @@ class AgentSessionService:
                 # The assignment guard serializes publication and release retries.
                 if isinstance(pending, _SlurmPublicationRequired):
                     pending.prepare()
-                    completed = {"_publication": pending}
+                    completed: dict[str, Any] = {"_publication": pending}
                 else:
                     pending.retain()
                     completed = {"_retained": pending}
                 with self._daemon._cycle_lock:
                     return self._slurm_work_locked(
-                        session_id, coordinator_epoch, evidence, cursor, **completed,
+                        session_id, coordinator_epoch, evidence, cursor, _pending_only=False, **completed,
                     )
         with self._daemon._cycle_lock:
             return self._slurm_work_locked(session_id, coordinator_epoch, evidence, cursor)
+
+    @overload
+    def _slurm_work_locked(
+        self, session_id: str, coordinator_epoch: str,
+        evidence: Mapping[str, PlainData] | None, cursor: str | None,
+        _pending_only: Literal[True], **retention: Any,
+    ) -> Mapping[str, PlainData] | None: ...
+
+    @overload
+    def _slurm_work_locked(
+        self, session_id: str, coordinator_epoch: str,
+        evidence: Mapping[str, PlainData] | None, cursor: str | None,
+        _pending_only: Literal[False] = False, **retention: Any,
+    ) -> Mapping[str, PlainData]: ...
 
     def _slurm_work_locked(
         self, session_id: str, coordinator_epoch: str,

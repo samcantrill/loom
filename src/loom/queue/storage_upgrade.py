@@ -20,7 +20,7 @@ from uuid import uuid4
 
 from loom._sqlite_inspection import inspect_sqlite_database
 from loom.pipeline.stores.atomic import atomic_write_bytes, _fsync_path_strict
-from loom.serialization import thaw_plain_data
+from loom.serialization import PlainData, thaw_plain_data
 
 from .errors import QueueConfigError, QueueServiceError
 from ._storage_policy import parse_storage_policy
@@ -98,13 +98,14 @@ def _declarations(request: dict, *, qualify: bool) -> list[dict]:
                 # HTTPS construction qualifies remote readiness. Inspection and
                 # interrupted recovery need only its inert retained declaration.
                 authority = None
-                if payload["authority"]["kind"] == "embedded":
+                authority_declaration = d._mapping(payload, "authority")
+                if authority_declaration["kind"] == "embedded":
                     authority = d._coordinator_authority_factory(
-                        payload["authority"], source.parent, deployment_root=root,
+                        authority_declaration, source.parent, deployment_root=root,
                         storage=parse_storage_policy(payload.get("storage")),
                     )
                 projection = d._coordinator_immutable_projection(payload)
-                if "state_root" in payload["authority"]:
+                if "state_root" in authority_declaration:
                     from loom.pipeline.stores.coordinator_authority import coordinator_authority_identity
                     projection["authority"] = coordinator_authority_identity(authority)
                 immutable = d._canonical_fingerprint({"coordinator": projection, "local_agent": None})
@@ -116,7 +117,7 @@ def _declarations(request: dict, *, qualify: bool) -> list[dict]:
                 }
             else:
                 spec = d.read_agent_spec(path, env_file=env)
-                payload = thaw_plain_data(spec.declarations)
+                payload = cast(dict[str, PlainData], thaw_plain_data(spec.declarations))
                 selected[side] = {
                     "payload": payload, "root": spec.agent_root, "spec": spec,
                 }
@@ -689,6 +690,7 @@ def storage_upgrade(request_path: str | Path, *, action: str = "inspect") -> dic
         if _request(request_path)[1] != digest:
             raise QueueServiceError("storage upgrade declarations changed after inspection")
         if action == "restore":
+            assert manifest is not None  # Missing restore snapshots were rejected above.
             if any((root / ("entered-" + owner_key(Path(owner["root"])) + ".json")).exists() for owner in owners):
                 raise QueueServiceError("storage upgrade restore is forbidden after a target owner entered")
             if manifest["state"] == "restored":
@@ -708,6 +710,7 @@ def storage_upgrade(request_path: str | Path, *, action: str = "inspect") -> dic
             if roles:
                 owners = [_source_inventory(role, request) for role in roles]
                 manifest = _prepare(request, digest, roles, owners)
+            assert manifest is not None  # Retained or just prepared under the owner locks.
             _guards(root, manifest, allow_previous=manifest["state"] == "prepared")
             manifest["state"] = "converting"
             publish_json(manifest_path, manifest)

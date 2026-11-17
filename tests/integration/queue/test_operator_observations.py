@@ -10,6 +10,8 @@ import os
 import socket
 import sqlite3
 
+from typing import cast
+
 import pytest
 
 from loom.coordinator import CoordinatorClientError, CoordinatorOperatorClient
@@ -603,7 +605,7 @@ def test_coordinator_retirement_negotiates_before_sending_mutation(owner, monkey
         calls.append(operation)
         result = dict(original(daemon, principal, operation, payload, **kwargs))
         if operation == "operator_handshake" and unsupported:
-            result["capabilities"] = [value for value in result["capabilities"]
+            result["capabilities"] = [value for value in cast(list[str], result["capabilities"])
                                       if value != "quiescent-coordinator-retirement-v1"]
         return result
 

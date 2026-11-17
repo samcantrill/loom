@@ -223,6 +223,7 @@ def test_native_run_projects_current_fingerprints_timing_and_only_committed_arti
     assert record.sources["native"]["config_fingerprint"] == identities[0]
     assert record.sources["native"]["started_at"] == snapshot.started_at
     assert record.sources["native"]["finished_at"] == snapshot.finished_at
+    assert record.stages is not None
     for actual, projected, stage in zip(
         summary.stages, record.stages, snapshot.stages, strict=True
     ):

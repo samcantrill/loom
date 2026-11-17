@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 import json
+from typing import Any, cast
 
 import pytest
 
@@ -27,7 +28,9 @@ def test_producer_reconciliation_opens_authority_once_per_pass(tmp_path, monkeyp
         uri = result["prepared_run"]["run_uri"]
         with daemon._cycle_lock:
             execution = daemon._execution
+            assert execution is not None
             resolver = execution._action_resolution
+            assert resolver is not None
             claims = resolver.store.producers(uri)
             assert len(claims) == 2 and all(claim["state"] == "succeeded" for claim in claims)
             original = execution._authority_store
@@ -192,7 +195,7 @@ def test_renamed_graph_reuses_original_producers_without_attempts(tmp_path):
         )
         assert authority(original_uri).open_run(original_uri) == before
         events = authority(uri).list_audit_events(uri)
-        timing = [event.payload for event in events if event.event_type == "stage.reuse_timing"]
+        timing = [cast(dict[str, Any], event.payload) for event in events if event.event_type == "stage.reuse_timing"]
         assert timing
         actions = {span["action"] for item in timing for span in item["spans"]}
         assert {
@@ -211,7 +214,9 @@ def test_renamed_graph_reuses_original_producers_without_attempts(tmp_path):
             for stage in child_snapshot.stages:
                 for attempt in stage.attempts:
                     worker = store.read_stage_worker_result(child, stage.stage_name, attempt=attempt.attempt)
-                    assert any(span["action"] == "worker_execution" for span in worker["executor_metadata"]["native_timings"]["spans"])
+                    assert worker is not None
+                    metadata = cast(dict[str, Any], worker["executor_metadata"])
+                    assert any(span["action"] == "worker_execution" for span in metadata["native_timings"]["spans"])
     finally:
         daemon.stop()
 

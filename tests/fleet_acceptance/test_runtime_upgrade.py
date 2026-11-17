@@ -180,6 +180,7 @@ def test_installed_runtime_upgrade(case):
                                 "outcome": "incomplete",
                             },
                         )
+                        assert result is not None
                         if result["outcome"] == "complete":
                             break
                         assert result["outcome"] in {"waiting", "running", "pending"}, (
@@ -224,6 +225,7 @@ def test_installed_runtime_upgrade(case):
                         fact["availability"] == "available" and fact["value"]["settled"]
                     ), fact
                     settlement[name] = fact
+                assert result is not None
                 check_evidence = {}
                 for rows in result["checks"].values():
                     attempt = rows[-1]

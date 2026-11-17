@@ -2024,8 +2024,9 @@ def _coordinator_immutable_projection(
             "port": server_mapping.get("port"),
         }
     )
+    storage = parse_storage_policy(payload.get("storage"))
     return {
-        **({"storage": parse_storage_policy(payload["storage"]).to_dict()} if payload.get("storage") is not None else {}),
+        **({"storage": storage.to_dict()} if storage is not None else {}),
         "schema_version": payload["schema_version"],
         "kind": payload["kind"],
         "machine_id": payload["machine_id"],
@@ -2047,8 +2048,9 @@ def _outbound_immutable_projection(
                 "descriptor": dict(_mapping(profile, "descriptor")),
             }
         )
+    storage = parse_storage_policy(payload.get("storage"))
     return {
-        **({"storage": parse_storage_policy(payload["storage"]).to_dict()} if payload.get("storage") is not None else {}),
+        **({"storage": storage.to_dict()} if storage is not None else {}),
         "schema_version": payload["schema_version"],
         "kind": payload["kind"],
         "url": payload["url"],

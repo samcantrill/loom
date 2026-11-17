@@ -18,7 +18,7 @@ import os
 import tempfile
 from pathlib import Path
 import sqlite3
-from typing import Any
+from typing import Any, cast
 
 from loom.serialization import thaw_plain_data
 from .errors import QueueConflictError, QueueServiceError
@@ -483,8 +483,10 @@ def receive_stopped(spec, control, *, expected_coordinator_id):
         if _has_retained_agent_work(journal, execution, slurm) or journal.pending_poll() is not None:
             raise QueueConflictError("stopped delivery requires settled native work")
         values = current.declarations
-        transport = AgentTlsClientConfig(values["url"], Path(values["server_ca_path"]),
-            Path(values["certificate_path"]), Path(values["private_key_path"]))
+        transport = AgentTlsClientConfig(
+            cast(str, values["url"]), Path(cast(str, values["server_ca_path"])),
+            Path(cast(str, values["certificate_path"])), Path(cast(str, values["private_key_path"])),
+        )
 
         client = LocalDaemonAgentHttpClient(transport)
         # Borrow the already locked journal for the normal reconciliation
@@ -494,15 +496,18 @@ def receive_stopped(spec, control, *, expected_coordinator_id):
             handshake = client.handshake()
             if handshake.get("coordinator_id") != expected_coordinator_id:
                 raise QueueConflictError("stopped delivery coordinator identity changed")
-            if session.coordinator_epoch != handshake["coordinator_epoch"]:
+            epoch = handshake.get("coordinator_epoch")
+            if not isinstance(epoch, str):
+                raise QueueConflictError("stopped delivery coordinator epoch is invalid")
+            if session.coordinator_epoch != epoch:
                 from .deployment import _operation_id
-                session = client.reconcile(session.session_id, handshake["coordinator_epoch"],
-                    idempotency_key=_operation_id("reconcile", session.session_id, handshake["coordinator_epoch"]))
+                session = client.reconcile(session.session_id, epoch,
+                    idempotency_key=_operation_id("reconcile", session.session_id, epoch))
             raw = client._call("control", {"session_id": session.session_id}).get("control")
         finally:
             client._journal = None
             client.close()
-        if raw is None or AgentControl.from_value(raw) != control:
+        if not isinstance(raw, Mapping) or AgentControl.from_value(raw) != control:
             raise QueueConflictError("stopped delivery differs from authorized coordinator control")
         if read_agent_spec(current.source_path, env_file=current.environment_path).declaration_digest != current.declaration_digest:
             raise QueueConflictError("stopped delivery source changed during exchange")

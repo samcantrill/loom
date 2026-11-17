@@ -550,7 +550,8 @@ def test_fresh_setup_repeat_and_selected_add_host(site, capsys, colocated):
         repeated["checks"]["worker"]["operation_id"]
         == result["checks"]["worker"]["operation_id"]
     )
-    assert operation_status(inventory, "fresh")["outcome"] == "complete"
+    status = operation_status(inventory, "fresh")
+    assert status is not None and status["outcome"] == "complete"
     from loom.queue.errors import QueueConflictError
 
     for field, replacement in (

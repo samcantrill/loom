@@ -370,7 +370,8 @@ def test_slow_worker_preparation_cannot_reserve_after_authorization_changes(tmp_
         assert not daemon._execution.coordinator.list_run_live_states(uri)
         assert _supervisor_launch_count(config) == 0
         if change == "cancel":
-            _drive_until(daemon, lambda: not daemon._execution._ready_preparations._pending)
+            execution = daemon._execution
+            _drive_until(daemon, lambda: not execution._ready_preparations._pending)
     finally:
         release.set()
         daemon.stop()

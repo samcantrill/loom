@@ -96,6 +96,7 @@ def retry_other_failed_checks(inventory, operation_id, *, keep):
         if result["outcome"] != "failed":
             continue
         successor = failed + "-explicit-retry"
+        current = None
         deadline = time.monotonic() + 120
         while time.monotonic() < deadline:
             upgrades.upgrade(inventory, operation_id=operation_id, action="retry-check",
@@ -104,6 +105,7 @@ def retry_other_failed_checks(inventory, operation_id, *, keep):
             if current[slot][-1]["operation_id"] == successor:
                 break
             time.sleep(0.05)
+        assert current is not None
         assert current[slot][-1]["operation_id"] == successor
         assert finish_check(inventory, successor)["outcome"] == "passed"
 
@@ -965,6 +967,7 @@ def test_runtime_candidate_repair_recovers_cancelled_preparation(
         selection["config"], deployment.preparation_profile,
     ), "retained-preparation")
     barrier.touch()
+    assert deployment.connection is not None
     with CoordinatorClient.from_connection_file(deployment.connection) as client:
         client.start_run(request)
         deadline = time.monotonic() + 60
@@ -980,7 +983,7 @@ def test_runtime_candidate_repair_recovers_cancelled_preparation(
         worker_result = base / "worker/assignments" / assignment / "worker-result.json"
         original_bytes = worker_result.read_bytes()
         cancel = client.cancel_run_operation("retained-preparation")
-        options = dict(
+        options: dict[str, Any] = dict(
             runtime_release=old_target, recover_retained_results=True, hold_admission=True,
             deployment=Path(setup["deployment"]), connection=Path(setup["operator_connection"]),
             config=selection["config"],
@@ -1006,6 +1009,7 @@ def test_runtime_candidate_repair_recovers_cancelled_preparation(
                 agent_results=results,
             )
             assert current.availability == "available", current.reason
+            assert current.owner is not None
             missing = inspect_coordinator_result_recovery(
                 Path(intent["hosts"]["coordinator"]["root"]) / "coordinator", expected_root_id=current.owner, agent_results=[],
             )
@@ -1106,6 +1110,7 @@ def test_runtime_recovery_publishes_original_result_and_finishes_downstream(
         "retained-measurement", "retained-measurement", deployment.source,
         selection["config"], deployment.preparation_profile,
     ), "retained-measurement")
+    assert deployment.connection is not None
     with CoordinatorClient.from_connection_file(deployment.connection) as client:
         client.start_run(request)
         deadline = time.monotonic() + 60
@@ -1148,6 +1153,7 @@ def test_runtime_recovery_publishes_original_result_and_finishes_downstream(
         assert result["outcome"] == "complete", result
         assert len(dropped) == 1
         observation = client.observe_run("retained-measurement", wait=False)
+        assert observation.admission is not None
         assert observation.admission.state.value == ("CANCELLED" if cancelled else "SUCCEEDED"), observation
         if cancellation is not None:
             assert client.wait_operation(cancellation.operation_id, timeout_seconds=20).operation.state == "applied"
@@ -1304,7 +1310,7 @@ def test_qualified_upgrade_holds_admission_until_explicit_publication_release(si
     assert setup["outcome"] == "complete", setup
     target = target_bundle(inventory, tmp_path)
     original_inventory = inventory.path.read_bytes()
-    options = dict(runtime_release=target, deployment=Path(setup["deployment"]),
+    options: dict[str, Any] = dict(runtime_release=target, deployment=Path(setup["deployment"]),
                    connection=Path(setup["operator_connection"]), config=selection["config"],
                    hold_admission=True)
     result = upgrades.upgrade(inventory, operation_id="publication", apply=True, **options)
@@ -1383,7 +1389,7 @@ def test_preview_compares_accepted_coordinator_identity_after_input_disappears(s
     assert setup["outcome"] == "complete", setup
     (obsolete / "challenge").unlink()
     obsolete.rmdir()
-    options = dict(runtime_release=target_bundle(inventory, tmp_path),
+    options: dict[str, Any] = dict(runtime_release=target_bundle(inventory, tmp_path),
                    deployment=Path(setup["deployment"]), connection=Path(setup["operator_connection"]),
                    config=selection["config"])
     result = upgrades.preview(inventory, **options)

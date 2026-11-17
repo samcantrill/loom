@@ -3,6 +3,8 @@
 from dataclasses import asdict, replace
 import json
 
+from typing import cast
+
 import pytest
 
 from loom.coordinator import CoordinatorClientError, CoordinatorOperatorClient
@@ -84,7 +86,7 @@ def test_contraction_retains_session_and_accepts_remaining_inventory(site):
     daemon._trusted_scheduling_loader = lambda: candidate(site)
     reload = request(daemon)
     with CoordinatorOperatorClient.from_unix_socket(daemon.config.endpoint, expected_coordinator_id=daemon.status().coordinator_id) as client:
-        assert CAPABILITY in client.observe_status().value["capabilities"]
+        assert CAPABILITY in cast(list[str], client.observe_status().value["capabilities"])
         result = client.reload_scheduling(reload)
         assert result["state"] == "applied"
         assert client.reload_scheduling(reload) == result
@@ -149,7 +151,7 @@ def test_contraction_negotiates_before_mutation(site, monkeypatch):
         calls.append(args[2])
         value = dict(dispatch(*args, **kwargs))
         if args[2] == "operator_handshake":
-            value["capabilities"] = [item for item in value["capabilities"] if item != CAPABILITY]
+            value["capabilities"] = [item for item in cast(list[str], value["capabilities"]) if item != CAPABILITY]
         return value
     monkeypatch.setattr(unix, "dispatch_control", old_peer)
     with CoordinatorOperatorClient.from_unix_socket(daemon.config.endpoint, expected_coordinator_id=daemon.status().coordinator_id) as client:

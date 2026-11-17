@@ -7,6 +7,8 @@ from types import SimpleNamespace
 from threading import Event
 from contextlib import contextmanager
 
+from typing import Any
+
 import pytest
 
 from loom.fleet import upgrades, workload_upgrades, _workload_host
@@ -105,7 +107,7 @@ def test_host_batch_starts_peer_and_retains_success_when_first_host_waits(tmp_pa
     from loom.fleet import ssh_operations
     from loom.fleet._startup import ServiceStarting
 
-    operation = object.__new__(ssh_operations._Operation)
+    operation: Any = object.__new__(ssh_operations._Operation)
     operation.intent = {"hosts": {name: {"host": name} for name in ("first", "second")}}
     operation.accept_update = lambda *args: None
     ids = []
@@ -147,7 +149,7 @@ def test_runtime_transition_keeps_coordinator_and_all_agent_readiness_barriers(t
     calls = []
     operation = SimpleNamespace(
         directory=tmp_path, receipts=tmp_path / "receipts", operator=object(),
-        intent={"hosts": hosts, "agents": {"first": {}, "second": {}},
+        intent={"kind": "runtime-upgrade", "hosts": hosts, "agents": {"first": {}, "second": {}},
                 "target_path": "/release.json", "operation_id": "upgrade",
                 "check_selection": {"coordinator_id": "coordinator"}},
         recheck=lambda: None, gate=lambda: None, probes=lambda: None,
@@ -179,7 +181,7 @@ def test_runtime_transition_keeps_coordinator_and_all_agent_readiness_barriers(t
 
 
 def test_completed_check_retry_replays_after_admission_reopens(tmp_path, monkeypatch):
-    operation = SimpleNamespace(directory=tmp_path, inventory=object(), recheck=lambda: None)
+    operation = SimpleNamespace(directory=tmp_path, inventory=object(), intent={"gpu_qualification": "exclusive"}, recheck=lambda: None)
     atomic(tmp_path / "checks.json", {"worker:cpu": [
         {"operation_id": "failed", "previous_check_id": None},
         {"operation_id": "successor", "previous_check_id": "failed"},
@@ -195,7 +197,7 @@ def test_completed_check_retry_replays_after_admission_reopens(tmp_path, monkeyp
 
 
 def test_workload_waiting_observations_do_not_requalify(tmp_path, monkeypatch):
-    operation = object.__new__(workload_upgrades.WorkloadUpgrade)
+    operation: Any = object.__new__(workload_upgrades.WorkloadUpgrade)
     operation.directory = tmp_path
     release = {"release_id": "current"}
     operation.intent = {
@@ -223,7 +225,7 @@ def test_workload_waiting_observations_do_not_requalify(tmp_path, monkeypatch):
 
 
 def test_runtime_retained_qualification_still_observes_live_owner(tmp_path, monkeypatch):
-    operation = object.__new__(upgrades._Upgrade)
+    operation: Any = object.__new__(upgrades._Upgrade)
     release = {"release_id": "candidate"}
     source = {"release_id": "previous"}
     operation.directory = tmp_path
@@ -262,7 +264,7 @@ def test_changed_image_refuses_at_staging_before_qualification(tmp_path, monkeyp
 
 
 def test_workload_preparation_is_retained_only_after_success(tmp_path, monkeypatch):
-    operation = object.__new__(workload_upgrades.WorkloadUpgrade)
+    operation: Any = object.__new__(workload_upgrades.WorkloadUpgrade)
     operation.directory = tmp_path
     release = {"release_id": "current"}
     target = {"profile": "qualified"}
@@ -293,7 +295,7 @@ def test_workload_preparation_is_retained_only_after_success(tmp_path, monkeypat
 
 @pytest.mark.parametrize("changed", [None, "image", "root", "declaration", "binding"])
 def test_apply_reuses_only_exact_current_preview_qualification(tmp_path, monkeypatch, changed):
-    operation = object.__new__(workload_upgrades.WorkloadUpgrade)
+    operation: Any = object.__new__(workload_upgrades.WorkloadUpgrade)
     operation.directory = tmp_path
     image = tmp_path / "image.sif"
     image.write_bytes(b"qualified")
@@ -355,8 +357,10 @@ def test_probe_qualifies_source_once_and_reuses_it_for_promotion(tmp_path, monke
         return service
     monkeypatch.setattr(_workload_host, "load_outbound_agent_service_config", load)
     checked = []
-    monkeypatch.setattr(_profile_promotion, "validate_candidate",
-                        lambda source, target, profile: checked.append((source, target, profile)))
+    def validate(source, target, profile, **policy_changes):
+        assert policy_changes == {"add_container_policies": False, "increase_publication_budgets": False}
+        checked.append((source, target, profile))
+    monkeypatch.setattr(_profile_promotion, "validate_candidate", validate)
     _workload_host.probe(request)
     assert len(qualified) == 2
     assert checked == [(qualified[0].client, qualified[1].client, "profile")]

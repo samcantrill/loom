@@ -132,7 +132,7 @@ def test_budget_failure_is_durable_unavailable_not_sealed_recovery(
             "observed_at_least": failure["reason"]["observed_at_least"],
         }
         assert failure["reason"]["observed_at_least"] > limit
-        assert failure["tree"] == str(current.relative_to(Path(profile.shared_roots["outputs"]["host_path"])))
+        assert failure["tree"] == str(current.relative_to(Path(cast(dict[str, str], profile.shared_roots["outputs"])["host_path"])))
         assert failure["identity"]["fence"] == "fence-1"
         assert failure["budgets"] == limits
         assert "receipt_digest" not in failure
@@ -497,6 +497,7 @@ def test_trusted_recovery_rename_replays_without_payload_scan(tmp_path, monkeypa
                           agent_id="agent-1", fence="fence-1")
     ref = recovery.seal(workspace.request(), profile.shared_roots,
                         agent_id="agent-1", fence="fence-1")
+    assert ref is not None
     assert ref["schema_version"] == 2
     tree, receipt = recovery.inspect(ref, profile.shared_roots)
     assert receipt["members"] is None

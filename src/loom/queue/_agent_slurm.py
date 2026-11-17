@@ -16,7 +16,7 @@ from pathlib import Path
 import sqlite3
 from threading import RLock
 from time import monotonic
-from typing import cast
+from typing import Literal, cast
 
 from loom.pipeline.stores.atomic import atomic_write_bytes
 from loom.pipeline.executors.slurm.commands import SlurmCommandResult, ready_stage_command_policy
@@ -139,7 +139,7 @@ class AgentSlurmJobs:
 
     def __init__(
         self, root: Path, profiles: Sequence[SlurmReadyStageProfile], *,
-        sqlite_policy: SQLitePolicy | None = None, durable_files: str = "best_effort",
+        sqlite_policy: SQLitePolicy | None = None, durable_files: Literal["best_effort", "strict"] = "best_effort",
         submit_interval_seconds: float | None = None,
         observation_policy: SlurmObservationPolicy | None = None,
         asynchronous_preparation: bool = False,
@@ -154,7 +154,7 @@ class AgentSlurmJobs:
         self._last_submit: float | None = None
         self.root = root
         self._sqlite_policy = sqlite_policy
-        self._durable_files = durable_files
+        self._durable_files: Literal["best_effort", "strict"] = durable_files
         self.path = root / "slurm.sqlite"
         self.journal = SQLiteReadyStageSubmissions(self.path, _allow_initialize=False, sqlite_policy=sqlite_policy)
         self.journal._open_existing()
@@ -565,7 +565,7 @@ class AgentSlurmJobs:
         if disposition == "pending":
             delay = response.get("retry_after_seconds")
             if (response.get("assignment_id") != assignment.assignment_id
-                or type(delay) not in (int, float) or not 0 < delay <= 60):
+                or not (type(delay) is int or type(delay) is float) or not 0 < delay <= 60):
                 raise QueueConflictError("agent SLURM pending acknowledgement conflicts")
             self._ack_retry_at[assignment.operation_id] = monotonic() + delay
             if self._reconciliation_binding is not None:
@@ -742,6 +742,7 @@ class AgentSlurmJobs:
                 started_after=min(window[0] for window in windows),
                 ended_before=max(window[1] for window in windows), timeout_seconds=timeout,
             )
+            assert isinstance(result, SlurmCommandResult)
             if "...[truncated]" in result.stderr:
                 raise SlurmCommandOutputLimitError("accounting batch stderr is truncated")
             partitioned = partition_accounting_output(result.stdout, names)

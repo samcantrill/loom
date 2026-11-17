@@ -58,6 +58,7 @@ class OutboundSlurmCoordinator:
             private_key_path=credentials['agent'].with_suffix('.key'),
             agent_root=self.root / 'agent', slurm_profiles=self.daemon.config.slurm_profiles,
         )
+        assert config.agent_root is not None
         if not (config.agent_root / 'control.sqlite').exists():
             LocalDaemonAgentHttpClient.initialize_agent_root(config)
         service = OutboundAgentServiceConfig(

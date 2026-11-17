@@ -4,6 +4,7 @@ from dataclasses import fields, replace
 import hashlib
 from pathlib import Path
 import sys
+from typing import Any, cast
 
 import pytest
 
@@ -75,13 +76,13 @@ def test_slurm_delivery_validates_recovery_ownership_before_worker_resolution(tm
         executor_fingerprint=profile.descriptor.executor_fingerprint,
     )
     assert SlurmStageDelivery.from_dict(delivery.to_dict()) == delivery
-    stale = delivery.to_dict()
+    stale = cast(dict[str, Any], delivery.to_dict())
     stale["worker_metadata"][WIRE]["tree"] = stale["worker_metadata"][WIRE]["tree"].replace(
         delivery.attempt_id, "another-attempt",
     )
     with pytest.raises(QueueConflictError, match="ownership"):
         SlurmStageDelivery.from_dict(stale)
-    resolved = delivery.to_dict()
+    resolved = cast(dict[str, Any], delivery.to_dict())
     resolved["worker_metadata"][BINDING] = {"current": {"path": str(tmp_path)}}
     with pytest.raises(QueueServiceError, match="resolved recovery"):
         SlurmStageDelivery.from_dict(resolved)
@@ -111,7 +112,7 @@ def test_submitted_slurm_command_preserves_image_mounts_and_allocation(tmp_path,
     assert f"{tmp_path}/input-tree:/loom/data:ro" in argv
     assert ("--nv" in argv) == gpu
     assert ("CUDA_VISIBLE_DEVICES=GPU-allocation-id" in argv) == gpu
-    assert command.metadata["gpu_visibility"]["visible_gpu_count"] == (1 if gpu else 0)
+    assert cast(dict[str, Any], command.metadata["gpu_visibility"])["visible_gpu_count"] == (1 if gpu else 0)
     assert workspace.delivery().submitted_execution == execution
     # Reading the retained binding does not reinterpret image selection.
     from loom.queue._agent_process_supervisor import _profile_from_value
@@ -278,7 +279,7 @@ def test_submitted_slurm_runs_worker_process_and_publishes_complete_output_tree(
             worker_metadata={
                 **delivery.worker_metadata,
                 "loom.execution_binding": {
-                    **delivery.worker_metadata["loom.execution_binding"],
+                    **cast(dict[str, Any], delivery.worker_metadata["loom.execution_binding"]),
                     "environment_fingerprint": policy.capability.environment_fingerprint,
                 },
             },

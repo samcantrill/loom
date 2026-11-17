@@ -1,6 +1,7 @@
 """Slurm control pages honor encoded bytes and never skip an undelivered task."""
 
 import json
+from typing import Any, cast
 from types import SimpleNamespace
 
 import pytest
@@ -31,7 +32,7 @@ def owner_for(sizes, *, withheld=()):
 
 
 def page(owner, cursor=None):
-    return LocalDaemonExecution.slurm_agent_task_page(owner, "agent", "root", cursor=cursor)
+    return cast(dict[str, Any], LocalDaemonExecution.slurm_agent_task_page(owner, "agent", "root", cursor=cursor))
 
 
 def wire(reply):

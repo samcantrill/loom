@@ -3,7 +3,7 @@
 from collections.abc import Mapping
 import sys
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -394,7 +394,7 @@ def test_attempt_mount_preserves_rename_boundary(tmp_path, runtime, version, tru
     from loom.queue.shared_execution import assignment_scope
     from tests.unit.loom.queue.test_remote_stage_execution import _shared_publication_workspace
 
-    limits = {"max_members": 1024, "max_payload_bytes": 1024 * 1024,
+    limits: dict[str, Any] = {"max_members": 1024, "max_payload_bytes": 1024 * 1024,
               "max_manifest_bytes": 1024 * 1024}
     if trusted:
         limits["policy"] = "trusted_shared_storage"
@@ -405,14 +405,14 @@ def test_attempt_mount_preserves_rename_boundary(tmp_path, runtime, version, tru
         profile = replace(profile, container=_binding())
     request = workspace.request()
     metadata = {**request.worker_metadata, "loom.execution_binding": {
-        **request.worker_metadata["loom.execution_binding"], "attempt": 2,
+        **cast(dict[str, Any], request.worker_metadata["loom.execution_binding"]), "attempt": 2,
     }}
     request = replace(request, attempt=2, attempt_id="attempt-2", worker_metadata=metadata)
     owner = {
         "assignment_id": "previous-assignment", "attempt_id": "attempt-1",
         "stage_name": request.stage_name, "attempt": 1, "agent_id": "agent-1",
         "fence": "previous-fence",
-        "origin_run_id": request.worker_metadata["loom.execution_binding"]["origin_run_id"],
+        "origin_run_id": cast(dict[str, Any], request.worker_metadata["loom.execution_binding"])["origin_run_id"],
     }
     previous = "loom-recovery-retained/" + publication_id(owner)
     reference = {

@@ -1,10 +1,12 @@
 """Request-selected inputs preserve authority without coupling unrelated roots."""
 
 from dataclasses import replace
+from typing import Any, cast
 
 import pytest
 
 from loom.pipeline.orchestration import SubmittedContainerRequirement
+from loom.queue._preparation_policy import SubmittedPreparationProfile
 from loom.queue.errors import QueueServiceError
 from loom.queue.preparation import PreparationChildInput, PrepareRunRequest, SharedInputReceipt
 from loom.queue.shared_execution import stage_scope
@@ -44,10 +46,11 @@ def _selected_request(*aliases):
 
 def test_request_retains_canonical_immutable_selection_and_legacy_encoding():
     request = _selected_request("beta", "alpha", "alpha")
+    assert request.input_locations is not None
     assert [item["root_id"] for item in request.input_locations] == ["alpha", "beta"]
     assert PrepareRunRequest.from_dict(request.to_dict()) == request
     with pytest.raises(TypeError):
-        request.input_locations[0]["path"] = "changed"
+        cast(dict[str, Any], request.input_locations[0])["path"] = "changed"
     assert request.intent_digest("owner") != _selected_request("alpha").intent_digest("owner")
     assert "input_locations" not in _request().to_dict()
     with pytest.raises(QueueServiceError, match="v3"):
@@ -57,12 +60,14 @@ def test_request_retains_canonical_immutable_selection_and_legacy_encoding():
 
 
 def test_preparation_selects_only_requested_inputs_and_infrastructure(tmp_path):
-    selected = _selected_policy(tmp_path).select(_selected_request("alpha", "beta"))["profile"]
+    selected = cast(dict[str, Any], _selected_policy(tmp_path).select(_selected_request("alpha", "beta"))["profile"])
     assert set(selected["shared_scope"]["roots"]) == {"alpha", "beta", "runs"}
     assert selected["shared_scope"]["locations"] == [_location("alpha"), _location("beta")]
     capability = SubmittedContainerCapability.from_dict(selected["container_capability"])
     assert set(capability.shared_roots) == {"alpha", "beta", "runs", "workloads"}
-    execution = replace(_selected_request().execution, project_integration=None)
+    execution = _selected_request().execution
+    assert execution is not None
+    execution = replace(execution, project_integration=None)
     binding = PreparationChildInput(
         "selection", "shared-container", "config/pipeline.yaml",
         SharedInputReceipt("sha256:" + "a" * 64, "projects", "capture"), None,
@@ -78,7 +83,7 @@ def test_unpermitted_or_writable_input_rejected_before_preparation(tmp_path, ali
 
 
 def test_stage_override_cannot_expand_retained_input_selection(tmp_path):
-    profile = _selected_policy(tmp_path).select(_selected_request("alpha"))["profile"]
+    profile = cast(dict[str, Any], _selected_policy(tmp_path).select(_selected_request("alpha"))["profile"])
     with pytest.raises(QueueServiceError, match="outside the preparation selection"):
         stage_scope({"input": _location("beta")}, {}, profile["shared_scope"])
 
@@ -86,11 +91,12 @@ def test_stage_override_cannot_expand_retained_input_selection(tmp_path):
 def test_preparation_preserves_read_only_capture_storage_without_mounting_unselected_inputs(tmp_path):
     policy = _selected_policy(tmp_path)
     profile = policy.profiles["shared-container"]
+    assert isinstance(profile, SubmittedPreparationProfile)
     capability = replace(profile.capability, shared_roots={**profile.capability.shared_roots,
         "captures": {"container_path": "/loom/captures", "access": "ro",
                      "challenge": {"path": "challenge", "sha256": "d" * 64}}})
     policy = replace(policy, profiles={"shared-container": replace(profile, capability=capability)})
-    selected = policy.select(_selected_request("alpha"))["profile"]
+    selected = cast(dict[str, Any], policy.select(_selected_request("alpha"))["profile"])
     assert set(selected["shared_scope"]["roots"]) == {"alpha", "runs", "captures"}
     assert selected["shared_scope"]["locations"] == [_location("alpha")]
 
@@ -99,6 +105,7 @@ def test_worker_with_different_catalog_matches_selected_qualified_roots(tmp_path
     catalog = _catalog(tmp_path)
     selected = catalog.select_roots({"alpha": catalog.shared_roots["alpha"]})
     execution = _selected_request().execution
+    assert execution is not None
     requirement = selected.requirement(execution)
     assert requirement.schema_version == 2
     assert SubmittedContainerRequirement.from_dict(requirement.to_dict()) == requirement
@@ -106,7 +113,7 @@ def test_worker_with_different_catalog_matches_selected_qualified_roots(tmp_path
     assert selected.satisfies(requirement)  # Neither beta nor gamma is needed.
     assert not replace(selected, environment_fingerprint="sha256:" + "9" * 64).satisfies(requirement)
     changed = replace(selected, shared_roots={**selected.shared_roots,
-        "alpha": {**selected.shared_roots["alpha"], "container_path": "/loom/different"}})
+        "alpha": {**cast(dict[str, Any], selected.shared_roots["alpha"]), "container_path": "/loom/different"}})
     assert not changed.satisfies(requirement)
     assert not _capability(tmp_path).satisfies(requirement)  # An older worker cannot run v3.
 
@@ -116,9 +123,10 @@ def test_catalog_growth_does_not_change_request_or_selected_policy(tmp_path):
     request = _selected_request("alpha")
     before = policy.select(request)
     profile = policy.profiles["shared-container"]
+    assert isinstance(profile, SubmittedPreparationProfile)
     catalog = profile.capability
     grown = replace(catalog, shared_roots={**catalog.shared_roots,
-        "delta": {**catalog.shared_roots["beta"], "container_path": "/loom/inputs/delta"}})
+        "delta": {**cast(dict[str, Any], catalog.shared_roots["beta"]), "container_path": "/loom/inputs/delta"}})
     after = replace(policy, profiles={"shared-container": replace(profile, capability=grown)}).select(request)
     assert before == after
     legacy = _capability(tmp_path)
@@ -138,7 +146,9 @@ def test_old_image_rejects_selected_input_contract_before_loading_worker(tmp_pat
         "resident-submitted-container-v1", "resident-submitted-container-v2",
     ))
     monkeypatch.setattr(runpy, "run_module", lambda *args, **kwargs: pytest.fail("older worker was entered"))
-    command = submitted_execution.submitted_worker_command(_selected_request().execution, tmp_path)
+    execution = _selected_request().execution
+    assert execution is not None
+    command = submitted_execution.submitted_worker_command(execution, tmp_path)
     monkeypatch.setattr(sys, "argv", [command[0], *command[3:]])
     with pytest.raises(SystemExit, match="does not support required worker contract"):
         exec(command[2], {})
@@ -153,6 +163,7 @@ def test_action_reuse_joins_projected_capability_to_retained_preparation(tmp_pat
 
     capability = _catalog(tmp_path)
     execution = _selected_request().execution
+    assert execution is not None and execution.project_integration is not None
     shared = {"capability": "shared-execution-v1", "roots": {"alpha": capability.shared_roots["alpha"]},
               "locations": [_location("alpha")]}
     selected = capability.select_roots(shared["roots"])

@@ -1,5 +1,7 @@
 """Native source publication and replay across the Fleet host receipt boundary."""
 
+from typing import Any, cast
+
 import hashlib
 import io
 import json
@@ -74,7 +76,7 @@ def test_gpu_repair_reconciles_exact_native_publication(site, bundle, tmp_path, 
     assert result["reload"]["state"] == "applied"
     assert operation.call("coordinator", "repair-gpu-policy", **values) == result
     operation.recheck()
-    assert upgrades._Upgrade.accepted_declaration(operation, "coordinator") == result["declaration"]
+    assert upgrades._Upgrade.accepted_declaration(cast(Any, operation), "coordinator") == result["declaration"]
     offer(agent, session, DEVICES[:1])
     assert interrupted == [interruption]
     assert (directory / "intent.json").read_bytes() == retained

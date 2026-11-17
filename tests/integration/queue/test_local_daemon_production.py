@@ -3798,6 +3798,7 @@ def test_blocked_resident_input_inspection_allows_peer_dispatch_and_cancellation
         assert entered.wait(10)
         detail = controls.submit(client.admission, first.admission_id).result(timeout=5)
         assert detail.admission.run_uri == first_uri
+        assert daemon._execution is not None
         assert not daemon._execution.coordinator.retained_assignments(agent_id=config.machine_id)
         controls.submit(client.submit, LocalDaemonAdmissionRequest("peer", second_uri)).result(timeout=5)
         _wait_for_supervisor_launch_count(config, expected=1)

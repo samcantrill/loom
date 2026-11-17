@@ -3,6 +3,7 @@
 from contextlib import contextmanager
 from pathlib import Path
 import sqlite3
+from typing import cast
 
 from .errors import RunProjectionError
 
@@ -90,7 +91,7 @@ def refresh(root: Path) -> tuple[dict[str, str], ...]:
             try:
                 if not path.is_dir():
                     continue
-                found[uri] = store.read_run_document(uri)["created_at"]
+                found[uri] = cast(str, store.read_run_document(uri)["created_at"])
             except (OSError, ValueError, LookupError, StoreError):
                 warnings.append({"code": "discovery_record_unavailable", "run_uri": uri})
     except OSError as error:

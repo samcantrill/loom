@@ -1,12 +1,14 @@
 """Contained Slurm release survives a durable unavailable recovery outcome."""
 
+from typing import Any, cast
+
 import base64
 from contextlib import contextmanager
 from dataclasses import replace
 import hashlib
 import json
 import sqlite3
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 
 import pytest
 
@@ -75,7 +77,7 @@ def test_slurm_ack_replays_budget_outcome_before_releasing_gpu(tmp_path, monkeyp
 
     proof = {"assignment_id": assignment.assignment_id, "job_id": "123", "execution_fence": "fence-1"}
     projected = []
-    execution = SimpleNamespace(
+    execution: Any = SimpleNamespace(
         slurm_assignments=fixture.store,
         slurm_submissions=SimpleNamespace(acknowledge=projected.append),
         _recovery_retains_assignment=lambda _: False,
@@ -177,13 +179,14 @@ def test_slow_slurm_retention_yields_global_lock_then_revalidates_session(operat
     lock = RLock()
     calls, results, failures = [], [], []
     daemon = SimpleNamespace(_cycle_lock=lock, _publication_guards=PublicationGuards())
-    execution = SimpleNamespace(config=SimpleNamespace(coordinator_shared_roots={}))
+    execution: Any = SimpleNamespace(config=SimpleNamespace(coordinator_shared_roots={}))
     evidence = {"provider_released": True, "assignment": {"assignment_id": "assignment-1"}}
+    continuation: Any
     if operation == "publication":
         evidence = {"result_operation": "commit", "assignment_id": "assignment-1"}
         continuation = _SlurmPublicationRequired(execution, SimpleNamespace(), "fence")
     else:
-        continuation = _SlurmRetentionRequired(execution, SimpleNamespace(), evidence)
+        continuation = _SlurmRetentionRequired(execution, cast(Any, SimpleNamespace()), evidence)
 
     def retain():
         entered.set()
@@ -204,7 +207,7 @@ def test_slow_slurm_retention_yields_global_lock_then_revalidates_session(operat
         assert options.get("_retained", options.get("_publication")) is continuation and continuation.completed
         return {"sequence": 1}
 
-    service = SimpleNamespace(_daemon=daemon, _slurm_work_locked=locked)
+    service: Any = SimpleNamespace(_daemon=daemon, _slurm_work_locked=locked)
 
     def release():
         try:
@@ -239,18 +242,19 @@ def test_embedded_slurm_seals_on_worker_without_acknowledging_early(operation):
     from loom.queue.local_daemon_execution import _SlurmRetentionRequired, _SlurmPublicationRequired
 
     entered, proceed, wake = Event(), Event(), Event()
-    record = SimpleNamespace(assignment=SimpleNamespace(
+    record: Any = SimpleNamespace(assignment=SimpleNamespace(
         assignment_id="assignment-1", agent_id="embedded", agent_root_id="root",
     ))
     calls = []
     daemon = SimpleNamespace(_wake=wake, _publication_guards=PublicationGuards())
     with ThreadPoolExecutor(max_workers=1) as workers:
-        execution = SimpleNamespace(
+        execution: Any = SimpleNamespace(
             agent_id="embedded", config=SimpleNamespace(coordinator_shared_roots={}),
-            _slurm_storage_futures={}, _slurm_storage_workers=workers,
+            _slurm_storage_futures={}, _slurm_chunk_futures={}, _slurm_storage_workers=workers,
             _slurm_task=lambda record: {}, _daemon_owner=lambda: daemon,
         )
-        pending = (_SlurmPublicationRequired(execution, record, "fence") if operation == "publication"
+        execution._slurm_storage_count = MethodType(LocalDaemonExecution._slurm_storage_count, execution)
+        pending: Any = (_SlurmPublicationRequired(execution, record, "fence") if operation == "publication"
                    else _SlurmRetentionRequired(execution, record, {}))
         pending.completed = False
         key = "_publication" if operation == "publication" else "_retained"
@@ -292,8 +296,8 @@ def test_slurm_publication_continuation_binds_verified_tree_and_replays_rename(t
 
     workspace, profile, result = _shared_slurm_workspace(tmp_path)
     report = workspace.retain_result(result)
-    execution = SimpleNamespace(config=SimpleNamespace(coordinator_shared_roots=profile.shared_roots))
-    record = SimpleNamespace(
+    execution: Any = SimpleNamespace(config=SimpleNamespace(coordinator_shared_roots=profile.shared_roots))
+    record: Any = SimpleNamespace(
         assignment=SimpleNamespace(agent_id="agent-1", assignment_id=workspace.root.name),
         delivery=workspace.delivery(), report=report, bootstrap_incarnation="bootstrap", fence="fence-1",
     )
@@ -310,11 +314,13 @@ def test_slurm_publication_continuation_binds_verified_tree_and_replays_rename(t
     execution.config.coordinator_shared_roots = {}
     assert not pending.validates(execution, record, "fence-1")
     execution.config.coordinator_shared_roots = roots
+    assert pending.prepared is not None
     outputs = accept_publication(pending.prepared)
     # A crash/lost reply after rename must permit fresh verification and replay.
     replay = _SlurmPublicationRequired(execution, record, "fence-1")
     replay.prepare()
     assert replay.validates(execution, record, "fence-1")
+    assert replay.prepared is not None
     assert accept_publication(replay.prepared) == outputs
 
 
@@ -328,12 +334,12 @@ def test_concurrent_slurm_commit_retries_share_one_publication_guard(tmp_path, m
     from tests.unit.loom.queue.test_slurm_ready_stage import _shared_slurm_workspace
 
     workspace, profile, result = _shared_slurm_workspace(tmp_path)
-    record = SimpleNamespace(
+    record: Any = SimpleNamespace(
         assignment=SimpleNamespace(agent_id="agent-1", assignment_id=workspace.root.name),
         delivery=workspace.delivery(), report=workspace.retain_result(result),
         bootstrap_incarnation="bootstrap", fence="fence-1",
     )
-    execution = SimpleNamespace(config=SimpleNamespace(coordinator_shared_roots=profile.shared_roots))
+    execution: Any = SimpleNamespace(config=SimpleNamespace(coordinator_shared_roots=profile.shared_roots))
     lock = RLock()
     daemon = SimpleNamespace(_cycle_lock=lock, _publication_guards=PublicationGuards())
     entered, proceed, retry_started = Event(), Event(), Event()
@@ -358,7 +364,7 @@ def test_concurrent_slurm_commit_retries_share_one_publication_guard(tmp_path, m
         assert token.validates(execution, record, "fence-1")
         return publication.accept_publication(token.prepared)
 
-    service = SimpleNamespace(_daemon=daemon, _slurm_work_locked=locked)
+    service: Any = SimpleNamespace(_daemon=daemon, _slurm_work_locked=locked)
     evidence = {"result_operation": "commit", "assignment_id": workspace.root.name}
 
     def commit(retry=False):
@@ -387,17 +393,18 @@ def test_embedded_publication_can_transition_to_retention_in_one_replay():
     from loom.queue._publication_guards import PublicationGuards
     from loom.queue.local_daemon_execution import _SlurmRetentionRequired, _SlurmPublicationRequired
 
-    record = SimpleNamespace(assignment=SimpleNamespace(
+    record: Any = SimpleNamespace(assignment=SimpleNamespace(
         assignment_id="assignment-1", agent_id="embedded", agent_root_id="root",
     ))
     daemon = SimpleNamespace(_wake=Event(), _publication_guards=PublicationGuards())
     accepted = set()
     with ThreadPoolExecutor(max_workers=1) as workers:
-        execution = SimpleNamespace(
+        execution: Any = SimpleNamespace(
             agent_id="embedded", config=SimpleNamespace(coordinator_shared_roots={}),
-            _slurm_storage_futures={}, _slurm_storage_workers=workers,
+            _slurm_storage_futures={}, _slurm_chunk_futures={}, _slurm_storage_workers=workers,
             _slurm_task=lambda record: {}, _daemon_owner=lambda: daemon,
         )
+        execution._slurm_storage_count = MethodType(LocalDaemonExecution._slurm_storage_count, execution)
         publication = _SlurmPublicationRequired(execution, record, "fence")
         retention = _SlurmRetentionRequired(execution, record, {})
         publication.prepare = lambda: setattr(publication, "prepared", object())

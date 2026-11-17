@@ -1,5 +1,7 @@
 """Exact transport replay pacing does not consume maintenance capacity."""
 
+from typing import Any
+
 from pathlib import Path
 
 import pytest
@@ -115,7 +117,7 @@ def test_clock_health_diagnostic_survives_agent_reply_and_retry_log(caplog):
     import io
     body = io.BytesIO(json.dumps(payload).encode())
     response = SimpleNamespace(status=400, isclosed=lambda: body.tell() == len(body.getvalue()), read1=body.read1)
-    connection = SimpleNamespace(request=lambda *a, **kw: None, getresponse=lambda: response)
+    connection: Any = SimpleNamespace(request=lambda *a, **kw: None, getresponse=lambda: response)
     with pytest.raises(_AcceptedTimeError) as caught:
         _read_agent_reply(connection, "authorize", b"{}", "agent")
     retry = _RecoveryRetry()

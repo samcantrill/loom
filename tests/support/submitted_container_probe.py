@@ -1,6 +1,7 @@
 """Tiny project copied into acceptance images, never mounted from the host."""
 
 from copy import deepcopy
+from typing import Any, cast
 import os
 from pathlib import Path
 import socket
@@ -46,7 +47,7 @@ def inspect(request):
         from weave.ordered import decode_ordered_config
 
         assert candidate["schema_version"] == 2
-        configuration = decode_ordered_config(candidate["configuration"])
+        configuration = cast(dict[str, Any], decode_ordered_config(candidate["configuration"]))
         for stage in configuration["pipeline"]["stages"]:
             assert submitted_implementation(*submitted_binding(
                 stage["fingerprint"]["loom.submitted_execution"]

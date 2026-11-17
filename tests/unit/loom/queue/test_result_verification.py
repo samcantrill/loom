@@ -2,6 +2,8 @@
 
 from threading import Barrier, Event
 
+from typing import Any
+
 import pytest
 
 from loom.queue._phase_timing import observe_phases, phase
@@ -85,7 +87,7 @@ def test_terminal_admission_waits_for_its_unsettled_action_claim(tmp_path, cance
         LocalDaemonAdmissionState.CANCELLED if cancel
         else LocalDaemonAdmissionState.SUCCEEDED
     )
-    execution = SimpleNamespace(
+    execution: Any = SimpleNamespace(
         _action_resolution=SimpleNamespace(store=store),
         coordinator=SimpleNamespace(list_run_live_states=lambda uri: ()),
     )
@@ -211,13 +213,16 @@ def test_report_and_result_consumers_share_actual_io_capacity():
         assert release.wait(timeout=10)
         return "hydrated"
 
+    def verify(*args) -> None:
+        blocked(*args)
+
     try:
         report = pool.bulk.submit("preparation", "report_hydration", blocked)
         assert report is not None
-        pool.submit({"claim_id": "producer"}, (None, None), {}, {}, blocked)
+        pool.submit({"claim_id": "producer"}, (None, None), {}, {}, verify)
         entered.wait(timeout=10)
         assert pool.bulk.submit("excess-report", "report_hydration", blocked) is None
-        pool.submit({"claim_id": "excess-producer"}, (None, None), {}, {}, blocked)
+        pool.submit({"claim_id": "excess-producer"}, (None, None), {}, {}, verify)
         release.set()
         assert report.result(timeout=10) == "hydrated"
         for item in tuple(pool._pending.values()):
@@ -252,6 +257,7 @@ def test_fair_waiter_survives_skipped_owner_visits_and_new_work_cannot_overtake(
         assert offer("later") is None
         release.set()
         for future in running:
+            assert future is not None
             future.result(timeout=10)
         # Later work is revisited repeatedly while the older owner's scan is elsewhere.
         for _ in range(8):
@@ -300,6 +306,7 @@ def test_owner_withdrawal_removes_waiter_without_retaining_payload_or_running_it
             pass
         release.set()
         for future in running:
+            assert future is not None
             future.result(timeout=10)
         with pool.offering(("preparation", "live")):
             live = pool.submit("live", "capture", calls.append, "live")
@@ -336,6 +343,7 @@ def test_retired_run_waiter_does_not_block_other_owner_or_free_running_io():
             assert pool.submit("live", "capture", calls.append, "live") is None
         release.set()
         for future in running:
+            assert future is not None
             future.result(timeout=10)
         with pool.offering(("preparation", "live")):
             future = pool.submit("live", "capture", calls.append, "live")
@@ -373,6 +381,7 @@ def test_dispatch_scan_withdraws_unselected_work_but_preserves_unvisited_run():
         assert pool.scopes(("dispatch",)) == {waiting_context}
         release.set()
         for future in running:
+            assert future is not None
             future.result(timeout=10)
         with pool.visiting({("dispatch", "run-b")}):
             with pool.offering(waiting_context):
@@ -415,6 +424,7 @@ def test_bulk_timing_separates_original_capacity_wait_from_worker_execution(monk
         clock[0] = 3.0
         release.set()
         for future in running:
+            assert future is not None
             future.result(timeout=10)
         with observe_phases(parent.append), pool.offering(("run", "measured")):
             future = pool.submit("measured", "audit", work)

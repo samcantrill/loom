@@ -33,6 +33,7 @@ def test_replacement_refuses_declaration_changed_since_qualification(tmp_path):
     with pytest.raises(QueueError, match="declaration changed after qualification"):
         with service_replacement_guard(service, "unused-root"):
             pytest.fail("changed declaration entered replacement")
+    assert service.client.agent_root is not None
     assert not service.client.agent_root.exists()
 
 
@@ -198,6 +199,7 @@ def test_failed_readiness_cannot_publish_a_native_declaration_binding(tmp_path):
     assert service.client.agent_root is not None
     with pytest.raises(QueueError, match="accepted readiness"):
         LocalDaemonAgentHttpClient.initialize_agent_root(service.client)
+    assert service.client.agent_root is not None
     assert not service.client.agent_root.exists()
 
 
@@ -270,6 +272,7 @@ def test_bound_control_owner_refuses_unresolved_delivery_before_shutdown(
     from loom.queue.deployment import service_replacement_guard
 
     binding = read_agent_declaration_binding(spec.agent_root, spec.declaration_digest)
+    assert binding is not None
     with pytest.raises(QueueError, match="settled agent work"):
         with service_replacement_guard(spec, binding.root_id):
             pytest.fail("replacement accepted unresolved delivery")
@@ -319,6 +322,7 @@ def test_replacement_spec_holds_native_owners_without_deleted_execution_inputs(t
         pytest.fail("replacement ownership guard qualified unavailable execution")
 
     monkeypatch.setattr("loom.queue.deployment.qualify_agent_spec", forbidden)
+    assert binding is not None
     with service_replacement_guard(spec, binding.root_id):
         with pytest.raises(QueueError, match="already locked"):
             with agent_declaration_guard(spec.agent_root, spec.declaration_digest):

@@ -1,5 +1,7 @@
 """Stable host authorization and assignment-owned submitted container launches."""
 
+from typing import Any, cast
+
 from dataclasses import replace
 import hashlib
 import json
@@ -75,7 +77,7 @@ def _submitted(tmp_path):
     request = replace(
         request, profile=policy.capability, fingerprint=fingerprint.to_dict(),
         worker_metadata={**request.worker_metadata, "loom.execution_binding": {
-            **request.worker_metadata["loom.execution_binding"],
+            **cast(dict[str, Any], request.worker_metadata["loom.execution_binding"]),
             "environment_fingerprint": policy.capability.environment_fingerprint,
         }},
     )
@@ -134,7 +136,7 @@ def test_portable_policy_excludes_host_prefix_but_retains_environment(tmp_path):
     policy, _, _, _ = _submitted(tmp_path)
     moved = replace(policy, shared_roots={
         alias: {**root, "host_path": "/different-host/" + alias}
-        for alias, root in policy.shared_roots.items()
+        for alias, root in cast(dict[str, dict[str, Any]], policy.shared_roots).items()
     })
     assert moved.capability == policy.capability
     assert moved.fingerprint != policy.fingerprint

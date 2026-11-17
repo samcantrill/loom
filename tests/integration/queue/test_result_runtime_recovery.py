@@ -2,6 +2,7 @@
 from threading import Event
 from datetime import datetime, timedelta, timezone
 import sqlite3
+from typing import Any, cast
 
 import pytest
 
@@ -182,7 +183,7 @@ def test_retained_success_is_recoverable_but_not_settled(monkeypatch, cancelled)
                 case.agent_root, expected_root_id=identity,
             )
             assert observation.availability == "available", observation.to_dict()
-            results = observation.value["results"]
+            results = cast(list[dict[str, Any]], observation.value["results"])
             assert len(results) == 1
             assert results[0]["stage_name"] == "build"
             assert results[0]["attempt"] == 1
@@ -190,14 +191,14 @@ def test_retained_success_is_recoverable_but_not_settled(monkeypatch, cancelled)
             coordinator_id = case.daemon.status().coordinator_id
             matched = inspect_coordinator_result_recovery(
                 coordinator, expected_root_id=coordinator_id,
-                agent_results=observation.to_dict()["value"]["results"],
+                agent_results=cast(dict[str, Any], observation.to_dict())["value"]["results"],
             )
             assert matched.availability == "available", matched.reason
             missing = inspect_coordinator_result_recovery(
                 coordinator, expected_root_id=coordinator_id, agent_results=[],
             )
             assert missing.availability == "unavailable"
-            assert "matching agent proof" in missing.reason
+            assert missing.reason is not None and "matching agent proof" in missing.reason
             from loom.queue.errors import QueueConflictError
             with pytest.raises(QueueConflictError, match="cohort changed"):
                 require_result_recovery(
@@ -206,11 +207,11 @@ def test_retained_success_is_recoverable_but_not_settled(monkeypatch, cancelled)
                 )
             require_result_recovery(
                 case.agent_root, expected_root_id=identity, role="agent",
-                agent_results=observation.to_dict()["value"]["results"],
+                agent_results=cast(dict[str, Any], observation.to_dict())["value"]["results"],
             )
             settled = inspect_service_settlement(case.agent_root, expected_root_id=identity)
             assert not settled.value["settled"]
-            assert "local_assignment_or_release" in settled.value["wait_reasons"]
+            assert "local_assignment_or_release" in cast(list[str], settled.value["wait_reasons"])
             # External result-file mutation must refuse, without repairing bytes.
             path = case.agent_root / "assignments" / results[0]["assignment_id"] / "worker-result.json"
             original = path.read_bytes()
@@ -218,7 +219,7 @@ def test_retained_success_is_recoverable_but_not_settled(monkeypatch, cancelled)
                 path.write_bytes(original + b"\n")
                 refused = inspect_agent_result_recovery(case.agent_root, expected_root_id=identity)
                 assert refused.availability == "unavailable"
-                assert "digest changed" in refused.reason
+                assert refused.reason is not None and "digest changed" in refused.reason
                 assert path.read_bytes() == original + b"\n"
             finally:
                 path.write_bytes(original)
@@ -240,6 +241,7 @@ def test_live_worker_cannot_qualify_for_result_recovery(monkeypatch):
                 case.agent_root, expected_root_id=_read_remote_agent_root_id(case.agent_root),
             )
             assert fact.availability == "unavailable"
+            assert fact.reason is not None
             assert "containment" in fact.reason or "durable result" in fact.reason
         finally:
             _release_gate(gate)

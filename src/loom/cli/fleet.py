@@ -389,6 +389,7 @@ def handle(namespace: argparse.Namespace) -> int:
                 previous_release=getattr(namespace, "previous_release", None),
                 profile=namespace.profile,
             )
+    assert result is not None, "Fleet command returned no result"
     if namespace.output_format == "json":
         print(json.dumps(result, sort_keys=True))
     else:

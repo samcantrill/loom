@@ -4,6 +4,8 @@ import hashlib
 import json
 import shutil
 
+from typing import Any, cast
+
 import pytest
 
 from loom.coordinator import CoordinatorClientError, CoordinatorOperatorClient
@@ -27,7 +29,7 @@ def test_retirement_resume_uses_live_coordinator_capabilities(owner, tmp_path, m
     record_process(root, stopped=False)
     observed = inspect_native_service(root).to_dict()
     required = "quiescent-coordinator-retirement-v1"
-    assert required not in observed["value"]["capabilities"]
+    assert required not in cast(dict[str, Any], observed["value"])["capabilities"]
     assert required in operator.observe_status().value["capabilities"]
     operation = object.__new__(workload_upgrades.WorkloadUpgrade)
     operation.directory = tmp_path / "retirement"

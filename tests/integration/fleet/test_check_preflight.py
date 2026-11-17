@@ -3,6 +3,8 @@
 from dataclasses import replace
 import json
 
+from typing import cast
+
 import pytest
 
 from loom.fleet import _check_preflight
@@ -54,7 +56,10 @@ def test_capture_submitted_candidate_without_resident_profile(tmp_path, monkeypa
     assert (policy.capability.permits(binding.container_capability) if selected_inputs
             else binding.container_capability == policy.capability)
     assert "unselected" not in binding.container_capability.shared_roots
-    assert "unselected" not in binding.shared_scope["roots"]
+    from loom.queue.preparation import SharedInputReceipt
+    assert isinstance(binding.input_receipt, SharedInputReceipt)
+    assert binding.shared_scope is not None
+    assert "unselected" not in cast(dict[str, object], binding.shared_scope["roots"])
     assert binding.input_receipt.root == "projects"
     assert binding.config_path == "pipeline.yaml"
     assert not (tmp_path / "runs/target-1").exists()

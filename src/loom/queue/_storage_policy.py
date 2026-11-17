@@ -3,6 +3,7 @@
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 import socket
+from typing import Literal
 
 from loom._sqlite_policy import SQLitePolicy
 from .errors import QueueConfigError, QueueServiceError
@@ -12,7 +13,7 @@ from .errors import QueueConfigError, QueueServiceError
 class StoragePolicy:
     owner_host: str
     sqlite: SQLitePolicy
-    durable_files: str = "strict"
+    durable_files: Literal["best_effort", "strict"] = "strict"
 
     def __post_init__(self):
         if (

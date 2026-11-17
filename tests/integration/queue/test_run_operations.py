@@ -717,6 +717,9 @@ def test_public_run_inspection_and_cancel_use_the_agent_slurm_job(
                 )
             )
             assert record.job_id is not None
+            from loom.pipeline.executors.slurm.ready_stage import SlurmJobPrivateFileProvider
+            provider = profile.job_private_file_provider
+            assert isinstance(provider, SlurmJobPrivateFileProvider)
             bootstrap.register(
                 operation_id=record.assignment.operation_id,
                 request_digest=record.assignment.request_digest,
@@ -724,7 +727,7 @@ def test_public_run_inspection_and_cancel_use_the_agent_slurm_job(
                 cluster=record.cluster,
                 incarnation="queued-bootstrap",
                 capability=base64.b64encode(
-                    Path(profile.job_private_file_provider.fixed_path).read_bytes()
+                    Path(provider.fixed_path).read_bytes()
                 ).decode(),
             )
             bootstrap.inputs_ready(record.assignment.assignment_id, "queued-bootstrap")

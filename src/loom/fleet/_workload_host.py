@@ -232,6 +232,7 @@ def publish(request, directory):
     # Bind the connection from the already verified service identity, leaving
     # retained host requests and exact reload replay bytes unchanged.
     bound_request = {**request, "coordinator_id": binding["expected_root_id"]}
+    client = None
     current = payload(request)
     target = request["declaration"]
     retained = directory / "reload.json"
@@ -280,6 +281,7 @@ def publish(request, directory):
                 publication_budget_increase=increase,
             ).to_dict()
             if not stopped and request.get("retirement") is not None:
+                assert client is not None
                 _retirement_publication_ready(client, request["retirement"])
         atomic(retained, intent)
     if current not in (intent["before"], intent["after"]):
@@ -299,6 +301,7 @@ def publish(request, directory):
         atomic(config(request), intent["after"])
     result = {"outcome": "applied", "declaration": target}
     if stopped:
+        assert staged is not None
         return {**result, "reload": thaw_plain_data(staged),
                 "activation": "applied" if staged["state"] == "applied" else "startup_recovery_required"}
     if role(request) == "coordinator":
@@ -438,6 +441,7 @@ def retire_stopped(request):
         raise QueueConflictError("stopped retirement requires an agent")
     control = AgentControl.from_value(request["control"])
     if (control.kind is not AgentControlKind.PROMOTE
+        or control.promotion is None
         or not control.promotion.get("retire_configuration")
         or control.promotion["agent_root_id"] != request["expected_root_id"]):
         raise QueueConflictError("stopped retirement control identity differs")

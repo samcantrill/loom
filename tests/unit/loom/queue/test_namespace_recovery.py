@@ -100,6 +100,7 @@ def test_live_agent_lock_refuses_before_process_inspection(tmp_path):
     path = _outbound_agent_service_config(tmp_path)
     assert main(["queue", "agent-init", str(path)], stdout=io.StringIO(), stderr=io.StringIO()) == 0
     service = load_outbound_agent_service_config(path)
+    assert service.client.agent_root is not None
     held = _RemoteAgentJournal(service.client.agent_root)
     try:
         with pytest.raises(QueueServiceError, match="already locked"):

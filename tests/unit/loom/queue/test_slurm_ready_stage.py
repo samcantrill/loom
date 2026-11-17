@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any, cast
 import sqlite3
 import subprocess
 import sys
@@ -36,9 +37,9 @@ def test_repeated_delivery_reads_preserve_live_state_and_revalidate_changed_byte
     assert first.delivery is second.delivery
     assert len(validations) == 1
     with pytest.raises(TypeError):
-        second.delivery.resolved_runtime["stage_id"] = "changed"
+        cast(dict[str, Any], second.delivery.resolved_runtime)["stage_id"] = "changed"
     with pytest.raises(TypeError):
-        second.delivery.fingerprint["payload"]["stage_name"] = "changed"
+        cast(dict[str, Any], second.delivery.fingerprint["payload"])["stage_name"] = "changed"
 
     # A changed persisted representation must not reuse an earlier validated
     # value for the same assignment, nor cache a failed validation.
@@ -128,6 +129,8 @@ def _shared_slurm_workspace(tmp_path):
 
     resident, profile, _launch, result = _shared_publication_workspace(tmp_path)
     request = resident.request()
+    from loom.queue._remote_stage_execution import ResidentProfileDescriptor
+    assert isinstance(request.profile, ResidentProfileDescriptor)
     values = {
         field.name: getattr(request, field.name)
         for field in fields(SlurmStageDelivery)

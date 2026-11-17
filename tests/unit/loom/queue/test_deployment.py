@@ -38,7 +38,9 @@ from loom.queue.gpu.occupancy import (
 )
 from loom.queue.preflight import run_role_preflight
 from loom.pipeline.executors.slurm import FakeSlurmCommandRunner
-from loom.pipeline.executors.slurm.ready_stage import SlurmJobPrivateFileProvider
+from loom.pipeline.executors.slurm.ready_stage import SlurmJobPrivateFileProvider, SlurmReadyStageProfile
+from loom.pipeline.executors.slurm.trusted_user import SlurmUserPrivateFileProvider
+from loom.queue._preparation_policy import PreparationProfile
 from tests.support.stage29_composition import (
     ConfiguredCpuProvider,
     ResidentProviderFactory,
@@ -95,6 +97,7 @@ def test_explicit_storage_binds_role_and_reaches_coordinator_databases(tmp_path,
     LocalDaemon.initialize_deployment(service.daemon)
     paths = [service.daemon.control_database, service.daemon.execution_database]
     if colocated:
+        assert service.daemon.agent_root is not None
         paths.extend([
             service.daemon.agent_root / "control.sqlite", service.daemon.agent_journal,
             service.daemon.agent_root / "supervisor/supervisor.sqlite",
@@ -128,6 +131,7 @@ def test_outbound_storage_reaches_control_execution_and_supervisor(tmp_path):
     assert service.active_fingerprint == legacy.active_fingerprint
     LocalDaemonAgentHttpClient.initialize_agent_root(service.client)
     root = service.client.agent_root
+    assert root is not None
     for name in ("control.sqlite", "journal.sqlite", "supervisor/supervisor.sqlite"):
         with service.client.connect_database(root / name) as conn:
             assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
@@ -153,6 +157,7 @@ def test_storage_owner_mismatch_refuses_before_creating_state(tmp_path):
     service = load_coordinator_service_config(source)
     with pytest.raises(QueueServiceError, match="different physical owner"):
         LocalDaemon.initialize_deployment(service.daemon)
+    assert service.daemon.deployment_root is not None
     assert not service.daemon.deployment_root.exists()
 
 
@@ -844,6 +849,7 @@ def test_coordinator_publication_removes_failed_staging_root(
     with pytest.raises(QueueServiceError, match="injected"):
         LocalDaemon.initialize_deployment(service.daemon)
 
+    assert service.daemon.deployment_root is not None
     assert service.daemon.deployment_root is not None
     assert not service.daemon.deployment_root.exists()
     assert not tuple(tmp_path.glob(".deployment.staging-*"))
@@ -1590,7 +1596,6 @@ def test_coordinator_config_constructs_complete_protected_composition(
             batch_output_path="/shared/owner/logs/slurm-%j.out",
         )
     if trusted_user:
-        from loom.pipeline.executors.slurm.trusted_user import SlurmUserPrivateFileProvider
 
         declaration = payload["slurm_profiles"][0]
         declaration.pop("container_options")
@@ -1615,8 +1620,11 @@ def test_coordinator_config_constructs_complete_protected_composition(
     assert (profile.runner.command_policy is not None) is bounded_commands
     assert (profile.accounting_history is not None) is accounting_history
     if accounting_history:
+        assert profile.accounting_history is not None
         assert profile.accounting_history.user_id == 1000
     if bounded_commands:
+        assert profile.runner.command_policy is not None
+        assert profile.containment_helper is not None
         assert profile.runner.command_policy.submission_timeout_seconds == 60
         assert profile.containment_helper.process_policy == "bounded-v1"
         assert profile.containment_helper.timeout_seconds == 30
@@ -1681,6 +1689,7 @@ def test_coordinator_config_constructs_complete_protected_composition(
     declaration["bootstrap_executable"] = "/site/loom/bin/loom"
     declaration["bootstrap_config_path"] = "/site/private/bootstrap-training.json"
     configured = _slurm_profile_composition([declaration])[0]
+    assert isinstance(configured, SlurmReadyStageProfile)
     assert configured.bootstrap_argv == (
         "/site/loom/bin/loom", "slurm-bootstrap", "--config", "/site/private/bootstrap-training.json",
     )
@@ -1696,9 +1705,11 @@ def test_coordinator_config_constructs_complete_protected_composition(
         declaration["runner"].pop("unavailable_commands")
         declaration["runner"]["command_policy"]["submission_timeout_seconds"] = 30
         with_changed_timeout = _slurm_profile_composition([declaration])[0]
+        assert isinstance(with_changed_timeout, SlurmReadyStageProfile)
         assert isinstance(with_changed_timeout.runner, SubprocessSlurmCommandRunner)
         assert with_changed_timeout.configuration_fingerprint != configured.configuration_fingerprint
         if client_environment:
+            assert with_changed_timeout.runner.client_environment is not None
             assert with_changed_timeout.runner.client_environment["TMPDIR"] == "/site/scratch/other"
             declaration["runner"]["client_environment"]["SBATCH_PARTITION"] = "unapproved"
             with pytest.raises(QueueConfigError, match=r"runner target is invalid"):
@@ -1960,10 +1971,11 @@ def test_gpu_probe_reopens_explicit_storage_policy(tmp_path, monkeypatch, role):
     source, root, service = _gpu_probe_configuration(
         tmp_path, monkeypatch, role, storage=_rollback_storage(),
     )
-    profiles = (
-        (service.local_agent.profile,) if role == "coordinator"
-        else service.client.resident_profiles
-    )
+    if isinstance(service, CoordinatorServiceConfig):
+        assert service.local_agent is not None
+        profiles = (service.local_agent.profile,)
+    else:
+        profiles = service.client.resident_profiles
     with _probe_owner(service, profiles) as (_, journal, _):
         assert journal.retained_claim_commands() == ()
         # A normal owner connection must verify the policy, not convert the DB.
@@ -2801,8 +2813,10 @@ def test_preparation_policy_selects_existing_descriptor_and_changes_only_active_
     assert policy.effective_profiles == ("example-cpu",)
     assert policy.effective_roots == ("projects",)
     assert configured.local_agent is not None
+    selected_profile = policy.profiles["example-cpu"]
+    assert isinstance(selected_profile, PreparationProfile)
     assert (
-        policy.profiles["example-cpu"].descriptor
+        selected_profile.descriptor
         == configured.local_agent.profile.descriptor
     )
     request = PrepareRunRequest(
@@ -3165,6 +3179,7 @@ def test_coordinator_retirement_preserves_retained_preparation_alias_meaning(tmp
     after = replace(before, preparation_policy=PreparationPolicy(
         {"current": root}, {"current": replace(profile, allowed_source_roots=("current",))}))
     LocalDaemon.initialize_deployment(before)
+    assert after.preparation_policy is not None
     candidate = [replace(after, preparation_policy=PreparationPolicy(
         {"current": PreparationSourceRoot(tmp_path / "different", root.shared_snapshot_root)},
         after.preparation_policy.profiles))]
@@ -3244,6 +3259,7 @@ def test_slurm_admission_is_optional_active_configuration_and_selects_shared_sch
         payload["slurm_admission"] = {"max_reserved_gpus": value}
         _write_protected(source, payload)
         selected = load_coordinator_service_config(source)
+        assert selected.daemon.slurm_admission is not None
         assert selected.daemon.slurm_admission.max_reserved_gpus == value
         assert selected.daemon.slurm_schema_version == 4
         assert selected.immutable_fingerprint == legacy.immutable_fingerprint
@@ -3255,6 +3271,7 @@ def test_slurm_admission_is_optional_active_configuration_and_selects_shared_sch
     unselected = load_coordinator_service_config(source)
     assert unselected.active_fingerprint == legacy.active_fingerprint
     assert unselected.daemon.slurm_schema_version == 3
+    assert legacy.daemon.deployment_root is not None
     assert not legacy.daemon.deployment_root.exists()
 
 

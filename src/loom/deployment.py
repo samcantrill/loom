@@ -72,7 +72,7 @@ class DeploymentSelection:
         from loom.pipeline.runtime import RunOptions
         from loom.serialization import thaw_plain_data
 
-        result = deepcopy(dict(thaw_plain_data(explicit or {})))
+        result = deepcopy(cast(dict[str, Any], thaw_plain_data(explicit or {})))
         settings = self.run_defaults.get("execution", {}).get("settings", {})
         if settings:
             execution = result.setdefault("execution", {})

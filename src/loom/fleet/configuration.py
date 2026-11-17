@@ -127,7 +127,7 @@ def load_inventory(path: Path) -> Inventory:
         raise QueueConfigError("Fleet name is required")
     manager = value["service_manager"]
     gpu_qualification = value.get("gpu_qualification", "exclusive")
-    if gpu_qualification not in {"exclusive", "nonexclusive"}:
+    if not isinstance(gpu_qualification, str) or gpu_qualification not in {"exclusive", "nonexclusive"}:
         raise QueueConfigError("gpu_qualification must be exclusive or nonexclusive")
     if manager not in ("systemd-user", "tmux"):
         raise QueueConfigError("unsupported service_manager")

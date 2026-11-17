@@ -4,6 +4,8 @@ import threading
 import time
 from types import SimpleNamespace
 
+from typing import Any
+
 import pytest
 
 from loom.fleet._upgrade_progress import Observation, encode
@@ -58,13 +60,14 @@ def test_monotonic_disjoint_preparation_and_partial_gate_clocks(monkeypatch):
 def test_native_gate_requires_live_matching_observation_and_fresh_open(tmp_path):
     now = [0.0]
     observer = Observation(None, "resume", clock=lambda: now[0])
-    op = object.__new__(upgrades._Upgrade)
+    op: Any = object.__new__(upgrades._Upgrade)
     op.observation = observer
     op.intent = {"operation_id": "window"}
     op.receipts = tmp_path
     (tmp_path / "close").mkdir()
     (tmp_path / "open").mkdir()
     binding = upgrades._maintenance_binding(op.intent)
+    assert isinstance(binding, dict)
     closed = {"state": "closed", "maintenance_id": "window",
               "intent_digest": binding["target_intent_digest"], "revision": 1}
     live = [closed]

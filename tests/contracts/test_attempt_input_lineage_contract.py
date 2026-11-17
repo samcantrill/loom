@@ -180,6 +180,9 @@ def test_explicit_unknown_inspection_and_empty_input_evidence_remain_distinct(
         allocation_owner = AuthorityRepository(
             database.parent, database_name=database.name
         )
+    from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+    from loom.authority._repository import AuthorityRepository
+    assert isinstance(allocation_owner, (SQLitePerRunAuthorityStore, AuthorityRepository))
     allocation_owner.allocate_stage_attempt(
         uri,
         "unrecorded",

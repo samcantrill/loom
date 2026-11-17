@@ -403,7 +403,7 @@ def test_recovery_cleanup_clients_preserve_selection_and_coordinator_guard(tmp_p
         operation = str(request["operation"])
         payload = {k: v for k, v in request.items() if k not in {"operation", "daemon_control"}}
         validate_request(operation, payload)
-        result = ({"run_uri": "run", "entries": []} if operation == "preview_recovery_cleanup"
+        result: dict[str, PlainData] = ({"run_uri": "run", "entries": []} if operation == "preview_recovery_cleanup"
                   else {"run_uri": "run", "assignment_id": "assignment-1", "state": "deleted"})
         connection.sendall(encode_wire({"ok": True, "result": result}) + b"\n")
 

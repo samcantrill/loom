@@ -23,6 +23,8 @@ from loom.pipeline.executors.slurm.errors import (
     SlurmPlanningError,
     SlurmResourceMappingError,
 )
+from loom.pipeline.executors.slurm.commands import SlurmCommandRunner
+from loom.pipeline.executors.slurm.trusted_user import SlurmUserPrivateFileProvider
 from loom.pipeline.executors.slurm.ready_stage import (
     ReadyStageState,
     SQLiteReadyStageSubmissions,
@@ -58,12 +60,12 @@ def _private_capability_path(tmp_path, monkeypatch):
 
 
 def _profile(
-    runner: FakeSlurmCommandRunner,
+    runner: SlurmCommandRunner,
     *,
     credential_reference: str = "slurm-credential",
     available: bool = True,
     cluster: str | None = "cluster-a",
-    provider: SlurmJobPrivateFileProvider | None = None,
+    provider: SlurmJobPrivateFileProvider | SlurmUserPrivateFileProvider | None = None,
     container_options: dict[str, object] | None = None,
 ) -> SlurmReadyStageProfile:
     return SlurmReadyStageProfile(
@@ -113,7 +115,7 @@ def test_submitted_policy_is_immutable_and_part_of_profile_identity() -> None:
     selected = replace(profile, submitted_container_policy=declaration)
     assert selected.configuration_fingerprint != profile.configuration_fingerprint
     declaration["environment"]["mode"] = "second"
-    assert selected.submitted_container_policy["environment"]["mode"] == "first"
+    assert cast(dict[str, Any], selected.submitted_container_policy)["environment"]["mode"] == "first"
     changed = replace(profile, submitted_container_policy=declaration)
     assert changed.configuration_fingerprint != selected.configuration_fingerprint
 
@@ -231,6 +233,7 @@ def test_requeue_selection_rejects_ambiguous_nonboolean_values(value):
 def test_retained_native_profile_uses_the_prior_identity_payload() -> None:
     profile = _profile(FakeSlurmCommandRunner())
     provider = profile.job_private_file_provider
+    assert isinstance(provider, SlurmJobPrivateFileProvider)
     legacy_payload = {
         "profile_id": profile.profile_id,
         "partition": profile.partition,

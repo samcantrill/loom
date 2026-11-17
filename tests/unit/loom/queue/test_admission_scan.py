@@ -1,11 +1,12 @@
 """A finite admission sweep advances despite cancellation and new submissions."""
 
 from types import SimpleNamespace
+from typing import Any
 
 from loom.queue._admission_scan import AdmissionScan
 
 
-def row(index, priority=0):
+def row(index, priority=0) -> Any:
     return SimpleNamespace(admission_id=f"admission-{index}", enqueue_sequence=index, run_priority=priority)
 
 
@@ -47,7 +48,7 @@ def test_slow_cycle_diagnostics_are_bounded_and_cannot_change_lifecycle_result(m
     diagnostics = []
     expected = (row(1),)
     from threading import RLock
-    owner = SimpleNamespace(_reconcile_once=lambda: expected, _reconcile_guard=RLock())
+    owner: Any = SimpleNamespace(_reconcile_once=lambda: expected, _reconcile_guard=RLock())
     ticks = iter([0.0, 2.0])
     monkeypatch.setattr(local_daemon.time, "monotonic", lambda: next(ticks))
     monkeypatch.setattr(_phase_timing, "log_phases", diagnostics.append)

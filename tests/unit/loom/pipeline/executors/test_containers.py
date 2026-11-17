@@ -465,7 +465,7 @@ container:
         entry, overrides=('dataset.roots={"alpha": "/host/a", "beta": "/host/b"}',)
     ).resolved
     options = parse_container_options(configured["container"])
-    assert [mount.to_dict() for mount in options.mounts] == [
+    assert [mount.to_dict() for mount in cast(tuple[ContainerMount, ...], options.mounts)] == [
         {"source": "/cache", "target": "/cache", "mode": "rw"},
         {"source": "/host/a", "target": "/host/a", "mode": "ro"},
         {"source": "/host/b", "target": "/host/b", "mode": "ro"},
@@ -477,6 +477,7 @@ container:
         entry, overrides=('deployment.roots={"third": "/different/host/path"}',)
     ).resolved
     mounts = parse_container_options(changed["container"]).mounts
+    assert isinstance(mounts[-1], ContainerMount)
     assert mounts[-1].source == mounts[-1].target == "/different/host/path"
     assert mounts[-1].mode == ContainerMountMode.READ_ONLY
 

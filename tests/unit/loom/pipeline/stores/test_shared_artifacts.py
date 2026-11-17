@@ -1,6 +1,7 @@
 """Shared closure validation through the native artifact store."""
 
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -34,7 +35,9 @@ def test_trusted_publication_does_not_inventory_sync_or_revalidate_payloads(tmp_
     refs = publish(workspace.request(), report, profile.shared_roots,
                    agent_id="agent-1", fence="fence-1")
     ref = refs["result"]
-    assert shared.binding(ref.metadata)["schema_version"] == 2
+    reference = shared.binding(ref.metadata)
+    assert reference is not None
+    assert reference["schema_version"] == 2
     primary = Path(ref.uri.removeprefix("file://"))
     # A later change is deliberately not detected by trusted consumers.
     (primary.parent / "values.bin").write_bytes(b"changed companion")
@@ -216,9 +219,10 @@ def test_increased_root_ceilings_preserve_historical_reference_and_receipt(tmp_p
     refs = publish(workspace.request(), report, profile.shared_roots, agent_id="agent-1", fence="fence-1")
     ref = refs["result"]
     recorded = binding(ref.metadata)
+    assert recorded is not None
     primary = Path(ref.uri.removeprefix("file://"))
     receipt = (primary.parent / RECEIPT).read_bytes()
-    roots = thaw_plain_data(profile.shared_roots)
+    roots = cast(dict[str, Any], thaw_plain_data(profile.shared_roots))
     roots["outputs"]["publication"] = {
         "max_members": 1_000_000, "max_manifest_bytes": 536_870_912,
         "max_payload_bytes": 274_877_906_944,
@@ -231,7 +235,7 @@ def test_increased_root_ceilings_preserve_historical_reference_and_receipt(tmp_p
     assert (primary.parent / RECEIPT).read_bytes() == receipt
     with pytest.raises(QueueConflictError, match="identity"):
         publish(workspace.request(), report, roots, agent_id="agent-1", fence="another-fence")
-    for key, value in recorded["budgets"].items():
+    for key, value in budgets(recorded["budgets"]).items():
         prior = roots["outputs"]["publication"][key]
         roots["outputs"]["publication"][key] = value - 1
         with pytest.raises(ArtifactStoreError, match="not admitted"):
@@ -247,7 +251,7 @@ def test_increase_does_not_enlarge_frozen_publication_request(tmp_path):
     limits = {"max_members": 3, "max_payload_bytes": 4096, "max_manifest_bytes": 4096}
     workspace, profile, _, result = _shared_publication_workspace(tmp_path, limits=limits)
     report = workspace.retain_outputs()
-    roots = thaw_plain_data(profile.shared_roots)
+    roots = cast(dict[str, Any], thaw_plain_data(profile.shared_roots))
     roots["outputs"]["publication"]["max_members"] = 1_000_000
     primary = Path(result.outputs["result"].uri.removeprefix("file://"))
     (primary.parent / "late-output").write_bytes(b"unretained output")

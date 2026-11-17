@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 import hashlib
+from typing import Any, cast
 
 import pytest
 
@@ -33,7 +34,7 @@ def policies(tmp_path):
         "challenge": {"path": "challenge", "sha256": hashlib.sha256(b"publication root").hexdigest()},
         "publication": LIMITS,
     }})
-    roots = thaw_plain_data(old.shared_roots)
+    roots = cast(dict[str, Any], thaw_plain_data(old.shared_roots))
     roots["runs"]["publication"] = INCREASED
     return old, replace(old, shared_roots=roots)
 
@@ -43,6 +44,8 @@ def coordinators(tmp_path):
     selected = service(tmp_path, local=False).daemon
     old, new = policies(tmp_path)
     preparation = selected.preparation_policy
+    assert preparation is not None
+    assert selected.agent_policy.local_owner is not None
     installed = preparation.profiles["existing-project"]
     policy = replace(selected.agent_policy, local_owner=replace(
         selected.agent_policy.local_owner, actions=("maintenance", "scheduling_reload")))
@@ -68,7 +71,7 @@ def coordinators(tmp_path):
 def test_budget_update_refuses_any_decrease(tmp_path, key):
     old, new = policies(tmp_path)
     validate_roots(old.shared_roots, new.shared_roots)
-    roots = thaw_plain_data(new.shared_roots)
+    roots = cast(dict[str, Any], thaw_plain_data(new.shared_roots))
     roots["runs"]["publication"][key] = LIMITS[key] - 1
     with pytest.raises(QueueConflictError, match="only increase"):
         validate_roots(old.shared_roots, roots)
@@ -87,7 +90,7 @@ def test_agent_budget_update_preserves_roots_permissions_and_execution(tmp_path,
     elif mutation == "policy":
         new = replace(new, container_policies=(replace(new_policy, policy_id="another"),))
     else:
-        roots = thaw_plain_data(new_policy.shared_roots)
+        roots = cast(dict[str, Any], thaw_plain_data(new_policy.shared_roots))
         if mutation == "alias":
             roots["renamed"] = roots.pop("runs")
         elif mutation == "challenge":
@@ -102,6 +105,7 @@ def test_agent_budget_update_preserves_roots_permissions_and_execution(tmp_path,
 @pytest.mark.parametrize("mutation", [None, "mismatch", "source", "alias", "locations", "scheduling"])
 def test_coordinator_budget_update_preserves_preparation_and_matching_limits(tmp_path, mutation):
     old, new = coordinators(tmp_path)
+    assert new.preparation_policy is not None
     if mutation == "mismatch":
         new = replace(new, container_capabilities=old.container_capabilities)
     elif mutation == "source":
@@ -110,6 +114,7 @@ def test_coordinator_budget_update_preserves_preparation_and_matching_limits(tmp
         new = replace(new, preparation_policy=replace(new.preparation_policy, profiles={}))
     elif mutation == "locations":
         profile = new.preparation_policy.profiles["submitted"]
+        assert profile.shared_scope is not None
         new = replace(new, preparation_policy=replace(new.preparation_policy, profiles={
             "submitted": replace(profile, shared_scope={**profile.shared_scope, "locations": [{
                 "kind": "loom.shared-location", "schema_version": 1, "root_id": "data", "path": "."}]})}))
@@ -140,6 +145,8 @@ def test_budget_promotion_recovers_same_agent_and_exact_control(tmp_path, monkey
     agent, old, new = client(tmp_path, (old, new))
     root_id = agent.agent_root_id
     control = request(old, config(tmp_path), root_id)
+    assert control.promotion is not None
+    assert old.agent_root is not None
     control = replace(control, promotion={
         **{key: value for key, value in control.promotion.items()
            if key not in {"profile_id", "target_profile", "target_immutable", "target_active"}},
@@ -170,6 +177,7 @@ def test_budget_promotion_recovers_same_agent_and_exact_control(tmp_path, monkey
 @pytest.mark.parametrize("interrupted", [False, True])
 def test_coordinator_budget_reload_requires_exact_settled_gate_and_recovers(tmp_path, monkeypatch, interrupted):
     old, new = coordinators(tmp_path)
+    assert new.preparation_policy is not None
     LocalDaemon.initialize_deployment(old)
     daemon = LocalDaemon(old, trusted_scheduling_loader=lambda: new)
     before = daemon.start()
@@ -199,7 +207,7 @@ def test_coordinator_budget_reload_requires_exact_settled_gate_and_recovers(tmp_
         assert restarted.status().coordinator_id == before.coordinator_id
         assert operator(restarted).reload_scheduling(reload)["state"] == "applied"
         assert operator(restarted).observe_maintenance()["state"] == "closed"
-        assert restarted.config.coordinator_shared_roots["runs"]["publication"] == INCREASED
+        assert cast(dict[str, Any], restarted.config.coordinator_shared_roots["runs"])["publication"] == INCREASED
         with pytest.raises(QueueConflictError, match="conflicts"):
             operator(restarted).reload_scheduling(replace(reload, reason="different intent"))
     finally:

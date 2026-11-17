@@ -991,7 +991,7 @@ def test_submitted_check_retains_native_offered_policy_and_exact_request(fleet):
     assert remote._config.resident_profiles == ()
     connection = inventory.path.parent / "operator.json"
     with CoordinatorOperatorClient.from_connection_file(connection) as client:
-        observed = client.observe_agent("worker").value
+        observed = cast(dict[str, Any], client.observe_agent("worker").value)
     assert observed["offer"]["profile_identities"] == () or observed["offer"]["profile_identities"] == []
     assert len(observed["offer"]["container_execution_capabilities"]) == 1
     with pytest.raises(QueueConfigError, match="explicit submitted execution"):
@@ -1051,7 +1051,7 @@ def test_selected_gpu_intent_keeps_host_policy_separate_from_preparation(fleet, 
 
     def with_gpu(client, name):
         observation = observe(client, name)
-        value = thaw_plain_data(observation.value)
+        value = cast(dict[str, Any], thaw_plain_data(observation.value))
         value["offer"]["gpu_devices"] = [{"device_id": "GPU-18cf22d0-ba80-55a5-f8d8-cb19fe940cd1"}]
         return replace(observation, value=value)
 

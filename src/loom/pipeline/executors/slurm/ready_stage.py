@@ -1721,6 +1721,7 @@ class SQLiteReadyStageSubmissions:
             raise SlurmPlanningError("SLURM cancel requires an exact known handle")
         if current.cancel_requested:
             return current
+        job_id = current.job_id
         if profile.accounting_history is not None:
             current = yield from self._observe_steps(operation_id, profile)
             # The agent schedules observation independently from cancellation.
@@ -1729,18 +1730,18 @@ class SQLiteReadyStageSubmissions:
                 _after_observation(current)
             if current.scheduler_source != "sacct" or current.accounting_identity is None:
                 return self._record_cancel(
-                    operation_id, expected_job_id=cast(str, current.job_id),
+                    operation_id, expected_job_id=job_id,
                     requested=False, evidence="slurm_cancel_identity_unavailable",
                 )
         try:
             result = yield (
-                partial(profile.runner.scancel, job_ids=(cast(str, current.job_id),))
+                partial(profile.runner.scancel, job_ids=(job_id,))
                 if profile.accounting_history is None else
                 partial(getattr(profile.runner, "scancel_named_operation"), current.accounting_identity)
             )
         except subprocess.TimeoutExpired:
             return self._record_cancel(
-                operation_id, expected_job_id=current.job_id, requested=False,
+                operation_id, expected_job_id=job_id, requested=False,
                 evidence=(
                     "slurm_cancel_timeout"
                     if ready_stage_command_policy(profile.runner) is not None
@@ -1750,13 +1751,13 @@ class SQLiteReadyStageSubmissions:
         except Exception:
             return self._record_cancel(
                 operation_id,
-                expected_job_id=current.job_id,
+                expected_job_id=job_id,
                 requested=False,
                 evidence="slurm_cancel_unknown",
             )
         return self._record_cancel(
             operation_id,
-            expected_job_id=current.job_id,
+            expected_job_id=job_id,
             requested=result.ok,
             evidence=(
                 "slurm_cancel_requested"

@@ -9,10 +9,13 @@ import os
 from pathlib import Path
 import shutil
 
+from typing import Any
+
 import pytest
 
 from loom.fingerprints import hash_mapping
 from loom.errors import SerializationError
+from loom.queue._preparation_policy import PreparationProfile
 from loom.queue import preparation as inputs
 from loom.queue.errors import QueueServiceError
 from loom.queue.local_daemon import (
@@ -581,7 +584,9 @@ def test_local_policy_is_protected_and_child_input_is_versioned(tmp_path: Path) 
     policy = load_preparation_policy(config, base=tmp_path, descriptors=(descriptor,),
                                      local_agent_id="worker", local_launch_profile=launch)
     assert policy is not None
-    scope = policy.profiles["example-cpu"].local_scope
+    selected_profile = policy.profiles["example-cpu"]
+    assert isinstance(selected_profile, PreparationProfile)
+    scope = selected_profile.local_scope
     assert scope == {"agent_id": "worker", "binding_fingerprint": launch.fingerprint}
     receipt = SharedInputReceipt("sha256:" + "a" * 64, "projects", "capture")
     binding = PreparationChildInput("operation", "example-cpu", "pipeline.yaml", receipt,
@@ -652,6 +657,7 @@ def test_shared_scope_is_explicit_and_preserves_portable_policy(tmp_path):
     policy = load_preparation_policy(data, base=tmp_path, descriptors=(descriptor,))
     assert policy is not None
     profile = policy.profiles["shared"]
+    assert isinstance(profile, PreparationProfile)
     assert profile.shared_scope is not None
     assert profile.shared_scope["capability"] == SHARED_EXECUTION_CAPABILITY
     assert profile.local_scope is None and profile.project_processor is not None
@@ -753,7 +759,7 @@ def test_local_binding_preserves_unresolved_diagnostic_fields():
     from loom.preparation import _bind_local_snapshot
     from loom.queue.preparation import LOCAL_PREPARATION_SCOPE
 
-    snapshot = {"pipeline": {"stages": [{
+    snapshot: dict[str, Any] = {"pipeline": {"stages": [{
         "name": "inspect", "factory": {"_target_": "installed.Stage"},
         "outputs": {"receipt": {"artifact_type": "json"}},
         "placement": {}, "fingerprint": {"private": "secret"},

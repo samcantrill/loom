@@ -121,6 +121,7 @@ def test_one_batch_associates_unknown_and_observes_known_without_resubmission(tm
         assert current.state is ReadyStageState.ACCEPTED
         assert current.job_id == str(16 + key)
         assert current.scheduler_state == "RUNNING"
+        assert current.accounting_identity is not None
         assert current.accounting_identity.sluid == f"s{key}"
     reopened = AgentSlurmJobs(tmp_path, (profile,), observation_policy=owner.observation_policy)
     reopened.step_cycle(tasks, _ack, allow_submission=False)

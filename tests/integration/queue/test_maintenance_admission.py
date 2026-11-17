@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from typing import Any, cast
 import json
 import os
 import sqlite3
@@ -756,6 +757,7 @@ def test_submitted_check_authorization_is_negotiated_and_retained(tmp_path, monk
     selected = service(tmp_path)
     policy, execution, _ = _fixture(tmp_path)
     preparation = selected.daemon.preparation_policy
+    assert preparation is not None
     installed = preparation.profiles["existing-project"]
     submitted = SubmittedPreparationProfile(
         policy.capability, installed.allowed_source_roots, installed.source_modes,
@@ -787,13 +789,13 @@ def test_submitted_check_authorization_is_negotiated_and_retained(tmp_path, monk
                     client.maintenance(authorization, expected_coordinator_id=daemon.status().coordinator_id)
                 assert error.value.code == "unsupported_capability"
                 assert error.value.mutation_outcome == "not_applied"
-                assert operator(daemon).observe_maintenance()["checks"] == {}
+                assert cast(dict[str, Any], operator(daemon).observe_maintenance()["checks"]) == {}
                 return
             receipt = client.maintenance(authorization, expected_coordinator_id=daemon.status().coordinator_id)
             assert client.maintenance(authorization, expected_coordinator_id=daemon.status().coordinator_id) == receipt
         daemon.stop()
         daemon.start()
-        assert operator(daemon).observe_maintenance()["checks"]["prepare-1"] == binding
+        assert cast(dict[str, Any], operator(daemon).observe_maintenance()["checks"])["prepare-1"] == binding
         changed = {**binding, "profile": {**binding["profile"], "environment_fingerprint": "sha256:" + "d" * 64}}
         changed["request"] = replace(request, preparation=replace(request.preparation, operation_id="other", run_name="other"), queue_item_id="other").to_dict()
         with pytest.raises(QueueConflictError, match="profile conflicts"):
@@ -819,6 +821,8 @@ def test_submitted_maintenance_child_binds_exact_execution_and_placement(tmp_pat
     child = prepare_child_run(selected, child_binding, "maintenance-child", runtime_options=RunOptions(executor="local"))
     intent = load_managed_local_intent(selected.daemon, child.run_uri)
     execution = child_binding.execution
+    assert execution is not None
+    assert child_binding.container_capability is not None
     if changed == "image":
         execution = replace(execution, image=replace(execution.image, sha256="d" * 64))
     request = RunRequest(replace(_request(), execution=execution), "check")

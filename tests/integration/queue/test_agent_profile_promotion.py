@@ -6,6 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 import sqlite3
 import sys
+from typing import Any, cast
 
 import pytest
 
@@ -153,6 +154,7 @@ def test_source_relocation_preserves_logical_roots_and_native_identity(tmp_path,
         binding = old.agent_root / "role-binding.json"
         before = binding.read_bytes()
         control = request(old, new, original_id)
+        assert control.promotion is not None
         if change != "relocate":
             with pytest.raises(QueueConflictError, match="shared root identity or writable"):
                 apply(c, control)
@@ -178,6 +180,7 @@ def test_promotion_replay_and_later_promotion_preserve_native_history(
     first = request(old, new, root)
     assert first.promotion is not None
     try:
+        assert old.agent_root is not None
         secret = (old.agent_root / "supervisor" / "service.secret").read_bytes()
         from loom.queue._agent_process_supervisor import (
             ResidentWorkerLaunch, SupervisorLaunchState,
@@ -280,6 +283,7 @@ def test_interrupted_promotion_recovers_before_startup_and_exact_replay(
     assert old.agent_root is not None and new.agent_root is not None
     control = request(old, new, c.agent_root_id)
     assert control.promotion is not None
+    assert control.promotion is not None
     original = promotion._finish
     original_write = promotion.atomic_write_bytes
     if boundary == "accepted":
@@ -343,6 +347,7 @@ def test_stale_local_predecessor_and_retained_work_have_no_binding_effect(
     try:
         control = request(old, new, c.agent_root_id)
         assert control.promotion is not None
+        assert control.promotion is not None
         monkeypatch.setattr(c, "_has_retained_agent_work", lambda: True)
         with pytest.raises(QueueConflictError, match="settlement"):
             apply(c, control)
@@ -374,12 +379,14 @@ def test_native_operator_authorization_gate_guards_and_wire_replay(owner, tmp_pa
         revision=session.config_revision,
     )
     assert control.promotion is not None
+    assert control.promotion is not None
     if mode:
         control = replace(control, promotion={
             **{key: value for key, value in control.promotion.items()
                if key not in {"profile_id", "target_profile"}},
             mode: True,
         })
+        assert control.promotion is not None
     server = LocalDaemonSocketServer(daemon, daemon.config.endpoint)
     server.start()
     try:
@@ -499,6 +506,7 @@ def test_external_supervisor_rejoins_only_after_native_promotion(tmp_path):
     c._config = replace(old, external_supervisor=True)
     c._trusted_config_loader = lambda: new
     control = request(old, new, c.agent_root_id)
+    assert control.promotion is not None
     external = None
     try:
         effect = apply(c, control)
@@ -540,10 +548,12 @@ def test_staged_source_keeps_predecessor_startable_and_recovers_native_publicati
     candidate = tmp_path / "candidate.json"
     candidate.write_text("target-source")
     control = request(old, new, c.agent_root_id)
+    assert control.promotion is not None
     control = replace(
         control,
         promotion={**dict(control.promotion or {}), "candidate_source": str(candidate)},
     )
+    assert control.promotion is not None
     source = {
         "path": str(canonical),
         "candidate": str(candidate),
@@ -612,7 +622,9 @@ def test_quiescent_promotion_can_add_container_policy_without_rebinding_capacity
     root = c.agent_root_id
     try:
         control = request(old, new, root)
+        assert control.promotion is not None
         control = replace(control, promotion={**control.promotion, "enable_submitted_containers": True})
+        assert control.promotion is not None
         if change != "add":
             with pytest.raises(QueueConflictError, match="unrelated role|container policies|requires a protected policy"):
                 apply(c, control)
@@ -624,7 +636,9 @@ def test_quiescent_promotion_can_add_container_policy_without_rebinding_capacity
         assert c._config.resource_inventory == old.resource_inventory
         assert c._config.resident_profiles == old.resident_profiles
         assert c._config.container_policies == (policy,)
-        assert "submitted-container-execution-v1" in c.active_session().capabilities
+        session = c.active_session()
+        assert session is not None
+        assert "submitted-container-execution-v1" in session.capabilities
         assert c._require_journal().prepare_control(control) == effect
         close(c)
         c = LocalDaemonAgentHttpClient(new)
@@ -649,7 +663,9 @@ def test_container_enablement_updates_coordinator_session_only_after_authorized_
             rule, capabilities=(*rule.capabilities, SUBMITTED_CONTAINER_CAPABILITY)),)))
     old, new = config(tmp_path), config(tmp_path, 2)
     control = request(old, new, "remote-root", session=session.session_id, revision=session.config_revision)
+    assert control.promotion is not None
     control = replace(control, promotion={**control.promotion, "enable_submitted_containers": True})
+    assert control.promotion is not None
     operator.maintenance({"operation_id":"enable-close", "maintenance_id":"upgrade",
         "maintenance_intent_digest":"target", "action":"close", "expected_revision":0, "check":None},
         expected_coordinator_id=daemon.status().coordinator_id)
@@ -681,7 +697,7 @@ def test_retirement_preserves_native_owner_and_recovers_container_only_target(tm
     from tests.unit.loom.queue.test_submitted_container_policy import _submitted
 
     policy, _, _, _ = _submitted(tmp_path)
-    obsolete = {**dict(policy.shared_roots["workloads"]), "host_path": str(tmp_path / "deleted-data")}
+    obsolete = {**dict(cast(dict[str, Any], policy.shared_roots["workloads"])), "host_path": str(tmp_path / "deleted-data")}
     previous_policy = replace(policy, shared_roots={**policy.shared_roots, "obsolete": obsolete})
     old = replace(config(tmp_path), resource_inventory=AgentResourceInventory(2),
                   container_policies=(previous_policy, replace(previous_policy, policy_id="unused")))
@@ -691,6 +707,7 @@ def test_retirement_preserves_native_owner_and_recovers_container_only_target(tm
     c, old, new = client(tmp_path, (old, new))
     root_id = c.agent_root_id
     control = request(old, old, root_id)
+    assert control.promotion is not None
     control = replace(control, promotion={
         **{key: value for key, value in control.promotion.items()
            if key not in {"profile_id", "target_profile", "target_immutable", "target_active"}},
@@ -698,7 +715,9 @@ def test_retirement_preserves_native_owner_and_recovers_container_only_target(tm
         "target_immutable": new.deployment_configuration_fingerprint,
         "target_active": new.active_configuration_fingerprint,
     })
+    assert control.promotion is not None
     try:
+        assert old.agent_root is not None
         secret = (old.agent_root / "supervisor/service.secret").read_bytes()
         if interrupted:
             finish = promotion._finish
@@ -714,7 +733,8 @@ def test_retirement_preserves_native_owner_and_recovers_container_only_target(tm
         assert c.agent_root_id == root_id
         assert c._config.resource_inventory == old.resource_inventory
         assert (old.agent_root / "supervisor/service.secret").read_bytes() == secret
-        assert c._require_journal().replayed_control_effect(control).code == "applied"
+        replayed = c._require_journal().replayed_control_effect(control)
+        assert replayed is not None and replayed.code == "applied"
         assert not (tmp_path / "deleted-data").exists()
         close(c)
         c = LocalDaemonAgentHttpClient(new)
@@ -740,7 +760,7 @@ def test_retirement_rejects_unrelated_identity_changes(tmp_path, change):
         new = replace(new, container_policies=(replace(policy, policy_id="replacement-name"),))
     else:
         roots = dict(policy.shared_roots)
-        roots["workloads"] = {**dict(roots["workloads"]), "container_path": "/loom/changed"}
+        roots["workloads"] = {**dict(cast(dict[str, Any], roots["workloads"])), "container_path": "/loom/changed"}
         new = replace(new, container_policies=(replace(policy, shared_roots=roots),))
     with pytest.raises(QueueConflictError):
         promotion.validate_candidate(old, new, None, retire_configuration=True)
@@ -763,7 +783,7 @@ def test_retirement_recovers_authored_source_before_loading_deleted_predecessor(
     old_data = tmp_path / "obsolete-data"
     old_data.mkdir()
     (old_data / "challenge").write_bytes(b"images")
-    old_policy = policy.to_dict()
+    old_policy = cast(dict[str, Any], policy.to_dict())
     old_policy["shared_roots"]["obsolete"] = {
         **old_policy["shared_roots"]["workloads"], "host_path": str(old_data),
     }
@@ -775,6 +795,7 @@ def test_retirement_recovers_authored_source_before_loading_deleted_predecessor(
     new_service = load_outbound_agent_service_config(candidate)
     c, old, new = client(tmp_path, (old_service.client, new_service.client))
     control = request(old, old, c.agent_root_id)
+    assert control.promotion is not None
     control = replace(control, promotion={
         **{key: value for key, value in control.promotion.items()
            if key not in {"profile_id", "target_profile", "target_immutable", "target_active"}},
@@ -782,6 +803,7 @@ def test_retirement_recovers_authored_source_before_loading_deleted_predecessor(
         "target_immutable": new.deployment_configuration_fingerprint,
         "target_active": new.active_configuration_fingerprint,
     })
+    assert control.promotion is not None
     original = canonical.read_text()
     source = {"path": str(canonical), "candidate": str(candidate), "environment": None,
               "before": original, "after": candidate.read_text()}
@@ -854,7 +876,7 @@ def test_stopped_retirement_uses_received_control_with_deleted_inputs(tmp_path, 
     obsolete = tmp_path / "obsolete-data"
     obsolete.mkdir()
     (obsolete / "challenge").write_bytes(b"images")
-    old_policy = policy.to_dict()
+    old_policy = cast(dict[str, Any], policy.to_dict())
     old_policy["shared_roots"]["obsolete"] = {
         **old_policy["shared_roots"]["workloads"], "host_path": str(obsolete),
     }
@@ -866,6 +888,7 @@ def test_stopped_retirement_uses_received_control_with_deleted_inputs(tmp_path, 
     new_service = load_outbound_agent_service_config(candidate)
     c, old, new = client(tmp_path, (old_service.client, new_service.client))
     control = request(old, old, c.agent_root_id)
+    assert control.promotion is not None
     control = replace(control, promotion={
         **{key: value for key, value in control.promotion.items()
            if key not in {"profile_id", "target_profile", "target_immutable", "target_active"}},
@@ -873,9 +896,11 @@ def test_stopped_retirement_uses_received_control_with_deleted_inputs(tmp_path, 
         "target_immutable": new.deployment_configuration_fingerprint,
         "target_active": new.active_configuration_fingerprint,
     })
+    assert control.promotion is not None
     c._require_journal().retain_control(control)
     assert c._require_journal().prepare_control(control) is None
     close(c)
+    assert old.agent_root is not None
     secret = (old.agent_root / "supervisor/service.secret").read_bytes()
     (obsolete / "challenge").unlink()
     obsolete.rmdir()
@@ -929,6 +954,7 @@ def test_policy_addition_preserves_native_owner_and_recovers_container_only_targ
     c, old, new = client(tmp_path, (old, new))
     root_id = c.agent_root_id
     control = request(old, config(tmp_path), root_id)
+    assert control.promotion is not None
     control = replace(control, promotion={
         **{key: value for key, value in control.promotion.items()
            if key not in {"profile_id", "target_profile", "target_immutable", "target_active"}},
@@ -936,7 +962,9 @@ def test_policy_addition_preserves_native_owner_and_recovers_container_only_targ
         "target_immutable": new.deployment_configuration_fingerprint,
         "target_active": new.active_configuration_fingerprint,
     })
+    assert control.promotion is not None
     try:
+        assert old.agent_root is not None
         secret = (old.agent_root / "supervisor/service.secret").read_bytes()
         if interrupted:
             finish = promotion._finish
@@ -952,7 +980,8 @@ def test_policy_addition_preserves_native_owner_and_recovers_container_only_targ
         assert c.agent_root_id == root_id
         assert c._config.resource_inventory == old.resource_inventory
         assert (old.agent_root / "supervisor/service.secret").read_bytes() == secret
-        assert c._require_journal().replayed_control_effect(control).code == "applied"
+        replayed = c._require_journal().replayed_control_effect(control)
+        assert replayed is not None and replayed.code == "applied"
         close(c)
         c = LocalDaemonAgentHttpClient(new)
         assert c.agent_root_id == root_id and c._config.container_policies == new.container_policies
@@ -971,6 +1000,7 @@ def test_startup_recovers_hot_sqlite_journal_under_native_locks(tmp_path, held_o
     selected = config(tmp_path)
     LocalDaemonAgentHttpClient.initialize_agent_root(selected)
     root = selected.agent_root
+    assert root is not None
     database = root / "control.sqlite"
     with sqlite3.connect(database) as conn:
         before = conn.execute("SELECT * FROM root_metadata ORDER BY key").fetchall()

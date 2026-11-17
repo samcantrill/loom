@@ -11,6 +11,7 @@ from dataclasses import replace
 from pathlib import Path
 import sys
 from unittest.mock import patch
+from typing import Any, cast
 
 import pytest
 
@@ -229,7 +230,7 @@ def test_checked_stateful_recipe_is_published_and_replayed_without_recomposition
     }
     snapshot = store.read_config_snapshot(receipt.run_uri, "resolved")
     assert snapshot is not None
-    resolved = read_configuration_json(snapshot)
+    resolved = cast(dict[str, Any], read_configuration_json(snapshot))
     assert resolved["pipeline"]["stages"][0]["config"] == {"value": 41}
     run_dir = store.local_run_dir(receipt.run_uri)
     before = {
@@ -453,7 +454,7 @@ def test_composed_preparation_uses_trusted_inputs_without_a_local_agent(
     }
     resolved_snapshot = store.read_config_snapshot(receipt.run_uri, "resolved")
     assert resolved_snapshot is not None
-    assert read_configuration_json(resolved_snapshot)["pipeline"]["stages"][0]["config"]["value"] == 42
+    assert cast(dict[str, Any], read_configuration_json(resolved_snapshot))["pipeline"]["stages"][0]["config"]["value"] == 42
     assert (
         prepare_managed_run(
             service,
@@ -917,7 +918,8 @@ def test_cached_intent_checks_document_bytes_not_timestamps(tmp_path, monkeypatc
     assert cache.load(config, receipt.run_uri, None) is first
     assert len(calls) == 1
     target = LocalRunStore(config.run_store_root).local_run_dir(receipt.run_uri) / document
-    if target.exists():
+    existed = target.exists()
+    if existed:
         previous, stat = target.read_bytes(), target.stat()
         assert b'\n' in previous
         # Same length and restored mtime: only content can detect this change.
@@ -925,7 +927,12 @@ def test_cached_intent_checks_document_bytes_not_timestamps(tmp_path, monkeypatc
         os.utime(target, ns=(stat.st_atime_ns, stat.st_mtime_ns))
     else:
         target.write_bytes(b'{}')
-    if document in {'config/resolved.yaml', 'config/composition_manifest.json'}:
+    if not existed:
+        from loom.pipeline.stores.errors import CorruptStoreDocumentError
+
+        with pytest.raises(CorruptStoreDocumentError, match='Malformed prepared-run document'):
+            cache.load(config, receipt.run_uri, None)
+    elif document in {'config/resolved.yaml', 'config/composition_manifest.json'}:
         with pytest.raises(QueueServiceError, match='snapshot|composition reference'):
             cache.load(config, receipt.run_uri, None)
     else:

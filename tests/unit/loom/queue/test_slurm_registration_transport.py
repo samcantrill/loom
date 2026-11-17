@@ -2,6 +2,8 @@
 from dataclasses import fields
 import io
 import json
+from typing import Any, cast
+from collections.abc import Sequence
 
 import pytest
 
@@ -9,14 +11,15 @@ from loom.queue.agent_session_transport import _read_agent_reply
 from loom.queue._agent_session_codec import _decode, _IndeterminateAgentProtocolError
 from loom.queue.errors import QueueServiceError
 from loom.queue.slurm_ready_stage import SlurmStageDelivery
-from loom.serialization import thaw_plain_data
+from loom.queue._remote_stage_execution import ResidentProfileDescriptor
+from loom.serialization import PlainData, thaw_plain_data
 from tests.unit.loom.queue.test_remote_stage_execution import _profile, _request
 
 
 def _response(tmp_path, *, input_metadata=None, fingerprint_schema=2, stage_config=None):
     # A valid authored factory graph can exceed the control protocol's depth 8.
     # This follows the native request/delivery producer before HTTP serialization.
-    nested = {"epsilon": 0.00001}
+    nested: dict[str, PlainData] = {"epsilon": 0.00001}
     for _ in range(11):
         nested = {"factory": nested}
     request = _request(
@@ -30,6 +33,7 @@ def _response(tmp_path, *, input_metadata=None, fingerprint_schema=2, stage_conf
     values = {field.name: getattr(request, field.name)
               for field in fields(SlurmStageDelivery)
               if field.name != "schema_version" and hasattr(request, field.name)}
+    assert isinstance(request.profile, ResidentProfileDescriptor)
     delivery = SlurmStageDelivery(
         **values, profile_id="cpu",
         project_fingerprint=request.profile.project_fingerprint,
@@ -47,13 +51,13 @@ def test_ordered_delivery_exceeding_control_budget_crosses_http_and_replays(tmp_
               "detrending": {}, "sequence": [3, 1, 3]}
     value = _response(tmp_path, fingerprint_schema=3, stage_config=config)
     assert 65536 < len(json.dumps(value).encode()) < 262144
-    connection = _Connection(value)
+    connection = cast(Any, _Connection(value))
     for _ in range(2):
         reply = _read_agent_reply(connection, "register", b"{}", "slurm_bootstrap")
         delivery = SlurmStageDelivery.from_dict(thaw_plain_data(reply["delivery"]))
         restored = StageFingerprintRecord.from_dict(delivery.fingerprint).payload.stage_config
         assert list(restored) == ["reconstruction", "detrending", "sequence"]
-        assert list(restored["sequence"]) == config["sequence"]
+        assert list(cast(Sequence[Any], restored["sequence"])) == config["sequence"]
     for role, operation in [("agent", "register"), ("slurm_bootstrap", "handshake")]:
         with pytest.raises(_IndeterminateAgentProtocolError):
             _read_agent_reply(connection, operation, b"{}", role)
@@ -65,7 +69,7 @@ def test_registration_reply_keeps_a_finite_transport_budget(tmp_path):
     with pytest.raises(QueueServiceError, match="body is too large"):
         _decode(json.dumps(value).encode(), slurm_registration=True)
     with pytest.raises(_IndeterminateAgentProtocolError):
-        _read_agent_reply(_Connection(value), "register", b"{}", "slurm_bootstrap")
+        _read_agent_reply(cast(Any, _Connection(value)), "register", b"{}", "slurm_bootstrap")
 
 
 def test_large_unknown_registration_is_not_treated_as_a_delivery(tmp_path):
@@ -95,12 +99,12 @@ def test_native_delivery_crosses_registration_reply_and_replay(tmp_path):
     value = _response(tmp_path)
     with pytest.raises(QueueServiceError):
         _decode(json.dumps(value).encode())
-    connection = _Connection(value)
+    connection = cast(Any, _Connection(value))
     first = _read_agent_reply(connection, "register", b"{}", "slurm_bootstrap")
     replay = _read_agent_reply(connection, "register", b"{}", "slurm_bootstrap")
     assert thaw_plain_data(first) == thaw_plain_data(replay) == value["result"]
     delivery = SlurmStageDelivery.from_dict(thaw_plain_data(first["delivery"]))
-    assert delivery.fingerprint["payload"]["stage_config"]["model"]["encoder"]["block"]["normalization"]["epsilon"] == 0.00001
+    assert cast(dict[str, Any], delivery.fingerprint)["payload"]["stage_config"]["model"]["encoder"]["block"]["normalization"]["epsilon"] == 0.00001
     assert thaw_plain_data(delivery.fingerprint) == value["result"]["delivery"]["fingerprint"]
     assert connection.paths == ["/v1/slurm_bootstrap/register"] * 2
     for role, operation in [("agent", "register"), ("slurm_bootstrap", "handshake")]:
@@ -112,7 +116,7 @@ def test_input_artifact_metadata_crosses_registration_reply_and_replay(tmp_path)
     metadata = {"metric_value": 0.9882636666297913,
                 "observations": [None, True, 2, 0.25, "ready", {"ratio": 0.75}]}
     value = _response(tmp_path, input_metadata=metadata)
-    connection = _Connection(value)
+    connection = cast(Any, _Connection(value))
     first = _read_agent_reply(connection, "register", b"{}", "slurm_bootstrap")
     replay = _read_agent_reply(connection, "register", b"{}", "slurm_bootstrap")
     assert thaw_plain_data(first) == thaw_plain_data(replay) == value["result"]

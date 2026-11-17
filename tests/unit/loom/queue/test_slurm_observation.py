@@ -241,6 +241,8 @@ def test_acknowledged_cleanup_replays_revocation_without_new_helper_query(tmp_pa
     drive_until(settle, lambda: not owner.has_retained_work())
     assert not owner.has_retained_work()
     assert len(calls) == 1
+    from loom.pipeline.executors.slurm.trusted_user import SlurmUserPrivateFileProvider
+    assert isinstance(profile.job_private_file_provider, SlurmUserPrivateFileProvider)
     assert not profile.job_private_file_provider.path_for("operation-1").exists()
     assert sum(call[0] == "sbatch" for call in runner.calls) == 1
 

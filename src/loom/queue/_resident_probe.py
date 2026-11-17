@@ -111,9 +111,9 @@ def _probe_temporary_root(profile: ResidentWorkerLaunchProfile) -> Path | None:
     if profile.container is None:
         selected = profile.environment.get("TMPDIR", selected)
     elif profile.temporary_mounts:
-        from loom.pipeline.executors.containers import parse_container_options
+        from loom.pipeline.executors.containers import ContainerMount, parse_container_options
 
-        mounts = parse_container_options(profile.container["container"]).mounts
+        mounts = cast(tuple[ContainerMount, ...], parse_container_options(profile.container["container"]).mounts)
         selected = next(mount.source for mount in mounts if mount.target == profile.temporary_mounts[0])
     if selected is None:
         return None  # Unselected deployments retain platform temporary defaults.
@@ -322,7 +322,7 @@ def _container_probe(profile, script, request, timeout_seconds, device_environme
 
             container = parse_container_options(binding["container"])
             mounts = []
-            for index, mount in enumerate(container.mounts):
+            for index, mount in enumerate(cast(tuple[ContainerMount, ...], container.mounts)):
                 if mount.target in profile.temporary_mounts:
                     temporary = scratch / ("mount-" + str(index))
                     temporary.mkdir(mode=0o700)

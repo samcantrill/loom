@@ -1,6 +1,7 @@
 """Submitted Slurm dispatch, worker, and shared commit across coordinator restart."""
 
 import base64
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
 from dataclasses import replace
@@ -10,12 +11,15 @@ import os
 from pathlib import Path
 import sys
 from time import monotonic, sleep
+from typing import Any, cast
 
 import pytest
 import loom
 
 from examples.execution.containers.apptainer_fixture import fake_apptainer
 from loom.pipeline.executors.slurm.commands import FakeSlurmCommandRunner
+from loom.pipeline.execution.models import ExecutionFailure
+from loom.pipeline.executors.slurm.ready_stage import SlurmJobPrivateFileProvider
 from loom.pipeline.runtime.options import RunOptions
 from loom.pipeline.status import StageStatus
 from loom.preparation import decode_preparation_report, prepare_child_run
@@ -173,6 +177,8 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
             candidate = replace(candidate, cluster="cluster-a", accounting_history=SlurmHistoryPolicy(1000),
                                 containment_helper=replace(candidate.containment_helper, process_policy="bounded-v1"))
             service = replace(service, daemon=replace(service.daemon, slurm_profiles=(candidate,)))
+        composed = None
+        requirements = None
         if preparation:
             prepared = prepare_child_run(
                 service, binding, "child", runtime_options=RunOptions(executor="local")
@@ -186,6 +192,7 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
             )
         peer = None
         if peer_inspection or (outbound and recovery) or slow_agent_storage:
+            assert composed is not None and requirements is not None
             peer = prepare_managed_run(
                 service, composed, "independent-workload", execution_requirements=requirements
             )
@@ -245,7 +252,7 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                             lambda: client.admission(client.admission_for_queue_item("submitted").admission_id)
                         ).result(timeout=5)
                         assert detail.admission.run_uri == prepared.run_uri
-                        inspections = detail.owners["input_validation"]["inspections"]
+                        inspections = cast(dict[str, Any], detail.owners["input_validation"])["inspections"]
                         assert len(inspections) == 1
                         assert inspections[0]["reason"] == "input_validation_pending"
                         if peer_inspection:
@@ -264,6 +271,7 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                             assert len([call for call in profile.runner.calls if call[0] == "sbatch"]) == 1
                         if cancel_inspection:
                             cancelled = readers.submit(client.cancel, "submitted").result(timeout=5)
+                            assert cancelled is not None
                             assert cancelled.cancellation_operation_id is not None
                             validation_release.set()
                             settled = readers.submit(client.wait, "submitted", timeout_seconds=10).result(timeout=12)
@@ -279,6 +287,8 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                     assert daemon._execution is not None
                 finally:
                     validation_release.set()
+            first_reference = None
+            interrupted = False
             for attempt in range(1, 3 if recovery else 2):
                 deadline = monotonic() + 10
                 records = ()
@@ -292,6 +302,8 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                 assert records and records[0].state == "accepted"
                 record = records[0]
                 operation = daemon.operation(record.assignment.operation_id)
+                assert isinstance(operation.result, Mapping)
+                assert record.job_id is not None
                 assert operation.result["job_id"] == record.job_id
                 assert (
                     len([call for call in profile.runner.calls if call[0] == "sbatch"]) == attempt + int(peer_submitted)
@@ -306,6 +318,7 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                     profile.credential_reference,
                 )
                 view = daemon.slurm_bootstrap_view(principal)
+                assert isinstance(profile.job_private_file_provider, SlurmJobPrivateFileProvider)
                 registration = view.register(
                     operation_id=record.assignment.operation_id,
                     request_digest=record.assignment.request_digest,
@@ -383,6 +396,7 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                 failed = recovery and attempt == 1
                 assert result.status is (StageStatus.FAILED if failed else StageStatus.SUCCEEDED), result.failure
                 if failed:
+                    assert isinstance(result.failure, ExecutionFailure)
                     assert "synthetic failure after complete progress" in result.failure.message
                     assert not tuple((tmp_path / "published").glob("loom-recovery-retained/*"))
                     from loom.queue import _shared_recovery
@@ -501,11 +515,13 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                         capacity.setattr(execution_module, "_SLURM_STORAGE_LIMIT", 0)
                         transport.publish(identity, retained, lambda *args: pytest.fail("shared payload relay"))
                         deadline = monotonic() + 10
+                        queued = None
                         while monotonic() < deadline:
                             queued = daemon._execution.slurm_assignments.read(delivery.assignment_id)
                             if queued.publication_requested_at is not None:
                                 break
                             sleep(0.02)
+                        assert queued is not None
                         assert queued.publication_requested_at is not None
                         assert queued.publication_completed_at is None
                         assert not daemon._execution._slurm_storage_futures
@@ -516,11 +532,13 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                     assert daemon._execution is not None
                     assert publication_started.wait(10)
                     deadline = monotonic() + 15
+                    pending_record = None
                     while monotonic() < deadline:
                         pending_record = daemon._execution.slurm_assignments.read(delivery.assignment_id)
                         if pending_record.compute_released_at is not None:
                             break
                         sleep(0.02)
+                    assert pending_record is not None
                     assert pending_record.compute_released_at is not None
                     assert pending_record.publication_completed_at is None
                     assert pending_record.state != "released"
@@ -529,11 +547,13 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                         cancel_client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
                         cancel_client.cancel("submitted")
                         deadline = monotonic() + 15
+                        cancelled = None
                         while monotonic() < deadline:
                             cancelled = daemon._execution.slurm_assignments.read(delivery.assignment_id)
                             if cancelled.publication_cancelled_at is not None:
                                 break
                             sleep(0.02)
+                        assert cancelled is not None
                         assert cancelled.publication_cancelled_at is not None
                         assert cancelled.publication_completed_at is None
                         assert cancelled.state != "released"
@@ -614,11 +634,13 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                 assert settled.state.value == ("FAILED" if failed else "SUCCEEDED")
                 if recovery:
                     deadline = monotonic() + 10
+                    released = None
                     while monotonic() < deadline:
                         released = daemon._execution.slurm_assignments.read(delivery.assignment_id)
                         if released.state == "released":
                             break
                         sleep(0.02)
+                    assert released is not None
                     assert released.state == "released"
                     from loom.queue import _shared_recovery
                     from loom.queue._recovery_cleanup import preview_recovery_cleanup, release_recovery
@@ -659,7 +681,8 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                             prepared.run_uri, delivery.stage_name, attempt=attempt,
                         ))
                         artifacts = LocalArtifactStore(store.local_artifact_root(prepared.run_uri))
-                        payload = artifacts.load(committed.outputs["manifest"])
+                        payload = cast(dict[str, Any], artifacts.load(committed.outputs["manifest"]))
+                        assert first_reference is not None
                         assert payload["restored"] is True
                         assert payload["binding"]["predecessors"][0]["reference"] == first_reference
                         assert payload["binding"]["current"]["path"] != payload["binding"]["predecessors"][0]["path"]
@@ -673,7 +696,7 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                         # Scope the test's operator to the dynamically allocated
                         # native agent. Protected-config reload has separate coverage.
                         with monkeypatch.context() as patch:
-                            patch.setattr(daemon.daemon if outbound else daemon, "_agent_policy", AgentPolicyConfig(principals=(
+                            patch.setattr(daemon.daemon if isinstance(daemon, OutboundSlurmCoordinator) else daemon, "_agent_policy", AgentPolicyConfig(principals=(
                                 TransportPrincipalPolicy(
                                     "operator-credential", "operator", "operator", actions=("cleanup_recovery",),
                                     agent_ids=(record.assignment.agent_id,),

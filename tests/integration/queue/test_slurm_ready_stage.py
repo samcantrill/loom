@@ -34,6 +34,7 @@ from loom.pipeline.executors.slurm.ready_stage import (
     SlurmReadyStageProfile,
     resolve_slurm_containment,
 )
+from loom.pipeline.executors.slurm.trusted_user import SlurmUserPrivateFileProvider
 from loom.pipeline.planning import plan_pipeline
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
@@ -534,7 +535,6 @@ def _exercise_mixed_route_run(
         container_options=container_options,
     )
     if trusted_user:
-        from loom.pipeline.executors.slurm.trusted_user import SlurmUserPrivateFileProvider
         profile = replace(profile, job_private_file_provider=SlurmUserPrivateFileProvider(
             root=tmp_path / "credentials", descriptor="trusted-test-v1",
         ))
@@ -542,7 +542,11 @@ def _exercise_mixed_route_run(
 
     def capability_path(operation_id):
         provider = profile.job_private_file_provider
-        return provider.path_for(operation_id) if trusted_user else Path(provider.fixed_path)
+        if trusted_user:
+            assert isinstance(provider, SlurmUserPrivateFileProvider)
+            return provider.path_for(operation_id)
+        assert isinstance(provider, SlurmJobPrivateFileProvider)
+        return Path(provider.fixed_path)
 
     original_compare_and_set = SQLiteReadyStageSubmissions._compare_and_set
     intent_crash_injected = False
@@ -972,7 +976,7 @@ def _exercise_mixed_route_run(
         ) == {"state": "input_ready"}
         fence = view.grant(assignment_id, incarnation)
         if replayable_start:
-            assert "slurm-replayable-start-v1" in view.handshake()["capabilities"]
+            assert "slurm-replayable-start-v1" in cast(list[str], view.handshake()["capabilities"])
             payload = dict(assignment_id=assignment_id, incarnation=incarnation, fence=fence, request_id="live-process")
             principal = LocalDaemonPrincipal("slurm-principal", LocalDaemonRole.SLURM_BOOTSTRAP, "slurm-credential")
             assert _dispatch_application(daemon, principal, "slurm_bootstrap", "start", payload) == {"permitted": True}
@@ -1197,7 +1201,7 @@ def _exercise_mixed_route_run(
                 assert recovery_receipt["retry_allowed"] is (False if recovery_terminal_state is None else None)
                 assert recovery_receipt["physical_ownership"] == "retained"
                 recovery_evidence = cast(
-                    dict[str, object], recovery_receipt["evidence"]
+                    dict[str, PlainData], recovery_receipt["evidence"]
                 )
                 assert recovery_evidence["kind"] == "slurm_helper"
                 assert recovery_evidence["helper_descriptor"] == "test-contained-v1"
@@ -1437,6 +1441,7 @@ SharedSlurmResult(json.loads(sys.argv[2]), report.assignment_id, compute=True).p
             if accounting_history:
                 submission = daemon._execution.slurm_submissions.read(record.assignment.operation_id)
                 assert submission.schema_version == 4
+                assert submission.accounting_identity is not None
                 assert submission.accounting_identity.db_index == "1200"
                 assert submission.accounting_identity.sluid == "sFixture1200"
             replayed_view = daemon.slurm_bootstrap_view(
@@ -1609,6 +1614,7 @@ SharedSlurmResult(json.loads(sys.argv[2]), report.assignment_id, compute=True).p
                 container = cast(Mapping[str, object], metadata["container"])
                 assert container["container_runtime"] == "apptainer"
                 assert "/fixture/bootstrap.json" not in json.dumps(container)
+                assert isinstance(profile.job_private_file_provider, SlurmJobPrivateFileProvider)
                 assert str(
                     profile.job_private_file_provider.fixed_path
                 ) not in json.dumps(container)
@@ -2097,6 +2103,7 @@ def test_parallel_slurm_stages_honor_the_profile_outstanding_limit(
     profile = _profile(runner, max_outstanding=max_outstanding)
     # This dispatch test leaves assignments active. Give their separate result
     # reservations enough quota; the small default fixture only fits 15 jobs.
+    assert profile.result_storage is not None
     profile = replace(profile, result_storage={
         **profile.result_storage, "retention_bytes": 8 * 1024 * 1024 * 1024,
     })
@@ -2284,6 +2291,7 @@ def test_trusted_user_registration_enforces_expiry_but_preserves_consumed_replay
         with sqlite3.connect(config.execution_database) as conn:
             assert conn.execute("PRAGMA user_version").fetchone() == (4,)
         conn.close()
+        assert config.agent_root is not None
         with sqlite3.connect(config.agent_root / "slurm.sqlite") as conn:
             assert conn.execute("PRAGMA user_version").fetchone() == (3,)
         conn.close()
@@ -2356,7 +2364,7 @@ def test_actual_native_preparation_pair_crosses_slurm_ready_helpers_and_ack_repl
     logical = load_preparation_report(original, uri_to_path(original.uri))
     runner = FakeSlurmCommandRunner(starting_job_id=1200)
     source_request = native_workspace.worker_request(resolve_shared=True)
-    profile = replace(_profile(runner), environment_fingerprint=source_request.metadata["loom.execution_binding"]["environment_fingerprint"])
+    profile = replace(_profile(runner), environment_fingerprint=cast(dict[str, str], source_request.metadata["loom.execution_binding"])["environment_fingerprint"])
     assignment = SlurmStageAssignment(
         assignment_id="native-pair",
         operation_id="native-pair-operation",
@@ -2621,7 +2629,7 @@ def test_slow_shared_publication_allows_unrelated_gpu_dispatch_and_cancellation(
         assert token.validates(execution, record, "fence-1")
         return publication.accept_publication(token.prepared)
 
-    service = SimpleNamespace(_daemon=daemon, _slurm_work_locked=locked)
+    service: Any = SimpleNamespace(_daemon=daemon, _slurm_work_locked=locked)
     evidence = {"result_operation": "commit", "assignment_id": workspace.root.name}
     try:
         with ThreadPoolExecutor(max_workers=2) as workers:
@@ -2630,6 +2638,7 @@ def test_slow_shared_publication_allows_unrelated_gpu_dispatch_and_cancellation(
                 assert entered.wait(5)
                 client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
                 workers.submit(client.submit, LocalDaemonAdmissionRequest("independent", run_uri)).result(timeout=5)
+                records = ()
                 deadline = time.monotonic() + 5
                 while time.monotonic() < deadline:
                     records = execution.slurm_assignments.list_run_unreleased(run_uri)
@@ -2680,6 +2689,7 @@ def test_gpu_budget_survives_restart_and_reload_preserves_admitted_work(tmp_path
         "credential_id": "operator-certificate", "principal_id": "operator",
         "role": "operator", "actions": ["scheduling_reload"], "agent_ids": [], "pools": [],
     }]
+    assert profile.result_storage is not None
     payload["slurm_profiles"] = [{
         key: getattr(profile, key) for key in (
             "profile_id", "partition", "max_outstanding", "command_adapter_fingerprint",
@@ -2700,6 +2710,7 @@ def test_gpu_budget_survives_restart_and_reload_preserves_admitted_work(tmp_path
     config = service.daemon
     profile = config.slurm_profiles[0]
     runner = profile.runner
+    assert isinstance(runner, FakeSlurmCommandRunner)
     runs = {
         key: _persist_rejected_slurm_run(config.run_store_root / key, profile, resources=resources(quantity))
         for key, quantity in (("cpu-early", 0), ("left", 4), ("right", 4), ("waiting", 1), ("cpu", 0), ("oversize", 9))
@@ -2708,6 +2719,7 @@ def test_gpu_budget_survives_restart_and_reload_preserves_admitted_work(tmp_path
     LocalDaemon.initialize_deployment(config)
     daemon = LocalDaemon(config, trusted_scheduling_loader=lambda: replacement)
     daemon.start()
+    assert daemon._execution is not None
 
     def until(predicate):
         deadline = time.monotonic() + 8
@@ -2728,6 +2740,7 @@ def test_gpu_budget_survives_restart_and_reload_preserves_admitted_work(tmp_path
                     f"records={[(record.assignment.run_uri, record.state) for record in execution.slurm_assignments.list_unreleased()]}")
 
     def accepted(key):
+        assert daemon._execution is not None
         records = daemon._execution.slurm_assignments.list_run_unreleased(runs[key])
         return len(records) == 1 and records[0].state == "accepted"
 
@@ -2787,6 +2800,7 @@ def test_gpu_budget_survives_restart_and_reload_preserves_admitted_work(tmp_path
         replacement = config
         daemon = LocalDaemon(config, trusted_scheduling_loader=lambda: replacement)
         daemon.start()
+        assert daemon._execution is not None
         client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
         assert daemon._execution.slurm_assignments.reserved_gpu_count() == 8
         for key, previous in before.items():

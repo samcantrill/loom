@@ -1154,6 +1154,7 @@ def test_scheduling_reload_refuses_new_execution_schema_before_mutation(tmp_path
     try:
         operator = daemon.operator_view(LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR))
         with pytest.raises(QueueConflictError, match="stopped-owner migration"):
+            assert daemon._execution is not None
             daemon._execution.prepare_scheduling_reload(replacement, "candidate-epoch")
         receipt = operator.reload_scheduling(CoordinatorSchedulingReload(
             operation_id="reload-new-schema", expected_scheduling_epoch=before.scheduling_epoch,

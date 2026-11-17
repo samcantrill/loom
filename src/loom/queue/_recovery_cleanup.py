@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
 from . import _shared_recovery as recovery
 from .errors import QueueConflictError
@@ -145,9 +145,9 @@ def _published_logs(facts: Any, roots: Any) -> bool:
             continue
         if not {"stdout", "stderr"} <= logs.keys() <= {"stdout", "stderr", "traceback"}:
             raise QueueConflictError("published execution log declaration conflicts")
-        tree = contained(Path(roots[ref["root_id"]]["host_path"]), ref["tree"])
+        tree = contained(Path(roots[ref["root_id"]]["host_path"]), cast(str, ref["tree"]))
         receipt = inspect_receipt(tree, ref)
-        members = {row["path"] for row in receipt["members"]}
+        members = {row["path"] for row in cast(list[dict[str, Any]], receipt["members"])}
         if any(path != f"_loom/logs/{stream}.log" or path not in members for stream, path in logs.items()):
             raise QueueConflictError("published execution logs are missing from their inventory")
         return True
@@ -229,6 +229,7 @@ def release_recovery(daemon: Any, principal: Any, *, run_uri: str, assignment_id
         fcntl.flock(descriptor, fcntl.LOCK_EX)
         with daemon._connection() as conn:
             record = _release_record(conn, assignment_id)
+        assert record is not None  # The committed reservation owns this cleanup lock.
         if record["state"] == "deleted":
             return _release_response(record)
         record.pop("error", None)

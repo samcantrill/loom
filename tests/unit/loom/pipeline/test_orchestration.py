@@ -4,6 +4,8 @@ import sqlite3
 from dataclasses import replace
 from pathlib import Path
 
+from typing import Any
+
 import pytest
 
 from loom.artifacts import ArtifactRef
@@ -1131,7 +1133,7 @@ def test_ready_sweep_boundary_defers_arrivals_then_revisits_priority_head(tmp_pa
         )
 
     admit("original", 1, 0, 10)
-    boundary = {"ready_through": 10, "enqueue_through": 2}
+    boundary: dict[str, Any] = {"ready_through": 10, "enqueue_through": 2}
     first = store.ready_window(limit=1, **boundary)
     # Same-second new admission: only the enqueue boundary excludes it.
     admit("urgent-new-admission", 3, 5, 10)

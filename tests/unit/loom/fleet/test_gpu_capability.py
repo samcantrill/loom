@@ -118,7 +118,8 @@ def test_submitted_gpu_probe_uses_exact_image_and_native_inventory(tmp_path, mon
         execution = replace(execution, worker_contract=SELECTED_INPUT_WORKER_CONTRACT)
     from loom.pipeline.executors.containers import ContainerMount
 
-    scratch_base = tmp_path / "absent-production-scratch"
+    scratch_base = tmp_path / "configured-scratch"
+    scratch_base.mkdir(mode=0o700)
     policy = replace(policy, mounts=(ContainerMount(source=str(scratch_base), target="/tmp", mode="rw"),),
                      temporary_mounts=("/tmp",), environment={"TMPDIR": "/tmp"})
     temporary_sources = []
@@ -142,7 +143,7 @@ def test_submitted_gpu_probe_uses_exact_image_and_native_inventory(tmp_path, mon
         assert command.argv[index + 1] == execution.python_executable
         mount = next(value for value in command.argv if value.endswith(":/tmp:rw"))
         source = Path(mount.removesuffix(":/tmp:rw"))
-        assert source.is_relative_to("/tmp") and source.is_dir()
+        assert source.is_relative_to(scratch_base) and source.is_dir()
         assert source != scratch_base
         temporary_sources.append(source)
         Path(command.argv[index + 4]).write_text(json.dumps({
@@ -170,6 +171,7 @@ def test_submitted_gpu_probe_uses_exact_image_and_native_inventory(tmp_path, mon
     assert result["profile"] == selected
     assert result["execution"] == execution.to_dict()
     assert result["exclusive_scheduling"] == "not_tested"
+    assert client.agent_root is not None
     assert not client.agent_root.exists()
-    assert not scratch_base.exists()
+    assert scratch_base.is_dir() and not tuple(scratch_base.iterdir())
     assert all(not source.exists() for source in temporary_sources)

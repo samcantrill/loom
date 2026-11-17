@@ -5,6 +5,8 @@ import hashlib
 from pathlib import Path
 from types import SimpleNamespace
 
+from typing import Any, cast
+
 import pytest
 
 from loom.artifacts import ArtifactRef
@@ -418,7 +420,7 @@ def test_trusted_tree_fetch_refuses_incomplete_companion_export(tmp_path):
 
     daemon, authority, uri = fixture(tmp_path)
     ref, tree = shared_ref(daemon, uri)
-    raw = dict(ref.metadata[shared.SHARED_PUBLICATION])
+    raw = dict(cast(dict[str, Any], ref.metadata[shared.SHARED_PUBLICATION]))
     limits = {**dict(raw["budgets"]), "policy": "trusted_shared_storage"}
     import json
     receipt = json.loads((tree / shared.RECEIPT).read_bytes())

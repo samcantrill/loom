@@ -379,7 +379,7 @@ class LocalRunStore:
 
         if run_dir.exists() and (run_dir / "run.json").exists():
             existing = self._read_run_wrapper(run_uri_text)
-            created_at = existing["created_at"]
+            created_at = cast(str, existing["created_at"])
         else:
             created_at = utc_timestamp()
 

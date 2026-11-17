@@ -8,6 +8,8 @@ from pathlib import Path
 import sqlite3
 import subprocess
 
+from typing import Any, cast
+
 import pytest
 
 from loom.cli.main import main
@@ -341,8 +343,8 @@ def test_export_selects_preparation_execution_kind_without_qualification(tmp_pat
     monkeypatch.setattr(subprocess, "Popen", forbid)
     declaration = inspect_role_declaration(agent_path, role="agent")
     assert all("profile_id" in item and "policy_id" not in item
-               for item in declaration.value["profile_identities"])
-    assert [item["policy_id"] for item in declaration.value["container_execution_capabilities"]] == ([] if mode == "missing" else [policy.policy_id])
+               for item in cast(list[dict[str, Any]], declaration.value["profile_identities"]))
+    assert [item["policy_id"] for item in cast(list[dict[str, Any]], declaration.value["container_execution_capabilities"])] == ([] if mode == "missing" else [policy.policy_id])
     output = tmp_path / "exported.json"
     code, result = cli("export-deployment", "--fleet", path, "--hosts", "gpu01",
                        "--deployment", original, "--output", output)

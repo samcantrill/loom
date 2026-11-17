@@ -38,7 +38,7 @@ import sqlite3
 import stat
 from threading import Event, RLock, Thread
 import time
-from typing import TYPE_CHECKING, Any, Iterator, cast
+from typing import TYPE_CHECKING, Any, Iterator, Literal, cast
 from uuid import uuid4
 
 from loom._sqlite_inspection import inspect_sqlite_database
@@ -742,7 +742,7 @@ class LocalDaemonConfig:
         return None if self.storage is None else self.storage.sqlite
 
     @property
-    def durable_files(self) -> str:
+    def durable_files(self) -> Literal["best_effort", "strict"]:
         return "best_effort" if self.storage is None else self.storage.durable_files
 
     @property
@@ -4260,7 +4260,7 @@ class LocalDaemon:
                 ) if self.config.storage is None else
                 self.config.connect_database(self.config.control_database, factory=_ChangeConnection)
             )
-            conn.on_commit = self._status_changed.set
+            cast(_ChangeConnection, conn).on_commit = self._status_changed.set
             conn.row_factory = sqlite3.Row
             expected = self._coordinator_id
             if expected is not None:

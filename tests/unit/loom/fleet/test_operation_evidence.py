@@ -68,9 +68,8 @@ def test_evidence_keeps_partial_timings_and_all_check_attempts_without_writes(tm
     assert evidence["issues"] == [
         {"source": str(root / "timings.jsonl"), "reason": "invalid_or_partial_line"}
     ]
-    assert (
-        operation_status(inventory, "upgrade", missing_ok=True)["outcome"] == "pending"
-    )
+    status = operation_status(inventory, "upgrade", missing_ok=True)
+    assert status is not None and status["outcome"] == "pending"
     assert before == {
         p: (p.read_bytes(), p.stat().st_mtime_ns)
         for p in tmp_path.rglob("*")

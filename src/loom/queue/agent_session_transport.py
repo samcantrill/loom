@@ -68,7 +68,7 @@ import ssl
 from threading import BoundedSemaphore, RLock, Thread
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from time import monotonic
-from typing import Any, cast
+from typing import Any, Literal, cast
 from urllib.parse import urlsplit
 
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
@@ -274,7 +274,7 @@ class AgentTlsClientConfig:
         return None if self.storage is None else self.storage.sqlite
 
     @property
-    def durable_files(self) -> str:
+    def durable_files(self) -> Literal["best_effort", "strict"]:
         return "best_effort" if self.storage is None else self.storage.durable_files
 
     def connect_database(self, path: Path, *, initialize=False):
@@ -3576,6 +3576,31 @@ class _Handler(BaseHTTPRequestHandler):
         with request_phases():
             self._dispatch_post()
 
+    def _authenticate_transport(self) -> tuple[str, str, str]:
+        certificate = cast(ssl.SSLSocket, self.connection).getpeercert(
+            binary_form=True
+        )
+        if certificate is None:
+            raise QueueServiceError("agent TLS peer is unavailable")
+        fingerprint = hashlib.sha256(certificate).hexdigest()
+        credential = self._daemon_server.credential_fingerprints.get(fingerprint)
+        if credential is None:
+            raise QueueServiceError("agent TLS credential is not accepted")
+        execution = self._daemon_server.daemon_owner._execution
+        slurm_profile = (
+            None
+            if execution is None
+            else execution._slurm_profile_for_credential(credential)
+        )
+        if slurm_profile is None:
+            principal_id, mapped_role = ScopedAuthorizer(
+                self._daemon_server.daemon_owner._agent_policy
+            ).transport_principal(credential)
+        else:
+            principal_id = slurm_profile.bootstrap_principal_id
+            mapped_role = LocalDaemonRole.SLURM_BOOTSTRAP.value
+        return principal_id, mapped_role, credential
+
     def _dispatch_post(self) -> None:
         self._reply_context = {}
         query_path = self.path.startswith("/v1/query/")
@@ -3591,28 +3616,7 @@ class _Handler(BaseHTTPRequestHandler):
         agent_wait_slot: BoundedSemaphore | None = None
         bulk_acquired = False
         try:
-            certificate = cast(ssl.SSLSocket, self.connection).getpeercert(
-                binary_form=True
-            )
-            if certificate is None:
-                raise QueueServiceError("agent TLS peer is unavailable")
-            fingerprint = hashlib.sha256(certificate).hexdigest()
-            credential = self._daemon_server.credential_fingerprints.get(fingerprint)
-            if credential is None:
-                raise QueueServiceError("agent TLS credential is not accepted")
-            execution = self._daemon_server.daemon_owner._execution
-            slurm_profile = (
-                None
-                if execution is None
-                else execution._slurm_profile_for_credential(credential)
-            )
-            if slurm_profile is None:
-                principal_id, mapped_role = ScopedAuthorizer(
-                    self._daemon_server.daemon_owner._agent_policy
-                ).transport_principal(credential)
-            else:
-                principal_id = slurm_profile.bootstrap_principal_id
-                mapped_role = LocalDaemonRole.SLURM_BOOTSTRAP.value
+            principal_id, mapped_role, credential = self._authenticate_transport()
             query_credential = mapped_role == LocalDaemonRole.QUERY.value
             segments = self.path.split("/")
             if len(segments) != 4 or segments[0] or segments[1] != "v1":

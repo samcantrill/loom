@@ -333,6 +333,7 @@ def test_waiting_preparation_survives_detach_without_local_worker(
             agent_results=[],
         )
         assert recovery.availability == "unavailable"
+        assert recovery.reason is not None
         assert "coordinator mutation remains active" in recovery.reason
         with sqlite3.connect(
             tmp_path / "deployment/coordinator/control.sqlite"

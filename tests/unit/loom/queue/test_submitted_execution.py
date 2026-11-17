@@ -408,11 +408,11 @@ def test_preparation_resumes_retention_before_dispatch_without_recapturing(
     operation._reconcile_lock.acquire()
     daemon.start()
     def advance_to_boundary():
-        from concurrent.futures import wait
+        from concurrent.futures import Future, wait
 
         for _ in range(20):
             operation._advance(operation._read(request.operation_id))
-            futures = [
+            futures: list[Future[Any]] = [
                 future for work in (operation._captures, operation._images, operation._children)
                 for _, future in work.values()
             ]

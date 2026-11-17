@@ -1,6 +1,7 @@
 """Staged runtime retirement preserves native identity and startup recovery."""
 
 from dataclasses import replace
+from typing import Any, cast
 import hashlib
 import json
 
@@ -27,6 +28,7 @@ def test_submitted_preparation_retirement_preserves_execution_permissions(tmp_pa
     selected = service(tmp_path)
     policy, _, _, _ = _submitted(tmp_path)
     preparation = selected.daemon.preparation_policy
+    assert preparation is not None
     installed = preparation.profiles["existing-project"]
     old = SubmittedPreparationProfile(
         policy.capability, installed.allowed_source_roots, ("shared",),
@@ -44,7 +46,7 @@ def test_submitted_preparation_retirement_preserves_execution_permissions(tmp_pa
         narrowed = replace(narrowed, capability=replace(capability, policy_id="different"))
     elif change == "scope":
         narrowed = replace(narrowed, shared_scope={**narrowed.shared_scope,
-            "roots": {"new-data": old.shared_scope["roots"]["data"]}})
+            "roots": {"new-data": cast(dict[str, Any], old.shared_scope["roots"])["data"]}})
     elif change == "source-mode":
         narrowed = replace(narrowed, source_modes=("shared", "staged"))
     before = replace(selected.daemon,
@@ -96,6 +98,7 @@ def test_stopped_retirement_records_target_and_recovers_deleted_predecessor(tmp_
     obsolete.rmdir()
     with pytest.raises(QueueError):
         load_coordinator_service_config(source)
+    assert request.retirement is not None
     wrong = replace(request, retirement={**dict(request.retirement), "maintenance_id": "another-owner"})
     with pytest.raises(QueueError, match="exact closed maintenance"):
         stage_retirement(source, candidate, wrong, expected_root_id=started.coordinator_id)

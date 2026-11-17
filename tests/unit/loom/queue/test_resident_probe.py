@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import cast
+
 import errno
 import os
 from pathlib import Path
@@ -134,7 +136,7 @@ def test_native_probe_selects_host_scratch_without_changing_parent(tmp_path, mon
     assert result.contained and result.failure is None
     assert result.payload is not None
     assert len(set(result.payload.values())) == 1
-    assert Path(result.payload["TMPDIR"]).parent == base
+    assert Path(cast(str, result.payload["TMPDIR"])).parent == base
     assert list(base.iterdir()) == []
     assert os.environ["TMPDIR"] == before
 

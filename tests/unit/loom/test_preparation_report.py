@@ -363,7 +363,7 @@ def test_mapping_order_is_retained_and_order_only_changes_never_share_compositio
     primary = save_composition_evidence(logical, companion)
     ref = store.save(primary, stage_name="prepare", name="report", artifact_type="json", codec_key="json.v1")
     assert len(json.loads(companion.read_bytes())["compositions"]) == 2
-    loaded = load_preparation_report(ref, store.local_path(ref))
+    loaded = cast(dict[str, Any], load_preparation_report(ref, store.local_path(ref)))
     assert list(loaded["composition"]["resolved"]) == ["a", "z"]
     assert list(loaded["requested_composition"]["resolved"]) == ["z", "a"]
     assert list(loaded["composition"]["resolved"]["a"]) == ["reconstruction", "detrending"]
@@ -380,7 +380,7 @@ def test_shared_ordered_views_remain_independent_after_hydration(tmp_path, monke
     monkeypatch.setattr(__import__(__name__, fromlist=["_composition"]), "_composition", lambda: deepcopy(composition))
     _, store, ref, companion = _write(tmp_path)
     assert len(json.loads(companion.read_bytes())["compositions"]) == 1
-    loaded = load_preparation_report(ref, store.local_path(ref))
+    loaded = cast(dict[str, Any], load_preparation_report(ref, store.local_path(ref)))
     for name in ("composition", "requested_composition"):
         resolved = loaded[name]["resolved"]
         assert list(resolved["parts"]) == ["reconstruction", "detrending"]
@@ -396,7 +396,7 @@ def test_legacy_report_reads_original_plain_mapping_without_order_upgrade(tmp_pa
     from loom.fingerprints import hash_bytes
 
     logical, store, ref, companion = _write(tmp_path)
-    physical = store.load(ref)
+    physical = cast(dict[str, Any], store.load(ref))
     physical["report_format"] = "loom.preparation_report.v1"
     evidence = json.loads(companion.read_bytes())
     evidence.update(schema="loom.preparation_composition.v1", schema_version=1)
@@ -435,7 +435,7 @@ def test_project_inspection_cannot_reorder_captured_configuration():
     result = {"schema_version": 3, "evidence": {"namespace": "example", "payload": {}},
               "reconciliation_key": None, "stage_contracts": {}}
     with pytest.raises(QueueConflictError, match="changed the captured composition"):
-        _validate_project_result(original, checked, result, binding)
+        _validate_project_result(original, checked, result, cast(Any, binding))
 
 
 @pytest.mark.parametrize("encoding", ["plain", "ordered", "mixed"])
@@ -444,7 +444,7 @@ def test_historical_v2_composition_encodings(tmp_path, encoding):
     from weave.ordered import decode_ordered_config
 
     logical, store, ref, companion = _write(tmp_path)
-    primary = store.load(ref)
+    primary = cast(dict[str, Any], store.load(ref))
     primary["report_format"] = "loom.preparation_report.v2"
     document = json.loads(companion.read_bytes())
     document.update(schema="loom.preparation_composition.v2", schema_version=2)

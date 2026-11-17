@@ -9,15 +9,18 @@ import shutil
 import socket
 import sqlite3
 import time
+from typing import Any
 
 import pytest
 
+from loom.pipeline.executors.slurm.ready_stage import SlurmReadyStageProfile
+from loom.pipeline.stores.coordinator_authority import EmbeddedCoordinatorAuthorityFactory
 from loom.queue import LocalDaemon
 from loom.queue._agent_session_journal import _RemoteAgentJournal
 from loom.queue._agent_slurm import SlurmSubmissionProjection
 from loom.queue._storage_upgrade_state import GUARD_NAME, require_storage_upgrade_ready
 from loom.queue.agent_session_transport import LocalDaemonAgentHttpClient
-from loom.queue.deployment import load_coordinator_service_config, load_outbound_agent_service_config
+from loom.queue.deployment import load_coordinator_service_config, load_outbound_agent_service_config, _slurm_profile_composition
 from loom.queue.errors import QueueError, QueueServiceError
 from loom.queue.local_daemon import _acquire_lock, _open_root, _validate_deployment_binding
 from loom.queue.storage_upgrade import storage_upgrade
@@ -25,6 +28,12 @@ from loom.queue import storage_upgrade as upgrade_module
 from tests.unit.loom.queue.test_deployment import (
     _agent_config, _coordinator_config, _rollback_storage, _write_protected,
 )
+
+
+def _agent_root(service) -> Path:
+    root = service.client.agent_root
+    assert isinstance(root, Path)
+    return root
 
 
 @pytest.fixture
@@ -73,9 +82,9 @@ def _cohort(root, *, kind="slurm", explicit_wal=False, legacy=False, custom_prov
         payload["storage"] = _rollback_storage()
         payload["storage"]["sqlite"]["journal_mode"] = "wal"
     if bootstrap_upgrade:
-        from loom.queue.deployment import _slurm_profile_composition
         payload["slurm_profiles"] = [{**_profile(), "credential_reference": "bootstrap-credential"}]
         profile, = _slurm_profile_composition(payload["slurm_profiles"])
+        assert isinstance(profile, SlurmReadyStageProfile)
         payload["agent_policy"]["agents"][0]["external_slurm_profiles"] = [
             [profile.profile_id, profile.configuration_fingerprint]]
     _write_protected(source_c, payload)
@@ -110,7 +119,7 @@ def _cohort(root, *, kind="slurm", explicit_wal=False, legacy=False, custom_prov
     _write_protected(source_a, agent_payload)
     agent = load_outbound_agent_service_config(source_a)
     LocalDaemonAgentHttpClient.initialize_agent_root(agent.client)
-    with agent.client.connect_database(agent.client.agent_root / "control.sqlite") as conn:
+    with agent.client.connect_database(_agent_root(agent) / "control.sqlite") as conn:
         conn.execute("UPDATE root_metadata SET value='drained' WHERE key='availability_state'")
         if legacy:
             conn.execute("DELETE FROM root_metadata WHERE key='execution_store_requirements'")
@@ -132,6 +141,7 @@ def _cohort(root, *, kind="slurm", explicit_wal=False, legacy=False, custom_prov
         payload["slurm_profiles"][0]["bootstrap_executable"] = "/new/immutable/loom"
         agent_payload["slurm_profiles"][0]["bootstrap_executable"] = "/new/immutable/loom"
         profile, = _slurm_profile_composition(payload["slurm_profiles"])
+        assert isinstance(profile, SlurmReadyStageProfile)
         payload["agent_policy"]["agents"][0]["external_slurm_profiles"] = [
             [profile.profile_id, profile.configuration_fingerprint]]
     target_c = _write_protected(c / "target.yaml", payload)
@@ -139,7 +149,7 @@ def _cohort(root, *, kind="slurm", explicit_wal=False, legacy=False, custom_prov
     target_a = _write_protected(a / "target.yaml", agent_payload)
     ids = [
         _open_root(coordinator.daemon.coordinator_root, role="coordinator"),
-        _open_root(agent.client.agent_root, role="local-agent"),
+        _open_root(_agent_root(agent), role="local-agent"),
     ]
     request = _write_protected(root / "request.json", {
         "version": 1, "operation_id": "conversion-1", "snapshot_root": str(root / "snapshots"),
@@ -211,7 +221,7 @@ def test_schema_six_upgrade_allows_async_output_and_remains_inspectable(root):
     _validate_deployment_binding(new_c.daemon)
     for root_path, role in (
         (new_c.daemon.coordinator_root, "coordinator"),
-        (new_a.client.agent_root, "local-agent"),
+        (_agent_root(new_a), "local-agent"),
     ):
         assert root_path is not None
         identity = _open_root(root_path, role=role)
@@ -294,12 +304,12 @@ def test_round_trip(root, kind, explicit_wal):
                                sqlite_policy=new_c.daemon.sqlite_policy, _allow_initialize=False)._open_existing()
     if kind != "slurm":
         from loom.queue._agent_process_supervisor import _service_configuration
-        assert _service_configuration(new_a.client.agent_root / "supervisor").storage == new_a.client.storage
+        assert _service_configuration(_agent_root(new_a) / "supervisor").storage == new_a.client.storage
     assert storage_upgrade(request, action="restore")["state"] == "restored"
     _validate_deployment_binding(old_c.daemon)
     with closing(sqlite3.connect(old_c.daemon.execution_database)) as conn:
         assert conn.execute("PRAGMA user_version").fetchone() == (3,)
-    journal = _RemoteAgentJournal(old_a.client.agent_root,
+    journal = _RemoteAgentJournal(_agent_root(old_a),
         expected_configuration_fingerprint=old_a.immutable_fingerprint,
         expected_active_configuration_fingerprint=old_a.active_fingerprint,
         sqlite_policy=old_a.client.sqlite_policy)
@@ -354,7 +364,7 @@ def test_interruption(root, monkeypatch, boundary, finish):
         assert {str(path): path.read_bytes() for path in (root / "snapshots").glob("*-source*")} == sources
     selected_c, selected_a = (new_c, new_a) if finish == "resume" else (old_c, old_a)
     _validate_deployment_binding(selected_c.daemon)
-    journal = _RemoteAgentJournal(selected_a.client.agent_root,
+    journal = _RemoteAgentJournal(_agent_root(selected_a),
         expected_configuration_fingerprint=selected_a.immutable_fingerprint,
         expected_active_configuration_fingerprint=selected_a.active_fingerprint,
         sqlite_policy=selected_a.client.sqlite_policy)
@@ -370,7 +380,7 @@ def test_activation_refuses_restore(root, owner):
         daemon.start()
         daemon.stop()
     else:
-        journal = _RemoteAgentJournal(agent.client.agent_root,
+        journal = _RemoteAgentJournal(_agent_root(agent),
             expected_configuration_fingerprint=agent.immutable_fingerprint,
             expected_active_configuration_fingerprint=agent.active_fingerprint,
             sqlite_policy=agent.client.sqlite_policy)
@@ -400,9 +410,9 @@ def test_lock_and_decl_conflict(root):
 @pytest.mark.parametrize("annotated", [True, False])
 def test_authority_inventory(root, annotated):
     request, coordinator, _, target, _ = _cohort(root)
-    from loom.pipeline.stores.coordinator_authority import EmbeddedCoordinatorAuthorityFactory
     from loom.pipeline.status import RunStatus
     selected = coordinator.daemon.coordinator_authority_factory
+    assert isinstance(selected, EmbeddedCoordinatorAuthorityFactory)
     run, _ = _retained_run(root, coordinator, annotated=annotated)
     other = EmbeddedCoordinatorAuthorityFactory(selected.state_root, root / "other-deployment")
     other._store(run.as_uri()).create_run(run.as_uri(), status=RunStatus.SUCCEEDED)
@@ -410,6 +420,7 @@ def test_authority_inventory(root, annotated):
     preview = storage_upgrade(request)
     assert sum(name.endswith("authority.sqlite3") for name in preview["owners"][0]["databases"]) == 1
     storage_upgrade(request, action="apply")
+    assert target.daemon.coordinator_authority_factory is not None
     assert target.daemon.coordinator_authority_factory(run.as_uri()).open_run(run.as_uri()).status == RunStatus.SUCCEEDED
     assert _snapshot(other.state_root / hashlib.sha256(str(other.deployment_root).encode()).hexdigest()) == foreign
 
@@ -419,6 +430,7 @@ def test_authority_inventory_refuses_missing_or_unbound_state(root, damage):
     request, coordinator, _, _, _ = _cohort(root)
     run, _ = _retained_run(root, coordinator)
     authority = coordinator.daemon.coordinator_authority_factory
+    assert isinstance(authority, EmbeddedCoordinatorAuthorityFactory)
     bucket = authority.state_root / hashlib.sha256(str(authority.deployment_root).encode()).hexdigest()
     child = bucket / hashlib.sha256(run.as_uri().encode()).hexdigest()
     if damage == "wrong_operation":
@@ -485,7 +497,7 @@ def test_target_cannot_add_missing_execution_store(root):
     with pytest.raises(QueueError, match="require a retained Slurm store"):
         storage_upgrade(request, action="apply")
     assert _snapshot(root) == before
-    assert not (agent.client.agent_root / "slurm.sqlite").exists()
+    assert not (_agent_root(agent) / "slurm.sqlite").exists()
 
 
 def test_https_inspection_never_qualifies_remote_authority(root, monkeypatch):
@@ -501,6 +513,7 @@ def test_https_inspection_never_qualifies_remote_authority(root, monkeypatch):
         }
         _write_protected(path, payload)
     # Retain the native projection for this independent remote-authority fixture.
+    assert coordinator.daemon.deployment_root is not None
     binding_path = coordinator.daemon.deployment_root / "deployment-binding.json"
     binding = json.loads(binding_path.read_bytes())
     _, _, source = deployment._read_coordinator_declaration(item["source_config"])
@@ -523,30 +536,30 @@ def test_workspace_inventory(root):
     request, _, agent, _, target = _cohort(root, kind="resident")
     # Interrupted allocation before request publication leaves a native empty
     # workspace, which still needs its selected policy when reopened later.
-    workspace = _ResidentAssignmentWorkspace(agent.client.agent_root, "empty")
+    workspace = _ResidentAssignmentWorkspace(_agent_root(agent), "empty")
     storage_upgrade(request, action="apply")
-    reopened = _ResidentAssignmentWorkspace(target.client.agent_root, "empty",
+    reopened = _ResidentAssignmentWorkspace(_agent_root(target), "empty",
         sqlite_policy=target.client.sqlite_policy, durable_files="strict", _allow_initialize=False)
     assert reopened.root == workspace.root
     assert reopened.durable_files == "strict"
     assert storage_upgrade(request, action="restore")["state"] == "restored"
-    restored = _ResidentAssignmentWorkspace(agent.client.agent_root, "empty", _allow_initialize=False)
+    restored = _ResidentAssignmentWorkspace(_agent_root(agent), "empty", _allow_initialize=False)
     assert restored.durable_files == "best_effort"
 
 
 def test_pending_work_and_missing_store(root):
     request, _, agent, _, _ = _cohort(root)
-    database = agent.client.agent_root / "control.sqlite"
+    database = _agent_root(agent) / "control.sqlite"
     with closing(sqlite3.connect(database)) as conn, conn:
         conn.execute("INSERT INTO agent_controls_local VALUES ('pending','{}',NULL,'{}',0)")
     with pytest.raises(QueueError, match="settled"):
         storage_upgrade(request, action="apply")
     with closing(sqlite3.connect(database)) as conn, conn:
         conn.execute("DELETE FROM agent_controls_local")
-    (agent.client.agent_root / "slurm.sqlite").unlink()
+    (_agent_root(agent) / "slurm.sqlite").unlink()
     with pytest.raises(QueueError, match="require a retained Slurm store"):
         storage_upgrade(request, action="apply")
-    assert not (agent.client.agent_root / "slurm.sqlite").exists()
+    assert not (_agent_root(agent) / "slurm.sqlite").exists()
     assert not (root / "snapshots").exists()
 
 
@@ -601,7 +614,7 @@ def test_restore_interruption(root, monkeypatch):
     def interrupted(source, destination, *, mode):
         nonlocal fired
         copy(source, destination, mode=mode)
-        if destination == agent.client.agent_root / "control.sqlite" and not fired:
+        if destination == _agent_root(agent) / "control.sqlite" and not fired:
             fired = True
             raise OSError("restore acknowledgement lost")
 
@@ -694,6 +707,7 @@ def test_availability_startup_guard(root, monkeypatch):
     with pytest.raises(QueueError, match="incomplete"):
         _bind(selection, "held", time.monotonic() + 10)
     assert _snapshot(root / "c") == before
+    assert selection.binding is not None
     assert not selection.binding.exists()
     storage_upgrade(request, action="resume")
     _bind(selection, "ready", time.monotonic() + 10)
@@ -716,16 +730,16 @@ def test_activation_sync_failure(root, monkeypatch):
         return sync(path)
 
     monkeypatch.setattr(atomic, "_fsync_path_strict", fail_receipt)
-    options = dict(expected_configuration_fingerprint=agent.immutable_fingerprint,
+    options: dict[str, Any] = dict(expected_configuration_fingerprint=agent.immutable_fingerprint,
                    expected_active_configuration_fingerprint=agent.active_fingerprint,
                    sqlite_policy=agent.client.sqlite_policy)
-    before = upgrade_module._db_facts(agent.client.agent_root / "control.sqlite")
+    before = upgrade_module._db_facts(_agent_root(agent) / "control.sqlite")
     with pytest.raises(QueueError, match="upgrade evidence is unavailable"):
-        _RemoteAgentJournal(agent.client.agent_root, **options)
-    assert upgrade_module._db_facts(agent.client.agent_root / "control.sqlite") == before
-    with _acquire_lock(agent.client.agent_root):
+        _RemoteAgentJournal(_agent_root(agent), **options)
+    assert upgrade_module._db_facts(_agent_root(agent) / "control.sqlite") == before
+    with _acquire_lock(_agent_root(agent)):
         pass  # Failed activation released ownership.
-    journal = _RemoteAgentJournal(agent.client.agent_root, **options)
+    journal = _RemoteAgentJournal(_agent_root(agent), **options)
     journal.close()
     assert storage_upgrade(request)["entered"] is True
 

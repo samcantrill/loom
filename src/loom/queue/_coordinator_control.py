@@ -940,7 +940,13 @@ def _dispatch_operator(daemon: LocalDaemon, principal: LocalDaemonPrincipal, ope
             if operation == "operator_release_recovery":
                 from ._recovery_cleanup import release_recovery
 
-                return release_recovery(daemon, principal, **value)
+                return release_recovery(
+                    daemon, principal,
+                    operation_id=cast(str, value["operation_id"]),
+                    run_uri=cast(str, value["run_uri"]),
+                    assignment_id=cast(str, value["assignment_id"]),
+                    reason=cast(str, value["reason"]),
+                )
             if operation == "operator_retire":
                 return view.retire(cast(str, value["operation_id"]), cast(str, payload["expected_coordinator_id"]))
             if operation == "operator_agent_retirement_ready":

@@ -387,6 +387,7 @@ def test_action_contract_loading_is_async_and_cancelled_completion_cannot_launch
         assert finished.wait(timeout=20)
         daemon.reconcile_once()
         factory = service.daemon.coordinator_authority_factory
+        assert factory is not None
         snapshot = factory(first["prepared_run"]["run_uri"]).open_run(first["prepared_run"]["run_uri"])
         assert all(not stage.attempts for stage in snapshot.stages)
         with daemon._connection() as conn:
@@ -443,6 +444,7 @@ def test_reuse_result_audit_is_async_and_cancellation_cannot_bind_late_proof(tmp
         daemon.reconcile_once()
         uri = consumer["prepared_run"]["run_uri"]
         factory = service.daemon.coordinator_authority_factory
+        assert factory is not None
         snapshot = factory(uri).open_run(uri)
         assert all(stage.result_binding is None and not stage.attempts for stage in snapshot.stages)
         with daemon._connection() as conn:
@@ -509,6 +511,7 @@ def test_verifier_report_load_is_async_and_late_completion_respects_demand(tmp_p
         daemon.reconcile_once()
         uri = consumer["prepared_run"]["run_uri"]
         factory = service.daemon.coordinator_authority_factory
+        assert factory is not None
         snapshot = factory(uri).open_run(uri)
         assert all(not stage.attempts for stage in snapshot.stages)
         if cancel:
@@ -559,6 +562,7 @@ def test_worker_request_preparation_is_async_and_cancellation_prevents_dispatch(
         assert not release.is_set()
         uri = first["prepared_run"]["run_uri"]
         factory = service.daemon.coordinator_authority_factory
+        assert factory is not None
         before = factory(uri).open_run(uri)
         release.set()
         assert finished.wait(timeout=20)
@@ -630,6 +634,7 @@ def test_context_failure_withdraws_waiters_without_releasing_running_bulk_io(tmp
             assert bulk.running()
         release.set()
         for future in running:
+            assert future is not None
             future.result(timeout=10)
     finally:
         fail_context.set()

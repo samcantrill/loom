@@ -525,7 +525,7 @@ def qualify_resident_profile(
         from loom.pipeline.stores.shared_artifacts import publication_policy, TRUSTED_SHARED_STORAGE
         request["trusted_shared_publication"] = any(
             "publication" in root and publication_policy(root["publication"]) == TRUSTED_SHARED_STORAGE
-            for root in profile.shared_roots.values()
+            for root in cast(Mapping[str, Mapping[str, PlainData]], profile.shared_roots).values()
         )
         if profile.container is not None:
             request["shared_container"] = True

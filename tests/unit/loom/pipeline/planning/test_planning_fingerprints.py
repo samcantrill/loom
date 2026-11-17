@@ -1,5 +1,7 @@
 """Unit tests for stage fingerprint construction."""
 
+from typing import cast
+
 from loom.artifacts import ArtifactRef
 from loom.pipeline import OutputSpec, StageFactorySpec, StageSpec
 from loom.pipeline.planning import (
@@ -221,7 +223,7 @@ def test_configuration_mapping_order_survives_wire_and_changes_fingerprint():
     )
     assert first.fingerprint != second.fingerprint
     restored = StageFingerprintRecord.from_dict(json.loads(stable_json_dumps(first.to_dict())))
-    assert list(restored.payload.stage_config["parts"]) == ["reconstruction", "detrending"]
+    assert list(cast(dict[str, object], restored.payload.stage_config["parts"])) == ["reconstruction", "detrending"]
     assert restored.fingerprint == first.fingerprint
     assert restored.to_dict() == first.to_dict()
 
@@ -245,4 +247,4 @@ def test_legacy_fingerprint_keeps_original_hash_and_schema_without_inferred_orde
     assert restored.schema_version == restored.payload.schema_version == 2
     assert restored.fingerprint == legacy.fingerprint != current.fingerprint
     assert stable_json_dumps(restored.to_dict()) == original_wire
-    assert list(restored.payload.stage_config["parts"]) == ["detrending", "reconstruction"]
+    assert list(cast(dict[str, object], restored.payload.stage_config["parts"])) == ["detrending", "reconstruction"]

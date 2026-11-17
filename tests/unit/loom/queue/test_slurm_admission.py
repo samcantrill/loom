@@ -226,10 +226,12 @@ def test_unlimited_run_still_enforces_shared_gpu_budget_after_restart(tmp_path):
 def test_agent_task_page_filters_owner_before_limit_and_survives_restart(tmp_path):
     fixture = ReservationFixture(tmp_path)
     from dataclasses import replace
+    assignment = None
     for index in range(6):
         assignment, arguments = fixture.candidate(f"task-{index}", 0)
         assignment = replace(assignment, agent_id="other" if index % 2 else "selected")
         fixture.store.reserve(assignment, **arguments)
+    assert assignment is not None
     selected_root = assignment.agent_root_id
     first = fixture.store.agent_page("selected", selected_root, limit=2)
     assert [row.assignment.assignment_id for row in first] == ["task-0", "task-2"]

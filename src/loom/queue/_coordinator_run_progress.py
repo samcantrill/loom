@@ -406,6 +406,7 @@ def _schedule_window(
         # Admission fairness belongs to this shared route selector. The native
         # resident kernel still owns resource feasibility and stage selection.
         groups = tuple(dict.fromkeys(record.admission_id for record in managed_records))
+        decision = None
         for admission_id in groups or (None,):
             group = tuple(record for record in managed_records if record.admission_id == admission_id)
             decision = self._scheduling.kernel(group).decide(
@@ -415,6 +416,7 @@ def _schedule_window(
             )
             if decision.state is PolicyDecisionState.SELECT:
                 break
+        assert decision is not None  # The empty group still receives a decision.
         selected_id = (
             decision.stage_work_id
             if decision.state is PolicyDecisionState.SELECT

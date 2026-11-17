@@ -2591,6 +2591,7 @@ class LocalDaemonExecution:
                 )
             if (record.publication_requested_at is not None and record.publication_completed_at is None
                 and self._attempt_cancel_requested(assignment.run_uri, assignment.attempt_id)):
+                assert record.fence is not None  # Publication requires an accepted execution fence.
                 self.slurm_assignments.cancel_publication(assignment.assignment_id, record.fence)
                 record = self.slurm_assignments.read(assignment.assignment_id)
             if evidence.get("provider_released") is True:
@@ -6807,6 +6808,7 @@ class LocalDaemonExecution:
             )
             if current.fencing_token != fence:
                 raise QueueConflictError("SLURM publication fence conflicts")
+            assert publication is not None  # A prepared publication owns shared outputs.
             shared_outputs = accept_publication(publication)
         report, outputs = self.slurm_assignments.committed_result(
             assignment_id, incarnation, fence, shared_outputs=shared_outputs,

@@ -22,6 +22,7 @@ def test_conflicting_poll_requires_terminal_wait_and_preserves_history(monkeypat
             owner._resume_pending_poll(wait_timeout_ms=100)
             journal = owner._require_journal()
             session = journal.active_session()
+            assert session is not None
             sequence = journal.next_poll_sequence(session.session_id)
             original = dict(session_id=session.session_id,
                             availability_revision=session.availability_revision,
@@ -35,13 +36,14 @@ def test_conflicting_poll_requires_terminal_wait_and_preserves_history(monkeypat
                 for _ in range(100):
                     if receipt["result"] == "assignment":
                         break
-                    journal.prepare_poll(session.session_id, original["availability_revision"], sequence, original)
+                    journal.prepare_poll(session.session_id, session.availability_revision, sequence, original)
                     journal.complete_poll(session.session_id, sequence, receipt)
                     sequence += 1
                     original["sequence"] = sequence
                     receipt = owner._call("poll", original)
             assert receipt["result"] == outcome
             current = journal.current_resource_offer(session.session_id)
+            assert current is not None
             owner.publish_offer(replace(current, availability_revision="changed-capacity"),
                                 idempotency_key="changed-offer",
                                 expected_availability_revision=session.availability_revision)

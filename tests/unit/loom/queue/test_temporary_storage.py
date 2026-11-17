@@ -88,6 +88,7 @@ def test_unsafe_scratch_base_is_rejected_without_repair(tmp_path, monkeypatch, u
     supervisor, launch, daemon, base, directory = _owned(
         tmp_path, monkeypatch, target="/tmp"
     )
+    other = None
     if unsafe == "symlink":
         base.rmdir()
         other = tmp_path / "other"
@@ -106,6 +107,7 @@ def test_unsafe_scratch_base_is_rejected_without_repair(tmp_path, monkeypatch, u
     if unsafe == "shared":
         assert base.stat().st_mode & 0o777 == 0o777
     elif unsafe == "symlink":
+        assert other is not None
         assert base.is_symlink() and list(other.iterdir()) == []
 
 

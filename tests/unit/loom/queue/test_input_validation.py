@@ -1,7 +1,7 @@
 """Blocked IO cannot consume unbounded slots or authorize superseded work."""
 
 from threading import Event
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -27,16 +27,16 @@ def test_observation_reports_completion_without_another_dispatch_poll(monkeypatc
 
     monkeypatch.setattr(owner, "require_bindings", inspect)
     pool = owner.InputValidationPool(woke.set)
-    identity = {"worker_request": {"run_uri": "file:///run", "stage_name": "prepare"}}
+    identity: dict[str, Any] = {"worker_request": {"run_uri": "file:///run", "stage_name": "prepare"}}
     try:
         pool.poll("stage", identity, {}, {})
         assert started.wait(10)
-        assert pool.observations("file:///run")["inspections"][0]["reason"] == "input_validation_pending"
+        assert cast(dict[str, Any], pool.observations("file:///run"))["inspections"][0]["reason"] == "input_validation_pending"
         release.set()
         assert woke.wait(10)
         # An unavailable execution route may prevent further dispatch polls.
         # Ordinary status must still distinguish completed IO from active IO.
-        assert pool.observations("file:///run")["inspections"][0]["reason"] == expected
+        assert cast(dict[str, Any], pool.observations("file:///run"))["inspections"][0]["reason"] == expected
     finally:
         release.set()
         pool.close()
@@ -55,7 +55,7 @@ def test_bounded_validation_supersession_and_shutdown(monkeypatch):
 
     monkeypatch.setattr(owner, "require_bindings", inspect)
     pool = owner.InputValidationPool(woke.set, workers=1, max_pending=1)
-    roots = {"data": {"host_path": "/original"}}
+    roots: dict[str, Any] = {"data": {"host_path": "/original"}}
     try:
         assert pool.poll("first", {"attempt": "1"}, {}, roots).reason == "input_validation_pending"
         assert started.wait(10)

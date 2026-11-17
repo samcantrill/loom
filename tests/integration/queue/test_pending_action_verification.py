@@ -73,6 +73,7 @@ def test_pending_verifier_waits_cheaply_then_revalidates(tmp_path, monkeypatch, 
         first = _start(daemon, "original")
         assert daemon._wait(first["queue_item_id"], timeout_seconds=50).state.value == "SUCCEEDED"
         factory = service.daemon.coordinator_authority_factory
+        assert factory is not None
         original_uri = first["prepared_run"]["run_uri"]
         original = factory(original_uri).open_run(original_uri)
         _rename_graph(tmp_path)
@@ -122,6 +123,7 @@ def test_pending_verifier_waits_cheaply_then_revalidates(tmp_path, monkeypatch, 
             assert consumer.latest_commit == next(s.latest_commit for s in original.stages if s.stage_name == "reader")
         else:
             assert consumer.result_binding is None
+            assert consumer.reason is not None
             assert consumer.reason.code == (
                 "action.input_unavailable" if change == "input" else "action.candidate_unavailable"
             )

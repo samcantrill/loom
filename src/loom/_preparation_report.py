@@ -299,9 +299,9 @@ def load_report(
             # A tagged field requires the whole ordered tuple to decode; never
             # reinterpret a malformed/mixed envelope as legacy plain data.
             tagged = document_version == 3 or any(
-                isinstance(full[key], dict)
-                and full[key].get("schema") == "weave.ordered-config.v1"
-                for key in ("resolved", "redacted", "recipe_manifest")
+                isinstance(value, dict)
+                and value.get("schema") == "weave.ordered-config.v1"
+                for value in (full[key] for key in ("resolved", "redacted", "recipe_manifest"))
             )
             for key in ("resolved", "redacted", "recipe_manifest"):
                 try:

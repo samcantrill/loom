@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import pytest
 
+from loom.serialization import PlainData
 from loom.pipeline.context import StageContext
 from loom.pipeline.orchestration import SubmittedContainerRequirement
 from loom.pipeline.runtime.options import RunOptions
@@ -62,7 +63,7 @@ def _run(tmp_path, monkeypatch, *, stage_update=None, selected_inputs=False, slu
     request = PrepareRunRequest("submitted", "target", PreparationSource("shared", "projects", ".", ("pipeline.yaml",)),
                                 "pipeline.yaml", "containers", execution=execution)
     receipt = capture_shared_input(request, source_root=tmp_path / "projects", snapshot_root=tmp_path / "captures")
-    locations = [{"kind": "loom.shared-location", "schema_version": 1, "root_id": "data", "path": "."}] if selected_inputs else []
+    locations: list[PlainData] = [{"kind": "loom.shared-location", "schema_version": 1, "root_id": "data", "path": "."}] if selected_inputs else []
     binding = PreparationChildInput(request.operation_id, request.preparation_profile, request.config_path, receipt,
         None, shared_scope={"capability": "shared-execution-v1", "roots": policy.capability.workload_roots, "locations": locations},
         execution=execution, container_capability=policy.capability)
@@ -86,8 +87,11 @@ def test_selected_inputs_are_narrowed_per_action_and_retained_for_replay(tmp_pat
     assert preflight.status.value == "PASS"
     # Preparation may inspect data; this stage only produces a constant and
     # therefore needs no dataset. Host-only image and control storage remain.
+    assert binding.container_capability is not None
+    assert binding.execution is not None
     assert "data" in binding.container_capability.shared_roots
     requirement = requirements["produce"]
+    assert isinstance(requirement, SubmittedContainerRequirement)
     assert requirement.schema_version == 2
     assert set(requirement.shared_root_requirements) == {"workloads", "control"}
     assert binding.container_capability.satisfies(requirement)
@@ -96,7 +100,9 @@ def test_selected_inputs_are_narrowed_per_action_and_retained_for_replay(tmp_pat
     assert selected.requirement(binding.execution) == requirement
     child = prepare_child_run(service, binding, "selected-child", runtime_options=RunOptions(executor="local"))
     intent = load_managed_local_intent(service.daemon, child.run_uri)
-    assert "data" in intent.execution_requirements["prepare"].shared_root_requirements
+    prepare_requirement = intent.execution_requirements["prepare"]
+    assert isinstance(prepare_requirement, SubmittedContainerRequirement)
+    assert "data" in prepare_requirement.shared_root_requirements
 
 
 def test_selected_input_override_fails_before_report_publication(tmp_path, monkeypatch):
@@ -191,7 +197,7 @@ def test_submitted_slurm_preparation_preserves_route_and_requires_matching_polic
                                   stage_update={"placement": {"execution_route": route}})
     composed, requirements, preflight = decode_preparation_report(report, expected=binding)
     assert preflight.status.value == "PASS"
-    assert composed.resolved["pipeline"]["stages"][0]["placement"]["execution_route"] == route
+    assert cast(Any, composed).resolved["pipeline"]["stages"][0]["placement"]["execution_route"] == route
     child = prepare_child_run(service, binding, "slurm-child", runtime_options=RunOptions(executor="local"))
     child_intent = load_managed_local_intent(service.daemon, child.run_uri)
     assert child_intent.pipeline.stages[0].placement["execution_route"] == route

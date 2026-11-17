@@ -15,7 +15,7 @@ from tests.unit.loom.pipeline.executors.slurm.test_command_policy import _assert
 from tests.unit.loom.pipeline.executors.slurm.test_ready_stage import _profile
 
 
-def _helper(program, *, timeout=2):
+def _helper(program, *, timeout: float = 2):
     return SlurmContainmentHelper(
         "bounded-fixture", (sys.executable, "-c", program), timeout,
         process_policy="bounded-v1",
@@ -104,4 +104,5 @@ def test_binary_limit_is_bytes_and_accepts_an_exact_size_response():
 def test_selected_helper_retains_parent_scratch_environment(tmp_path, monkeypatch):
     monkeypatch.setenv("TMPDIR", str(tmp_path))
     result = _helper("import json,tempfile; print(json.dumps({'tmp': tempfile.gettempdir()}))").resolve({})
+    assert result is not None and isinstance(result["tmp"], str)
     assert Path(result["tmp"]) == tmp_path

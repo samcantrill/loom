@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 import hashlib
 import json
+from typing import Any, cast
 
 import pytest
 
@@ -92,7 +93,7 @@ def test_authenticated_frozen_identity_delivers_with_exact_plain_receipt(tmp_pat
             return {"received": 6}
         return {"acknowledged": True}
 
-    changed = thaw_plain_data(received)
+    changed = cast(dict[str, Any], thaw_plain_data(received))
     changed["assignment"]["profile_descriptor"]["supported_data_versions"] = [2]
     with pytest.raises(QueueConflictError, match="retained result is invalid"):
         owner.deliver(freeze_plain_data(changed), coordinator)
