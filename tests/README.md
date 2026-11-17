@@ -114,6 +114,9 @@ Their native role state, absent-root inspection and offline test installations u
 `LOOM_TEST_LOCAL_STATE_ROOT` when set, otherwise the selected temporary directory.
 The chosen filesystem must satisfy the existing native host-local storage
 policy. This test setting does not bypass that policy or change production roots.
+Fleet check downloads also use this selected filesystem: their 65 MiB storage
+companions can exceed the separate small artifact contract-test mount. Without
+the test setting, Fleet honors the operator process's ordinary `TMPDIR` choice.
 
 ## Opt-in runtime acceptance hooks
 

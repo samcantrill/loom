@@ -503,9 +503,15 @@ def test_nonexclusive_gpu_does_not_dispatch_or_wait_for_scheduler(tmp_path, monk
 
 def test_storage_deadline_does_not_prevent_gpu_dispatch(tmp_path, monkeypatch):
     from contextlib import nullcontext
+    import tempfile
 
     import loom.fleet.self_tests as checks_module
 
+    temporary_root = tmp_path / "selected-temporary-storage"
+    temporary_root.mkdir()
+    monkeypatch.setenv("TMPDIR", str(temporary_root))
+    monkeypatch.setattr(tempfile, "tempdir", None)
+    monkeypatch.setattr(checks_module, "TemporaryDirectory", tempfile.TemporaryDirectory)
     operation = "check-storage-deadline"
     inventory, directory, intent, requests = retained_checks(tmp_path, operation)
     retained = (directory / "intent.json").read_bytes()
@@ -537,6 +543,7 @@ def test_storage_deadline_does_not_prevent_gpu_dispatch(tmp_path, monkeypatch):
         )
 
     def fetch_artifacts(items, destination, *, deadline):
+        assert Path(destination).parent == temporary_root
         if current[0] == "storage" and slow_storage[0]:
             clock[0] = deadline
             return {"items": [{"outcome": "failed"}]}

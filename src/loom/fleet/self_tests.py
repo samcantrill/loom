@@ -9,6 +9,7 @@ import math
 import os
 from pathlib import Path
 import tempfile
+from tempfile import TemporaryDirectory
 import time
 from typing import Any, cast
 from uuid import uuid4
@@ -329,8 +330,9 @@ def _observe_check(
         with measure("artifact_verification") as timing:
             timing["outcome"] = "reused"
     else:
-        # Operator receipts may live on NFS. Downloads use local temporary storage.
-        with tempfile.TemporaryDirectory(prefix="loom-fleet-check-", dir="/tmp") as destination:
+        # Receipt and download filesystems are independent. Honor the operator's
+        # TMPDIR selection; downloads still require atomic directory publication.
+        with TemporaryDirectory(prefix="loom-fleet-check-") as destination:
             with measure("artifact_download"):
                 fetched = client.fetch_artifacts(selected.items, destination, deadline=deadline)
             row = fetched["items"][0]

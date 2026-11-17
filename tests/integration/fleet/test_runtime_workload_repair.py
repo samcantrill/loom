@@ -13,7 +13,9 @@ from loom.fleet import _workload_host, upgrades, workload_upgrades
 from loom.fleet._host import read
 from loom.fleet.ssh_operations import apply
 from loom.queue.deployment import _load_protected_config
-from tests.integration.fleet.test_runtime_upgrade import independent_policy, target_bundle
+from tests.integration.fleet.test_runtime_upgrade import (
+    independent_policy, settle_failed_checks, target_bundle,
+)
 from tests.integration.fleet.test_ssh_operations import bundle, endpoint, site, write, bind_environments  # noqa: F401
 
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
@@ -39,8 +41,12 @@ def test_workload_repair_preserves_gate_failure_identity_and_replays_native_prom
         if principal["role"] == "operator":
             principal["actions"].append("resume")
     write(inventory.hosts[0].config, authored)
+    setup_deadline = time.monotonic() + 240
     setup = apply(inventory, operation_id="setup-repair", issuer=base / "issuer",
                   check_selection=selection)
+    while setup["outcome"] == "waiting" and time.monotonic() < setup_deadline:
+        time.sleep(0.2)
+        setup = apply(inventory, operation_id="setup-repair", resume=True)
     assert setup["outcome"] == "complete", setup
     if initially_drained:
         with CoordinatorOperatorClient.from_connection_file(setup["operator_connection"]) as operator:
@@ -49,11 +55,28 @@ def test_workload_repair_preserves_gate_failure_identity_and_replays_native_prom
     target = target_bundle(inventory, tmp_path)
     source = tmp_path / "projects" / "pipeline.yaml"
     source_bytes = source.read_bytes()
-    source.write_text("pipeline: [invalid")
-    failed = _finish(inventory, apply=True, runtime_release=target,
-                     deployment=selected, connection=Path(setup["operator_connection"]),
-                     config=selection["config"])
+    native_before_check = upgrades._Upgrade.native
+    injected = []
+
+    def break_check_input(operation, key, request, invoke):
+        result = native_before_check(operation, key, request, invoke)
+        if key == "close" and not injected:
+            # Preflight has passed. Fail the subsequent native check preparation,
+            # preserving the post-replacement failure this repair must replay.
+            source.write_text("pipeline: [invalid")
+            injected.append(True)
+        return result
+
+    with monkeypatch.context() as fault:
+        fault.setattr(upgrades._Upgrade, "native", break_check_input)
+        failed = _finish(inventory, apply=True, runtime_release=target,
+                         deployment=selected, connection=Path(setup["operator_connection"]),
+                         config=selection["config"])
+    assert injected
     assert failed["outcome"] == "blocked" and "retry-check" in failed["reason"], failed
+    # Checks advance independently: the first failure does not imply that the
+    # other preparation/check has released its claims for workload promotion.
+    settle_failed_checks(inventory, "runtime-window")
     parent = inventory.path.parent / "operations/runtime-window"
     original_intent = (parent / "intent.json").read_bytes()
     original_checks = (parent / "checks.json").read_bytes()
