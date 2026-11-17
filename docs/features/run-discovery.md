@@ -100,6 +100,12 @@ scope for a locally opened collection. Missing authority remains a warning and
 never promotes stale lifecycle state to current truth. Existing unpaginated
 catalog `list` behavior and envelopes are unchanged.
 
+An in-process viewer with an already selected protected deployment can pass
+`RunCatalog.open(path).search(query, authority_factory=selected_factory)` to use
+that deployment's per-run authority. Candidate membership remains restricted to
+the opened collection. Omitting the factory preserves local authority discovery;
+neither path promotes persisted lifecycle summaries into current status.
+
 Pages use `live_keyset`, not snapshot consistency. New or newly matching records
 behind a cursor are not inserted retroactively. Default limit is 50, maximum
 200; at most 500 detailed candidates are acquired/evaluated per page. Collection
@@ -145,6 +151,10 @@ and removes missing completed registrations. Missing pending publications remain
 visible rather than racing a writer that may still finish. Unreadable documents
 produce warnings and incomplete index coverage. Newly copied documents must use
 the correct destination run identity, as required by the run-store format.
+Unregistered directories without `run.json` are auxiliary storage and are
+ignored, including colocated work and artifact directories. A registered run
+whose directory remains but whose document is missing still reports incomplete
+coverage, as does an unregistered directory containing an unreadable run document.
 
 Search never rebuilds a missing index implicitly. It reports
 `discovery_index_unavailable`; an index that has not had a successful refresh

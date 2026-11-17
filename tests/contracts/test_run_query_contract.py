@@ -221,7 +221,7 @@ def test_collection_time_order_uses_refreshed_index_and_caps_detail_reads(
     tmp_path, monkeypatch
 ):
     from loom.pipeline.stores import LocalRunStore
-    from loom.runs import CollectionScope, Order
+    from loom.runs import CollectionScope, Order, RunCatalog
     from loom.runs import _query_local
 
     root = tmp_path / "runs"
@@ -256,14 +256,13 @@ def test_collection_time_order_uses_refreshed_index_and_caps_detail_reads(
         order_by=(Order("created_at"),),
         where=Compare(Field("tags", ("match",)), "eq", "yes"),
     )
-    page = _query_local.search_collection(
-        root, query, authority_factory=lambda uri: object()
+    page = RunCatalog.open(root).search(
+        query, authority_factory=lambda uri: object()
     )
     assert metadata_reads == []
     assert len(detailed_reads) == page.examined == 500
     assert page.items == () and page.next_cursor is not None
-    following = _query_local.search_collection(
-        root,
+    following = RunCatalog.open(root).search(
         replace(query, cursor=page.next_cursor),
         authority_factory=lambda uri: object(),
     )
@@ -307,6 +306,7 @@ def test_local_empty_partial_and_unavailable_are_distinct(tmp_path):
     assert refresh(tmp_path) == ()
     empty = RunCatalog.open(tmp_path).search(RunQuery(scope=CollectionScope()))
     (tmp_path / "partial").mkdir()
+    (tmp_path / "partial/run.json").write_text('{unfinished')
     # Out-of-band changes are discovered only by the explicit refresh.
     assert RunCatalog.open(tmp_path).search(RunQuery(scope=CollectionScope())).complete
     assert refresh(tmp_path)
@@ -317,6 +317,34 @@ def test_local_empty_partial_and_unavailable_are_distinct(tmp_path):
         not missing.complete and missing.warnings[0]["code"] == "collection_unavailable"
     )
     assert not partial.complete and partial.warnings[0]["code"] == "discovery_refresh_required"
+
+
+def test_local_catalog_uses_selected_authority_for_current_status(tmp_path):
+    from loom.pipeline.status import RunStatus
+    from loom.pipeline.stores import LocalRunStore, path_to_run_uri
+    from loom.runs import CollectionScope, RunCatalog
+    from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+
+    uri = path_to_run_uri(tmp_path / 'one')
+    LocalRunStore(tmp_path).create_run(uri)
+    authority = SQLitePerRunAuthorityStore()
+    authority.create_run(uri)
+    authority.transition_run(uri, from_status=RunStatus.CREATED, to_status=RunStatus.RUNNING)
+    catalog = RunCatalog.open(tmp_path)
+    assert not catalog.rebuild(discovery_only=True).warnings
+    acquired = []
+
+    def selected(run_uri):
+        acquired.append(run_uri)
+        return authority
+
+    page = catalog.search(
+        RunQuery(scope=CollectionScope(), where=Compare(Field('native', ('status',)), 'eq', 'RUNNING')),
+        authority_factory=selected,
+    )
+    assert acquired == [uri]
+    assert page.complete and not page.warnings
+    assert tuple(item['identity'] for item in page.items) == (uri,)
 
 
 def test_managed_initializer_order_bounds_context_reads_and_skips_reconciled_requests(
