@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from loom.pipeline.stores import PerRunAuthorityStore
 
 from .models import CatalogIndexResult, ListRunsResult, RunComparison, RunFilter
 from .query import RunQuery
@@ -70,15 +74,24 @@ class RunCatalog:
             warnings=current.warnings,
         )
 
-    def search(self, query: RunQuery) -> QueryPage:
+    def search(
+        self,
+        query: RunQuery,
+        *,
+        authority_factory: Callable[[str], PerRunAuthorityStore] | None = None,
+    ) -> QueryPage:
         """Search this explicit local collection with bounded live pages and coverage.
 
         Requires CollectionScope; authority absence stays unavailable rather than
         promoting materialized lifecycle state into current truth.
+        A trusted local caller may bind the authority selected by its protected
+        deployment through ``authority_factory``. The factory receives each
+        candidate run URI from this collection; it does not widen collection
+        membership or replace lifecycle facts with discovery-index metadata.
         """
         from ._query_local import search_collection
 
-        return search_collection(self.collection_path, query)
+        return search_collection(self.collection_path, query, authority_factory=authority_factory)
 
 
 __all__ = ["RunCatalog"]

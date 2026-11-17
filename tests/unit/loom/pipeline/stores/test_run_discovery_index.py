@@ -79,6 +79,37 @@ def test_refresh_finishes_registration_when_writer_dies_after_publication(tmp_pa
     assert rows(root)[uri]['pending'] == 0
 
 
+def test_refresh_ignores_auxiliary_directories_without_run_documents(tmp_path):
+    root = tmp_path / 'runs'
+    uri = path_to_run_uri(root / 'one')
+    LocalRunStore(root).create_run(uri)
+    for name in ('.loom', 'loom-artifacts', 'loom-work', 'custom-shared-storage'):
+        (root / name).mkdir()
+    assert index.refresh(root) == ()
+    assert set(rows(root)) == {uri}
+    with index.connection(root) as conn:
+        assert conn.execute('SELECT refreshed FROM discovery_metadata').fetchone()[0] == 1
+
+
+def test_refresh_retains_registered_run_with_missing_document(tmp_path):
+    root = tmp_path / 'runs'
+    uri = path_to_run_uri(root / 'one')
+    LocalRunStore(root).create_run(uri)
+    (root / 'one/run.json').unlink()
+    assert index.refresh(root) == ({'code': 'discovery_record_unavailable', 'run_uri': uri},)
+    assert set(rows(root)) == {uri}
+
+
+def test_refresh_reports_unregistered_corrupt_run_document(tmp_path):
+    root = tmp_path / 'runs'
+    run = root / 'copied'
+    run.mkdir(parents=True)
+    (run / 'run.json').write_text('{unfinished')
+    assert index.refresh(root) == (
+        {'code': 'discovery_record_unavailable', 'run_uri': path_to_run_uri(run)},
+    )
+
+
 def test_concurrent_registration_is_not_removed_by_refresh(tmp_path, monkeypatch):
     root = tmp_path / 'runs'
     store = LocalRunStore(root)
