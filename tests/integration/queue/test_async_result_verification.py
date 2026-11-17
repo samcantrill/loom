@@ -525,7 +525,7 @@ def test_verifier_report_load_is_async_and_late_completion_respects_demand(tmp_p
 
 
 def test_worker_request_preparation_is_async_and_cancellation_prevents_dispatch(tmp_path, monkeypatch):
-    from loom.queue import local_daemon_execution as execution
+    from loom.pipeline import execution
 
     service = _text_service(tmp_path, qualify_actions=True)
     LocalDaemon.initialize_deployment(service.daemon)

@@ -313,17 +313,21 @@ def _mapping(value: object) -> dict[str, PlainData]:
     return cast(dict[str, PlainData], dict(value))
 
 
+def _candidate_admission(value: PlainData) -> PlainData:
+    if isinstance(value, Mapping) and value.get("state") not in {"FAILED", "SUCCEEDED", "CANCELLED"}:
+        # In-flight observations can increment the counter without changing a
+        # decision fact. Keep identity, state and cancellation evidence exact;
+        # terminal revisions still fence failed-attempt retries.
+        return {key: item for key, item in value.items() if key != "revision"}
+    return value
+
+
 def _same_candidate(observed: object, current: Mapping[str, PlainData]) -> bool:
     if not isinstance(observed, Mapping):
         return False
     before, after = dict(observed), dict(current)
-    old_admission, new_admission = before.get("admission"), after.get("admission")
-    if isinstance(old_admission, Mapping) and isinstance(new_admission, Mapping):
-        if old_admission.get("state") not in {"FAILED", "SUCCEEDED", "CANCELLED"} and old_admission.get("state") == new_admission.get("state"):
-            # Native in-flight observations increment this counter even when no
-            # decision fact changes. Failed-revision retry fencing stays exact.
-            before["admission"] = {key: value for key, value in old_admission.items() if key != "revision"}
-            after["admission"] = {key: value for key, value in new_admission.items() if key != "revision"}
+    before["admission"] = _candidate_admission(before.get("admission"))
+    after["admission"] = _candidate_admission(after.get("admission"))
     return before == after
 
 
@@ -1430,7 +1434,7 @@ class CoordinatorPreparations:
         assert factory is not None and self.callbacks is not None
         token = (
             *self._publication_token(row), uri,
-            None if admission is None else admission.revision,
+            _candidate_admission(None if admission is None else admission.to_dict()),
             factory(uri).open_run(uri).revision,
         )
         pending = self._candidates.get(operation_id)

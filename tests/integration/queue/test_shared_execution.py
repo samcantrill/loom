@@ -264,6 +264,9 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, s
                     assert remote._require_journal().has_unresolved_assignment_references()
                     if scenario == "cancel_missing":
                         client.cancel("target")
+                        # Acceptance retains cancellation intent. Advance its
+                        # native control before testing the lost decline reply.
+                        daemon.reconcile_once()
                         def interrupt_decline(*args, **kwargs):
                             raise RuntimeError("before cancellation settlement")
                         monkeypatch.setattr(remote, "decline_assignment", interrupt_decline)

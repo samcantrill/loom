@@ -215,6 +215,8 @@ def test_two_agents_publish_and_consume_complete_large_shared_closure(
     retained = threading.Event()
     timed_out_requests = []
     if slow_preparation:
+        from loom.queue._agent_transport_policy import AgentTransportPolicy
+
         original_decode = preparation.load_preparation_report
         original_declare = AgentSessionService.declare_outputs
         original_exchange = transport._exchange_agent_request
@@ -231,9 +233,9 @@ def test_two_agents_publish_and_consume_complete_large_shared_closure(
                 retained.set()
             return result
 
-        def deadline_exchange(config, operation, body, role, connection, keep_alive):
+        def deadline_exchange(config, operation, body, role, connection, keep_alive, **kwargs):
             if operation != "output_manifest" or deadline_expired.is_set():
-                return original_exchange(config, operation, body, role, connection, keep_alive)
+                return original_exchange(config, operation, body, role, connection, keep_alive, **kwargs)
             # Use real TLS and a real socket deadline. The server remains inside
             # native semantic validation until this request actually times out.
             if connection is not None:
@@ -242,8 +244,11 @@ def test_two_agents_publish_and_consume_complete_large_shared_closure(
                 config.url, config.server_ca_path, config.certificate_path,
                 config.private_key_path, timeout=0.2,
             )
+            attempt_config = replace(config, transport_policy=AgentTransportPolicy(
+                connect_timeout_seconds=0.2, response_timeout_seconds=0.2,
+            ))
             try:
-                return original_exchange(config, operation, body, role, connection, keep_alive)
+                return original_exchange(attempt_config, operation, body, role, connection, keep_alive, **kwargs)
             except transport._IndeterminateAgentProtocolError:
                 assert decoding.is_set(), "deadline expired before validation started"
                 timed_out_requests.append(json.loads(body)["assignment_id"])
