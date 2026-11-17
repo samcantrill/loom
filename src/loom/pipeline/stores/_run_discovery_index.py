@@ -79,6 +79,7 @@ def refresh(root: Path) -> tuple[dict[str, str], ...]:
         raise RunProjectionError("collection is unavailable; existing index retained")
     with connection(root, create=True) as conn:
         watermark = conn.execute("SELECT revision FROM discovery_metadata").fetchone()[0]
+        registered = {row[0] for row in conn.execute("SELECT run_uri FROM discovery_runs")}
     store = LocalRunStore(root)
     found: dict[str, str] = {}
     warnings: list[dict[str, str]] = []
@@ -91,6 +92,13 @@ def refresh(root: Path) -> tuple[dict[str, str], ...]:
             try:
                 if not path.is_dir():
                     continue
+                if uri not in registered:
+                    try:
+                        (path / "run.json").lstat()
+                    except FileNotFoundError:
+                        # Shared artifact/work directories are not runs. A
+                        # registered missing marker still reports unavailable.
+                        continue
                 found[uri] = cast(str, store.read_run_document(uri)["created_at"])
             except (OSError, ValueError, LookupError, StoreError):
                 warnings.append({"code": "discovery_record_unavailable", "run_uri": uri})
