@@ -244,7 +244,9 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
             client.submit(LocalDaemonAdmissionRequest("submitted", prepared.run_uri))
             if not preparation and not recovery:
                 try:
-                    assert validation_started.wait(10)
+                    # Background request preparation precedes inspection. Its
+                    # filesystem work is not the control-latency contract below.
+                    assert validation_started.wait(60)
                     assert not daemon._execution.slurm_assignments.list_run_unreleased(prepared.run_uri)
                     assert not [call for call in profile.runner.calls if call[0] == "sbatch"]
                     with ThreadPoolExecutor(max_workers=1) as readers:
@@ -290,7 +292,9 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
             first_reference = None
             interrupted = False
             for attempt in range(1, 3 if recovery else 2):
-                deadline = monotonic() + 10
+                # Allow asynchronous preparation and registration to settle on
+                # shared storage; peer-progress/cancellation bounds stay strict.
+                deadline = monotonic() + 60
                 records = ()
                 while monotonic() < deadline:
                     records = daemon._execution.slurm_assignments.list_run_unreleased(
