@@ -287,6 +287,25 @@ def test_cross_device_rename_never_falls_back_to_payload_copy(tmp_path, monkeypa
     assert (destination / "assembled/values.npy").stat().st_ino == inode
 
 
+def test_replay_uses_moved_intent_when_mount_setup_recreated_empty_source(tmp_path):
+    _, profile, source, reference, inode = _first(tmp_path)
+    second, profile, _ = _workspace(tmp_path, attempt=2, predecessors=[reference])
+    destination = _continue(second, profile, reference)
+    source.mkdir(parents=True)
+    assert _continue(second, profile, reference) == destination
+    assert list(source.iterdir()) == []
+    assert (destination / "assembled/values.npy").stat().st_ino == inode
+
+
+def test_empty_mount_destination_needs_no_worker_initializer(tmp_path):
+    _, profile, _, reference, inode = _first(tmp_path)
+    second, profile, _ = _workspace(tmp_path, attempt=2, predecessors=[reference])
+    destination = publication.staging_tree(second.request(), profile.shared_roots, "agent-1")
+    destination.mkdir(parents=True)
+    assert _continue(second, profile, reference) == destination
+    assert (destination / "assembled/values.npy").stat().st_ino == inode
+
+
 @pytest.mark.parametrize("conflict", ["destination", "published", "sealed", "unauthorized", "owner", "fence", "receipt", "intent_link"])
 def test_handoff_refuses_conflicts_without_changing_saved_output(tmp_path, conflict):
     _, profile, source, reference, _ = _first(tmp_path)

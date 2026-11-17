@@ -36,6 +36,73 @@ if TYPE_CHECKING:
 
 _OWNERSHIP_LIMIT = 64 * 1024
 _INTENTS = ".loom-staging-continuations"
+WIRE = "loom.output_staging_continuation"
+_PRINCIPAL = "native-output-staging"
+_GRANT_QUERY = (
+    "SELECT digest, result_json FROM agent_receipts WHERE principal_id=? "
+    "AND operation='continue_staging' AND idempotency_key=?"
+)
+
+
+def requested(request: PublicationRequest) -> bool:
+    from .shared_execution import assignment_scope
+
+    scope = assignment_scope(request.fingerprint)
+    return scope is not None and "staging_continuation" in scope
+
+
+def validate_binding(request: PublicationRequest, recovery_wire: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Admit the coordinator-selected source in an immutable native delivery."""
+    raw = request.worker_metadata.get(WIRE)
+    if not requested(request):
+        if raw is not None:
+            raise QueueConflictError("output staging continuation was not requested")
+        return None
+    if not isinstance(raw, Mapping) or set(raw) != {"schema_version", "predecessor"} or (
+        type(raw["schema_version"]) is not int or raw["schema_version"] != 1
+    ):
+        raise QueueConflictError("output staging continuation delivery is missing or invalid")
+    if raw["predecessor"] is None:
+        return None
+    return _admit_predecessor(raw["predecessor"], recovery_wire["predecessors"])
+
+
+def may_own_unstarted_progress(row: Mapping[str, Any], metadata: Mapping[str, Any]) -> bool:
+    """A granted handoff can own assembly before any worker receives a permit."""
+    value = metadata.get(WIRE)
+    return row["fence"] is not None and isinstance(value, Mapping) and value.get("predecessor") is not None
+
+
+def _empty_staging(tree: Path) -> bool:
+    if not tree.exists():
+        return True
+    with os.scandir(tree) as entries:
+        return all(entry.name == RECEIPT for entry in entries)
+
+
+def select_predecessor(predecessors: list[Any], roots: Mapping[str, PlainData]) -> dict[str, Any] | None:
+    """Find the latest surviving unsealed tree using only authorized locations.
+
+    A grant interrupted before rename leaves the bytes in an earlier attempt;
+    an empty newly prepared mount directory is not assembly progress.
+    """
+    authorized = _predecessor_map(predecessors)
+    for reference in reversed(authorized.values()):
+        root_binding = cast(Mapping[str, PlainData], roots[reference["root_id"]])
+        root = Path(str(root_binding["host_path"]))
+        owner = _publication_owner(reference)
+        _require_unpublished(root, owner)
+        tree = _stage_path(root, owner)
+        if not tree.exists():
+            continue
+        marker = tree / RECEIPT
+        if marker.exists():
+            _admit_source_marker(root, tree, _read(marker), reference, authorized)
+        elif not _empty_staging(tree):
+            raise QueueConflictError("uninitialized predecessor staging contains output")
+        if not _empty_staging(tree):
+            return reference
+    return None
 
 
 def _stage_path(root: Path, owner: Mapping[str, Any]) -> Path:
@@ -65,9 +132,24 @@ def _publication_owner(reference: Mapping[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in reference["identity"].items() if key != "origin_run_id"}
 
 
-def _admit_predecessor(reference: object, predecessors: list[Any]) -> dict[str, Any]:
+def _predecessor_map(predecessors: list[Any]) -> dict[str, dict[str, Any]]:
+    authorized: dict[str, dict[str, Any]] = {}
+    for raw in predecessors:
+        reference = recovery._reference(raw)
+        key = reference["publication_id"]
+        if key in authorized:
+            raise QueueConflictError("staging continuation has duplicate predecessor ownership")
+        authorized[key] = reference
+    return authorized
+
+
+def _admit_predecessor(reference: object, predecessors: list[Any] | Mapping[str, Any]) -> dict[str, Any]:
     admitted = recovery._reference(reference)
-    if admitted not in predecessors:
+    matches = (
+        predecessors.get(admitted["publication_id"]) == admitted
+        if isinstance(predecessors, Mapping) else admitted in predecessors
+    )
+    if not matches:
         raise QueueConflictError("staging continuation predecessor is not authorized")
     return admitted
 
@@ -83,7 +165,7 @@ def _admit_source_marker(
     tree: Path,
     marker: Mapping[str, Any],
     reference: dict[str, Any],
-    predecessors: list[Any],
+    predecessors: Mapping[str, Any],
 ) -> None:
     """Resolve an interrupted earlier handoff without writing any old journal."""
     if set(marker) != {"schema_version", "identity"} or marker["schema_version"] != 1:
@@ -107,7 +189,7 @@ def _admit_source_marker(
         if previous["identity"]["attempt"] >= reference["identity"]["attempt"]:
             raise QueueConflictError("staging continuation source order conflicts")
         previous_tree = _stage_path(root, _publication_owner(previous))
-        if previous_tree.exists():
+        if not _empty_staging(previous_tree):
             raise QueueConflictError("staging continuation has two source trees")
         reference = previous
 
@@ -164,7 +246,8 @@ def continue_staging(
         if wire is None or selection is None:
             raise QueueConflictError("staging continuation requires native recovery delivery")
         recovery.current_tree(request, roots, agent_id=agent_id)
-        reference = _admit_predecessor(predecessor, wire["predecessors"])
+        authorized = _predecessor_map(wire["predecessors"])
+        reference = _admit_predecessor(predecessor, authorized)
         # Inspect the native immutable receipt; application admission owns the
         # mutable staging payload and must verify its resource receipts later.
         recovery.inspect(reference, roots)
@@ -175,23 +258,26 @@ def continue_staging(
         destination = staging_tree(request, roots, agent_id)
         _require_unpublished(root, owner)
         _require_unpublished(root, source_owner)
-        intent_path = _intent_path(root, source if source.exists() else destination, owner)
+        destination_intent = _intent_path(root, destination, owner)
+        source_present = source.exists()
+        # A released container's mount preparation can recreate its old empty
+        # staging path. The moved durable intent identifies the surviving tree.
+        if destination_intent.exists() and _empty_staging(source):
+            source_present = False
+        intent_path = _intent_path(root, source if source_present else destination, owner)
         intent = {"schema_version": 1, "source": reference, "destination": owner}
         recorded = intent_path.exists()
         if recorded and _read(intent_path) != intent:
             raise QueueConflictError("staging continuation replay conflicts")
 
-        if source.exists():
-            _admit_source_marker(root, source, _read(source / RECEIPT), reference, wire["predecessors"])
+        if source_present:
+            _admit_source_marker(root, source, _read(source / RECEIPT), reference, authorized)
             if destination.exists():
-                children = tuple(destination.iterdir())
-                if children and (
-                    children != (destination / RECEIPT,)
-                    or _read(destination / RECEIPT) != {"schema_version": 1, "identity": owner}
+                marker = destination / RECEIPT
+                if not _empty_staging(destination) or (
+                    marker.exists() and _read(marker) != {"schema_version": 1, "identity": owner}
                 ):
                     raise QueueConflictError("staging continuation destination contains output")
-                if not children and not recorded:
-                    raise QueueConflictError("staging continuation destination has no owner")
             if not recorded:
                 require_owner()
                 atomic_write_bytes(intent_path, encoded(intent), durability="strict")
@@ -223,7 +309,7 @@ def continue_staging(
         marker = _read(destination / RECEIPT)
         desired = {"schema_version": 1, "identity": owner}
         if marker != desired:
-            _admit_source_marker(root, destination, marker, reference, wire["predecessors"])
+            _admit_source_marker(root, destination, marker, reference, authorized)
             require_owner()
             atomic_write_bytes(destination / RECEIPT, encoded(desired), durability="strict")
         # Repeat barriers on replay even if rename/marker replacement was already
@@ -234,3 +320,71 @@ def continue_staging(
         return destination
     except (ArtifactStoreError, AtomicWriteError, OSError, ValueError) as exc:
         raise QueueConflictError(str(exc)) from exc
+
+
+def _grant_receipt(request: PublicationRequest, agent_id: str, fence: str):
+    wire = recovery.validate_wire(request)
+    if wire is None:
+        if requested(request):
+            raise QueueConflictError("staging continuation grant lacks recovery delivery")
+        return None
+    predecessor = validate_binding(request, wire)
+    if predecessor is None:
+        return None
+    owner = identity(request, agent_id=agent_id, fence=fence)
+    data = encoded({"schema_version": 1, "source": predecessor, "destination": owner}).decode()
+    return predecessor, owner, hashlib.sha256(data.encode()).hexdigest(), data
+
+
+def require_grant_continuation(request: PublicationRequest, conn: Any, *, agent_id: str, fence: str) -> None:
+    """Refuse a start permit until its selected handoff is durably acknowledged."""
+    expected = _grant_receipt(request, agent_id, fence)
+    if expected is None:
+        return
+    previous = conn.execute(_GRANT_QUERY, (_PRINCIPAL, request.assignment_id)).fetchone()
+    if previous is None or tuple(previous) != expected[2:]:
+        raise QueueConflictError("staging continuation is not acknowledged for this grant")
+
+
+def finish_grant_continuation(
+    request: PublicationRequest,
+    roots: Mapping[str, PlainData],
+    *,
+    agent_id: str,
+    fence: str,
+    connection: Callable[[], Any],
+    require_live_owner: Callable[[], Mapping[str, PlainData]],
+) -> None:
+    """Finish staging before returning a native grant, with durable replay.
+
+    The caller serializes this operation against release of the same assignment.
+    Its receipt precedes grant acknowledgement, so a later grant RPC never
+    mutates staging already exposed to a running worker. The filesystem intent
+    still owns recovery if the control receipt was not committed.
+    """
+    expected = _grant_receipt(request, agent_id, fence)
+    if expected is None:
+        return
+    predecessor, owner, digest, data = expected
+    parameters = (_PRINCIPAL, request.assignment_id)
+    with connection() as conn:
+        previous = conn.execute(_GRANT_QUERY, parameters).fetchone()
+    if previous is not None:
+        if tuple(previous) != (digest, data):
+            raise QueueConflictError("staging grant receipt conflicts")
+        return
+    continue_staging(request, roots, predecessor=predecessor, agent_id=agent_id,
+                     fence=fence, require_live_owner=require_live_owner)
+    if require_live_owner() != owner:
+        raise QueueConflictError("staging grant authority changed before acknowledgement")
+    with connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        previous = conn.execute(_GRANT_QUERY, parameters).fetchone()
+        if previous is not None and tuple(previous) != (digest, data):
+            raise QueueConflictError("staging grant receipt conflicts")
+        conn.execute(
+            "INSERT OR IGNORE INTO agent_receipts "
+            "(principal_id, operation, idempotency_key, digest, result_json) VALUES (?, 'continue_staging', ?, ?, ?)",
+            (*parameters, digest, data),
+        )
+        conn.commit()

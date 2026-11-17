@@ -26,6 +26,7 @@ from ._phase_timing import phase
 SHARED_EXECUTION_CAPABILITY = "shared-execution-v1"
 INPUT_DIRECTORY_CAPABILITY = "input-directory-v1"
 SHARED_EXECUTION_SCOPE = "loom.shared_execution"
+STAGING_CONTINUATION_CAPABILITY = "released-output-staging-v1"
 SOURCE_PROMOTION_CAPABILITY = "quiescent-source-promotion-v1"
 
 
@@ -198,7 +199,10 @@ def has_input_directories(roots: Mapping[str, PlainData]) -> bool:
 def scope(value: object) -> dict[str, PlainData] | None:
     if value is None:
         return None
-    if (not isinstance(value, Mapping) or set(value) != {"capability", "roots", "locations"}
+    if (not isinstance(value, Mapping) or set(value) not in (
+        {"capability", "roots", "locations"},
+        {"capability", "roots", "locations", "staging_continuation"},
+    )
         or value["capability"] != SHARED_EXECUTION_CAPABILITY or not isinstance(value["roots"], Mapping)
         or not isinstance(value["locations"], (list, tuple))):
         raise QueueServiceError("shared execution scope is unsupported")
@@ -206,7 +210,14 @@ def scope(value: object) -> dict[str, PlainData] | None:
     roots = qualified_roots(thaw_plain_data(value["roots"]))
     if any(item["root_id"] not in roots for item in locations):
         raise QueueServiceError("shared location root is not permitted")
-    return {"capability": SHARED_EXECUTION_CAPABILITY, "roots": roots, "locations": cast(PlainData, locations)}
+    continuation: dict[str, PlainData] = {}
+    if "staging_continuation" in value:
+        if value["staging_continuation"] != {"capability": STAGING_CONTINUATION_CAPABILITY} or not any(
+            "publication" in cast(Mapping[str, PlainData], root) for root in roots.values()
+        ):
+            raise QueueServiceError("output staging continuation requires a supported shared publication policy")
+        continuation["staging_continuation"] = {"capability": STAGING_CONTINUATION_CAPABILITY}
+    return {"capability": SHARED_EXECUTION_CAPABILITY, "roots": roots, "locations": cast(PlainData, locations), **continuation}
 
 
 def selected_locations(value: object) -> list[dict[str, PlainData]]:
@@ -219,7 +230,9 @@ def selected_locations(value: object) -> list[dict[str, PlainData]]:
     return []
 
 
-def stage_scope(config: object, factory_init: object, permitted: Mapping[str, PlainData]) -> dict[str, PlainData]:
+def stage_scope(config: object, factory_init: object, permitted: Mapping[str, PlainData], *, continue_staging: bool = False) -> dict[str, PlainData]:
+    if type(continue_staging) is not bool:
+        raise QueueServiceError("output staging continuation selection must be boolean")
     locations = selected_locations(config) + selected_locations(factory_init)
     if "locations" in permitted:
         admitted = cast(list[Mapping[str, PlainData]], permitted["locations"])
@@ -232,7 +245,11 @@ def stage_scope(config: object, factory_init: object, permitted: Mapping[str, Pl
     aliases.update(alias for alias, facts in roots.items() if "publication" in cast(Mapping[str, PlainData], facts))
     if not aliases.issubset(roots):
         raise QueueServiceError("stage selects an undeclared shared root")
-    return {"capability": SHARED_EXECUTION_CAPABILITY, "roots": {alias: roots[alias] for alias in sorted(aliases)}, "locations": cast(PlainData, locations)}
+    result: dict[str, PlainData] = {"capability": SHARED_EXECUTION_CAPABILITY, "roots": {alias: roots[alias] for alias in sorted(aliases)}, "locations": cast(PlainData, locations)}
+    if continue_staging:
+        result["staging_continuation"] = {"capability": STAGING_CONTINUATION_CAPABILITY}
+        return cast(dict[str, PlainData], scope(result))
+    return result
 
 
 @dataclass(frozen=True)

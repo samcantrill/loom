@@ -113,6 +113,8 @@ def _reference(value: object) -> dict[str, Any]:
 def validate_wire(request: Any) -> dict[str, Any] | None:
     raw = request.worker_metadata.get(WIRE)
     if raw is None:
+        if "loom.output_staging_continuation" in request.worker_metadata:
+            raise QueueConflictError("staging continuation requires native recovery delivery")
         return None
     selection = selected(request)
     if (
@@ -154,6 +156,8 @@ def validate_wire(request: Any) -> dict[str, Any] | None:
         ):
             raise QueueConflictError("recovery predecessor ownership conflicts")
         previous = owner["attempt"]
+    from ._shared_staging_continuation import validate_binding
+    validate_binding(request, value)
     return value
 
 
@@ -168,6 +172,9 @@ def bind_delivery(
     verify_trees: bool = True,
 ) -> Any:
     selection = selected(request)
+    from ._shared_staging_continuation import requested
+    if request.preparation_input is not None and requested(request):
+        raise QueueConflictError("preparation delivery cannot continue output staging")
     if selection is None or request.preparation_input is not None:
         return request
     session = conn.execute(
@@ -232,6 +239,9 @@ def bind_slurm_delivery(
     request: Any, conn: Any, run_uri: str, roots: Mapping[str, PlainData], *,
     agent_id: str, slurm_assignments: Any, verify_trees: bool = True,
 ) -> Any:
+    from ._shared_staging_continuation import requested
+    if request.preparation_input is not None and requested(request):
+        raise QueueConflictError("preparation delivery cannot continue output staging")
     if selected(request) is None or request.preparation_input is not None:
         return request
     return _bind_delivery(
@@ -246,14 +256,21 @@ def _bind_delivery(
 ) -> Any:
     selection = selected(request)
     assert selection is not None
+    from ._shared_staging_continuation import (
+        WIRE as staging_wire, may_own_unstarted_progress, requested, select_predecessor,
+    )
     predecessors = []
     rows = assignment_rows(conn, run_uri, slurm_assignments=slurm_assignments, stage_name=request.stage_name)
-    # Declined/revoked deliveries with no start permit cannot own progress.
+    # Ordinary no-start deliveries cannot own progress. A granted staging
+    # handoff can move assembly before any worker receives its start permit.
     for row in rows:
         if (row["stage_name"] != request.stage_name or row["attempt"] >= request.attempt
-            or not row["start_permitted"] or row["request_json"] is None):
+            or row["request_json"] is None):
             continue
-        if WIRE not in json.loads(row["request_json"])["worker_metadata"]:
+        metadata = json.loads(row["request_json"])["worker_metadata"]
+        if not row["start_permitted"] and not may_own_unstarted_progress(row, metadata):
+            continue
+        if WIRE not in metadata:
             continue
         if row["recovery_failure_json"] is not None:
             raise QueueConflictError("recovery predecessor unavailable: retention budget exceeded")
@@ -284,10 +301,15 @@ def _bind_delivery(
         if verify_trees:
             resolve(ref, roots)
         predecessors.append(ref)
+    continuation = (
+        {staging_wire: {"schema_version": 1, "predecessor": select_predecessor(predecessors, roots)}}
+        if requested(request) else {}
+    )
     result = replace(
         request,
         worker_metadata={
             **request.worker_metadata,
+            **continuation,
             WIRE: {
                 "schema_version": 1,
                 "root_id": selection[0],

@@ -1921,9 +1921,11 @@ class SlurmBootstrapWorkspace:
         self.accept_inputs(shared_roots=shared_roots)
         request = self.delivery().worker_request(self.root, shared_roots=shared_roots)
         from ._shared_recovery import BINDING, WIRE, worker_binding
+        from ._shared_staging_continuation import WIRE as staging_wire
 
         metadata = dict(request.metadata)
         metadata.pop(WIRE, None)
+        metadata.pop(staging_wire, None)
         binding = worker_binding(self)
         if binding is not None:
             metadata[BINDING] = binding

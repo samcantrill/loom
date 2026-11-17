@@ -1486,9 +1486,26 @@ It requires an admitted predecessor and the caller's live assignment authority,
 renames the tree without a payload-copy fallback, and carries durable handoff
 intents inside that tree across successive interruptions. It never changes
 sealed recovery trees or accepted publications, and does not grant an assignment
-or admit application-specific assembly contents. Provider launch dispatch does
-not yet invoke it; launch integration and its capability admission remain
-required before exposing continuation to applications.
+or admit application-specific assembly contents. An explicit optional shared
+scope capability (`released-output-staging-v1`) selects the behavior. Native
+delivery retains the exact authorized source, including a granted predecessor
+that received staging but never obtained start permission. Positive release
+and retained recovery evidence still precede reuse.
+
+Resident acceptance and SLURM grant handlers finish selected handoffs under the
+existing per-assignment publication guard before returning a grant that can
+cause a worker to mount output staging. A native control receipt acknowledges
+the exact source/destination/fence after filesystem durability. Start permission
+requires that receipt; grant replay with an existing receipt never mutates live
+staging. Cancellation independently prevents a new start. Both worker adapters
+remove the native continuation metadata when projecting application requests.
+
+The unselected scope preserves its existing wire shape. Preparation does not
+yet emit the new selection or qualify the required installation/provider path;
+those admission changes and physical launch tests remain prerequisites to
+application activation. The grant tests exercise native handlers, serialized
+delivery, SQLite receipts and real filesystem handoffs with controlled provider
+release/run-authority facts. They are not physical provider fencing evidence.
 `_phase_timing.py` bounds diagnostic collection independently of authority.
 
 `_coordinator_run_authority.py` owns the existing scoped adapter for one accepted

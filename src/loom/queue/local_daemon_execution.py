@@ -6400,24 +6400,53 @@ class LocalDaemonExecution:
         )
         if not record.input_ready:
             raise QueueConflictError("SLURM grant requires durable inputs")
-        if record.fence is not None:
-            return record.fence
-        with self.config.connect_database(self.config.control_database) as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            if action_attempt_cancelled(conn, record.assignment.run_uri, record.assignment.attempt_id):
-                raise QueueConflictError("SLURM assignment run is cancelling")
-            authority = self._remote_authority(record.assignment.run_uri)
-            fence = authority.grant_prepared_attempt(
-                record.assignment.run_uri,
-                assignment_id=assignment_id,
-                attempt_id=record.assignment.attempt_id,
-            )
-            attach_action_fence(conn, record.assignment.run_uri, record.assignment.attempt_id, assignment_id, fence.fencing_token)
-            self.slurm_assignments.mark_granted(
-                assignment_id, incarnation, fence.fencing_token
-            )
-            conn.commit()
-        return fence.fencing_token
+        fence = record.fence
+        if fence is None:
+            with self.config.connect_database(self.config.control_database) as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                if action_attempt_cancelled(conn, record.assignment.run_uri, record.assignment.attempt_id):
+                    raise QueueConflictError("SLURM assignment run is cancelling")
+                authority = self._remote_authority(record.assignment.run_uri)
+                granted = authority.grant_prepared_attempt(
+                    record.assignment.run_uri,
+                    assignment_id=assignment_id,
+                    attempt_id=record.assignment.attempt_id,
+                )
+                fence = granted.fencing_token
+                attach_action_fence(conn, record.assignment.run_uri, record.assignment.attempt_id, assignment_id, fence)
+                self.slurm_assignments.mark_granted(assignment_id, incarnation, fence)
+                conn.commit()
+        from ._shared_staging_continuation import WIRE as staging_wire, finish_grant_continuation, requested
+        if requested(record.delivery) or staging_wire in record.delivery.worker_metadata:
+            # A grant reply can cause a container to bind this directory before
+            # start permission. Finish the handoff before exposing that reply.
+            with self._daemon_owner()._publication_guards.hold(assignment_id):
+                def live_owner():
+                    current = self._slurm_authorized_record(
+                        principal_id, credential_id, assignment_id, incarnation,
+                    )
+                    if (current.delivery != record.delivery or current.fence != fence
+                        or current.state != "granted" or current.start_consumed):
+                        raise QueueConflictError("staging continuation grant is no longer live")
+                    with self.config.connect_database(self.config.control_database) as conn:
+                        if action_attempt_cancelled(conn, current.assignment.run_uri, current.assignment.attempt_id):
+                            raise QueueConflictError("staging continuation grant is cancelled")
+                    granted = self._remote_authority(current.assignment.run_uri).grant_prepared_attempt(
+                        current.assignment.run_uri, assignment_id=assignment_id,
+                        attempt_id=current.assignment.attempt_id,
+                    )
+                    if granted.fencing_token != fence:
+                        raise QueueConflictError("staging continuation grant fence conflicts")
+                    from ._shared_publication import identity
+                    return identity(current.delivery, agent_id=current.assignment.agent_id, fence=fence)
+
+                finish_grant_continuation(
+                    record.delivery, self.config.coordinator_shared_roots,
+                    agent_id=record.assignment.agent_id, fence=fence,
+                    connection=lambda: self.config.connect_database(self.config.control_database),
+                    require_live_owner=live_owner,
+                )
+        return fence
 
     def slurm_start_permit(
         self,
@@ -6448,6 +6477,11 @@ class LocalDaemonExecution:
             if request_id is not None and record.state != "granted":
                 conn.commit()
                 return False
+            from ._shared_staging_continuation import WIRE as staging_wire, requested, require_grant_continuation
+            if requested(record.delivery) or staging_wire in record.delivery.worker_metadata:
+                require_grant_continuation(
+                    record.delivery, conn, agent_id=record.assignment.agent_id, fence=fence,
+                )
             permitted = self.slurm_assignments.consume_start(assignment_id, request_id=request_id)
             conn.commit()
             return permitted

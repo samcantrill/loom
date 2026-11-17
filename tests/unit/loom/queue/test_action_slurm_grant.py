@@ -59,6 +59,8 @@ def test_slurm_shared_grant_and_start_use_exact_live_demand(tmp_path, monkeypatc
         state="inputs_ready",
         assignment=SimpleNamespace(run_uri=uri, attempt_id="producer-1"),
     )
+    from tests.unit.loom.queue.test_remote_stage_execution import _profile, _request
+    record.delivery = _request(_profile(tmp_path))
     execution = object.__new__(LocalDaemonExecution)
     monkeypatch.setattr(
         execution,
