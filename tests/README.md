@@ -106,10 +106,11 @@ pytest's selected temporary base. This setting neither mocks publication nor
 skips tests, and does not change application storage behavior. A runtime fetch
 to an unsupported filesystem still fails as documented.
 
-The optional fleet SSH fixtures require `ssh`, `ssh-keygen` and `sshd` on PATH
-(the system daemon is commonly under `/usr/sbin`). Their disposable daemon binds
+The optional fleet SSH fixtures require `ssh`, `ssh-keygen`, `sshd` and OpenSSL 3
+on PATH, including in the disposable SSH endpoint's environment. The system
+daemon is commonly under `/usr/sbin`. Their disposable daemon binds
 only loopback and stores its private authorization files beneath `TMPDIR`.
-Their native role state and offline test installations use
+Their native role state, absent-root inspection and offline test installations use
 `LOOM_TEST_LOCAL_STATE_ROOT` when set, otherwise the selected temporary directory.
 The chosen filesystem must satisfy the existing native host-local storage
 policy. This test setting does not bypass that policy or change production roots.

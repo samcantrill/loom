@@ -666,18 +666,25 @@ def test_fresh_setup_repeat_and_selected_add_host(site, capsys, colocated):
 
 
 def test_disposable_ssh_endpoint_observes_without_writes(endpoint, tmp_path):
+    import tempfile
     from loom.fleet.ssh_operations import ssh
 
-    result = ssh(
-        "control",
-        {
-            "action": "inspect",
-            "root": str(tmp_path / "absent"),
-            "release": {"descriptor_sha256": "a" * 64},
-        },
-    )
-    assert result["local_storage"] and not result["root_exists"]
-    assert not (tmp_path / "absent").exists()
+    # Inspect an absent native root on the same selected filesystem as site.
+    # tmp_path may hold ordinary test inputs on shared HPC scratch storage.
+    with tempfile.TemporaryDirectory(
+        prefix="lf7-probe-", dir=os.environ.get("LOOM_TEST_LOCAL_STATE_ROOT", tmp_path)
+    ) as directory:
+        absent = Path(directory) / "absent"
+        result = ssh(
+            "control",
+            {
+                "action": "inspect",
+                "root": str(absent),
+                "release": {"descriptor_sha256": "a" * 64},
+            },
+        )
+        assert result["local_storage"] and not result["root_exists"]
+        assert not absent.exists()
 
 
 def test_dispatch_faults_resume_original_ids_and_refuse_edits_missing_root(

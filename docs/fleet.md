@@ -360,7 +360,8 @@ so setup can reject overlapping roots before dispatch.
 For setup select `service_manager: tmux` or `systemd-user` explicitly. Fleet uses only configured
 SSH aliases and their existing authentication/host-key policy; aliases cannot
 contain SSH options or shell syntax. Each host must already provide Python 3.12,
-uv, OpenSSL, findmnt and the selected service manager. Native state and IPC must be on a supported local
+uv, OpenSSL 3, findmnt and the selected service manager. Certificate issuance uses
+OpenSSL 3's `x509 -subj` option. Native state and IPC must be on a supported local
 filesystem; a directory beneath an NFS home is insufficient. Workload software,
 shared mounts and the selected resident Python/SIF profile or submitted image and
 container runtime must already exist.
