@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 import signal
 import sqlite3
@@ -285,6 +284,8 @@ def test_restart_rotates_service_generation_and_restarts_process(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(supervisor, "_process_start_ticks", lambda _pid: None)
+    monkeypatch.setattr(supervisor, "_process_running", lambda _pid: False)
     with patch(
         "loom.authority.supervisor.subprocess.Popen",
         lambda *args, **kwargs: _FakeProcess(),
@@ -324,6 +325,8 @@ def test_stale_state_reports_unavailable_and_unready(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(supervisor, "_process_start_ticks", lambda _pid: None)
+    monkeypatch.setattr(supervisor, "_process_running", lambda _pid: False)
     with patch(
         "loom.authority.supervisor.subprocess.Popen",
         lambda *args, **kwargs: _FakeProcess(),
@@ -553,7 +556,7 @@ def test_unreadable_process_identity_does_not_claim_exit_or_signal(
 
 
 @pytest.mark.skipif(
-    not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"),
+    sys.platform != "linux",
     reason="pidfd exit observation is Linux-specific",
 )
 def test_already_exited_owned_child_is_confirmed_stopped(tmp_path: Path) -> None:

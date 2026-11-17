@@ -20,8 +20,6 @@ from loom.serialization import (
     thaw_plain_data,
 )
 from loom.serialization.errors import PlainDataError
-from weave.ordered import encode_ordered_config, decode_ordered_config
-from weave.errors import ConfigError
 
 from .errors import PlanSerializationError, PlanningValidationError
 
@@ -483,7 +481,11 @@ class StageFingerprintPayload:
     def to_dict(self) -> dict[str, PlainData]:
         def configuration(value: object) -> PlainData:
             plain = thaw_plain_data(value)
-            return encode_ordered_config(plain) if self.schema_version == 3 else plain
+            if self.schema_version == 3:
+                from weave.ordered import encode_ordered_config
+
+                return encode_ordered_config(plain)
+            return plain
 
         return {
             "schema_version": self.schema_version,
@@ -535,6 +537,9 @@ class StageFingerprintPayload:
         def configuration(name: str) -> Mapping[str, PlainData]:
             value = mapping[name]
             if mapping["schema_version"] == 3:
+                from weave.ordered import decode_ordered_config
+                from weave.errors import ConfigError
+
                 try:
                     value = decode_ordered_config(thaw_plain_data(value))
                 except ConfigError as exc:

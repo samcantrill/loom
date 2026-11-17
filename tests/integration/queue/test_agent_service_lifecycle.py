@@ -17,6 +17,8 @@ from time import monotonic, sleep
 
 import pytest
 
+from loom._pidfd import open_pidfd, send_pidfd_signal
+
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import LocalRunStore
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
@@ -415,9 +417,9 @@ def test_late_cancellation_waits_for_remote_provider_release(
 def _kill_worker(work: _RemoteWork, launch: ResidentWorkerLaunch) -> None:
     pid = work.supervisor.query(launch).process_id
     assert pid is not None
-    descriptor = os.pidfd_open(pid)
+    descriptor = open_pidfd(pid)
     try:
-        signal.pidfd_send_signal(descriptor, signal.SIGKILL)
+        send_pidfd_signal(descriptor, signal.SIGKILL)
         assert select.select([descriptor], [], [], 3)[0]
     finally:
         os.close(descriptor)
@@ -525,6 +527,7 @@ def test_service_registration_recovers_uncertainty_across_coordinator_restart(
     service.thread.join(10)
     assert not service.thread.is_alive() and not service.errors
     root = work.service_config.client.agent_root
+    assert root is not None
     with sqlite3.connect(root / "control.sqlite") as conn:
         intents = conn.execute("SELECT operation_id, result_json FROM agent_registration_intents").fetchall()
         assert len(intents) == (1 if accepted else 2)

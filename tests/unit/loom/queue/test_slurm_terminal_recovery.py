@@ -24,6 +24,7 @@ def test_disabled_policy_retains_schema_selection():
 
     policy = parse_terminal_recovery({"terminal_result_grace_seconds": 120, "enabled": False})
     config = LocalDaemonConfig(Path("/coordinator"), None, Path("/runs"), None, cpu_capacity=0, slurm_terminal_recovery=policy)
+    assert config.slurm_terminal_recovery is not None
     assert not config.slurm_terminal_recovery.enabled
     assert config.slurm_schema_version == 7
     assert replace(config, slurm_terminal_recovery=parse_terminal_recovery({"terminal_result_grace_seconds": 120})).slurm_schema_version == 7
@@ -48,7 +49,9 @@ def test_terminal_observation_and_probe_survive_reopen_without_resetting_grace(t
         reopened.observe_terminal_once("retained", {**identity, "result": {**identity["result"], "fence": "other"}}, "2030-01-01T02:00:00+00:00")
     with pytest.raises(QueueConflictError, match="probe conflicts"):
         reopened.record_terminal_probe("retained", {**probe, "request": {}})
-    assert fixture.reopen().read("retained").terminal_observation["probe"] == probe
+    retained = fixture.reopen().read("retained").terminal_observation
+    assert retained is not None
+    assert retained["probe"] == probe
 
 
 def test_migration_preserves_retained_assignment_without_inventing_observation(tmp_path):

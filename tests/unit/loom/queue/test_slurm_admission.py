@@ -3,6 +3,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import fields, replace
 from threading import Barrier
+from typing import Any
 
 import pytest
 
@@ -107,12 +108,13 @@ class ReservationFixture:
             environment_fingerprint="env-1", executor_fingerprint="executor-1",
         )
         delivery = SlurmStageDelivery(**values)
-        return assignment, dict(
+        arguments: dict[str, Any] = dict(
             request_json=request.to_dict(), delivery=delivery,
             input_paths={"input-1": self.input}, issuer_epoch="epoch",
             max_parallel_stages=100, max_profile_outstanding=None,
             requested_gpu_count=quantity, max_reserved_gpus=8,
         )
+        return assignment, arguments
 
 
 @pytest.mark.parametrize("quantities", [(1,) * 8, (2,) * 4, (3, 2, 3)])

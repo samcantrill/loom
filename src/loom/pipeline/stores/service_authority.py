@@ -10,6 +10,8 @@ import threading
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from functools import cache
+from multiprocessing import get_context
 from multiprocessing.managers import BaseManager
 from typing import Any, cast
 from urllib.parse import urlparse
@@ -174,9 +176,11 @@ class LocalAuthorityService:
         if port < 0:
             raise AuthorityStoreError("service port must be non-negative")
         resolved_authkey = authkey or secrets.token_bytes(32)
-        core = _ServiceAuthorityCore()
-        manager_type = _server_manager_type(core)
-        manager = manager_type(address=(host, port), authkey=resolved_authkey)
+        # Forking an active coordinator can inherit SQLite mutexes held by
+        # another thread. Even garbage collection in the child can deadlock.
+        manager = _LocalAuthorityManager(
+            address=(host, port), authkey=resolved_authkey, ctx=get_context("spawn"),
+        )
         manager.start()
         address = cast(tuple[str, int], manager.address)
         return cls(
@@ -1902,16 +1906,18 @@ class _ServiceAuthorityCore:
         return value.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _server_manager_type(core: _ServiceAuthorityCore) -> type[BaseManager]:
-    class AuthorityServiceManager(BaseManager):
-        pass
+class _LocalAuthorityManager(BaseManager):
+    """Importable manager for a fresh local service process."""
 
-    AuthorityServiceManager.register(
-        "authority",
-        callable=lambda: core,
-        exposed=_EXPOSED,
-    )
-    return AuthorityServiceManager
+
+@cache
+def _local_authority_core() -> _ServiceAuthorityCore:
+    # Manager request creation is serialized; every client of this service
+    # receives the same core, constructed only inside its owning process.
+    return _ServiceAuthorityCore()
+
+
+_LocalAuthorityManager.register("authority", callable=_local_authority_core, exposed=_EXPOSED)
 
 
 def _client_manager_type() -> type[BaseManager]:

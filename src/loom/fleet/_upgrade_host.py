@@ -12,6 +12,7 @@ import sys
 import time
 from typing import Any, cast
 
+from loom._pidfd import open_pidfd, send_pidfd_signal
 from loom.fleet._host import (
     atomic,
     config,
@@ -156,7 +157,7 @@ def stop_owned(request, *, observe):
     if observed["owner"] != request["expected_root_id"]:
         raise QueueConflictError("upgrade root identity changed")
     if observed["value"]["ownership"] == "live":
-        descriptor = os.pidfd_open(observed["value"]["expected_process"])
+        descriptor = open_pidfd(observed["value"]["expected_process"])
         try:
             current = observe(request)
             if (
@@ -169,7 +170,7 @@ def stop_owned(request, *, observe):
             ):
                 raise QueueConflictError("service process changed before stop")
             with measure("signal_to_exit"):
-                signal.pidfd_send_signal(descriptor, signal.SIGTERM)
+                send_pidfd_signal(descriptor, signal.SIGTERM)
                 poll = select.poll()
                 poll.register(descriptor, select.POLLIN)
                 if not poll.poll(30000):

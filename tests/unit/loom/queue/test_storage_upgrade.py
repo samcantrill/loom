@@ -213,6 +213,7 @@ def test_schema_six_upgrade_allows_async_output_and_remains_inspectable(root):
         (new_c.daemon.coordinator_root, "coordinator"),
         (new_a.client.agent_root, "local-agent"),
     ):
+        assert root_path is not None
         identity = _open_root(root_path, role=role)
         observation = inspect_service_settlement(root_path, expected_root_id=identity)
         assert observation.availability == "available", observation.to_dict()

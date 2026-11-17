@@ -139,10 +139,12 @@ class LifecycleObservers:
             if selected is None:
                 break
             if observation:
-                store, uri, fact = selected
+                store, uri, fact = cast(tuple[Any, str, dict[str, Any]], selected)
                 self.emit(store, uri, **fact)
             else:
-                store, before, after = selected
+                store, before, after = cast(
+                    tuple[Any, AuthoritativeRunSnapshot, AuthoritativeRunSnapshot], selected,
+                )
                 self.transitions(store, before, after)
             # Cooperative budget: do not start another callback/history read
             # after slow storage consumed this turn. One callback cannot be

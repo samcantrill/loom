@@ -3,6 +3,7 @@
 from collections import Counter
 from concurrent.futures import Future
 from threading import Event
+from typing import cast
 
 import pytest
 
@@ -49,7 +50,7 @@ def test_prerequisites_survive_capacity_until_dispatch(monkeypatch, stages):
 
     try:
         for _ in range(30):
-            pool._workers.complete()
+            cast(ControlledExecutor, pool._workers).complete()
             for index in range(stages):
                 if index in dispatched:
                     continue
@@ -126,11 +127,11 @@ def test_cancellation_frees_only_its_runs_slots(monkeypatch):
     try:
         pool.poll(("cancelled", "a"), "a", lambda: "a")
         pool.poll(("peer", "b"), "b", lambda: "b")
-        pool._workers.complete()
+        cast(ControlledExecutor, pool._workers).complete()
         pool.retain_run("cancelled", set())
         pool.poll(("replacement", "c"), "c", lambda: "c")
         assert pool.poll(("peer", "b"), "b", lambda: pytest.fail("repeated preparation")) == ("b", None)
-        pool._workers.complete()
+        cast(ControlledExecutor, pool._workers).complete()
         assert pool.poll(("replacement", "c"), "c", lambda: None) == ("c", None)
     finally:
         pool.close()
@@ -159,9 +160,9 @@ def test_completed_inspection_transfers_to_stage_until_dispatch(monkeypatch):
     try:
         for index in range(32):
             pool.poll(("run", str(index)), "request", lambda: True)
-        pool._workers.complete()
+        cast(ControlledExecutor, pool._workers).complete()
         for _ in range(6):
-            scans._executor.complete()
+            cast(ControlledExecutor, scans._executor).complete()
             for index in range(32):
                 pool.poll_observation(
                     ("run", str(index)), "inputs", lambda index=index: poll_scan(index),
@@ -197,14 +198,14 @@ def test_completed_waiting_class_keeps_preparation_capacity_for_peer(monkeypatch
     try:
         for index in range(32):
             pool.poll(("blocked", str(index)), "request", lambda: True, resource_class=blocked_class)
-        pool._workers.complete()
+        cast(ControlledExecutor, pool._workers).complete()
         assert len(pool._pending) == 31
         # Waiting prerequisites stay retained; the peer can prepare and leave
         # repeatedly without waiting for any allocation in the blocked class.
         for index in range(100):
             key = ("peer", str(index))
             pool.poll(key, "request", lambda: True, resource_class=peer_class)
-            pool._workers.complete()
+            cast(ControlledExecutor, pool._workers).complete()
             assert pool.poll(key, "request", lambda: pytest.fail("repeated preparation"), resource_class=peer_class) == (True, None)
             pool.discard(key)
         for index in range(31):

@@ -14,6 +14,7 @@ import time
 
 import pytest
 
+from loom._pidfd import open_pidfd, send_pidfd_signal
 from loom.fleet import _services
 from loom.queue.agent_session_transport import (
     AgentTlsClientConfig,
@@ -124,7 +125,7 @@ def test_agent_reconnect_keeps_separate_supervisor_launch_and_owned_worker(tmp_p
         receipt = supervisor.launch(launch)
         assert receipt.state is SupervisorLaunchState.RUNNING
         assert receipt.process_id is not None
-        worker_fd = os.pidfd_open(receipt.process_id)
+        worker_fd = open_pidfd(receipt.process_id)
         identity = (
             supervisor.supervisor_id,
             supervisor.continuity_epoch,
@@ -176,7 +177,7 @@ def test_same_boot_supervisor_loss_never_adopts_worker(tmp_path):
     )
     receipt = supervisor.launch(launch)
     assert receipt.process_id is not None
-    worker_fd = os.pidfd_open(receipt.process_id)
+    worker_fd = open_pidfd(receipt.process_id)
     try:
         process.kill()
         process.communicate(timeout=10)
@@ -188,7 +189,7 @@ def test_same_boot_supervisor_loss_never_adopts_worker(tmp_path):
         with pytest.raises(QueueServiceError, match="endpoint is unavailable"):
             LocalDaemonAgentHttpClient(config)
     finally:
-        signal.pidfd_send_signal(worker_fd, signal.SIGKILL)
+        send_pidfd_signal(worker_fd, signal.SIGKILL)
         assert select.select([worker_fd], [], [], 5)[0]
         os.close(worker_fd)
         client.close()

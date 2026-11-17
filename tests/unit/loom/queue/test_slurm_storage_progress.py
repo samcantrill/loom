@@ -200,6 +200,7 @@ def test_prepared_retention_cannot_commit_after_ownership_changes(changed):
 
 
 def test_pending_chunk_deduplicates_and_does_not_block_peer_storage():
+    from typing import Any
     from loom.queue._publication_guards import PublicationGuards
     from time import monotonic, sleep
 
@@ -213,7 +214,7 @@ def test_pending_chunk_deduplicates_and_does_not_block_peer_storage():
             assert release.wait(5)
         return 3
 
-    owner = SimpleNamespace(
+    owner: Any = SimpleNamespace(
         slurm_assignments=SimpleNamespace(write_output_chunk=write),
         _slurm_chunk_futures={}, _slurm_storage_futures={},
         _daemon_owner=lambda: SimpleNamespace(_wake=wake, _publication_guards=guards),

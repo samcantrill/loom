@@ -2,6 +2,7 @@
 
 import json
 import logging
+from typing import Any, cast
 
 import pytest
 
@@ -112,7 +113,7 @@ def test_slow_observation_yields_and_drains_both_fact_queues(monkeypatch):
     monkeypatch.setattr(owner, "emit", lambda *a, **kw: record("event"))
     monkeypatch.setattr(owner, "transitions", lambda *a: record("transition"))
     for _ in range(3):
-        owner._prepared.append((None, None, SimpleNamespace(run_uri="run")))
+        owner._prepared.append(cast(Any, (None, None, SimpleNamespace(run_uri="run"))))
         owner.defer_emit(None, "run", event_type="stage.planned")
     for index in range(6):
         assert owner.flush_prepared() is (index < 5)

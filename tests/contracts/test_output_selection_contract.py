@@ -312,10 +312,10 @@ def test_restricted_original_and_multirun_pages_keep_every_association(
     assert {r["matched_run_uri"] for r in rows} == {uri, consumer_uri}
     # The actual managed scope owner only recognizes the adopted run. The same
     # valid binding must not reveal a producer outside that owner's journal.
-    from loom.queue import _run_queries
+    from loom.queue import _query_journal
 
     monkeypatch.setattr(
-        _run_queries, "_journal", lambda _: ([], [{"run_uri": consumer_uri}])
+        _query_journal, "managed_run_exists", lambda _daemon, selected: selected == consumer_uri
     )
     denied = select(daemon, OutputSelection(run_uris=(consumer_uri,)))
     assert not denied.complete and denied.items[0]["outcome"] == "producer_restricted"

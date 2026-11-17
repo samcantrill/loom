@@ -15,6 +15,7 @@ from pathlib import Path
 import tempfile
 from typing import Any, cast
 
+from loom._pidfd import open_pidfd
 from loom.fleet._host import atomic, config, environment, payload, read, role, owner
 from loom.queue.errors import QueueConflictError
 from loom.queue.deployment import (
@@ -371,7 +372,7 @@ def recover_service(request):
                 raise QueueConflictError(
                     "workload communication service ownership changed"
                 )
-            descriptor = os.pidfd_open(fact["value"]["expected_process"])
+            descriptor = open_pidfd(fact["value"]["expected_process"])
             try:
                 current = owner(request)
                 if (

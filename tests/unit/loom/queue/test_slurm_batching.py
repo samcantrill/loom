@@ -1,6 +1,7 @@
 """Whole-cycle result priority, exact history, query budgets and fair progress."""
 
 from dataclasses import replace
+from collections.abc import Mapping
 import subprocess
 
 import pytest
@@ -186,6 +187,7 @@ def test_full_result_quota_defers_only_new_assignment_and_drains_existing_work(t
         lambda *_args: SlurmContainmentReceipt("UNKNOWN"),
     )
     owner, clock, runner, original = _batch_owner(tmp_path, monkeypatch)
+    assert isinstance(original.result_storage, Mapping)
     profile = replace(original, result_storage={
         **original.result_storage, "retention_bytes": 2 * 65 * 1024**2,
     })

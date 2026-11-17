@@ -13,6 +13,8 @@ from time import monotonic, sleep
 
 import pytest
 
+from loom._pidfd import open_pidfd, send_pidfd_signal
+
 from loom.coordinator import CoordinatorClientError, CoordinatorOperatorClient
 from loom.queue._coordinator_transport import HttpsControlTransport
 from loom.pipeline.status import StageStatus
@@ -294,7 +296,7 @@ def test_reboot_containment_closes_and_releases_same_session(
         assert supervisor is not None
         running = supervisor.query(launch)
         assert running.process_id is not None
-        pidfd = os.pidfd_open(running.process_id)
+        pidfd = open_pidfd(running.process_id)
         try:
             os.killpg(running.process_id, signal.SIGKILL)
             import select
@@ -312,9 +314,9 @@ def test_reboot_containment_closes_and_releases_same_session(
             )
         # Reboot recovery requires an unclean owner loss. Orderly shutdown now
         # refuses unsettled receipts, even after this fixture killed the root.
-        service_fd = os.pidfd_open(supervisor.service_process_id)
+        service_fd = open_pidfd(supervisor.service_process_id)
         try:
-            signal.pidfd_send_signal(service_fd, signal.SIGKILL)
+            send_pidfd_signal(service_fd, signal.SIGKILL)
             assert select.select([service_fd], [], [], 5)[0]
         finally:
             os.close(service_fd)

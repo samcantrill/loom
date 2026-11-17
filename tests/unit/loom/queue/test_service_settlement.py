@@ -281,7 +281,7 @@ def test_schema_seven_settlement_refuses_unreleased_or_incompatible_state(tmp_pa
     if condition == "reserved":
         assert observation.availability == "available", observation.to_dict()
         assert observation.value["settled"] is False
-        assert "slurm_assignment_or_release" in observation.value["wait_reasons"]
+        assert observation.value["wait_reasons"] == ["slurm_assignment_or_release"]
     else:
         assert observation.availability == "unavailable"
         assert observation.reason == "settlement_evidence_unavailable"

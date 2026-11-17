@@ -15,6 +15,7 @@ import pytest
 import loom
 
 from examples.execution.containers.apptainer_fixture import fake_apptainer
+from loom.pipeline.executors.slurm.commands import FakeSlurmCommandRunner
 from loom.pipeline.runtime.options import RunOptions
 from loom.pipeline.status import StageStatus
 from loom.preparation import decode_preparation_report, prepare_child_run
@@ -155,6 +156,8 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
             from loom.pipeline.executors.slurm.history import SlurmHistoryPolicy
 
             candidate = service.daemon.slurm_profiles[0]
+            assert isinstance(candidate.runner, FakeSlurmCommandRunner)
+            assert candidate.containment_helper is not None
             candidate.runner.command_policy = SlurmCommandPolicy(10, 60, 10)
             discover = candidate.runner.discover_named_operation
 
@@ -187,6 +190,7 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                 service, composed, "independent-workload", execution_requirements=requirements
             )
         profile = service.daemon.slurm_profiles[0]
+        assert isinstance(profile.runner, FakeSlurmCommandRunner)
         config = LocalDaemonConfig(
             coordinator_root=tmp_path / "daemon/coordinator",
             agent_root=tmp_path / "daemon/agent",
@@ -225,6 +229,7 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
         LocalDaemon.initialize(config)
         daemon = make_daemon(config)
         daemon.start()
+        assert daemon._execution is not None
         try:
             client = daemon.client_view(
                 LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
@@ -244,6 +249,7 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                         assert len(inspections) == 1
                         assert inspections[0]["reason"] == "input_validation_pending"
                         if peer_inspection:
+                            assert peer is not None
                             client.submit(LocalDaemonAdmissionRequest("independent", peer.run_uri))
                             deadline = monotonic() + 10
                             peer_records = ()
@@ -270,6 +276,7 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                     daemon.stop()
                     daemon = make_daemon(config)
                     daemon.start()
+                    assert daemon._execution is not None
                 finally:
                     validation_release.set()
             for attempt in range(1, 3 if recovery else 2):
@@ -292,6 +299,7 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                 daemon.stop()
                 daemon = make_daemon(config)
                 daemon.start()
+                assert daemon._execution is not None
                 principal = LocalDaemonPrincipal(
                     profile.bootstrap_principal_id,
                     LocalDaemonRole.SLURM_BOOTSTRAP,
@@ -358,6 +366,7 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                     daemon.stop()
                     daemon = make_daemon(config)
                     daemon.start()
+                    assert daemon._execution is not None
                     monkeypatch.setattr(agent_module, "resolve_slurm_containment", containment)
                     deadline = monotonic() + 25
                     while daemon._execution.slurm_assignments.read(delivery.assignment_id).state != "released":
@@ -446,7 +455,8 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                             if observed.scheduler_source == "squeue":
                                 break
                         sleep(0.02)
-                    assert peer_record is not None and observed.scheduler_source == "squeue"
+                    assert peer_record is not None and observed is not None
+                    assert observed.scheduler_source == "squeue"
                     peer_client.cancel("storage-peer")
                     deadline = monotonic() + 10
                     while monotonic() < deadline:
@@ -460,11 +470,13 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                         assert daemon._execution.slurm_assignments.read(delivery.assignment_id).report is None
                     storage_release.set()
                     deadline = monotonic() + 15
+                    completed = None
                     while monotonic() < deadline:
                         completed = daemon._execution.slurm_assignments.read(delivery.assignment_id)
                         if completed.state in {"terminal", "logical_released", "released"}:
                             break
                         sleep(0.02)
+                    assert completed is not None
                     assert completed.state in {"terminal", "logical_released", "released"}
                     assert completed.report is not None and completed.report.status is StageStatus.SUCCEEDED
                     if daemon._execution.slurm_assignments.schema_version >= 5:
@@ -501,6 +513,7 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                         daemon.stop()
                     daemon = make_daemon(config)
                     daemon.start()
+                    assert daemon._execution is not None
                     assert publication_started.wait(10)
                     deadline = monotonic() + 15
                     while monotonic() < deadline:
@@ -530,6 +543,7 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                         daemon.stop()
                         daemon = make_daemon(config)
                         daemon.start()
+                        assert daemon._execution is not None
                         cancel_client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
                         assert cancel_client.wait("submitted", timeout_seconds=15).state.value == "CANCELLED"
                         deadline = monotonic() + 10
@@ -555,6 +569,7 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                     daemon.stop()
                     daemon = make_daemon(config)
                     daemon.start()
+                    assert daemon._execution is not None
                 view = daemon.slurm_bootstrap_view(principal)
                 assert not view.start_permit(delivery.assignment_id, "compute-1", fence)
                 view.commit_result(delivery.assignment_id, "compute-1", fence)
@@ -573,7 +588,7 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                     client.submit(LocalDaemonAdmissionRequest("retention-peer", peer.run_uri))
                     peer_submitted = True
                     deadline = monotonic() + 15
-                    peer_record = None
+                    peer_record = observed = None
                     while monotonic() < deadline:
                         candidates = daemon._execution.slurm_assignments.list_run_unreleased(peer.run_uri)
                         if candidates and candidates[0].job_id:
@@ -582,7 +597,8 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                             if observed.scheduler_source == "squeue":
                                 break
                         sleep(0.02)
-                    assert peer_record is not None and observed.scheduler_source == "squeue"
+                    assert peer_record is not None and observed is not None
+                    assert observed.scheduler_source == "squeue"
                     client.cancel("retention-peer")
                     deadline = monotonic() + 10
                     while monotonic() < deadline:
@@ -629,6 +645,7 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                         daemon.stop()
                         daemon = make_daemon(config)
                         daemon.start()
+                        assert daemon._execution is not None
                         client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
                         client.submit(LocalDaemonAdmissionRequest(
                             "submitted", prepared.run_uri, retry_failed_revision=settled.revision,

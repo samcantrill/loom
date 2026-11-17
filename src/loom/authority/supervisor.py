@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TextIO, cast
 
+from loom._pidfd import open_pidfd, send_pidfd_signal
 from loom.pipeline.stores import (
     AuthorityBackendKind,
     AuthorityDeploymentProfile,
@@ -1198,7 +1199,7 @@ def _terminate_process(
             _reap_exited_child(state.pid)
             return True
         try:
-            signal.pidfd_send_signal(pidfd, signal.SIGTERM)
+            send_pidfd_signal(pidfd, signal.SIGTERM)
         except ProcessLookupError:
             _reap_exited_child(state.pid)
             return True
@@ -1206,7 +1207,7 @@ def _terminate_process(
             _reap_exited_child(state.pid)
             return True
         try:
-            signal.pidfd_send_signal(pidfd, signal.SIGKILL)
+            send_pidfd_signal(pidfd, signal.SIGKILL)
         except ProcessLookupError:
             _reap_exited_child(state.pid)
             return True
@@ -1243,10 +1244,8 @@ def _matching_process_is_live(state: AuthoritySupervisorState) -> bool | None:
 
 
 def _open_verified_pidfd(state: AuthoritySupervisorState) -> int | None:
-    if not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"):
-        return None
     try:
-        pidfd = os.pidfd_open(state.pid)
+        pidfd = open_pidfd(state.pid)
     except (OSError, ProcessLookupError):
         return None
     try:

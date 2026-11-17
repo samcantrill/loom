@@ -299,6 +299,8 @@ def test_session_replacement_cli_uses_the_owner_socket_and_safe_result(
                     "daemon-replace-agent-session",
                     "--endpoint",
                     str(config.endpoint),
+                    "--expected-coordinator-id",
+                    str(handshake["coordinator_id"]),
                     "--operation-id",
                     "replace-from-cli",
                     "--agent-id",
@@ -317,7 +319,10 @@ def test_session_replacement_cli_uses_the_owner_socket_and_safe_result(
         server.stop()
         daemon.stop()
 
-    assert stderr.getvalue() == ""
+    assert all(
+        json.loads(line).get("diagnostic") == "loom.phase_timings"
+        for line in stderr.getvalue().splitlines()
+    )
     envelope = json.loads(stdout.getvalue())
     assert envelope["result"]["state"] == "decision"
     assert envelope["result"]["readiness"] == "withheld"

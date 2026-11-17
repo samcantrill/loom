@@ -22,6 +22,7 @@ from typing import Any, cast
 
 import pytest
 
+from loom._pidfd import open_pidfd, send_pidfd_signal
 from loom.fleet.configuration import load_inventory
 from loom.fleet.ssh_operations import apply, operation_status, plan
 
@@ -431,9 +432,9 @@ def site(tmp_path, bundle, endpoint, request):
             observed = inspect_native_service(native)
             pid = observed.value.get("expected_process")
             if observed.value.get("ownership") == "live" and pid:
-                descriptor = os.pidfd_open(cast(int, pid))
+                descriptor = open_pidfd(cast(int, pid))
                 try:
-                    signal.pidfd_send_signal(descriptor, signal.SIGTERM)
+                    send_pidfd_signal(descriptor, signal.SIGTERM)
                 finally:
                     os.close(descriptor)
                 pids.append(pid)
@@ -790,9 +791,9 @@ def test_dispatch_faults_resume_original_ids_and_refuse_edits_missing_root(
     # A missing DB on a stopped fixture owner must never trigger initialization.
     fact = inspect_native_service(base / "worker")
     pid = fact.value["expected_process"]
-    descriptor = os.pidfd_open(cast(int, pid))
+    descriptor = open_pidfd(cast(int, pid))
     try:
-        signal.pidfd_send_signal(descriptor, signal.SIGTERM)
+        send_pidfd_signal(descriptor, signal.SIGTERM)
         import select
 
         poller = select.poll()

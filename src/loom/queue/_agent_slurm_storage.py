@@ -13,7 +13,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 import json
 from time import monotonic
-from typing import Any
+from typing import Any, cast
 
 from loom.pipeline.stores.shared_artifacts import binding as shared_binding
 from loom.serialization import PlainData, thaw_plain_data
@@ -155,7 +155,7 @@ class SlurmStorageProgress:
                     assignment, "delivery",
                     lambda: transport.read_chunk(item.transfer_id, item.size_bytes, offset),
                 )
-            chunk = delivery.chunk
+            chunk = cast(bytes, delivery.chunk)
             response = call({
                 **binding, "result_operation": "output", "transfer_id": item.transfer_id,
                 "offset": offset, "data": base64.b64encode(chunk).decode(),
@@ -171,7 +171,7 @@ class SlurmStorageProgress:
                     or response.get("transfer_id") != item.transfer_id
                     or response.get("offset") != offset
                     or "received" in response
-                    or type(delay) not in (int, float) or not 0 < delay <= 60):
+                    or not (type(delay) is int or type(delay) is float) or not 0 < delay <= 60):
                     raise QueueConflictError("SLURM pending output acknowledgement conflicts")
                 self.defer_delivery(assignment, delay)
                 raise SlurmEffectPending(delay)

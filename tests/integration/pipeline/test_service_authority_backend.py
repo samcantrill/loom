@@ -15,6 +15,17 @@ from loom.pipeline.stores.service_authority import LocalAuthorityService
 pytestmark = pytest.mark.integration
 
 
+def test_services_keep_separate_state_while_clients_share_their_service(tmp_path: Path) -> None:
+    run_uri = path_to_run_uri(tmp_path / "runs" / "owned")
+    with LocalAuthorityService.start() as first, LocalAuthorityService.start() as second:
+        writer = create_run_store(first.config())
+        writer.admit_run(run_uri)
+        reader = create_run_store(first.config())
+        assert reader.open_run(run_uri).run_uri == run_uri
+        assert first.health()["runs"] == 1
+        assert second.health()["runs"] == 0
+
+
 def test_service_backend_admits_runs_through_separate_clients(
     tmp_path: Path,
 ) -> None:

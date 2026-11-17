@@ -4,6 +4,7 @@ from pathlib import Path
 from threading import Event
 from time import monotonic
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -50,7 +51,7 @@ def test_header_deadline_interrupts_a_busy_peer_and_keeps_outcome_uncertain():
     )
     started = monotonic()
     with pytest.raises(_IndeterminateAgentProtocolError):
-        _exchange_agent_request(config, "slurm_work", b'{"exact":"evidence"}', "agent", Connection(), True)
+        _exchange_agent_request(config, "slurm_work", b'{"exact":"evidence"}', "agent", cast(Any, Connection()), True)
     assert monotonic() - started < 1
     assert len(requests) == 1
     assert requests[0][1]["body"] == b'{"exact":"evidence"}'

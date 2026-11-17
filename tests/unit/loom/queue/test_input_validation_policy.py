@@ -1,6 +1,7 @@
 """Explicit publisher trust replaces traversal, not root or version checks."""
 
 import hashlib
+from typing import Any, cast
 import pytest
 
 from loom.queue.errors import QueueServiceError
@@ -24,7 +25,7 @@ def inputs(tmp_path, *, trusted=True):
     location = {"kind": "loom.shared-location", "schema_version": 1, "root_id": "data", "path": "clips"}
     required = {"capability": shared.SHARED_EXECUTION_CAPABILITY,
                 "roots": shared.qualifications(roots), "locations": [location]}
-    return roots, shared.scope(required)
+    return cast(dict[str, Any], roots), cast(dict[str, Any], shared.scope(required))
 
 
 def test_trusted_root_checks_identity_and_entries_without_walking_payload(tmp_path, monkeypatch):
@@ -92,4 +93,5 @@ def test_manifest_larger_than_one_chunk_keeps_exact_digest(tmp_path):
     roots["data"]["input_validation"]["manifest"]["sha256"] = hashlib.sha256(content).hexdigest()
     required = shared.scope({"capability": shared.SHARED_EXECUTION_CAPABILITY,
         "roots": shared.qualifications(roots), "locations": []})
+    assert required is not None
     shared.require_bindings(required, roots)

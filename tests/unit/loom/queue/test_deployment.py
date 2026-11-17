@@ -3375,4 +3375,5 @@ def test_outbound_transport_budgets_are_read_without_probes_and_bind_policy(tmp_
     after = read_agent_spec(source)
     assert after.declaration_digest != before.declaration_digest
     service = load_outbound_agent_service_config(source)
+    assert service.client.transport_policy is not None
     assert service.client.transport_policy.to_dict() == payload["transport_policy"]

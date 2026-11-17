@@ -14,7 +14,7 @@ import shutil
 import sys
 import time
 from threading import Event
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -1015,6 +1015,7 @@ def _exercise_mixed_route_run(
             import loom.queue._agent_slurm as agent_module
             from loom.pipeline.executors.slurm.ready_stage import SlurmContainmentReceipt
 
+            assert recovery_terminal_state is not None
             original_containment = agent_module.resolve_slurm_containment
             monkeypatch.setattr(agent_module, "resolve_slurm_containment", lambda *_: SlurmContainmentReceipt("UNKNOWN"))
             with daemon._cycle_lock:
@@ -1025,7 +1026,7 @@ def _exercise_mixed_route_run(
                     scheduler_source="sacct", observed_at=now[0],
                 )
                 diagnostic = execution._reconcile_terminal_without_report(
-                    execution.slurm_assignments.read(assignment_id), authority,
+                    execution.slurm_assignments.read(assignment_id), cast(Any, authority),
                 )
                 assert diagnostic == "slurm_terminal_result_grace"
                 observation = execution.slurm_assignments.read(assignment_id).terminal_observation
@@ -2715,7 +2716,9 @@ def test_gpu_budget_survives_restart_and_reload_preserves_admitted_work(tmp_path
                 return
             time.sleep(0.02)
         execution = daemon._execution
+        assert execution is not None
         agent = execution._slurm_agent
+        assert agent is not None
         pytest.fail(f"coordinator did not reach the expected admission outcome: "
                     f"service_error={daemon._service_error!r}; "
                     f"commands={[(key, value.kind, value.future is None or value.future.done()) for key, value in agent._commands._pending.items()]}; "
@@ -2798,6 +2801,7 @@ def test_gpu_budget_survives_restart_and_reload_preserves_admitted_work(tmp_path
         assert client.admission_for_queue_item("waiting").state is LocalDaemonAdmissionState.ACTIVE
         assert reload_budget(None, "disable")["state"] == "applied"
         assert daemon.config.slurm_schema_version == 4
+        assert daemon._execution is not None
         assert daemon._execution.slurm_assignments.reserved_gpu_count() == 9
         assert len([call for call in runner.calls if call[0] == "sbatch"]) == 5
     finally:

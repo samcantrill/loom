@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from loom._pidfd import open_pidfd
 from loom.fleet import _host, _startup
 from loom.queue.operations import inspect_native_service
 from tests.integration.fleet.test_service_lifecycle import configuration
@@ -48,7 +49,7 @@ def test_tmux_launch_ready_after_twenty_seconds_resumes_same_native_process(tmp_
                 _host.start(request)
             assert time.monotonic() - started >= 20
             record = _host.read(_startup.startup_path(request))
-            pidfd = os.pidfd_open(record["process"]["pid"])
+            pidfd = open_pidfd(record["process"]["pid"])
             assert not select.select([pidfd], [], [], 0)[0]
             time.sleep(max(0, 21 - (time.monotonic() - started)))
             release.touch()

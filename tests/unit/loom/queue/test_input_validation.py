@@ -1,6 +1,7 @@
 """Blocked IO cannot consume unbounded slots or authorize superseded work."""
 
 from threading import Event
+from typing import cast
 
 import pytest
 
@@ -151,15 +152,15 @@ def test_completed_inspections_wait_for_consumers_without_rescanning(monkeypatch
         # consumers can dispatch yet; the ninth and later scans must preserve it.
         for index in range(32):
             assert pool.poll(str(index), {}, {"dataset": index}, {}).reason == "input_validation_pending"
-            pool._executor.complete()
+            cast(ControlledExecutor, pool._executor).complete()
         assert pool.poll("overflow", {}, {}, {}).reason == "input_validation_ownership_capacity"
         for index in range(32):
             assert pool.poll(str(index), {}, {"dataset": index}, {}).reason is None
-        pool._executor.complete()
+        cast(ControlledExecutor, pool._executor).complete()
         assert len(calls) == 32
         pool.discard("0")
         pool.poll("overflow", {}, {}, {})
-        pool._executor.complete()
+        cast(ControlledExecutor, pool._executor).complete()
         assert pool.poll("overflow", {}, {}, {}).reason is None
         assert len(calls) == 33
     finally:
@@ -180,14 +181,14 @@ def test_failed_inspection_retry_respects_execution_capacity(monkeypatch):
     pool = owner.InputValidationPool(lambda: None, workers=1, max_pending=1)
     try:
         pool.poll("failed", {}, {}, {})
-        pool._executor.complete()
+        cast(ControlledExecutor, pool._executor).complete()
         assert pool.poll("failed", {}, {}, {}).reason == "input_validation_storage_unavailable"
         pool.poll("peer", {}, {}, {})
         clock[0] = 10.0
         pool.poll("failed", {}, {}, {})
-        assert len(pool._executor.jobs) == 1
-        pool._executor.complete()
+        assert len(cast(ControlledExecutor, pool._executor).jobs) == 1
+        cast(ControlledExecutor, pool._executor).complete()
         pool.poll("failed", {}, {}, {})
-        assert len(pool._executor.jobs) == 1
+        assert len(cast(ControlledExecutor, pool._executor).jobs) == 1
     finally:
         pool.close()

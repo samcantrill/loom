@@ -178,7 +178,7 @@ AgentProcessSupervisorService.serve_initialized(root,
         os.close(write_fd)
         return read_fd
 
-    monkeypatch.setattr(_workload_host.os, "pidfd_open", simulated_pidfd)
+    monkeypatch.setattr(_workload_host, "open_pidfd", simulated_pidfd)
     monkeypatch.setattr(_services, "systemctl", systemctl)
     monkeypatch.setattr(_services, "startup_status", lambda _: {
         "ActiveState": "active", "MainPID": str(os.getpid()),
