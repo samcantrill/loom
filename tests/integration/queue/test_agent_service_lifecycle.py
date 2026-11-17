@@ -65,8 +65,8 @@ from tests.support.mutual_tls import mutual_tls_credentials, certificate_fingerp
 pytestmark = pytest.mark.integration
 
 
-def _wait_until(predicate: Callable[[], bool]) -> None:
-    deadline = monotonic() + 10
+def _wait_until(predicate: Callable[[], bool], *, timeout_seconds: float = 10) -> None:
+    deadline = monotonic() + timeout_seconds
     while not predicate():
         assert monotonic() < deadline, "agent lifecycle did not settle"
         sleep(0.02)
@@ -237,7 +237,10 @@ def remote_work(remote_owner: _RemoteWork) -> _RemoteWork:
         lambda: any(
             stage.status is StageStatus.RUNNING
             for stage in work.authority.open_run(work.run_uri).stages
-        )
+        ),
+        # Service registration, shared-storage preparation and ordinary empty
+        # polls precede the worker-loss scenario; they are not its deadline.
+        timeout_seconds=30,
     )
     return work
 

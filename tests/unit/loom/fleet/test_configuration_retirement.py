@@ -86,7 +86,7 @@ def test_stopped_promotion_reconciles_publication_before_control_replay(tmp_path
             state["published"] = True
         else:
             assert state["published"] and state["reconciled"]
-            assert values == {"release_options": "exact"}
+            assert values == {"release_options": "exact", "retirement_control": control}
             state["started"] = True
         if action == interruption and not state["interrupted"]:
             state["interrupted"] = True

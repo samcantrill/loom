@@ -971,6 +971,25 @@ def test_remote_clean_shutdown_joins_terminal_work_until_journal_reconciles(
     assert _supervisor_process_ids(cast(Path, config.agent_root)) == ()
 
 
+def _execute_available_assignment(
+    agent: LocalDaemonAgentHttpClient,
+    session_id: str,
+    availability_revision: str,
+) -> Mapping[str, PlainData]:
+    """Wait for fixture preparation without mistaking an empty poll for work."""
+    deadline = monotonic() + 20
+    while True:
+        result = agent.execute_one(
+            session_id,
+            availability_revision,
+            sequence=agent.next_poll_sequence(session_id),
+            wait_timeout_ms=5_000,
+        )
+        if result.get("result") != "wait":
+            return result
+        assert monotonic() < deadline, "fixture did not deliver an assignment"
+
+
 def _crash_remote_agent_application(
     config: AgentTlsClientConfig,
     capabilities: tuple[str, ...],
@@ -1036,11 +1055,10 @@ def _crash_remote_agent_application(
             setattr(cast(Any, agent), "release_assignment", interrupt_release)
         queue.put(("ready", os.getpid(), session.value(), supervisor.supervisor_id))
         try:
-            agent.execute_one(
+            _execute_available_assignment(
+                agent,
                 session.session_id,
                 session.availability_revision,
-                sequence=1,
-                wait_timeout_ms=5_000,
             )
         except RuntimeError as exc:
             queue.put(("crashed", os.getpid(), str(exc), supervisor.supervisor_id))
@@ -3448,18 +3466,17 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
         )
         with ThreadPoolExecutor(max_workers=1) as workers:
             execution = workers.submit(
-                agent.execute_one,
+                _execute_available_assignment,
+                agent,
                 session.session_id,
                 session.availability_revision,
-                sequence=1,
-                wait_timeout_ms=5_000,
             )
             submitted = coordinator.submit(
                 LocalDaemonAdmissionRequest("restart-item", run_uri)
             )
             if restart_barrier == "diagnostic_write":
                 with pytest.raises(RuntimeError, match="application restart"):
-                    execution.result(timeout=20)
+                    execution.result(timeout=40)
                 assert interrupted_write.is_set()
                 with sqlite3.connect(config.control_database) as conn:
                     assert (
@@ -3487,12 +3504,12 @@ def test_agent_restart_joins_one_supervisor_and_replays_durable_remote_result(
                 )
             elif restart_barrier in {"before_dispatch_timeout", "accepted_reply_timeout"}:
                 with pytest.raises(_SupervisorCommunicationError):
-                    execution.result(timeout=20)
+                    execution.result(timeout=40)
                 assert agent._execution_journal is not None
                 assert agent._execution_journal.retained_claim_commands()
             else:
                 with pytest.raises(RuntimeError, match="application restart"):
-                    execution.result(timeout=20)
+                    execution.result(timeout=40)
         if restart_barrier == "binding_failure_after_no_start_commit":
             assert agent._execution_journal is not None
             retained_commands = agent._execution_journal.retained_claim_commands()
@@ -3832,7 +3849,7 @@ def test_fresh_agent_processes_replay_one_continuous_supervisor_launch(
             LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
         )
         coordinator.submit(LocalDaemonAdmissionRequest("fresh-restart-item", run_uri))
-        crashed = events.get(timeout=20)
+        crashed = events.get(timeout=40)
         assert crashed[0] == "crashed", crashed
         assert crashed[3] == ready[3]
         first.join(timeout=20)
@@ -6055,13 +6072,12 @@ def test_loopback_remote_agent_declines_then_executes_and_commits_real_stages(
         )
         with ThreadPoolExecutor(max_workers=1) as workers:
             execution = workers.submit(
-                agent.execute_one,
+                _execute_available_assignment,
+                agent,
                 session.session_id,
                 session.availability_revision,
-                sequence=1,
-                wait_timeout_ms=5_000,
             )
-            declined = execution.result(timeout=20)
+            declined = execution.result(timeout=40)
             next_session = cast(Mapping[str, object], declined["session"])
             next_availability = str(next_session["availability_revision"])
             agent.publish_offer(
@@ -6080,13 +6096,12 @@ def test_loopback_remote_agent_declines_then_executes_and_commits_real_stages(
                 idempotency_key="offer-remote-2",
             )
             execution = workers.submit(
-                agent.execute_one,
+                _execute_available_assignment,
+                agent,
                 session.session_id,
                 next_availability,
-                sequence=2,
-                wait_timeout_ms=5_000,
             )
-            first = execution.result(timeout=20)
+            first = execution.result(timeout=40)
             next_session = cast(Mapping[str, object], first["session"])
             next_availability = str(next_session["availability_revision"])
             agent.publish_offer(
@@ -6105,13 +6120,12 @@ def test_loopback_remote_agent_declines_then_executes_and_commits_real_stages(
                 idempotency_key="offer-remote-3",
             )
             execution = workers.submit(
-                agent.execute_one,
+                _execute_available_assignment,
+                agent,
                 session.session_id,
                 next_availability,
-                sequence=3,
-                wait_timeout_ms=5_000,
             )
-            second = execution.result(timeout=20)
+            second = execution.result(timeout=40)
         completed = coordinator.wait("remote-item", timeout_seconds=10)
 
         assert declined["state"] == "DECLINED"
