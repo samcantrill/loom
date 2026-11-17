@@ -3145,7 +3145,9 @@ def test_startup_fails_closed_when_live_coordinator_state_lacks_exact_claim(
         _execution(config)
 
 
-def test_socket_diagnostic_redacts_unexpected_exception_text(tmp_path: Path) -> None:
+def test_socket_diagnostic_redacts_unexpected_exception_text(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
     secret = "credential=do-not-return"
 
     class _FailingClient:
@@ -3170,6 +3172,21 @@ def test_socket_diagnostic_redacts_unexpected_exception_text(tmp_path: Path) -> 
 
     assert raised.value.code == "internal_error"
     assert secret not in str(raised.value)
+    records = [record for record in caplog.records
+               if record.name == "loom.queue._coordinator_control"]
+    assert len(records) == 1
+    message = records[0].getMessage()
+    assert secret not in message
+    diagnostic = json.loads(message.split(": ", 1)[1])
+    # The public status call first performs its native handshake. The local
+    # diagnostic names the failed boundary; the client retains caller context.
+    assert diagnostic["operation"] == "handshake"
+    assert raised.value.operation == "status"
+    assert diagnostic["cause_type"] == "builtins.RuntimeError"
+    assert 0 < len(diagnostic["frames"]) <= 16
+    assert diagnostic["frames"][-1]["function"] == "status"
+    assert diagnostic["frames"][-1]["path"] == __file__
+    assert diagnostic["frames"][-1]["line"] > 0
 
 
 @pytest.mark.parametrize("legacy_projection", [False, True])

@@ -9,7 +9,9 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 import json
+import logging
 import math
+import traceback
 from typing import Any, cast
 
 from loom.serialization import PlainData, thaw_plain_data
@@ -63,6 +65,7 @@ _OPERATOR_ADMIN_MUTATIONS = frozenset({
 })
 OPERATOR_OPERATIONS = _OPERATOR_ADMIN_MUTATIONS | frozenset({"operator_agent_retirement_ready"}) | frozenset({"operator_handshake", "operator_status", "operator_agent", "operator_assignment", "operator_control", "operator_operation", "operator_maintenance", "operator_maintenance_control", "operator_maintenance_operation"})
 CONTROL_CAPABILITY = "daemon-control-v1"
+_LOGGER = logging.getLogger(__name__)
 MAX_RESPONSE_BYTES = 1_048_576
 MAX_OBSERVATION_SECONDS = 25.0
 CONTROL_OPERATIONS = OPERATOR_OPERATIONS | frozenset(
@@ -904,6 +907,22 @@ def dispatch_control(
             code = "unavailable"
         else:
             code = "internal_error"
+        if code == "internal_error":
+            # Keep enough local evidence to diagnose a failed boundary without
+            # logging authored payloads, exception text, or frame locals.
+            try:
+                _LOGGER.error("coordinator control failed: %s", json.dumps({
+                    "operation": operation,
+                    "cause_type": f"{type(exc).__module__}.{type(exc).__qualname__}",
+                    "frames": [
+                        {"path": frame.filename, "line": frame.lineno, "function": frame.name}
+                        for frame in traceback.StackSummary.extract(
+                            traceback.walk_tb(exc.__traceback__), limit=-16, lookup_lines=False,
+                        )
+                    ],
+                }))
+            except Exception:
+                pass  # Diagnostics must not replace the original control error.
         raise control_error(
             code,
             operation,
