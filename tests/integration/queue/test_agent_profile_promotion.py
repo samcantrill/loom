@@ -864,8 +864,11 @@ def test_stopped_retirement_uses_received_control_with_deleted_inputs(tmp_path, 
     import json
     from tests.unit.loom.queue.test_deployment import _agent_config, _write_protected
     from tests.unit.loom.queue.test_submitted_container_policy import _submitted
-    from loom.queue.deployment import load_outbound_agent_service_config, read_agent_spec
+    from loom.queue.deployment import (
+        load_outbound_agent_service_config, read_agent_spec, service_replacement_guard,
+    )
     from loom.queue.errors import QueueError
+    from loom.queue.service_upgrade import inspect_service_settlement
 
     policy, _, _, _ = _submitted(tmp_path)
     canonical = _agent_config(tmp_path)
@@ -907,6 +910,13 @@ def test_stopped_retirement_uses_received_control_with_deleted_inputs(tmp_path, 
     with pytest.raises(QueueError):
         load_outbound_agent_service_config(canonical)
     spec = read_agent_spec(canonical)
+    identity = control.promotion["agent_root_id"]
+    assert isinstance(identity, str)
+    with pytest.raises(QueueConflictError, match="exact applied retirement"):
+        with service_replacement_guard(
+            spec, identity, retirement_control=control,
+        ):
+            pytest.fail("unapplied retirement permitted runtime replacement")
     with pytest.raises(QueueConflictError, match="delivery or native predecessor"):
         promotion.apply_stopped(spec, replace(control, operation_id="undelivered"))
     original = canonical.read_bytes()
@@ -922,14 +932,35 @@ def test_stopped_retirement_uses_received_control_with_deleted_inputs(tmp_path, 
     assert not obsolete.exists()
     assert (old.agent_root / "supervisor/service.secret").read_bytes() == secret
     accepted = load_outbound_agent_service_config(canonical)
+    settlement = inspect_service_settlement(old.agent_root, expected_root_id=identity)
+    assert settlement.to_dict()["value"] == {
+        "settled": False, "wait_reasons": ["local_control_settlement"],
+    }
+    for conflicting in (
+        replace(control, operation_id="undelivered"),
+        replace(control, reason="different retained request"),
+    ):
+        with pytest.raises(QueueConflictError, match="exact applied retirement|replay conflicts"):
+            with service_replacement_guard(accepted, identity, retirement_control=conflicting):
+                pytest.fail("a different retirement control permitted replacement")
+    with service_replacement_guard(accepted, identity, retirement_control=control):
+        pass
+    assert inspect_service_settlement(old.agent_root, expected_root_id=identity).value == settlement.value
     restarted = LocalDaemonAgentHttpClient(accepted.client)
     try:
         assert restarted.agent_root_id == control.promotion["agent_root_id"]
         assert restarted._drained and not restarted._config.resident_profiles
         assert restarted._require_journal().replayed_control_effect(control) == effect
+        # A later delivered control cannot borrow this promotion's exception.
+        restarted._require_journal().retain_control(replace(
+            control, operation_id="later-drain", kind=AgentControlKind.DRAIN, promotion=None,
+        ))
     finally:
         close(restarted)
     assert promotion.apply_stopped(read_agent_spec(canonical), control) == effect
+    with pytest.raises(QueueConflictError, match="settled remaining effects"):
+        with service_replacement_guard(accepted, identity, retirement_control=control):
+            pytest.fail("unrelated pending control permitted replacement")
 
 
 @pytest.mark.parametrize("interrupted", [False, True])

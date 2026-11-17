@@ -209,12 +209,18 @@ def replace(request):
     if owner(request)["value"]["ownership"] == "live":
         raise QueueConflictError("service must stop before replacement")
     _, service = _inspect(request)
-    _settled(request)
+    retirement_control = None
+    if request.get("retirement_control") is not None:
+        from loom.queue.agent_sessions import AgentControl
+        retirement_control = AgentControl.from_value(request["retirement_control"])
+    else:
+        _settled(request)
     if service is None:
         service = load_coordinator_service_config(config(request), env_file=environment(request))
     with service_replacement_guard(
         service, request["expected_root_id"],
         recovery_results=request.get("recovery_results"),
+        retirement_control=retirement_control,
     ):
         binding = admin / "service.json"
         archive = (

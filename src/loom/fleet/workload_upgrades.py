@@ -621,7 +621,7 @@ class WorkloadUpgrade(maintenance._Upgrade):
         self.call(name, "workload-stopped-retire", control=control,
             expected_root_id=row["expected_root_id"], source_release=row["source_release"],
             coordinator_id=self.intent["check_selection"]["coordinator_id"])
-        self.call(name, "upgrade-replace", **replacement)
+        self.call(name, "upgrade-replace", retirement_control=control, **replacement)
         return self.promote(name, candidate_source)
 
 

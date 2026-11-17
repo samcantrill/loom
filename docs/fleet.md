@@ -1362,7 +1362,13 @@ old declaration. It reports `runtime_start_required`; it does not start a runtim
 or acknowledge the control; the combined Fleet operation owns those steps.
 The workload operation's stopped-agent continuation accepts the native control,
 executes source conversion and runtime replacement, then waits for normal agent
-acknowledgement. On retry it reconciles a retained host publication before
+acknowledgement. Runtime replacement carries that exact retirement control. Under
+the native stopped-agent lock, it verifies the applied effect, accepted target
+declaration and drained state, allowing only that control's acknowledgement to
+await startup. Pending work, polls, containment or unrelated controls still
+refuse replacement. Ordinary settlement remains false until acknowledgement;
+this continuation neither fabricates an acknowledgement nor releases admission.
+On retry it reconciles a retained host publication before
 resubmitting the control, so a lost reply cannot make the authorized source
 change fail the controller's predecessor check. The combined operation invokes
 this sequence serially after the coordinator runs the target runtime.

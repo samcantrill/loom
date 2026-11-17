@@ -2800,7 +2800,9 @@ def inspect_role_declaration(
 
 
 @contextmanager
-def service_replacement_guard(service, expected_root_id: str, *, recovery_results=None):
+def service_replacement_guard(
+    service, expected_root_id: str, *, recovery_results=None, retirement_control=None,
+):
     """Hold a stopped, settled native role during current runtime replacement.
 
     The caller has already drained admission/work and stopped the communication
@@ -2813,6 +2815,8 @@ def service_replacement_guard(service, expected_root_id: str, *, recovery_result
     Explicit ``recovery_results`` instead rechecks the Fleet-owned cohort of
     durable successful contained results. Journals remain retained for ordinary
     startup replay; this does not assert logical settlement.
+    An exact applied ``retirement_control`` permits its acknowledgement to await
+    the replacement's startup. Every other effect must be settled.
     """
     from .errors import QueueConflictError
     from ._agent_session_journal import _RemoteAgentJournal
@@ -2825,6 +2829,11 @@ def service_replacement_guard(service, expected_root_id: str, *, recovery_result
     from ._service_lifetime import _retained_coordinator_operations
     from .local_daemon_execution import local_daemon_owner_work_is_retained
 
+    if retirement_control is not None and (
+        recovery_results is not None
+        or not isinstance(service, (OutboundAgentServiceConfig, AgentSpec))
+    ):
+        raise QueueConflictError("retirement continuation requires an agent without result recovery")
     if isinstance(service, (OutboundAgentServiceConfig, AgentSpec)):
         spec = read_agent_spec(service.source_path, env_file=service.environment_path)
         binding = None
@@ -2853,7 +2862,12 @@ def service_replacement_guard(service, expected_root_id: str, *, recovery_result
             if journal.root_id != expected_root_id:
                 raise QueueConflictError("replacement native root identity changed")
             execution, slurm = _retained_agent_owners(spec)
-            if recovery_results is not None:
+            if retirement_control is not None:
+                from .service_upgrade import require_retirement_replacement
+                require_retirement_replacement(
+                    spec, expected_root_id=expected_root_id, control=retirement_control,
+                )
+            elif recovery_results is not None:
                 from .service_upgrade import require_result_recovery
                 require_result_recovery(
                     spec.agent_root, expected_root_id=expected_root_id,

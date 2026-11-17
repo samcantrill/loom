@@ -33,6 +33,18 @@ def inspect_service_settlement(
     work poll is not a previous check's effect. Service replacement always uses
     the default, which also requires that poll to settle.
     """
+    return _inspect_service_settlement(
+        root, expected_root_id=expected_root_id,
+        include_pending_poll=include_pending_poll,
+        verified_agent_inventory=_verified_agent_inventory,
+    )
+
+
+def _inspect_service_settlement(
+    root: str | Path, *, expected_root_id: str, include_pending_poll: bool = True,
+    verified_agent_inventory: dict[str, object] | None = None,
+    pending_acknowledgement: str | None = None,
+) -> OperatorObservation:
     root = Path(root)
     owner = inspect_native_service(root, expected_root_id=expected_root_id)
     waits: list[str] = []
@@ -66,7 +78,8 @@ def inspect_service_settlement(
                     waits.append("unresolved_poll")
                 _agent_execution_settlement(
                     root, conn, expected_root_id, waits,
-                    verified_inventory=_verified_agent_inventory,
+                    verified_inventory=verified_agent_inventory,
+                    pending_acknowledgement=pending_acknowledgement,
                 )
             else:
                 raise ValueError("unsupported service role")
@@ -88,6 +101,44 @@ def inspect_service_settlement(
         "available",
         {"settled": not waits, "wait_reasons": cast(list[PlainData], waits)},
     )
+
+
+def require_retirement_replacement(spec, *, expected_root_id: str, control) -> None:
+    """Require an exact applied retirement's stopped runtime continuation.
+
+    Call under the native replacement ownership lock. This permits only this
+    control's pending acknowledgement, which ordinary startup must replay; it
+    does not declare the role settled or acknowledge any evidence. All work,
+    polls, containment and unrelated controls still require full settlement.
+    """
+    from .agent_sessions import AgentControlKind
+    from ._profile_promotion import publication_declaration, publication_state
+    from .errors import QueueConflictError
+
+    if (
+        control.kind is not AgentControlKind.PROMOTE
+        or control.promotion is None
+        or control.promotion.get("retire_configuration") is not True
+        or control.promotion["agent_root_id"] != expected_root_id
+        or publication_state(spec.agent_root, control.operation_id) != "applied"
+        or publication_declaration(spec, control) is None
+    ):
+        raise QueueConflictError("runtime replacement requires the exact applied retirement")
+    with _readonly_root(spec.agent_root) as conn:
+        state = conn.execute(
+            "SELECT value FROM root_metadata WHERE key='availability_state'"
+        ).fetchone()
+    if state is None or state[0] != "drained":
+        raise QueueConflictError("retirement runtime replacement requires a drained agent")
+    observation = _inspect_service_settlement(
+        spec.agent_root, expected_root_id=expected_root_id,
+        pending_acknowledgement=control.operation_id,
+    )
+    if observation.availability != "available" or not observation.value.get("settled"):
+        raise QueueConflictError(
+            "retirement runtime replacement requires settled remaining effects: "
+            + str(observation.to_dict())
+        )
 
 
 def _coordinator_slurm_settlement(root: Path, root_id: str, waits: list[str]) -> None:
@@ -113,6 +164,7 @@ def _coordinator_slurm_settlement(root: Path, root_id: str, waits: list[str]) ->
 def _agent_execution_settlement(
     root: Path, control: sqlite3.Connection, root_id: str, waits: list[str],
     *, verified_inventory: dict[str, object] | None = None,
+    pending_acknowledgement: str | None = None,
 ) -> None:
     from ._agent_process_supervisor import AgentProcessSupervisor
     from ._managed_local import _require_agent_journal_schema
@@ -137,7 +189,9 @@ def _agent_execution_settlement(
             raise ValueError("execution store requirements are unavailable")
         supervisor_required, slurm_required = value["supervisor"], value["slurm"]
     if control.execute(
-        "SELECT 1 FROM agent_controls_local WHERE effect_json IS NULL OR acknowledged = 0 LIMIT 1"
+        "SELECT 1 FROM agent_controls_local WHERE effect_json IS NULL OR "
+        "(acknowledged = 0 AND (? IS NULL OR operation_id != ?)) LIMIT 1",
+        (pending_acknowledgement, pending_acknowledgement),
     ).fetchone() or control.execute(
         "SELECT 1 FROM remote_assignment_controls_local "
         "WHERE result_code IS NULL OR acknowledged = 0 LIMIT 1"
