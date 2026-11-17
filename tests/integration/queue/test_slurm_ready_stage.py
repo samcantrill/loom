@@ -1093,6 +1093,14 @@ def _exercise_mixed_route_run(
             return
         recovery_receipt = None
         if guarded_recovery:
+            if accounting_history:
+                # The asynchronous scheduler must establish the exact accounting
+                # incarnation before injected terminal evidence can authorize
+                # recovery. A bootstrap grant alone does not establish it.
+                deadline = time.monotonic() + 15
+                while execution.slurm_submissions.read(record.assignment.operation_id).accounting_identity is None:
+                    assert time.monotonic() < deadline, daemon.status()
+                    time.sleep(.01)
             before_recovery = authority.open_run(run_uri)
             train = next(
                 item for item in before_recovery.stages if item.stage_name == "train"
@@ -1126,7 +1134,10 @@ def _exercise_mixed_route_run(
             operator = daemon.operator_view(
                 LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
             )
-            with daemon._cycle_lock:
+            assert execution._slurm_agent is not None
+            # The scheduler has its own journal owner. The coordinator lock
+            # alone does not serialize injected observations with that owner.
+            with daemon._cycle_lock, execution._slurm_agent._lock:
                 _agent_observation(
                     execution,  # noqa: SLF001
                     record.assignment.operation_id,
@@ -1176,6 +1187,16 @@ def _exercise_mixed_route_run(
                         expected_state_version=recovery_request.expected_state_version + 1,
                     ))
 
+                if recovery_terminal_state is not None:
+                    history_state[0] = recovery_terminal_state
+                # Finish the already captured scheduler query before injecting
+                # newer terminal evidence. Otherwise its old RUNNING result
+                # legitimately invalidates recovery on the next native step.
+                deadline = time.monotonic() + 10
+                while execution._slurm_agent._commands.contains(record.assignment.operation_id):
+                    assert time.monotonic() < deadline
+                    execution._drive_local_slurm(execution.slurm_assignments.read(assignment_id))
+                    time.sleep(.01)
                 unknown_observation = _agent_observation(
                     execution,  # noqa: SLF001
                     record.assignment.operation_id,
@@ -1188,8 +1209,15 @@ def _exercise_mixed_route_run(
                     "sacct" if recovery_terminal_state else "unavailable"
                 )
                 assert unknown_observation.scheduler_state == recovery_terminal_state
+                assert execution.recovery_target_is_still_unknown(recovery_request), (
+                    execution.slurm_assignments.read(assignment_id).state,
+                    execution.slurm_assignments.read(assignment_id).start_consumed,
+                    execution.slurm_assignments.read(assignment_id).process_execution_id,
+                    execution.slurm_submissions.read(record.assignment.operation_id).scheduler_state,
+                    execution.slurm_submissions.read(record.assignment.operation_id).scheduler_source,
+                    execution.slurm_submissions.read(record.assignment.operation_id).accounting_identity,
+                )
                 if recovery_terminal_state is not None:
-                    history_state[0] = recovery_terminal_state
                     import loom.queue._agent_slurm as agent_module
                     from loom.pipeline.executors.slurm.ready_stage import SlurmContainmentReceipt
                     with monkeypatch.context() as pending_patch:
