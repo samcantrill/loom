@@ -21,7 +21,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
 
 @pytest.mark.parametrize("https", [False, True])
-def test_real_complete_tree_transport_and_cli_query_role(tmp_path, https, capsys):
+def test_real_complete_tree_transport_and_cli_query_role(tmp_path, https, capsys, download_root):
     from loom.cli.main import main
 
     with _coordinator(tmp_path, https=https) as (service, daemon, _):
@@ -49,7 +49,7 @@ def test_real_complete_tree_transport_and_cli_query_role(tmp_path, https, capsys
             assert description["outcome"] == "available", description
             assert description["total_bytes"] > 256 * 1024
             result = client.fetch_artifacts(
-                [{"locator": locator.to_dict()}], tmp_path / "destination", scope=SCOPE
+                [{"locator": locator.to_dict()}], download_root / "destination", scope=SCOPE
             )
             assert result["success_count"] == 1, result
             destination = Path(result["items"][0]["local_path"])
@@ -157,7 +157,7 @@ def test_real_complete_tree_transport_and_cli_query_role(tmp_path, https, capsys
                         json.dumps(
                             {
                                 "selections": [{"locator": local_locator.to_dict()}],
-                                "destination": str(tmp_path / "cli-fetch"),
+                                    "destination": str(download_root / "cli-fetch"),
                                 "scope": SCOPE,
                             }
                         ),

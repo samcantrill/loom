@@ -48,7 +48,7 @@ def collect(method, query):
     ],
 )
 def test_composed_workflow_preserves_source_targets_and_partial_results(
-    tmp_path, tag, value, kind
+    tmp_path, tag, value, kind, download_root
 ):
     with _coordinator(tmp_path) as (service, daemon, _):
         with CoordinatorClient.from_unix_socket(service.daemon.endpoint) as client:
@@ -183,7 +183,7 @@ def test_composed_workflow_preserves_source_targets_and_partial_results(
             )
             assert preview["content"] == {"value": 1}
             batch = client.fetch_artifacts(
-                outputs, tmp_path / "retrieved", scope=CollectionScope()
+                outputs, download_root / "retrieved", scope=CollectionScope()
             )
             assert (
                 batch["complete"]

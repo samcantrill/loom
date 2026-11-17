@@ -97,7 +97,7 @@ qualification follows the opt-in hooks below and cannot be inferred from fixture
 Reuse evidence across handoffs; broaden or repeat only for a concrete failure,
 affected consumer, missing assertion, or change invalidating the previous result.
 
-Artifact-download success contracts require a destination filesystem supporting
+Artifact-download contract and transport tests require a destination filesystem supporting
 Linux `renameat2(RENAME_NOREPLACE)`. When the ordinary test workspace lacks that
 operation, set `LOOM_TEST_ARTIFACT_DOWNLOAD_ROOT` to an existing absolute directory
 on a supporting filesystem. Only those download destinations and the atomic
@@ -105,6 +105,14 @@ no-overwrite check use private temporary children there; other fixtures keep
 pytest's selected temporary base. This setting neither mocks publication nor
 skips tests, and does not change application storage behavior. A runtime fetch
 to an unsupported filesystem still fails as documented.
+
+The optional fleet SSH fixtures require `ssh`, `ssh-keygen` and `sshd` on PATH
+(the system daemon is commonly under `/usr/sbin`). Their disposable daemon binds
+only loopback and stores its private authorization files beneath `TMPDIR`.
+Their native role state and offline test installations use
+`LOOM_TEST_LOCAL_STATE_ROOT` when set, otherwise the selected temporary directory.
+The chosen filesystem must satisfy the existing native host-local storage
+policy. This test setting does not bypass that policy or change production roots.
 
 ## Opt-in runtime acceptance hooks
 

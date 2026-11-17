@@ -64,7 +64,7 @@ def test_config_exports_and_signature() -> None:
     assert RawSourceSnapshotPayload
     assert RawSourceSnapshotReference
     assert ARTIFACT_SAFE_FINGERPRINT_LABEL == "artifact_safe_config"
-    assert ARTIFACT_SAFE_FINGERPRINT_POLICY == "artifact_safe_authored_composition_v1"
+    assert ARTIFACT_SAFE_FINGERPRINT_POLICY == "artifact_safe_authored_composition_v2"
     assert ARTIFACT_SAFE_RUNTIME_REPLAY == "unavailable"
     assert instantiate
     assert register_recipe

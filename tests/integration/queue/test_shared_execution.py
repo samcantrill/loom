@@ -364,8 +364,13 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, s
             assert hashlib.sha256(data).hexdigest() == ref["sha256"]
             assert len(data) == ref["size_bytes"]
             if scientific:
+                from weave.ordered import decode_ordered_config
+
                 assert len(data) > 128 * 1024
-                assert cast(Any, request.to_dict())["fingerprint"]["payload"]["stage_config"]["scientific"] == nested
+                stage_config = cast(Any, request.to_dict())["fingerprint"]["payload"]["stage_config"]
+                decoded_config = decode_ordered_config(stage_config)
+                assert isinstance(decoded_config, dict)
+                assert decoded_config["scientific"] == nested
             from loom.queue.shared_execution import assignment_scope
             scope = assignment_scope(request.fingerprint)
             assert scope is not None

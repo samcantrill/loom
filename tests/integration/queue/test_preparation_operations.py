@@ -15,7 +15,7 @@ from threading import Event
 from concurrent.futures import ThreadPoolExecutor
 import io
 from time import monotonic, sleep
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -612,20 +612,42 @@ def _damaged_native_report_environment(root: Path, fault: str) -> dict[str, str]
     installed.mkdir()
     (installed / "sitecustomize.py").write_text(
         "import os\n"
-        "from loom.pipeline.context import StageContext\n"
-        "from loom.io.codecs.json_codec import JSONCodec\n"
-        "encode = JSONCodec.encode\n"
-        "def encoded(self, obj, **kwargs):\n"
+        "from dataclasses import replace\n"
+        "from loom.diagnostics import PreflightResult, PreflightCheckStatus\n"
+        "import loom.preparation as preparation\n"
+        "import loom._preparation_report as reports\n"
+        "encode = preparation.stable_json_bytes\n"
+        "def encoded(obj, **kwargs):\n"
         "    if os.environ['LOOM_TEST_REPORT_FAULT'] == 'malformed_json' and isinstance(obj, dict) and 'input_manifest_digest' in obj:\n"
         "        return b'{invalid json'\n"
-        "    return encode(self, obj, **kwargs)\n"
-        "JSONCodec.encode = encoded\n"
-        "save = StageContext.save_artifact\n"
-        "def changed(self, name, value, **kwargs):\n"
-        "    if name == 'report' and self.stage_name == 'prepare' and os.environ['LOOM_TEST_REPORT_FAULT'] == 'malformed_companion':\n"
-        "        self.local_output_path('report', suffix='.composition.json').write_bytes(b'{invalid companion')\n"
-        "    return save(self, name, value, **kwargs)\n"
-        "StageContext.save_artifact = changed\n"
+        "    return encode(obj, **kwargs)\n"
+        "preparation.stable_json_bytes = encoded\n"
+        "save = reports.save_composition_evidence\n"
+        "def changed(value, path):\n"
+        "    fault = os.environ['LOOM_TEST_REPORT_FAULT']\n"
+        "    if fault == 'profile':\n"
+        "        value['profile_descriptor']['revision'] = 'another-installation'\n"
+        "    elif fault == 'requirements':\n"
+        "        value['execution_requirements']['produce']['environment_fingerprint'] = 'another-environment'\n"
+        "    elif fault == 'missing_requirement':\n"
+        "        value['execution_requirements'] = {}\n"
+        "    elif fault == 'malformed_preflight':\n"
+        "        value['preflight']['checks'] = None\n"
+        "    elif fault == 'malformed_requirements':\n"
+        "        value['execution_requirements']['produce']['environment_fingerprint'] = None\n"
+        "    elif fault == 'malformed_pipeline':\n"
+        "        value['composition']['resolved']['pipeline']['stages'] = None\n"
+        "    elif fault == 'malformed_runtime':\n"
+        "        value['composition']['resolved']['runtime'] = {'invalid_field': True}\n"
+        "    elif fault == 'required_unavailable':\n"
+        "        preflight = PreflightResult.from_dict(value['preflight'])\n"
+        "        checks = (replace(preflight.checks[0], status=PreflightCheckStatus.SKIP, details={'applicability': 'required'}), *preflight.checks[1:])\n"
+        "        value['preflight'] = PreflightResult(checks, preflight.groups).to_dict()\n"
+        "    primary = save(value, path)\n"
+        "    if fault == 'malformed_companion':\n"
+        "        path.write_bytes(b'{invalid companion')\n"
+        "    return primary\n"
+        "reports.save_composition_evidence = changed\n"
     )
     return {"PYTHONPATH": str(installed), "LOOM_TEST_REPORT_FAULT": fault}
 
@@ -1592,7 +1614,10 @@ def test_restart_reuses_capture_and_replays_a_claimed_complete_target(
         receipt = _result(completed)["prepared_run"]
         snapshot = store.read_config_snapshot(receipt["run_uri"], "resolved")
         assert snapshot is not None
-        assert json.loads(snapshot)["pipeline"]["stages"][0]["config"] == {"value": 41}
+        from loom.serialization.configuration import read_configuration_json
+
+        resolved = read_configuration_json(snapshot)
+        assert cast(Any, resolved)["pipeline"]["stages"][0]["config"] == {"value": 41}
         with sqlite3.connect(service.daemon.control_database) as conn:
             assert (
                 conn.execute("SELECT COUNT(*) FROM managed_admissions").fetchone()[0]
@@ -1701,53 +1726,10 @@ def test_child_failure_or_inconsistent_evidence_never_publishes(
         "malformed_runtime",
         "malformed_json",
     }:
-        # A selected installed Python writes an inconsistent report before its
-        # native artifact checksum and authoritative output commit are created.
-        installed = tmp_path / "report-producer"
-        installed.mkdir()
-        (installed / "sitecustomize.py").write_text(
-            "import os\n"
-            "from dataclasses import replace\n"
-            "from loom.pipeline.context import StageContext\n"
-            "from loom.diagnostics import PreflightResult, PreflightCheckStatus\n"
-            "from loom.io.codecs.json_codec import JSONCodec\n"
-            "encode = JSONCodec.encode\n"
-            "def encoded(self, obj, **kwargs):\n"
-            "    if os.environ['LOOM_TEST_REPORT_FAULT'] == 'malformed_json' and isinstance(obj, dict) and 'input_manifest_digest' in obj:\n"
-            "        return b'{invalid json'\n"
-            "    return encode(self, obj, **kwargs)\n"
-            "JSONCodec.encode = encoded\n"
-            "save = StageContext.save_artifact\n"
-            "def changed(self, name, value, **kwargs):\n"
-            "    if name == 'report' and self.stage_name == 'prepare':\n"
-            "        fault = os.environ['LOOM_TEST_REPORT_FAULT']\n"
-            "        if fault == 'profile':\n"
-            "            value['profile_descriptor']['revision'] = 'another-installation'\n"
-            "        elif fault == 'requirements':\n"
-            "            value['execution_requirements']['produce']['environment_fingerprint'] = 'another-environment'\n"
-            "        elif fault == 'missing_requirement':\n"
-            "            value['execution_requirements'] = {}\n"
-            "        elif fault == 'malformed_preflight':\n"
-            "            value['preflight']['checks'] = None\n"
-            "        elif fault == 'malformed_requirements':\n"
-            "            value['execution_requirements']['produce']['environment_fingerprint'] = None\n"
-            "        elif fault == 'malformed_pipeline':\n"
-            "            value['composition']['resolved']['pipeline']['stages'] = None\n"
-            "        elif fault == 'malformed_runtime':\n"
-            "            value['composition']['resolved']['runtime'] = {'invalid_field': True}\n"
-            "        elif fault == 'required_unavailable':\n"
-            "            preflight = PreflightResult.from_dict(value['preflight'])\n"
-            "            checks = (replace(preflight.checks[0], status=PreflightCheckStatus.SKIP, details={'applicability': 'required'}), *preflight.checks[1:])\n"
-            "            value['preflight'] = PreflightResult(checks, preflight.groups).to_dict()\n"
-            "    return save(self, name, value, **kwargs)\n"
-            "StageContext.save_artifact = changed\n"
-        )
+        # Corrupt the native report before its artifact checksum and output commit.
         agent_path = tmp_path / "agent.json"
         config = json.loads(agent_path.read_text())
-        config["resident_profiles"][0]["environment"] = {
-            "PYTHONPATH": str(installed),
-            "LOOM_TEST_REPORT_FAULT": fault,
-        }
+        config["resident_profiles"][0]["environment"] = _damaged_native_report_environment(tmp_path, fault)
         agent_path.write_text(json.dumps(config))
         service = load_coordinator_service_config(tmp_path / "coordinator.json")
 
@@ -2601,7 +2583,9 @@ class Consumer:
         uri = result["prepared_run"]["run_uri"]
         intent = load_managed_local_intent(service.daemon, uri)
         assert "recovery" not in intent.pipeline.get_stage("produce").stage_config
-        resolved = json.loads(store.read_config_snapshot(uri, "resolved") or "{}")
+        from loom.serialization.configuration import read_configuration_json
+
+        resolved = read_configuration_json(store.read_config_snapshot(uri, "resolved") or "{}")
         assert "scientific_evidence" not in resolved
         assert report["composition"] == report["requested_composition"]
         assert report["project_contracts"]["produce"]["payload"]["checked_value"] == 73

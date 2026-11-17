@@ -243,7 +243,8 @@ def test_installed_offline_discovery_and_classified_failure(
 
 @pytest.mark.parametrize("mode,https", [("shared", False), ("staged", True)])
 def test_prepare_eof_reconnect_submit_observe_and_guard(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str, https: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str, https: bool,
+    download_root: Path,
 ):
     from loom.pipeline.execution.models import StageWorkerResult
     from loom.pipeline.stores import LocalArtifactStore, LocalRunStore
@@ -356,7 +357,7 @@ def test_prepare_eof_reconnect_submit_observe_and_guard(
                 assert description["outcome"] == "available"
                 preview = await _call(client, "loom_read_artifact", request={"locator": locator, "format": "json"})
                 assert preview["outcome"] == "available" and not preview["truncated"]
-                fetched = await _call(client, "loom_fetch_artifacts", selections=outputs["items"], destination=str(tmp_path / "mcp-fetch"))
+                fetched = await _call(client, "loom_fetch_artifacts", selections=outputs["items"], destination=str(download_root / "mcp-fetch"))
                 assert fetched["success_count"] == 1, fetched
                 assert fetched["location_context"] == "mcp_process_filesystem"
                 assert Path(fetched["items"][0]["primary_path"]).is_file()

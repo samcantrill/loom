@@ -364,7 +364,9 @@ def test_real_child_composes_once_and_publisher_replays_plain_recipe_evidence(
     store = LocalRunStore(service.daemon.run_store_root)
     snapshot = store.read_config_snapshot(receipt.run_uri, "resolved")
     assert snapshot is not None
-    resolved = json.loads(snapshot)
+    from loom.serialization.configuration import read_configuration_json
+
+    resolved = cast(Any, read_configuration_json(snapshot))
     assert resolved["pipeline"]["stages"][0]["config"] == {"value": 41}
     assert store.read_recipe_manifest(receipt.run_uri) == tuple(
         report["composition"]["recipe_manifest"]

@@ -245,7 +245,7 @@ def test_invalid_mutation_keeps_native_not_applied_outcome() -> None:
 
 
 @pytest.mark.parametrize("budget", [1, 2, 3, 4, 6, 30])
-def test_fetch_shares_deadline_across_pages_chunks_and_items(tmp_path, monkeypatch, budget):
+def test_fetch_shares_deadline_across_pages_chunks_and_items(download_root, monkeypatch, budget):
     import base64
     from types import SimpleNamespace
     from loom import _artifact_fetch
@@ -289,7 +289,7 @@ def test_fetch_shares_deadline_across_pages_chunks_and_items(tmp_path, monkeypat
                 "data": base64.b64encode(b"x" * payload["length"]).decode(),
             }
 
-    destination = tmp_path / "fetch"
+    destination = download_root / "fetch"
     selections = [
         {"locator": {"run_uri": "file:///run", "stage_name": "produce",
                      "commit_id": commit, "output_name": "out"}}

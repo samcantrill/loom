@@ -2,9 +2,7 @@
 
 from dataclasses import replace
 import hashlib
-import os
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
 from typing import Any, cast
@@ -22,19 +20,6 @@ from tests.contracts.test_output_selection_contract import fixture
 
 pytestmark = pytest.mark.contract
 SCOPE = {"kind": "collection", "name": "run_store"}
-
-
-@pytest.fixture
-def download_root(tmp_path):
-    """Select an actual publish-if-absent filesystem for download contracts."""
-    configured = os.environ.get("LOOM_TEST_ARTIFACT_DOWNLOAD_ROOT")
-    if configured is None:
-        yield tmp_path
-        return
-    root = Path(configured)
-    assert root.is_absolute() and root.is_dir(), "download test root must already exist"
-    with TemporaryDirectory(prefix="loom-fetch-contract-", dir=root) as directory:
-        yield Path(directory)
 
 
 def publish(authority, uri, ref, stage="produce"):

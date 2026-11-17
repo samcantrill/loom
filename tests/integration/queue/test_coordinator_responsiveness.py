@@ -50,7 +50,11 @@ def _large_composition(store, uri, requirement):
     ]}
     store.write_composition_manifest(uri, {"schema_version": 1, "metadata": metadata})
     store.write_run_user_metadata(uri, {"config_provenance": {"schema_version": 2, "metadata": metadata}})
-    pipeline = PipelineSpec.from_config(json.loads(store.read_config_snapshot(uri, "resolved"))["pipeline"])
+    from loom.serialization.configuration import read_configuration_json
+
+    configuration = read_configuration_json(store.read_config_snapshot(uri, "resolved"))["pipeline"]
+    assert isinstance(configuration, dict)
+    pipeline = PipelineSpec.from_config(configuration)
     prepare_managed_local_runtime_record(
         store=store, run_uri=uri, pipeline=pipeline,
         plan=ExecutionPlan.from_dict(store.read_plan(uri)),

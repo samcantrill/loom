@@ -161,6 +161,9 @@ def bundle(tmp_path_factory):
 
 @pytest.fixture
 def endpoint(tmp_path, monkeypatch):
+    executable = shutil.which("ssh")
+    daemon_executable = shutil.which("sshd")
+    assert executable is not None and daemon_executable is not None
     root = tmp_path / "ssh"
     root.mkdir(mode=0o700)
     for name in ("host", "client"):
@@ -174,28 +177,23 @@ def endpoint(tmp_path, monkeypatch):
     key = (root / "client.pub").read_text()
     import tempfile
 
-    authorization_root = Path(
-        tempfile.mkdtemp(prefix="loom-ssh-fixture-", dir="/tmp")
-    )
+    authorization_root = Path(tempfile.mkdtemp(prefix="loom-ssh-fixture-"))
     authorized = authorization_root / "authorized_keys"
     authorized.write_text(key)
     authorized.chmod(0o600)
     configuration = root / "sshd_config"
     configuration.write_text(
-        # This disposable loopback daemon uses a task-owned key under /tmp;
-        # production sshd settings are never touched. StrictModes rejects the
-        # world-writable /tmp ancestor even though the task/key are private.
-        f"Port {port}\nListenAddress 127.0.0.1\nHostKey {root / 'host'}\nPidFile {root / 'pid'}\nAuthorizedKeysFile {authorized}\nStrictModes no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nUsePAM no\nAcceptEnv PYTHONPATH\nAllowUsers {pwd.getpwuid(os.getuid()).pw_name}\nLogLevel ERROR\n"
+        # The disposable loopback daemon uses a task-owned key under TMPDIR.
+        # Production sshd settings are never touched; temporary ancestors need
+        # not satisfy the site's production StrictModes policy.
+        f"Port {port}\nListenAddress 127.0.0.1\nHostKey {root / 'host'}\nPidFile {root / 'pid'}\nAuthorizedKeysFile {authorized}\nStrictModes no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nUsePAM no\nAcceptEnv PYTHONPATH TMPDIR TMP TEMP UV_CACHE_DIR UV_OFFLINE UV_PYTHON_DOWNLOADS\nAllowUsers {pwd.getpwuid(os.getuid()).pw_name}\nLogLevel ERROR\n"
     )
     known = root / "known_hosts"
     known.write_text(f"[127.0.0.1]:{port} " + (root / "host.pub").read_text())
     config = root / "config"
     config.write_text(
-        f"Host control worker worker2\n HostName 127.0.0.1\n Port {port}\n User {pwd.getpwuid(os.getuid()).pw_name}\n IdentityFile {root / 'client'}\n IdentitiesOnly yes\n UserKnownHostsFile {known}\n StrictHostKeyChecking yes\n"
+        f"Host control worker worker2\n HostName 127.0.0.1\n Port {port}\n User {pwd.getpwuid(os.getuid()).pw_name}\n IdentityFile {root / 'client'}\n IdentitiesOnly yes\n UserKnownHostsFile {known}\n StrictHostKeyChecking yes\n SendEnv TMPDIR TMP TEMP UV_CACHE_DIR UV_OFFLINE UV_PYTHON_DOWNLOADS\n"
     )
-    executable = shutil.which("ssh")
-    daemon_executable = shutil.which("sshd")
-    assert executable is not None and daemon_executable is not None
     bindir = root / "bin"
     bindir.mkdir()
     wrapper = bindir / "ssh"
@@ -248,7 +246,11 @@ def site(tmp_path, bundle, endpoint, request):
     )
     from loom.queue.operations import inspect_native_service
 
-    base = Path(tempfile.mkdtemp(prefix="lf7-", dir="/tmp"))
+    state_root = os.environ.get("LOOM_TEST_LOCAL_STATE_ROOT")
+    if state_root is not None:
+        selected_root = Path(state_root)
+        assert selected_root.is_absolute() and selected_root.is_dir()
+    base = Path(tempfile.mkdtemp(prefix="lf7-", dir=state_root))
     socket_bytes = getattr(request, "param", None)
     if socket_bytes is not None:
         tmux_socket_path = base / (".loom-fleet-" + "0" * 16) / "tmux.sock"

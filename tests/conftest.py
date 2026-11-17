@@ -5,8 +5,10 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import suppress
 import json
+import os
 from pathlib import Path
 import sqlite3
+from tempfile import TemporaryDirectory
 
 import pytest
 
@@ -16,6 +18,19 @@ from loom.queue._agent_process_supervisor import (
     SupervisorLaunchConfiguration,
     _launch_from_value,
 )
+
+
+@pytest.fixture
+def download_root(tmp_path: Path) -> Iterator[Path]:
+    """Use the selected atomic-publication filesystem for download destinations."""
+    configured = os.environ.get("LOOM_TEST_ARTIFACT_DOWNLOAD_ROOT")
+    if configured is None:
+        yield tmp_path
+        return
+    root = Path(configured)
+    assert root.is_absolute() and root.is_dir(), "download test root must already exist"
+    with TemporaryDirectory(prefix="loom-fetch-", dir=root) as directory:
+        yield Path(directory)
 
 
 @pytest.fixture(autouse=True)
