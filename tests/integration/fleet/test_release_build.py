@@ -2,6 +2,7 @@
 
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -17,9 +18,9 @@ from loom.queue.errors import QueueConfigError
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
 
-def run(*command, cwd):
+def run(*command, cwd, env=None):
     return subprocess.run(
-        command, cwd=cwd, check=True, capture_output=True, text=True
+        command, cwd=cwd, env=env, check=True, capture_output=True, text=True
     ).stdout.strip()
 
 
@@ -44,7 +45,11 @@ fleet = []
 requires = ["uv_build>=0.11.8,<0.12.0"]
 build-backend = "uv_build"
 """)
-    run("uv", "lock", "--python", sys.executable, cwd=root)
+    # This new fixture project deliberately creates its first lock. Keep the
+    # enclosing validation and release installation locked to their own inputs.
+    lock_environment = dict(os.environ)
+    lock_environment.pop("UV_LOCKED", None)
+    run("uv", "lock", "--python", sys.executable, cwd=root, env=lock_environment)
     run("git", "init", "-q", cwd=root)
     run("git", "add", ".", cwd=root)
     run(

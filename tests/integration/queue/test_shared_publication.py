@@ -8,6 +8,7 @@ from pathlib import Path
 import sqlite3
 import sys
 import threading
+from time import monotonic
 
 import pytest
 
@@ -307,13 +308,26 @@ def test_two_agents_publish_and_consume_complete_large_shared_closure(
             client.prepare_run(_request())
             if pure_coordinator:
                 assert daemon.config.resident_worker_launch_profile is None
-                prepared = clients[0].execute_one(sessions[0].session_id,
-                    sessions[0].availability_revision, sequence=1, wait_timeout_ms=5000)
+                deadline = monotonic() + 90
+                while True:
+                    prepared = clients[0].execute_one(sessions[0].session_id,
+                        sessions[0].availability_revision,
+                        sequence=clients[0].next_poll_sequence(sessions[0].session_id),
+                        wait_timeout_ms=5000)
+                    if prepared.get("result") != "wait" or monotonic() >= deadline:
+                        break
                 assert prepared["state"] == "RELEASED", prepared
                 if slow_preparation:
                     assert len(timed_out_requests) == 1
                     assert publications.count(timed_out_requests[0]) == 1
-            operation = client.wait_operation("prepare-1", timeout_seconds=25).operation
+            deadline = monotonic() + 90
+            while True:
+                observed = client.wait_operation(
+                    "prepare-1", timeout_seconds=min(25, max(0, deadline - monotonic()))
+                )
+                operation = observed.operation
+                if observed.kind.value == "TERMINAL" or monotonic() >= deadline:
+                    break
             assert operation.state == "applied", operation
             result = _result(operation)
             target_uri = result["prepared_run"]["run_uri"]

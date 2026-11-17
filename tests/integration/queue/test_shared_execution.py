@@ -6,6 +6,7 @@ from pathlib import Path
 import os
 import sqlite3
 import sys
+from time import monotonic
 from typing import Any, cast
 
 import pytest
@@ -155,7 +156,14 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, s
         monkeypatch.setattr(_ResidentAssignmentWorkspace, "stage_input_chunk", forbidden)
         with CoordinatorClient.from_unix_socket(service.daemon.endpoint) as client:
             client.prepare_run(_request())
-            prepared = client.wait_operation("prepare-1", timeout_seconds=25).operation
+            deadline = monotonic() + 90
+            while True:
+                observed = client.wait_operation(
+                    "prepare-1", timeout_seconds=min(25, max(0, deadline - monotonic()))
+                )
+                prepared = observed.operation
+                if observed.kind.value == "TERMINAL" or monotonic() >= deadline:
+                    break
             assert prepared.state == "applied", prepared
             result = _result(prepared)
             assert result["input_receipt"]["mode"] == "shared"

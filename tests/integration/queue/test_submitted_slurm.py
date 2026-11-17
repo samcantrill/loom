@@ -487,7 +487,13 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                     completed = None
                     while monotonic() < deadline:
                         completed = daemon._execution.slurm_assignments.read(delivery.assignment_id)
-                        if completed.state in {"terminal", "logical_released", "released"}:
+                        if (
+                            completed.state in {"terminal", "logical_released", "released"}
+                            and (
+                                daemon._execution.slurm_assignments.schema_version < 5
+                                or completed.publication_completed_at is not None
+                            )
+                        ):
                             break
                         sleep(0.02)
                     assert completed is not None
