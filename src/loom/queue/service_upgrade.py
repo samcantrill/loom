@@ -98,7 +98,7 @@ def _coordinator_slurm_settlement(root: Path, root_id: str, waits: list[str]) ->
         conn.row_factory = None
         _verify_owner_store_binding(conn, role="coordinator", stable_id=root_id)
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        if version not in {3, 4, 5, 6}:
+        if version not in {3, 4, 5, 6, 7}:
             raise ValueError("coordinator execution schema is unsupported")
         _require_schema(conn, expected_version=version)
         if conn.execute(

@@ -48,20 +48,25 @@ def _profile():
 
 
 def _cohort(root, *, kind="slurm", explicit_wal=False, legacy=False, custom_provider=False,
-            pending_effects=False, replayable_start=False, bootstrap_upgrade=False, terminal_recovery=False):
+            pending_effects=False, replayable_start=False, bootstrap_upgrade=False, terminal_recovery=False,
+            async_output=False, source_replayable_start=False):
     c, a = root / "c", root / "a"
     c.mkdir(mode=0o700)
     a.mkdir(mode=0o700)
     source_c = _coordinator_config(c)
     payload = json.loads(source_c.read_text())
     payload["local_agent"] = None
-    if pending_effects or replayable_start:
+    if pending_effects or replayable_start or async_output or source_replayable_start:
         payload["slurm_admission"] = {"max_reserved_gpus": 8}
         payload["agent_policy"]["agents"] = [{
             "credential_id": "credential", "principal_id": "principal",
             "agent_id": "submit-agent", "pools": ["default"],
             "capabilities": ["slurm-agent-jobs-v1"], "gpu_devices": [],
         }]
+        if source_replayable_start:
+            payload["agent_policy"]["agents"][0]["capabilities"].extend([
+                "slurm-pending-effects-v1", "slurm-replayable-start-v1",
+            ])
     (c / "authority").mkdir(mode=0o700)
     payload["authority"]["state_root"] = "authority"
     if explicit_wal:
@@ -94,8 +99,12 @@ def _cohort(root, *, kind="slurm", explicit_wal=False, legacy=False, custom_prov
         agent_payload["slurm_profiles"] = [_profile()]
     if bootstrap_upgrade:
         agent_payload["slurm_profiles"][0]["credential_reference"] = "bootstrap-credential"
-    if pending_effects or replayable_start:
+    if pending_effects or replayable_start or async_output or source_replayable_start:
         agent_payload["registration"]["capabilities"] = ["slurm-agent-jobs-v1"]
+        if source_replayable_start:
+            agent_payload["registration"]["capabilities"].extend([
+                "slurm-pending-effects-v1", "slurm-replayable-start-v1",
+            ])
     if explicit_wal:
         agent_payload["storage"] = payload["storage"]
     _write_protected(source_a, agent_payload)
@@ -114,6 +123,9 @@ def _cohort(root, *, kind="slurm", explicit_wal=False, legacy=False, custom_prov
     if replayable_start:
         payload["agent_policy"]["agents"][0]["capabilities"].append("slurm-replayable-start-v1")
         agent_payload["registration"]["capabilities"].append("slurm-replayable-start-v1")
+    if async_output:
+        payload["agent_policy"]["agents"][0]["capabilities"].append("slurm-pending-output-v1")
+        agent_payload["registration"]["capabilities"].append("slurm-pending-output-v1")
     if terminal_recovery:
         payload["slurm_terminal_recovery"] = {"terminal_result_grace_seconds": 120}
     if bootstrap_upgrade:
@@ -172,7 +184,7 @@ def test_pending_effects_supported_upgrade_and_restore(root, version):
 
 @pytest.mark.parametrize("role", ["coordinator", "outbound-agent"])
 def test_pending_effects_upgrade_does_not_allow_unrelated_capability(root, role):
-    request, *_ = _cohort(root, pending_effects=True)
+    request, *_ = _cohort(root, pending_effects=True, async_output=True)
     declaration = next(item for item in json.loads(request.read_text())["roles"] if item["role"] == role)
     target = Path(declaration["target_config"])
     payload = json.loads(target.read_text())
@@ -184,6 +196,31 @@ def test_pending_effects_upgrade_does_not_allow_unrelated_capability(root, role)
     with pytest.raises(QueueError, match="other declarations must match"):
         storage_upgrade(request)
     assert _snapshot(root) == before
+
+
+def test_schema_six_upgrade_allows_async_output_and_remains_inspectable(root):
+    from loom.queue.service_upgrade import inspect_service_settlement
+
+    request, old_c, _, new_c, new_a = _cohort(
+        root, source_replayable_start=True, async_output=True, terminal_recovery=True,
+    )
+    assert old_c.daemon.slurm_schema_version == 6
+    assert new_c.daemon.slurm_schema_version == 7
+    assert storage_upgrade(request)["state"] == "eligible"
+    assert storage_upgrade(request, action="apply")["state"] == "ready"
+    _validate_deployment_binding(new_c.daemon)
+    for root_path, role in (
+        (new_c.daemon.coordinator_root, "coordinator"),
+        (new_a.client.agent_root, "local-agent"),
+    ):
+        identity = _open_root(root_path, role=role)
+        observation = inspect_service_settlement(root_path, expected_root_id=identity)
+        assert observation.availability == "available", observation.to_dict()
+        assert observation.value["settled"] is True
+    assert storage_upgrade(request, action="restore")["state"] == "restored"
+    _validate_deployment_binding(old_c.daemon)
+    with closing(sqlite3.connect(old_c.daemon.execution_database)) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone() == (6,)
 
 
 def _retained_run(root, coordinator, *, annotated=True, name="run"):

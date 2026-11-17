@@ -1321,8 +1321,11 @@ not select an upgrade retain their existing startup behavior and fingerprints.
 Use sibling protected source/target role declarations; they may differ in storage
 and Slurm policy, while identities, roots and other declarations remain fixed.
 An existing `slurm-agent-jobs-v1` declaration may additionally enable
-`slurm-pending-effects-v1` in the coordinator's protected agent policy and the
-outbound agent's registration. This narrow protocol upgrade does not permit
+`slurm-pending-effects-v1`, `slurm-replayable-start-v1` and
+`slurm-pending-output-v1` in the coordinator's protected agent policy and the
+outbound agent's registration. Enabling terminal-result recovery selects execution
+schema 7; settlement inspection supports that schema before subsequent maintenance.
+This narrow protocol upgrade does not permit
 unrelated capability or identity changes.
 Embedded authority requires an existing explicit `state_root`; only that
 deployment's authority namespace is included. Retained native run references

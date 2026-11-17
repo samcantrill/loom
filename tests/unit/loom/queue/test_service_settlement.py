@@ -15,12 +15,14 @@ from loom.queue import LocalDaemon, LocalDaemonConfig
 from loom.queue._agent_slurm import AgentSlurmJobs
 from loom.queue._remote_stage_execution import ResidentExecutionProfile, ResidentProfileDescriptor
 from loom.queue._slurm_admission import SlurmAdmissionPolicy
+from loom.queue._slurm_terminal_recovery import SlurmTerminalRecoveryPolicy
 from loom.queue._storage_policy import StoragePolicy
 from loom.queue.agent_session_transport import (
     AgentTlsClientConfig, LocalDaemonAgentHttpClient, _read_remote_agent_root_id,
 )
 from loom.queue.service_upgrade import inspect_service_settlement
 from tests.unit.loom.queue.test_agent_slurm import _profile, _task
+from tests.unit.loom.queue.test_agent_slurm_storage import drive_until
 
 
 def _agent(root, *, kind="slurm", rollback=False):
@@ -121,8 +123,15 @@ def test_agent_settlement_waits_for_full_slurm_release(tmp_path, monkeypatch, fa
     assert pending.value["settled"] is False
     assert "slurm_submission_or_release" in pending.value["wait_reasons"]
     failing = False
+    agent.close()
     agent = AgentSlurmJobs(config.agent_root, (profile,), sqlite_policy=config.sqlite_policy)
-    agent.step(task, acknowledge)
+    try:
+        drive_until(
+            lambda: agent.step(task, acknowledge),
+            lambda: _inspect(config, identity).value.get("settled") is True,
+        )
+    finally:
+        agent.close()
     settled = _inspect(config, identity)
     assert settled.value["settled"] is True, settled.to_dict()
     assert not any(call[0] == "sbatch" for call in profile.runner.calls)
@@ -221,13 +230,14 @@ def test_acknowledged_assignment_control_needs_no_optional_containment_payload(t
         assert observation.value["settled"] is True
 
 
-@pytest.mark.parametrize("version", [3, 4])
+@pytest.mark.parametrize("version", [3, 4, 7])
 def test_coordinator_settlement_validates_execution_owner_without_mutation(tmp_path, version):
     config = LocalDaemonConfig(
         coordinator_root=tmp_path / "coordinator", agent_root=None,
         resident_worker_launch_profile=None, cpu_capacity=0,
         run_store_root=tmp_path / "runs",
         slurm_admission=SlurmAdmissionPolicy(8) if version == 4 else None,
+        slurm_terminal_recovery=SlurmTerminalRecoveryPolicy() if version == 7 else None,
     )
     LocalDaemon.initialize(config)
     with closing(sqlite3.connect(config.control_database)) as conn:
@@ -241,3 +251,37 @@ def test_coordinator_settlement_validates_execution_owner_without_mutation(tmp_p
     before = _snapshot(config.coordinator_root)
     assert inspect_service_settlement(config.coordinator_root, expected_root_id=identity).availability == "unavailable"
     assert _snapshot(config.coordinator_root) == before
+
+
+@pytest.mark.parametrize("condition", ["reserved", "unknown_schema", "missing_column"])
+def test_schema_seven_settlement_refuses_unreleased_or_incompatible_state(tmp_path, condition):
+    from tests.unit.loom.queue.test_slurm_admission import ReservationFixture
+
+    config = LocalDaemonConfig(
+        coordinator_root=tmp_path / "coordinator", agent_root=None,
+        resident_worker_launch_profile=None, cpu_capacity=0,
+        run_store_root=tmp_path / "runs",
+        slurm_terminal_recovery=SlurmTerminalRecoveryPolicy(),
+    )
+    LocalDaemon.initialize(config)
+    with closing(sqlite3.connect(config.control_database)) as conn:
+        identity = conn.execute("SELECT value FROM root_metadata WHERE key='stable_id'").fetchone()[0]
+    if condition == "reserved":
+        fixture = ReservationFixture(config.coordinator_root, schema_version=7)
+        assignment, arguments = fixture.candidate("unreleased", 0)
+        fixture.store.reserve(assignment, **arguments)
+    else:
+        with closing(sqlite3.connect(config.execution_database)) as conn:
+            conn.execute("PRAGMA user_version=99" if condition == "unknown_schema" else
+                         "ALTER TABLE slurm_stage_assignments DROP COLUMN terminal_observation_json")
+            conn.commit()
+    before = _snapshot(config.coordinator_root)
+    observation = inspect_service_settlement(config.coordinator_root, expected_root_id=identity)
+    assert _snapshot(config.coordinator_root) == before
+    if condition == "reserved":
+        assert observation.availability == "available", observation.to_dict()
+        assert observation.value["settled"] is False
+        assert "slurm_assignment_or_release" in observation.value["wait_reasons"]
+    else:
+        assert observation.availability == "unavailable"
+        assert observation.reason == "settlement_evidence_unavailable"

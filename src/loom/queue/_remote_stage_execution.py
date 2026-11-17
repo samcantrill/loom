@@ -840,7 +840,8 @@ def _preparation_worker_context(
     # Resident payloads have an isolated directory and primary file; Slurm's
     # native relay retains its flat input layout. The workspace owns that path.
     if input_path is None:
-        input_path = lambda name: _assignment_input_path(workspace_root, name)
+        def input_path(name: str) -> Path:
+            return _assignment_input_path(workspace_root, name)
     from .preparation import SharedInputReceipt, _require_local_binding
 
     _require_local_binding(preparation.local_scope, launch_profile)

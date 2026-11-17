@@ -125,14 +125,22 @@ def _declarations(request: dict, *, qualify: bool) -> list[dict]:
                 selected[side]["storage"].require_owner()
         before, after = selected["source"], selected["target"]
         comparable_target = json.loads(json.dumps(after["payload"]))
-        from .agent_sessions import SLURM_PENDING_EFFECTS_CAPABILITY, SLURM_SUBMISSION_CAPABILITY
+        from .agent_sessions import (
+            SLURM_ASYNC_OUTPUT_CAPABILITY,
+            SLURM_PENDING_EFFECTS_CAPABILITY,
+            SLURM_SUBMISSION_CAPABILITY,
+        )
         from ._slurm_start import SLURM_REPLAYABLE_START_CAPABILITY
 
         def allow_protocol_capabilities(old, new):
             previous = old.get("capabilities", [])
             current = new.get("capabilities", [])
             if SLURM_SUBMISSION_CAPABILITY in previous:
-                added = {SLURM_PENDING_EFFECTS_CAPABILITY, SLURM_REPLAYABLE_START_CAPABILITY} - set(previous)
+                added = {
+                    SLURM_PENDING_EFFECTS_CAPABILITY,
+                    SLURM_REPLAYABLE_START_CAPABILITY,
+                    SLURM_ASYNC_OUTPUT_CAPABILITY,
+                } - set(previous)
                 new["capabilities"] = [value for value in current if value not in added]
 
         if item["role"] == "coordinator":

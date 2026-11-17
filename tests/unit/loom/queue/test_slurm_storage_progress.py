@@ -220,7 +220,8 @@ def test_pending_chunk_deduplicates_and_does_not_block_peer_storage():
     )
     guards = PublicationGuards()
     owner._slurm_storage_count = MethodType(LocalDaemonExecution._slurm_storage_count, owner)
-    record = lambda name: SimpleNamespace(assignment=SimpleNamespace(assignment_id=name), bootstrap_incarnation="boot")
+    def record(name):
+        return SimpleNamespace(assignment=SimpleNamespace(assignment_id=name), bootstrap_incarnation="boot")
     evidence = {"identity": {}, "transfer_id": "transfer", "offset": 0, "data": "YWJj", "final": True}
     with ThreadPoolExecutor(max_workers=2) as pool:
         owner._slurm_storage_workers = pool

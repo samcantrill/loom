@@ -116,7 +116,8 @@ def test_slurm_request_capacity_does_not_consume_control_or_poll_slots():
         agent_control_wait_slots=BoundedSemaphore(1),
         agent_work_wait_slots=BoundedSemaphore(1),
     )
-    acquire = lambda operation: _MutualTlsHttpServer.acquire_agent_wait(owner, "agent", operation)
+    def acquire(operation):
+        return _MutualTlsHttpServer.acquire_agent_wait(owner, "agent", operation)
     slots = [acquire("slurm_work"), acquire("slurm_work")]
     with pytest.raises(_SlurmWorkCapacityError):
         acquire("slurm_work")
