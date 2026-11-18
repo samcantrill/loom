@@ -4575,11 +4575,10 @@ def test_same_run_local_and_remote_stages_overlap(tmp_path: Path) -> None:
         )
         with ThreadPoolExecutor(max_workers=1) as workers:
             remote = workers.submit(
-                agent.execute_one,
+                _execute_available_assignment,
+                agent,
                 session.session_id,
                 session.availability_revision,
-                sequence=1,
-                wait_timeout_ms=5_000,
             )
             coordinator.submit(LocalDaemonAdmissionRequest("mixed-item", run_uri))
             deadline = monotonic() + 30
@@ -4599,7 +4598,8 @@ def test_same_run_local_and_remote_stages_overlap(tmp_path: Path) -> None:
                     break
                 sleep(0.01)
             assert active_agent_ids == {"machine-A", "agent-a"}
-            assert remote.result(timeout=90)["state"] == "RELEASED"
+            result = remote.result(timeout=90)
+            assert result.get("state") == "RELEASED", result
         assert coordinator.wait("mixed-item", timeout_seconds=90).state is (
             LocalDaemonAdmissionState.SUCCEEDED
         )
