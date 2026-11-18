@@ -3041,20 +3041,26 @@ def test_four_exclusive_devices_mixed_cpu_and_excess_gpu_through_service(monkeyp
             for index in range(5):
                 gate, _, _ = _submit_gated(case, f"gpu-{index}", gpu=True)
                 gates.append(gate)
+            gpu_gates = set(gates)
             cpu_gate, _, _ = _submit_gated(case, "cpu")
             gates.append(cpu_gate)
-            # Every worker stays gated while its peers start. Bound gaps in
-            # startup progress without giving five launches one shared deadline.
-            pending_starts = {*gates[:4], cpu_gate}
-            while pending_starts:
-                started = _eventually(
-                    lambda: {
-                        gate for gate in pending_starts if (gate / "build.started").exists()
-                    },
-                    seconds=45,
+            # Independent preparations can become ready in a different order
+            # from submission. Keep all started workers gated during the check.
+            started: set[Path] = set()
+            while len(started & gpu_gates) < 4 or cpu_gate not in started:
+                started.update(
+                    _eventually(
+                        lambda: {
+                            gate for gate in gates
+                            if gate not in started and (gate / "build.started").exists()
+                        },
+                        seconds=45,
+                    )
                 )
-                pending_starts.difference_update(started)
-            assert not (gates[4] / "build.started").exists()
+            running_gpus = started & gpu_gates
+            assert len(running_gpus) == 4
+            deferred, = gpu_gates - running_gpus
+            assert not (deferred / "build.started").exists()
             assert len(_running(case)) == 5
             launches = [
                 json.loads(row[0])
@@ -3070,8 +3076,8 @@ def test_four_exclusive_devices_mixed_cpu_and_excess_gpu_through_service(monkeyp
             ]
             assert set(bindings) == {f"GPU-private-{index}" for index in range(4)}
             assert len(bindings) == 4
-            _release_gate(gates[0])
-            _eventually(lambda: (gates[4] / "build.started").exists(), seconds=30)
+            _release_gate(min(running_gpus))
+            _eventually(lambda: (deferred / "build.started").exists(), seconds=30)
             assert all((gate / "build.started").exists() for gate in gates)
             for gate in gates:
                 _release_gate(gate)
