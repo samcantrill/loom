@@ -585,7 +585,9 @@ def test_restart_admits_short_work_before_known_worker_exits(
     with _service(monkeypatch, ceiling=2, memory=2 * 1024**3) as case:
         gate, _, _ = _submit_gated(case, "long")
         try:
-            _eventually(lambda: (gate / "build.started").exists())
+            # The restart scenario begins only after the first worker reaches
+            # the gate. Allow for fixture startup on shared storage separately.
+            _eventually(lambda: (gate / "build.started").exists(), seconds=40)
             held = _running(case)
             assert len(held) == 1
             original_launch = _rows(
