@@ -3043,13 +3043,17 @@ def test_four_exclusive_devices_mixed_cpu_and_excess_gpu_through_service(monkeyp
                 gates.append(gate)
             cpu_gate, _, _ = _submit_gated(case, "cpu")
             gates.append(cpu_gate)
-            _eventually(
-                lambda: (
-                    all((gate / "build.started").exists() for gate in gates[:4])
-                    and (cpu_gate / "build.started").exists()
-                ),
-                seconds=45,
-            )
+            # Every worker stays gated while its peers start. Bound gaps in
+            # startup progress without giving five launches one shared deadline.
+            pending_starts = {*gates[:4], cpu_gate}
+            while pending_starts:
+                started = _eventually(
+                    lambda: {
+                        gate for gate in pending_starts if (gate / "build.started").exists()
+                    },
+                    seconds=45,
+                )
+                pending_starts.difference_update(started)
             assert not (gates[4] / "build.started").exists()
             assert len(_running(case)) == 5
             launches = [
