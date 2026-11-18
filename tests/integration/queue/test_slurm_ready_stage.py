@@ -2147,8 +2147,28 @@ def test_parallel_slurm_stages_honor_the_profile_outstanding_limit(
     profile = replace(profile, result_storage={
         **profile.result_storage, "retention_bytes": 8 * 1024 * 1024 * 1024,
     })
+    submissions_accepted = Event()
+    accepted_assignments: set[str] = set()
     later_limit_decision = Event()
     original_reserve = slurm_ready_stage.SQLiteSlurmStageAssignments.reserve
+    original_record_submission = slurm_ready_stage.SQLiteSlurmStageAssignments.record_submission
+
+    def observe_submission(
+        owner: slurm_ready_stage.SQLiteSlurmStageAssignments,
+        assignment_id: str,
+        *,
+        state: str,
+        job_id: str | None,
+        cluster: str | None,
+    ) -> str:
+        recorded = original_record_submission(
+            owner, assignment_id, state=state, job_id=job_id, cluster=cluster
+        )
+        if recorded == "accepted":
+            accepted_assignments.add(assignment_id)
+            if len(accepted_assignments) == expected_submissions:
+                submissions_accepted.set()
+        return recorded
 
     def observe_limit(*args: object, **kwargs: object) -> str:
         try:
@@ -2160,6 +2180,9 @@ def test_parallel_slurm_stages_honor_the_profile_outstanding_limit(
 
     monkeypatch.setattr(
         slurm_ready_stage.SQLiteSlurmStageAssignments, "reserve", observe_limit
+    )
+    monkeypatch.setattr(
+        slurm_ready_stage.SQLiteSlurmStageAssignments, "record_submission", observe_submission
     )
     run_root = tmp_path / "runs"
     run_store = LocalRunStore(run_root)
@@ -2234,22 +2257,13 @@ def test_parallel_slurm_stages_honor_the_profile_outstanding_limit(
         client.submit(LocalDaemonAdmissionRequest("parallel-slurm", run_uri))
         execution = daemon._execution
         assert execution is not None
-        # The >capacity case persists forty real per-stage sagas, including
-        # authority and Slurm journals, on the test filesystem.
-        deadline = time.monotonic() + (180 if expected_submissions > 32 else 30)
-        while time.monotonic() < deadline:
-            submissions = [call for call in runner.calls if call[0] == "sbatch"]
-            records = execution.slurm_assignments.list_run_unreleased(run_uri)
-            accepted = len(records) == expected_submissions and all(
-                record.state == "accepted" for record in records
-            )
-            if (
-                len(submissions) == expected_submissions
-                and accepted
-                and (expected_submissions != 1 or later_limit_decision.is_set())
-            ):
-                break
-            time.sleep(0.02)
+        # Wait for committed submissions without repeatedly opening the
+        # writer's SQLite journal. Audit the persisted state after the wait.
+        timeout = 180 if expected_submissions > 32 else 30
+        deadline = time.monotonic() + timeout
+        submissions_accepted.wait(timeout)
+        if expected_submissions == 1:
+            later_limit_decision.wait(max(0, deadline - time.monotonic()))
         submissions = [call for call in runner.calls if call[0] == "sbatch"]
         records = execution.slurm_assignments.list_run_unreleased(run_uri)
 
