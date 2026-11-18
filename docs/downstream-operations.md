@@ -751,6 +751,13 @@ are incompatible with reconciliation. Replay retains the operation ID and every
 other request field, including retry policy. Exact requests keep their existing
 wire shape and never retry through replay.
 
+Stages that support continuing output assembly can be selected in the protected
+deployment with `preparation.staging_continuation_stages`, for example
+`["predict"]`. Set this on the initial submission and retain it on retry. The
+CLI forwards the selection into native preparation. Once the previous provider
+is released, eligible unpublished output staging can transfer to the next
+attempt. The stage still validates its own saved progress before reusing it.
+
 Protected project processor schema 2 adds `target_prefix` to the schema 1 policy
 fields. For example, `"target_prefix": "science-"` derives
 `science-<complete 64-character digest>`. The processor receives schema 2 with

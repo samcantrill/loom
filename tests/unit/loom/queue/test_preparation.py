@@ -95,6 +95,21 @@ def test_staging_continuation_child_requires_publication_and_keeps_worker_unsele
     )
     assert PreparationChildInput.from_dict(binding.to_dict()) == binding
     assert binding.shared_scope == shared
+    from tests.unit.loom.pipeline.test_action_verification import _binding
+    project = replace(binding, project_preparation=_binding().project_preparation,
+                      candidate={"configuration": {"value": [["second", 2], ["first", 1]]}})
+    compact = project.to_dict(compact_candidate=True)
+    assert compact["purpose"]["candidate_json"].startswith("zlib:")
+    decoded = PreparationChildInput.from_dict(compact)
+    assert decoded == project
+    assert PreparationChildInput.from_dict(compact).candidate is decoded.candidate
+    malformed = {**compact, "purpose": {**compact["purpose"], "candidate_json": "zlib:broken"}}
+    with pytest.raises(QueueServiceError, match="compact verification"):
+        PreparationChildInput.from_dict(malformed)
+    assert PreparationChildInput.from_dict(project.to_dict()) == project
+    mixed = {**compact, "purpose": {**compact["purpose"], "candidate": {}}}
+    with pytest.raises(QueueServiceError):
+        PreparationChildInput.from_dict(mixed)
     ordinary = replace(binding, staging_continuation_stages=())
     assert "staging_continuation_stages" not in ordinary.to_dict()
     assert PreparationChildInput.from_dict(ordinary.to_dict()) == ordinary

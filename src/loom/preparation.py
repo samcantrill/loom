@@ -847,7 +847,7 @@ def prepare_child_run(
                 {
                     "name": "prepare",
                     "factory": {"_target_": PREPARATION_STAGE_TARGET},
-                    "config": binding.to_dict(),
+                    "config": binding.to_dict(compact_candidate=bool(binding.staging_continuation_stages)),
                     "resources": {
                         "entries": {
                             "cpu": {"kind": "cpu", "amount": 1, "unit": "count"}

@@ -1509,6 +1509,14 @@ selection and rejects missing/unknown targets or a changed scope. The preparatio
 worker carries downstream intent but cannot select continuation for itself.
 Omitting the sequence preserves existing request, child and invocation bytes.
 
+Whole-target verification children for opted-in stages carry the candidate as a
+single canonical JSON document in the fixed preparation stage configuration.
+The native serializer compresses documents up to 64 MiB. Older structured
+inputs still round-trip. The receiving process validates the document, retains
+one immutable decoded candidate, and passes the complete descriptor to the
+installed project verifier. This prevents the stage plan and runtime snapshots
+from recursively order-encoding an already ordered scientific configuration.
+
 Native agent and Slurm bootstrap handshakes advertise
 `released-output-staging-v1`. A selected downstream stage, and preparation
 carrying that selection, require the negotiated capability in resident scheduling

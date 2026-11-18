@@ -410,11 +410,12 @@ def resolve(value: object, roots: Mapping[str, PlainData]) -> Path:
     return tree
 
 
-def worker_binding(workspace: Any) -> dict[str, PlainData] | None:
+def worker_bindings(workspace: Any) -> dict[str, PlainData]:
+    """Expose native recovery locations and their writable owner's future seal ID."""
     request = workspace.request()
     value = validate_wire(request)
     if value is None:
-        return None
+        return {}
     from ._shared_publication import workspace_facts
     from .shared_execution import execution_roots
 
@@ -425,7 +426,7 @@ def worker_binding(workspace: Any) -> dict[str, PlainData] | None:
     )
     owner = _owner(request, launch["agent_id"], launch["execution_fence"])
     tree = current_tree(request, roots, owner=owner)
-    return cast(
+    binding = cast(
         dict[str, PlainData],
         {
             "schema_version": 1,
@@ -444,6 +445,7 @@ def worker_binding(workspace: Any) -> dict[str, PlainData] | None:
             ],
         },
     )
+    return {BINDING: binding, "loom.recovery_owner.v1": publication_id(owner)}
 
 
 def seal(

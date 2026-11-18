@@ -102,6 +102,7 @@ def handle(namespace: argparse.Namespace) -> int:
                     )),
                 ),
                 context=context,
+                staging_continuation_stages=selection.staging_continuation_stages,
             ),
             None if reconcile else namespace.queue_item_id or identity,
             mode="reconcile" if reconcile else "exact",

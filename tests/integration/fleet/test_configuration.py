@@ -678,3 +678,17 @@ def test_deployment_rejects_invalid_or_unrelated_run_defaults(tmp_path, defaults
     _write_protected(original, value)
     with pytest.raises(QueueConfigError, match="run_defaults"):
         load_deployment(original)
+
+
+def test_released_staging_selection_survives_connection_export(tmp_path):
+    original = selection(tmp_path)
+    value = json.loads(original.read_text())
+    value["preparation"]["staging_continuation_stages"] = ["score", "predict"]
+    _write_protected(original, value)
+    selected = load_deployment(original)
+    exported = export_connection_deployment(selected, tmp_path / "retry-client.json")
+    assert load_deployment(exported).staging_continuation_stages == ("predict", "score")
+    value["preparation"]["staging_continuation_stages"] = ["predict", "predict"]
+    _write_protected(original, value)
+    with pytest.raises(QueueConfigError, match="duplicate stages"):
+        load_deployment(original)

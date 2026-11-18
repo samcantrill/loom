@@ -2208,14 +2208,12 @@ class _ResidentAssignmentWorkspace:
             if report is None:
                 raise QueueConflictError("worker project report input is missing")
             metadata[REPORT] = report.local_ref(input_path(report)).to_dict()
-        from ._shared_recovery import WIRE, BINDING, worker_binding
+        from ._shared_recovery import WIRE, worker_bindings
         from ._shared_staging_continuation import WIRE as staging_wire
         metadata.pop(WIRE, None)
         metadata.pop(staging_wire, None)
         if resolve_shared:
-            recovery = worker_binding(self)
-            if recovery is not None:
-                metadata[BINDING] = recovery
+            metadata.update(worker_bindings(self))
         logs = self.root / "logs"
         local_run_uri = f"loom-agent:{request.assignment_id}"
         return StageWorkerRequest(
