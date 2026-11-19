@@ -11,6 +11,7 @@ from loom.coordinator import RunRequest
 from loom.preparation import CoordinatorPreparation
 from loom.queue import LocalDaemon
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+from loom.queue.local_daemon_execution import LocalDaemonExecution
 from tests.integration.queue.test_run_operations import _two_stage_service, _request
 
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
@@ -75,20 +76,34 @@ def test_native_failure_policy_settles_unrelated_work(tmp_path, policy, second_s
         daemon.stop()
 
 
-def test_independent_early_stop_after_failure_cancels_before_new_dispatch(tmp_path):
+def test_independent_early_stop_after_failure_cancels_before_new_dispatch(tmp_path, monkeypatch):
     service = _two_stage_service(tmp_path, failing=True)
     path = tmp_path / "projects" / "pipeline.yaml"
     config = json.loads(path.read_text())
     second = config["pipeline"]["stages"][1]
     second.pop("depends_on")
-    unstarted = deepcopy(second)
-    unstarted["name"] = "z_unstarted"
     second["factory"] = {
         "_target_": "tests.support.pipeline_execution_stages.EarlyStopStage"
     }
     second["config"] = {"message": "independent branch stopped early"}
-    config["pipeline"]["stages"].append(unstarted)
+    config["pipeline"]["stages"].append({**deepcopy(second), "name": "other_stop"})
     path.write_text(json.dumps(config))
+    stop_stages = ("second", "other_stop")
+    prepare = LocalDaemonExecution._prepared_ready_request
+
+    def prepare_after_failure(execution, record, snapshot, intent):
+        # Open both independent branches at the failure transition. Either
+        # can get the only CPU, depending on which request is prepared first.
+        if record.stage_name in stop_stages and not any(
+            stage.stage_name == "produce" and stage.status.value == "FAILED"
+            for stage in snapshot.stages
+        ):
+            return None, "stage_preparation_pending"
+        return prepare(execution, record, snapshot, intent)
+
+    monkeypatch.setattr(
+        LocalDaemonExecution, "_prepared_ready_request", prepare_after_failure
+    )
     service = replace(service, daemon=replace(service.daemon, cpu_capacity=1))
     request = RunRequest(
         replace(
@@ -118,24 +133,23 @@ def test_independent_early_stop_after_failure_cancels_before_new_dispatch(tmp_pa
         assert snapshot.status.value == "CANCELLED"
         stages = {stage.stage_name: stage for stage in snapshot.stages}
         assert stages["produce"].status.value == "FAILED"
-        assert stages["second"].status.value == "CANCELLED"
-        assert stages["z_unstarted"].latest_commit is None
-        # Cancellation closes planned attempts; no worker should execute this branch.
+        for stage in stop_stages:
+            assert stages[stage].status.value == "CANCELLED"
+            assert stages[stage].latest_commit is None
+        # Only the early-stop owner may have a worker binding.
         from loom.pipeline.stores import run_uri_to_path
 
         with sqlite3.connect(
             run_uri_to_path(admission.run_uri) / ".loom" / "authority.sqlite3"
         ) as conn:
-            assert (
-                conn.execute(
-                    "SELECT COUNT(*) FROM managed_attempt_bindings WHERE attempt_id = ?",
-                    ("z_unstarted-1",),
-                ).fetchone()[0]
-                == 0
-            )
-        assert stages["z_unstarted"].status.value == "CANCELLED"
-        assert stages["second"].reason is not None
-        assert stages["second"].reason.message == "independent branch stopped early"
+            bindings = conn.execute(
+                "SELECT attempt_id FROM managed_attempt_bindings WHERE attempt_id IN (?, ?)",
+                tuple(f"{name}-1" for name in stop_stages),
+            ).fetchall()
+        assert len(bindings) == 1, bindings
+        winner = stages[bindings[0][0].removesuffix("-1")]
+        assert winner.reason is not None
+        assert winner.reason.message == "independent branch stopped early"
         assert admission.cancellation_operation_id is not None
     finally:
         daemon.stop()
