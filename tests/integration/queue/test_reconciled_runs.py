@@ -100,10 +100,26 @@ def _reconciled_request(operation_id: str, *, retry: bool = False):
     )
 
 
-@pytest.mark.parametrize("preparation_available", [False, True])
+@pytest.mark.parametrize(
+    "preparation_available,resume_supported", [(False, False), (True, False), (True, True)]
+)
 def test_https_negotiates_reconciliation_before_submission(
-    tmp_path: Path, preparation_available: bool
+    tmp_path: Path, preparation_available: bool, resume_supported: bool, monkeypatch
 ) -> None:
+    from loom.queue import _coordinator_control
+    from loom.queue.run import RESUME_CANCELLED_CAPABILITY
+
+    if preparation_available and not resume_supported:
+        describe = _coordinator_control._connection_description
+
+        def legacy_description(*args):
+            current = describe(*args)
+            return replace(current, capabilities=tuple(
+                cap for cap in current.capabilities if cap != RESUME_CANCELLED_CAPABILITY
+            ))
+
+        monkeypatch.setattr(_coordinator_control, "_connection_description", legacy_description)
+
     service = _reconciled_service(tmp_path)
     service = replace(service, daemon=replace(
         service.daemon,
@@ -146,6 +162,16 @@ def test_https_negotiates_reconciliation_before_submission(
             assert "daemon-control-v1" in description.capabilities
             for capability in ("agent-preparation-v1", "reconciled-run-v1"):
                 assert (capability in description.capabilities) == preparation_available
+            assert (RESUME_CANCELLED_CAPABILITY in description.capabilities) == resume_supported
+            if not resume_supported:
+                resume = replace(_reconciled_request("https-resume"),
+                                 retry_policy="one_observed_cancellation")
+                with pytest.raises(CoordinatorClientError) as rejected:
+                    client.start_run(resume)
+                assert rejected.value.code == "unsupported_capability"
+                assert rejected.value.ids["missing_capability"] == RESUME_CANCELLED_CAPABILITY
+                assert rejected.value.mutation_outcome == "not_applied"
+                assert not daemon._preparations.contains("https-resume")
             request = _reconciled_request("https-reconcile")
             if not preparation_available:
                 with pytest.raises(CoordinatorClientError) as rejected:

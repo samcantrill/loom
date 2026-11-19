@@ -238,7 +238,10 @@ def _retry_failed_admission(
                 cancelled = {tuple(pair) for pair in record.pop("cancelled_attempts")}
                 record["cancelled_assignments"] = {
                     row["assignment_id"]: [admission.run_uri, row["stage_name"], row["attempt_id"], row["fence"]]
-                    for row in assignment_rows(conn, admission.run_uri, slurm_assignments=execution.slurm_assignments)
+                    for row in assignment_rows(
+                        conn, admission.run_uri, slurm_assignments=execution.slurm_assignments,
+                        embedded=execution._embedded_recovery,
+                    )
                     if (row["stage_name"], row["attempt_id"]) in cancelled and row["fence"] is not None
                 }
             conn.execute(

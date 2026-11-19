@@ -72,7 +72,9 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                 "    elif option == '--pwd':",
             ).replace(
                 "os.execvpe(args[0], args, os.environ)",
-                f"os.execvpe(args[0], [args[0], '-c', {shim!r}, *args[3:]], os.environ)",
+                "if args[1:3] == ['-m', 'loom.queue._slurm_submitted_worker']:\n"
+                f"    args = [args[0], '-c', {shim!r}, *args[3:]]\n"
+                "os.execvpe(args[0], args, os.environ)",
             )
         )
 
@@ -124,11 +126,12 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
             tmp_path,
             monkeypatch,
             slurm=True,
+            staging_continuation_stages=("produce",) if recovery else (),
             stage_update={
                 "placement": {"execution_route": {"kind": "slurm", "profile": "batch"}},
                 **({
                     "factory": {"_target_": "tests.support.shared_execution_stages.SharedRecoveryProducer"},
-                    "config": {"death": False, "complete_diagnostics": True},
+                    "config": {"death": False, "complete_diagnostics": True, "staged_sample": True},
                     "outputs": {"manifest": {"artifact_type": "json", "codec_key": "json.v1"}},
                 } if recovery else {}),
             },

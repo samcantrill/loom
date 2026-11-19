@@ -350,6 +350,10 @@ def _report_contracts(report: Mapping[str, PlainData]) -> dict[str, PlainData]:
         capture=capture_digest(report), node=stage.name, original=declaration(stage)) for stage in pipeline.stages}
 
 
+class _ContinuationUnavailable(QueueServiceError):
+    pass
+
+
 def _inspect_project(
     composition: dict[str, PlainData], options: RunOptions | None,
     binding: PreparationChildInput, preflight: PreflightResult,
@@ -365,6 +369,7 @@ def _inspect_project(
         request: dict[str, PlainData] = {
             "schema_version": selected["schema_version"],
             "operation": "prepare",
+            "select_staging_continuation": True,
             "composition": deepcopy(composition),
             **({"artifact_directory": str(artifact_directory)} if artifact_directory is not None else {}),
             "effective_run_options": options.to_dict(),
@@ -377,18 +382,20 @@ def _inspect_project(
             "project_preparation": dict(binding.project_preparation),
         }
         result = _plain_mapping(cast(Any, processor)(request))
-        if set(result) != {"schema_version", "composition", "evidence", "reconciliation_key", "stage_contracts"}:
-            raise QueueConflictError("project preparation result fields are invalid")
         checked = _plain_mapping(result.pop("composition"))
         _validate_project_result(composition, checked, result, binding)
+        checked = _project_continuation_snapshot(checked, result, binding)
     except Exception as exc:
         # Worker stderr is private attempt evidence; the portable preflight report
         # keeps only the exception class, never paths or secrets from its message.
         traceback.print_exc()
+        unavailable = isinstance(exc, _ContinuationUnavailable)
         check = PreflightCheckResult(
-            "config.project_preparation", PreflightGroup.CONFIG,
+            "config.staging_continuation" if unavailable else "config.project_preparation",
+            PreflightGroup.CONFIG,
             PreflightCheckStatus.FAIL, PreflightSeverity.ERROR,
-            "Installed project preparation failed",
+            "Staging continuation requires a qualified writable publication root"
+            if unavailable else "Installed project preparation failed",
             {"applicability": "required", "error_type": type(exc).__name__},
         )
         return composition, None, PreflightResult((*preflight.checks, check), preflight.groups)
@@ -458,10 +465,11 @@ def _verify_project_candidate(binding: PreparationChildInput, composition: Mappi
 def _validate_project_result(
     original: dict[str, PlainData], checked: dict[str, PlainData],
     result: dict[str, PlainData], binding: PreparationChildInput,
+    *, bound_continuation: bool = False,
 ) -> None:
     assert binding.project_preparation is not None
     selected = _plain_mapping(binding.project_preparation["processor"])
-    if (set(result) != {"schema_version", "evidence", "reconciliation_key", "stage_contracts"}
+    if (set(result) - {"staging_continuation_stages"} != {"schema_version", "evidence", "reconciliation_key", "stage_contracts"}
         or type(result["schema_version"]) is not int or result["schema_version"] != selected["schema_version"]):
         raise QueueConflictError("unsupported project preparation result capability")
     evidence = _plain_mapping(result["evidence"])
@@ -482,8 +490,9 @@ def _validate_project_result(
         raise QueueConflictError("reconciled preparation requires a complete key")
     from loom.pipeline._project_contracts import node_result
 
-    if (stable_json_bytes(original) != stable_json_bytes(checked)
-        or any(encode_ordered_config(original[key]) != encode_ordered_config(checked[key])
+    expected = _project_continuation_snapshot(original, result, binding) if bound_continuation else original
+    if (stable_json_bytes(expected) != stable_json_bytes(checked)
+        or any(encode_ordered_config(expected[key]) != encode_ordered_config(checked[key])
                for key in ("resolved", "redacted", "recipe_manifest"))):
         raise QueueConflictError("project preparation changed the captured composition")
     pipeline = _pipeline_from_resolved(cast(Mapping[str, object], original["resolved"]))
@@ -492,6 +501,44 @@ def _validate_project_result(
         raise QueueConflictError("project contracts must cover exactly the captured nodes")
     for item in contracts.values():
         node_result(item)
+
+
+def _project_continuation_stages(result: Mapping[str, PlainData]) -> tuple[str, ...]:
+    from loom.queue.preparation import continuation_stage_names
+
+    return continuation_stage_names(result.get("staging_continuation_stages", ()))
+
+
+def _project_continuation_snapshot(
+    composition: dict[str, PlainData], result: Mapping[str, PlainData],
+    binding: PreparationChildInput,
+) -> dict[str, PlainData]:
+    continuing = set(_project_continuation_stages(result)) - set(binding.staging_continuation_stages)
+    if not continuing:
+        return composition
+    if binding.shared_scope is None or not any(
+        isinstance(root, Mapping) and "publication" in root
+        for root in _plain_mapping(binding.shared_scope["roots"]).values()
+    ):
+        raise _ContinuationUnavailable("staging continuation requires protected publication storage")
+    checked = deepcopy(composition)
+    resolved = cast(dict[str, PlainData], checked["resolved"])
+    pipeline = cast(dict[str, PlainData], resolved["pipeline"])
+    stages = cast(list[dict[str, PlainData]], pipeline["stages"])
+    if continuing - {stage["name"] for stage in stages}:
+        raise QueueConflictError("project requested continuation of an unknown stage")
+    diagnostics = dict(diagnostic_stages(cast(dict[str, PlainData], checked["redacted"])))
+    for index, stage in enumerate(stages):
+        if stage["name"] not in continuing:
+            continue
+        factory = _plain_mapping(stage["factory"])
+        selected = stage_scope(stage.get("config", {}), factory.get("init", {}), binding.shared_scope,
+                               continue_staging=True)
+        fingerprint = cast(dict[str, PlainData], stage["fingerprint"])
+        fingerprint[SHARED_EXECUTION_SCOPE] = selected
+        if index in diagnostics:
+            annotate_mapping(diagnostics[index], "fingerprint", {SHARED_EXECUTION_SCOPE: selected})
+    return checked
 
 
 def _bind_local_snapshot(
@@ -752,7 +799,7 @@ def _decode_preparation_report(
                 raise QueueConflictError("required project preparation evidence is missing")
             _validate_project_result(
                 _plain_mapping(report["requested_composition"]), composition,
-                _plain_mapping(report["project_result"]), expected,
+                _plain_mapping(report["project_result"]), expected, bound_continuation=True,
             )
         elif report["project_result"] is not None:
             raise QueueConflictError("failed project preparation cannot return checked evidence")
@@ -765,6 +812,8 @@ def _decode_preparation_report(
             raise QueueConflictError("preparation checked runtime options are missing")
         pipeline = _pipeline_from_resolved(received.resolved)
         continuing = set(expected.staging_continuation_stages)
+        if received.project_result is not None:
+            continuing.update(_project_continuation_stages(received.project_result))
         if continuing - set(pipeline.stage_names):
             raise QueueConflictError("staging_continuation_stages contains an unknown prepared node")
         # Validate the serialized report against accepted invocation intent;

@@ -169,6 +169,7 @@ def bind_delivery(
     *,
     session_id: str,
     slurm_assignments: Any = None,
+    embedded: Any = None,
     verify_trees: bool = True,
     cancelled_attempts: frozenset[str] = frozenset(),
 ) -> Any:
@@ -185,7 +186,8 @@ def bind_delivery(
         raise QueueConflictError("recovery destination machine is unavailable")
     return _bind_delivery(
         request, conn, run_uri, roots, agent_id=session["agent_root_id"],
-        slurm_assignments=slurm_assignments, verify_trees=verify_trees, cancelled_attempts=cancelled_attempts,
+        slurm_assignments=slurm_assignments, embedded=embedded,
+        verify_trees=verify_trees, cancelled_attempts=cancelled_attempts,
     )
 
 
@@ -199,9 +201,10 @@ def retention_receipts(conn: Any, assignment_id: str) -> dict[str, str]:
 
 def assignment_rows(
     conn: Any, run_uri: str, *, slurm_assignments: Any = None,
+    embedded: Any = None,
     stage_name: str | None = None, limit: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Project both native providers into the existing recovery retention contract."""
+    """Project the native providers into the recovery retention contract."""
     rows = conn.execute(
         "SELECT r.*, d.request_json, a.result_json AS recovery_json, "
         "f.result_json AS recovery_failure_json FROM remote_assignments r "
@@ -235,14 +238,16 @@ def assignment_rows(
                 "recovery_json": receipts.get("seal"),
                 "recovery_failure_json": receipts.get("seal_unavailable"),
             })
+    if embedded is not None:
+        result.extend(embedded.rows(conn, run_uri, stage_name=stage_name, limit=limit))
     if limit is not None and len(result) > limit:
         raise QueueConflictError("recovery history exceeds assignment limit")
     return sorted(result, key=lambda row: (row["stage_name"], row["attempt"]))
 
 
-def bind_slurm_delivery(
+def bind_provider_delivery(
     request: Any, conn: Any, run_uri: str, roots: Mapping[str, PlainData], *,
-    agent_id: str, slurm_assignments: Any, verify_trees: bool = True,
+    agent_id: str, slurm_assignments: Any, embedded: Any = None, verify_trees: bool = True,
     cancelled_attempts: frozenset[str] = frozenset(),
 ) -> Any:
     from ._shared_staging_continuation import requested
@@ -252,13 +257,14 @@ def bind_slurm_delivery(
         return request
     return _bind_delivery(
         request, conn, run_uri, roots, agent_id=agent_id,
-        slurm_assignments=slurm_assignments, verify_trees=verify_trees, cancelled_attempts=cancelled_attempts,
+        slurm_assignments=slurm_assignments, embedded=embedded,
+        verify_trees=verify_trees, cancelled_attempts=cancelled_attempts,
     )
 
 
 def _bind_delivery(
     request: Any, conn: Any, run_uri: str, roots: Mapping[str, PlainData], *,
-    agent_id: str, slurm_assignments: Any, verify_trees: bool = True,
+    agent_id: str, slurm_assignments: Any, embedded: Any = None, verify_trees: bool = True,
     cancelled_attempts: frozenset[str] = frozenset(),
 ) -> Any:
     selection = selected(request)
@@ -267,7 +273,10 @@ def _bind_delivery(
         WIRE as staging_wire, may_own_unstarted_progress, requested, select_predecessor,
     )
     predecessors = []
-    rows = assignment_rows(conn, run_uri, slurm_assignments=slurm_assignments, stage_name=request.stage_name)
+    rows = assignment_rows(
+        conn, run_uri, slurm_assignments=slurm_assignments, embedded=embedded,
+        stage_name=request.stage_name,
+    )
     # Ordinary no-start deliveries cannot own progress. A granted staging
     # handoff can move assembly before any worker receives its start permit.
     for row in rows:

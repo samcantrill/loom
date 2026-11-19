@@ -25,6 +25,7 @@ from loom.pipeline.cleanup.preparation_pins import retain_preparation_path
 from loom.serialization import PlainData, stable_json_bytes, thaw_plain_data
 from loom.runs.context import SubmissionContext
 
+from ._continuation import ContinuationConflict, ContinuationPending
 from .errors import QueueConflictError, QueueServiceError
 from .run import RunRequest, _public_operation_id
 from ._maintenance import MaintenanceCheckConflict
@@ -570,6 +571,13 @@ class CoordinatorPreparations:
             policy = self.daemon.config.preparation_policy
             assert policy is not None
             selected = policy.select(request)
+            if request.staging_continuation_stages:
+                from .shared_execution import stage_scope
+
+                shared = _mapping(selected["profile"]).get("shared_scope")
+                if not isinstance(shared, Mapping):
+                    raise QueueServiceError("staging continuation requires a protected publication root")
+                stage_scope({}, {}, shared, continue_staging=True)
             if fresh_stages:
                 from uuid import uuid4
 
@@ -1383,12 +1391,13 @@ class CoordinatorPreparations:
                 execution = self.daemon._execution
                 if execution is None:
                     return
-                reason = execution.reconcile_slurm_retry(uri, accepted_at=row["accepted_at"])
-                if reason is not None:
-                    if reason == "slurm_recovery_retention_budget_exceeded":
-                        self._fail(row, reason, conflict=True)
-                    elif row["result_code"] != reason:
-                        self._store_result(_with_report(operation_id, "pending", reason, result, report.preflight))
+                outcome = execution.settle_continuation(admission, accepted_at=row["accepted_at"])
+                if isinstance(outcome, ContinuationConflict):
+                    self._fail(row, outcome.reason, conflict=True)
+                    return
+                if isinstance(outcome, ContinuationPending):
+                    if row["result_code"] != outcome.reason:
+                        self._store_result(_with_report(operation_id, "pending", outcome.reason, result, report.preflight))
                     return
                 admission = self.daemon.admission_for_run_uri(uri)
             if resume_cancelled:

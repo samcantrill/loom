@@ -1709,8 +1709,10 @@ class LocalDaemon:
         self._cycle_lock = RLock()
         self._scheduling_reference_revision = 0
         self._reconcile_guard = RLock()
+        from ._admission_scan import AdmissionScan
         from ._context_preparation import ContextPreparations
 
+        self._admission_scan = AdmissionScan()
         self._contexts = ContextPreparations(self._wake.set)
         from ._result_verification import ResultVerifications
 
@@ -2114,8 +2116,10 @@ class LocalDaemon:
         self._verified_local_owner_subject = verified_local_owner_subject
         self._contexts.close()
         self._result_verifications.close()
+        from ._admission_scan import AdmissionScan
         from ._context_preparation import ContextPreparations
 
+        self._admission_scan = AdmissionScan()
         self._contexts = ContextPreparations(self._wake.set)
         from ._result_verification import ResultVerifications
 
@@ -2784,19 +2788,12 @@ class LocalDaemon:
             epochs = (self._epoch, self._scheduling_epoch)
             invalidated = tuple(self._context_invalidations)
             self._context_invalidations.clear()
-        self._contexts.submit(
-            (admission for admission in admissions
-             if (retry := self._admission_retries.get(admission.run_uri)) is None
-             or retry.ready((admission.revision, self._scheduling_epoch))),
-            epochs, execution.load_context,
+        prepared = {item.admission.admission_id: item for item in self._contexts.completed()}
+        self._contexts.begin_cycle(
+            admissions,
             minimum_interval=self.config.poll_interval_seconds, invalidated=invalidated,
         )
-        prepared = {item.admission.admission_id: item for item in self._contexts.completed()}
-        if prepared:
-            # A completion frees a bounded slot after submission above.
-            # Wake another turn even when all remaining IO is blocked.
-            self._wake.set()
-        epochs = (self._epoch, self._scheduling_epoch)
+
         schedulable: dict[str, LocalDaemonAdmission] = {
             row.admission_id: row for row in admissions
             if row.state in {LocalDaemonAdmissionState.ACTIVE, LocalDaemonAdmissionState.WAITING}
@@ -2929,10 +2926,20 @@ class LocalDaemon:
                     else schedulable[admission_id]
                 ),
             )
+
+        def visit(admission: LocalDaemonAdmission) -> bool:
+            retry = self._admission_retries.get(admission.run_uri)
+            if retry is not None and not retry.ready((admission.revision, epochs[1])):
+                return True
+            return self._contexts.try_submit(admission, epochs, execution.load_context)
+
+        visited = self._admission_scan.take(admissions, visit)
+        if self._admission_scan.high_water is not None and self._contexts.has_capacity():
+            self._wake.set()
         # Reconciliation is an internal operation; retain its bounded
         # nonterminal work result without rebuilding public detail/status.
         return tuple(
-            self._admission(admission.admission_id) for admission in admissions
+            self._admission(admission.admission_id) for admission in visited
         )
 
     def _serve(self) -> None:

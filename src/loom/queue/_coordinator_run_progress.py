@@ -242,12 +242,6 @@ def schedule_once(
         self._ready_scan_boundary = None
         self._gpu_scan_after = self._gpu_scan_boundary = None
         return None
-    if self.daemon is not None:
-        epochs = (self.daemon._epoch, self.daemon._scheduling_epoch)
-        admissions = {key: value for key, value in admissions.items()
-                      if self._cycle_context_epochs.get(key) == epochs}
-        if not admissions:
-            return None
     if self._ready_scan_boundary is None:
         _, snapshot_time = self._daemon_owner()._accepted_snapshot()
         self._ready_scan_boundary = (
@@ -321,6 +315,19 @@ def _schedule_window(
                    if not self._attempt_cancel_requested(record.run_uri, record.attempt_id))
     if not window:
         return None
+    if self.daemon is not None:
+        # READY projections outlive an admission sweep. Revalidate their retained
+        # intent through the same bounded context loader before allocating work.
+        daemon = self.daemon
+        epochs = (daemon._epoch, daemon._scheduling_epoch)
+        ready_admissions = dict.fromkeys(record.admission_id for record in window)
+        for identity in ready_admissions:
+            admission = admissions.get(identity)
+            if admission is not None and self._cycle_context_epochs.get(identity) != epochs:
+                if not daemon._contexts.try_submit(admission, epochs, self.load_context, for_dispatch=True):
+                    break
+        admissions = {key: value for key, value in admissions.items()
+                      if self._cycle_context_epochs.get(key) == epochs}
     contexts = self._cycle_contexts
     exhausted_admissions: set[str] = set()
     for record in window:

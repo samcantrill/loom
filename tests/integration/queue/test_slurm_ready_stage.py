@@ -1010,31 +1010,39 @@ def _exercise_mixed_route_run(
         if provider_retry_state is not None:
             from loom.pipeline.executors.slurm.ready_stage import SlurmContainmentReceipt
             from loom.queue import _agent_slurm
-            from loom.queue._slurm_retry import PROVIDER_RECOVERY_PREFIX
+            from loom.queue._continuation import ContinuationPending
+            from loom.queue._slurm_retry import PROVIDER_RECOVERY_PREFIX, reconcile
 
             with daemon._cycle_lock:
-                assert execution.reconcile_slurm_retry(run_uri) == "waiting_for_slurm_termination_evidence"
+                assert reconcile(execution, run_uri) == ContinuationPending("waiting_for_slurm_termination_evidence")
                 if provider_retry_state == "TIMEOUT":
                     observed = execution.slurm_submissions.find(record.assignment.operation_id)
                     live = replace(observed, scheduler_state="RUNNING", scheduler_source="squeue",
                                    scheduler_observed_at="2026-01-02T10:00:00Z")
                     with monkeypatch.context() as patch:
                         patch.setattr(execution.slurm_submissions, "find", lambda _: live)
-                        assert execution.reconcile_slurm_retry(run_uri, accepted_at="2026-01-02T09:59:59Z") is None
-                        assert execution.reconcile_slurm_retry(
-                            run_uri, accepted_at="2026-01-02T10:00:01Z",
-                        ) == "waiting_for_slurm_termination_evidence"
+                        assert reconcile(execution, run_uri, accepted_at="2026-01-02T09:59:59Z") is None
+                        assert reconcile(
+                            execution, run_uri, accepted_at="2026-01-02T10:00:01Z",
+                        ) == ContinuationPending("waiting_for_slurm_termination_evidence")
                 agent = execution._slurm_agent
-                history_state[0] = provider_retry_state
-                observed = agent.journal.observe(record.assignment.operation_id, profile)
-                assert observed.scheduler_source == "sacct" and observed.accounting_identity is not None
-                agent._publish(record.assignment, observed, lambda evidence: execution.acknowledge_slurm_agent(
-                    execution.agent_id, execution.agent_id, evidence,
-                ))
+
+                def acknowledge(evidence):
+                    return execution.acknowledge_slurm_agent(
+                        record.assignment.agent_id, record.assignment.agent_root_id, evidence,
+                    )
+
+                with agent._lock:
+                    # Replay any earlier observation before injecting a new one.
+                    agent.replay_pending(acknowledge)
+                    history_state[0] = provider_retry_state
+                    observed = agent.journal.observe(record.assignment.operation_id, profile)
+                    assert observed.scheduler_source == "sacct" and observed.accounting_identity is not None
+                    agent._publish(record.assignment, observed, acknowledge)
                 with monkeypatch.context() as patch:
                     patch.setattr(_agent_slurm, "resolve_slurm_containment", lambda *_: SlurmContainmentReceipt("UNKNOWN"))
                     for _ in range(2):
-                        assert execution.reconcile_slurm_retry(run_uri) == "waiting_for_slurm_containment_evidence"
+                        assert reconcile(execution, run_uri) == ContinuationPending("waiting_for_slurm_containment_evidence")
                 assert not daemon._recovery_fences_ordinary_terminal(assignment_id)
                 with daemon._connection() as conn:
                     (intent,) = conn.execute("SELECT recovery_id, state FROM recovery_operations").fetchall()
@@ -1084,7 +1092,7 @@ def _exercise_mixed_route_run(
                 assert not daemon._recovery_fences_ordinary_terminal(assignment_id)
                 assert (settled.report is not None) == (provider_retry_winner == "worker")
                 assert attempt.reason is None or attempt.reason.detail.get("recovery_id") is None
-            assert execution.reconcile_slurm_retry(run_uri) is None
+            assert reconcile(execution, run_uri) is None
             assert not capability_path(record.assignment.operation_id).exists()
             return
         recovery_receipt = None

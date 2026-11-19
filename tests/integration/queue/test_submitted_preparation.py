@@ -26,7 +26,9 @@ pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 def _run(tmp_path, monkeypatch, *, stage_update=None, selected_inputs=False, slurm=False, configuration_update=None, staging_continuation_stages=()):
     service = _service(tmp_path)
     policy, execution, _ = _fixture(tmp_path)
-    if staging_continuation_stages:
+    if staging_continuation_stages and not any(
+        "publication" in root for root in policy.shared_roots.values()
+    ):
         policy = replace(policy, shared_roots={**policy.shared_roots, "control": {
             **policy.shared_roots["control"],
             "container_path": "/loom/output",

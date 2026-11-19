@@ -11,6 +11,8 @@ from loom.serialization import PlainData
 from .errors import QueueServiceError
 from .preparation import PrepareRunRequest
 
+RESUME_CANCELLED_CAPABILITY = "resume-cancelled-run-v1"
+
 
 @dataclass(frozen=True, slots=True)
 class RunRequest:

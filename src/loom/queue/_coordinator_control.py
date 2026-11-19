@@ -46,7 +46,7 @@ from .local_daemon import (
     _RecoveryNotAccepted,
 )
 from .preparation import PrepareRunRequest
-from .run import RunRequest
+from .run import RESUME_CANCELLED_CAPABILITY, RunRequest
 from ._service_lifetime import ServiceRetiring
 from ._preparation_operations import PreparationChildReserved, PreparationNotAccepted
 
@@ -1022,7 +1022,7 @@ def _connection_description(daemon: LocalDaemon, status: DaemonStatus, transport
             "artifact-read-v1",
             "bounded-run-logs-v1",
             *(
-                ("agent-preparation-v1", "reconciled-run-v1")
+                ("agent-preparation-v1", "reconciled-run-v1", RESUME_CANCELLED_CAPABILITY)
                 if daemon.preparation_available
                 else ()
             ),

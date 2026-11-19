@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from loom.pipeline.status import StageStatus
 
+from ._continuation import ContinuationConflict, ContinuationPending
 from ._shared_recovery import WIRE, retention_receipts
 from ._slurm_start import intended_execution_id
 from .errors import QueueConflictError
@@ -41,7 +42,9 @@ def _terminal_state(observed, record: SlurmStageRecord) -> str | None:
     return observed.scheduler_state
 
 
-def reconcile(execution: LocalDaemonExecution, run_uri: str, *, accepted_at: str | None = None) -> str | None:
+def reconcile(
+    execution: LocalDaemonExecution, run_uri: str, *, accepted_at: str | None = None,
+) -> ContinuationPending | ContinuationConflict | None:
     from .local_daemon import _RecoveryNotAccepted
 
     daemon = execution._daemon_owner()
@@ -63,7 +66,7 @@ def reconcile(execution: LocalDaemonExecution, run_uri: str, *, accepted_at: str
             with daemon._connection() as conn:
                 receipts = retention_receipts(conn, assignment.assignment_id)
             if "seal_unavailable" in receipts:
-                return "slurm_recovery_retention_budget_exceeded"
+                return ContinuationConflict("slurm_recovery_retention_budget_exceeded")
             if not provider_released:
                 waiting = "waiting_for_slurm_provider_release"
                 continue
@@ -149,4 +152,4 @@ def reconcile(execution: LocalDaemonExecution, run_uri: str, *, accepted_at: str
             continue
         waiting = ("waiting_for_slurm_provider_release" if result["state"] == "closed"
                    else "waiting_for_slurm_containment_evidence")
-    return waiting
+    return None if waiting is None else ContinuationPending(waiting)

@@ -14,6 +14,8 @@ from ._coordinator_run_progress import (
 from ._coordinator_run_authority import _ScopedCoordinatorAuthority as _ScopedCoordinatorAuthority
 
 from ._action_results import action_attempt_cancelled, action_attempt_needed, attach_action_fence
+from ._continuation import ContinuationConflict, ContinuationPending
+from ._embedded_recovery import EmbeddedRecovery
 from ._recovery_retry import _RecoveryRetry
 from ._slurm_admission import SlurmAdmissionDeferred
 from . import _slurm_retry
@@ -1384,6 +1386,7 @@ class LocalDaemonExecution:
             if config.agent_root is not None
             else None
         )
+        self._embedded_recovery = EmbeddedRecovery(self)
         self.open_owner_stores()
         self.supervisor = None
         if config.agent_root is not None:
@@ -1806,6 +1809,7 @@ class LocalDaemonExecution:
                 agent_root=self.config.agent_root,
                 supervisor=self.supervisor,
                 resident_launch_profile=self.config.resident_worker_launch_profile,
+                embedded_recovery=self._embedded_recovery,
                 suspend_requested=suspend_requested, durable_files=self.config.durable_files)
         except ManagedLocalError:
             if not self._is_exact_retained_unknown(assignment.assignment_id):
@@ -2841,9 +2845,19 @@ class LocalDaemonExecution:
             in_flight = True
         return in_flight, diagnostic
 
-    def reconcile_slurm_retry(self, run_uri: str, *, accepted_at: str | None = None) -> str | None:
-        """Advance or await the provider-owned prerequisites of a requested retry."""
-        return _slurm_retry.reconcile(self, run_uri, accepted_at=accepted_at)
+    def settle_continuation(
+        self, admission: LocalDaemonAdmission, *, accepted_at: str,
+    ) -> ContinuationPending | ContinuationConflict | None:
+        """Collect provider evidence before verifying and freezing a target revision."""
+        unresolved = _slurm_retry.reconcile(self, admission.run_uri, accepted_at=accepted_at)
+        if unresolved is not None:
+            return unresolved
+        if admission.state in {LocalDaemonAdmissionState.FAILED, LocalDaemonAdmissionState.CANCELLED} and (
+            self.coordinator.list_run_live_states(admission.run_uri)
+            or self.local_assignment_reconciliation_pending(admission.run_uri)
+        ):
+            return ContinuationPending("waiting_for_assignment_release")
+        return None
 
     def _reconcile_slurm_terminal_assignment(
         self,
@@ -3862,12 +3876,13 @@ class LocalDaemonExecution:
                 inputs=tuple(remote_inputs),
                 declared_outputs=tuple(sorted(stage.outputs)),
             )
-            from ._shared_recovery import bind_slurm_delivery
+            from ._shared_recovery import bind_provider_delivery
 
             with self._daemon_owner()._connection() as conn:
-                delivery = bind_slurm_delivery(
+                delivery = bind_provider_delivery(
                     delivery, conn, assignment.run_uri, self.config.coordinator_shared_roots,
                     agent_id=assignment.agent_id, slurm_assignments=self.slurm_assignments,
+                    embedded=self._embedded_recovery,
                     verify_trees=False,
                     cancelled_attempts=_cancelled_stage_attempts(snapshot, record.stage_name),
                 )
@@ -5069,7 +5084,13 @@ class LocalDaemonExecution:
         if profile is not None:
             if profile.shared_roots:
                 try:
-                    attributes.update(shared_attributes({"roots": qualifications(profile.shared_roots)}))
+                    roots = qualifications(profile.shared_roots)
+                    attributes.update(shared_attributes({"roots": roots}))
+                    if any(
+                        self._embedded_recovery.owns_root(alias, root)
+                        for alias, root in profile.shared_roots.items()
+                    ):
+                        attributes["staging_continuation_capability"] = STAGING_CONTINUATION_CAPABILITY
                 except QueueServiceError:
                     pass  # Changed mounts withdraw shared eligibility.
             attributes["resident_profile_fingerprint"] = (
@@ -5872,6 +5893,7 @@ class LocalDaemonExecution:
                 delivered = bind_delivery(
                     delivered, conn, assignment.run_uri, self._daemon_owner().config.coordinator_shared_roots,
                     session_id=remote_target.session_id, slurm_assignments=self.slurm_assignments,
+                    embedded=self._embedded_recovery,
                     verify_trees=False, cancelled_attempts=_cancelled_stage_attempts(snapshot, record.stage_name),
                 )
             verified, _preparation_reason = self._prepared_recovery_predecessors(record, delivered)
@@ -5987,6 +6009,7 @@ class LocalDaemonExecution:
                 agent_root=agent_root,
                 supervisor=supervisor,
                 resident_launch_profile=launch_profile,
+                embedded_recovery=self._embedded_recovery,
                 cancellation_requested=lambda: self._install_cancellation_if_requested(
                     admission, authority, intent.plan.stage_order, attempt_id=assignment.attempt_id
                 ),

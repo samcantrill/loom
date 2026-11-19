@@ -1528,8 +1528,16 @@ contained probe to check the actual interpreter/image's native contracts. The
 probe is bounded, imports no project configuration, and is omitted for unselected
 work. Submitted probes own the launch's image verification, avoiding a duplicate
 SIF hash. Saved supervisor launch replay does not perform new-launch qualification.
-The embedded local managed path does not advertise continuation: it still lacks
-the native staging handoff used by remote resident acceptance and Slurm grants.
+The embedded local managed path uses the same staging handoff when its worker
+profile and coordinator share a qualified writable publication root. The
+directory can be inside the protected run store on a standalone machine. The
+embedded supervisor proves process settlement and the local agent journal
+records resource release. The coordinator retains the recovery seal and
+completes any selected handoff before the next worker starts.
+An installed project processor can request continuation for checked downstream
+stages. The preparation owner validates those names and applies their storage
+and worker requirements to the captured graph. Preparation refuses that
+selection when the deployment lacks qualified publication storage.
 
 Physical provider/container/shared-storage qualification and application
 integration remain prerequisites to activation. The grant tests exercise native handlers, serialized

@@ -18,10 +18,11 @@ class PendingContext:
     admission: LocalDaemonAdmission
     epochs: tuple[str | None, str | None]
     future: Future[ManagedLocalIntent]
+    for_dispatch: bool
 
 
 class ContextPreparations:
-    """Two actual operations, no executor backlog, and round-robin admissions.
+    """Two actual operations with no executor backlog.
 
     Only the reconciliation owner changes bookkeeping. A cancelled or superseded
     caller cannot release capacity occupied by a running filesystem operation.
@@ -31,41 +32,49 @@ class ContextPreparations:
     def __init__(self, wake: Callable[[], None]) -> None:
         self._workers = ThreadPoolExecutor(max_workers=2, thread_name_prefix="loom-context")
         self._pending: dict[str, PendingContext] = {}
-        self._last_submitted: str | None = None
         self._wake = wake
         self._next_load: dict[str, tuple[int, tuple[str | None, str | None], float]] = {}
         self._interval = 0.0
 
-    def submit(
+    def begin_cycle(
         self, admissions: Iterable[LocalDaemonAdmission],
-        epochs: tuple[str | None, str | None],
-        load: Callable[[LocalDaemonAdmission], ManagedLocalIntent],
         *, minimum_interval: float = 0.0, invalidated: Iterable[str] = (),
     ) -> None:
         self._interval = minimum_interval
-        candidates = list(admissions)
-        active = {item.admission_id for item in candidates}
+        active = {item.admission_id: item.run_uri for item in admissions}
         invalidated_runs = set(invalidated)
-        for identity in self._next_load.keys() - active:
+        for identity in self._next_load.keys() - active.keys():
             del self._next_load[identity]
-        for item in candidates:
-            if item.run_uri in invalidated_runs:
-                self._next_load.pop(item.admission_id, None)
-        now = monotonic()
-        cursor = next((i + 1 for i, item in enumerate(candidates)
-                       if item.admission_id == self._last_submitted), 0)
-        for admission in candidates[cursor:] + candidates[:cursor]:
-            if len(self._pending) >= 2:
-                break
-            if admission.admission_id in self._pending:
-                continue
-            previous = self._next_load.get(admission.admission_id)
-            if previous is not None and previous[:2] == (admission.revision, epochs) and now < previous[2]:
-                continue
-            future = self._workers.submit(copy_context().run, _load_context, load, admission)
-            self._pending[admission.admission_id] = PendingContext(admission, epochs, future)
-            self._last_submitted = admission.admission_id
-            future.add_done_callback(lambda _future: self._wake())
+        for identity, run_uri in active.items():
+            if run_uri in invalidated_runs:
+                self._next_load.pop(identity, None)
+
+    def has_capacity(self) -> bool:
+        return len(self._pending) < 2
+
+    def try_submit(
+        self, admission: LocalDaemonAdmission, epochs: tuple[str | None, str | None],
+        load: Callable[[LocalDaemonAdmission], ManagedLocalIntent],
+        *, for_dispatch: bool = False,
+    ) -> bool:
+        """Account for one admission, deferring it only when both slots are occupied."""
+        identity = admission.admission_id
+        if identity in self._pending:
+            return True
+        previous = self._next_load.get(identity)
+        if (not for_dispatch and previous is not None
+            and previous[:2] == (admission.revision, epochs) and monotonic() < previous[2]):
+            return True
+        if not self.has_capacity():
+            return False
+        # READY work gets first access to a freed slot. Keep the other slot
+        # available for admissions that still need their initial reconciliation.
+        if for_dispatch and any(item.for_dispatch for item in self._pending.values()):
+            return False
+        future = self._workers.submit(copy_context().run, _load_context, load, admission)
+        self._pending[identity] = PendingContext(admission, epochs, future, for_dispatch)
+        future.add_done_callback(lambda _future: self._wake())
+        return True
 
     def completed(self) -> tuple[PendingContext, ...]:
         completed = tuple(item for item in self._pending.values() if item.future.done())
