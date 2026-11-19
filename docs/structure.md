@@ -1428,8 +1428,8 @@ lost response does not substitute the new head for the original predecessor.
 ## Outbound Agent Session Boundaries
 
 Control messages retain a 65,536-byte transport limit. The Slurm bootstrap
-registration reply permits up to 262,144 bytes for a recognized typed stage
-delivery, including ordered scientific configuration. Its control envelope
+registration reply permits up to 1,048,576 bytes for a recognized typed stage
+delivery, including ordered scientific configuration and compact retry candidates. Its control envelope
 still obeys the ordinary limit, and semantic fields retain bounded depth and
 collection sizes. Other operations and unrecognized delivery versions do not
 receive this larger budget. Artifact transfer limits are separate and unchanged.

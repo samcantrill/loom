@@ -59,9 +59,23 @@ def test_ordered_delivery_exceeding_control_budget_crosses_http_and_replays(tmp_
             _read_agent_reply(connection, operation, b"{}", role)
 
 
+def test_compact_retry_candidate_exceeding_256_kib_crosses_registration(tmp_path):
+    from loom.pipeline.planning.models import StageFingerprintRecord
+
+    # A measured PURE retry has a 440,592-character compressed candidate.
+    candidate = "zlib:" + "A" * 440_592
+    stage_config = {"preparation": {"purpose": {"kind": "project", "candidate_json": candidate}}}
+    value = _response(tmp_path, fingerprint_schema=3, stage_config=stage_config)
+    assert 262_144 < len(json.dumps(value).encode()) < 1_048_576
+    response = _read_agent_reply(_Connection(value), "register", b"{}", "slurm_bootstrap")
+    delivery = SlurmStageDelivery.from_dict(thaw_plain_data(response["delivery"]))
+    restored = StageFingerprintRecord.from_dict(delivery.fingerprint).payload.stage_config
+    assert restored["preparation"]["purpose"]["candidate_json"] == candidate
+
+
 def test_registration_reply_keeps_a_finite_transport_budget(tmp_path):
     value = _response(tmp_path, fingerprint_schema=3,
-                      stage_config={"content": "x" * 262144})
+                      stage_config={"content": "x" * 1_048_576})
     with pytest.raises(QueueServiceError, match="body is too large"):
         _decode(json.dumps(value).encode(), slurm_registration=True)
     with pytest.raises(_IndeterminateAgentProtocolError):

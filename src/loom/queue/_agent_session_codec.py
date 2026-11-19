@@ -24,9 +24,9 @@ from ._remote_stage_execution import (
 
 _MAX_BODY_BYTES = 65_536
 
-# Ordered configuration envelopes expand native scientific deliveries. This
-# budget belongs only to the typed Slurm registration reply, not control traffic.
-_MAX_SLURM_REGISTRATION_BYTES = 262_144
+# Ordered scientific configurations include compact retry verification inputs.
+# Only typed Slurm registration replies admit this semantic payload budget.
+_MAX_SLURM_REGISTRATION_BYTES = 1_048_576
 
 _MAX_QUERY_RESPONSE_BYTES = 1_048_576
 
