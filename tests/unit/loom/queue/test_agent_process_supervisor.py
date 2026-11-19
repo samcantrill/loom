@@ -333,6 +333,34 @@ def test_shared_new_launch_reports_progress_and_stops_before_spawning(tmp_path, 
         assert conn.execute("SELECT COUNT(*) FROM launches").fetchone()[0] == 0
 
 
+def test_detached_supervisor_retains_shared_input_validation_progress(tmp_path):
+    resident, request, data = _shared_container_request(tmp_path)
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    client = AgentProcessSupervisorService.initialize(
+        agent, configuration=SupervisorLaunchConfiguration("agent-A", (resident.launch_profile,))
+    )
+    try:
+        launch = _retain_shared_launch(client, tmp_path, resident, request)
+        (data / "nested").mkdir()
+        (data / "nested" / "outside").symlink_to(tmp_path)
+        with pytest.raises(AgentProcessSupervisorError, match="shared input trees require regular files and directories"):
+            client.launch(launch)
+        path = agent / "supervisor" / "supervisor.log"
+        progress = [
+            row for line in path.read_text().splitlines()
+            if (row := json.loads(line)).get("kind") == "input_validation_progress"
+        ]
+        assert len(progress) == 1
+        assert progress[0]["operation_id"] == launch.assignment_id
+        assert progress[0]["entries_examined"] == 0
+        assert progress[0]["last_progress_at"]
+        assert path.stat().st_mode & 0o777 == 0o600
+        assert not (launch.workspace_root / "run.grant").exists()
+    finally:
+        client.shutdown_for_test()
+
+
 def test_shared_docker_replay_observes_without_original_inputs_or_new_container(tmp_path, monkeypatch):
     from loom.queue._docker_worker import DockerWorker
     from tests.unit.loom.queue.test_docker_worker import Daemon

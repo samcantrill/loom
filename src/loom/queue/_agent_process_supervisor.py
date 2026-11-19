@@ -2134,20 +2134,21 @@ class AgentProcessSupervisorService:
         with AgentProcessSupervisorService._startup_lock:
             process = AgentProcessSupervisorService._starting_services.get(root)
             if process is None or process.poll() is not None:
-                process = subprocess.Popen(
-                    [
-                        sys.executable,
-                        "-m",
-                        "loom.queue._agent_process_supervisor",
-                        "--serve",
-                        str(root),
-                    ],
-                    cwd=str(Path.cwd()),
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    start_new_session=True,
-                )
+                with _detached_supervisor_stderr(root) as stderr:
+                    process = subprocess.Popen(
+                        [
+                            sys.executable,
+                            "-m",
+                            "loom.queue._agent_process_supervisor",
+                            "--serve",
+                            str(root),
+                        ],
+                        cwd=str(Path.cwd()),
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL,
+                        stderr=stderr,
+                        start_new_session=True,
+                    )
                 AgentProcessSupervisorService._starting_services[root] = process
 
                 def reap(child: subprocess.Popen[bytes]) -> None:
@@ -2171,6 +2172,30 @@ class AgentProcessSupervisorService:
                         "managed supervisor endpoint is unavailable"
                     )
                 sleep(0.02)
+
+
+@contextmanager
+def _detached_supervisor_stderr(root: Path) -> Generator[int, None, None]:
+    """Keep detached diagnostics in the private root without retaining caller pipes."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NONBLOCK | os.O_NOFOLLOW
+    try:
+        fd = os.open(root / "supervisor.log", flags, 0o600)
+    except OSError:
+        yield subprocess.DEVNULL
+        return
+    try:
+        try:
+            info = os.fstat(fd)
+            valid = (
+                stat.S_ISREG(info.st_mode)
+                and info.st_uid == os.geteuid()
+                and not info.st_mode & 0o077
+            )
+        except OSError:
+            valid = False
+        yield fd if valid else subprocess.DEVNULL
+    finally:
+        os.close(fd)
 
 
 def _host_boot_evidence() -> dict[str, str]:

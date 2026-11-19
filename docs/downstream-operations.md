@@ -407,6 +407,15 @@ startup fails closed. An empty supervisor may restart after a host restart; a
 supervisor that has accepted a launch cannot be reconstructed from an absent
 process and requires explicit recovery.
 
+A detached worker supervisor appends service diagnostics to
+`<agent-root>/supervisor/supervisor.log` on the agent host. Input validation
+records carry the assignment ID, elapsed time and entries examined. A
+foreground supervisor writes the same diagnostics to the service manager's
+stderr stream. For submitted-container v3 assignments, the agent's service log
+records `assignment_input_locations`. The supervisor records
+`new_launch_input_qualification`. The worker's native result records
+`worker_input_qualification`. Join these observations by assignment ID.
+
 Each private supervisor IPC exchange has a ten-second whole-exchange deadline
 covering connect, mutual authentication, request send and response read. This
 bounds the actual calling operation and closes its connection; it does not set

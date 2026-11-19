@@ -100,7 +100,7 @@ def test_selected_catalog_survives_agent_launch_and_shared_reference_delivery(tm
         _close(client)
 
 
-def test_selected_delivery_defers_recursive_check_to_new_launch(tmp_path, monkeypatch):
+def test_selected_delivery_defers_recursive_check_to_new_launch(tmp_path, monkeypatch, capsys):
     from loom.queue import shared_execution
     from loom.queue._container_worker import qualify_shared_worker_inputs
     from loom.queue._remote_stage_execution import _ResidentAssignmentWorkspace
@@ -123,6 +123,10 @@ def test_selected_delivery_defers_recursive_check_to_new_launch(tmp_path, monkey
     monkeypatch.setattr(shared_execution.os, "walk", counted)
     workspace.persist_request(request, profile)
     assert workspace.has_request() and not visits
+    evidence = json.loads(capsys.readouterr().err)
+    assert evidence["operation_id"] == request.assignment_id
+    assert [span["action"] for span in evidence["spans"]] == ["assignment_input_locations"]
+    assert evidence["spans"][0]["outcome"] == "complete"
 
     data = tmp_path / "input-tree"
     (data / "a-link").symlink_to(data / "payload.bin")

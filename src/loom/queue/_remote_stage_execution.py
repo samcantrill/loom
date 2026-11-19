@@ -73,6 +73,7 @@ from ._agent_process_supervisor import (
     _launch_from_value,
     _preparation_root_bindings,
 )
+from ._phase_timing import log_phases, observe_phases, phase
 from .errors import QueueConflictError, QueueServiceError
 from .submitted_execution import (
     SELECTED_INPUT_WORKER_CONTRACT,
@@ -1882,7 +1883,10 @@ class _ResidentAssignmentWorkspace:
             if execution is not None and execution.worker_contract == SELECTED_INPUT_WORKER_CONTRACT:
                 # The supervisor owns recursive validation before starting a new
                 # submitted worker. Delivery validates the admitted locations.
-                require_binding_locations(shared, launch_profile.shared_roots)
+                with observe_phases(log_phases), phase(
+                    "assignment_input_locations", operation_id=request.assignment_id,
+                ):
+                    require_binding_locations(shared, launch_profile.shared_roots)
             else:
                 require_bindings(shared, launch_profile.shared_roots)
         for item in request.inputs:
