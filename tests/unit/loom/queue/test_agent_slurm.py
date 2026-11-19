@@ -693,6 +693,40 @@ def test_pacing_starts_after_submitting_acknowledgement(tmp_path, monkeypatch):
     assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
 
 
+@pytest.mark.parametrize("cancel", [False, True])
+def test_reopen_after_deferred_submit_permission_before_scheduler_call(tmp_path, cancel):
+    runner = FakeSlurmCommandRunner()
+    profile = _profile(runner, tmp_path)
+    AgentSlurmJobs.initialize(tmp_path)
+    first = AgentSlurmJobs(tmp_path, (profile,))
+    task = _task(profile)
+    deferred = []
+
+    def pending(value):
+        if value["submission"]["state"] == "submitting":
+            deferred.append(value)
+            return {"sequence": value["sequence"], "disposition": "pending",
+                    "assignment_id": value["assignment"]["assignment_id"], "retry_after_seconds": 1}
+        return {"sequence": value["sequence"], "cancel_requested": False}
+
+    first.step(task, pending)
+    assert len(deferred) == 1
+    assert not any(name == "sbatch" for name, *_ in runner.calls)
+    reopened = AgentSlurmJobs(tmp_path, (profile,))
+    receipts = []
+
+    def applied(value):
+        receipts.append(value)
+        return {"sequence": value["sequence"], "cancel_requested": cancel}
+
+    reopened.step(task, applied)
+    assert receipts[0] == deferred[0]
+    assert all(row["submission"]["state"] != "intent" for row in receipts)
+    final = reopened.journal.read("operation-1")
+    assert final.state is (ReadyStageState.REJECTED if cancel else ReadyStageState.ACCEPTED)
+    assert sum(name == "sbatch" for name, *_ in runner.calls) == int(not cancel)
+
+
 def test_failed_pending_ack_does_not_hide_later_receipts_or_submit_again(tmp_path):
     runner = FakeSlurmCommandRunner()
     profile = _profile(runner, tmp_path, retention_bytes=512 * 1024 * 1024)

@@ -519,17 +519,6 @@ class AgentSlurmJobs:
             if scanned == len(rows) and len(rows) < 32:
                 self._replay_after = None
 
-    def _before_submit(
-        self, assignment: SlurmStageAssignment, value: SlurmReadyStageSubmission,
-        acknowledge: Callable[[Mapping[str, PlainData]], Mapping[str, PlainData]],
-    ) -> bool:
-        if self._publish(assignment, value, acknowledge).get("cancel_requested") is True:
-            return False
-        # Timestamp the actual call boundary, after its durable acknowledgement.
-        # A failed acknowledgement never consumes a pacing interval.
-        self._last_submit = monotonic()
-        return True
-
     def step(
         self,
         task: Mapping[str, PlainData],
@@ -740,8 +729,8 @@ class AgentSlurmJobs:
         if retained is not None and retained[0]:
             self._reconciled_operations.pop(assignment.operation_id, None)
             return
-        if self.observation_policy is not None and retained is not None and retained[1] is not None and retained[2]:
-            last = json.loads(str(retained[1]))
+        last = json.loads(retained[1]) if retained is not None and retained[1] else None
+        if self.observation_policy is not None and last is not None and retained[2]:
             if last["release"] is not None:
                 # A positive release acknowledgement already crossed the durable
                 # outbox. Finish the exact revoke/release without another query.
@@ -785,7 +774,12 @@ class AgentSlurmJobs:
             script.chmod(0o600)
         current = self.journal.prepare(request, profile, script)
         if current.state is ReadyStageState.INTENT:
-            reply = self._publish(assignment, current, acknowledge)
+            # An acknowledged remote SUBMITTING barrier and a local INTENT
+            # prove the scheduler call has not yet been claimed. Replay the
+            # same outbox sequence after deferred/lost replies or a restart.
+            submitting = replace(current, state=ReadyStageState.SUBMITTING)
+            announced = last is not None and last["submission"]["state"] == ReadyStageState.SUBMITTING.value
+            reply = self._publish(assignment, submitting if announced else current, acknowledge)
             if reply.get("cancel_requested") is True:
                 current = self.journal.suppress_before_submit(request.operation_id)
             elif not allow_submission:
@@ -796,13 +790,11 @@ class AgentSlurmJobs:
                 and monotonic() < self._last_submit + self.submit_interval_seconds
             ):
                 return
+            elif not announced and self._publish(assignment, submitting, acknowledge).get("cancel_requested") is True:
+                current = self.journal.suppress_before_submit(request.operation_id)
             else:
-                current = self.journal.submit(
-                    request,
-                    profile,
-                    script,
-                    before_runner=lambda value: self._before_submit(assignment, value, acknowledge),
-                )
+                self._last_submit = monotonic()
+                current = self.journal.submit(request, profile, script)
         elif current.state in {ReadyStageState.SUBMITTING, ReadyStageState.UNKNOWN}:
             job = task.get("job_id")
             if isinstance(job, str):
