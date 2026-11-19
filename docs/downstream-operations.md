@@ -767,6 +767,12 @@ unfinished stages after their assignments have settled, preserves successful
 commits, and delivers retained recovery trees to the next attempt. Replaying
 the same submission or an earlier cancellation preserves its original outcome.
 
+The selected preparation worker advertises its supported candidate encoding in
+the committed preparation report. Workers that support compact verification
+receive the ordered candidate as one canonical JSON document. The coordinator
+retains that encoding with the verifier generation so restarting the service
+replays the same child. Older workers continue to receive the expanded mapping.
+
 A Slurm timeout can terminate the worker before it reports. Failed-run retry
 uses the installed profile's accounting and containment evidence for that exact
 allocation, then waits for provider release and shared recovery retention.
@@ -815,7 +821,7 @@ this verdict to the invocation, installation and captured descriptor. A changed
 candidate requires re-observation and a fresh verification child. Nonterminal
 admission counter changes alone do not invalidate unchanged decision facts; failed
 revision fencing and authority/commit identity checks remain exact. Rejection,
-missing/corrupt evidence, unavailable authority, cancelled targets and foreign
+missing/corrupt evidence, unavailable authority, cancellations without explicit resume, and foreign
 scope retain failure without creating another canonical target. Schema 1 project
 processors and version 2–4 exact preparation reports retain their existing contracts.
 

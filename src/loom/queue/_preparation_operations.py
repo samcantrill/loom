@@ -22,7 +22,7 @@ from loom.artifacts import ArtifactRef
 from loom.io.uris import uri_to_path
 from loom.pipeline.runtime.options import RunOptions
 from loom.pipeline.cleanup.preparation_pins import retain_preparation_path
-from loom.serialization import PlainData, stable_json_bytes
+from loom.serialization import PlainData, stable_json_bytes, thaw_plain_data
 from loom.runs.context import SubmissionContext
 
 from .errors import QueueConflictError, QueueServiceError
@@ -32,6 +32,10 @@ from ._service_lifetime import ServiceRetiring
 from ._phase_timing import PhaseTimings, phase
 from .submitted_execution import SubmittedContainerCapability
 from .preparation import (
+    CANDIDATE_DOCUMENT_ENCODING,
+    CANDIDATE_ENCODING_METADATA,
+    _candidate_document,
+    _read_candidate_document,
     PreparationChildInput,
     PrepareRunRequest,
     SharedInputReceipt,
@@ -314,6 +318,8 @@ def _mapping(value: object) -> dict[str, PlainData]:
 
 
 def _same_candidate(observed: object, current: Mapping[str, PlainData]) -> bool:
+    if isinstance(observed, str):
+        observed = thaw_plain_data(_read_candidate_document(observed))
     if not isinstance(observed, Mapping):
         return False
     before, after = dict(observed), dict(current)
@@ -1063,6 +1069,7 @@ class CoordinatorPreparations:
             except QueueConflictError:
                 self._fail(row, "publication_conflict", conflict=True)
                 return
+        candidate = _mapping(selected["reconciliation"])["candidate"] if "reconciliation" in selected else None
         binding = PreparationChildInput(
             request.operation_id,
             request.preparation_profile,
@@ -1074,7 +1081,8 @@ class CoordinatorPreparations:
             request.run_options,
             cast(Mapping[str, PlainData] | None, profile.get("local_scope")),
             project_binding,
-            None if "reconciliation" not in selected else cast(Mapping[str, PlainData] | None, _mapping(selected["reconciliation"])["candidate"]),
+            cast(Mapping[str, PlainData] | None, None if isinstance(candidate, str) else candidate),
+            _candidate_document=candidate if isinstance(candidate, str) else None,
             shared_scope=cast(Mapping[str, PlainData] | None, profile.get("shared_scope")),
             generations=cast(Mapping[str, str] | None, selected.get("generations")),
             action_verification=cast(Mapping[str, PlainData] | None, selected.get("action_verification")),
@@ -1421,7 +1429,14 @@ class CoordinatorPreparations:
                     reconciliation["failed_revision"] = admission.revision
                     self._save_selection(operation_id, selected)
                 if not _same_candidate(reconciliation["candidate"], candidate):
-                    reconciliation["candidate"] = candidate
+                    # A new verifier may use the scalar form only when the selected
+                    # worker has advertised its decoder. A retained generation owns
+                    # its original encoding across coordinator restarts.
+                    reconciliation["candidate"] = (
+                        _candidate_document(candidate)
+                        if report.reference.metadata.get(CANDIDATE_ENCODING_METADATA) == CANDIDATE_DOCUMENT_ENCODING
+                        else candidate
+                    )
                     reconciliation["verification_generation"] = cast(int, reconciliation["verification_generation"]) + 1
                     generation = reconciliation["verification_generation"]
                     child_name = PREPARATION_RUN_PREFIX + hashlib.sha256(f"{operation_id}:verify:{generation}".encode()).hexdigest()
@@ -1429,7 +1444,7 @@ class CoordinatorPreparations:
                         conn.execute("BEGIN IMMEDIATE")
                         current = conn.execute("SELECT result_json FROM preparation_operations WHERE operation_id = ?", (operation_id,)).fetchone()
                         result["cancellation_operation_id"] = json.loads(current["result_json"])["cancellation_operation_id"]
-                        conn.execute("UPDATE preparation_operations SET selected_json = ?, child_name = ?, child_admission_id = NULL, dispatch_claimed = 0, state = 'pending', result_json = ? WHERE operation_id = ?",
+                        conn.execute("UPDATE preparation_operations SET selected_json = ?, child_name = ?, child_admission_id = NULL, dispatch_claimed = 0, state = 'pending', result_code = NULL, result_json = ? WHERE operation_id = ?",
                                      (_json(selected), child_name, _json(result), operation_id))
                         conn.commit()
                     return

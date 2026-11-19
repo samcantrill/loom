@@ -123,6 +123,27 @@ def test_staging_continuation_child_requires_publication_and_keeps_worker_unsele
         }})
 
 
+def test_ordinary_verifier_preserves_negotiated_or_legacy_candidate_encoding():
+    from loom.queue._preparation_operations import _same_candidate
+    from loom.queue.preparation import PreparationChildInput, _candidate_document
+    from tests.unit.loom.pipeline.test_action_verification import _binding
+
+    candidate = {"configuration": {"items": [["train", 1], ["fit", 2]]},
+                 "admission": {"state": "CANCELLED", "revision": 5}}
+    binding = replace(_binding(), action_verification=None, candidate=candidate)
+    legacy = binding.to_dict(compact_candidate=True)
+    assert legacy["purpose"]["candidate"] == candidate
+
+    document = _candidate_document(candidate)
+    negotiated = replace(binding, candidate=None, _candidate_document=document)
+    compact = negotiated.to_dict(compact_candidate=True)
+    assert compact["purpose"]["candidate_json"] == document
+    assert "staging_continuation_stages" not in compact
+    assert PreparationChildInput.from_dict(compact) == PreparationChildInput.from_dict(legacy)
+    assert _same_candidate(document, candidate)
+    assert not _same_candidate(document, {**candidate, "admission": {"state": "CANCELLED", "revision": 6}})
+
+
 def test_fresh_generation_roundtrip_and_target_identity(tmp_path):
     from loom.queue.preparation import PreparationChildInput, project_target_from_key
 

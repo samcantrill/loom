@@ -542,6 +542,17 @@ def _decode_scope(value: object) -> tuple[object, object]:
     raise QueueServiceError("preparation scope fields are invalid")
 
 
+CANDIDATE_ENCODING_METADATA = "loom.preparation.candidate_encoding"
+CANDIDATE_DOCUMENT_ENCODING = "canonical-json.v1"
+
+
+def _candidate_document(candidate: Mapping[str, PlainData]) -> str:
+    raw = stable_json_bytes(candidate)
+    if len(raw) > _MAX_BYTES:
+        return raw.decode("utf-8")
+    return "zlib:" + base64.b64encode(zlib.compress(raw)).decode("ascii")
+
+
 @lru_cache(maxsize=1)
 def _read_candidate_document(document: str) -> Mapping[str, PlainData]:
     """Admit a repeated grant's immutable verification input once per process."""
@@ -613,7 +624,7 @@ class PreparationChildInput:
             raise QueueServiceError("shared configuration requires shared capture and no local pin")
         object.__setattr__(self, "local_scope", _local_scope(self.local_scope))
         if _candidate_document is not None:
-            if self.candidate is not None or not self.staging_continuation_stages or self.project_preparation is None or self.action_verification is not None:
+            if self.candidate is not None or self.project_preparation is None or self.action_verification is not None:
                 raise QueueServiceError("compact input requires project candidate verification")
             object.__setattr__(self, "candidate", _read_candidate_document(_candidate_document))
             object.__setattr__(self, "_retained_candidate_document", _candidate_document)
@@ -684,16 +695,12 @@ class PreparationChildInput:
         if self.project_preparation is not None:
             purpose = {"kind": "project", "binding": thaw_plain_data(self.project_preparation)}
             if self.candidate is not None:
-                if compact_candidate and self.staging_continuation_stages:
+                if compact_candidate and (self._retained_candidate_document is not None or self.staging_continuation_stages):
                     document = self._retained_candidate_document
                     if document is None:
                         # A scalar avoids order-encoding this already ordered configuration
                         # again in the stage plan, its fingerprint and the runtime snapshot.
-                        raw = stable_json_bytes(self.candidate)
-                        document = (
-                            "zlib:" + base64.b64encode(zlib.compress(raw)).decode("ascii")
-                            if len(raw) <= _MAX_BYTES else raw.decode("utf-8")
-                        )
+                        document = _candidate_document(self.candidate)
                     purpose["candidate_json"] = document
                 else:
                     purpose["candidate"] = thaw_plain_data(self.candidate)

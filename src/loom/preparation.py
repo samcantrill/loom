@@ -66,6 +66,8 @@ from loom.queue.managed_local_preparation import (
     prepare_managed_run,
 )
 from loom.queue.preparation import (
+    CANDIDATE_DOCUMENT_ENCODING,
+    CANDIDATE_ENCODING_METADATA,
     LOCAL_PREPARATION_SCOPE,
     _local_scope,
     _project_binding,
@@ -255,7 +257,11 @@ class PreparationStage:
         path = context.local_output_path("report", suffix=".json")
         atomic_write_bytes(path, stable_json_bytes(primary))
         return {"report": context.register_local_artifact(
-            "report", path, artifact_type="json", codec_key="json.v1"
+            "report", path, artifact_type="json", codec_key="json.v1",
+            metadata=(
+                {CANDIDATE_ENCODING_METADATA: CANDIDATE_DOCUMENT_ENCODING}
+                if binding.project_preparation is not None else None
+            ),
         )}
 
 
@@ -847,7 +853,7 @@ def prepare_child_run(
                 {
                     "name": "prepare",
                     "factory": {"_target_": PREPARATION_STAGE_TARGET},
-                    "config": binding.to_dict(compact_candidate=bool(binding.staging_continuation_stages)),
+                    "config": binding.to_dict(compact_candidate=True),
                     "resources": {
                         "entries": {
                             "cpu": {"kind": "cpu", "amount": 1, "unit": "count"}
