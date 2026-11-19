@@ -1740,9 +1740,12 @@ class SQLiteSlurmStageAssignments:
         )
 
 
-@lru_cache(maxsize=128)
-def _cached_retained_delivery(encoded: str) -> SlurmStageDelivery:
+def _decode_retained_delivery(encoded: str) -> SlurmStageDelivery:
     return SlurmStageDelivery.from_dict(json.loads(encoded))
+
+
+_cached_retained_delivery = lru_cache(maxsize=112)(_decode_retained_delivery)
+_cached_large_delivery = lru_cache(maxsize=4)(_decode_retained_delivery)
 
 
 def _retained_delivery(encoded: str) -> SlurmStageDelivery:
@@ -1750,9 +1753,12 @@ def _retained_delivery(encoded: str) -> SlurmStageDelivery:
     # from SQLite, never by assignment ID or a mutable record revision. Only
     # successful validation is cached; live state and release proofs are not.
     # Bound retained source documents to 32 MiB, excluding decoded-object overhead.
-    if len(encoded.encode("utf-8")) > 256 * 1024:
-        return SlurmStageDelivery.from_dict(json.loads(encoded))
-    return _cached_retained_delivery(encoded)
+    size = len(encoded.encode("utf-8"))
+    if size <= 256 * 1024:
+        return _cached_retained_delivery(encoded)
+    if size <= 1024 * 1024:
+        return _cached_large_delivery(encoded)
+    return _decode_retained_delivery(encoded)
 
 
 class SlurmBootstrapWorkspace:
