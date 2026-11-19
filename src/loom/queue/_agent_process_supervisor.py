@@ -9,6 +9,7 @@ private queue application infrastructure; pipeline execution never imports it.
 from __future__ import annotations
 
 from collections.abc import Generator
+from concurrent.futures import CancelledError
 from loom._sqlite_policy import connect_existing, initialize_database
 from loom.pipeline.stores.atomic import atomic_write_text, atomic_write_bytes
 from ._storage_policy import StoragePolicy, parse_storage_policy
@@ -912,6 +913,8 @@ class AgentProcessSupervisor:
         try:
             with observe_phases(log_phases), phase("new_launch_input_qualification", operation_id=launch.assignment_id):
                 self._require_new_launch_inputs(launch)
+        except CancelledError as exc:
+            raise _SupervisorNoStartError("input qualification cancelled before start") from exc
         except (ValueError, OSError, QueueError, RuntimeResourceError) as exc:
             raise _SupervisorNoStartError(str(exc)) from exc
 
@@ -930,7 +933,24 @@ class AgentProcessSupervisor:
             if profile.submitted_execution is not None:
                 _ResidentAssignmentWorkspace.require_submitted_launch(launch)
             assignment = _ResidentAssignmentWorkspace.read_request(launch.workspace_root)
-            qualify_shared_worker_inputs(profile, assignment, agent_id=launch.agent_id)
+            def report_progress(update) -> None:
+                try:
+                    log_phases({
+                        "kind": "input_validation_progress",
+                        "operation_id": launch.assignment_id,
+                        "entries_examined": update.entries_examined,
+                        "elapsed_milliseconds": round(update.elapsed_seconds * 1000),
+                        "last_progress_at": update.last_progress_at,
+                    })
+                except OSError:
+                    # A closed diagnostic stream cannot veto a qualified launch.
+                    pass
+
+            qualify_shared_worker_inputs(
+                profile, assignment, agent_id=launch.agent_id,
+                cancelled=lambda: launch.launch_operation_id in self._stop_requested,
+                progress=report_progress,
+            )
         if profile.container is not None and launch.schema_version is not None:
             expected = _validated_resource_controls(
                 launch.container_command.metadata.get("resource_controls")

@@ -9,7 +9,10 @@ not make worker-local diagnostic files a dependency of coordinator inspection.
 
 from __future__ import annotations
 
-from .shared_execution import assignment_scope, require_bindings, validate_workload, SHARED_EXECUTION_SCOPE
+from .shared_execution import (
+    SHARED_EXECUTION_SCOPE, assignment_scope, require_binding_locations, require_bindings,
+    validate_workload,
+)
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
@@ -72,6 +75,7 @@ from ._agent_process_supervisor import (
 )
 from .errors import QueueConflictError, QueueServiceError
 from .submitted_execution import (
+    SELECTED_INPUT_WORKER_CONTRACT,
     SUBMITTED_EXECUTION_SCOPE,
     SubmittedContainerCapability,
     SubmittedContainerExecution,
@@ -1873,7 +1877,13 @@ class _ResidentAssignmentWorkspace:
                 return
         shared = assignment_scope(request.fingerprint)
         if shared is not None:
-            require_bindings(shared, launch_profile.shared_roots)
+            execution = request.submitted_execution
+            if execution is not None and execution.worker_contract == SELECTED_INPUT_WORKER_CONTRACT:
+                # The supervisor owns recursive validation before starting a new
+                # submitted worker. Delivery validates the admitted locations.
+                require_binding_locations(shared, launch_profile.shared_roots)
+            else:
+                require_bindings(shared, launch_profile.shared_roots)
         for item in request.inputs:
             if shared_binding(item.metadata) is not None:
                 from ._shared_publication import resolve_input
@@ -2169,7 +2179,9 @@ class _ResidentAssignmentWorkspace:
             ).fetchone()
         return None if row is None or row[0] is None else str(row[0])
 
-    def worker_request(self, *, resolve_shared: bool = False) -> StageWorkerRequest:
+    def worker_request(
+        self, *, resolve_shared: bool = False, shared_profile: ResidentWorkerLaunchProfile | None = None,
+    ) -> StageWorkerRequest:
         """Project native request facts; execution alone resolves shared payloads.
 
         No-start cancellation/failure projections need no payload access or launch.
@@ -2189,12 +2201,16 @@ class _ResidentAssignmentWorkspace:
             thaw_plain_data(request.fingerprint, path="remote fingerprint")
         )
         def input_path(item):
+            nonlocal shared_profile
             if shared_binding(item.metadata) is None or not resolve_shared:
                 return self.input_path(item.logical_name)
             from ._shared_publication import resolve_input
             from .shared_execution import execution_roots
-            profile = self.shared_launch_profile()
-            return resolve_input(item, execution_roots(profile.shared_roots, container=profile.container is not None))
+            if shared_profile is None:
+                shared_profile = self.shared_launch_profile()
+            return resolve_input(item, execution_roots(
+                shared_profile.shared_roots, container=shared_profile.container is not None,
+            ))
         inputs = {
             item.logical_name: item.local_ref(input_path(item))
             for item in request.inputs
@@ -2210,7 +2226,7 @@ class _ResidentAssignmentWorkspace:
         from ._shared_recovery import WIRE, BINDING, worker_binding
         metadata.pop(WIRE, None)
         if resolve_shared:
-            recovery = worker_binding(self)
+            recovery = worker_binding(self, profile=shared_profile)
             if recovery is not None:
                 metadata[BINDING] = recovery
         logs = self.root / "logs"
@@ -2259,7 +2275,9 @@ class _ResidentAssignmentWorkspace:
         require_bindings(required, execution_roots(profile.shared_roots, container=profile.container is not None))
         return profile
 
-    def preparation_context(self) -> Mapping[str, PlainData] | None:
+    def preparation_context(
+        self, *, shared_profile: ResidentWorkerLaunchProfile | None = None,
+    ) -> Mapping[str, PlainData] | None:
         """Bind only the fixed child's selected alias to its retained launch profile."""
         request = self.request()
         preparation = request.preparation_input
@@ -2269,7 +2287,7 @@ class _ResidentAssignmentWorkspace:
         if retained is None:
             raise QueueConflictError("preparation input requires a retained supervisor launch")
         if preparation.shared_scope is not None:
-            launch_profile = self.shared_launch_profile()
+            launch_profile = shared_profile if shared_profile is not None else self.shared_launch_profile()
         else:
             launch = _launch_from_value(json.loads(retained))
             if (

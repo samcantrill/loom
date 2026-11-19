@@ -270,6 +270,16 @@ def _selected_input_paths(
     return paths
 
 
+def require_binding_locations(
+    required: Mapping[str, PlainData], roots: Mapping[str, PlainData],
+) -> None:
+    """Validate the selected roots and locations without walking descendants."""
+    try:
+        _selected_input_paths(required, roots, lambda: None)
+    except OSError as error:
+        raise InputValidationIOError("shared input locations cannot be inspected") from error
+
+
 @phase("input_root_validation")
 def require_bindings(
     required: Mapping[str, PlainData], roots: Mapping[str, PlainData], *,

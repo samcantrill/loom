@@ -388,7 +388,7 @@ def resolve(value: object, roots: Mapping[str, PlainData]) -> Path:
     return tree
 
 
-def worker_binding(workspace: Any) -> dict[str, PlainData] | None:
+def worker_binding(workspace: Any, *, profile: Any = None) -> dict[str, PlainData] | None:
     request = workspace.request()
     value = validate_wire(request)
     if value is None:
@@ -397,7 +397,8 @@ def worker_binding(workspace: Any) -> dict[str, PlainData] | None:
     from .shared_execution import execution_roots
 
     launch, _ = workspace_facts(workspace)
-    profile = workspace.shared_launch_profile()
+    if profile is None:
+        profile = workspace.shared_launch_profile()
     roots = execution_roots(
         profile.shared_roots, container=profile.container is not None
     )
