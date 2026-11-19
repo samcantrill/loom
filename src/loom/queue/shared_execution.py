@@ -26,6 +26,7 @@ from ._phase_timing import phase
 SHARED_EXECUTION_CAPABILITY = "shared-execution-v1"
 INPUT_DIRECTORY_CAPABILITY = "input-directory-v1"
 SHARED_EXECUTION_SCOPE = "loom.shared_execution"
+STAGING_CONTINUATION_CAPABILITY = "released-output-staging-v1"
 SOURCE_PROMOTION_CAPABILITY = "quiescent-source-promotion-v1"
 
 
@@ -198,7 +199,10 @@ def has_input_directories(roots: Mapping[str, PlainData]) -> bool:
 def scope(value: object) -> dict[str, PlainData] | None:
     if value is None:
         return None
-    if (not isinstance(value, Mapping) or set(value) != {"capability", "roots", "locations"}
+    if (not isinstance(value, Mapping) or set(value) not in (
+        {"capability", "roots", "locations"},
+        {"capability", "roots", "locations", "staging_continuation"},
+    )
         or value["capability"] != SHARED_EXECUTION_CAPABILITY or not isinstance(value["roots"], Mapping)
         or not isinstance(value["locations"], (list, tuple))):
         raise QueueServiceError("shared execution scope is unsupported")
@@ -206,7 +210,14 @@ def scope(value: object) -> dict[str, PlainData] | None:
     roots = qualified_roots(thaw_plain_data(value["roots"]))
     if any(item["root_id"] not in roots for item in locations):
         raise QueueServiceError("shared location root is not permitted")
-    return {"capability": SHARED_EXECUTION_CAPABILITY, "roots": roots, "locations": cast(PlainData, locations)}
+    continuation: dict[str, PlainData] = {}
+    if "staging_continuation" in value:
+        if value["staging_continuation"] != {"capability": STAGING_CONTINUATION_CAPABILITY} or not any(
+            "publication" in cast(Mapping[str, PlainData], root) for root in roots.values()
+        ):
+            raise QueueServiceError("output staging continuation requires a supported shared publication policy")
+        continuation["staging_continuation"] = {"capability": STAGING_CONTINUATION_CAPABILITY}
+    return {"capability": SHARED_EXECUTION_CAPABILITY, "roots": roots, "locations": cast(PlainData, locations), **continuation}
 
 
 def selected_locations(value: object) -> list[dict[str, PlainData]]:
@@ -219,7 +230,9 @@ def selected_locations(value: object) -> list[dict[str, PlainData]]:
     return []
 
 
-def stage_scope(config: object, factory_init: object, permitted: Mapping[str, PlainData]) -> dict[str, PlainData]:
+def stage_scope(config: object, factory_init: object, permitted: Mapping[str, PlainData], *, continue_staging: bool = False) -> dict[str, PlainData]:
+    if type(continue_staging) is not bool:
+        raise QueueServiceError("output staging continuation selection must be boolean")
     locations = selected_locations(config) + selected_locations(factory_init)
     if "locations" in permitted:
         admitted = cast(list[Mapping[str, PlainData]], permitted["locations"])
@@ -232,7 +245,33 @@ def stage_scope(config: object, factory_init: object, permitted: Mapping[str, Pl
     aliases.update(alias for alias, facts in roots.items() if "publication" in cast(Mapping[str, PlainData], facts))
     if not aliases.issubset(roots):
         raise QueueServiceError("stage selects an undeclared shared root")
-    return {"capability": SHARED_EXECUTION_CAPABILITY, "roots": {alias: roots[alias] for alias in sorted(aliases)}, "locations": cast(PlainData, locations)}
+    result: dict[str, PlainData] = {"capability": SHARED_EXECUTION_CAPABILITY, "roots": {alias: roots[alias] for alias in sorted(aliases)}, "locations": cast(PlainData, locations)}
+    if continue_staging:
+        result["staging_continuation"] = {"capability": STAGING_CONTINUATION_CAPABILITY}
+        return cast(dict[str, PlainData], scope(result))
+    return result
+
+
+def staging_continuation_required(
+    factory_target: str, stage_config: Mapping[str, PlainData],
+    fingerprint_fields: Mapping[str, PlainData],
+) -> bool:
+    """Require support for a continuing stage or preparation carrying its intent."""
+    from .preparation import PREPARATION_STAGE_TARGET, PreparationChildInput
+
+    selected = scope(fingerprint_fields.get(SHARED_EXECUTION_SCOPE))
+    if factory_target == PREPARATION_STAGE_TARGET:
+        return bool(PreparationChildInput.from_dict(stage_config).staging_continuation_stages)
+    return selected is not None and "staging_continuation" in selected
+
+
+def assignment_requires_staging_continuation(fingerprint: Mapping[str, PlainData]) -> bool:
+    from loom.pipeline.planning import StageFingerprintRecord
+
+    payload = StageFingerprintRecord.from_dict(fingerprint).payload
+    return staging_continuation_required(
+        payload.factory_target, payload.stage_config, payload.fingerprint_fields,
+    )
 
 
 @dataclass(frozen=True)
@@ -351,6 +390,8 @@ def attributes(required: Mapping[str, PlainData] | None) -> dict[str, PlainData]
     return {"shared_execution_capability": SHARED_EXECUTION_CAPABILITY,
             **({"shared_artifact_publication_capability": CAPABILITY} if publication else {}),
             **({"trusted_shared_artifact_publication_capability": TRUSTED_CAPABILITY} if trusted else {}),
+            **({"staging_continuation_capability": STAGING_CONTINUATION_CAPABILITY}
+               if publication and "staging_continuation" in required else {}),
             **{"shared_root_" + alias: hash_mapping(facts) for alias, facts in cast(Mapping[str, PlainData], required["roots"]).items()}}
 
 
@@ -394,14 +435,18 @@ def materialize(value: object, roots: Mapping[str, PlainData], *, container: boo
     return value
 
 
-def bind_snapshot(snapshot: dict[str, PlainData], permitted: Mapping[str, PlainData], *, redacted: dict[str, PlainData] | None = None) -> None:
+def bind_snapshot(snapshot: dict[str, PlainData], permitted: Mapping[str, PlainData], *, redacted: dict[str, PlainData] | None = None, staging_continuation_stages: tuple[str, ...] = ()) -> None:
     """Retain each stage's selected roots independently of the preparation union."""
     pipeline = cast(Mapping[str, PlainData], snapshot["pipeline"])
     stages = cast(list[dict[str, PlainData]], pipeline["stages"])
+    continuing = set(staging_continuation_stages)
+    if continuing - {cast(str, stage["name"]) for stage in stages}:
+        raise QueueServiceError("staging_continuation_stages contains an unknown captured node")
     diagnostics = dict(diagnostic_stages(redacted))
     for index, stage in enumerate(stages):
         factory = cast(Mapping[str, PlainData], stage["factory"])
-        selected = stage_scope(stage.get("config", {}), factory.get("init", {}), permitted)
+        selected = stage_scope(stage.get("config", {}), factory.get("init", {}), permitted,
+                               continue_staging=cast(str, stage["name"]) in continuing)
         validate_workload(stage.get("config", {}), selected)
         validate_workload(factory.get("init", {}), selected)
         fingerprint = cast(Mapping[str, PlainData], stage.get("fingerprint", {}))

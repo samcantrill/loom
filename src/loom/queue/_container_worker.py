@@ -204,11 +204,12 @@ def qualify_shared_worker_inputs(
     progress: Callable[[InputValidationProgress], None] | None = None,
 ) -> None:
     """Validate live shared paths only before a genuinely new execution."""
-    from .shared_execution import assignment_scope, require_bindings, snapshot_mount
+    from .shared_execution import assignment_scope, assignment_requires_staging_continuation, require_bindings, snapshot_mount
     from ._shared_publication import selected, staging_tree, resolve_input
     from ._shared_recovery import validate_wire, current_tree, resolve as resolve_recovery
     from loom.pipeline.stores.shared_artifacts import binding as shared_binding
 
+    continuing = assignment_requires_staging_continuation(assignment.fingerprint)
     if profile.submitted_execution is not None:
         from .submitted_execution import assignment_binding, verify_submitted_image
         from .shared_execution import qualifications
@@ -221,11 +222,17 @@ def qualify_shared_worker_inputs(
         submitted = assignment_binding(assignment.fingerprint)
         if submitted is None or qualifications({alias: dict(root)})[alias] != submitted[1].shared_roots[alias]:
             raise ValueError("submitted image root qualification conflicts")
-        verify_submitted_image(execution.image, profile.shared_roots)
+        if not continuing:
+            verify_submitted_image(execution.image, profile.shared_roots)
     shared_scope = assignment_scope(assignment.fingerprint)
     if shared_scope is None:
         return
     require_bindings(shared_scope, profile.shared_roots, cancelled=cancelled, progress=progress)
+    from .resident_readiness import require_staging_continuation_support
+
+    # A submitted probe verifies its immutable image before executing in it.
+    # Keep one image audit for this launch instead of hashing a large SIF twice.
+    require_staging_continuation_support(profile, assignment.fingerprint)
     if selected(assignment) is not None:
         if agent_id is None:
             raise ValueError("shared output mount requires the assignment machine identity")

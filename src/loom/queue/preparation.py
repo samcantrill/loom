@@ -8,8 +8,10 @@ preparation lifecycle.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
+import base64
 import errno
+from functools import lru_cache
 import hashlib
 import io
 import json
@@ -20,6 +22,7 @@ import stat
 import tarfile
 from typing import cast
 from uuid import uuid4
+import zlib
 
 from loom.artifacts import ArtifactRef
 from loom.fingerprints import format_digest, hash_mapping, validate_digest
@@ -154,6 +157,19 @@ def _invocation(instance: object) -> None:
                 "preparation stage executor/adapter inputs are obsolete"
             )
     object.__setattr__(instance, "run_options", freeze_plain_data(options))
+    stages = continuation_stage_names(getattr(instance, "staging_continuation_stages"))
+    object.__setattr__(instance, "staging_continuation_stages", stages)
+
+
+def continuation_stage_names(stages: object) -> tuple[str, ...]:
+    """Canonical names selected for released staging handoff."""
+    if not isinstance(stages, (tuple, list)):
+        raise QueueServiceError("staging_continuation_stages must be a sequence")
+    for name in stages:
+        validate_queue_id(name, "staging continuation stage")
+    if len(set(stages)) != len(stages):
+        raise QueueServiceError("staging_continuation_stages contains duplicate stages")
+    return tuple(sorted(stages))
 
 
 def _invocation_data(instance: object) -> dict[str, PlainData]:
@@ -161,6 +177,8 @@ def _invocation_data(instance: object) -> dict[str, PlainData]:
         "overlays": list(getattr(instance, "overlays")),
         "overrides": list(getattr(instance, "overrides")),
         "run_options": thaw_plain_data(getattr(instance, "run_options")),
+        **({"staging_continuation_stages": list(getattr(instance, "staging_continuation_stages"))}
+           if getattr(instance, "staging_continuation_stages") else {}),
     }
 
 
@@ -181,6 +199,9 @@ class PrepareRunRequest:
     omission preserves the profile's static selection. Locations are normalized,
     deduplicated and retained in intent, including across replay. Composed stages
     may narrow this selection but cannot widen it through config or overrides.
+    ``staging_continuation_stages`` names captured downstream stages allowed to
+    continue positively released output staging. It requires protected shared
+    publication and never selects continuation for the preparation worker itself.
     """
 
     operation_id: str
@@ -194,6 +215,7 @@ class PrepareRunRequest:
     context: SubmissionContext | None = None
     execution: SubmittedContainerExecution | None = None
     input_locations: tuple[Mapping[str, PlainData], ...] | None = None
+    staging_continuation_stages: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         from .managed_local_preparation import _validate_run_name
@@ -255,7 +277,7 @@ class PrepareRunRequest:
     def from_dict(cls, data: Mapping[str, object]) -> "PrepareRunRequest":
         if "input_locations" in data and data["input_locations"] is None:
             raise QueueServiceError("input_locations must be a sequence when present")
-        if set(data) - {"overlays", "overrides", "run_options", "context", "execution", "input_locations"} != {
+        if set(data) - {"overlays", "overrides", "run_options", "context", "execution", "input_locations", "staging_continuation_stages"} != {
             "operation_id",
             "run_name",
             "source",
@@ -279,6 +301,7 @@ class PrepareRunRequest:
                 data["execution"]
             ),
             cast(tuple[Mapping[str, PlainData], ...] | None, data.get("input_locations")),
+            cast(tuple[str, ...], data.get("staging_continuation_stages", ())),
         )
 
     def intent_digest(self, principal_id: str) -> str:
@@ -519,6 +542,26 @@ def _decode_scope(value: object) -> tuple[object, object]:
     raise QueueServiceError("preparation scope fields are invalid")
 
 
+@lru_cache(maxsize=1)
+def _read_candidate_document(document: str) -> Mapping[str, PlainData]:
+    """Admit a repeated grant's immutable verification input once per process."""
+    try:
+        if document.startswith("zlib:"):
+            compressed = base64.b64decode(document[5:], validate=True)
+            decoder = zlib.decompressobj()
+            raw = decoder.decompress(compressed, _MAX_BYTES + 1)
+            if len(raw) > _MAX_BYTES or not decoder.eof or decoder.unused_data:
+                raise ValueError("invalid compressed verification input")
+        else:
+            raw = document.encode("utf-8")
+        candidate = json.loads(raw)
+        if not isinstance(candidate, dict) or stable_json_bytes(candidate) != raw:
+            raise ValueError("candidate must be a canonical JSON object")
+        return cast(Mapping[str, PlainData], freeze_plain_data(candidate))
+    except (ValueError, zlib.error) as exc:
+        raise QueueServiceError("invalid compact verification input") from exc
+
+
 @dataclass(frozen=True, slots=True)
 class PreparationChildInput:
     """Finite captured input and invocation for the fixed preparation stage."""
@@ -539,8 +582,12 @@ class PreparationChildInput:
     action_verification: Mapping[str, PlainData] | None = None
     execution: SubmittedContainerExecution | None = None
     container_capability: SubmittedContainerCapability | None = None
+    staging_continuation_stages: tuple[str, ...] = ()
 
-    def __post_init__(self) -> None:
+    _candidate_document: InitVar[str | None] = None
+    _retained_candidate_document: str | None = field(default=None, init=False, compare=False, repr=False)
+
+    def __post_init__(self, _candidate_document: str | None) -> None:
         from types import MappingProxyType
         from ._remote_stage_execution import ResidentProfileDescriptor
 
@@ -565,7 +612,12 @@ class PreparationChildInput:
         if self.shared_scope is not None and (self.local_scope is not None or not isinstance(self.input_receipt, SharedInputReceipt)):
             raise QueueServiceError("shared configuration requires shared capture and no local pin")
         object.__setattr__(self, "local_scope", _local_scope(self.local_scope))
-        if self.candidate is not None:
+        if _candidate_document is not None:
+            if self.candidate is not None or not self.staging_continuation_stages or self.project_preparation is None or self.action_verification is not None:
+                raise QueueServiceError("compact input requires project candidate verification")
+            object.__setattr__(self, "candidate", _read_candidate_document(_candidate_document))
+            object.__setattr__(self, "_retained_candidate_document", _candidate_document)
+        elif self.candidate is not None:
             if not isinstance(self.candidate, Mapping):
                 raise QueueServiceError("candidate descriptor must be plain data")
             if self.project_preparation is None:
@@ -576,6 +628,14 @@ class PreparationChildInput:
             raise QueueServiceError("project preparation requires protected local policy")
         object.__setattr__(self, "project_preparation", project)
         _invocation(self)
+        if self.shared_scope is not None and "staging_continuation" in self.shared_scope:
+            raise QueueServiceError("preparation worker cannot continue output staging")
+        if self.staging_continuation_stages:
+            from .shared_execution import stage_scope
+
+            if self.shared_scope is None:
+                raise QueueServiceError("staging continuation requires shared preparation")
+            stage_scope({}, {}, self.shared_scope, continue_staging=True)
         validate_queue_id(self.operation_id, "preparation operation_id")
         validate_queue_id(self.preparation_profile, "preparation_profile")
         object.__setattr__(
@@ -619,12 +679,24 @@ class PreparationChildInput:
             "container_capability": self.container_capability.to_dict(),
         }
 
-    def to_dict(self) -> dict[str, PlainData]:
+    def to_dict(self, *, compact_candidate: bool = False) -> dict[str, PlainData]:
         purpose: dict[str, PlainData] = {"kind": "generic"}
         if self.project_preparation is not None:
             purpose = {"kind": "project", "binding": thaw_plain_data(self.project_preparation)}
             if self.candidate is not None:
-                purpose["candidate"] = thaw_plain_data(self.candidate)
+                if compact_candidate and self.staging_continuation_stages:
+                    document = self._retained_candidate_document
+                    if document is None:
+                        # A scalar avoids order-encoding this already ordered configuration
+                        # again in the stage plan, its fingerprint and the runtime snapshot.
+                        raw = stable_json_bytes(self.candidate)
+                        document = (
+                            "zlib:" + base64.b64encode(zlib.compress(raw)).decode("ascii")
+                            if len(raw) <= _MAX_BYTES else raw.decode("utf-8")
+                        )
+                    purpose["candidate_json"] = document
+                else:
+                    purpose["candidate"] = thaw_plain_data(self.candidate)
             if self.action_verification is not None:
                 purpose["kind"] = "verify_result"
                 purpose["request"] = thaw_plain_data(self.action_verification)
@@ -653,7 +725,7 @@ class PreparationChildInput:
         if (not isinstance(value, Mapping)
             or type(value.get("schema_version")) is not int
             or value["schema_version"] != (11 if submitted else PREPARATION_CHILD_INPUT_SCHEMA_VERSION)
-            or not required <= set(value) or set(value) - required - {"generations"}
+            or not required <= set(value) or set(value) - required - {"generations", "staging_continuation_stages"}
             or not isinstance(value["input_receipt"], Mapping)):
             raise QueueServiceError("preparation child input fields or schema are unsupported")
         local, shared = _decode_scope(value["scope"])
@@ -664,10 +736,14 @@ class PreparationChildInput:
         fields = set(purpose)
         if not (
             (kind == "generic" and fields == {"kind"})
-            or (kind == "project" and fields in ({"kind", "binding"}, {"kind", "binding", "candidate"}))
+            or (kind == "project" and fields in ({"kind", "binding"}, {"kind", "binding", "candidate"}, {"kind", "binding", "candidate_json"}))
             or (kind == "verify_result" and fields == {"kind", "binding", "request"})
         ):
             raise QueueServiceError("preparation purpose fields are invalid")
+        compact = "candidate_json" in purpose
+        document = purpose.get("candidate_json")
+        if compact and not isinstance(document, str):
+            raise QueueServiceError("compact verification input must be a string")
         result = cls(
             operation_id=cast(str, value["operation_id"]),
             preparation_profile=cast(str, value["preparation_profile"]),
@@ -681,12 +757,14 @@ class PreparationChildInput:
             shared_scope=cast(Mapping[str, PlainData] | None, shared),
             project_preparation=cast(Mapping[str, PlainData] | None, purpose.get("binding")),
             candidate=cast(Mapping[str, PlainData] | None, purpose.get("candidate")),
+            _candidate_document=cast(str | None, document),
             generations=cast(Mapping[str, str] | None, value.get("generations")),
             action_verification=cast(Mapping[str, PlainData] | None, purpose.get("request")),
             execution=SubmittedContainerExecution.from_dict(value["execution"]) if submitted else None,
             container_capability=SubmittedContainerCapability.from_dict(value["container_capability"]) if submitted else None,
+            staging_continuation_stages=cast(tuple[str, ...], value.get("staging_continuation_stages", ())),
         )
-        if result.to_dict() != thaw_plain_data(value):
+        if result.to_dict(compact_candidate=compact) != thaw_plain_data(value):
             raise QueueServiceError("preparation child input is not current canonical data")
         return result
 

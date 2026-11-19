@@ -284,15 +284,21 @@ def _preparation_constraints(
     )
     from ._remote_stage_execution import ResidentProfileDescriptor
 
-    from .shared_execution import SHARED_EXECUTION_SCOPE, scope, attributes
+    from .shared_execution import (
+        SHARED_EXECUTION_SCOPE, STAGING_CONTINUATION_CAPABILITY,
+        scope, attributes, staging_continuation_required,
+    )
     shared = scope(stage.fingerprint_fields.get(SHARED_EXECUTION_SCOPE))
     constraints = ()
     if shared is not None:
         evaluator = evaluators.get("attribute")
         if evaluator is None:
             raise QueueServiceError("shared execution requires the attribute evaluator")
+        required = attributes(shared)
+        if staging_continuation_required(stage.factory.target_path, stage.stage_config, stage.fingerprint_fields):
+            required["staging_continuation_capability"] = STAGING_CONTINUATION_CAPABILITY
         constraints = (HardConstraintSpec("shared-execution", "attribute",
-            {"attributes": attributes(shared)}, evaluator.descriptor),)
+            {"attributes": required}, evaluator.descriptor),)
     if stage.factory.target_path != PREPARATION_STAGE_TARGET:
         return constraints
     binding = PreparationChildInput.from_dict(stage.stage_config)

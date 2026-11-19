@@ -153,7 +153,23 @@ def test_bootstrap_lost_start_reply_replays_live_nonce_but_new_invocation_cannot
     _exercise_bootstrap(tmp_path, monkeypatch, 0, "strict", False, replay_start=True)
 
 
-def _exercise_bootstrap(tmp_path, monkeypatch, pending_responses, durable_files, trusted_user, *, replay_start=False):
+@pytest.mark.parametrize("coordinator_support", [False, True])
+def test_continuation_requires_coordinator_support_before_grant(tmp_path, monkeypatch, coordinator_support):
+    _exercise_bootstrap(tmp_path, monkeypatch, 0, "best_effort", False,
+                        continuing=True, coordinator_support=coordinator_support)
+
+
+def _exercise_bootstrap(tmp_path, monkeypatch, pending_responses, durable_files, trusted_user, *, replay_start=False, continuing=False, coordinator_support=True):
+    from loom.queue.shared_execution import STAGING_CONTINUATION_CAPABILITY
+    from tests.unit.loom.queue.test_remote_stage_execution import _profile, _request
+
+    fingerprint = _request(_profile(tmp_path)).fingerprint
+    if continuing:
+        from tests.unit.loom.queue.test_shared_recovery import _workspace
+        from tests.unit.loom.queue.test_staging_continuation_grants import _select
+
+        workspace, _, _ = _workspace(tmp_path)
+        fingerprint = _select(workspace.request()).fingerprint
     config_path = tmp_path / "bootstrap.json"
     config_value = _config_value(tmp_path)
     if trusted_user:
@@ -184,7 +200,8 @@ def _exercise_bootstrap(tmp_path, monkeypatch, pending_responses, durable_files,
         def handshake(self, *, role: str) -> dict[str, object]:
             assert role == "slurm_bootstrap"
             return {
-                "capabilities": ["slurm-ready-stage-bootstrap-v1", *(["slurm-replayable-start-v1"] if replay_start else [])],
+                "capabilities": ["slurm-ready-stage-bootstrap-v1", *(["slurm-replayable-start-v1"] if replay_start else []),
+                                 *([STAGING_CONTINUATION_CAPABILITY] if coordinator_support else [])],
                 "profile_id": "training",
                 "profile_descriptor": {},
                 "credential_policy_revision": "slurm-policy-1",
@@ -286,6 +303,7 @@ def _exercise_bootstrap(tmp_path, monkeypatch, pending_responses, durable_files,
             executor_fingerprint="executor-v1",
             executor_name="local",
             submitted_execution=None,
+            fingerprint=fingerprint,
             inputs=(),
         ),
     )
@@ -313,6 +331,12 @@ def _exercise_bootstrap(tmp_path, monkeypatch, pending_responses, durable_files,
         lambda **kwargs: captured.update(kwargs) or object(),
     )
 
+    if continuing and not coordinator_support:
+        with pytest.raises(QueueServiceError, match="coordinator lacks released-output-staging-v1"):
+            run_slurm_bootstrap(operation_id="operation-1", request_digest="digest-1", config=config)
+        assert actions == ["register"]
+        assert captured == {}
+        return
     if pending_responses is None:
         with pytest.raises(
             QueueServiceError, match="deadline expired; no offline grant"

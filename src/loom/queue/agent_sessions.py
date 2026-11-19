@@ -2081,6 +2081,8 @@ class AgentSessionService:
         return result
 
     def handshake(self) -> Mapping[str, PlainData]:
+        from .shared_execution import STAGING_CONTINUATION_CAPABILITY
+
         self._authorize("handshake")
         coordinator_id = self._daemon._require_started()  # type: ignore[attr-defined]
         return freeze_plain_data(
@@ -2092,6 +2094,7 @@ class AgentSessionService:
                     "concurrent-resident-assignments-v1",
                     SUBMITTED_CONTAINER_CAPABILITY,
                     "shared-assignment-reference-v1",
+                    STAGING_CONTINUATION_CAPABILITY,
                     SLURM_SUBMISSION_CAPABILITY,
                     *([SLURM_PENDING_EFFECTS_CAPABILITY] if self._daemon._execution is not None
                       and self._daemon._execution.slurm_assignments.schema_version >= 5 else []),
@@ -3645,6 +3648,31 @@ class AgentSessionService:
             else:
                 state = str(current["state"])
             conn.commit()
+        request = _ResidentAssignmentBundle.from_remote_dict(json.loads(request_json))
+        from ._shared_staging_continuation import WIRE as staging_wire, finish_grant_continuation, requested
+        if requested(request) or staging_wire in request.worker_metadata:
+            with self._daemon._connection() as conn:
+                machine = conn.execute(
+                    "SELECT agent_root_id FROM agent_sessions WHERE session_id=?", (session_id,),
+                ).fetchone()[0]
+
+            def live_owner():
+                with self._daemon._state_guard(), self._daemon._connection() as conn:
+                    current, current_request = capture(conn)
+                    if (current_request != request_json or current["fence"] != fence
+                        or current["state"] != "GRANTED" or current["start_permitted"]
+                        or action_attempt_cancelled(conn, str(current["run_uri"]), str(current["attempt_id"]))):
+                        raise QueueConflictError("staging continuation grant is no longer live")
+                if not self._remote_execution().remote_start_permit(assignment_id, fence=str(fence)):
+                    raise QueueConflictError("staging continuation grant is cancelled")
+                from ._shared_publication import identity
+                return identity(request, agent_id=str(machine), fence=str(fence))
+
+            finish_grant_continuation(
+                request, self._daemon.config.coordinator_shared_roots,
+                agent_id=str(machine), fence=str(fence), connection=self._daemon._connection,
+                require_live_owner=live_owner,
+            )
         return freeze_plain_data({"assignment_id": assignment_id, "fence": str(fence), "state": state},
                                  path="remote assignment grant")
 
@@ -3655,11 +3683,25 @@ class AgentSessionService:
 
         def check(conn: sqlite3.Connection) -> bool:
             rule, revision = self._authorize("start_permit")
-            self._require_remote_session(conn, rule, revision, session_id, self._daemon._epoch or "")
+            session = self._require_remote_session(conn, rule, revision, session_id, self._daemon._epoch or "")
             row = self._require_remote_assignment(conn, session_id, assignment_id)
             if row["fence"] != fence or str(row["state"]) not in {"GRANTED", "RUNNING"}:
                 raise QueueConflictError("remote start permit fence is stale")
-            return not action_attempt_cancelled(conn, str(row["run_uri"]), str(row["attempt_id"]))
+            if action_attempt_cancelled(conn, str(row["run_uri"]), str(row["attempt_id"])):
+                return False
+            delivery = conn.execute(
+                "SELECT request_json FROM agent_deliveries WHERE assignment_id=?", (assignment_id,),
+            ).fetchone()
+            if delivery is not None:
+                value = json.loads(delivery[0])
+                from ._shared_staging_continuation import WIRE as staging_wire, requested, require_grant_continuation
+                request = _ResidentAssignmentBundle.from_remote_dict(value)
+                if requested(request) or staging_wire in request.worker_metadata:
+                    require_grant_continuation(
+                        request, conn,
+                        agent_id=session.agent_root_id, fence=fence,
+                    )
+            return True
 
         with self._daemon._state_guard(), self._daemon._connection() as conn:
             if not check(conn):
@@ -5946,9 +5988,14 @@ def _require_target_session(daemon, conn, session_id, request):
         StagedInputReceipt,
     )
 
-    from .shared_execution import SHARED_EXECUTION_CAPABILITY, assignment_scope
+    from .shared_execution import (
+        SHARED_EXECUTION_CAPABILITY, STAGING_CONTINUATION_CAPABILITY,
+        assignment_scope, assignment_requires_staging_continuation,
+    )
     if assignment_scope(request.fingerprint) is not None and SHARED_EXECUTION_CAPABILITY not in session.capabilities:
         raise QueueServiceError("agent session lacks shared-execution-v1")
+    if assignment_requires_staging_continuation(request.fingerprint) and STAGING_CONTINUATION_CAPABILITY not in session.capabilities:
+        raise QueueServiceError(f"agent session lacks {STAGING_CONTINUATION_CAPABILITY}")
     preparation = request.preparation_input
     if preparation is not None:
         supported = (

@@ -83,6 +83,28 @@ def test_stage_override_cannot_expand_retained_input_selection(tmp_path):
         stage_scope({"input": _location("beta")}, {}, profile["shared_scope"])
 
 
+def test_staging_continuation_requires_shared_publication_at_policy_selection(tmp_path):
+    policy = _selected_policy(tmp_path)
+    request = replace(_selected_request("alpha"), staging_continuation_stages=("predict",))
+    with pytest.raises(QueueServiceError, match="shared publication"):
+        policy.select(request)
+    installed = replace(_request(), preparation_profile="installed", staging_continuation_stages=("predict",))
+    with pytest.raises(QueueServiceError, match="shared preparation"):
+        _policy(tmp_path).select(installed)
+    profile = policy.profiles["shared-container"]
+    roots = {**profile.capability.shared_roots, "runs": {
+        **profile.capability.shared_roots["runs"],
+        "publication": {"max_payload_bytes": 1000000, "max_manifest_bytes": 1000000, "max_members": 1000},
+    }}
+    shared = {**profile.shared_scope, "roots": {"runs": roots["runs"]}}
+    policy = replace(policy, profiles={"shared-container": replace(
+        profile, capability=replace(profile.capability, shared_roots=roots), shared_scope=shared,
+    )})
+    selected = policy.select(request)["profile"]["shared_scope"]
+    assert set(selected["roots"]) == {"alpha", "runs"}
+    assert "staging_continuation" not in selected
+
+
 def test_preparation_preserves_read_only_capture_storage_without_mounting_unselected_inputs(tmp_path):
     policy = _selected_policy(tmp_path)
     profile = policy.profiles["shared-container"]

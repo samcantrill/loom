@@ -1379,6 +1379,13 @@ references. Workers resolve these through their installed mappings. Both keys
 are native reserved metadata and cannot be injected through authored metadata.
 A retained reference does not grant authority to choose another predecessor.
 
+For assignments with native shared recovery, the reserved companion key
+`StageContext.metadata["loom.recovery_owner.v1"]` supplies the current
+assignment's recovery publication ID. A stage can use this stable ID in
+durable references it writes before release. On a later attempt the same ID
+appears in the released predecessor reference. Read authority for the old
+tree comes from that reference and its worker-resolved path.
+
 Stages write only beneath `current.path`, read only supplied predecessor paths,
 and keep their complete dependency closure inside each attempt tree. They must
 use relative references, or preserve enough domain provenance to rebase old

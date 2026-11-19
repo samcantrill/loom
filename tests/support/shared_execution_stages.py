@@ -93,6 +93,7 @@ class SharedRecoveryProducer:
         assert not inputs
         if execution["attempt"] == 1:
             assert not binding["predecessors"]
+            (current / "owner").write_text(context.metadata["loom.recovery_owner.v1"])
             (current / "checkpoint").mkdir()
             (current / "checkpoint" / "weights").write_bytes(b"completed-progress")
             (current / "catalog.json").write_text('{"checkpoint":"checkpoint/weights"}')
@@ -106,6 +107,8 @@ class SharedRecoveryProducer:
         assert prior["attempt"] == 1
         previous = Path(prior["path"])
         assert previous != current
+        assert (previous / "owner").read_text() == prior["reference"]["publication_id"]
+        assert context.metadata["loom.recovery_owner.v1"] != prior["reference"]["publication_id"]
         catalog = json.loads((previous / "catalog.json").read_text())
         assert (previous / catalog["checkpoint"]).read_bytes() == b"completed-progress"
         (current / "restored").write_bytes(b"restored")

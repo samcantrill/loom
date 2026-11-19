@@ -1079,6 +1079,7 @@ class CoordinatorPreparations:
             generations=cast(Mapping[str, str] | None, selected.get("generations")),
             action_verification=cast(Mapping[str, PlainData] | None, selected.get("action_verification")),
             execution=request.execution,
+            staging_continuation_stages=request.staging_continuation_stages,
             container_capability=(
                 SubmittedContainerCapability.from_dict(profile["container_capability"])
                 if request.execution is not None else None

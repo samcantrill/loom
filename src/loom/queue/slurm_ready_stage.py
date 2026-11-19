@@ -1920,13 +1920,13 @@ class SlurmBootstrapWorkspace:
     def worker_request(self, *, shared_roots: Mapping[str, PlainData] | None = None) -> StageWorkerRequest:
         self.accept_inputs(shared_roots=shared_roots)
         request = self.delivery().worker_request(self.root, shared_roots=shared_roots)
-        from ._shared_recovery import BINDING, WIRE, worker_binding
+        from ._shared_recovery import WIRE, worker_bindings
+        from ._shared_staging_continuation import WIRE as staging_wire
 
         metadata = dict(request.metadata)
         metadata.pop(WIRE, None)
-        binding = worker_binding(self)
-        if binding is not None:
-            metadata[BINDING] = binding
+        metadata.pop(staging_wire, None)
+        metadata.update(worker_bindings(self))
         return replace(request, metadata=metadata)
 
     def retain_result(self, result: StageWorkerResult) -> _RemoteExecutionReport:

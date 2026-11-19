@@ -4609,13 +4609,14 @@ class LocalDaemonSlurmBootstrapView:
     def handshake(self) -> Mapping[str, PlainData]:
         execution = self._execution()
         from ._slurm_start import SLURM_REPLAYABLE_START_CAPABILITY
+        from .shared_execution import STAGING_CONTINUATION_CAPABILITY
         profile = execution._slurm_profile_for_principal(
             self._principal.subject, self._principal.credential_id
         )
         return freeze_plain_data(
             {
                 "protocol_version": "1",
-                "capabilities": ["slurm-ready-stage-bootstrap-v1", *(
+                "capabilities": ["slurm-ready-stage-bootstrap-v1", STAGING_CONTINUATION_CAPABILITY, *(
                     [SLURM_REPLAYABLE_START_CAPABILITY]
                     if execution.slurm_assignments.schema_version >= 6 else []
                 )],

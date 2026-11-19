@@ -27,7 +27,7 @@ from loom.queue.deployment import (
     load_coordinator_service_config,
     load_outbound_agent_service_config,
 )
-from loom.queue.errors import QueueConfigError, QueueConflictError, QueueServiceError
+from loom.queue.errors import QueueConfigError, QueueConflictError, QueueServiceError, QueueValidationError
 from loom.queue._coordinator_control import control_error, optional_id
 from loom.queue.local_daemon import (
     LocalDaemon,
@@ -35,7 +35,7 @@ from loom.queue.local_daemon import (
     _open_root,
     _validate_deployment_binding,
 )
-from loom.queue.preparation import PreparationSource
+from loom.queue.preparation import PreparationSource, continuation_stage_names
 from loom.queue.submitted_execution import SUBMITTED_CONTAINER_WORKER_CONTRACT, SUPPORTED_WORKER_CONTRACTS
 
 
@@ -61,6 +61,7 @@ class DeploymentSelection:
     wait_seconds: float | None
     worker_contract: str = SUBMITTED_CONTAINER_WORKER_CONTRACT
     run_defaults: Mapping[str, Any] = field(default_factory=dict)
+    staging_continuation_stages: tuple[str, ...] = ()
 
     def resolve_run_options(self, explicit: Mapping[str, Any] | None = None) -> dict[str, Any]:
         """Resolve sparse policy before retaining a new request, never during replay.
@@ -155,11 +156,15 @@ def load_deployment(path: str | Path) -> DeploymentSelection:
     preparation = value.get("preparation")
     if (
         not isinstance(preparation, Mapping)
-        or set(preparation) - {"worker_contract"} != {"source", "profile"}
+        or set(preparation) - {"worker_contract", "staging_continuation_stages"} != {"source", "profile"}
         or not isinstance(preparation["source"], Mapping)
         or not isinstance(preparation["profile"], str)
     ):
         raise QueueConfigError("deployment preparation selection is invalid")
+    try:
+        continuing = continuation_stage_names(preparation.get("staging_continuation_stages", ()))
+    except (QueueServiceError, QueueValidationError) as exc:
+        raise QueueConfigError(str(exc)) from exc
     contract = preparation.get("worker_contract", SUBMITTED_CONTAINER_WORKER_CONTRACT)
     if not isinstance(contract, str) or contract not in SUPPORTED_WORKER_CONTRACTS:
         raise QueueConfigError("deployment preparation worker contract is unsupported")
@@ -191,6 +196,7 @@ def load_deployment(path: str | Path) -> DeploymentSelection:
         duration("wait_seconds", None),
         contract,
         defaults,
+        continuing,
     )
 
 
@@ -211,6 +217,8 @@ def export_connection_deployment(selection: DeploymentSelection, destination: st
         "schema_version": 1, "kind": "loom.deployment",
         "connection": str(selection.connection.resolve()),
         "preparation": {"source": selection.source.to_dict(), "profile": selection.preparation_profile,
+                        **({"staging_continuation_stages": list(selection.staging_continuation_stages)}
+                           if selection.staging_continuation_stages else {}),
                         **({"worker_contract": selection.worker_contract}
                            if selection.worker_contract != SUBMITTED_CONTAINER_WORKER_CONTRACT else {})},
         "startup_seconds": selection.startup_seconds, "wait_seconds": selection.wait_seconds,

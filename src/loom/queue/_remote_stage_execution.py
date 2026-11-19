@@ -844,7 +844,8 @@ def _preparation_worker_context(
     # Resident payloads have an isolated directory and primary file; Slurm's
     # native relay retains its flat input layout. The workspace owns that path.
     if input_path is None:
-        input_path = lambda name: _assignment_input_path(workspace_root, name)
+        def input_path(name: str) -> Path:
+            return _assignment_input_path(workspace_root, name)
     from .preparation import SharedInputReceipt, _require_local_binding
 
     _require_local_binding(preparation.local_scope, launch_profile)
@@ -2223,12 +2224,12 @@ class _ResidentAssignmentWorkspace:
             if report is None:
                 raise QueueConflictError("worker project report input is missing")
             metadata[REPORT] = report.local_ref(input_path(report)).to_dict()
-        from ._shared_recovery import WIRE, BINDING, worker_binding
+        from ._shared_recovery import WIRE, worker_bindings
+        from ._shared_staging_continuation import WIRE as staging_wire
         metadata.pop(WIRE, None)
+        metadata.pop(staging_wire, None)
         if resolve_shared:
-            recovery = worker_binding(self, profile=shared_profile)
-            if recovery is not None:
-                metadata[BINDING] = recovery
+            metadata.update(worker_bindings(self, profile=shared_profile))
         logs = self.root / "logs"
         local_run_uri = f"loom-agent:{request.assignment_id}"
         return StageWorkerRequest(
@@ -2944,9 +2945,12 @@ def _validate_remote_semantic_data(
     if EXECUTION in worker_metadata and cast(Mapping[str, PlainData], worker_metadata[EXECUTION])["run_state_root"] is not None:
         raise QueueServiceError("remote execution cannot export a local state root")
     from ._shared_recovery import WIRE, BINDING
+    from ._shared_staging_continuation import WIRE as staging_wire
     if BINDING in worker_metadata:
         raise QueueServiceError("remote execution cannot export resolved recovery paths")
-    _reject_path_bearing_data({key: value for key, value in worker_metadata.items() if key not in {CONTRACT, CAPTURE, REPORT, EXECUTION, WIRE}}, "worker_metadata")
+    # Both native deliveries validate finite relative references at construction.
+    # They never carry coordinator-local resolved paths into remote execution.
+    _reject_path_bearing_data({key: value for key, value in worker_metadata.items() if key not in {CONTRACT, CAPTURE, REPORT, EXECUTION, WIRE, staging_wire}}, "worker_metadata")
 
 
 _PREPARATION_ARCHIVE_INPUT = "preparation_archive"

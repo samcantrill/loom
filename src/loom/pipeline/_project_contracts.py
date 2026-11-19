@@ -20,7 +20,7 @@ CONTRACTS = "loom.project_contracts"
 CAPTURE = "loom.project_contract_capture"
 REPORT = "loom.project_report"
 EXECUTION = "loom.execution_binding"
-RESERVED = frozenset({CONTRACT, CONTRACTS, CAPTURE, REPORT, EXECUTION, "loom.remote_recovery", "loom.recovery_binding"})
+RESERVED = frozenset({CONTRACT, CONTRACTS, CAPTURE, REPORT, EXECUTION, "loom.remote_recovery", "loom.recovery_binding", "loom.recovery_owner.v1"})
 
 _worker_contract_cache = WorkerContractCache()
 
@@ -382,7 +382,7 @@ def validate_admitted_worker(
     }
     if plain_mapping(actual) != expected:
         raise ValueError("worker attachment differs from admitted report")
-    if {EXECUTION, "loom.remote_recovery", "loom.recovery_binding"}.intersection(request.metadata):
+    if {EXECUTION, "loom.remote_recovery", "loom.recovery_binding", "loom.recovery_owner.v1"}.intersection(request.metadata):
         raise ValueError(
             "worker execution binding must be supplied by assignment authority"
         )

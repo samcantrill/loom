@@ -1480,6 +1480,61 @@ wait hints. `_result_verification.py` retains producer audit futures; action
 resolution and preparation/dispatch owners retain their own captured tokens and
 apply only current completions. Workers do not own lifecycle transitions.
 `_shared_publication.py` groups exact publication audits within one operation.
+`_shared_staging_continuation.py` implements an internal continuation operation
+for unsealed output staging after a predecessor's positive native release.
+It requires an admitted predecessor and the caller's live assignment authority,
+renames the tree without a payload-copy fallback, and carries durable handoff
+intents inside that tree across successive interruptions. It never changes
+sealed recovery trees or accepted publications, and does not grant an assignment
+or admit application-specific assembly contents. An explicit optional shared
+scope capability (`released-output-staging-v1`) selects the behavior. Native
+delivery retains the exact authorized source, including a granted predecessor
+that received staging but never obtained start permission. Positive release
+and retained recovery evidence still precede reuse.
+
+Resident acceptance and SLURM grant handlers finish selected handoffs under the
+existing per-assignment publication guard before returning a grant that can
+cause a worker to mount output staging. A native control receipt acknowledges
+the exact source/destination/fence after filesystem durability. Start permission
+requires that receipt; grant replay with an existing receipt never mutates live
+staging. Cancellation independently prevents a new start. Both worker adapters
+remove the native continuation metadata when projecting application requests.
+
+The unselected scope preserves its existing wire shape. Managed preparation
+accepts an optional `staging_continuation_stages` sequence, canonicalized as
+unique sorted stage names and retained in invocation identity. Protected policy
+requires shared publication before accepting the selection. Snapshot construction
+binds it only to named downstream stages; report validation reconstructs that
+selection and rejects missing/unknown targets or a changed scope. The preparation
+worker carries downstream intent but cannot select continuation for itself.
+Omitting the sequence preserves existing request, child and invocation bytes.
+
+Whole-target verification children for opted-in stages carry the candidate as a
+single canonical JSON document in the fixed preparation stage configuration.
+The native serializer compresses documents up to 64 MiB. Older structured
+inputs still round-trip. The receiving process validates the document, retains
+one immutable decoded candidate, and passes the complete descriptor to the
+installed project verifier. This prevents the stage plan and runtime snapshots
+from recursively order-encoding an already ordered scientific configuration.
+
+Native agent and Slurm bootstrap handshakes advertise
+`released-output-staging-v1`. A selected downstream stage, and preparation
+carrying that selection, require the negotiated capability in resident scheduling
+and targeted delivery; Slurm submit-agent selection checks the same capability.
+Agent registration and the allocation bootstrap refuse an unsupported coordinator.
+The capability describes native protocol support. Before a new selected worker
+launch, `resident_readiness.require_staging_continuation_support` uses the existing
+contained probe to check the actual interpreter/image's native contracts. The
+probe is bounded, imports no project configuration, and is omitted for unselected
+work. Submitted probes own the launch's image verification, avoiding a duplicate
+SIF hash. Saved supervisor launch replay does not perform new-launch qualification.
+The embedded local managed path does not advertise continuation: it still lacks
+the native staging handoff used by remote resident acceptance and Slurm grants.
+
+Physical provider/container/shared-storage qualification and application
+integration remain prerequisites to activation. The grant tests exercise native handlers, serialized
+delivery, SQLite receipts and real filesystem handoffs with controlled provider
+release/run-authority facts. They are not physical provider fencing evidence.
 `_phase_timing.py` bounds diagnostic collection independently of authority.
 
 `_coordinator_run_authority.py` owns the existing scoped adapter for one accepted

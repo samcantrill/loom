@@ -17,7 +17,7 @@ from ._action_results import action_attempt_cancelled, action_attempt_needed, at
 from ._recovery_retry import _RecoveryRetry
 from ._slurm_admission import SlurmAdmissionDeferred
 
-from .shared_execution import SHARED_EXECUTION_CAPABILITY, attributes as shared_attributes, qualifications
+from .shared_execution import SHARED_EXECUTION_CAPABILITY, STAGING_CONTINUATION_CAPABILITY, attributes as shared_attributes, qualifications
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -3740,7 +3740,12 @@ class LocalDaemonExecution:
             # An expired offer must not trigger preparation/report IO while the
             # agent is trying to reconnect through this same coordinator. This
             # is only a preflight; select again below after worker validation.
-            self._select_slurm_agent(profile)
+            from .shared_execution import staging_continuation_required
+
+            stage = intent.pipeline.get_stage(record.stage_name)
+            continuing = staging_continuation_required(stage.factory.target_path, stage.stage_config, stage.fingerprint_fields)
+            continuation_options = {"require_continuation": True} if continuing else {}
+            self._select_slurm_agent(profile, **continuation_options)
             if profile.result_storage is None:
                 raise QueueServiceError(
                     "SLURM requires qualified durable result storage"
@@ -3754,7 +3759,6 @@ class LocalDaemonExecution:
                 run_uri=record.run_uri,
                 attempt_id=record.attempt_id,
             )
-            stage = intent.pipeline.get_stage(record.stage_name)
             worker_request, preparation_reason = self._prepared_ready_request(record, snapshot, intent)
             if worker_request is None:
                 return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.WAITING, preparation_reason)
@@ -3769,7 +3773,7 @@ class LocalDaemonExecution:
                 worker_request.resolved_runtime,
                 _worker_runtime(intent, record.stage_name),
             )
-            owner_id, owner_root_id = self._select_slurm_agent(profile)
+            owner_id, owner_root_id = self._select_slurm_agent(profile, **continuation_options)
             assignment = SlurmStageAssignment(
                 agent_id=owner_id,
                 agent_root_id=owner_root_id,
@@ -3923,7 +3927,7 @@ class LocalDaemonExecution:
             ),
         )
 
-    def _select_slurm_agent(self, profile: SlurmReadyStageProfile) -> tuple[str, str]:
+    def _select_slurm_agent(self, profile: SlurmReadyStageProfile, *, require_continuation: bool = False) -> tuple[str, str]:
         if (
             self.agent_id is not None
             and self._slurm_agent is not None
@@ -3940,11 +3944,13 @@ class LocalDaemonExecution:
         )
         with self.config.connect_database(self.config.control_database) as conn:
             rows = conn.execute(
-                "SELECT s.agent_id, s.agent_root_id, o.offer_json FROM agent_sessions s JOIN agent_offers o ON o.session_id=s.session_id "
+                "SELECT s.agent_id, s.agent_root_id, o.offer_json, s.capabilities_json FROM agent_sessions s JOIN agent_offers o ON o.session_id=s.session_id "
                 "WHERE s.state='ACTIVE' AND s.policy_revision=? AND o.current=1 AND o.coordinator_epoch=? AND o.expires_at>=? ORDER BY s.agent_id",
                 (policy.revision, self.coordinator_epoch, utc_timestamp()),
             ).fetchall()
-        for agent_id, root_id, raw in rows:
+        for agent_id, root_id, raw, capabilities in rows:
+            if require_continuation and STAGING_CONTINUATION_CAPABILITY not in json.loads(capabilities):
+                continue
             offer = AgentOffer.from_value(json.loads(raw))
             if (
                 profile.profile_id,
@@ -5324,7 +5330,10 @@ class LocalDaemonExecution:
                         "outstanding_assignments": outstanding.get(str(row["session_id"]), 0),
                         **identity,
                         "artifact_capability": "regular-file-relay-v1",
-                        **(shared_attributes({"roots": dict(profile.shared_roots)})
+                        **(shared_attributes({"roots": dict(profile.shared_roots),
+                            **({"staging_continuation": {"capability": STAGING_CONTINUATION_CAPABILITY}}
+                               if STAGING_CONTINUATION_CAPABILITY in json.loads(str(row["capabilities_json"])) else {}),
+                           })
                            if profile.shared_roots and self._shared_assignment_candidate(profile, json.loads(str(row["capabilities_json"]))) else {}),
                         **(
                             {
@@ -6400,24 +6409,53 @@ class LocalDaemonExecution:
         )
         if not record.input_ready:
             raise QueueConflictError("SLURM grant requires durable inputs")
-        if record.fence is not None:
-            return record.fence
-        with self.config.connect_database(self.config.control_database) as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            if action_attempt_cancelled(conn, record.assignment.run_uri, record.assignment.attempt_id):
-                raise QueueConflictError("SLURM assignment run is cancelling")
-            authority = self._remote_authority(record.assignment.run_uri)
-            fence = authority.grant_prepared_attempt(
-                record.assignment.run_uri,
-                assignment_id=assignment_id,
-                attempt_id=record.assignment.attempt_id,
-            )
-            attach_action_fence(conn, record.assignment.run_uri, record.assignment.attempt_id, assignment_id, fence.fencing_token)
-            self.slurm_assignments.mark_granted(
-                assignment_id, incarnation, fence.fencing_token
-            )
-            conn.commit()
-        return fence.fencing_token
+        fence = record.fence
+        if fence is None:
+            with self.config.connect_database(self.config.control_database) as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                if action_attempt_cancelled(conn, record.assignment.run_uri, record.assignment.attempt_id):
+                    raise QueueConflictError("SLURM assignment run is cancelling")
+                authority = self._remote_authority(record.assignment.run_uri)
+                granted = authority.grant_prepared_attempt(
+                    record.assignment.run_uri,
+                    assignment_id=assignment_id,
+                    attempt_id=record.assignment.attempt_id,
+                )
+                fence = granted.fencing_token
+                attach_action_fence(conn, record.assignment.run_uri, record.assignment.attempt_id, assignment_id, fence)
+                self.slurm_assignments.mark_granted(assignment_id, incarnation, fence)
+                conn.commit()
+        from ._shared_staging_continuation import WIRE as staging_wire, finish_grant_continuation, requested
+        if requested(record.delivery) or staging_wire in record.delivery.worker_metadata:
+            # A grant reply can cause a container to bind this directory before
+            # start permission. Finish the handoff before exposing that reply.
+            with self._daemon_owner()._publication_guards.hold(assignment_id):
+                def live_owner():
+                    current = self._slurm_authorized_record(
+                        principal_id, credential_id, assignment_id, incarnation,
+                    )
+                    if (current.delivery != record.delivery or current.fence != fence
+                        or current.state != "granted" or current.start_consumed):
+                        raise QueueConflictError("staging continuation grant is no longer live")
+                    with self.config.connect_database(self.config.control_database) as conn:
+                        if action_attempt_cancelled(conn, current.assignment.run_uri, current.assignment.attempt_id):
+                            raise QueueConflictError("staging continuation grant is cancelled")
+                    granted = self._remote_authority(current.assignment.run_uri).grant_prepared_attempt(
+                        current.assignment.run_uri, assignment_id=assignment_id,
+                        attempt_id=current.assignment.attempt_id,
+                    )
+                    if granted.fencing_token != fence:
+                        raise QueueConflictError("staging continuation grant fence conflicts")
+                    from ._shared_publication import identity
+                    return identity(current.delivery, agent_id=current.assignment.agent_id, fence=fence)
+
+                finish_grant_continuation(
+                    record.delivery, self.config.coordinator_shared_roots,
+                    agent_id=record.assignment.agent_id, fence=fence,
+                    connection=lambda: self.config.connect_database(self.config.control_database),
+                    require_live_owner=live_owner,
+                )
+        return fence
 
     def slurm_start_permit(
         self,
@@ -6448,6 +6486,11 @@ class LocalDaemonExecution:
             if request_id is not None and record.state != "granted":
                 conn.commit()
                 return False
+            from ._shared_staging_continuation import WIRE as staging_wire, requested, require_grant_continuation
+            if requested(record.delivery) or staging_wire in record.delivery.worker_metadata:
+                require_grant_continuation(
+                    record.delivery, conn, agent_id=record.assignment.agent_id, fence=fence,
+                )
             permitted = self.slurm_assignments.consume_start(assignment_id, request_id=request_id)
             conn.commit()
             return permitted

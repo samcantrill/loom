@@ -186,7 +186,8 @@ class PreparationStage:
             )
         if binding.shared_scope is not None and preflight.status != PreflightStatus.FAIL:
             bind_snapshot(cast(dict[str, PlainData], composition["resolved"]), binding.shared_scope,
-                          redacted=cast(dict[str, PlainData], composition["redacted"]))
+                          redacted=cast(dict[str, PlainData], composition["redacted"]),
+                          staging_continuation_stages=binding.staging_continuation_stages)
         if binding.execution is not None and preflight.status != PreflightStatus.FAIL:
             _bind_submitted_snapshot(cast(dict[str, PlainData], composition["resolved"]), binding,
                                      redacted=cast(dict[str, PlainData], composition["redacted"]))
@@ -757,6 +758,9 @@ def _decode_preparation_report(
         if received.effective_run_options is None:
             raise QueueConflictError("preparation checked runtime options are missing")
         pipeline = _pipeline_from_resolved(received.resolved)
+        continuing = set(expected.staging_continuation_stages)
+        if continuing - set(pipeline.stage_names):
+            raise QueueConflictError("staging_continuation_stages contains an unknown prepared node")
         # Validate the serialized report against accepted invocation intent;
         # publication still uses the worker's checked options unchanged.
         expected_options = merge_config_run_options(
@@ -796,7 +800,8 @@ def _decode_preparation_report(
             if scope != expected.local_scope or (scope is not None and stage.placement.get("target") != scope["agent_id"]):
                 raise QueueConflictError("preparation report local placement conflicts")
             if expected.shared_scope is not None:
-                selected = stage_scope(stage.stage_config, stage.factory.init, expected.shared_scope)
+                selected = stage_scope(stage.stage_config, stage.factory.init, expected.shared_scope,
+                                       continue_staging=stage.name in continuing)
                 retained = shared_scope(stage.fingerprint_fields.get(SHARED_EXECUTION_SCOPE))
                 # Canonical report JSON can reorder configuration mappings.
                 # Compare location membership on detached projections, leaving
@@ -842,7 +847,7 @@ def prepare_child_run(
                 {
                     "name": "prepare",
                     "factory": {"_target_": PREPARATION_STAGE_TARGET},
-                    "config": binding.to_dict(),
+                    "config": binding.to_dict(compact_candidate=bool(binding.staging_continuation_stages)),
                     "resources": {
                         "entries": {
                             "cpu": {"kind": "cpu", "amount": 1, "unit": "count"}
