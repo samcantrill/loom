@@ -34,6 +34,7 @@ from loom.queue.shared_execution import SHARED_EXECUTION_CAPABILITY
 from loom.pipeline.stores import LocalRunStore, LocalArtifactStore
 from loom.pipeline.execution.models import StageWorkerResult
 from tests.support.mutual_tls import mutual_tls_credentials, certificate_fingerprint
+from tests.integration.queue.test_agent_session_transport import _execute_available_assignment
 from tests.integration.queue.test_preparation_operations import (
     _service,
     _request,
@@ -216,13 +217,12 @@ def test_failed_remote_recovery_survives_settlement_and_explicit_retry(
             client.prepare_run(_request())
             if pure_coordinator:
                 assert daemon.config.resident_worker_launch_profile is None
-                prepared = clients[0].execute_one(
+                prepared = _execute_available_assignment(
+                    clients[0],
                     sessions[0].session_id,
                     sessions[0].availability_revision,
-                    sequence=1,
-                    wait_timeout_ms=5000,
                 )
-                assert prepared["state"] == "RELEASED", prepared
+                assert prepared.get("state") == "RELEASED", prepared
             operation = client.wait_operation("prepare-1", timeout_seconds=25).operation
             assert operation.state == "applied", operation
             result = _result(operation)
@@ -233,13 +233,12 @@ def test_failed_remote_recovery_survives_settlement_and_explicit_retry(
             client.submit(ordinary)
             remote.refresh_resource_offer()
             current = remote.active_session()
-            executed = remote.execute_one(
+            executed = _execute_available_assignment(
+                remote,
                 current.session_id,
                 current.availability_revision,
-                sequence=remote.next_poll_sequence(current.session_id),
-                wait_timeout_ms=5000,
             )
-            assert executed["state"] == "RELEASED", executed
+            assert executed.get("state") == "RELEASED", executed
             failed = client.wait("target", timeout_seconds=25)
             assert failed.state.value == "FAILED", failed
             assert client.submit(ordinary) == failed
@@ -301,13 +300,12 @@ def test_failed_remote_recovery_survives_settlement_and_explicit_retry(
             )
             remote.refresh_resource_offer()
             current = remote.active_session()
-            executed = remote.execute_one(
+            executed = _execute_available_assignment(
+                remote,
                 current.session_id,
                 current.availability_revision,
-                sequence=remote.next_poll_sequence(current.session_id),
-                wait_timeout_ms=5000,
             )
-            assert executed["state"] == "RELEASED", executed
+            assert executed.get("state") == "RELEASED", executed
             completed = client.wait("target", timeout_seconds=25)
             assert completed.state.value == "SUCCEEDED", completed
             assert authority.open_run(target_uri).stages[0].attempts[0] == first_attempt
