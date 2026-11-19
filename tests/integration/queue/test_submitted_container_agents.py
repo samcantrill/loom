@@ -100,6 +100,37 @@ def test_selected_catalog_survives_agent_launch_and_shared_reference_delivery(tm
         _close(client)
 
 
+def test_selected_delivery_defers_recursive_check_to_new_launch(tmp_path, monkeypatch):
+    from loom.queue import shared_execution
+    from loom.queue._container_worker import qualify_shared_worker_inputs
+    from loom.queue._remote_stage_execution import _ResidentAssignmentWorkspace
+    from loom.queue.submitted_execution import SELECTED_INPUT_WORKER_CONTRACT
+
+    policy, execution, request = _fixture(tmp_path)
+    policy = replace(policy, worker_contracts=(SELECTED_INPUT_WORKER_CONTRACT,))
+    execution = replace(execution, worker_contract=SELECTED_INPUT_WORKER_CONTRACT)
+    request = _bound(request, execution, policy)
+    workspace = _ResidentAssignmentWorkspace(tmp_path / "agent", request.assignment_id)
+    profile = policy.launch_profile(execution, workspace=workspace.root)
+
+    visits = []
+    walk = shared_execution.os.walk
+
+    def counted(path, **kwargs):
+        visits.append(path)
+        return walk(path, **kwargs)
+
+    monkeypatch.setattr(shared_execution.os, "walk", counted)
+    workspace.persist_request(request, profile)
+    assert workspace.has_request() and not visits
+
+    data = tmp_path / "input-tree"
+    (data / "a-link").symlink_to(data / "payload.bin")
+    with pytest.raises(QueueServiceError, match="regular files and directories"):
+        qualify_shared_worker_inputs(profile, request, agent_id="agent-1")
+    assert visits == [data]
+
+
 @pytest.mark.parametrize("installed_first", [False, True])
 def test_container_only_agent_images_share_resource_owners_and_exclusive_gpu(tmp_path, installed_first):
     policy, first, request = _fixture(tmp_path)

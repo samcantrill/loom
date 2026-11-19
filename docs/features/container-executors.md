@@ -70,6 +70,20 @@ These observations do not infer transport health. Upgrade the resident superviso
 and agent together after settlement; replacing files cannot transfer a live
 supervisor's process handles. The workload worker contract is unchanged.
 
+Delivery for a resident submitted-container v3 worker verifies the selected root
+qualifications and each selected location before retaining the request. The
+supervisor walks the selected trees before a new launch to reject unsupported
+entries, and verifies the selected image and artifact references. Its
+`input_validation_progress` log reports entries examined and elapsed time at the
+start, at most every five seconds during the walk, and on successful completion.
+An accepted stop is checked between filesystem operations. A filesystem call
+already in progress must return before the next cancellation check.
+
+The contained worker validates the same scope in its own filesystem view before
+running project code, then reuses that verified binding for input materialization,
+preparation, and recovery in that invocation. Retained worker timings record
+`worker_input_qualification` separately. A new launch checks live storage again.
+
 The worker workspace is mounted read/write at the identical absolute path;
 installed project and configured shared preparation roots are read-only mounts.
 Conflicting mounts are rejected. Existing container command builders own resource

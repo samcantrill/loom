@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 import re
@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from ._agent_process_supervisor import ResidentWorkerLaunchProfile
     from ._remote_stage_execution import _ResidentAssignmentBundle
     from .slurm_ready_stage import SlurmStageDelivery
+    from .shared_execution import InputValidationProgress
 
 
 def container_binding(
@@ -199,6 +200,8 @@ def qualify_shared_worker_inputs(
     assignment: _ResidentAssignmentBundle | SlurmStageDelivery,
     *,
     agent_id: str | None,
+    cancelled: Callable[[], bool] | None = None,
+    progress: Callable[[InputValidationProgress], None] | None = None,
 ) -> None:
     """Validate live shared paths only before a genuinely new execution."""
     from .shared_execution import assignment_scope, assignment_requires_staging_continuation, require_bindings, snapshot_mount
@@ -224,7 +227,7 @@ def qualify_shared_worker_inputs(
     shared_scope = assignment_scope(assignment.fingerprint)
     if shared_scope is None:
         return
-    require_bindings(shared_scope, profile.shared_roots)
+    require_bindings(shared_scope, profile.shared_roots, cancelled=cancelled, progress=progress)
     from .resident_readiness import require_staging_continuation_support
 
     # A submitted probe verifies its immutable image before executing in it.

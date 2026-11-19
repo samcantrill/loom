@@ -304,6 +304,35 @@ def test_shared_new_launch_qualification_rejects_before_spawning(tmp_path, monke
         assert conn.execute("SELECT COUNT(*) FROM launches").fetchone()[0] == 0
 
 
+
+def test_shared_new_launch_reports_progress_and_stops_before_spawning(tmp_path, monkeypatch):
+    from loom.queue._agent_process_supervisor import _SupervisorNoStartError
+    from loom.queue import _agent_process_supervisor as owner
+
+    resident, request, _ = _shared_container_request(tmp_path)
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    supervisor = AgentProcessSupervisor.initialize(agent, agent_id="agent-A", profiles=(resident.launch_profile,))
+    launch = _retain_shared_launch(supervisor, tmp_path, resident, request)
+    progress = []
+
+    def stop_on_progress(value):
+        if value.get("kind") == "input_validation_progress":
+            progress.append(value)
+            supervisor._stop_requested.add(launch.launch_operation_id)
+
+    def forbid(*args, **kwargs):
+        raise AssertionError("cancelled validation must not spawn")
+
+    monkeypatch.setattr(owner, "log_phases", stop_on_progress)
+    monkeypatch.setattr(subprocess, "Popen", forbid)
+    with pytest.raises(_SupervisorNoStartError, match="qualification cancelled"):
+        supervisor.launch(launch)
+    assert len(progress) == 1 and progress[0]["entries_examined"] == 0
+    with supervisor._connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM launches").fetchone()[0] == 0
+
+
 def test_shared_docker_replay_observes_without_original_inputs_or_new_container(tmp_path, monkeypatch):
     from loom.queue._docker_worker import DockerWorker
     from tests.unit.loom.queue.test_docker_worker import Daemon

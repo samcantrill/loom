@@ -410,7 +410,7 @@ def resolve(value: object, roots: Mapping[str, PlainData]) -> Path:
     return tree
 
 
-def worker_bindings(workspace: Any) -> dict[str, PlainData]:
+def worker_bindings(workspace: Any, *, profile: Any = None) -> dict[str, PlainData]:
     """Expose native recovery locations and their writable owner's future seal ID."""
     request = workspace.request()
     value = validate_wire(request)
@@ -420,7 +420,8 @@ def worker_bindings(workspace: Any) -> dict[str, PlainData]:
     from .shared_execution import execution_roots
 
     launch, _ = workspace_facts(workspace)
-    profile = workspace.shared_launch_profile()
+    if profile is None:
+        profile = workspace.shared_launch_profile()
     roots = execution_roots(
         profile.shared_roots, container=profile.container is not None
     )
