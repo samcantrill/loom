@@ -334,6 +334,38 @@ def test_concurrent_release_requests_delete_once(releasable_attempt):
     assert len(case.results) == 1
 
 
+@pytest.mark.parametrize("worker_report", [None, "CANCELLED"])
+def test_cancelled_predecessor_needs_exact_continuation_grant(releasable_attempt, tmp_path, worker_report):
+    from loom.queue.errors import QueueConflictError
+
+    case = releasable_attempt
+    (tmp_path / "retry").mkdir()
+    retry, _, _ = _workspace(tmp_path / "retry", attempt=2)
+    with case.daemon._connection() as conn:
+        conn.execute("CREATE TABLE daemon_metadata (key TEXT PRIMARY KEY, value TEXT)")
+        conn.execute("UPDATE remote_assignments SET report_json = ?", (
+            None if worker_report is None else json.dumps({"status": worker_report}),
+        ))
+
+        def predecessors():
+            delivery = recovery.bind_delivery(
+                retry.request(), conn, "run", case.profile.shared_roots,
+                session_id="session", cancelled_attempts=frozenset({"attempt-1"}),
+            )
+            return delivery.worker_metadata[recovery.WIRE]["predecessors"]
+
+        assert not predecessors()
+        key = "resume-cancelled-recovery:" + case.workspace.assignment_id
+        identity = ["run", case.workspace.request().stage_name, "attempt-1", "wrong-fence"]
+        conn.execute("INSERT INTO daemon_metadata VALUES (?, ?)", (key, json.dumps(identity)))
+        with pytest.raises(QueueConflictError, match="grant conflicts"):
+            predecessors()
+        identity[-1] = "fence-1"
+        conn.execute("UPDATE daemon_metadata SET value=? WHERE key=?", (json.dumps(identity), key))
+        retained, = predecessors()
+        assert retained["identity"]["assignment_id"] == case.workspace.assignment_id
+
+
 def test_retry_after_successful_cleanup_does_not_acquire_retired_tree(releasable_attempt, tmp_path):
     case = releasable_attempt
     cleanup.release_recovery(case.daemon, case.principal, **case.arguments)

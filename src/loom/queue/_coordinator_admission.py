@@ -108,7 +108,7 @@ def _submit(
                 existing.intent_digest == intent.digest
                 and existing.queue_item_id == request.queue_item_id
             ):
-                if request.retry_failed_revision is not None:
+                if request.continuation_revision is not None:
                     return _retry_failed_admission(self,
                         existing, request, execution, parent_id=run_operation_id
                     )
@@ -118,7 +118,7 @@ def _submit(
             raise QueueConflictError(
                 "queue item identity already admits another run"
             )
-        if request.retry_failed_revision is not None:
+        if request.continuation_revision is not None:
             raise QueueConflictError("retry requires an existing failed admission")
 
         intent = load_managed_local_intent(config, request.run_uri)
@@ -187,31 +187,60 @@ def _retry_failed_admission(
 ) -> LocalDaemonAdmission:
     # The coordinator journal bridges its local admission update and the
     # authority's atomic, replayable lifecycle continuation across restart.
-    key = (
-        f"admission-retry:{admission.admission_id}:{request.retry_failed_revision}"
-    )
+    revision = request.continuation_revision
+    resume_cancelled = request.resume_cancelled_revision is not None
+    key = f"admission-retry:{admission.admission_id}:{revision}"
+    expected_state = LocalDaemonAdmissionState.CANCELLED if resume_cancelled else LocalDaemonAdmissionState.FAILED
     with self._connection() as conn:
         row = conn.execute(
             "SELECT value FROM daemon_metadata WHERE key = ?", (key,)
         ).fetchone()
     if row is None:
         if (
-            admission.state is not LocalDaemonAdmissionState.FAILED
-            or admission.revision != request.retry_failed_revision
-            or admission.cancellation_operation_id is not None
+            admission.state is not expected_state
+            or admission.revision != revision
+            or (not resume_cancelled and admission.cancellation_operation_id is not None)
         ):
             raise QueueConflictError("retry failed admission revision is stale")
-        snapshot = execution.validate_admission_retry(admission)
+        snapshot = execution.validate_admission_retry(admission, resume_cancelled=resume_cancelled)
         record = {
             "admission_id": admission.admission_id,
             "failed_revision": admission.revision,
             "authority_revision": snapshot.revision.to_dict(),
             "state": "pending",
         }
+        if resume_cancelled:
+            record.update(
+                terminal_state=expected_state.value,
+                cancellation_operation_id=admission.cancellation_operation_id,
+                run_uri=admission.run_uri,
+                parent_id=parent_id,
+                cancelled_admission=admission.to_dict(),
+                cancelled_attempts=[
+                    [stage.stage_name, stage.attempts[-1].attempt_id]
+                    for stage in snapshot.stages
+                    if stage.status.value == "CANCELLED" and stage.attempts and stage.attempts[-1].status.value == "CANCELLED"
+                ],
+            )
         with execution.scheduling_reload_guard(), self._state_guard(), self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             from ._maintenance import classify
             classify(conn, request.queue_item_id, parent_id=parent_id)
+            if parent_id is not None:
+                parent = conn.execute(
+                    "SELECT state, cancellation_requested FROM preparation_operations WHERE operation_id = ?",
+                    (parent_id,),
+                ).fetchone()
+                if parent is None or parent["state"] != "applying" or parent["cancellation_requested"]:
+                    raise QueueConflictError("run continuation is suppressed or complete")
+            if resume_cancelled:
+                from ._shared_recovery import assignment_rows
+                cancelled = {tuple(pair) for pair in record.pop("cancelled_attempts")}
+                record["cancelled_assignments"] = {
+                    row["assignment_id"]: [admission.run_uri, row["stage_name"], row["attempt_id"], row["fence"]]
+                    for row in assignment_rows(conn, admission.run_uri, slurm_assignments=execution.slurm_assignments)
+                    if (row["stage_name"], row["attempt_id"]) in cancelled and row["fence"] is not None
+                }
             conn.execute(
                 "INSERT INTO daemon_metadata(key, value) VALUES (?, ?)",
                 (key, json.dumps(record)),
@@ -220,9 +249,14 @@ def _retry_failed_admission(
             self._scheduling_reference_revision += 1
     else:
         record = json.loads(str(row["value"]))
+    if record.get("terminal_state", "FAILED") != expected_state.value:
+        raise QueueConflictError("retry terminal status conflicts")
     if record["state"] == "pending":
         _apply_admission_retry(self, key, record, execution)
     self._wake.set()
+    if "accepted_admission" in record:
+        from .local_daemon import LocalDaemonAdmission
+        return LocalDaemonAdmission.from_dict(record["accepted_admission"])
     return self._admission(admission.admission_id)
 
 
@@ -233,27 +267,55 @@ def _apply_admission_retry(
 
     admission = self._admission(record["admission_id"])
     if (
-        admission.state is not LocalDaemonAdmissionState.FAILED
+        admission.state.value != record.get("terminal_state", "FAILED")
         or admission.revision != record["failed_revision"]
-        or admission.cancellation_operation_id is not None
+        or admission.cancellation_operation_id != record.get("cancellation_operation_id")
     ):
         raise QueueConflictError("pending admission retry conflicts")
     execution.resume_failed_admission(
         admission,
         operation_id=key,
         expected_revision=BackendRevision.from_dict(record["authority_revision"]),
+        resume_cancelled=record.get("terminal_state") == "CANCELLED",
     )
     record["state"] = "applied"
     with execution.scheduling_reload_guard(), self._state_guard(), self._connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        conn.execute(
+        updated = conn.execute(
             "UPDATE managed_admissions SET state = ?, blocked_reason = NULL, "
-            "revision = revision + 1 WHERE admission_id = ? AND revision = ? AND cancellation_operation_id IS NULL",
+            "cancellation_operation_id = NULL, cancellation_principal_id = NULL, "
+            "revision = revision + 1 WHERE admission_id = ? AND revision = ? "
+            "AND cancellation_operation_id IS ?",
             (
                 LocalDaemonAdmissionState.PENDING_AUTHORITY.value,
-                admission.admission_id, record["failed_revision"],
+                admission.admission_id, record["failed_revision"], record.get("cancellation_operation_id"),
             ),
         )
+        if updated.rowcount != 1:
+            raise QueueConflictError("continuation revision changed during settlement")
+        if record.get("terminal_state") == "CANCELLED":
+            for assignment_id, identity in record["cancelled_assignments"].items():
+                conn.execute(
+                    "INSERT INTO daemon_metadata(key, value) VALUES (?, ?)",
+                    (f"resume-cancelled-recovery:{assignment_id}", json.dumps(identity)),
+                )
+            conn.execute(
+                "DELETE FROM action_graph_cancellations WHERE run_uri = ? AND operation_id = ?",
+                (admission.run_uri, admission.cancellation_operation_id),
+            )
+            # Bound operations from the cancelled run still own their original cancellation scope.
+            conn.execute(
+                "UPDATE preparation_operations SET selected_json=json_set(selected_json, "
+                "'$.reconciliation.superseded_by', ?) "
+                "WHERE kind='run' AND queue_item_id=? AND operation_id IS NOT ? "
+                "AND json_type(selected_json, '$.reconciliation')='object' "
+                "AND json_type(selected_json, '$.reconciliation.superseded_by') IS NULL",
+                (key, admission.queue_item_id, record.get("parent_id")),
+            )
+        accepted = conn.execute(
+            "SELECT * FROM managed_admissions WHERE admission_id = ?", (admission.admission_id,),
+        ).fetchone()
+        record["accepted_admission"] = _admission_from_row(accepted).to_dict()
         conn.execute(
             "UPDATE daemon_metadata SET value = ? WHERE key = ?",
             (json.dumps(record), key),

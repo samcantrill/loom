@@ -1061,6 +1061,8 @@ class SQLitePerRunAuthorityStore:
         operation_id: str,
         expected_revision: BackendRevision,
         stage_names: tuple[str, ...],
+        resume_cancelled: bool = False,
+        cancellation_operation_id: str | None = None,
     ) -> BackendRevision:
         """Atomically authorize explicit continuation of released failed work.
 
@@ -1077,6 +1079,8 @@ class SQLitePerRunAuthorityStore:
             "expected_revision": expected_revision.to_dict(),
             "stage_names": list(stage_names),
         }
+        if resume_cancelled:
+            request.update(resume_cancelled=True, cancellation_operation_id=cancellation_operation_id)
         key = f"managed_admission_retry:{operation_id}"
         with self._transaction(run_uri) as conn:
             binding = conn.execute(
@@ -1098,10 +1102,24 @@ class SQLitePerRunAuthorityStore:
                 if receipt["request"] != request:
                     raise AuthorityStoreError("managed retry operation conflicts")
                 return BackendRevision.from_dict(receipt["revision"])
-            _require_no_cancellation_epoch(conn)
+            if resume_cancelled:
+                active = conn.execute("SELECT epoch FROM cancellation_epochs WHERE id = 1").fetchone()
+                if active is not None:
+                    receipt = conn.execute(
+                        "SELECT receipt_json FROM cancellation_epoch_receipts WHERE operation_id = ?",
+                        (cancellation_operation_id,),
+                    ).fetchone()
+                    if receipt is None or _json_loads(receipt[0])["epoch"] != active[0]:
+                        raise AuthorityStoreError("resume requires the current cancellation epoch")
+                    conn.execute("DELETE FROM cancellation_epochs WHERE id = 1")
+                if conn.execute("SELECT 1 FROM action_producers WHERE active = 1 LIMIT 1").fetchone():
+                    raise AuthorityStoreError("cancelled action producer remains live")
+            else:
+                _require_no_cancellation_epoch(conn)
             _require_expected_revision(_current_run_revision(conn), expected_revision)
             snapshot = _snapshot(conn, run_uri=run_uri, now=self._now())
-            if snapshot.status not in {RunStatus.FAILED, RunStatus.INTERRUPTED}:
+            allowed = {RunStatus.CANCELLED} if resume_cancelled else {RunStatus.FAILED, RunStatus.INTERRUPTED}
+            if snapshot.status not in allowed:
                 raise AuthorityStoreError("managed retry requires a failed run")
             if (
                 conn.execute(
@@ -1127,8 +1145,8 @@ class SQLitePerRunAuthorityStore:
                 in {
                     StageStatus.RUNNING,
                     StageStatus.SUBMITTED,
-                    StageStatus.CANCELLED,
                 }
+                or (stage.status is StageStatus.CANCELLED and not resume_cancelled)
                 or any(
                     attempt.status in {StageStatus.RUNNING, StageStatus.SUBMITTED}
                     for attempt in stage.attempts
@@ -1144,7 +1162,7 @@ class SQLitePerRunAuthorityStore:
             )
             revision = self._next_revision(conn)
             for stage in snapshot.stages:
-                if stage.status is StageStatus.FAILED:
+                if stage.status is StageStatus.FAILED or (resume_cancelled and stage.status is StageStatus.CANCELLED):
                     ensure_stage_transition(
                         stage.status, StageStatus.STALE, intent=TransitionIntent.RESUME
                     )
@@ -1258,7 +1276,8 @@ class SQLitePerRunAuthorityStore:
                 epoch = cast(str, epoch_row["epoch"])
                 canonical_row = conn.execute(
                     "SELECT request_json FROM cancellation_epoch_receipts "
-                    "ORDER BY operation_id LIMIT 1"
+                    "WHERE json_extract(receipt_json, '$.epoch') = ? ORDER BY operation_id LIMIT 1",
+                    (epoch,),
                 ).fetchone()
                 if canonical_row is None:
                     raise AuthorityStoreError(
@@ -1324,7 +1343,7 @@ class SQLitePerRunAuthorityStore:
             raise AuthorityStoreError("cancellation finalization run_uri conflicts")
         with self._transaction(run_uri) as conn:
             receipt_row = conn.execute(
-                "SELECT request_json FROM cancellation_epoch_receipts "
+                "SELECT request_json, receipt_json FROM cancellation_epoch_receipts "
                 "WHERE operation_id = ?",
                 (request.operation_id,),
             ).fetchone()
@@ -1337,6 +1356,12 @@ class SQLitePerRunAuthorityStore:
             )
             if installed != request:
                 raise AuthorityStoreError("cancellation finalization conflicts")
+            epoch = conn.execute(
+                "SELECT epoch FROM cancellation_epochs WHERE id = 1"
+            ).fetchone()
+            if epoch is None or epoch[0] != _json_loads(receipt_row["receipt_json"])["epoch"]:
+                # A committed explicit continuation superseded this exact old epoch.
+                return RunStatus.CANCELLED
             status = _require_run_status(conn)
             if status in {
                 RunStatus.SUCCEEDED,

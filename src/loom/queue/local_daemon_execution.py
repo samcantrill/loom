@@ -16,6 +16,7 @@ from ._coordinator_run_authority import _ScopedCoordinatorAuthority as _ScopedCo
 from ._action_results import action_attempt_cancelled, action_attempt_needed, attach_action_fence
 from ._recovery_retry import _RecoveryRetry
 from ._slurm_admission import SlurmAdmissionDeferred
+from . import _slurm_retry
 
 from .shared_execution import SHARED_EXECUTION_CAPABILITY, STAGING_CONTINUATION_CAPABILITY, attributes as shared_attributes, qualifications
 
@@ -2038,7 +2039,7 @@ class LocalDaemonExecution:
         return intent, scoped_authority
 
     def validate_admission_retry(
-        self, admission: LocalDaemonAdmission
+        self, admission: LocalDaemonAdmission, *, resume_cancelled: bool = False
     ) -> AuthoritativeRunSnapshot:
         """Require available, released owners before recording retry intent."""
         from .coordinator_authority import ManagedAdmissionRetryAuthority
@@ -2055,7 +2056,8 @@ class LocalDaemonExecution:
                 "managed admission retry requires released assignments"
             )
         snapshot = authority.open_run(admission.run_uri)
-        if snapshot.status not in {RunStatus.FAILED, RunStatus.INTERRUPTED}:
+        allowed = {RunStatus.CANCELLED} if resume_cancelled else {RunStatus.FAILED, RunStatus.INTERRUPTED}
+        if snapshot.status not in allowed:
             raise QueueConflictError(
                 "managed admission retry requires failed authority state"
             )
@@ -2067,6 +2069,7 @@ class LocalDaemonExecution:
         *,
         operation_id: str,
         expected_revision: BackendRevision,
+        resume_cancelled: bool = False,
     ) -> None:
         from .coordinator_authority import ManagedAdmissionRetryAuthority
 
@@ -2091,6 +2094,8 @@ class LocalDaemonExecution:
             operation_id=operation_id,
             expected_revision=expected_revision,
             stage_names=intent.plan.stage_order,
+            **({"resume_cancelled": True, "cancellation_operation_id": admission.cancellation_operation_id}
+               if resume_cancelled else {}),
         )
 
     def reconcile_admission(
@@ -2836,6 +2841,10 @@ class LocalDaemonExecution:
             in_flight = True
         return in_flight, diagnostic
 
+    def reconcile_slurm_retry(self, run_uri: str, *, accepted_at: str | None = None) -> str | None:
+        """Advance or await the provider-owned prerequisites of a requested retry."""
+        return _slurm_retry.reconcile(self, run_uri, accepted_at=accepted_at)
+
     def _reconcile_slurm_terminal_assignment(
         self,
         record: SlurmStageRecord,
@@ -2956,6 +2965,20 @@ class LocalDaemonExecution:
     ) -> bool:
         if isinstance(request.target, SlurmRecoveryTarget):
             record = cast(SlurmStageRecord, binding[0])
+            if request.recovery_id.startswith(_slurm_retry.PROVIDER_RECOVERY_PREFIX):
+                outcome = _slurm_retry.terminal_state(self, record)
+                if (record.report is not None or self._run_cancellation_operation(request.run_uri) is not None
+                    or outcome is None or request.reason != _slurm_retry.reason(outcome)):
+                    # A cancellation, changed accounting or late worker report
+                    # supersedes an uncommitted close. Replay a CAS that already
+                    # won before a coordinator crash using the journaled evidence.
+                    snapshot = self._authority_store(request.run_uri).open_run(request.run_uri)
+                    return any(
+                        item.attempt_id == record.assignment.attempt_id and item.reason is not None
+                        and item.reason.detail.get("recovery_id") == request.recovery_id
+                        for stage in snapshot.stages if stage.stage_name == request.stage_name
+                        for item in stage.attempts
+                    )
             if record.report is not None:
                 return False
             if record.state == "unknown":
@@ -2973,9 +2996,7 @@ class LocalDaemonExecution:
                                    or submission.scheduler_state == "UNKNOWN"))
                 or (
                     submission.scheduler_source == "sacct"
-                    and submission.scheduler_state in {
-                        "TIMEOUT", "FAILED", "CANCELLED", "COMPLETED",
-                    }
+                    and submission.scheduler_state in _slurm_retry.GUARDED_TERMINAL_STATES
                     # The submission owner validates and retains the accounting
                     # incarnation. Eligibility alone never proves containment.
                     and submission.accounting_identity is not None
@@ -3109,6 +3130,9 @@ class LocalDaemonExecution:
             if request.requested_outcome == "failed"
             else StageStatus.CANCELLED
         )
+        if (request.recovery_id.startswith(_slurm_retry.PROVIDER_RECOVERY_PREFIX)
+            and not self._recovery_binding_is_unknown(request, binding)):
+            return {"recovery_id": request.recovery_id, "state": "superseded", "evidence": "TARGET_STATE_CHANGED"}
         try:
             transition = authority.close_managed_attempt_fence(
                 run_uri,
@@ -3845,6 +3869,7 @@ class LocalDaemonExecution:
                     delivery, conn, assignment.run_uri, self.config.coordinator_shared_roots,
                     agent_id=assignment.agent_id, slurm_assignments=self.slurm_assignments,
                     verify_trees=False,
+                    cancelled_attempts=_cancelled_stage_attempts(snapshot, record.stage_name),
                 )
             verified, preparation_reason = self._prepared_recovery_predecessors(record, delivery)
             if verified is None:
@@ -5574,12 +5599,12 @@ class LocalDaemonExecution:
         if raw is not None:
             retained = StageWorkerRequest.from_dict(raw)
             if retained.attempt != record.attempt:
-                prior_failed = any(
-                    a.attempt == retained.attempt and a.status is StageStatus.FAILED
+                prior_interrupted = any(
+                    a.attempt == retained.attempt and a.status in {StageStatus.FAILED, StageStatus.CANCELLED}
                     for fact in snapshot.stages if fact.stage_name == record.stage_name
                     for a in fact.attempts
                 )
-                if not prior_failed or retained.attempt + 1 != record.attempt:
+                if not prior_interrupted or retained.attempt + 1 != record.attempt:
                     raise QueueConflictError("managed retry worker request conflicts")
                 raw = None
         worker_request = StageWorkerRequest.from_dict(raw) if raw is not None else prepare_stage_attempt(
@@ -5844,7 +5869,11 @@ class LocalDaemonExecution:
             )
             from ._shared_recovery import bind_delivery
             with self._daemon_owner()._connection() as conn:
-                delivered = bind_delivery(delivered, conn, assignment.run_uri, self._daemon_owner().config.coordinator_shared_roots, session_id=remote_target.session_id, slurm_assignments=self.slurm_assignments, verify_trees=False)
+                delivered = bind_delivery(
+                    delivered, conn, assignment.run_uri, self._daemon_owner().config.coordinator_shared_roots,
+                    session_id=remote_target.session_id, slurm_assignments=self.slurm_assignments,
+                    verify_trees=False, cancelled_attempts=_cancelled_stage_attempts(snapshot, record.stage_name),
+                )
             verified, _preparation_reason = self._prepared_recovery_predecessors(record, delivered)
             if verified is None:
                 return False
@@ -6889,6 +6918,13 @@ class LocalDaemonExecution:
         return capacity_holding - remote_assignment_ids
 
 
+
+
+def _cancelled_stage_attempts(snapshot: AuthoritativeRunSnapshot, stage_name: str) -> frozenset[str]:
+    return frozenset(
+        attempt.attempt_id for stage in snapshot.stages if stage.stage_name == stage_name
+        for attempt in stage.attempts if attempt.status is StageStatus.CANCELLED
+    )
 
 
 def _safe_identifier(value: object, field: str) -> str:

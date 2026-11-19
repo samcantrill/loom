@@ -1158,7 +1158,8 @@ class CoordinatorPreparation:
             or not observed_stages.issubset(planned_stages)
             or (snapshot.status.value == "SUCCEEDED" and observed_stages != planned_stages)
             or (not snapshot.stages and snapshot.status.value != "PLANNED")
-            or snapshot.status.value in {"CANCELLED", "CANCELLING"}
+            or snapshot.status.value == "CANCELLING"
+            or (snapshot.status.value == "CANCELLED" and (admission is None or admission.state.value != "CANCELLED"))
             or (admission is not None and admission.state.value == "SUCCEEDED" and snapshot.status.value != "SUCCEEDED")):
             raise QueueConflictError("candidate authority identity conflicts")
         store = LocalRunStore(config.run_store_root)

@@ -148,11 +148,11 @@ def prepare_ready_request(
     if raw is not None:
         previous = StageWorkerRequest.from_dict(raw)
         if previous.attempt != record.attempt:
-            prior_failed = any(
-                a.attempt == previous.attempt and a.status is StageStatus.FAILED
+            prior_interrupted = any(
+                a.attempt == previous.attempt and a.status in {StageStatus.FAILED, StageStatus.CANCELLED}
                 for s in snapshot.stages if s.stage_name == record.stage_name for a in s.attempts
             )
-            if not prior_failed or previous.attempt + 1 != record.attempt:
+            if not prior_interrupted or previous.attempt + 1 != record.attempt:
                 raise QueueConflictError("managed retry worker request conflicts")
             raw = None
     if raw is None:

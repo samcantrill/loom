@@ -170,6 +170,7 @@ def bind_delivery(
     session_id: str,
     slurm_assignments: Any = None,
     verify_trees: bool = True,
+    cancelled_attempts: frozenset[str] = frozenset(),
 ) -> Any:
     selection = selected(request)
     from ._shared_staging_continuation import requested
@@ -184,8 +185,16 @@ def bind_delivery(
         raise QueueConflictError("recovery destination machine is unavailable")
     return _bind_delivery(
         request, conn, run_uri, roots, agent_id=session["agent_root_id"],
-        slurm_assignments=slurm_assignments, verify_trees=verify_trees,
+        slurm_assignments=slurm_assignments, verify_trees=verify_trees, cancelled_attempts=cancelled_attempts,
     )
+
+
+def retention_receipts(conn: Any, assignment_id: str) -> dict[str, str]:
+    return {receipt["operation"]: receipt["result_json"] for receipt in conn.execute(
+        "SELECT operation, result_json FROM agent_receipts WHERE principal_id = ? "
+        "AND operation IN ('seal', 'seal_unavailable') AND idempotency_key = ?",
+        (_PRINCIPAL, assignment_id),
+    )}
 
 
 def assignment_rows(
@@ -208,11 +217,7 @@ def assignment_rows(
     if slurm_assignments is not None:
         for record, evidence in slurm_assignments.recovery_records(run_uri, stage_name=stage_name, limit=limit):
             assignment = record.assignment
-            receipts = {receipt["operation"]: receipt["result_json"] for receipt in conn.execute(
-                "SELECT operation, result_json FROM agent_receipts WHERE principal_id = ? "
-                "AND operation IN ('seal', 'seal_unavailable') AND idempotency_key = ?",
-                (_PRINCIPAL, assignment.assignment_id),
-            )}
+            receipts = retention_receipts(conn, assignment.assignment_id)
             proof = (
                 evidence.get("release") if evidence is not None
                 and evidence.get("provider_released") is True else None
@@ -238,6 +243,7 @@ def assignment_rows(
 def bind_slurm_delivery(
     request: Any, conn: Any, run_uri: str, roots: Mapping[str, PlainData], *,
     agent_id: str, slurm_assignments: Any, verify_trees: bool = True,
+    cancelled_attempts: frozenset[str] = frozenset(),
 ) -> Any:
     from ._shared_staging_continuation import requested
     if request.preparation_input is not None and requested(request):
@@ -246,13 +252,14 @@ def bind_slurm_delivery(
         return request
     return _bind_delivery(
         request, conn, run_uri, roots, agent_id=agent_id,
-        slurm_assignments=slurm_assignments, verify_trees=verify_trees,
+        slurm_assignments=slurm_assignments, verify_trees=verify_trees, cancelled_attempts=cancelled_attempts,
     )
 
 
 def _bind_delivery(
     request: Any, conn: Any, run_uri: str, roots: Mapping[str, PlainData], *,
     agent_id: str, slurm_assignments: Any, verify_trees: bool = True,
+    cancelled_attempts: frozenset[str] = frozenset(),
 ) -> Any:
     selection = selected(request)
     assert selection is not None
@@ -283,8 +290,19 @@ def _bind_delivery(
                 "recovery predecessor is not positively settled and retained"
             )
         report = None if row["report_json"] is None else json.loads(row["report_json"])
-        if report is not None and report["status"] != "FAILED":
+        status = None if report is None else report["status"]
+        if status not in {None, "FAILED", "CANCELLED"}:
             continue
+        if status == "CANCELLED" or row["attempt_id"] in cancelled_attempts:
+            grant = conn.execute(
+                "SELECT value FROM daemon_metadata WHERE key = ?",
+                (f"resume-cancelled-recovery:{row['assignment_id']}",),
+            ).fetchone()
+            if grant is None:
+                continue
+            expected = [run_uri, row["stage_name"], row["attempt_id"], row["fence"]]
+            if json.loads(grant["value"]) != expected:
+                raise QueueConflictError("cancelled recovery assignment grant conflicts")
         released = conn.execute(
             "SELECT 1 FROM agent_receipts WHERE principal_id = ? "
             "AND operation = 'release_recovery' AND idempotency_key = ?",

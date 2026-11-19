@@ -699,6 +699,28 @@ class OwnedStage(ReleaseStage):
                 )
                 with pytest.raises(ProcessLookupError):
                     os.kill(pid, 0)
+                denied_request = _reconciled_request("failed-only", retry=True)
+                client = CoordinatorClient.from_unix_socket(service.daemon.endpoint)
+                with client:
+                    client.start_run(denied_request)
+                    denied = daemon.wait_operation("failed-only", timeout=60).operation
+                    assert denied.state == "conflict", denied.to_dict()
+                    resume = replace(_reconciled_request("resume"), retry_policy="one_observed_cancellation")
+                    client.start_run(resume)
+                    resumed = daemon.wait_operation("resume", timeout=60).operation
+                    assert resumed.state == "applied", resumed.to_dict()
+                    assert _result(resumed)["decision"] == "retry"
+                    assert client.start_run(resume) == resumed
+                    old_cancel = client.cancel_run_operation(first.operation_id)
+                    assert old_cancel.state == "applied", old_cancel.to_dict()
+                    (marker / "release").touch()
+                    terminal = daemon._wait(_result(first)["queue_item_id"], timeout_seconds=45)
+                    assert terminal.state.value == "SUCCEEDED", terminal.to_dict()
+                    uri = _result(first)["prepared_run"]["run_uri"]
+                    snapshot = service.daemon.coordinator_authority_factory(uri).open_run(uri)
+                    stages = {stage.stage_name: stage for stage in snapshot.stages}
+                    assert [a.status.value for a in stages["produce"].attempts] == ["CANCELLED", "SUCCEEDED"]
+                    assert stages["other"].status.value == "SUCCEEDED"
     finally:
         (marker / "release").touch()
         server.stop()

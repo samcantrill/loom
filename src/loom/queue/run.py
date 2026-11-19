@@ -22,6 +22,8 @@ class RunRequest:
     ``retry_policy="one_observed_failure"`` authorizes one durably observed failed
     revision for that submission. Replay cannot authorize any later failure.
     Cancellation after binding cancels the shared target for all observers.
+    ``one_observed_cancellation`` authorizes one explicit continuation of the
+    terminal cancelled revision selected by this reconciliation.
     """
 
     preparation: PrepareRunRequest
@@ -46,7 +48,7 @@ class RunRequest:
             not isinstance(self.mode, str)
             or self.mode not in {"exact", "reconcile"}
             or not isinstance(self.retry_policy, str)
-            or self.retry_policy not in {"never", "one_observed_failure"}
+            or self.retry_policy not in {"never", "one_observed_failure", "one_observed_cancellation"}
         ):
             raise QueueServiceError("run reconciliation intent is invalid")
         if self.mode == "reconcile":

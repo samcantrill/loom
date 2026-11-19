@@ -1177,6 +1177,12 @@ class LocalDaemonAdmissionRequest:
     run_uri: str
     retry_failed_revision: int | None = None
 
+    resume_cancelled_revision: int | None = None
+
+    @property
+    def continuation_revision(self) -> int | None:
+        return self.retry_failed_revision or self.resume_cancelled_revision
+
     def __post_init__(self) -> None:
         for value, name in (
             (self.queue_item_id, "queue_item_id"),
@@ -1191,6 +1197,13 @@ class LocalDaemonAdmissionRequest:
         ):
             raise QueueServiceError("retry failed revision must be a positive integer")
 
+        if self.resume_cancelled_revision is not None and (
+            type(self.resume_cancelled_revision) is not int
+            or self.resume_cancelled_revision < 1
+            or self.retry_failed_revision is not None
+        ):
+            raise QueueServiceError("resume requires one positive cancelled revision")
+
     def to_dict(self) -> dict[str, PlainData]:
         result: dict[str, PlainData] = {
             "queue_item_id": self.queue_item_id,
@@ -1198,6 +1211,8 @@ class LocalDaemonAdmissionRequest:
         }
         if self.retry_failed_revision is not None:
             result["retry_failed_revision"] = self.retry_failed_revision
+        if self.resume_cancelled_revision is not None:
+            result["resume_cancelled_revision"] = self.resume_cancelled_revision
         return result
 
     @classmethod
@@ -1205,10 +1220,16 @@ class LocalDaemonAdmissionRequest:
         fields = {"queue_item_id", "run_uri"}
         if "retry_failed_revision" in data:
             fields.add("retry_failed_revision")
+        if "resume_cancelled_revision" in data:
+            fields.add("resume_cancelled_revision")
         _exact_fields(data, fields, "admission request")
         return cls(
             queue_item_id=_required_string(data, "queue_item_id"),
             run_uri=_required_string(data, "run_uri"),
+            resume_cancelled_revision=(
+                _required_int(data, "resume_cancelled_revision")
+                if "resume_cancelled_revision" in data else None
+            ),
             retry_failed_revision=(
                 _required_int(data, "retry_failed_revision")
                 if "retry_failed_revision" in data
@@ -3360,9 +3381,18 @@ class LocalDaemon:
     ) -> Mapping[str, PlainData]:
         """Persist and advance one immutable guarded-recovery saga."""
 
+        from ._slurm_retry import PROVIDER_RECOVERY_PREFIX
+
         _public_operation_id(request.recovery_id)
-        authorizer = self._authorizer()
-        authorizer.require_operator(principal, "recover_unknown")
+        self._authorizer().require_operator(principal, "recover_unknown")
+        if request.recovery_id.startswith(PROVIDER_RECOVERY_PREFIX):
+            raise QueueConflictError("provider recovery operation namespace is reserved")
+        return self._admit_guarded_recovery(request, principal.subject)
+
+    def _admit_guarded_recovery(
+        self, request: RecoverUnknownAssignment, principal_id: str,
+    ) -> Mapping[str, PlainData]:
+        """Use the same intent, containment evidence and close journal for both owners."""
         encoded = json.dumps(request.to_dict(), sort_keys=True, separators=(",", ":"))
         digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
         execution = self._execution
@@ -3378,7 +3408,7 @@ class LocalDaemon:
                 ).fetchone()
                 if prior is not None:
                     if (
-                        str(prior["principal_id"]) != principal.subject
+                        str(prior["principal_id"]) != principal_id
                         or str(prior["request_json"]) != encoded
                         or str(prior["request_digest"]) != digest
                     ):
@@ -3397,8 +3427,9 @@ class LocalDaemon:
                     conn.execute("BEGIN IMMEDIATE")
                     raced = conn.execute(
                         "SELECT recovery_id FROM recovery_operations "
-                        "WHERE recovery_id = ?",
-                        (request.recovery_id,),
+                        "WHERE recovery_id = ? OR (state IN ('pending', 'evidence_confirmed', 'closed') "
+                        "AND json_extract(request_json, '$.assignment_id') = ?)",
+                        (request.recovery_id, request.assignment_id),
                     ).fetchone()
                     if raced is not None:
                         raise _RecoveryNotAccepted("recovery operation conflicts")
@@ -3410,7 +3441,7 @@ class LocalDaemon:
                         "VALUES (?, ?, ?, ?, ?, 'pending', NULL, ?)",
                         (
                             request.recovery_id,
-                            principal.subject,
+                            principal_id,
                             encoded,
                             digest,
                             recorded_at,
@@ -3586,23 +3617,19 @@ class LocalDaemon:
                 self._advance_recovery(execution, request, str(row["recorded_at"]))
 
     def _recovery_fences_ordinary_terminal(self, assignment_id: str) -> bool:
-        """Whether recovery has permanently fenced ordinary terminal mutation."""
+        """A provider-driven retry lets an arriving worker result race the close."""
+        from ._slurm_retry import PROVIDER_RECOVERY_PREFIX
 
         with self._connection() as conn:
-            rows = tuple(
-                conn.execute(
-                    "SELECT request_json FROM recovery_operations "
-                    "WHERE state IN ('pending', 'evidence_confirmed', 'closed')"
-                )
+            rows = conn.execute(
+                "SELECT recovery_id, state FROM recovery_operations "
+                "WHERE state IN ('pending', 'evidence_confirmed', 'closed') "
+                "AND json_extract(request_json, '$.assignment_id') = ?", (assignment_id,),
             )
-        for row in rows:
-            value = json.loads(str(row["request_json"]))
-            if (
-                isinstance(value, Mapping)
-                and value.get("assignment_id") == assignment_id
-            ):
-                return True
-        return False
+            return any(
+                row["state"] == "closed" or not row["recovery_id"].startswith(PROVIDER_RECOVERY_PREFIX)
+                for row in rows
+            )
 
     def _recovery_is_settling(self, assignment_id: str) -> bool:
         """Whether close and its existing-policy retry decision are incomplete."""

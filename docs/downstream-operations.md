@@ -760,6 +760,19 @@ are incompatible with reconciliation. Replay retains the operation ID and every
 other request field, including retry policy. Exact requests keep their existing
 wire shape and never retry through replay.
 
+A cancelled target stays cancelled until a new reconciled operation requests
+`--resume-cancelled` (API policy `one_observed_cancellation`). This operation
+binds the cancelled admission revision and cancellation receipt. Loom reopens
+unfinished stages after their assignments have settled, preserves successful
+commits, and delivers retained recovery trees to the next attempt. Replaying
+the same submission or an earlier cancellation preserves its original outcome.
+
+A Slurm timeout can terminate the worker before it reports. Failed-run retry
+uses the installed profile's accounting and containment evidence for that exact
+allocation, then waits for provider release and shared recovery retention.
+An unresolved allocation leaves the continuation pending with its waiting
+reason. A retention budget failure is reported as a conflict.
+
 Stages that support continuing output assembly can be selected in the protected
 deployment with `preparation.staging_continuation_stages`, for example
 `["predict"]`. Set this on the initial submission and retain it on retry. The

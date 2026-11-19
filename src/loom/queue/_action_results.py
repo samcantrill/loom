@@ -89,7 +89,7 @@ class ActionResults:
                     )
                 if (
                     retry_authorized
-                    and claim["state"] == "failed"
+                    and claim["state"] in {"failed", "cancelled"}
                     and (claim["owner_run_uri"], claim["owner_node"]) == (run_uri, node)
                 ):
                     if attempt_id is None or attempt_id == claim["attempt_id"]:
@@ -108,7 +108,7 @@ class ActionResults:
                     demand = {"state": "live", "binding_json": None}
                 elif (
                     retry_authorized
-                    and demand["state"] == "failed"
+                    and demand["state"] in {"failed", "detached"}
                     and claim["state"] in {"owned", "succeeded"}
                 ):
                     conn.execute(

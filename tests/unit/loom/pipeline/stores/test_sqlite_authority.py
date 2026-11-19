@@ -1372,6 +1372,36 @@ def test_final_cancellation_settles_prepared_and_never_ready_stages_and_replays(
     assert stages["downstream"].attempts == ()
 
 
+def test_resume_supersedes_only_the_observed_cancellation_and_preserves_receipts(tmp_path):
+    uri = path_to_run_uri(tmp_path / "resume-cancelled")
+    store = SQLitePerRunAuthorityStore()
+    store.create_run(uri, status=RunStatus.RUNNING)
+    admission = CoordinatorAdmissionRequest("admit", "coordinator", uri, "intent")
+    store.bind_coordinator_admission(uri, admission)
+    store.ensure_prepared_attempt(uri, _prepared_request(store.open_run(uri).revision))
+    cancel = CancellationEpochRequest("cancel", "coordinator", uri, ("build", "later"))
+    first = store.install_cancellation_epoch(uri, cancel)
+    store.finalize_cancellation(uri, cancel)
+    cancelled = store.open_run(uri)
+    resume = dict(admission=admission, operation_id="resume", expected_revision=cancelled.revision,
+                  stage_names=cancel.stage_names, resume_cancelled=True)
+    with pytest.raises(AuthorityStoreError, match="current cancellation"):
+        store.resume_failed_admission(uri, **resume, cancellation_operation_id="different")
+    revision = store.resume_failed_admission(uri, **resume, cancellation_operation_id="cancel")
+    assert store.resume_failed_admission(uri, **resume, cancellation_operation_id="cancel") == revision
+    assert store.install_cancellation_epoch(uri, cancel) == first
+    assert store.finalize_cancellation(uri, cancel) is RunStatus.CANCELLED
+    reopened = store.open_run(uri)
+    assert reopened.status is RunStatus.PLANNED
+    assert all(stage.status is StageStatus.STALE for stage in reopened.stages)
+    assert [s.attempts for s in reopened.stages] == [s.attempts for s in cancelled.stages]
+    fresh = replace(cancel, operation_id="cancel-again")
+    assert store.install_cancellation_epoch(uri, fresh).epoch != first.epoch
+    assert store.finalize_cancellation(uri, cancel) is RunStatus.CANCELLED
+    assert store.open_run(uri).status is RunStatus.PLANNED
+    assert store.finalize_cancellation(uri, fresh) is RunStatus.CANCELLED
+
+
 def test_final_cancellation_refuses_a_live_binding_until_exact_unbind(
     tmp_path: Path,
 ) -> None:
