@@ -6,7 +6,7 @@ from pathlib import Path
 import os
 import sqlite3
 import sys
-from time import monotonic
+from time import monotonic, sleep
 from typing import Any, cast
 
 import pytest
@@ -271,10 +271,22 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, s
                 if scenario in {"unresolved_restart", "cancel_missing"}:
                     assert remote._require_journal().has_unresolved_assignment_references()
                     if scenario == "cancel_missing":
+                        (unresolved,) = remote._require_journal().unresolved_assignment_references()
                         client.cancel("target")
-                        # Acceptance retains cancellation intent. Advance its
-                        # native control before testing the lost decline reply.
-                        daemon.reconcile_once()
+                        # Acceptance retains intent. Wait for the exact native
+                        # control before injecting a failure in its settlement.
+                        deadline = monotonic() + 25
+                        while True:
+                            with service.daemon.connect_database(service.daemon.control_database) as conn:
+                                pending_control = conn.execute(
+                                    "SELECT 1 FROM remote_assignment_controls "
+                                    "WHERE session_id = ? AND assignment_id = ? AND acknowledged = 0",
+                                    unresolved,
+                                ).fetchone()
+                            if pending_control is not None:
+                                break
+                            assert monotonic() < deadline, "cancellation control was not retained"
+                            sleep(0.05)
                         def interrupt_decline(*args, **kwargs):
                             raise RuntimeError("before cancellation settlement")
                         monkeypatch.setattr(remote, "decline_assignment", interrupt_decline)

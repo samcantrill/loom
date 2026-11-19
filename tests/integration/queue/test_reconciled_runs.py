@@ -394,9 +394,10 @@ def test_cancellation_scope_with_second_contender(tmp_path, bound):
     try:
         first, second = _reconciled_request("first"), _reconciled_request("second")
         daemon.start_run(first, principal_id="caller")
-        daemon.start_run(second, principal_id="caller")
         if bound:
+            # Establish that the first request owns the paused publication.
             assert entered.wait(30)
+        daemon.start_run(second, principal_id="caller")
         control = daemon.cancel_run_operation("first", principal_id="caller")
         if not bound:
             daemon._preparations._reconcile_lock.release()
