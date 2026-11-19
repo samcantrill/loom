@@ -49,9 +49,16 @@ def test_containment_budget_is_bounded_and_fair(tmp_path, monkeypatch, slow):
     tasks = [{**task, "release_requested": True, "containment_request": {"operation": str(i)}}
              for i, task in enumerate(tasks, start=1)]
     received = []
+
+    def acknowledge(value):
+        # A slow coordinator must not spend a helper's probe allowance.
+        clock[0] += 12
+        received.append(value)
+        return _ack(value)
+
     for _ in range(5 if slow else 3):
         before = len(probes)
-        owner.step_cycle(tasks, lambda value: (received.append(value) or _ack(value)))
+        owner.step_cycle(tasks, acknowledge)
         assert len(probes) - before <= (1 if slow else 2)
         clock[0] += 30
     assert probes[:5] == ["1", "2", "3", "4", "5"]

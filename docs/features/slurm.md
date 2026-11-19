@@ -57,9 +57,11 @@ coordinator before an agent that emits the optional diagnostic evidence field.
 
 With bounded accounting observation enabled, containment receives a separate
 query/time budget using the configured `max_queries_per_cycle` and
-`cycle_budget_seconds`, with oldest-probed ordering. A single bounded helper may
-finish after that deadline. Retry timers and probe ordering are disposable;
-retained assignments and acknowledged evidence remain the ownership authority.
+`cycle_budget_seconds`, with oldest-probed ordering. Only elapsed time inside
+containment helpers consumes their time budget. A helper started with time
+remaining may finish after the allowance is exhausted. Retry timers and probe
+ordering are disposable; retained assignments and acknowledged evidence remain
+the ownership authority.
 
 The native coordinator owns an explicit ready-stage route. A managed-stage run may resolve
 different execution targets per stage, but the coordinator remains the one run
