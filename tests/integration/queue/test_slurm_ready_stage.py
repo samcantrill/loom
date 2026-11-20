@@ -1702,7 +1702,7 @@ SharedSlurmResult(json.loads(sys.argv[2]), report.assignment_id, compute=True).p
 
         # Keep coordinator reconciliation from consuming this exact fault
         # after the foreground call commits its authority result.
-        with daemon._cycle_lock, execution._launch_lock:
+        with daemon._reconcile_guard, execution._launch_lock:
             monkeypatch.setattr(
                 execution.slurm_assignments,
                 "mark_terminal",
