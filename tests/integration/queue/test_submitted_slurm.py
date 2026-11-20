@@ -417,6 +417,32 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                             break
                         sleep(0.02)
                     assert daemon._execution.slurm_assignments.read(delivery.assignment_id).publication_completed_at is not None
+                elif failed:
+                    from loom.queue import _shared_publication
+                    from loom.queue._slurm_result_transport import SharedSlurmResult
+
+                    execution = daemon._execution
+                    agent = execution._slurm_agent
+                    assert agent is not None
+                    prepare_publication = _shared_publication.prepare_publication
+
+                    def prepare_during_observation_backoff(*args, **kwargs):
+                        publication = prepare_publication(*args, **kwargs)
+                        agent._next_poll[record.assignment.operation_id] = monotonic() + 60
+                        return publication
+
+                    identity = execution.slurm_result_identity(execution.slurm_assignments.read(delivery.assignment_id))
+                    transport = SharedSlurmResult(profile.result_storage, delivery.assignment_id, compute=True)
+                    with monkeypatch.context() as polling:
+                        polling.setattr(_shared_publication, "prepare_publication", prepare_during_observation_backoff)
+                        transport.publish(identity, retained, workspace.output_chunk)
+                        deadline = monotonic() + 10
+                        while monotonic() < deadline:
+                            current = execution.slurm_assignments.read(delivery.assignment_id)
+                            if current.state in {"terminal", "logical_released", "released"}:
+                                break
+                            sleep(0.02)
+                        assert current.state in {"terminal", "logical_released", "released"}
                 else:
                     view.declare_report(delivery.assignment_id, "compute-1", fence, retained)
                     view.commit_result(delivery.assignment_id, "compute-1", fence)

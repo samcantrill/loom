@@ -2744,6 +2744,10 @@ class LocalDaemonExecution:
                     _defer_publication=True,
                     _publication=retained if isinstance(retained, _SlurmPublicationRequired) else None,
                 ),
+                # Completing storage verification is independent of scheduler
+                # progress. Do not drop the prepared effect behind a poll delay.
+                resume_storage=retained is not None,
+                allow_submission=retained is None,
             )
         except (_SlurmRetentionRequired, _SlurmPublicationRequired) as continuation:
             # Embedded Slurm has no HTTP request thread to yield the cycle lock.

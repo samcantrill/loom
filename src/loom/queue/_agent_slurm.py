@@ -530,10 +530,11 @@ class AgentSlurmJobs:
         acknowledge: Callable[[Mapping[str, PlainData]], Mapping[str, PlainData]],
         *,
         allow_submission: bool = True,
+        resume_storage: bool = False,
     ) -> None:
         """Drive one bounded observation cycle, replaying before any new effect."""
         with self._lock:
-            self._step(task, acknowledge, allow_submission=allow_submission)
+            self._step(task, acknowledge, allow_submission=allow_submission, resume_storage=resume_storage)
 
     def step_cycle(
         self, tasks: Sequence[Mapping[str, PlainData]],
@@ -658,7 +659,7 @@ class AgentSlurmJobs:
 
     def _step(self, task, acknowledge, **options):
         operation_id = SlurmStageAssignment.from_dict(task["assignment"]).operation_id
-        if monotonic() < self._ack_retry_at.get(operation_id, 0):
+        if not options.get("resume_storage", False) and monotonic() < self._ack_retry_at.get(operation_id, 0):
             return
         try:
             return self._advance_step(task, acknowledge, **options)
@@ -679,6 +680,7 @@ class AgentSlurmJobs:
         allow_submission: bool,
         _defer_observation: bool = False,
         _delivery_only: bool = False,
+        resume_storage: bool = False,
     ) -> None:
         if task.get("schema_version") != 1:
             raise QueueServiceError("agent SLURM task version is unsupported")
@@ -761,6 +763,7 @@ class AgentSlurmJobs:
         )
         if (
             self.observation_policy is None
+            and not resume_storage
             and current is not None
             and current.state is not ReadyStageState.INTENT
             and now < self._next_poll.get(request.operation_id, 0)
