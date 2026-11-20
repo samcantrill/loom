@@ -26,7 +26,10 @@ from fractions import Fraction
 from pathlib import Path
 from threading import RLock
 from time import sleep
-from typing import Any, Literal, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, runtime_checkable
+
+if TYPE_CHECKING:
+    from ._embedded_recovery import EmbeddedRecovery
 
 from loom.artifacts import ArtifactRef
 from loom.serialization._diagnostic_capture import _capture_exception_details
@@ -1895,6 +1898,30 @@ class SQLiteAgentJournal:
             value = self._assignment(conn, assignment_id)["grant_fence"]
         return None if value is None else str(value)
 
+    def recovery_record(self, assignment: ManagedAssignment) -> dict[str, Any] | None:
+        from ._shared_recovery import WIRE
+
+        with self._transaction() as conn:
+            row = conn.execute(
+                "SELECT identity_json, request_json, state, grant_fence, "
+                "process_execution_id, result_json, availability_revision "
+                "FROM assignments WHERE assignment_id = ?", (assignment.assignment_id,),
+            ).fetchone()
+        if row is None or WIRE not in json.loads(row["request_json"]).get("worker_metadata", {}):
+            return None
+        if _assignment_from_dict(json.loads(row["identity_json"])) != assignment:
+            raise ManagedLocalError("local recovery assignment identity conflicts")
+        return {
+            "assignment_id": assignment.assignment_id, "run_uri": assignment.run_uri,
+            "stage_name": assignment.stage_name, "attempt_id": assignment.attempt_id,
+            "attempt": assignment.attempt, "agent_id": assignment.agent_id,
+            "state": str(row["state"]).upper(), "fence": row["grant_fence"],
+            "start_permitted": row["process_execution_id"] is not None,
+            "request_json": row["request_json"], "report_json": row["result_json"],
+            "provider_release_proof_json": row["availability_revision"]
+            if row["state"] == AssignmentState.RELEASED.value else None,
+        }
+
     def require_failed_before_start(self, assignment_id: str, *, fence: str) -> None:
         """Require the exact owner-recorded failed launch, not a worker assertion."""
 
@@ -2999,6 +3026,21 @@ class SQLiteCoordinatorAssignments:
             retained.append((assignment, raw_receipt))
         return tuple(retained)
 
+    def local_recovery_assignments(
+        self, run_uri: str, *, agent_id: str, stage_name: str | None,
+        limit: int | None,
+    ) -> tuple[ManagedAssignment, ...]:
+        with self._transaction() as conn:
+            return tuple(
+                _assignment_from_dict(json.loads(row[0]))
+                for row in conn.execute(
+                    "SELECT identity_json FROM coordinator_assignments WHERE run_uri=? AND agent_id=? "
+                    "AND (? IS NULL OR json_extract(identity_json, '$.stage_name')=?) "
+                    "ORDER BY assignment_id LIMIT ?",
+                    (run_uri, agent_id, stage_name, stage_name, -1 if limit is None else limit + 1),
+                )
+            )
+
     def session_assignment_facts(
         self, *, session_id: str
     ) -> tuple[Mapping[str, PlainData], ...]:
@@ -3487,6 +3529,7 @@ def run_managed_local_assignment(
     suspend_requested: Callable[[], bool] | None = None,
     execution_started: Callable[[], None] | None = None,
     reservation_guard: Callable[[], AbstractContextManager[None]] | None = None,
+    embedded_recovery: EmbeddedRecovery | None = None,
 ) -> ManagedExecutionReceipt:
     """Run one exact local assignment through the durable Phase 2 saga.
 
@@ -3623,10 +3666,15 @@ def run_managed_local_assignment(
         remote_inputs.append(artifact)
     fingerprint = cast(StageFingerprintRecord, worker_request.fingerprint)
     from ._execution_binding import execution_binding
+    from .shared_execution import SHARED_EXECUTION_SCOPE, scope
     from loom.pipeline._project_contracts import EXECUTION
+    shared = scope(fingerprint.payload.fingerprint_fields.get(SHARED_EXECUTION_SCOPE))
+    continuing = shared is not None and "staging_continuation" in shared
+    if continuing and embedded_recovery is None:
+        raise ManagedLocalError("embedded output staging continuation is unavailable")
     worker_request = replace(worker_request, metadata={**worker_request.metadata,
         EXECUTION: execution_binding(worker_request, profile.environment_fingerprint,
-            store=run_store, launch=resident_launch_profile,
+            store=None if continuing else run_store, launch=resident_launch_profile,
             workspace=agent_root / "assignments" / assignment.assignment_id)})
     delivered = _ResidentAssignmentBundle.from_worker_request(
         assignment_id=assignment.assignment_id,
@@ -3646,6 +3694,20 @@ def run_managed_local_assignment(
 
     _require_local_binding(_assignment_local_scope(delivered), resident_launch_profile,
                            agent_id=assignment.agent_id)
+    if continuing:
+        assert embedded_recovery is not None
+        from ._shared_recovery import WIRE, validate_wire
+        from ._shared_staging_continuation import WIRE as staging_wire
+
+        if workspace.has_request():
+            retained = workspace.request()
+            base_metadata = {key: value for key, value in retained.worker_metadata.items()
+                             if key not in {WIRE, staging_wire}}
+            if replace(retained, worker_metadata=base_metadata) != delivered or validate_wire(retained) is None:
+                raise ManagedLocalError("retained embedded recovery delivery conflicts")
+            delivered = retained
+        else:
+            delivered = embedded_recovery.bind(delivered, assignment)
     workspace.persist_request(delivered, resident_launch_profile)
     for artifact in remote_inputs if retained_inputs is None else ():
         from loom.pipeline.stores.shared_artifacts import binding
@@ -3864,6 +3926,9 @@ def run_managed_local_assignment(
                 "provider_released_availability_fresh",
                 {"availability_revision": availability_revision},
             )
+            if continuing:
+                assert embedded_recovery is not None
+                embedded_recovery.retain(delivered, assignment, resident_launch_profile.shared_roots)
             if coordinator.state(assignment.assignment_id) == "logical_released":
                 coordinator.advance(
                     assignment.assignment_id,
@@ -3945,6 +4010,9 @@ def run_managed_local_assignment(
             "provider_released_availability_fresh",
             {"availability_revision": availability_revision},
         )
+        if continuing:
+            assert embedded_recovery is not None
+            embedded_recovery.retain(delivered, assignment, resident_launch_profile.shared_roots)
         coordinator.advance(
             assignment.assignment_id,
             expected="logical_released",
@@ -4095,6 +4163,12 @@ def run_managed_local_assignment(
 
     state = journal.read_state(assignment.assignment_id)
     if state is AssignmentState.ACTIVE:
+        if continuing:
+            assert embedded_recovery is not None
+            embedded_recovery.grant(
+                delivered, assignment, fence.fencing_token,
+                resident_launch_profile.shared_roots, authority,
+            )
         try:
             journal.start_once(
                 assignment.assignment_id,

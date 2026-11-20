@@ -36,7 +36,9 @@ def register_subparser(
     parser.add_argument("--run-name", help="new prepared run name")
     parser.add_argument("--context", type=Path, help="JSON file containing submission description, tags and metadata")
     parser.add_argument("--reconcile", action="store_true", help="resolve the canonical target using the installed project")
-    parser.add_argument("--retry-failed", action="store_true", help="with --reconcile, retry one observed eligible failed revision")
+    retry_group = parser.add_mutually_exclusive_group()
+    retry_group.add_argument("--resume-cancelled", action="store_true", help="with --reconcile, resume one observed terminal cancellation")
+    retry_group.add_argument("--retry-failed", action="store_true", help="with --reconcile, retry one observed eligible failed revision")
     parser.add_argument("--fresh-stage", action="append", default=None,
                         help="request a fresh realization of this node without changing its settings")
     parser.add_argument("--detach", action="store_true")
@@ -76,6 +78,9 @@ def handle(namespace: argparse.Namespace) -> int:
 
         reconcile = getattr(namespace, "reconcile", False)
         retry = getattr(namespace, "retry_failed", False)
+        resume_cancelled = getattr(namespace, "resume_cancelled", False)
+        if resume_cancelled and not reconcile:
+            raise QueueConfigError("--resume-cancelled requires --reconcile")
         if (reconcile and (namespace.run_name or namespace.queue_item_id)) or (retry and not reconcile):
             raise QueueConfigError("--reconcile requires an unresolved target; --retry-failed requires --reconcile")
         selection = load_deployment(namespace.deployment)
@@ -102,10 +107,12 @@ def handle(namespace: argparse.Namespace) -> int:
                     )),
                 ),
                 context=context,
+                staging_continuation_stages=selection.staging_continuation_stages,
             ),
             None if reconcile else namespace.queue_item_id or identity,
             mode="reconcile" if reconcile else "exact",
-            retry_policy="one_observed_failure" if retry else "never",
+            retry_policy=("one_observed_cancellation" if resume_cancelled else
+                          "one_observed_failure" if retry else "never"),
             fresh_stages=tuple(getattr(namespace, "fresh_stage", None) or ()),
         )
         _validate_run_arguments(

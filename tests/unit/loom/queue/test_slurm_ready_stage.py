@@ -56,7 +56,8 @@ def test_repeated_delivery_reads_preserve_live_state_and_revalidate_changed_byte
     assert len(validations) == 3
 
 
-def test_large_retained_delivery_is_validated_without_caching(tmp_path, monkeypatch):
+@pytest.mark.parametrize(("padding", "cached"), [(450 * 1024, True), (1024 * 1024, False)])
+def test_large_retained_delivery_reuses_validation_within_budget(tmp_path, padding, cached):
     from tests.unit.loom.queue.test_slurm_admission import ReservationFixture
 
     from loom.queue import slurm_ready_stage as module
@@ -64,13 +65,11 @@ def test_large_retained_delivery_is_validated_without_caching(tmp_path, monkeypa
     fixture = ReservationFixture(tmp_path)
     _, arguments = fixture.candidate("large-delivery", 0)
     delivery = arguments["delivery"]
-    encoded = json.dumps(delivery.to_dict()) + " " * (256 * 1024)
-
-    def unexpected_cache(_):
-        pytest.fail("oversized source document must not enter the bounded cache")
-
-    monkeypatch.setattr(module, "_cached_retained_delivery", unexpected_cache)
-    assert module._retained_delivery(encoded) == delivery
+    encoded = json.dumps(delivery.to_dict()) + " " * padding
+    first = module._retained_delivery(encoded)
+    second = module._retained_delivery(encoded)
+    assert first == second == delivery
+    assert (first is second) == cached
 
 
 @pytest.mark.parametrize("version", [3, 4, 5, 6])

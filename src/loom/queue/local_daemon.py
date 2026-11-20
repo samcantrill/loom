@@ -1187,6 +1187,12 @@ class LocalDaemonAdmissionRequest:
     run_uri: str
     retry_failed_revision: int | None = None
 
+    resume_cancelled_revision: int | None = None
+
+    @property
+    def continuation_revision(self) -> int | None:
+        return self.retry_failed_revision or self.resume_cancelled_revision
+
     def __post_init__(self) -> None:
         for value, name in (
             (self.queue_item_id, "queue_item_id"),
@@ -1201,6 +1207,13 @@ class LocalDaemonAdmissionRequest:
         ):
             raise QueueServiceError("retry failed revision must be a positive integer")
 
+        if self.resume_cancelled_revision is not None and (
+            type(self.resume_cancelled_revision) is not int
+            or self.resume_cancelled_revision < 1
+            or self.retry_failed_revision is not None
+        ):
+            raise QueueServiceError("resume requires one positive cancelled revision")
+
     def to_dict(self) -> dict[str, PlainData]:
         result: dict[str, PlainData] = {
             "queue_item_id": self.queue_item_id,
@@ -1208,6 +1221,8 @@ class LocalDaemonAdmissionRequest:
         }
         if self.retry_failed_revision is not None:
             result["retry_failed_revision"] = self.retry_failed_revision
+        if self.resume_cancelled_revision is not None:
+            result["resume_cancelled_revision"] = self.resume_cancelled_revision
         return result
 
     @classmethod
@@ -1215,10 +1230,16 @@ class LocalDaemonAdmissionRequest:
         fields = {"queue_item_id", "run_uri"}
         if "retry_failed_revision" in data:
             fields.add("retry_failed_revision")
+        if "resume_cancelled_revision" in data:
+            fields.add("resume_cancelled_revision")
         _exact_fields(data, fields, "admission request")
         return cls(
             queue_item_id=_required_string(data, "queue_item_id"),
             run_uri=_required_string(data, "run_uri"),
+            resume_cancelled_revision=(
+                _required_int(data, "resume_cancelled_revision")
+                if "resume_cancelled_revision" in data else None
+            ),
             retry_failed_revision=(
                 _required_int(data, "retry_failed_revision")
                 if "retry_failed_revision" in data
@@ -1698,8 +1719,10 @@ class LocalDaemon:
         self._cycle_lock = RLock()
         self._scheduling_reference_revision = 0
         self._reconcile_guard = RLock()
+        from ._admission_scan import AdmissionScan
         from ._context_preparation import ContextPreparations
 
+        self._admission_scan = AdmissionScan()
         self._contexts = ContextPreparations(self._wake.set)
         from ._result_verification import ResultVerifications
 
@@ -2105,8 +2128,10 @@ class LocalDaemon:
         self._verified_local_owner_subject = verified_local_owner_subject
         self._contexts.close()
         self._result_verifications.close()
+        from ._admission_scan import AdmissionScan
         from ._context_preparation import ContextPreparations
 
+        self._admission_scan = AdmissionScan()
         self._contexts = ContextPreparations(self._wake.set)
         from ._result_verification import ResultVerifications
 
@@ -2765,19 +2790,12 @@ class LocalDaemon:
             epochs = (self._epoch, self._scheduling_epoch)
             invalidated = tuple(self._context_invalidations)
             self._context_invalidations.clear()
-        self._contexts.submit(
-            (admission for admission in admissions
-             if (retry := self._admission_retries.get(admission.run_uri)) is None
-             or retry.ready((admission.revision, self._scheduling_epoch))),
-            epochs, execution.load_context,
+        prepared = {item.admission.admission_id: item for item in self._contexts.completed()}
+        self._contexts.begin_cycle(
+            admissions,
             minimum_interval=self.config.poll_interval_seconds, invalidated=invalidated,
         )
-        prepared = {item.admission.admission_id: item for item in self._contexts.completed()}
-        if prepared:
-            # A completion frees a bounded slot after submission above.
-            # Wake another turn even when all remaining IO is blocked.
-            self._wake.set()
-        epochs = (self._epoch, self._scheduling_epoch)
+
         schedulable: dict[str, LocalDaemonAdmission] = {
             row.admission_id: row for row in admissions
             if row.state in {LocalDaemonAdmissionState.ACTIVE, LocalDaemonAdmissionState.WAITING}
@@ -2910,10 +2928,20 @@ class LocalDaemon:
                     else schedulable[admission_id]
                 ),
             )
+
+        def visit(admission: LocalDaemonAdmission) -> bool:
+            retry = self._admission_retries.get(admission.run_uri)
+            if retry is not None and not retry.ready((admission.revision, epochs[1])):
+                return True
+            return self._contexts.try_submit(admission, epochs, execution.load_context)
+
+        visited = self._admission_scan.take(admissions, visit)
+        if self._admission_scan.high_water is not None and self._contexts.has_capacity():
+            self._wake.set()
         # Reconciliation is an internal operation; retain its bounded
         # nonterminal work result without rebuilding public detail/status.
         return tuple(
-            self._admission(admission.admission_id) for admission in admissions
+            self._admission(admission.admission_id) for admission in visited
         )
 
     def _serve(self) -> None:
@@ -3362,15 +3390,18 @@ class LocalDaemon:
     ) -> Mapping[str, PlainData]:
         """Persist and advance one immutable guarded-recovery saga."""
 
-        _public_operation_id(request.recovery_id)
-        authorizer = self._authorizer()
-        authorizer.require_operator(principal, "recover_unknown")
-        return self._accept_guarded_recovery(principal.subject, request)
+        from ._slurm_retry import PROVIDER_RECOVERY_PREFIX
 
-    def _accept_guarded_recovery(
-        self, principal_id: str, request: RecoverUnknownAssignment,
+        _public_operation_id(request.recovery_id)
+        self._authorizer().require_operator(principal, "recover_unknown")
+        if request.recovery_id.startswith(PROVIDER_RECOVERY_PREFIX):
+            raise QueueConflictError("provider recovery operation namespace is reserved")
+        return self._admit_guarded_recovery(request, principal.subject)
+
+    def _admit_guarded_recovery(
+        self, request: RecoverUnknownAssignment, principal_id: str,
     ) -> Mapping[str, PlainData]:
-        """Shared durable owner; internal callers must validate their policy first."""
+        """Use the same intent, containment evidence and close journal for both owners."""
         encoded = json.dumps(request.to_dict(), sort_keys=True, separators=(",", ":"))
         digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
         execution = self._execution
@@ -3405,8 +3436,9 @@ class LocalDaemon:
                     conn.execute("BEGIN IMMEDIATE")
                     raced = conn.execute(
                         "SELECT recovery_id FROM recovery_operations "
-                        "WHERE recovery_id = ?",
-                        (request.recovery_id,),
+                        "WHERE recovery_id = ? OR (state IN ('pending', 'evidence_confirmed', 'closed') "
+                        "AND json_extract(request_json, '$.assignment_id') = ?)",
+                        (request.recovery_id, request.assignment_id),
                     ).fetchone()
                     if raced is not None:
                         raise _RecoveryNotAccepted("recovery operation conflicts")
@@ -3620,16 +3652,22 @@ class LocalDaemon:
             self._wake.set()
 
     def _recovery_fences_ordinary_terminal(self, assignment_id: str) -> bool:
-        """Whether recovery has permanently fenced ordinary terminal mutation."""
+        """A provider-driven retry lets an arriving worker result race the close."""
+        from ._slurm_retry import PROVIDER_RECOVERY_PREFIX
 
         with self._connection() as conn:
-            return conn.execute(
-                    "SELECT 1 FROM recovery_operations "
-                    "WHERE state IN ('pending', 'evidence_confirmed', 'closed') "
-                    "AND NOT (state='pending' AND principal_id='loom:terminal-recovery') "
-                    "AND json_extract(request_json, '$.assignment_id') = ? LIMIT 1",
-                    (assignment_id,),
-            ).fetchone() is not None
+            rows = conn.execute(
+                "SELECT recovery_id, state, principal_id FROM recovery_operations "
+                "WHERE state IN ('pending', 'evidence_confirmed', 'closed') "
+                "AND json_extract(request_json, '$.assignment_id') = ?", (assignment_id,),
+            )
+            return any(
+                row["state"] == "closed" or (
+                    not row["recovery_id"].startswith(PROVIDER_RECOVERY_PREFIX)
+                    and not (row["state"] == "pending" and row["principal_id"] == "loom:terminal-recovery")
+                )
+                for row in rows
+            )
 
     def _recovery_is_settling(self, assignment_id: str) -> bool:
         """Whether close and its existing-policy retry decision are incomplete."""
@@ -4619,13 +4657,14 @@ class LocalDaemonSlurmBootstrapView:
     def handshake(self) -> Mapping[str, PlainData]:
         execution = self._execution()
         from ._slurm_start import SLURM_REPLAYABLE_START_CAPABILITY
+        from .shared_execution import STAGING_CONTINUATION_CAPABILITY
         profile = execution._slurm_profile_for_principal(
             self._principal.subject, self._principal.credential_id
         )
         return freeze_plain_data(
             {
                 "protocol_version": "1",
-                "capabilities": ["slurm-ready-stage-bootstrap-v1", *(
+                "capabilities": ["slurm-ready-stage-bootstrap-v1", STAGING_CONTINUATION_CAPABILITY, *(
                     [SLURM_REPLAYABLE_START_CAPABILITY]
                     if execution.slurm_assignments.schema_version >= 6 else []
                 )],

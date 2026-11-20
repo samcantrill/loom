@@ -113,6 +113,8 @@ def _reference(value: object) -> dict[str, Any]:
 def validate_wire(request: Any) -> dict[str, Any] | None:
     raw = request.worker_metadata.get(WIRE)
     if raw is None:
+        if "loom.output_staging_continuation" in request.worker_metadata:
+            raise QueueConflictError("staging continuation requires native recovery delivery")
         return None
     selection = selected(request)
     if (
@@ -154,6 +156,8 @@ def validate_wire(request: Any) -> dict[str, Any] | None:
         ):
             raise QueueConflictError("recovery predecessor ownership conflicts")
         previous = owner["attempt"]
+    from ._shared_staging_continuation import validate_binding
+    validate_binding(request, value)
     return value
 
 
@@ -165,9 +169,14 @@ def bind_delivery(
     *,
     session_id: str,
     slurm_assignments: Any = None,
+    embedded: Any = None,
     verify_trees: bool = True,
+    cancelled_attempts: frozenset[str] = frozenset(),
 ) -> Any:
     selection = selected(request)
+    from ._shared_staging_continuation import requested
+    if request.preparation_input is not None and requested(request):
+        raise QueueConflictError("preparation delivery cannot continue output staging")
     if selection is None or request.preparation_input is not None:
         return request
     session = conn.execute(
@@ -177,15 +186,25 @@ def bind_delivery(
         raise QueueConflictError("recovery destination machine is unavailable")
     return _bind_delivery(
         request, conn, run_uri, roots, agent_id=session["agent_root_id"],
-        slurm_assignments=slurm_assignments, verify_trees=verify_trees,
+        slurm_assignments=slurm_assignments, embedded=embedded,
+        verify_trees=verify_trees, cancelled_attempts=cancelled_attempts,
     )
+
+
+def retention_receipts(conn: Any, assignment_id: str) -> dict[str, str]:
+    return {receipt["operation"]: receipt["result_json"] for receipt in conn.execute(
+        "SELECT operation, result_json FROM agent_receipts WHERE principal_id = ? "
+        "AND operation IN ('seal', 'seal_unavailable') AND idempotency_key = ?",
+        (_PRINCIPAL, assignment_id),
+    )}
 
 
 def assignment_rows(
     conn: Any, run_uri: str, *, slurm_assignments: Any = None,
+    embedded: Any = None,
     stage_name: str | None = None, limit: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Project both native providers into the existing recovery retention contract."""
+    """Project the native providers into the recovery retention contract."""
     rows = conn.execute(
         "SELECT r.*, d.request_json, a.result_json AS recovery_json, "
         "f.result_json AS recovery_failure_json FROM remote_assignments r "
@@ -201,11 +220,7 @@ def assignment_rows(
     if slurm_assignments is not None:
         for record, evidence in slurm_assignments.recovery_records(run_uri, stage_name=stage_name, limit=limit):
             assignment = record.assignment
-            receipts = {receipt["operation"]: receipt["result_json"] for receipt in conn.execute(
-                "SELECT operation, result_json FROM agent_receipts WHERE principal_id = ? "
-                "AND operation IN ('seal', 'seal_unavailable') AND idempotency_key = ?",
-                (_PRINCIPAL, assignment.assignment_id),
-            )}
+            receipts = retention_receipts(conn, assignment.assignment_id)
             proof = (
                 evidence.get("release") if evidence is not None
                 and evidence.get("provider_released") is True else None
@@ -223,37 +238,55 @@ def assignment_rows(
                 "recovery_json": receipts.get("seal"),
                 "recovery_failure_json": receipts.get("seal_unavailable"),
             })
+    if embedded is not None:
+        result.extend(embedded.rows(conn, run_uri, stage_name=stage_name, limit=limit))
     if limit is not None and len(result) > limit:
         raise QueueConflictError("recovery history exceeds assignment limit")
     return sorted(result, key=lambda row: (row["stage_name"], row["attempt"]))
 
 
-def bind_slurm_delivery(
+def bind_provider_delivery(
     request: Any, conn: Any, run_uri: str, roots: Mapping[str, PlainData], *,
-    agent_id: str, slurm_assignments: Any, verify_trees: bool = True,
+    agent_id: str, slurm_assignments: Any, embedded: Any = None, verify_trees: bool = True,
+    cancelled_attempts: frozenset[str] = frozenset(),
 ) -> Any:
+    from ._shared_staging_continuation import requested
+    if request.preparation_input is not None and requested(request):
+        raise QueueConflictError("preparation delivery cannot continue output staging")
     if selected(request) is None or request.preparation_input is not None:
         return request
     return _bind_delivery(
         request, conn, run_uri, roots, agent_id=agent_id,
-        slurm_assignments=slurm_assignments, verify_trees=verify_trees,
+        slurm_assignments=slurm_assignments, embedded=embedded,
+        verify_trees=verify_trees, cancelled_attempts=cancelled_attempts,
     )
 
 
 def _bind_delivery(
     request: Any, conn: Any, run_uri: str, roots: Mapping[str, PlainData], *,
-    agent_id: str, slurm_assignments: Any, verify_trees: bool = True,
+    agent_id: str, slurm_assignments: Any, embedded: Any = None, verify_trees: bool = True,
+    cancelled_attempts: frozenset[str] = frozenset(),
 ) -> Any:
     selection = selected(request)
     assert selection is not None
+    from ._shared_staging_continuation import (
+        WIRE as staging_wire, may_own_unstarted_progress, requested, select_predecessor,
+    )
     predecessors = []
-    rows = assignment_rows(conn, run_uri, slurm_assignments=slurm_assignments, stage_name=request.stage_name)
-    # Declined/revoked deliveries with no start permit cannot own progress.
+    rows = assignment_rows(
+        conn, run_uri, slurm_assignments=slurm_assignments, embedded=embedded,
+        stage_name=request.stage_name,
+    )
+    # Ordinary no-start deliveries cannot own progress. A granted staging
+    # handoff can move assembly before any worker receives its start permit.
     for row in rows:
         if (row["stage_name"] != request.stage_name or row["attempt"] >= request.attempt
-            or not row["start_permitted"] or row["request_json"] is None):
+            or row["request_json"] is None):
             continue
-        if WIRE not in json.loads(row["request_json"])["worker_metadata"]:
+        metadata = json.loads(row["request_json"])["worker_metadata"]
+        if not row["start_permitted"] and not may_own_unstarted_progress(row, metadata):
+            continue
+        if WIRE not in metadata:
             continue
         if row["recovery_failure_json"] is not None:
             raise QueueConflictError("recovery predecessor unavailable: retention budget exceeded")
@@ -266,8 +299,19 @@ def _bind_delivery(
                 "recovery predecessor is not positively settled and retained"
             )
         report = None if row["report_json"] is None else json.loads(row["report_json"])
-        if report is not None and report["status"] != "FAILED":
+        status = None if report is None else report["status"]
+        if status not in {None, "FAILED", "CANCELLED"}:
             continue
+        if status == "CANCELLED" or row["attempt_id"] in cancelled_attempts:
+            grant = conn.execute(
+                "SELECT value FROM daemon_metadata WHERE key = ?",
+                (f"resume-cancelled-recovery:{row['assignment_id']}",),
+            ).fetchone()
+            if grant is None:
+                continue
+            expected = [run_uri, row["stage_name"], row["attempt_id"], row["fence"]]
+            if json.loads(grant["value"]) != expected:
+                raise QueueConflictError("cancelled recovery assignment grant conflicts")
         released = conn.execute(
             "SELECT 1 FROM agent_receipts WHERE principal_id = ? "
             "AND operation = 'release_recovery' AND idempotency_key = ?",
@@ -284,10 +328,15 @@ def _bind_delivery(
         if verify_trees:
             resolve(ref, roots)
         predecessors.append(ref)
+    continuation = (
+        {staging_wire: {"schema_version": 1, "predecessor": select_predecessor(predecessors, roots)}}
+        if requested(request) else {}
+    )
     result = replace(
         request,
         worker_metadata={
             **request.worker_metadata,
+            **continuation,
             WIRE: {
                 "schema_version": 1,
                 "root_id": selection[0],
@@ -388,22 +437,24 @@ def resolve(value: object, roots: Mapping[str, PlainData]) -> Path:
     return tree
 
 
-def worker_binding(workspace: Any) -> dict[str, PlainData] | None:
+def worker_bindings(workspace: Any, *, profile: Any = None) -> dict[str, PlainData]:
+    """Expose native recovery locations and their writable owner's future seal ID."""
     request = workspace.request()
     value = validate_wire(request)
     if value is None:
-        return None
+        return {}
     from ._shared_publication import workspace_facts
     from .shared_execution import execution_roots
 
     launch, _ = workspace_facts(workspace)
-    profile = workspace.shared_launch_profile()
+    if profile is None:
+        profile = workspace.shared_launch_profile()
     roots = execution_roots(
         profile.shared_roots, container=profile.container is not None
     )
     owner = _owner(request, launch["agent_id"], launch["execution_fence"])
     tree = current_tree(request, roots, owner=owner)
-    return cast(
+    binding = cast(
         dict[str, PlainData],
         {
             "schema_version": 1,
@@ -422,6 +473,7 @@ def worker_binding(workspace: Any) -> dict[str, PlainData] | None:
             ],
         },
     )
+    return {BINDING: binding, "loom.recovery_owner.v1": publication_id(owner)}
 
 
 def seal(

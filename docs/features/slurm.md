@@ -57,9 +57,11 @@ coordinator before an agent that emits the optional diagnostic evidence field.
 
 With bounded accounting observation enabled, containment receives a separate
 query/time budget using the configured `max_queries_per_cycle` and
-`cycle_budget_seconds`, with oldest-probed ordering. A single bounded helper may
-finish after that deadline. Retry timers and probe ordering are disposable;
-retained assignments and acknowledged evidence remain the ownership authority.
+`cycle_budget_seconds`, with oldest-probed ordering. Only elapsed time inside
+containment helpers consumes their time budget. A helper started with time
+remaining may finish after the allowance is exhausted. Retry timers and probe
+ordering are disposable; retained assignments and acknowledged evidence remain
+the ownership authority.
 
 The native coordinator owns an explicit ready-stage route. A managed-stage run may resolve
 different execution targets per stage, but the coordinator remains the one run
@@ -426,11 +428,13 @@ sizes and retry timers are transient; durable operation and outbox state survive
 restart. Omitted batching fields preserve cap-only encoding and behavior.
 
 Repeated assignment reads reuse validation of immutable delivery documents by
-their complete stored JSON contents. The process-local cache holds at most 128
-documents of at most 256 KiB each; larger documents are validated without
-caching. This bounds retained source text to 32 MiB, excluding decoded-object
-overhead. Assignment state, execution fences, reports and release evidence are
-still read afresh. Changed bytes, eviction and process restart require validation
+their complete stored JSON contents. The process-local cache holds up to 112
+documents of at most 256 KiB and four larger documents of at most 1 MiB.
+Repeated reads of a verifier delivery share the same validation. This bounds
+retained source text to 32 MiB, excluding decoded-object overhead. Documents
+over 1 MiB are validated on each read. Assignment state, execution fences,
+reports and release evidence are still read afresh. Changed bytes, eviction
+and process restart require validation
 again; the cache does not authorize submission or release.
 
 Dispatch checks for an available submit agent before preparing or validating a

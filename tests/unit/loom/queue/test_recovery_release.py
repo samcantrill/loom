@@ -163,6 +163,19 @@ def test_slurm_ack_replays_budget_outcome_before_releasing_gpu(tmp_path, monkeyp
     record = fixture.reopen().read(assignment.assignment_id)
     assert record.state == "released" and record.report is None
     assert (current / "checkpoint").read_bytes() == b"complete progress"
+    from loom.pipeline.status import StageStatus
+    from loom.queue.local_daemon import LocalDaemonAdmissionState
+
+    admission = SimpleNamespace(state=LocalDaemonAdmissionState.CANCELLED)
+    execution._daemon_owner = lambda: SimpleNamespace(_connection=connection, admission_for_run_uri=lambda _: admission)
+    stage = SimpleNamespace(stage_name=assignment.stage_name, status=StageStatus.CANCELLED)
+    execution._authority_store = lambda _: SimpleNamespace(open_run=lambda _: SimpleNamespace(stages=[stage]))
+    from loom.queue._continuation import ContinuationConflict
+    from loom.queue._slurm_retry import reconcile
+
+    assert reconcile(execution, assignment.run_uri) == ContinuationConflict(
+        "slurm_recovery_retention_budget_exceeded"
+    )
     with connection() as conn:
         assert conn.execute("SELECT resolved FROM agent_coordinator_references").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM agent_receipts").fetchone()[0] == 1

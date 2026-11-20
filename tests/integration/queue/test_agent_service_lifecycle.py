@@ -447,7 +447,8 @@ def test_run_owned_agent_does_not_retire_on_unavailable_or_stale_decision(remote
     monkeypatch.setattr(LocalDaemonAgentHttpClient, "_call", intercepted)
     service = work.start_agent(lifetime="run")
     assert reached.wait(10)
-    _wait_until(lambda: len(decisions) >= 2)
+    # Reconnection also replays the handshake, offer and quiet control poll.
+    _wait_until(lambda: len(decisions) >= 2, timeout_seconds=30)
     assert service.thread.is_alive()
     assert work.supervisor.status()["service_process_id"] == work.supervisor.service_process_id
     with sqlite3.connect(work.daemon.config.control_database) as conn:

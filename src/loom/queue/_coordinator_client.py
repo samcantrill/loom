@@ -225,9 +225,16 @@ class NativeCoordinatorClient:
                         or operation in {"get_run_context", "patch_run_annotations", "append_run_note", "list_run_notes"}) and "run-context-v1" not in description.capabilities:
                     raise control_error("unsupported", operation, payload)
                 if operation == "start_run":
-                    requested = envelope.get("request")
-                    if isinstance(requested, Mapping) and requested.get("mode") == "reconcile" and "reconciled-run-v1" not in description.capabilities:
-                        raise control_error("unsupported", operation, payload)
+                    from .run import RESUME_CANCELLED_CAPABILITY
+
+                    if isinstance(requested, Mapping) and requested.get("mode") == "reconcile":
+                        if requested.get("retry_policy") == "one_observed_cancellation" and RESUME_CANCELLED_CAPABILITY not in description.capabilities:
+                            raise control_error(
+                                "unsupported_capability", operation, payload,
+                                ids={"missing_capability": RESUME_CANCELLED_CAPABILITY},
+                            )
+                        if "reconciled-run-v1" not in description.capabilities:
+                            raise control_error("unsupported", operation, payload)
                     # Retain the owner learned before mutation even if the
                     # acceptance response disappears. Later calls stay bound.
                     self._expected_coordinator_id = description.coordinator_id

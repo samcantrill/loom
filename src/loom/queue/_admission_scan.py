@@ -1,6 +1,7 @@
 """Finite reconciliation sweeps; newly admitted work cannot extend a sweep forever."""
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from itertools import islice
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -12,20 +13,30 @@ class AdmissionScan:
         self.after: tuple[int, int, str] | None = None
         self.high_water: int | None = None
 
-    def take(self, admissions: Sequence["LocalDaemonAdmission"], *, limit: int = 32) -> tuple["LocalDaemonAdmission", ...]:
+    def take(
+        self,
+        admissions: Sequence["LocalDaemonAdmission"],
+        visit: Callable[["LocalDaemonAdmission"], bool],
+        *,
+        limit: int = 32,
+    ) -> tuple["LocalDaemonAdmission", ...]:
+        """Visit a bounded prefix. A refused visit leaves the admission at the head."""
         if self.high_water is None:
             self.high_water = max((row.enqueue_sequence for row in admissions), default=0)
-        eligible = [
+        eligible = (
             row for row in admissions
             if row.enqueue_sequence <= self.high_water
             and (self.after is None or self.key(row) > self.after)
-        ]
-        selected = tuple(eligible[:limit])
-        if len(eligible) <= limit:
+        )
+        visited = []
+        for row in islice(eligible, limit):
+            if not visit(row):
+                return tuple(visited)
+            visited.append(row)
+            self.after = self.key(row)
+        if next(eligible, None) is None:
             self.after = self.high_water = None
-        else:
-            self.after = self.key(selected[-1])
-        return selected
+        return tuple(visited)
 
     @staticmethod
     def key(row: "LocalDaemonAdmission") -> tuple[int, int, str]:

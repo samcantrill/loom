@@ -182,6 +182,8 @@ class ManagedAdmissionRetryAuthority(Protocol):
         operation_id: str,
         expected_revision: BackendRevision,
         stage_names: tuple[str, ...],
+        resume_cancelled: bool = False,
+        cancellation_operation_id: str | None = None,
     ) -> BackendRevision: ...
 
 

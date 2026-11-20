@@ -1792,9 +1792,12 @@ class SQLiteSlurmStageAssignments:
         )
 
 
-@lru_cache(maxsize=128)
-def _cached_retained_delivery(encoded: str) -> SlurmStageDelivery:
+def _decode_retained_delivery(encoded: str) -> SlurmStageDelivery:
     return SlurmStageDelivery.from_dict(json.loads(encoded))
+
+
+_cached_retained_delivery = lru_cache(maxsize=112)(_decode_retained_delivery)
+_cached_large_delivery = lru_cache(maxsize=4)(_decode_retained_delivery)
 
 
 def _retained_delivery(encoded: str) -> SlurmStageDelivery:
@@ -1802,9 +1805,12 @@ def _retained_delivery(encoded: str) -> SlurmStageDelivery:
     # from SQLite, never by assignment ID or a mutable record revision. Only
     # successful validation is cached; live state and release proofs are not.
     # Bound retained source documents to 32 MiB, excluding decoded-object overhead.
-    if len(encoded.encode("utf-8")) > 256 * 1024:
-        return SlurmStageDelivery.from_dict(json.loads(encoded))
-    return _cached_retained_delivery(encoded)
+    size = len(encoded.encode("utf-8"))
+    if size <= 256 * 1024:
+        return _cached_retained_delivery(encoded)
+    if size <= 1024 * 1024:
+        return _cached_large_delivery(encoded)
+    return _decode_retained_delivery(encoded)
 
 
 class SlurmBootstrapWorkspace:
@@ -1972,13 +1978,13 @@ class SlurmBootstrapWorkspace:
     def worker_request(self, *, shared_roots: Mapping[str, PlainData] | None = None) -> StageWorkerRequest:
         self.accept_inputs(shared_roots=shared_roots)
         request = self.delivery().worker_request(self.root, shared_roots=shared_roots)
-        from ._shared_recovery import BINDING, WIRE, worker_binding
+        from ._shared_recovery import WIRE, worker_bindings
+        from ._shared_staging_continuation import WIRE as staging_wire
 
         metadata = dict(request.metadata)
         metadata.pop(WIRE, None)
-        binding = worker_binding(self)
-        if binding is not None:
-            metadata[BINDING] = binding
+        metadata.pop(staging_wire, None)
+        metadata.update(worker_bindings(self))
         return replace(request, metadata=metadata)
 
     def retain_result(self, result: StageWorkerResult) -> _RemoteExecutionReport:

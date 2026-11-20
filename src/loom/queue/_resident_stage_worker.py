@@ -38,36 +38,41 @@ def main(argv: list[str] | None = None) -> int:
     gate = workspace_root / "run.grant"
     while not gate.is_file():
         time.sleep(0.01)
+    from .shared_execution import assignment_scope, materialize, execution_roots
+
     retained = workspace.request()
+    shared = assignment_scope(retained.fingerprint)
     if retained.submitted_execution is not None:
         from .submitted_execution import SUPPORTED_WORKER_CONTRACTS
         from .errors import QueueServiceError
 
         if retained.submitted_execution.worker_contract not in SUPPORTED_WORKER_CONTRACTS:
             raise QueueServiceError("submitted native worker contract is unsupported")
-        # Consume the host's retained launch evidence before any project import.
-        # Image hashing remains the supervisor's new-launch responsibility.
-        profile = workspace.shared_launch_profile()
-        if profile.submitted_execution != retained.submitted_execution:
-            raise QueueServiceError("contained workload differs from retained execution")
     timings = PhaseTimings()
+    profile = None
     with observe_phases(timings.observe):
-        request = timings.call("input_materialization", workspace.worker_request, resolve_shared=True)
+        # Validate this worker's namespace once before loading project inputs.
+        # Image hashing remains the supervisor's new-launch responsibility.
+        if shared is not None or retained.submitted_execution is not None:
+            profile = timings.call("worker_input_qualification", workspace.shared_launch_profile)
+        request = timings.call(
+            "input_materialization", workspace.worker_request, resolve_shared=True, shared_profile=profile,
+        )
         os.environ.pop(PREPARATION_INPUT_CONTEXT_ENV, None)
-        preparation = timings.call("preparation_materialization", workspace.preparation_context)
+        preparation = timings.call(
+            "preparation_materialization", workspace.preparation_context, shared_profile=profile,
+        )
     if preparation is not None:
         os.environ[PREPARATION_INPUT_CONTEXT_ENV] = json.dumps(preparation, sort_keys=True, separators=(",", ":"))
     resolver: Callable[[object], object] | None = None
     container_execution = False
     shared_roots = None
-    from .shared_execution import assignment_scope, materialize, execution_roots
-    shared = assignment_scope(workspace.request().fingerprint)
     if shared is not None:
-        profile = workspace.shared_launch_profile()
+        assert profile is not None
         container_execution = profile.container is not None
         roots = execution_roots(profile.shared_roots, container=container_execution)
         shared_roots = roots
-        if workspace.request().preparation_input is None:
+        if retained.preparation_input is None:
             def resolve_locations(value: object) -> object:
                 return timings.call("location_materialization", materialize, value, roots, container=container_execution)
             resolver = resolve_locations

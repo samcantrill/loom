@@ -163,6 +163,65 @@ def test_blocked_admissions_preserve_bounded_capacity_and_peer_progress(tmp_path
         daemon.stop()
 
 
+def test_production_sweep_advances_through_original_population_with_saturated_loaders(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(LocalDaemon, "_serve", lambda self: self._stop.wait())
+    root = tmp_path / "runs"
+    uris = [
+        _persist_sleep_run(root, run_name=f"run-{index}", stage_name="stage")
+        for index in range(36)
+    ]
+    config = LocalDaemonConfig(tmp_path / "coordinator", None, root, None, cpu_capacity=0)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    release = Event()
+    both_entered = [Event(), Event()]
+    loaded = set()
+    try:
+        client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+        initial = [client.submit(LocalDaemonAdmissionRequest(str(i), uri))
+                   for i, uri in enumerate(uris[:35])]
+        execution = daemon._execution
+        assert execution is not None
+        load = execution.load_context
+
+        def slow_first_two(admission):
+            index = uris.index(admission.run_uri)
+            if index < 2:
+                both_entered[index].set()
+                assert release.wait(10)
+            loaded.add(admission.admission_id)
+            return load(admission)
+
+        monkeypatch.setattr(execution, "load_context", slow_first_two)
+        assert {row.admission_id for row in daemon.reconcile_once()} == {
+            row.admission_id for row in initial[:2]
+        }
+        assert all(entered.wait(2) for entered in both_entered)
+        late = client.submit(LocalDaemonAdmissionRequest("late", uris[-1]))
+        assert daemon.reconcile_once() == ()
+        assert not loaded
+        release.set()
+
+        from time import monotonic
+
+        deadline = monotonic() + 30
+        while daemon._admission_scan.high_water is not None:
+            assert monotonic() < deadline, "original admission sweep did not finish"
+            observed = daemon._wake.snapshot()
+            visited = daemon.reconcile_once()
+            assert len(visited) <= 32
+            assert late.admission_id not in {row.admission_id for row in visited}
+            daemon._wake.wait_for_change(observed, 0.1)
+        _drive_until(daemon, lambda: {row.admission_id for row in initial} <= loaded)
+        _drive_until(daemon, lambda: late.admission_id in loaded)
+    finally:
+        release.set()
+        daemon.stop()
+
+
 @pytest.mark.parametrize("change", ["cancel", "scheduling"])
 def test_preparation_is_discarded_when_its_authorization_changes(tmp_path, monkeypatch, change):
     from loom.queue import CoordinatorSchedulingReload

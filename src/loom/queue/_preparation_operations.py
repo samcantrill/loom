@@ -22,9 +22,10 @@ from loom.artifacts import ArtifactRef
 from loom.io.uris import uri_to_path
 from loom.pipeline.runtime.options import RunOptions
 from loom.pipeline.cleanup.preparation_pins import retain_preparation_path
-from loom.serialization import PlainData, stable_json_bytes
+from loom.serialization import PlainData, stable_json_bytes, thaw_plain_data
 from loom.runs.context import SubmissionContext
 
+from ._continuation import ContinuationConflict, ContinuationPending
 from .errors import QueueConflictError, QueueServiceError
 from .run import RunRequest, _public_operation_id
 from ._maintenance import MaintenanceCheckConflict
@@ -32,6 +33,10 @@ from ._service_lifetime import ServiceRetiring
 from ._phase_timing import PhaseTimings, phase
 from .submitted_execution import SubmittedContainerCapability
 from .preparation import (
+    CANDIDATE_DOCUMENT_ENCODING,
+    CANDIDATE_ENCODING_METADATA,
+    _candidate_document,
+    _read_candidate_document,
     PreparationChildInput,
     PrepareRunRequest,
     SharedInputReceipt,
@@ -323,6 +328,8 @@ def _candidate_admission(value: PlainData) -> PlainData:
 
 
 def _same_candidate(observed: object, current: Mapping[str, PlainData]) -> bool:
+    if isinstance(observed, str):
+        observed = thaw_plain_data(_read_candidate_document(observed))
     if not isinstance(observed, Mapping):
         return False
     before, after = dict(observed), dict(current)
@@ -568,6 +575,13 @@ class CoordinatorPreparations:
             policy = self.daemon.config.preparation_policy
             assert policy is not None
             selected = policy.select(request)
+            if request.staging_continuation_stages:
+                from .shared_execution import stage_scope
+
+                shared = _mapping(selected["profile"]).get("shared_scope")
+                if not isinstance(shared, Mapping):
+                    raise QueueServiceError("staging continuation requires a protected publication root")
+                stage_scope({}, {}, shared, continue_staging=True)
             if fresh_stages:
                 from uuid import uuid4
 
@@ -1067,6 +1081,7 @@ class CoordinatorPreparations:
             except QueueConflictError:
                 self._fail(row, "publication_conflict", conflict=True)
                 return
+        candidate = _mapping(selected["reconciliation"])["candidate"] if "reconciliation" in selected else None
         binding = PreparationChildInput(
             request.operation_id,
             request.preparation_profile,
@@ -1078,11 +1093,13 @@ class CoordinatorPreparations:
             request.run_options,
             cast(Mapping[str, PlainData] | None, profile.get("local_scope")),
             project_binding,
-            None if "reconciliation" not in selected else cast(Mapping[str, PlainData] | None, _mapping(selected["reconciliation"])["candidate"]),
+            cast(Mapping[str, PlainData] | None, None if isinstance(candidate, str) else candidate),
+            _candidate_document=candidate if isinstance(candidate, str) else None,
             shared_scope=cast(Mapping[str, PlainData] | None, profile.get("shared_scope")),
             generations=cast(Mapping[str, str] | None, selected.get("generations")),
             action_verification=cast(Mapping[str, PlainData] | None, selected.get("action_verification")),
             execution=request.execution,
+            staging_continuation_stages=request.staging_continuation_stages,
             container_capability=(
                 SubmittedContainerCapability.from_dict(profile["container_capability"])
                 if request.execution is not None else None
@@ -1300,7 +1317,15 @@ class CoordinatorPreparations:
         if row["cancellation_requested"]:
             self._store_result(_with_report(operation_id, "cancelled", None, result, report.preflight))
             return
+        resume_cancelled = reconciliation["retry_policy"] == "one_observed_cancellation"
         if row["target_name"] is None:
+            if resume_cancelled:
+                # A continuation cannot become the publication owner of a new run.
+                try:
+                    self.daemon.admission_for_run_uri(uri)
+                except AdmissionNotFoundError:
+                    self._fail(row, "cancelled_admission_missing", conflict=True)
+                    return
             retain_preparation_path(config.run_store_root / target_name,
                                     coordinator_id=self.daemon._require_started(), operation_id=operation_id)
             with self.daemon._connection() as conn:
@@ -1343,7 +1368,7 @@ class CoordinatorPreparations:
             retained = _mapping(json.loads(str(row["result_json"])))
             result["queue_item_id"], result["binding"] = retained["queue_item_id"], retained["binding"]
         owner = self._read(cast(str, reconciliation["publication_owner"]))
-        if owner["cancellation_requested"] or owner["state"] in {"failed", "cancelled", "conflict"}:
+        if (owner["cancellation_requested"] and owner["state"] != "applied") or owner["state"] in {"failed", "cancelled", "conflict"}:
             self._fail(row, "candidate_publication_failed", conflict=True)
             return
         if owner["operation_id"] != operation_id and owner["state"] != "applied":
@@ -1352,13 +1377,45 @@ class CoordinatorPreparations:
             admission = self.daemon.admission_for_run_uri(uri)
         except AdmissionNotFoundError:
             admission = None
+        if resume_cancelled and admission is None:
+            self._fail(row, "cancelled_admission_missing", conflict=True)
+            return
         if admission is not None:
             if admission.queue_item_id != row["queue_item_id"]:
                 self._fail(row, "candidate_admission_conflict", conflict=True)
                 return
-            if admission.state.value in {"CANCELLED", "CANCELLATION_REQUESTED"} or admission.cancellation_operation_id is not None:
+            if admission.state.value in {"CANCELLATION_REQUESTED", "CANCELLING"}:
+                if not resume_cancelled:
+                    self._fail(row, "candidate_cancellation_pending", conflict=True)
+                return
+            if (admission.state.value == "CANCELLED" or admission.cancellation_operation_id is not None) and not resume_cancelled:
                 self._fail(row, "candidate_cancelled", conflict=True)
                 return
+            if reconciliation["retry_policy"] != "never" and admission.state.value != "SUCCEEDED":
+                execution = self.daemon._execution
+                if execution is None:
+                    return
+                outcome = execution.settle_continuation(admission, accepted_at=row["accepted_at"])
+                if isinstance(outcome, ContinuationConflict):
+                    self._fail(row, outcome.reason, conflict=True)
+                    return
+                if isinstance(outcome, ContinuationPending):
+                    if row["result_code"] != outcome.reason:
+                        self._store_result(_with_report(operation_id, "pending", outcome.reason, result, report.preflight))
+                    return
+                admission = self.daemon.admission_for_run_uri(uri)
+            if resume_cancelled:
+                observed = reconciliation.get("cancelled_revision")
+                if admission.state.value != "CANCELLED" or (observed is not None and (
+                    observed != admission.revision or
+                    reconciliation.get("cancellation_operation_id") != admission.cancellation_operation_id
+                )):
+                    self._fail(row, "cancelled_revision_conflict", conflict=True)
+                    return
+                if observed is None:
+                    reconciliation["cancelled_revision"] = admission.revision
+                    reconciliation["cancellation_operation_id"] = admission.cancellation_operation_id
+                    self._save_selection(operation_id, selected)
         path = run_uri_to_path(uri)
         if admission is None and not path.exists() and not path.is_symlink() and owner["operation_id"] == operation_id and row["state"] == "pending":
             # Only the selected owner can publish; cancellation still fences admission.
@@ -1385,7 +1442,14 @@ class CoordinatorPreparations:
                     reconciliation["failed_revision"] = admission.revision
                     self._save_selection(operation_id, selected)
                 if not _same_candidate(reconciliation["candidate"], candidate):
-                    reconciliation["candidate"] = candidate
+                    # A new verifier may use the scalar form only when the selected
+                    # worker has advertised its decoder. A retained generation owns
+                    # its original encoding across coordinator restarts.
+                    reconciliation["candidate"] = (
+                        _candidate_document(candidate)
+                        if report.reference.metadata.get(CANDIDATE_ENCODING_METADATA) == CANDIDATE_DOCUMENT_ENCODING
+                        else candidate
+                    )
                     reconciliation["verification_generation"] = cast(int, reconciliation["verification_generation"]) + 1
                     generation = reconciliation["verification_generation"]
                     child_name = PREPARATION_RUN_PREFIX + hashlib.sha256(f"{operation_id}:verify:{generation}".encode()).hexdigest()
@@ -1393,7 +1457,7 @@ class CoordinatorPreparations:
                         conn.execute("BEGIN IMMEDIATE")
                         current = conn.execute("SELECT result_json FROM preparation_operations WHERE operation_id = ?", (operation_id,)).fetchone()
                         result["cancellation_operation_id"] = json.loads(current["result_json"])["cancellation_operation_id"]
-                        conn.execute("UPDATE preparation_operations SET selected_json = ?, child_name = ?, child_admission_id = NULL, dispatch_claimed = 0, state = 'pending', result_json = ? WHERE operation_id = ?",
+                        conn.execute("UPDATE preparation_operations SET selected_json = ?, child_name = ?, child_admission_id = NULL, dispatch_claimed = 0, state = 'pending', result_code = NULL, result_json = ? WHERE operation_id = ?",
                                      (_json(selected), child_name, _json(result), operation_id))
                         conn.commit()
                     return
@@ -1403,7 +1467,7 @@ class CoordinatorPreparations:
                 result["verification_report_ref"] = report.reference.to_dict()
                 result["binding"] = {"run_uri": uri, "publication_operation_id": reconciliation["publication_owner"]}
                 result["prepared_run"] = candidate["prepared_run"]
-                result["decision"] = "retry" if reconciliation["failed_revision"] is not None else "reuse" if admission is not None and admission.state.value == "SUCCEEDED" else "observe" if admission is not None else "admit_prepared"
+                result["decision"] = "retry" if reconciliation["failed_revision"] is not None or reconciliation.get("cancelled_revision") is not None else "reuse" if admission is not None and admission.state.value == "SUCCEEDED" else "observe" if admission is not None else "admit_prepared"
                 self._store_result(_with_report(operation_id, "applying", None, result, report.preflight))
                 self._continue_run(self._read(operation_id))
                 return
@@ -1789,14 +1853,15 @@ class CoordinatorPreparations:
                 return
             selected = _mapping(json.loads(str(row["selected_json"])))
             reconciliation = selected.get("reconciliation")
-            if isinstance(reconciliation, Mapping) and reconciliation["failed_revision"] is not None:
+            if isinstance(reconciliation, Mapping) and (reconciliation["failed_revision"] is not None or reconciliation.get("cancelled_revision") is not None):
                 if row["cancellation_requested"]:
                     self._fail(row, "target_cancelled", conflict=True)
                     return
                 try:
                     admission = self.daemon._submit(LocalDaemonAdmissionRequest(
                         str(row["queue_item_id"]), cast(str, prepared["run_uri"]),
-                        retry_failed_revision=cast(int, reconciliation["failed_revision"])),
+                        retry_failed_revision=cast(int | None, reconciliation["failed_revision"]),
+                        resume_cancelled_revision=cast(int | None, reconciliation.get("cancelled_revision"))),
                         run_operation_id=operation_id)
                 except QueueConflictError:
                     self._fail(row, "retry_revision_conflict", conflict=True)
@@ -1859,6 +1924,19 @@ class CoordinatorPreparations:
             ):
                 raise QueueConflictError("cancellation operation identity is ambiguous")
             result = _mapping(json.loads(str(row["result_json"])))
+            superseded = _mapping(json.loads(row["selected_json"])).get("reconciliation", {})
+            if isinstance(superseded, Mapping) and superseded.get("superseded_by"):
+                original = self._superseded_admission(conn, superseded)
+                operation = _operation(cancel_id, "applied", None, {
+                    "coordinator_id": result["coordinator_id"], "target_operation_id": operation_id,
+                    "queue_item_id": row["queue_item_id"], "admission": original,
+                    "native_cancellation_operation_id": original["cancellation_operation_id"],
+                    "native_control": {key: original[key] for key in ("admission_id", "state", "revision")},
+                })
+                conn.execute("INSERT INTO preparation_cancellations VALUES (?, ?, 'applied', NULL, ?)",
+                             (cancel_id, operation_id, _json(operation.result)))
+                conn.commit()
+                return operation
             # Acceptance and demand detachment share one transaction. A restart
             # must not resume a producer using a cancellation that only exists
             # in the public operation table.
@@ -1906,6 +1984,12 @@ class CoordinatorPreparations:
         self.daemon._wake.set()
         return operation
 
+    @staticmethod
+    def _superseded_admission(conn, reconciliation):
+        receipt = conn.execute("SELECT value FROM daemon_metadata WHERE key = ?",
+                               (reconciliation["superseded_by"],)).fetchone()
+        return _mapping(json.loads(receipt[0])["cancelled_admission"])
+
     def _reconcile_cancellations(self) -> None:
         from .local_daemon import LocalDaemonAdmissionState
 
@@ -1932,7 +2016,16 @@ class CoordinatorPreparations:
                         target_result["admission"] = self.daemon.admission_for_queue_item(str(target["queue_item_id"])).to_dict()
                     except AdmissionNotFoundError:
                         pass
-                if target_result["admission"] is not None:
+                reconciliation = _mapping(json.loads(target["selected_json"])).get("reconciliation", {})
+                if isinstance(reconciliation, Mapping) and reconciliation.get("superseded_by"):
+                    with self.daemon._connection() as conn:
+                        original = self._superseded_admission(conn, reconciliation)
+                    result["admission"] = original
+                    result["native_cancellation_operation_id"] = original["cancellation_operation_id"]
+                    result["native_control"] = {key: original[key] for key in ("admission_id", "state", "revision")}
+                    state = "applied"
+                    bound = False
+                elif target_result["admission"] is not None:
                     result["admission"] = target_result["admission"]
                     admission = self.daemon._cancel(
                         str(target["queue_item_id"]),

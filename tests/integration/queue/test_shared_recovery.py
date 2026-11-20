@@ -328,3 +328,92 @@ def test_failed_remote_recovery_survives_settlement_and_explicit_retry(
         server.stop()
         unix.stop()
         daemon.stop()
+
+
+@pytest.mark.parametrize("interrupt_grant", [False, True])
+def test_embedded_continuation_reuses_sealed_sample_and_staged_output(
+    tmp_path, monkeypatch, interrupt_grant
+):
+    from dataclasses import replace
+    from loom.queue import _embedded_recovery
+
+    _service(tmp_path)
+    root = tmp_path / "runs" / "publication"
+    root.mkdir(parents=True)
+    challenge = b"local-output-root"
+    (root / "challenge").write_bytes(challenge)
+    roots = {
+        "outputs": {
+            "host_path": str(root), "container_path": None, "access": "rw",
+            "challenge": {"path": "challenge", "sha256": hashlib.sha256(challenge).hexdigest()},
+            "publication": {
+                "max_members": 1024, "max_payload_bytes": 1048576, "max_manifest_bytes": 1048576,
+            },
+        }
+    }
+    agent_path = tmp_path / "agent.json"
+    authored = json.loads(agent_path.read_text())
+    authored["resident_profiles"][0]["shared_roots"] = roots
+    agent_path.write_text(json.dumps(authored))
+    config_path = tmp_path / "coordinator.json"
+    authored = json.loads(config_path.read_text())
+    authored["preparation"]["profiles"]["existing-project"].update(
+        configuration_policy="shared", shared_locations=[]
+    )
+    config_path.write_text(json.dumps(authored))
+    pipeline_path = tmp_path / "projects" / "pipeline.yaml"
+    authored = json.loads(pipeline_path.read_text())
+    authored["pipeline"]["stages"][0].update(
+        factory={"_target_": "tests.support.shared_execution_stages.StreamingContinuationProducer"},
+        config={},
+        outputs={"manifest": {"artifact_type": "json", "codec_key": "json.v1"}},
+    )
+    pipeline_path.write_text(json.dumps(authored))
+    service = load_coordinator_service_config(config_path)
+    LocalDaemon.initialize_deployment(service.daemon)
+    daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
+    daemon.start()
+    server = LocalDaemonSocketServer(daemon, service.daemon.endpoint)
+    server.start()
+    try:
+        with CoordinatorClient.from_unix_socket(service.daemon.endpoint) as client:
+            client.prepare_run(replace(_request(), staging_continuation_stages=("produce",)))
+            operation = client.wait_operation("prepare-1", timeout_seconds=25).operation
+            assert operation.state == "applied", operation
+            uri = _result(operation)["prepared_run"]["run_uri"]
+            client.submit(LocalDaemonAdmissionRequest("target", uri))
+            failed = client.wait("target", timeout_seconds=25)
+            assert failed.state.value == "FAILED", failed
+            [previous] = list(root.glob("loom-recovery-retained/*"))
+            assert (previous / "sample-a.bin").read_bytes() == b"sample-a"
+            interrupted = []
+            if interrupt_grant:
+                finish = _embedded_recovery.finish_grant_continuation
+
+                def interrupt_after_handoff(request, *args, **kwargs):
+                    finish(request, *args, **kwargs)
+                    if not interrupted:
+                        interrupted.append(request.assignment_id)
+                        raise OSError("interrupted after durable staging handoff")
+
+                monkeypatch.setattr(_embedded_recovery, "finish_grant_continuation", interrupt_after_handoff)
+            client.submit(LocalDaemonAdmissionRequest("target", uri, retry_failed_revision=failed.revision))
+            completed = client.wait("target", timeout_seconds=25)
+            assert completed.state.value == "SUCCEEDED", completed
+            store = LocalRunStore(service.daemon.run_store_root)
+            result = StageWorkerResult.from_dict(store.read_stage_worker_result(uri, "produce", attempt=2))
+            payload = LocalArtifactStore(store.local_artifact_root(uri)).load(result.outputs["manifest"])
+            assert payload == {"samples": ["sample-a", "sample-b"]}
+            with daemon._connection() as conn:
+                [(handoff,)] = conn.execute(
+                    "SELECT idempotency_key FROM agent_receipts WHERE operation = 'continue_staging'"
+                ).fetchall()
+            if interrupt_grant:
+                assert interrupted == [handoff]
+            assert service.daemon.coordinator_authority_factory is not None
+            authority = service.daemon.coordinator_authority_factory(uri)
+            [stage] = authority.open_run(uri).stages
+            assert [attempt.status.value for attempt in stage.attempts] == ["FAILED", "SUCCEEDED"]
+    finally:
+        server.stop()
+        daemon.stop()

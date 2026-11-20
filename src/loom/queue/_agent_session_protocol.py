@@ -139,7 +139,12 @@ def register(self: LocalDaemonAgentHttpClient, request: AgentRegistration) -> Ge
         if SLURM_ASYNC_OUTPUT_CAPABILITY in declared and SLURM_ASYNC_OUTPUT_CAPABILITY not in handshake["capabilities"]:
             raise QueueServiceError("coordinator lacks pending SLURM output")
     from ._shared_assignment import CAPABILITY
-    from .shared_execution import SHARED_EXECUTION_CAPABILITY, has_input_directories, qualifications
+    from .shared_execution import SHARED_EXECUTION_CAPABILITY, STAGING_CONTINUATION_CAPABILITY, has_input_directories, qualifications
+    if STAGING_CONTINUATION_CAPABILITY in request.declared_capabilities:
+        if not {SHARED_EXECUTION_CAPABILITY, SLURM_SUBMISSION_CAPABILITY}.intersection(request.declared_capabilities):
+            raise QueueServiceError("staging continuation requires shared execution or SLURM submission")
+        if STAGING_CONTINUATION_CAPABILITY not in cast(Sequence[str], (yield from _steps(self.handshake))["capabilities"]):
+            raise QueueServiceError(f"coordinator lacks {STAGING_CONTINUATION_CAPABILITY}")
     if CAPABILITY in request.declared_capabilities:
         if CAPABILITY not in cast(Sequence[str], (yield from _steps(self.handshake))["capabilities"]):
             raise QueueServiceError("coordinator lacks shared-assignment-reference-v1")

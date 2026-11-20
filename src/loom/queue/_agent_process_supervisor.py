@@ -9,6 +9,7 @@ private queue application infrastructure; pipeline execution never imports it.
 from __future__ import annotations
 
 from collections.abc import Generator
+from concurrent.futures import CancelledError
 from loom._sqlite_policy import connect_existing, initialize_database
 from loom.pipeline.stores.atomic import atomic_write_text, atomic_write_bytes
 from ._storage_policy import StoragePolicy, parse_storage_policy
@@ -912,6 +913,8 @@ class AgentProcessSupervisor:
         try:
             with observe_phases(log_phases), phase("new_launch_input_qualification", operation_id=launch.assignment_id):
                 self._require_new_launch_inputs(launch)
+        except CancelledError as exc:
+            raise _SupervisorNoStartError("input qualification cancelled before start") from exc
         except (ValueError, OSError, QueueError, RuntimeResourceError) as exc:
             raise _SupervisorNoStartError(str(exc)) from exc
 
@@ -930,7 +933,24 @@ class AgentProcessSupervisor:
             if profile.submitted_execution is not None:
                 _ResidentAssignmentWorkspace.require_submitted_launch(launch)
             assignment = _ResidentAssignmentWorkspace.read_request(launch.workspace_root)
-            qualify_shared_worker_inputs(profile, assignment, agent_id=launch.agent_id)
+            def report_progress(update) -> None:
+                try:
+                    log_phases({
+                        "kind": "input_validation_progress",
+                        "operation_id": launch.assignment_id,
+                        "entries_examined": update.entries_examined,
+                        "elapsed_milliseconds": round(update.elapsed_seconds * 1000),
+                        "last_progress_at": update.last_progress_at,
+                    })
+                except OSError:
+                    # A closed diagnostic stream cannot veto a qualified launch.
+                    pass
+
+            qualify_shared_worker_inputs(
+                profile, assignment, agent_id=launch.agent_id,
+                cancelled=lambda: launch.launch_operation_id in self._stop_requested,
+                progress=report_progress,
+            )
         if profile.container is not None and launch.schema_version is not None:
             expected = _validated_resource_controls(
                 launch.container_command.metadata.get("resource_controls")
@@ -2114,20 +2134,21 @@ class AgentProcessSupervisorService:
         with AgentProcessSupervisorService._startup_lock:
             process = AgentProcessSupervisorService._starting_services.get(root)
             if process is None or process.poll() is not None:
-                process = subprocess.Popen(
-                    [
-                        sys.executable,
-                        "-m",
-                        "loom.queue._agent_process_supervisor",
-                        "--serve",
-                        str(root),
-                    ],
-                    cwd=str(Path.cwd()),
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    start_new_session=True,
-                )
+                with _detached_supervisor_stderr(root) as stderr:
+                    process = subprocess.Popen(
+                        [
+                            sys.executable,
+                            "-m",
+                            "loom.queue._agent_process_supervisor",
+                            "--serve",
+                            str(root),
+                        ],
+                        cwd=str(Path.cwd()),
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL,
+                        stderr=stderr,
+                        start_new_session=True,
+                    )
                 AgentProcessSupervisorService._starting_services[root] = process
 
                 def reap(child: subprocess.Popen[bytes]) -> None:
@@ -2151,6 +2172,30 @@ class AgentProcessSupervisorService:
                         "managed supervisor endpoint is unavailable"
                     )
                 sleep(0.02)
+
+
+@contextmanager
+def _detached_supervisor_stderr(root: Path) -> Generator[int, None, None]:
+    """Keep detached diagnostics in the private root without retaining caller pipes."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NONBLOCK | os.O_NOFOLLOW
+    try:
+        fd = os.open(root / "supervisor.log", flags, 0o600)
+    except OSError:
+        yield subprocess.DEVNULL
+        return
+    try:
+        try:
+            info = os.fstat(fd)
+            valid = (
+                stat.S_ISREG(info.st_mode)
+                and info.st_uid == os.geteuid()
+                and not info.st_mode & 0o077
+            )
+        except OSError:
+            valid = False
+        yield fd if valid else subprocess.DEVNULL
+    finally:
+        os.close(fd)
 
 
 def _host_boot_evidence() -> dict[str, str]:

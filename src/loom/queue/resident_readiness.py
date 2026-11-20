@@ -27,6 +27,7 @@ from ._resident_probe import MAX_RESIDENT_PROBE_TIMEOUT_SECONDS, run_resident_pr
 from ._phase_timing import phase
 
 if TYPE_CHECKING:
+    from ._agent_process_supervisor import ResidentWorkerLaunchProfile
     from ._remote_stage_execution import ResidentExecutionProfile, ResidentProfileDescriptor
 
 
@@ -144,6 +145,50 @@ lockfile = pathlib.Path(request["lockfile"])
 if lockfile.is_file(): result["lockfile"] = hashlib.sha256(lockfile.read_bytes()).hexdigest()
 print(json.dumps(result, sort_keys=True, separators=(",", ":")))
 """
+
+
+_STAGING_CONTINUATION = r"""
+import contextlib, json, sys
+available = False
+try:
+    with contextlib.redirect_stdout(sys.stderr):
+        from loom.queue.shared_execution import STAGING_CONTINUATION_CAPABILITY, assignment_requires_staging_continuation
+        from loom.queue._shared_staging_continuation import validate_binding
+        from loom.queue.preparation import PreparationChildInput
+    available = (
+        STAGING_CONTINUATION_CAPABILITY == "released-output-staging-v1"
+        and callable(assignment_requires_staging_continuation)
+        and callable(validate_binding)
+        and "staging_continuation_stages" in PreparationChildInput.__dataclass_fields__
+    )
+except Exception:
+    pass
+print(json.dumps({"capability": "released-output-staging-v1", "available": available}))
+"""
+
+
+def require_staging_continuation_support(
+    profile: ResidentWorkerLaunchProfile, fingerprint: Mapping[str, PlainData],
+) -> None:
+    """Check a selected environment before a new stage launch, never on replay.
+
+    Session capability covers the native host. Submitted image support can only
+    be observed in that image; installed workers use the same contained probe.
+    This fixed probe imports native contracts only and receives no project config.
+    """
+    from .errors import QueueServiceError
+    from .shared_execution import STAGING_CONTINUATION_CAPABILITY, assignment_requires_staging_continuation
+
+    if not assignment_requires_staging_continuation(fingerprint):
+        return
+    result = run_resident_probe(profile, _STAGING_CONTINUATION, {}, timeout_seconds=30)
+    if result.failure or not result.contained or result.payload != {
+        "capability": STAGING_CONTINUATION_CAPABILITY, "available": True,
+    }:
+        raise QueueServiceError(
+            f"selected worker lacks {STAGING_CONTINUATION_CAPABILITY} qualification"
+            + (f": {result.failure}" if result.failure else "")
+        )
 
 
 def readiness_check(

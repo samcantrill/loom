@@ -91,12 +91,19 @@ class SharedRecoveryProducer:
         assert execution["run_state_root"] is None
         assert current.is_dir()
         assert not inputs
+        staged_sample = (
+            context.local_output_path("manifest").parent / "sample-a.bin"
+            if context.stage_config.get("staged_sample") else None
+        )
         if execution["attempt"] == 1:
             assert not binding["predecessors"]
+            (current / "owner").write_text(context.metadata["loom.recovery_owner.v1"])
             (current / "checkpoint").mkdir()
             (current / "checkpoint" / "weights").write_bytes(b"completed-progress")
             (current / "catalog.json").write_text('{"checkpoint":"checkpoint/weights"}')
             (current / "partial").write_bytes(b"incomplete-progress")
+            if staged_sample is not None:
+                staged_sample.write_bytes(b"assembled-sample-a")
             if context.stage_config["death"]:
                 os._exit(19)
             raise RuntimeError("synthetic failure after complete progress")
@@ -106,6 +113,10 @@ class SharedRecoveryProducer:
         assert prior["attempt"] == 1
         previous = Path(prior["path"])
         assert previous != current
+        assert (previous / "owner").read_text() == prior["reference"]["publication_id"]
+        assert context.metadata["loom.recovery_owner.v1"] != prior["reference"]["publication_id"]
+        if staged_sample is not None:
+            assert staged_sample.read_bytes() == b"assembled-sample-a"
         catalog = json.loads((previous / "catalog.json").read_text())
         assert (previous / catalog["checkpoint"]).read_bytes() == b"completed-progress"
         (current / "restored").write_bytes(b"restored")
@@ -156,3 +167,24 @@ def _check_project_context(context):
     assert contract == thaw_plain_data(context.metadata["loom.project_contract"])
     root = uri_to_path(reference.uri).parent
     assert (root / contract["payload"]["member"]).read_text() == 'science belongs to preparation'
+
+
+class StreamingContinuationProducer:
+    def run(self, context, inputs):
+        binding = context.metadata["loom.recovery_binding"]
+        current = Path(binding["current"]["path"])
+        staged = context.local_output_path("manifest").parent / "sample-a.bin"
+        if not binding["predecessors"]:
+            (current / "sample-a.bin").write_bytes(b"sample-a")
+            staged.write_bytes(b"assembled-sample-a")
+            raise RuntimeError("interrupted after sealing sample A")
+        [previous] = binding["predecessors"]
+        assert previous["attempt"] == 1
+        assert previous["reference"]["publication_id"] != context.metadata["loom.recovery_owner.v1"]
+        assert (Path(previous["path"]) / "sample-a.bin").read_bytes() == b"sample-a"
+        assert staged.read_bytes() == b"assembled-sample-a"
+        (current / "sample-b.bin").write_bytes(b"sample-b")
+        return {"manifest": context.save_artifact(
+            "manifest", {"samples": ["sample-a", "sample-b"]},
+            artifact_type="json", codec_key="json.v1",
+        )}

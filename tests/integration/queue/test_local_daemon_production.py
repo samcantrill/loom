@@ -1664,8 +1664,18 @@ def test_daemon_global_priority_preempts_earlier_lower_priority_admission(
     tmp_path: Path, monkeypatch, batch_limit,
 ) -> None:
     from loom.queue._admission_scan import AdmissionScan
+    from loom.pipeline.orchestration import SchedulingProjectionState
+
     take = AdmissionScan.take
-    monkeypatch.setattr(AdmissionScan, "take", lambda self, admissions: take(self, admissions, limit=batch_limit))
+    off_page = Event()
+    allow_dispatch = Event()
+
+    def take_page(scan, admissions, visit):
+        if off_page.is_set():
+            admissions = tuple(admission for admission in admissions if admission.run_uri != high_uri)
+        return take(scan, admissions, visit, limit=batch_limit)
+
+    monkeypatch.setattr(AdmissionScan, "take", take_page)
     run_root = tmp_path / "runs"
     low_uri = _persist_sleep_run(
         run_root,
@@ -1689,14 +1699,57 @@ def test_daemon_global_priority_preempts_earlier_lower_priority_admission(
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config)
     daemon.start()
+    release_lower_context = Event()
+    release_second_context = Event()
+    lower_entered = Event()
+    second_entered = Event()
     try:
         client = daemon.client_view(
             LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
         )
+        execution = daemon._execution
+        assert execution is not None
+        schedule = execution.schedule_once
+        load_context = execution.load_context
+
+        def load_after_priority_check(admission):
+            if batch_limit == 1 and admission.queue_item_id in {"low-item", "third-item"}:
+                lower_entered.set()
+                assert release_lower_context.wait(30)
+            if admission.queue_item_id == "second-item":
+                second_entered.set()
+                assert release_second_context.wait(30)
+            return load_context(admission)
+
+        def schedule_after_projection(*args, **kwargs):
+            if batch_limit == 1 and not allow_dispatch.is_set():
+                return None
+            return schedule(*args, **kwargs)
+
+        monkeypatch.setattr(execution, "schedule_once", schedule_after_projection)
+        monkeypatch.setattr(execution, "load_context", load_after_priority_check)
         # Admit both runs before the daemon can project or place either one.
         with daemon._reconcile_guard:
             client.submit(LocalDaemonAdmissionRequest("low-item", low_uri))
-            client.submit(LocalDaemonAdmissionRequest("high-item", high_uri))
+            high = client.submit(LocalDaemonAdmissionRequest("high-item", high_uri))
+        if batch_limit == 1:
+            deadline = time.monotonic() + 20
+            while not any(
+                work.scheduling_state is SchedulingProjectionState.READY
+                for work in execution.stage_work_store.list_stage_work(admission_id=high.admission_id)
+            ):
+                assert time.monotonic() < deadline, "high-priority stage was not projected"
+                time.sleep(0.02)
+            off_page.set()
+            for name in ("second", "third"):
+                uri = _persist_sleep_run(run_root, run_name=f"{name}-run", stage_name=name)
+                client.submit(LocalDaemonAdmissionRequest(f"{name}-item", uri))
+            daemon._wake.set()
+            assert lower_entered.wait(10) and second_entered.wait(10)
+            # A READY run outside the sweep gets the next freed slot even with
+            # more admissions prepared to take that slot.
+            allow_dispatch.set()
+            release_second_context.set()
         _wait_for_supervisor_launch_count(config, expected=1)
 
         with sqlite3.connect(config.execution_database) as conn:
@@ -1708,6 +1761,9 @@ def test_daemon_global_priority_preempts_earlier_lower_priority_admission(
                 )
             )
         assert live_run_uris == (high_uri,)
+        off_page.clear()
+        release_lower_context.set()
+        daemon._wake.set()
         assert client.wait("high-item", timeout_seconds=10).state is (
             LocalDaemonAdmissionState.SUCCEEDED
         )
@@ -1715,6 +1771,8 @@ def test_daemon_global_priority_preempts_earlier_lower_priority_admission(
             LocalDaemonAdmissionState.SUCCEEDED
         )
     finally:
+        release_lower_context.set()
+        release_second_context.set()
         daemon.stop()
 
 

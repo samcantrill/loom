@@ -34,7 +34,8 @@ def _preview(daemon: Any, run_uri: str, conn: Any, assignment_id: str | None = N
     snapshot = _authority(daemon, run_uri).open_run(run_uri)
     stages = {stage.stage_name: stage for stage in snapshot.stages}
     all_rows = recovery.assignment_rows(
-        conn, run_uri, slurm_assignments=daemon._execution.slurm_assignments, limit=1000,
+        conn, run_uri, slurm_assignments=daemon._execution.slurm_assignments,
+        embedded=daemon._execution._embedded_recovery, limit=1000,
     )
     rows = [row for row in all_rows if assignment_id is None or row["assignment_id"] == assignment_id]
     entries = []
@@ -186,7 +187,8 @@ def release_recovery(daemon: Any, principal: Any, *, run_uri: str, assignment_id
     with daemon._connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
         assignment = next((row for row in recovery.assignment_rows(
-            conn, run_uri, slurm_assignments=daemon._execution.slurm_assignments, limit=1000,
+            conn, run_uri, slurm_assignments=daemon._execution.slurm_assignments,
+            embedded=daemon._execution._embedded_recovery, limit=1000,
         ) if row["assignment_id"] == assignment_id), None)
         if assignment is None:
             raise QueueConflictError("recovery assignment is not in the selected run")

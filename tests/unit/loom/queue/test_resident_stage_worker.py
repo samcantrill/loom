@@ -14,8 +14,9 @@ from loom.pipeline.status import StageStatus
 import pytest
 
 
+@pytest.mark.parametrize("shared", [False, True], ids=["local", "shared"])
 def test_resident_main_passes_outer_boundary_containment_owner(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shared: bool
 ) -> None:
     workspace_root = tmp_path / "agent" / "assignments" / "assignment-1"
     workspace_root.mkdir(parents=True)
@@ -25,17 +26,29 @@ def test_resident_main_passes_outer_boundary_containment_owner(
 
     fingerprint = _request(_profile(tmp_path)).fingerprint
 
+    from loom.queue import shared_execution
+
+    profile = SimpleNamespace(container=None, shared_roots={}) if shared else None
+    validations = []
+    if shared:
+        monkeypatch.setattr(shared_execution, "assignment_scope", lambda _: {"roots": {}})
+
     class FakeWorkspace:
         durable_files = "strict"
 
         def request(self):
             return SimpleNamespace(fingerprint=fingerprint, preparation_input=None, submitted_execution=None)
 
-        def worker_request(self, *, resolve_shared: bool = False) -> object:
-            assert resolve_shared
+        def shared_launch_profile(self):
+            validations.append(True)
+            return profile
+
+        def worker_request(self, *, resolve_shared: bool = False, shared_profile=None) -> object:
+            assert resolve_shared and shared_profile is profile
             return object()
 
-        def preparation_context(self) -> None:
+        def preparation_context(self, *, shared_profile=None) -> None:
+            assert shared_profile is profile
             return None
 
     result = StageWorkerResult(
@@ -44,7 +57,7 @@ def test_resident_main_passes_outer_boundary_containment_owner(
         finished_at="2026-10-19T00:00:01Z", executor_name="local",
         executor_metadata={"existing": "kept"},
     )
-    ticks = iter((1, 3, 5, 8, 10, 17))
+    ticks = iter(((0, 1) if shared else ()) + (1, 3, 5, 8, 10, 17))
     monkeypatch.setattr(phase_timing, "monotonic", lambda: next(ticks))
 
     def reopen_workspace(_agent_root, _assignment_id, *, _allow_initialize):
@@ -82,7 +95,8 @@ def test_resident_main_passes_outer_boundary_containment_owner(
         assert isinstance(span, Mapping)
         actual.append((span["action"], span["elapsed_nanoseconds"]))
         assert span["outcome"] == "complete"
-    assert actual == [
+    assert len(validations) == int(shared)
+    assert actual == ([("worker_input_qualification", 1_000_000_000)] if shared else []) + [
         ("input_materialization", 2_000_000_000), ("preparation_materialization", 3_000_000_000), ("worker_execution", 7_000_000_000),
     ]
     assert "native_timings" not in result.executor_metadata

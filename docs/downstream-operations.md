@@ -407,6 +407,15 @@ startup fails closed. An empty supervisor may restart after a host restart; a
 supervisor that has accepted a launch cannot be reconstructed from an absent
 process and requires explicit recovery.
 
+A detached worker supervisor appends service diagnostics to
+`<agent-root>/supervisor/supervisor.log` on the agent host. Input validation
+records carry the assignment ID, elapsed time and entries examined. A
+foreground supervisor writes the same diagnostics to the service manager's
+stderr stream. For submitted-container v3 assignments, the agent's service log
+records `assignment_input_locations`. The supervisor records
+`new_launch_input_qualification`. The worker's native result records
+`worker_input_qualification`. Join these observations by assignment ID.
+
 Each private supervisor IPC exchange has a ten-second whole-exchange deadline
 covering connect, mutual authentication, request send and response read. This
 bounds the actual calling operation and closes its connection; it does not set
@@ -754,6 +763,32 @@ are incompatible with reconciliation. Replay retains the operation ID and every
 other request field, including retry policy. Exact requests keep their existing
 wire shape and never retry through replay.
 
+A cancelled target stays cancelled until a new reconciled operation requests
+`--resume-cancelled` (API policy `one_observed_cancellation`). This operation
+binds the cancelled admission revision and cancellation receipt. Loom reopens
+unfinished stages after their assignments have settled, preserves successful
+commits, and delivers retained recovery trees to the next attempt. Replaying
+the same submission or an earlier cancellation preserves its original outcome.
+
+The selected preparation worker advertises its supported candidate encoding in
+the committed preparation report. Workers that support compact verification
+receive the ordered candidate as one canonical JSON document. The coordinator
+retains that encoding with the verifier generation so restarting the service
+replays the same child. Older workers continue to receive the expanded mapping.
+
+A Slurm timeout can terminate the worker before it reports. Failed-run retry
+uses the installed profile's accounting and containment evidence for that exact
+allocation, then waits for provider release and shared recovery retention.
+An unresolved allocation leaves the continuation pending with its waiting
+reason. A retention budget failure is reported as a conflict.
+
+Stages that support continuing output assembly can be selected in the protected
+deployment with `preparation.staging_continuation_stages`, for example
+`["predict"]`. Set this on the initial submission and retain it on retry. The
+CLI forwards the selection into native preparation. Once the previous provider
+is released, eligible unpublished output staging can transfer to the next
+attempt. The stage still validates its own saved progress before reusing it.
+
 Protected project processor schema 2 adds `target_prefix` to the schema 1 policy
 fields. For example, `"target_prefix": "science-"` derives
 `science-<complete 64-character digest>`. The processor receives schema 2 with
@@ -789,7 +824,7 @@ this verdict to the invocation, installation and captured descriptor. A changed
 candidate requires re-observation and a fresh verification child. Nonterminal
 admission counter changes alone do not invalidate unchanged decision facts; failed
 revision fencing and authority/commit identity checks remain exact. Rejection,
-missing/corrupt evidence, unavailable authority, cancelled targets and foreign
+missing/corrupt evidence, unavailable authority, cancellations without explicit resume, and foreign
 scope retain failure without creating another canonical target. Schema 1 project
 processors and version 2–4 exact preparation reports retain their existing contracts.
 

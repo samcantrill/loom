@@ -496,6 +496,8 @@ def _exercise_mixed_route_run(
     guarded_recovery: bool = False,
     automatic_recovery: bool = False,
     late_terminal_result: bool = False,
+    provider_retry_state: str | None = None,
+    provider_retry_winner: str | None = None,
     prestart_failure: bool = False,
     replayable_start: bool = False,
     recovery_terminal_state: str | None = None,
@@ -1090,6 +1092,101 @@ def _exercise_mixed_route_run(
             assert recovered[0][1] in ({"unknown", "superseded"} if late_terminal_result else {"closed"})
             assert json.loads(recovered[0][2])["consider_retry"] is False
             assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
+            return
+        if provider_retry_state is not None:
+            from loom.pipeline.executors.slurm.ready_stage import SlurmContainmentReceipt
+            from loom.queue import _agent_slurm
+            from loom.queue._continuation import ContinuationPending
+            from loom.queue._slurm_retry import PROVIDER_RECOVERY_PREFIX, reconcile
+
+            with daemon._cycle_lock:
+                assert reconcile(execution, run_uri) == ContinuationPending("waiting_for_slurm_termination_evidence")
+                if provider_retry_state == "TIMEOUT":
+                    observed = execution.slurm_submissions.find(record.assignment.operation_id)
+                    assert observed is not None
+                    live = replace(observed, scheduler_state="RUNNING", scheduler_source="squeue",
+                                   scheduler_observed_at="2026-01-02T10:00:00Z")
+                    with monkeypatch.context() as patch:
+                        patch.setattr(execution.slurm_submissions, "find", lambda _: live)
+                        assert reconcile(execution, run_uri, accepted_at="2026-01-02T09:59:59Z") is None
+                        assert reconcile(
+                            execution, run_uri, accepted_at="2026-01-02T10:00:01Z",
+                        ) == ContinuationPending("waiting_for_slurm_termination_evidence")
+                agent = execution._slurm_agent
+                assert agent is not None
+
+                def acknowledge(evidence, execution=execution):
+                    return execution.acknowledge_slurm_agent(
+                        record.assignment.agent_id, record.assignment.agent_root_id, evidence,
+                    )
+
+                with agent._lock:
+                    # Replay any earlier observation before injecting a new one.
+                    agent.replay_pending(acknowledge)
+                    history_state[0] = provider_retry_state
+                    observed = agent.journal.observe(record.assignment.operation_id, profile)
+                    assert observed.scheduler_source == "sacct" and observed.accounting_identity is not None
+                    agent._publish(record.assignment, observed, acknowledge)
+                with monkeypatch.context() as patch:
+                    patch.setattr(_agent_slurm, "resolve_slurm_containment", lambda *_: SlurmContainmentReceipt("UNKNOWN"))
+                    for _ in range(2):
+                        assert reconcile(execution, run_uri) == ContinuationPending("waiting_for_slurm_containment_evidence")
+                assert not daemon._recovery_fences_ordinary_terminal(assignment_id)
+                with daemon._connection() as conn:
+                    (intent,) = conn.execute("SELECT recovery_id, state FROM recovery_operations").fetchall()
+                assert intent["recovery_id"].startswith(PROVIDER_RECOVERY_PREFIX)
+                assert intent["state"] == "pending"
+                assert execution.slurm_assignments.read(assignment_id).state == "running"
+                if provider_retry_winner == "cancellation":
+                    assert client.cancel("mixed-route").cancellation_operation_id is not None
+                elif provider_retry_winner == "worker":
+                    from loom.queue._slurm_result_transport import SharedSlurmResult
+                    result = execute_resident_stage_worker_request(
+                        worker_request=workspace.worker_request(), workspace_root=workspace.root,
+                        process_containment_owner=ProcessContainmentOwner.OUTER_BOUNDARY,
+                    )
+                    ordinary = workspace.retain_result(result)
+                    transport = SharedSlurmResult(profile.result_storage, assignment_id)
+                    identity = execution.slurm_result_identity(execution.slurm_assignments.read(assignment_id))
+                    transport.publish(identity, ordinary, workspace.output_chunk)
+                    local_execution = execution
+                    local_agent_id = local_execution.agent_id
+                    assert local_agent_id is not None
+                    assert transport.deliver(identity, lambda evidence: local_execution.acknowledge_slurm_agent(
+                        local_agent_id, local_agent_id, evidence,
+                    ))
+            daemon.stop()
+            daemon = LocalDaemon(config, clock=clock)
+            daemon.start()
+            execution = daemon._execution
+            assert execution is not None
+            expected = "CANCELLED" if provider_retry_state == "CANCELLED" else "FAILED"
+            if provider_retry_winner is not None:
+                expected = "SUCCEEDED" if provider_retry_winner == "worker" else "CANCELLED"
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline:
+                if (execution.slurm_assignments.read(assignment_id).state == "released"
+                    and daemon.admission_for_run_uri(run_uri).state.value == expected):
+                    break
+                time.sleep(0.02)
+            assert daemon.admission_for_run_uri(run_uri).state.value == expected
+            train = next(stage for stage in authority.open_run(run_uri).stages if stage.stage_name == "train")
+            attempt = train.attempts[-1]
+            assert attempt.status.value == expected
+            settled = execution.slurm_assignments.read(assignment_id)
+            assert settled.state == "released"
+            if provider_retry_winner is None:
+                assert attempt.reason is not None and attempt.reason.message is not None
+                assert provider_retry_state in attempt.reason.message
+                assert attempt.reason.detail["recovery_id"] == intent["recovery_id"]
+                assert settled.report is None
+                assert daemon._recovery_fences_ordinary_terminal(assignment_id)
+            else:
+                assert not daemon._recovery_fences_ordinary_terminal(assignment_id)
+                assert (settled.report is not None) == (provider_retry_winner == "worker")
+                assert attempt.reason is None or attempt.reason.detail.get("recovery_id") is None
+            assert reconcile(execution, run_uri) is None
+            assert not capability_path(record.assignment.operation_id).exists()
             return
         recovery_receipt = None
         if guarded_recovery:
@@ -1770,6 +1867,17 @@ def test_slurm_guarded_recovery_closes_then_releases_from_exact_helper(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _exercise_mixed_route_run(tmp_path, monkeypatch, guarded_recovery=True)
+
+
+@pytest.mark.parametrize("state", ["TIMEOUT", "PREEMPTED", "NODE_FAIL", "OUT_OF_MEMORY", "CANCELLED"])
+def test_retry_reconciles_contained_slurm_outcome_and_waits_for_release(tmp_path, monkeypatch, state):
+    _exercise_mixed_route_run(tmp_path, monkeypatch, provider_retry_state=state, accounting_history=True)
+
+
+@pytest.mark.parametrize("winner", ["worker", "cancellation"])
+def test_retry_honours_ordinary_winner_before_provider_close(tmp_path, monkeypatch, winner):
+    _exercise_mixed_route_run(tmp_path, monkeypatch, provider_retry_state="TIMEOUT",
+                              accounting_history=True, provider_retry_winner=winner)
 
 
 @pytest.mark.parametrize("terminal_state", ["TIMEOUT", "FAILED", "CANCELLED", "COMPLETED"])
