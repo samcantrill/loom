@@ -1703,6 +1703,8 @@ def test_daemon_global_priority_preempts_earlier_lower_priority_admission(
     release_second_context = Event()
     lower_entered = Event()
     second_entered = Event()
+    dispatch_contexts = []
+    dispatch_context_entered = Event()
     try:
         client = daemon.client_view(
             LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
@@ -1713,6 +1715,9 @@ def test_daemon_global_priority_preempts_earlier_lower_priority_admission(
         load_context = execution.load_context
 
         def load_after_priority_check(admission):
+            if batch_limit == 1 and allow_dispatch.is_set():
+                dispatch_contexts.append(admission.queue_item_id)
+                dispatch_context_entered.set()
             if batch_limit == 1 and admission.queue_item_id in {"low-item", "third-item"}:
                 lower_entered.set()
                 assert release_lower_context.wait(30)
@@ -1750,26 +1755,35 @@ def test_daemon_global_priority_preempts_earlier_lower_priority_admission(
             # more admissions prepared to take that slot.
             allow_dispatch.set()
             release_second_context.set()
-        _wait_for_supervisor_launch_count(config, expected=1)
+            assert dispatch_context_entered.wait(10)
+            assert dispatch_contexts[0] == "high-item"
+            assert len(daemon._contexts._pending) <= 2
+            # READY is a projection, not a completed worker request. A peer
+            # may launch while the high-priority request is still preparing.
+        else:
+            _wait_for_supervisor_launch_count(config, expected=1)
 
-        with sqlite3.connect(config.execution_database) as conn:
-            live_run_uris = tuple(
-                str(row[0])
-                for row in conn.execute(
-                    "SELECT run_uri FROM coordinator_assignments "
-                    "WHERE state != 'released' ORDER BY assignment_id"
+            with sqlite3.connect(config.execution_database) as conn:
+                live_run_uris = tuple(
+                    str(row[0])
+                    for row in conn.execute(
+                        "SELECT run_uri FROM coordinator_assignments "
+                        "WHERE state != 'released' ORDER BY assignment_id"
+                    )
                 )
-            )
-        assert live_run_uris == (high_uri,)
+            assert live_run_uris == (high_uri,)
         off_page.clear()
         release_lower_context.set()
         daemon._wake.set()
-        assert client.wait("high-item", timeout_seconds=10).state is (
-            LocalDaemonAdmissionState.SUCCEEDED
-        )
-        assert client.wait("low-item", timeout_seconds=10).state is (
-            LocalDaemonAdmissionState.SUCCEEDED
-        )
+        # The saturated scenario now allows the runnable peer to launch first.
+        # Give the four real subprocesses one cohort completion watchdog; the
+        # next-slot assertion above retains its separate bounded event wait.
+        names = ("high", "low", "second", "third") if batch_limit == 1 else ("high", "low")
+        deadline = time.monotonic() + 30
+        for name in names:
+            assert client.wait(f"{name}-item", timeout_seconds=max(0, deadline - time.monotonic())).state is (
+                LocalDaemonAdmissionState.SUCCEEDED
+            )
     finally:
         release_lower_context.set()
         release_second_context.set()

@@ -287,7 +287,9 @@ def test_embedded_slurm_seals_on_worker_without_acknowledging_early(operation):
             return {"sequence": 1}
 
         execution.acknowledge_slurm_agent = acknowledge
-        execution._slurm_agent = SimpleNamespace(step=lambda task, ack: ack({}))
+        execution._slurm_agent = SimpleNamespace(
+            step=lambda task, ack, *, resume_storage=False, allow_submission=True: ack({})
+        )
         try:
             LocalDaemonExecution._drive_local_slurm(execution, record)
             assert entered.wait(5)
@@ -434,7 +436,7 @@ def test_embedded_publication_can_transition_to_retention_in_one_replay():
             accepted.add(phase)
             return {}
 
-        def step(task, ack):
+        def step(task, ack, *, resume_storage=False, allow_submission=True):
             ack({"phase": "publication"})
             ack({"phase": "retention"})
 

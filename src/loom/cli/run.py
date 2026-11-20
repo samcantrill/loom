@@ -20,7 +20,7 @@ RUN_RESULT_SCHEMA_VERSION = "loom.cli.run.v3"
 def register_subparser(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
 ) -> None:
-    parser = subparsers.add_parser("run", help="run through a selected deployment")
+    parser = subparsers.add_parser("run", help="run through a selected deployment", allow_abbrev=False)
     parser.add_argument(
         "config",
         metavar="CONFIG",

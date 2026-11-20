@@ -99,7 +99,8 @@ def _reconcile_admission(
     else:
         if action_resolver is not None:
             action_resolver.reconcile_producers(admission.run_uri)
-        self.admission_activated(admission.admission_id)
+        if admission.state is LocalDaemonAdmissionState.PENDING_AUTHORITY:
+            self.admission_activated(admission.admission_id)
 
     placements = dict(intent.placements)
     orchestrator = RunOrchestrator(

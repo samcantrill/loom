@@ -8,13 +8,14 @@ from loom.queue import LocalDaemon
 from loom.queue.agent_sessions import AgentPolicyConfig, AgentPrincipalPolicy, SLURM_SUBMISSION_CAPABILITY, SLURM_PENDING_EFFECTS_CAPABILITY
 from loom.queue.agent_session_transport import AgentTlsClientConfig, AgentTlsServerConfig, LocalDaemonAgentHttpClient, LocalDaemonAgentHttpServer
 from loom.queue.deployment import OutboundAgentRegistrationConfig, OutboundAgentServiceConfig, run_outbound_agent_service
+from loom.queue.shared_execution import STAGING_CONTINUATION_CAPABILITY
 from tests.support.mutual_tls import mutual_tls_credentials, certificate_fingerprint
 
 
 class OutboundSlurmCoordinator:
     """Retain coordinator/agent roots through explicit paired restarts."""
 
-    capabilities = (SLURM_SUBMISSION_CAPABILITY, SLURM_PENDING_EFFECTS_CAPABILITY)
+    capabilities = (SLURM_SUBMISSION_CAPABILITY, SLURM_PENDING_EFFECTS_CAPABILITY, STAGING_CONTINUATION_CAPABILITY)
 
     @classmethod
     def configure(cls, config):

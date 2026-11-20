@@ -24,6 +24,14 @@ after an owner leaves. This bounds preparatory storage work, not CPU/GPU jobs
 or scheduler submissions. Running obsolete writers drain before slot reuse;
 restart recomputes this disposable preparation from durable run records.
 
+Admission reconciliation activates a newly bound run once. Revisiting a waiting
+run does not clear its waiting reason or advance its revision merely to restore
+the same state at the end of the turn; actual dispatch still activates it.
+Global priority applies to runnable work. An off-page READY projection receives
+a context-preparation opportunity before the admission scan takes the freed
+slot, but unfinished preparation does not prevent an independently runnable peer
+from launching.
+
 Completed input-directory inspection is another stage-owned prerequisite. Its
 separate execution pool has two workers/eight outstanding scans and at most 32
 unconsumed owners. Completion frees execution capacity, while the prepared stage

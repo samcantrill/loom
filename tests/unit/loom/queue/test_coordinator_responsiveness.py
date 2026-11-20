@@ -163,6 +163,36 @@ def test_blocked_admissions_preserve_bounded_capacity_and_peer_progress(tmp_path
         daemon.stop()
 
 
+def test_waiting_admission_reconciliation_preserves_revision(tmp_path, monkeypatch):
+    monkeypatch.setattr(LocalDaemon, "_serve", lambda self: self._stop.wait())
+    root = tmp_path / "runs"
+    uri = _persist_sleep_run(root, run_name="waiting", stage_name="stage")
+    config = LocalDaemonConfig(tmp_path / "coordinator", None, root, None, cpu_capacity=0)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+        admission = client.submit(LocalDaemonAdmissionRequest("waiting", uri))
+        _drive_until(daemon, lambda: daemon._admission(admission.admission_id).state.value == "WAITING")
+        before = daemon._admission(admission.admission_id)
+        execution = daemon._execution
+        assert execution is not None
+        reconcile = execution.reconcile_admission
+        observed = Event()
+
+        def revisit(*args, **kwargs):
+            outcome = reconcile(*args, **kwargs)
+            observed.set()
+            return outcome
+
+        monkeypatch.setattr(execution, "reconcile_admission", revisit)
+        _drive_until(daemon, observed.is_set)
+        assert daemon._admission(admission.admission_id) == before
+    finally:
+        daemon.stop()
+
+
 def test_production_sweep_advances_through_original_population_with_saturated_loaders(
     tmp_path, monkeypatch
 ):
@@ -216,7 +246,21 @@ def test_production_sweep_advances_through_original_population_with_saturated_lo
             assert late.admission_id not in {row.admission_id for row in visited}
             daemon._wake.wait_for_change(observed, 0.1)
         _drive_until(daemon, lambda: {row.admission_id for row in initial} <= loaded)
-        _drive_until(daemon, lambda: late.admission_id in loaded)
+        # The newcomer belongs to the next finite sweep, which may revisit all
+        # 35 original admissions on shared storage. Assert bounded, monotonic
+        # progress instead of giving that whole sweep a single-operation wait.
+        deadline = monotonic() + 30
+        while late.admission_id not in loaded:
+            assert monotonic() < deadline, "newcomer admission sweep did not finish"
+            observed = daemon._wake.snapshot()
+            boundary, after = daemon._admission_scan.high_water, daemon._admission_scan.after
+            visited = daemon.reconcile_once()
+            assert len(visited) <= 32
+            assert len(daemon._contexts._pending) <= 2
+            if boundary == daemon._admission_scan.high_water and after is not None:
+                assert daemon._admission_scan.after is not None
+                assert daemon._admission_scan.after >= after
+            daemon._wake.wait_for_change(observed, 0.1)
     finally:
         release.set()
         daemon.stop()

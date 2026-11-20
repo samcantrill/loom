@@ -257,7 +257,9 @@ def _retry_failed_admission(
     if record["state"] == "pending":
         _apply_admission_retry(self, key, record, execution)
     self._wake.set()
-    if "accepted_admission" in record:
+    # Run operations retain their immutable acceptance projection; direct submit
+    # replay observes the admission's current state after the one continuation.
+    if parent_id is not None and "accepted_admission" in record:
         from .local_daemon import LocalDaemonAdmission
         return LocalDaemonAdmission.from_dict(record["accepted_admission"])
     return self._admission(admission.admission_id)

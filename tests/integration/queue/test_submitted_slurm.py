@@ -593,10 +593,13 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                             break
                         sleep(0.02)
                     assert daemon._execution.slurm_assignments.read(delivery.assignment_id).publication_completed_at is not None
-                elif failed:
+                elif failed and not outbound:
                     from loom.queue import _shared_publication
                     from loom.queue._slurm_result_transport import SharedSlurmResult
 
+                    # This branch exercises embedded scheduler backoff. The
+                    # outbound case retains its bootstrap delivery and live
+                    # submit-agent retention/peer-progress checks below.
                     execution = daemon._execution
                     agent = execution._slurm_agent
                     assert agent is not None
