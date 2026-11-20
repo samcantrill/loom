@@ -132,6 +132,7 @@ def _declarations(request: dict, *, qualify: bool) -> list[dict]:
             SLURM_SUBMISSION_CAPABILITY,
         )
         from ._slurm_start import SLURM_REPLAYABLE_START_CAPABILITY
+        from .shared_execution import STAGING_CONTINUATION_CAPABILITY
 
         def allow_protocol_capabilities(old, new):
             previous = old.get("capabilities", [])
@@ -141,6 +142,7 @@ def _declarations(request: dict, *, qualify: bool) -> list[dict]:
                     SLURM_PENDING_EFFECTS_CAPABILITY,
                     SLURM_REPLAYABLE_START_CAPABILITY,
                     SLURM_ASYNC_OUTPUT_CAPABILITY,
+                    STAGING_CONTINUATION_CAPABILITY,
                 } - set(previous)
                 new["capabilities"] = [value for value in current if value not in added]
 

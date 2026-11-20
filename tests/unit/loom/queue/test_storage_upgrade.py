@@ -58,7 +58,7 @@ def _profile():
 
 def _cohort(root, *, kind="slurm", explicit_wal=False, legacy=False, custom_provider=False,
             pending_effects=False, replayable_start=False, bootstrap_upgrade=False, terminal_recovery=False,
-            async_output=False, source_replayable_start=False):
+            async_output=False, source_replayable_start=False, staging_continuation=False):
     c, a = root / "c", root / "a"
     c.mkdir(mode=0o700)
     a.mkdir(mode=0o700)
@@ -135,6 +135,9 @@ def _cohort(root, *, kind="slurm", explicit_wal=False, legacy=False, custom_prov
     if async_output:
         payload["agent_policy"]["agents"][0]["capabilities"].append("slurm-pending-output-v1")
         agent_payload["registration"]["capabilities"].append("slurm-pending-output-v1")
+    if staging_continuation:
+        payload["agent_policy"]["agents"][0]["capabilities"].append("released-output-staging-v1")
+        agent_payload["registration"]["capabilities"].append("released-output-staging-v1")
     if terminal_recovery:
         payload["slurm_terminal_recovery"] = {"terminal_result_grace_seconds": 120}
     if bootstrap_upgrade:
@@ -194,7 +197,7 @@ def test_pending_effects_supported_upgrade_and_restore(root, version):
 
 @pytest.mark.parametrize("role", ["coordinator", "outbound-agent"])
 def test_pending_effects_upgrade_does_not_allow_unrelated_capability(root, role):
-    request, *_ = _cohort(root, pending_effects=True, async_output=True)
+    request, *_ = _cohort(root, pending_effects=True, async_output=True, staging_continuation=True)
     declaration = next(item for item in json.loads(request.read_text())["roles"] if item["role"] == role)
     target = Path(declaration["target_config"])
     payload = json.loads(target.read_text())
@@ -208,14 +211,17 @@ def test_pending_effects_upgrade_does_not_allow_unrelated_capability(root, role)
     assert _snapshot(root) == before
 
 
-def test_schema_six_upgrade_allows_async_output_and_remains_inspectable(root):
+@pytest.mark.parametrize("staging_continuation", [False, True])
+def test_schema_six_upgrade_allows_async_output_and_remains_inspectable(root, staging_continuation):
     from loom.queue.service_upgrade import inspect_service_settlement
 
     request, old_c, _, new_c, new_a = _cohort(
         root, source_replayable_start=True, async_output=True, terminal_recovery=True,
+        staging_continuation=staging_continuation,
     )
     assert old_c.daemon.slurm_schema_version == 6
     assert new_c.daemon.slurm_schema_version == 7
+    assert ("released-output-staging-v1" in new_a.registration.capabilities) == staging_continuation
     assert storage_upgrade(request)["state"] == "eligible"
     assert storage_upgrade(request, action="apply")["state"] == "ready"
     _validate_deployment_binding(new_c.daemon)
