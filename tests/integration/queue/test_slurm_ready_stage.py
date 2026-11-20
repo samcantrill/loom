@@ -1700,23 +1700,25 @@ SharedSlurmResult(json.loads(sys.argv[2]), report.assignment_id, compute=True).p
             if revoke_calls == 1:
                 raise SlurmPlanningError("simulated lost revoke acknowledgement")
 
-        monkeypatch.setattr(
-            execution.slurm_assignments,
-            "mark_terminal",
-            mark_terminal_at_crash_boundary,
-        )
-        monkeypatch.setattr(
-            provider_class, "revoke", revoke_with_lost_response
-        )
-        execution._launch_lock.acquire()
-        try:
-            with pytest.raises(OSError, match="simulated crash"):
-                view.commit_result(assignment_id, incarnation, fence)
-        finally:
+        # Keep coordinator reconciliation from consuming this exact fault
+        # after the foreground call commits its authority result.
+        with daemon._cycle_lock, execution._launch_lock:
             monkeypatch.setattr(
-                execution.slurm_assignments, "mark_terminal", original_mark_terminal
+                execution.slurm_assignments,
+                "mark_terminal",
+                mark_terminal_at_crash_boundary,
             )
-            execution._launch_lock.release()
+            monkeypatch.setattr(
+                provider_class, "revoke", revoke_with_lost_response
+            )
+            try:
+                with pytest.raises(OSError, match="simulated crash"):
+                    view.commit_result(assignment_id, incarnation, fence)
+                assert terminal_crash_injected
+            finally:
+                monkeypatch.setattr(
+                    execution.slurm_assignments, "mark_terminal", original_mark_terminal
+                )
 
         deadline = time.monotonic() + 10
         while (
