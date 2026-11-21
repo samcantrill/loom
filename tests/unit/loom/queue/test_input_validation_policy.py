@@ -7,6 +7,12 @@ import pytest
 
 from loom.queue.errors import QueueServiceError
 from loom.queue import shared_execution as shared
+from loom.queue.submitted_execution import (
+    INPUT_DIRECTORY_WORKER_CONTRACT,
+    SELECTED_INPUT_WORKER_CONTRACT,
+    SubmittedContainerExecution,
+    SubmittedImage,
+)
 
 
 def inputs(tmp_path, *, trusted=True):
@@ -100,6 +106,53 @@ def test_container_projection_retains_exact_policy(tmp_path):
     shared.require_bindings(required, roots)
     (other / "version.json").write_bytes(b"another mount")
     with pytest.raises(QueueServiceError, match="manifest"):
+        shared.require_bindings(required, roots)
+
+
+def test_image_qualified_root_uses_recursive_checks_for_other_workers(tmp_path, monkeypatch):
+    roots, required = inputs(tmp_path)
+    digest = "1" * 64
+    roots["data"]["input_validation"]["reader_image_sha256"] = digest
+    required["roots"] = shared.qualifications(roots)
+
+    def execution(contract, image_sha256):
+        image = SubmittedImage(
+            {"kind": "loom.shared-location", "schema_version": 1, "root_id": "images", "path": "reader.sif"},
+            image_sha256,
+            1,
+        )
+        return SubmittedContainerExecution("apptainer", image, "/opt/bin/python", contract)
+
+    (tmp_path / "clips" / "unselected-link").symlink_to("frame.bin")
+    with monkeypatch.context() as patch:
+        patch.setattr(shared.os, "walk", lambda *_a, **_k: pytest.fail("qualified reader walked inputs"))
+        shared.require_bindings(
+            required, roots,
+            submitted_execution=execution(SELECTED_INPUT_WORKER_CONTRACT, digest),
+        )
+    for other in (
+        None,
+        execution(INPUT_DIRECTORY_WORKER_CONTRACT, digest),
+        execution(SELECTED_INPUT_WORKER_CONTRACT, "2" * 64),
+    ):
+        with pytest.raises(QueueServiceError, match="regular files"):
+            shared.require_bindings(required, roots, submitted_execution=other)
+
+
+def test_manifest_cannot_follow_symlink_inserted_at_the_actual_open(tmp_path, monkeypatch):
+    roots, required = inputs(tmp_path)
+    manifest = tmp_path / "version.json"
+    redirected = tmp_path / "replacement.json"
+    original = shared.os.open
+
+    def replace_manifest(member, flags, *args, **kwargs):
+        if member == manifest.name and kwargs.get("dir_fd") is not None:
+            manifest.rename(redirected)
+            manifest.symlink_to(redirected)
+        return original(member, flags, *args, **kwargs)
+
+    monkeypatch.setattr(shared.os, "open", replace_manifest)
+    with pytest.raises(shared.InputValidationIOError):
         shared.require_bindings(required, roots)
 
 
