@@ -444,16 +444,19 @@ datasets:
     manifest:
       path: manifest.json
       sha256: "<sha256 of the selected existing manifest>"
+    reader_image_sha256: "<sha256 of the qualified SIF>"
     entry_points: [records, manifest.json]
 ```
 
 The trusted policy verifies the exact protected root facts, the manifest digest,
 every declared entry point and every selected location. It does not walk payload
 directories. Manifest hashing streams chunks of at most one MiB with a 64 MiB
-total bound; at most 256 explicit entry points are admitted. Relative paths
-retain the existing no-escape/no-symbolic-link checks. The policy, version,
-manifest and ordered entry points participate in portable root identity, so a
-different policy/version cannot reuse another root's inspection evidence.
+total bound; at most 256 explicit entry points are admitted. The manifest is
+opened through directory descriptors with symbolic links refused at the actual
+open. When configured, the reader image digest and selected-input worker
+contract must match the submitted execution to use this policy. Other images and
+contracts use recursive inspection. The policy, version, manifest, reader digest
+and ordered entry points participate in portable root identity.
 
 This is a publisher-immutability contract: changing payloads while retaining
 the pinned manifest is not detected. Applications retain their semantic input

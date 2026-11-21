@@ -96,7 +96,10 @@ def probe_preparation(
     if binding.shared_scope is not None:
         from .shared_execution import require_bindings
 
-        require_bindings(binding.shared_scope, profile.shared_roots)
+        require_bindings(
+            binding.shared_scope, profile.shared_roots,
+            submitted_execution=profile.submitted_execution,
+        )
     purpose: dict[str, PlainData] = {"kind": "generic"}
     if binding.project_preparation is not None:
         purpose = {"kind": "project", "binding": dict(binding.project_preparation)}

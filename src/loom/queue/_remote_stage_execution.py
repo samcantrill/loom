@@ -1889,7 +1889,10 @@ class _ResidentAssignmentWorkspace:
                 ):
                     require_binding_locations(shared, launch_profile.shared_roots)
             else:
-                require_bindings(shared, launch_profile.shared_roots)
+                require_bindings(
+                    shared, launch_profile.shared_roots,
+                    submitted_execution=launch_profile.submitted_execution,
+                )
         for item in request.inputs:
             if shared_binding(item.metadata) is not None:
                 from ._shared_publication import resolve_input
@@ -2278,7 +2281,10 @@ class _ResidentAssignmentWorkspace:
         required = assignment_scope(request.fingerprint)
         if required is None:
             raise QueueConflictError("shared execution requires retained scope")
-        require_bindings(required, execution_roots(profile.shared_roots, container=profile.container is not None))
+        require_bindings(
+            required, execution_roots(profile.shared_roots, container=profile.container is not None),
+            submitted_execution=profile.submitted_execution,
+        )
         return profile
 
     def preparation_context(
