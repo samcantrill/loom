@@ -14,14 +14,18 @@ from pathlib import Path, PurePosixPath
 import hashlib
 import os
 import stat
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
+from loom.io._local_files import open_member_descriptor
 from loom.timestamps import utc_timestamp
 from loom.fingerprints import hash_mapping
 from loom.serialization import PlainData, thaw_plain_data
 from .errors import QueueServiceError
 from ._diagnostic_snapshot import annotate_mapping, diagnostic_stages
 from ._phase_timing import phase
+
+if TYPE_CHECKING:
+    from .submitted_execution import SubmittedContainerExecution
 
 SHARED_EXECUTION_CAPABILITY = "shared-execution-v1"
 INPUT_DIRECTORY_CAPABILITY = "input-directory-v1"
@@ -83,21 +87,29 @@ def location(value: object) -> dict[str, PlainData]:
 _INPUT_MANIFEST_BYTES = 64 * 1024 * 1024
 
 
+def _is_sha256(value: object) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(
+        digit in "0123456789abcdef" for digit in value
+    )
+
+
 def _input_validation_policy(value: object) -> dict[str, PlainData]:
     if not isinstance(value, Mapping):
         raise QueueServiceError("input validation policy must be a protected mapping")
     if value == {"policy": "recursive"}:
         return {"policy": "recursive"}
-    if (set(value) != {"policy", "version", "manifest", "entry_points"}
+    if (set(value) - {"reader_image_sha256"} != {"policy", "version", "manifest", "entry_points"}
         or value.get("policy") != "trusted_immutable_dataset"
         or not isinstance(value["version"], str) or not value["version"].strip()
         or len(value["version"]) > 256):
         raise QueueServiceError("immutable input validation identity is invalid")
     manifest = value["manifest"]
     if (not isinstance(manifest, Mapping) or set(manifest) != {"path", "sha256"}
-        or not isinstance(manifest["sha256"], str) or len(manifest["sha256"]) != 64
-        or any(c not in "0123456789abcdef" for c in manifest["sha256"])):
+        or manifest["path"] == "."
+        or not _is_sha256(manifest["sha256"])):
         raise QueueServiceError("immutable input manifest identity is invalid")
+    if "reader_image_sha256" in value and not _is_sha256(value["reader_image_sha256"]):
+        raise QueueServiceError("immutable input reader image identity is invalid")
     entries = value["entry_points"]
     if not isinstance(entries, (list, tuple)) or not entries or len(entries) > 256:
         raise QueueServiceError("immutable inputs require bounded entry points")
@@ -106,20 +118,27 @@ def _input_validation_policy(value: object) -> dict[str, PlainData]:
         raise QueueServiceError("immutable input entry points must be unique")
     return {"policy": "trusted_immutable_dataset", "version": value["version"],
             "manifest": {"path": _relative(manifest["path"]), "sha256": manifest["sha256"]},
-            "entry_points": cast(PlainData, entries)}
+            "entry_points": cast(PlainData, entries),
+            **({"reader_image_sha256": value["reader_image_sha256"]}
+               if "reader_image_sha256" in value else {})}
 
 
-def _require_immutable_inputs(root: Mapping[str, PlainData]) -> bool:
+def _require_immutable_inputs(
+    root: Mapping[str, PlainData], reader_image_sha256: str | None,
+) -> bool:
     policy = root.get("input_validation")
     if not isinstance(policy, Mapping) or policy["policy"] != "trusted_immutable_dataset":
         return False
+    if "reader_image_sha256" in policy and reader_image_sha256 != policy["reader_image_sha256"]:
+        return False
     manifest = cast(Mapping[str, PlainData], policy["manifest"])
-    path = resolve(root, str(manifest["path"]))
-    if not path.is_file() or path.stat().st_size > _INPUT_MANIFEST_BYTES:
-        raise QueueServiceError("immutable input manifest must be a bounded regular file")
     digest = hashlib.sha256()
     consumed = 0
-    with path.open("rb") as stream:
+    descriptor = open_member_descriptor(Path(str(root["host_path"])), str(manifest["path"]))
+    with os.fdopen(descriptor, "rb") as stream:
+        facts = os.fstat(stream.fileno())
+        if not stat.S_ISREG(facts.st_mode) or facts.st_size > _INPUT_MANIFEST_BYTES:
+            raise QueueServiceError("immutable input manifest must be a bounded regular file")
         while chunk := stream.read(min(1024 * 1024, _INPUT_MANIFEST_BYTES - consumed + 1)):
             consumed += len(chunk)
             if consumed > _INPUT_MANIFEST_BYTES:
@@ -348,6 +367,7 @@ class InputValidationIOError(QueueServiceError):
 def _selected_input_paths(
     required: Mapping[str, PlainData], roots: Mapping[str, PlainData],
     checkpoint: Callable[[], None],
+    *, validate_immutable: bool, reader_image_sha256: str | None = None,
 ) -> dict[Path, bool]:
     selected = cast(Mapping[str, PlainData], required["roots"])
     if not set(selected).issubset(roots):
@@ -359,25 +379,28 @@ def _selected_input_paths(
     # Resolve every declaration before pruning overlapping traversals, so a
     # missing descendant cannot hide behind an existing selected parent.
     immutable = {}
-    for alias in selected:
-        checkpoint()
-        immutable[alias] = _require_immutable_inputs(cast(Mapping[str, PlainData], roots[alias]))
+    if validate_immutable:
+        for alias in selected:
+            checkpoint()
+            immutable[alias] = _require_immutable_inputs(
+                cast(Mapping[str, PlainData], roots[alias]), reader_image_sha256
+            )
     paths: dict[Path, bool] = {}
     for item in cast(list[Mapping[str, PlainData]], required["locations"]):
         checkpoint()
         alias = str(item["root_id"])
         path = resolve(cast(Mapping[str, PlainData], roots[alias]), str(item["path"]))
         # An overlapping recursive binding keeps its stronger traversal rule.
-        paths[path] = paths.get(path, False) or not immutable[alias]
+        paths[path] = paths.get(path, False) or not immutable.get(alias, False)
     return paths
 
 
 def require_binding_locations(
     required: Mapping[str, PlainData], roots: Mapping[str, PlainData],
 ) -> None:
-    """Validate the selected roots and locations without walking descendants."""
+    """Validate selected locations at delivery; launch checks the dataset pin."""
     try:
-        _selected_input_paths(required, roots, lambda: None)
+        _selected_input_paths(required, roots, lambda: None, validate_immutable=False)
     except OSError as error:
         raise InputValidationIOError("shared input locations cannot be inspected") from error
 
@@ -387,12 +410,14 @@ def require_bindings(
     required: Mapping[str, PlainData], roots: Mapping[str, PlainData], *,
     cancelled: Callable[[], bool] | None = None,
     progress: Callable[[InputValidationProgress], None] | None = None,
+    submitted_execution: SubmittedContainerExecution | None = None,
 ) -> None:
     """Inspect selected inputs under their protected validation policy.
 
     Recursive inspection is the default. Trusted immutable roots instead verify
     their version-bound manifest, entry points and every selected location. This
     assumes publisher immutability; it does not detect in-place payload changes.
+    An image-qualified policy uses recursion for other execution contracts or images.
     Neither policy caches success across this call boundary.
 
     Cancellation is cooperative between filesystem operations. Progress is
@@ -400,6 +425,14 @@ def require_bindings(
     callback receives paths. Callers must perform this IO outside scheduling
     locks and retain responsibility for rejecting obsolete completed work.
     """
+    from .submitted_execution import SELECTED_INPUT_WORKER_CONTRACT
+
+    reader_image_sha256 = (
+        submitted_execution.image.sha256
+        if submitted_execution is not None
+        and submitted_execution.worker_contract == SELECTED_INPUT_WORKER_CONTRACT
+        else None
+    )
     start = monotonic()
     reported = start
     examined = 0
@@ -415,7 +448,10 @@ def require_bindings(
 
     checkpoint(force=True)
     try:
-        paths = _selected_input_paths(required, roots, checkpoint)
+        paths = _selected_input_paths(
+            required, roots, checkpoint, validate_immutable=True,
+            reader_image_sha256=reader_image_sha256,
+        )
         covered: list[Path] = []
 
         def unreadable(error: OSError) -> None:

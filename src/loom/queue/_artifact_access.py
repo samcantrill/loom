@@ -11,6 +11,7 @@ from pathlib import Path
 import stat
 from typing import Any, cast
 
+from loom.io._local_files import open_member_descriptor
 from loom.io.uris import uri_to_path
 from loom.io.errors import UnsupportedURIError
 from loom.pipeline.stores.errors import ArtifactStoreError
@@ -88,24 +89,11 @@ def validate_artifact_request(operation: str, payload: Any) -> dict[str, Any]:
 
 def _open_member(root: Path, member: str) -> int:
     """Traverse opened directory descriptors so rename/symlink races cannot escape."""
-    parts = [*root.absolute().parts[1:], *shared.relative(member).split("/")]
-    fd = os.open(root.anchor or "/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
-        for part in parts[:-1]:
-            child = os.open(
-                part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd
-            )
-            os.close(fd)
-            fd = child
-        result = os.open(
-            parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd
-        )
-        if not stat.S_ISREG(os.fstat(result).st_mode):
-            os.close(result)
-            raise AccessFailure("unsupported_closure")
-        return result
-    finally:
-        os.close(fd)
+    result = open_member_descriptor(root.absolute(), shared.relative(member))
+    if not stat.S_ISREG(os.fstat(result).st_mode):
+        os.close(result)
+        raise AccessFailure("unsupported_closure")
+    return result
 
 
 def _resolve(

@@ -1879,7 +1879,10 @@ class SlurmBootstrapWorkspace:
             raise QueueConflictError("SLURM retained launch differs from its delivery")
         scope = assignment_scope(request.fingerprint)
         if scope is not None:
-            require_bindings(scope, execution_roots(profile.shared_roots, container=profile.container is not None))
+            require_bindings(
+                scope, execution_roots(profile.shared_roots, container=profile.container is not None),
+                submitted_execution=profile.submitted_execution,
+            )
         return profile
 
     def request(self) -> SlurmStageDelivery:
