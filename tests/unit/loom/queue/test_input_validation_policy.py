@@ -1,6 +1,7 @@
 """Explicit publisher trust replaces traversal, not root or version checks."""
 
 import hashlib
+from pathlib import Path
 from typing import Any, cast
 import pytest
 
@@ -38,6 +39,22 @@ def test_trusted_root_checks_identity_and_entries_without_walking_payload(tmp_pa
     shared.require_bindings(required, roots)
     assert shared.scope(required) == required
     assert required["roots"]["data"]["input_validation"]["entry_points"] == ["clips", "version.json"]
+
+
+def test_delivery_leaves_immutable_manifest_verification_to_launch(tmp_path, monkeypatch):
+    roots, required = inputs(tmp_path)
+    manifest = tmp_path / "version.json"
+    manifest.write_bytes(b"wrong version")
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "open", lambda *_args, **_kwargs: pytest.fail("delivery opened a payload"))
+        patch.setattr(shared.os, "walk", lambda *_args, **_kwargs: pytest.fail("delivery walked inputs"))
+        shared.require_binding_locations(required, roots)
+        (tmp_path / "clips").rename(tmp_path / "missing")
+        with pytest.raises(QueueServiceError):
+            shared.require_binding_locations(required, roots)
+    (tmp_path / "missing").rename(tmp_path / "clips")
+    with pytest.raises(QueueServiceError, match="immutable input manifest bytes mismatch"):
+        shared.require_bindings(required, roots)
 
 
 @pytest.mark.parametrize("change", ["manifest", "manifest_link", "missing_entry", "missing_selection", "version"])

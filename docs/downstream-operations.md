@@ -415,6 +415,9 @@ stderr stream. For submitted-container v3 assignments, the agent's service log
 records `assignment_input_locations`. The supervisor records
 `new_launch_input_qualification`. The worker's native result records
 `worker_input_qualification`. Join these observations by assignment ID.
+Delivery checks the selected root and location declarations. For a protected
+trusted immutable input, the supervisor and worker verify its version manifest
+in their respective filesystem views.
 
 Each private supervisor IPC exchange has a ten-second whole-exchange deadline
 covering connect, mutual authentication, request send and response read. This

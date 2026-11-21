@@ -348,6 +348,7 @@ class InputValidationIOError(QueueServiceError):
 def _selected_input_paths(
     required: Mapping[str, PlainData], roots: Mapping[str, PlainData],
     checkpoint: Callable[[], None],
+    *, validate_immutable: bool,
 ) -> dict[Path, bool]:
     selected = cast(Mapping[str, PlainData], required["roots"])
     if not set(selected).issubset(roots):
@@ -359,25 +360,26 @@ def _selected_input_paths(
     # Resolve every declaration before pruning overlapping traversals, so a
     # missing descendant cannot hide behind an existing selected parent.
     immutable = {}
-    for alias in selected:
-        checkpoint()
-        immutable[alias] = _require_immutable_inputs(cast(Mapping[str, PlainData], roots[alias]))
+    if validate_immutable:
+        for alias in selected:
+            checkpoint()
+            immutable[alias] = _require_immutable_inputs(cast(Mapping[str, PlainData], roots[alias]))
     paths: dict[Path, bool] = {}
     for item in cast(list[Mapping[str, PlainData]], required["locations"]):
         checkpoint()
         alias = str(item["root_id"])
         path = resolve(cast(Mapping[str, PlainData], roots[alias]), str(item["path"]))
         # An overlapping recursive binding keeps its stronger traversal rule.
-        paths[path] = paths.get(path, False) or not immutable[alias]
+        paths[path] = paths.get(path, False) or not immutable.get(alias, False)
     return paths
 
 
 def require_binding_locations(
     required: Mapping[str, PlainData], roots: Mapping[str, PlainData],
 ) -> None:
-    """Validate the selected roots and locations without walking descendants."""
+    """Validate selected locations at delivery; launch checks the dataset pin."""
     try:
-        _selected_input_paths(required, roots, lambda: None)
+        _selected_input_paths(required, roots, lambda: None, validate_immutable=False)
     except OSError as error:
         raise InputValidationIOError("shared input locations cannot be inspected") from error
 
@@ -415,7 +417,7 @@ def require_bindings(
 
     checkpoint(force=True)
     try:
-        paths = _selected_input_paths(required, roots, checkpoint)
+        paths = _selected_input_paths(required, roots, checkpoint, validate_immutable=True)
         covered: list[Path] = []
 
         def unreadable(error: OSError) -> None:
