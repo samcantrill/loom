@@ -194,6 +194,7 @@ from .local_daemon_runtime import load_managed_local_runtime_record
 from ._agent_slurm import AgentSlurmJobs, SlurmSubmissionProjection
 from .slurm_ready_stage import (
     SQLiteSlurmStageAssignments,
+    SlurmAgentTaskRecord,
     SlurmStageAssignment,
     SlurmStageDelivery,
     SlurmStageRecord,
@@ -2182,13 +2183,14 @@ class LocalDaemonExecution:
                     ),
                 )
 
-    def _slurm_task(self, record: SlurmStageRecord) -> dict[str, PlainData]:
+    def _slurm_task(self, record: SlurmStageRecord | SlurmAgentTaskRecord) -> dict[str, PlainData]:
         profile = self._slurm_profile(
             record.assignment.profile_id, record.assignment.profile_configuration_fingerprint,
         )
-        sequence, _ = self.slurm_assignments.agent_evidence(
-            record.assignment.assignment_id
-        )
+        if isinstance(record, SlurmStageRecord):
+            sequence, _ = self.slurm_assignments.agent_evidence(record.assignment.assignment_id)
+        else:
+            sequence = record.agent_sequence
         recovery_proof = None
         recovery_closed = False
         with self.config.connect_database(self.config.control_database) as conn:
@@ -2221,11 +2223,7 @@ class LocalDaemonExecution:
             "cancel_requested": self._attempt_cancel_requested(record.assignment.run_uri, record.assignment.attempt_id),
             "job_id": record.job_id,
             "cluster": record.cluster,
-            "compute_release_requested": (
-                record.publication_requested_at is not None
-                and record.publication_completed_at is None
-                and record.compute_released_at is None
-            ),
+            "compute_release_requested": record.compute_release_requested,
             "release_requested": record.state
             in {"terminal", "logical_released", "rejected"},
             "containment_request": {
@@ -2245,7 +2243,7 @@ class LocalDaemonExecution:
         }
 
     def _slurm_history_proof(
-        self, record: SlurmStageRecord, profile: SlurmReadyStageProfile,
+        self, record: SlurmStageRecord | SlurmAgentTaskRecord, profile: SlurmReadyStageProfile,
     ) -> dict[str, PlainData]:
         if profile.accounting_history is None:
             return {}
@@ -2397,7 +2395,7 @@ class LocalDaemonExecution:
             not future.done() for _, future in self._slurm_chunk_futures.values()
         )
 
-    def slurm_result_identity(self, record: SlurmStageRecord) -> dict[str, PlainData]:
+    def slurm_result_identity(self, record: SlurmStageRecord | SlurmAgentTaskRecord) -> dict[str, PlainData]:
         return {
             "coordinator_id": self.coordinator_id,
             "assignment": record.assignment.to_dict(),
@@ -2957,8 +2955,8 @@ class LocalDaemonExecution:
             in_flight = True
         return in_flight, diagnostic
 
-    def _terminal_accounting_identity(self, record: SlurmStageRecord) -> dict[str, PlainData] | None:
-        if (record.report is not None or record.state not in {"granted", "running", "unknown"}
+    def _terminal_accounting_identity(self, record: SlurmStageRecord | SlurmAgentTaskRecord) -> dict[str, PlainData] | None:
+        if (record.report_present or record.state not in {"granted", "running", "unknown"}
             or not record.start_consumed or record.fence is None or record.bootstrap_incarnation is None
             or record.cluster is None):
             return None
@@ -2982,7 +2980,7 @@ class LocalDaemonExecution:
             ))
         return state.get("accepted_time_high_water") if state.get("accepted_time_health") == "healthy" else None
 
-    def _terminal_result_probe(self, record: SlurmStageRecord) -> dict[str, PlainData] | None:
+    def _terminal_result_probe(self, record: SlurmStageRecord | SlurmAgentTaskRecord) -> dict[str, PlainData] | None:
         from ._slurm_terminal_recovery import probe_request
 
         policy = self.config.slurm_terminal_recovery
@@ -3789,7 +3787,7 @@ class LocalDaemonExecution:
     def _slurm_recovery_proof(
         self,
         request: RecoverUnknownAssignment,
-        record: SlurmStageRecord,
+        record: SlurmStageRecord | SlurmAgentTaskRecord,
         profile: SlurmReadyStageProfile,
     ) -> dict[str, PlainData]:
         helper = profile.containment_helper

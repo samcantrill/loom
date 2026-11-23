@@ -223,18 +223,32 @@ def test_unlimited_run_still_enforces_shared_gpu_budget_after_restart(tmp_path):
         fixture.reopen().reserve(assignment, **arguments)
 
 
-def test_agent_task_page_filters_owner_before_limit_and_survives_restart(tmp_path):
-    fixture = ReservationFixture(tmp_path)
-    from dataclasses import replace
+@pytest.mark.parametrize("schema_version", (3, 5, 7))
+def test_agent_task_page_filters_owner_before_limit_and_survives_restart(
+    tmp_path, monkeypatch, schema_version,
+):
+    from loom.queue import slurm_ready_stage
+
+    fixture = ReservationFixture(tmp_path, schema_version=schema_version)
     assignment = None
     for index in range(6):
         assignment, arguments = fixture.candidate(f"task-{index}", 0)
         assignment = replace(assignment, agent_id="other" if index % 2 else "selected")
+        arguments["max_reserved_gpus"] = None
         fixture.store.reserve(assignment, **arguments)
     assert assignment is not None
     selected_root = assignment.agent_root_id
+    fixture.store.accept_agent_evidence("task-2", 1, {"source": "test"})
+    assert fixture.store.read("task-2").delivery.assignment_id == "task-2"
+
+    def reject_delivery_read(_encoded):
+        pytest.fail("scheduler work pages must not decode the retained worker delivery")
+
+    monkeypatch.setattr(slurm_ready_stage, "_retained_delivery", reject_delivery_read)
     first = fixture.store.agent_page("selected", selected_root, limit=2)
     assert [row.assignment.assignment_id for row in first] == ["task-0", "task-2"]
+    assert [row.agent_sequence for row in first] == [0, 1]
+    assert not any(row.report_present for row in first)
     remaining = fixture.store.agent_page("selected", selected_root, after="task-2", limit=2)
     assert [row.assignment.assignment_id for row in remaining] == ["task-4"]
     assert fixture.store.agent_page("selected", "wrong-root") == ()
