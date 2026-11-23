@@ -417,10 +417,9 @@ one protected profile; each still validates its own full name, UID, cluster,
 submission window and retained accounting incarnation. Unknown outcomes never
 authorize another submission. Results are not containment evidence.
 
-The coordinator's scheduler task page reads assignment identity, submission
-details, and current control evidence. Bootstrap and result processing load
-their worker payloads separately, so large preparation requests do not add
-repeated payload validation to task polling.
+The coordinator reads assignment identity, submission details, and current
+control evidence for task pages and scheduler acknowledgements without release.
+Bootstrap, result processing, and release load the worker payloads they need.
 
 Each query receives the smaller of its command timeout and the remaining
 monotonic cycle budget. Unqueried operations remain due. The call/time budget

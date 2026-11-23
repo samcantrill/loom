@@ -3,13 +3,16 @@
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import fields, replace
 from threading import Barrier
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
 from loom._sqlite_policy import SQLitePolicy
 from loom.pipeline.executors.slurm.commands import FakeSlurmCommandRunner
-from loom.pipeline.executors.slurm.ready_stage import map_ready_stage
+from loom.pipeline.executors.slurm.ready_stage import (
+    ReadyStageState, SlurmReadyStageRequest, SlurmReadyStageSubmission, map_ready_stage,
+)
 from loom.pipeline.orchestration import (
     ExecutionRequirement, SQLiteStageWorkStore, StageWorkRecord, stage_work_identity,
 )
@@ -21,7 +24,9 @@ from loom.pipeline.runtime import (
 from loom.pipeline.runtime.scheduling_resources import GpuResourcePlanner
 from loom.pipeline.stores import BackendRevision
 from loom.queue._managed_local import SQLiteCoordinatorAssignments
+from loom.queue._agent_slurm import SlurmSubmissionProjection
 from loom.queue._slurm_admission import SlurmAdmissionDeferred
+from loom.queue.local_daemon_execution import LocalDaemonExecution
 from loom.queue.slurm_ready_stage import (
     SQLiteSlurmStageAssignments, SlurmStageAssignment, SlurmStageDelivery,
 )
@@ -253,6 +258,48 @@ def test_agent_task_page_filters_owner_before_limit_and_survives_restart(
     assert [row.assignment.assignment_id for row in remaining] == ["task-4"]
     assert fixture.store.agent_page("selected", "wrong-root") == ()
     assert fixture.reopen().agent_page("selected", selected_root, after="task-2", limit=2) == remaining
+    assert fixture.reopen().read_agent_task("task-2") == first[1]
+
+
+def test_scheduler_intent_and_replay_do_not_decode_worker_delivery(tmp_path, monkeypatch):
+    from loom.queue import slurm_ready_stage
+
+    fixture = ReservationFixture(tmp_path, schema_version=7)
+    assignment, reservation = fixture.candidate("preparation-replay", 0)
+    fixture.store.reserve(assignment, **reservation)
+    submission = SlurmReadyStageSubmission(
+        SlurmReadyStageRequest.from_dict(reservation["request_json"]),
+        ReadyStageState.INTENT,
+        "2026-01-01T00:00:00Z",
+    )
+    projection = SlurmSubmissionProjection(
+        fixture.path, _allow_initialize=True,
+        schema_version=fixture.schema_version, sqlite_policy=fixture.policy,
+    )
+    owner = cast(LocalDaemonExecution, SimpleNamespace(
+        slurm_assignments=fixture.store,
+        slurm_submissions=projection,
+        _attempt_cancel_requested=lambda *_: False,
+    ))
+    evidence = {
+        "schema_version": 1, "provider_released": False,
+        "assignment": assignment.to_dict(), "submission": submission.to_dict(),
+        "release": None, "recovery_evidence": None, "sequence": 1,
+    }
+
+    def reject_delivery_read(_encoded):
+        pytest.fail("scheduler intent must not decode the retained worker delivery")
+
+    monkeypatch.setattr(slurm_ready_stage, "_retained_delivery", reject_delivery_read)
+    with pytest.raises(QueueConflictError, match="evidence owner conflicts"):
+        LocalDaemonExecution.acknowledge_slurm_agent(owner, "unexpected", assignment.agent_root_id, evidence)
+    for _ in range(2):
+        result = LocalDaemonExecution.acknowledge_slurm_agent(
+            owner, assignment.agent_id, assignment.agent_root_id, evidence,
+        )
+        assert result == {"sequence": 1, "cancel_requested": False}
+    assert fixture.store.read_agent_task(assignment.assignment_id).agent_sequence == 1
+    assert projection.read(assignment.operation_id) == submission
 
 
 def test_compute_release_preserves_assignment_and_storage_ownership(tmp_path):

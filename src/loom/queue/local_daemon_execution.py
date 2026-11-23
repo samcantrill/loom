@@ -2443,7 +2443,12 @@ class LocalDaemonExecution:
         if evidence["provider_released"] is True and evidence["release"] is None:
             raise QueueConflictError("SLURM provider release requires containment")
         assignment = SlurmStageAssignment.from_dict(evidence.get("assignment"))
-        record = self.slurm_assignments.read(assignment.assignment_id)
+        release = evidence.get("release")
+        record = (
+            self.slurm_assignments.read_agent_task(assignment.assignment_id)
+            if release is None
+            else self.slurm_assignments.read(assignment.assignment_id)
+        )
         if record.assignment != assignment or (
             assignment.agent_id,
             assignment.agent_root_id,
@@ -2466,8 +2471,8 @@ class LocalDaemonExecution:
         sequence = evidence.get("sequence")
         if isinstance(sequence, bool) or not isinstance(sequence, int):
             raise QueueServiceError("SLURM evidence sequence is invalid")
-        release = evidence.get("release")
         if isinstance(release, Mapping):
+            assert isinstance(record, SlurmStageRecord)
             if self._recovery_retains_assignment(assignment.assignment_id):
                 raise QueueConflictError(
                     "ordinary SLURM release is frozen by guarded recovery"
@@ -2532,7 +2537,6 @@ class LocalDaemonExecution:
                 job_id=submission.job_id,
                 cluster=submission.cluster,
             )
-        release = evidence.get("release")
         if isinstance(release, Mapping):
             record = self.slurm_assignments.read(assignment.assignment_id)
             if (record.publication_requested_at is not None and record.publication_completed_at is None and record.publication_cancelled_at is None

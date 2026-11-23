@@ -1323,43 +1323,61 @@ class SQLiteSlurmStageAssignments:
         """Read a bounded scheduler page without materializing worker deliveries."""
         if type(limit) is not int or not 1 <= limit <= 33:
             raise QueueServiceError("SLURM task page limit is invalid")
+        with _connect(self.path, sqlite_policy=self._sqlite_policy, require_existing=True) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                f"SELECT {self._agent_task_columns()} FROM {_ASSIGNMENT_TABLE} WHERE state != 'released' "
+                "AND json_extract(identity_json, '$.agent_id') = ? "
+                "AND json_extract(identity_json, '$.agent_root_id') = ? "
+                "AND (? IS NULL OR assignment_id > ?) ORDER BY assignment_id LIMIT ?",
+                (agent_id, agent_root_id, after, after, limit),
+            ).fetchall()
+        return tuple(self._agent_task_record(row) for row in rows)
+
+    def read_agent_task(self, assignment_id: str) -> SlurmAgentTaskRecord:
+        """Read exact scheduler facts for evidence that does not release storage."""
+        with _connect(self.path, sqlite_policy=self._sqlite_policy, require_existing=True) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                f"SELECT {self._agent_task_columns()} FROM {_ASSIGNMENT_TABLE} WHERE assignment_id = ?",
+                (assignment_id,),
+            ).fetchone()
+        if row is None:
+            raise QueueConflictError("SLURM assignment is not retained")
+        return self._agent_task_record(row)
+
+    def _agent_task_columns(self) -> str:
         compute_release = (
             "(publication_requested_at IS NOT NULL AND publication_completed_at IS NULL "
             "AND compute_released_at IS NULL)"
             if self.schema_version >= 5 else "0"
         )
         terminal = "terminal_observation_json" if self.schema_version >= 7 else "NULL"
-        with _connect(self.path, sqlite_policy=self._sqlite_policy, require_existing=True) as conn:
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                "SELECT identity_json, request_json, state, job_id, cluster, bootstrap_incarnation, "
-                "fence, process_execution_id, report_json IS NOT NULL AS report_present, "
-                f"start_consumed, agent_sequence, {compute_release} AS compute_release_requested, "
-                f"{terminal} AS terminal_observation FROM {_ASSIGNMENT_TABLE} WHERE state != 'released' "
-                "AND json_extract(identity_json, '$.agent_id') = ? "
-                "AND json_extract(identity_json, '$.agent_root_id') = ? "
-                "AND (? IS NULL OR assignment_id > ?) ORDER BY assignment_id LIMIT ?",
-                (agent_id, agent_root_id, after, after, limit),
-            ).fetchall()
-        return tuple(
-            SlurmAgentTaskRecord(
-                assignment=SlurmStageAssignment.from_dict(json.loads(row["identity_json"])),
-                request=json.loads(row["request_json"]),
-                state=row["state"],
-                job_id=row["job_id"],
-                cluster=row["cluster"],
-                bootstrap_incarnation=row["bootstrap_incarnation"],
-                fence=row["fence"],
-                process_execution_id=row["process_execution_id"],
-                report_present=bool(row["report_present"]),
-                start_consumed=bool(row["start_consumed"]),
-                agent_sequence=int(row["agent_sequence"]),
-                compute_release_requested=bool(row["compute_release_requested"]),
-                terminal_observation=(
-                    json.loads(row["terminal_observation"]) if row["terminal_observation"] is not None else None
-                ),
-            )
-            for row in rows
+        return (
+            "identity_json, request_json, state, job_id, cluster, bootstrap_incarnation, "
+            "fence, process_execution_id, report_json IS NOT NULL AS report_present, "
+            f"start_consumed, agent_sequence, {compute_release} AS compute_release_requested, "
+            f"{terminal} AS terminal_observation"
+        )
+
+    @staticmethod
+    def _agent_task_record(row: sqlite3.Row) -> SlurmAgentTaskRecord:
+        return SlurmAgentTaskRecord(
+            assignment=SlurmStageAssignment.from_dict(json.loads(row["identity_json"])),
+            request=json.loads(row["request_json"]),
+            state=row["state"],
+            job_id=row["job_id"],
+            cluster=row["cluster"],
+            bootstrap_incarnation=row["bootstrap_incarnation"],
+            fence=row["fence"],
+            process_execution_id=row["process_execution_id"],
+            report_present=bool(row["report_present"]),
+            start_consumed=bool(row["start_consumed"]),
+            agent_sequence=int(row["agent_sequence"]),
+            compute_release_requested=bool(row["compute_release_requested"]),
+            terminal_observation=(
+                json.loads(row["terminal_observation"]) if row["terminal_observation"] is not None else None
+            ),
         )
 
     def read_input_chunk(
