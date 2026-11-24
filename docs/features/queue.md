@@ -1099,6 +1099,15 @@ scheduling lock is retained during waiting, and empty checks do not acquire a
 SQLite write transaction. Notifications are hints; every delivery rechecks the
 authenticated session and current durable control state.
 
+The agent handshake can also advertise `agent-event-batch-v1`. An outbound
+agent sends up to 32 consecutive events for one assignment in a request of at
+most 65,536 bytes. Each event is authorized and persisted by the same owner as
+single-event delivery. The receipt identifies the assignment, final contiguous
+sequence and digest of the exact request. A lost reply or interrupted batch
+replays the original event IDs and payloads from the workspace. Older peers
+use paged single-event delivery. The agent flushes its terminal events before
+releasing the assignment.
+
 The work and control handlers inspect session candidates outside the coordinator
 state lock and close that read before checking external receipts. Claiming a
 control or delivering work rechecks the session and selected request under the

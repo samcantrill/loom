@@ -23,6 +23,7 @@ from ._remote_stage_execution import (
 )
 
 _MAX_BODY_BYTES = 65_536
+_MAX_BATCH_EVENTS = 32
 
 # Ordered scientific configurations include compact retry verification inputs.
 # Only typed Slurm registration replies admit this semantic payload budget.
@@ -211,7 +212,7 @@ def _exact(value: Mapping[str, object], fields: set[str]) -> None:
         raise QueueServiceError("agent protocol fields are invalid")
 
 
-def _decode(raw: bytes, *, failure_report: bool = False, control_wait: bool = False,
+def _decode(raw: bytes, *, failure_report: bool = False, control_wait: bool = False, event_batch: bool = False,
             slurm_registration: bool = False) -> Mapping[str, object]:
     maximum = _MAX_SLURM_REGISTRATION_BYTES if slurm_registration else _MAX_BODY_BYTES
     if len(raw) > maximum:
@@ -229,6 +230,15 @@ def _decode(raw: bytes, *, failure_report: bool = False, control_wait: bool = Fa
         raise QueueServiceError("agent protocol JSON is invalid") from exc
     if not isinstance(value, Mapping):
         raise QueueServiceError("agent protocol body is not an object")
+    if event_batch:
+        events = value.get("events")
+        if not isinstance(events, list) or not 1 <= len(events) <= _MAX_BATCH_EVENTS:
+            raise QueueServiceError("remote event batch count is invalid")
+        _bounded_json({**value, "events": None}, depth=0)
+        for event in events:
+            # Preserve the depth and collection bounds of a single event RPC.
+            _bounded_json(event, depth=0)
+        return value
     if control_wait:
         from .agent_sessions import _MAX_RECEIVED_CONTROLS
 

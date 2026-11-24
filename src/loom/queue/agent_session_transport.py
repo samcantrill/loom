@@ -19,6 +19,7 @@ from ._storage_policy import StoragePolicy
 from loom.pipeline.stores.atomic import _fsync_path_strict
 
 from . import _agent_session_protocol as _session_protocol
+from ._agent_event_batch import apply_event_batch, pack_event_batch
 from . import _agent_assignment as _assignment_progress
 from ._agent_session_protocol import _raise_if_application_suspended
 from ._agent_session_codec import (
@@ -915,6 +916,7 @@ class LocalDaemonAgentHttpClient:
         # Polls and assignment release/decline advance the same availability
         # revision. Their ordering is independent of unchanged-offer renewal.
         self._delivery_gate = _Gate()
+        self._supports_event_batch = False
         self._epoch_reconciliation_pending = False
         self._mutation_gate = _Gate()
         self._suspend_requested: Callable[[], bool] | None = None
@@ -1514,6 +1516,7 @@ class LocalDaemonAgentHttpClient:
                 )
                 journal.complete_reload(control, plan.replacement, effect)
                 self._config = plan.replacement
+                self._supports_event_batch = False
                 if self._slurm_agent is not None:
                     self._slurm_agent.submit_interval_seconds = plan.replacement.slurm_submit_interval_seconds
                     self._slurm_agent.observation_policy = plan.replacement.slurm_observation_policy
@@ -3102,6 +3105,32 @@ class LocalDaemonAgentHttpClient:
                         boundary = latest
                         continue
                 return
+            if self._supports_event_batch and len(page) > 1:
+                request, last = pack_event_batch(session_id, workspace.assignment_id, page)
+                try:
+                    receipt = yield from _steps(
+                        self._assignment_call, session_id, workspace.assignment_id,
+                        lambda: _steps(self._call, "event_batch", request),
+                    )
+                except QueueServiceError as exc:
+                    if str(exc) != "agent_protocol_rejected":
+                        raise
+                    # A retained session can reconnect to a downgraded peer.
+                    # Fall back only after authenticated renegotiation.
+                    yield from _steps(self.handshake)
+                    if self._supports_event_batch:
+                        raise
+                    continue
+                if (
+                    receipt.get("assignment_id") != workspace.assignment_id
+                    or type(receipt.get("acknowledged_sequence")) is not int
+                    or receipt["acknowledged_sequence"] != last
+                    or receipt.get("request_digest") != _canonical_digest(request)
+                ):
+                    raise QueueConflictError("remote event batch acknowledgement conflicts")
+                workspace.acknowledge_event(last)
+                yield from _delay(0)
+                continue
             for sequence, event_id, payload in page:
                 result = cast(
                     Mapping[str, PlainData],
@@ -3152,7 +3181,7 @@ class LocalDaemonAgentHttpClient:
         self, operation: str, value: Mapping[str, PlainData], *, role: str = "agent"
     ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
         while self._service_progress and self._epoch_reconciliation_pending and operation in {
-            "accept", "start_permit", "started", "event", "authorize", "input",
+            "accept", "start_permit", "started", "event", "event_batch", "authorize", "input",
             "output_manifest", "output", "result", "assignment_control_ack",
         }:
             _raise_if_application_suspended(self._suspend_requested)
@@ -3509,7 +3538,7 @@ def _read_agent_reply(
 # Slurm evidence has separate bounded admission and pending-effect replies; it
 # must not wait for the artifact-transfer lane to become free.
 _AGENT_BULK_OPERATIONS = frozenset({
-    "authorize", "input", "accept", "start_permit", "started", "event",
+    "authorize", "input", "accept", "start_permit", "started", "event", "event_batch",
     "output_manifest", "output", "result", "release", "recovery_release_ready",
 })
 _CLIENT_SHORT_OPERATIONS = frozenset({
@@ -3691,6 +3720,8 @@ class _Handler(BaseHTTPRequestHandler):
             return dict(_decode(raw, failure_report=True))
         if role == "agent" and operation == "control_wait":
             return dict(_decode(raw, control_wait=True))
+        if role == "agent" and operation == "event_batch":
+            return dict(_decode(raw, event_batch=True))
         return dict(_decode(raw))
 
     def do_POST(self) -> None:  # noqa: N802
@@ -3794,6 +3825,7 @@ class _Handler(BaseHTTPRequestHandler):
                     "decline",
                     "started",
                     "event",
+                    "event_batch",
                     "output_manifest",
                     "output",
                     "result",
@@ -4163,6 +4195,8 @@ def _dispatch(
             fence=_string(value, "fence"),
             process_execution_id=_string(value, "process_execution_id"),
         )
+    if operation == "event_batch":
+        return apply_event_batch(view, value)
     if operation == "event":
         _exact(
             value,

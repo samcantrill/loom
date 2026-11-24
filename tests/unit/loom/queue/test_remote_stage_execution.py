@@ -746,7 +746,7 @@ def test_terminal_event_relay_includes_events_arriving_during_last_exchange(tmp_
             workspace.append_event("last", {"kind": "timing"})
         return {"assignment_id": assignment_id, "acknowledged_sequence": sequence}
 
-    client = SimpleNamespace(_assignment_call=lambda sid, aid, operation: operation(), report_event=send)
+    client = SimpleNamespace(_assignment_call=lambda sid, aid, operation: operation(), report_event=send, _supports_event_batch=False)
     LocalDaemonAgentHttpClient._flush_workspace_events(client, "session", workspace, final=True)
     assert sent == ["first", "last"]
     assert workspace.pending_events() == ()

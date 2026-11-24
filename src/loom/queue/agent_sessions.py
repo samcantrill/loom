@@ -80,6 +80,7 @@ _MAX_RECEIVED_CONTROLS = 1025
 SLURM_SUBMISSION_CAPABILITY = "slurm-agent-jobs-v1"
 SLURM_PENDING_EFFECTS_CAPABILITY = "slurm-pending-effects-v1"
 SLURM_ASYNC_OUTPUT_CAPABILITY = "slurm-pending-output-v1"
+EVENT_BATCH_CAPABILITY = "agent-event-batch-v1"
 _MAX_IDENTIFIER = 160
 _MAX_COLLECTION = 32
 _MAX_OFFER_TTL_SECONDS = 3600
@@ -2109,6 +2110,7 @@ class AgentSessionService:
                 "capabilities": [
                     "agent-sessions-v12",
                     CONTROL_WAIT_CAPABILITY,
+                    EVENT_BATCH_CAPABILITY,
                     "concurrent-resident-assignments-v1",
                     SUBMITTED_CONTAINER_CAPABILITY,
                     "shared-assignment-reference-v1",
