@@ -7,6 +7,7 @@ admission, and process launch remain protected agent-local concerns.
 
 from __future__ import annotations
 
+from ._coordinator_transactions import short_write
 from ._phase_timing import phase
 
 from collections.abc import Callable, Mapping, Sequence
@@ -19,7 +20,7 @@ import json
 from pathlib import Path
 import re
 import sqlite3
-from time import monotonic, sleep
+from time import monotonic
 from typing import TYPE_CHECKING, Any, Concatenate, Literal, ParamSpec, TypeVar, cast, overload
 from uuid import uuid4
 
@@ -2165,31 +2166,10 @@ class AgentSessionService:
                 signal.wait_for_change(observed, max(0, deadline - monotonic()))
 
     def _poll_write(self, action: Callable[[sqlite3.Connection], _R]) -> _R:
-        """Order policy and SQLite transitions without sleeping on SQLite under the cycle lock."""
-        daemon = self._daemon
-        with daemon._connection() as conn:
-            timeout = int(conn.execute("PRAGMA busy_timeout").fetchone()[0]) / 1000
-            deadline = monotonic() + timeout
-            conn.execute("PRAGMA busy_timeout = 0")
-            while True:
-                try:
-                    with daemon._state_guard():
-                        self._require_poll_running()
-                        conn.execute("BEGIN IMMEDIATE")
-                        try:
-                            result = action(conn)
-                            conn.commit()
-                        except BaseException:
-                            conn.rollback()
-                            raise
-                        return result
-                except sqlite3.OperationalError as exc:
-                    if (
-                        getattr(exc, "sqlite_errorcode", 0) & 255
-                    ) != sqlite3.SQLITE_BUSY or monotonic() >= deadline:
-                        raise
-                with phase("poll_database_busy_wait"):
-                    sleep(min(0.01, max(0, deadline - monotonic())))
+        return short_write(
+            self._daemon, action, before_begin=self._require_poll_running,
+            wait_phase="poll_database_busy_wait",
+        )
 
     def _control_permissions(
         self, assignment: bool, agent: bool
@@ -2365,14 +2345,13 @@ class AgentSessionService:
     def next_control(self, session_id: str, *, received: frozenset[str] = frozenset()) -> AgentControl | None:
         return self._receive_controls(session_id, received, assignment=False, agent=True)[1]
 
-    @_serialized_session_operation
     def acknowledge_control(
         self, session_id: str, effect: AgentControlEffect
     ) -> Mapping[str, PlainData]:
-        rule, revision = self._authorize("control")
         _identifier(session_id, "session_id")
-        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
-            conn.execute("BEGIN IMMEDIATE")
+
+        def apply(conn: sqlite3.Connection) -> tuple[str, bool]:
+            rule, revision = self._authorize("control")
             session = _session_from_row(
                 conn.execute(
                     "SELECT * FROM agent_sessions WHERE session_id = ?", (session_id,)
@@ -2398,15 +2377,7 @@ class AgentSessionService:
             if row["effect_json"] is not None:
                 if str(row["effect_json"]) != encoded:
                     raise QueueConflictError("agent control acknowledgement conflicts")
-                conn.commit()
-                return freeze_plain_data(
-                    {
-                        "operation_id": control.operation_id,
-                        "state": str(row["state"]),
-                        "code": effect.code,
-                    },
-                    path="agent control acknowledgement",
-                )
+                return str(row["state"]), False
             if control.expected_config_revision != session.config_revision:
                 raise QueueConflictError("agent control acknowledgement is stale")
             applied = effect.code == "applied"
@@ -2444,13 +2415,15 @@ class AgentSessionService:
                 "effect_json = ?, acknowledged = 1 WHERE operation_id = ?",
                 (state, effect.code, encoded, effect.operation_id),
             )
-            conn.commit()
+            return state, applied
+
+        state, applied = short_write(self._daemon, apply)
         if applied:
             self._daemon._poll_waiters.notify(session_id)
             self._daemon._wake.set()
         return freeze_plain_data(
             {
-                "operation_id": control.operation_id,
+                "operation_id": effect.operation_id,
                 "state": state,
                 "code": effect.code,
             },
@@ -2460,7 +2433,6 @@ class AgentSessionService:
     def next_assignment_control(self, session_id: str, *, received: frozenset[str] = frozenset()) -> AgentAssignmentControl | None:
         return self._receive_controls(session_id, received, assignment=True, agent=False)[0]
 
-    @_serialized_session_operation
     def acknowledge_assignment_control(
         self,
         session_id: str,
@@ -2469,7 +2441,6 @@ class AgentSessionService:
         code: str,
         evidence: Mapping[str, object] | None = None,
     ) -> Mapping[str, PlainData]:
-        rule, revision = self._authorize("assignment_control")
         _identifier(session_id, "session_id")
         _identifier(operation_id, "operation_id")
         if code not in {"never_started", "contained", "terminal", "unknown"}:
@@ -2494,8 +2465,9 @@ class AgentSessionService:
                 dict(parsed_evidence), sort_keys=True, separators=(",", ":")
             )
         )
-        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
-            conn.execute("BEGIN IMMEDIATE")
+
+        def apply(conn: sqlite3.Connection) -> Mapping[str, PlainData]:
+            rule, revision = self._authorize("assignment_control")
             session = _session_from_row(
                 conn.execute(
                     "SELECT * FROM agent_sessions WHERE session_id = ?", (session_id,)
@@ -2532,31 +2504,31 @@ class AgentSessionService:
                 "evidence_json = ?, acknowledged = 1 WHERE operation_id = ?",
                 (state, code, encoded_evidence, operation_id),
             )
-            conn.commit()
-        return freeze_plain_data(
-            {
-                "operation_id": control.operation_id,
-                "assignment_id": control.assignment_id,
-                "state": state,
-                "code": code,
-                "evidence": parsed_evidence,
-            },
-            path="assignment control acknowledgement",
-        )
+            return freeze_plain_data(
+                {
+                    "operation_id": control.operation_id,
+                    "assignment_id": control.assignment_id,
+                    "state": state,
+                    "code": code,
+                    "evidence": parsed_evidence,
+                },
+                path="assignment control acknowledgement",
+            )
 
-    @_serialized_session_operation
+        return short_write(self._daemon, apply)
+
     def register(self, request: AgentRegistration) -> AgentSession:
-        self._daemon._lifetime.require_accepting()
-        rule, policy_revision = self._authorize("register")
-        coordinator_id = self._daemon._require_started()  # type: ignore[attr-defined]
-        epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]
         if request.session_id is not None:
             raise QueueConflictError("agent callers cannot select a session ID")
         if request.retirement_verifier is None:
             raise QueueServiceError("agent retirement verifier is required")
         digest = _digest(request.value())
-        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
-            conn.execute("BEGIN IMMEDIATE")
+
+        def apply(conn: sqlite3.Connection) -> AgentSession:
+            self._daemon._lifetime.require_accepting()
+            rule, policy_revision = self._authorize("register")
+            coordinator_id = self._daemon._require_started()  # type: ignore[attr-defined]
+            epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]
             replay = _receipt(
                 conn, rule.principal_id, "register", request.idempotency_key, digest
             )
@@ -2583,7 +2555,6 @@ class AgentSessionService:
                     raise QueueServiceError(
                         "agent registration receipt is no longer authorized"
                     )
-                conn.commit()
                 return replayed
             if request.coordinator_id != coordinator_id:
                 raise QueueConflictError("coordinator identity is stale")
@@ -2705,10 +2676,10 @@ class AgentSessionService:
                 digest,
                 session.value(),
             )
-            conn.commit()
-        return session
+            return session
 
-    @_serialized_session_operation
+        return short_write(self._daemon, apply)
+
     def reconcile(
         self,
         expected: AgentSession,
@@ -2716,7 +2687,6 @@ class AgentSessionService:
         *,
         idempotency_key: str,
     ) -> AgentSession:
-        rule, policy_revision = self._authorize("reconcile")
         _identifier(coordinator_epoch, "coordinator_epoch")
         _identifier(idempotency_key, "idempotency_key")
         request_value: dict[str, PlainData] = {
@@ -2724,8 +2694,9 @@ class AgentSessionService:
             "coordinator_epoch": coordinator_epoch,
         }
         digest = _digest(request_value)
-        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
-            conn.execute("BEGIN IMMEDIATE")
+
+        def apply(conn: sqlite3.Connection) -> AgentSession:
+            rule, policy_revision = self._authorize("reconcile")
             replay = _receipt(
                 conn,
                 rule.principal_id,
@@ -2756,7 +2727,6 @@ class AgentSessionService:
                     raise QueueServiceError(
                         "agent reconciliation receipt is no longer authorized"
                     )
-                conn.commit()
                 return replayed
             session = _session_from_row(
                 conn.execute(
@@ -2824,8 +2794,9 @@ class AgentSessionService:
                 digest,
                 resumed.value(),
             )
-            conn.commit()
-        return resumed
+            return resumed
+
+        return short_write(self._daemon, apply)
 
     def renew_offer(self, renewal: AgentOfferRenewal) -> Mapping[str, PlainData]:
         """Extend exactly the current unchanged offer once per sequence."""
@@ -2938,9 +2909,12 @@ class AgentSessionService:
         replacement_admission = _replacement_offer_admission(
             self._daemon, offer.session_id
         )
-        with execution.scheduling_reload_guard(), self._daemon._state_guard(), self._daemon._connection() as conn:
+        encoded_offer = _canonical_json(offer.value())
+
+        def apply(conn: sqlite3.Connection) -> tuple[Mapping[str, PlainData], bool]:
+            if self._daemon._execution is not execution:
+                raise QueueConflictError("offer scheduling changed during preparation")
             rule, policy_revision = self._authorize("offer")
-            conn.execute("BEGIN IMMEDIATE")
             if replacement_admission is not None:
                 old_row = conn.execute("SELECT * FROM agent_sessions WHERE session_id = ?", (replacement_admission.old_session_id,)).fetchone()
                 old_session = _session_from_row(old_row, self._daemon._require_started(), expected_principal=str(old_row["principal_id"]))
@@ -2964,8 +2938,7 @@ class AgentSessionService:
             )
             replay = _receipt(conn, rule.principal_id, "offer", idempotency_key, digest)
             if replay is not None:
-                conn.commit()
-                return replay
+                return replay, False
             execution.validate_agent_offer_provider_composition(offer)
             active_poll = conn.execute(
                 "SELECT sequence FROM agent_poll_state "
@@ -3103,7 +3076,7 @@ class AgentSessionService:
                     offer.session_id,
                     offer.coordinator_epoch,
                     offer.availability_revision,
-                    json.dumps(offer.value(), sort_keys=True, separators=(",", ":")),
+                    encoded_offer,
                     accepted,
                     expiry,
                 ),
@@ -3156,9 +3129,12 @@ class AgentSessionService:
             _write_receipt(
                 conn, rule.principal_id, "offer", idempotency_key, digest, value
             )
-            conn.commit()
-        self._daemon._wake.set()
-        return freeze_plain_data(value, path="agent offer receipt")
+            return freeze_plain_data(value, path="agent offer receipt"), True
+
+        result, created = short_write(self._daemon, apply, scheduling_guard=execution.scheduling_reload_guard)
+        if created:
+            self._daemon._wake.set()
+        return result
 
     def recover_poll(
         self,
@@ -3527,7 +3503,6 @@ class AgentSessionService:
 
         return self._poll_write(decide)
 
-    @_serialized_session_operation
     def authorize_transfers(
         self,
         session_id: str,
@@ -3536,7 +3511,6 @@ class AgentSessionService:
         expected_revision: int,
         operation_id: str,
     ) -> Mapping[str, PlainData]:
-        rule, policy_revision = self._authorize("authorize")
         _identifier(operation_id, "operation_id")
         if (
             isinstance(expected_revision, bool)
@@ -3544,9 +3518,10 @@ class AgentSessionService:
             or expected_revision < 0
         ):
             raise QueueServiceError("transfer authorization revision is invalid")
-        epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]
-        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
-            conn.execute("BEGIN IMMEDIATE")
+
+        def apply(conn: sqlite3.Connection) -> Mapping[str, PlainData]:
+            rule, policy_revision = self._authorize("authorize")
+            epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]
             self._require_remote_session(conn, rule, policy_revision, session_id, epoch)
             self._require_remote_assignment(conn, session_id, assignment_id)
             replay = conn.execute(
@@ -3567,7 +3542,6 @@ class AgentSessionService:
                     "coordinator_epoch": str(replay["coordinator_epoch"]),
                     "expires_at": str(replay["expires_at"]),
                 }
-                conn.commit()
                 return freeze_plain_data(value, path="transfer authorization")
             current = int(
                 conn.execute(
@@ -3601,16 +3575,17 @@ class AgentSessionService:
                     expires_at,
                 ),
             )
-            conn.commit()
-        return freeze_plain_data(
-            {
-                "authorization_id": authorization_id,
-                "revision": revision,
-                "coordinator_epoch": epoch,
-                "expires_at": expires_at,
-            },
-            path="transfer authorization",
-        )
+            return freeze_plain_data(
+                {
+                    "authorization_id": authorization_id,
+                    "revision": revision,
+                    "coordinator_epoch": epoch,
+                    "expires_at": expires_at,
+                },
+                path="transfer authorization",
+            )
+
+        return short_write(self._daemon, apply)
 
     @_serialized_publication_operation
     def read_input_chunk(
@@ -3626,8 +3601,8 @@ class AgentSessionService:
         _identifier(transfer_id, "transfer_id")
         if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
             raise QueueServiceError("input transfer offset is invalid")
-        with self._daemon._state_guard(), self._daemon._connection() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+
+        def locate(conn: sqlite3.Connection):
             stamp = self._transfer_authority(conn, session_id, assignment_id, authorization_id, authorization_revision, "input")
             row = conn.execute(
                 "SELECT size_bytes, private_path FROM remote_transfers WHERE "
@@ -3641,15 +3616,18 @@ class AgentSessionService:
             if offset > size:
                 raise QueueConflictError("input transfer offset exceeds its size")
             path = Path(str(row["private_path"]))
-            conn.commit()
+            return stamp, size, path
+
+        stamp, size, path = short_write(self._daemon, locate)
         with path.open("rb") as stream:
             stream.seek(offset)
             data = stream.read(TRANSFER_CHUNK_BYTES)
-        with self._daemon._state_guard(), self._daemon._connection() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+
+        def revalidate(conn: sqlite3.Connection) -> None:
             if self._transfer_authority(conn, session_id, assignment_id, authorization_id, authorization_revision, "input") != stamp:
                 raise QueueConflictError("remote input authority changed during reading")
-            conn.commit()
+
+        short_write(self._daemon, revalidate)
         return freeze_plain_data(
             {
                 "transfer_id": transfer_id,
@@ -3690,8 +3668,8 @@ class AgentSessionService:
             if cancelled:
                 raise QueueConflictError("remote assignment run is cancelling")
             fence = self._remote_execution().remote_accept(assignment_id)
-        with self._daemon._state_guard(), self._daemon._connection() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+
+        def retain_grant(conn: sqlite3.Connection) -> str:
             current, current_request = capture(conn)
             if current_request != request_json or (current["fence"] is not None and current["fence"] != fence):
                 raise QueueConflictError("remote grant authority changed during observation")
@@ -3704,7 +3682,9 @@ class AgentSessionService:
                 state = "GRANTED"
             else:
                 state = str(current["state"])
-            conn.commit()
+            return state
+
+        state = short_write(self._daemon, retain_grant)
         request = _ResidentAssignmentBundle.from_remote_dict(json.loads(request_json))
         from ._shared_staging_continuation import WIRE as staging_wire, finish_grant_continuation, requested
         if requested(request) or staging_wire in request.worker_metadata:
@@ -3738,43 +3718,69 @@ class AgentSessionService:
         """Linearize permission against cancellation after authority observation."""
         _identifier(fence, "fence")
 
-        def check(conn: sqlite3.Connection) -> bool:
+        from ._shared_staging_continuation import (
+            WIRE as staging_wire, expected_grant_receipt, requested, require_grant_receipt,
+        )
+
+        def capture(conn: sqlite3.Connection) -> tuple[str, int | None] | None:
             rule, revision = self._authorize("start_permit")
             session = self._require_remote_session(conn, rule, revision, session_id, self._daemon._epoch or "")
             row = self._require_remote_assignment(conn, session_id, assignment_id)
             if row["fence"] != fence or str(row["state"]) not in {"GRANTED", "RUNNING"}:
                 raise QueueConflictError("remote start permit fence is stale")
             if action_attempt_cancelled(conn, str(row["run_uri"]), str(row["attempt_id"])):
-                return False
+                return None
+            # request_json is immutable after delivery insertion. Only state and
+            # poll_sequence change on this row during its lifetime.
             delivery = conn.execute(
-                "SELECT request_json FROM agent_deliveries WHERE assignment_id=?", (assignment_id,),
+                "SELECT rowid FROM agent_deliveries WHERE assignment_id=? AND session_id=?",
+                (assignment_id, session_id),
             ).fetchone()
-            if delivery is not None:
-                value = json.loads(delivery[0])
-                from ._shared_staging_continuation import WIRE as staging_wire, requested, require_grant_continuation
-                request = _ResidentAssignmentBundle.from_remote_dict(value)
+            return session.agent_root_id, None if delivery is None else int(delivery[0])
+
+        with self._daemon._connection() as conn:
+            with self._daemon._state_guard():
+                original = capture(conn)
+            if original is None:
+                return False
+            root_id, delivery_id = original
+            expected = None
+            if delivery_id is not None:
+                payload = conn.execute(
+                    "SELECT request_json FROM agent_deliveries WHERE rowid=? AND assignment_id=? AND session_id=?",
+                    (delivery_id, assignment_id, session_id),
+                ).fetchone()
+                if payload is None:
+                    raise QueueConflictError("remote start delivery changed")
+                request = _ResidentAssignmentBundle.from_remote_dict(json.loads(payload[0]))
                 if requested(request) or staging_wire in request.worker_metadata:
-                    require_grant_continuation(
-                        request, conn,
-                        agent_id=session.agent_root_id, fence=fence,
-                    )
+                    expected = expected_grant_receipt(request, root_id, fence)
+
+            def check(current_conn: sqlite3.Connection) -> bool:
+                current = capture(current_conn)
+                if current is None:
+                    return False
+                if current != original:
+                    raise QueueConflictError("remote start delivery changed")
+                require_grant_receipt(current_conn, assignment_id, expected)
+                return True
+
+            with self._daemon._state_guard():
+                if not check(conn):
+                    return False
+
+        permitted = self._remote_execution().remote_start_permit(assignment_id, fence=fence)
+
+        def apply(conn: sqlite3.Connection) -> bool:
+            if not check(conn) or not permitted:
+                return False
+            conn.execute(
+                "UPDATE remote_assignments SET start_permitted = 1 WHERE assignment_id = ? AND fence = ?",
+                (assignment_id, fence),
+            )
             return True
 
-        with self._daemon._state_guard(), self._daemon._connection() as conn:
-            if not check(conn):
-                return False
-        # No global state lock or control write transaction spans authority IO.
-        permitted = self._remote_execution().remote_start_permit(assignment_id, fence=fence)
-        with self._daemon._state_guard(), self._daemon._connection() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            permitted = check(conn) and permitted
-            if permitted:
-                conn.execute(
-                    "UPDATE remote_assignments SET start_permitted = 1 WHERE assignment_id = ? AND fence = ?",
-                    (assignment_id, fence),
-                )
-            conn.commit()
-            return permitted
+        return short_write(self._daemon, apply)
 
     @_serialized_publication_operation
     def decline_assignment(
@@ -3842,10 +3848,10 @@ class AgentSessionService:
             session.pools,
             session.state,
         )
-        with self._daemon._state_guard(), self._daemon._connection() as conn:  # type: ignore[attr-defined]
+
+        def finish_decline(conn: sqlite3.Connection) -> None:
             rule, policy_revision = self._authorize("decline")
             self._require_remote_session(conn, rule, policy_revision, session_id, self._daemon._epoch or "")
-            conn.execute("BEGIN IMMEDIATE")
             conn.execute(
                 "UPDATE remote_assignments SET state = 'RELEASED', "
                 "next_availability_revision = ? WHERE assignment_id = ?",
@@ -3869,7 +3875,8 @@ class AgentSessionService:
                 "WHERE assignment_id = ?",
                 (assignment_id,),
             )
-            conn.commit()
+
+        short_write(self._daemon, finish_decline)
         self._daemon._poll_waiters.notify(session_id)
         self._daemon._wake_admission(str(row["run_uri"]))
         return resumed
@@ -3898,7 +3905,8 @@ class AgentSessionService:
         self._remote_execution().remote_started(
             assignment_id, fence=fence, process_execution_id=process_execution_id
         )
-        with self._daemon._state_guard(), self._daemon._connection() as conn:  # type: ignore[attr-defined]
+
+        def record_started(conn: sqlite3.Connection) -> None:
             rule, policy_revision = self._authorize("started")
             self._require_remote_session(conn, rule, policy_revision, session_id, self._daemon._epoch or "")
             conn.execute(
@@ -3906,7 +3914,8 @@ class AgentSessionService:
                 "WHERE assignment_id = ? AND fence = ? AND state IN ('GRANTED', 'RUNNING')",
                 (assignment_id, fence),
             )
-            conn.commit()
+
+        short_write(self._daemon, record_started)
         if str(row["state"]) != "RUNNING":
             self._daemon._wake_admission(str(row["run_uri"]))
         return freeze_plain_data(
@@ -3967,7 +3976,7 @@ class AgentSessionService:
         return rule, (revision, self._daemon._epoch or "", self._daemon._scheduling_epoch)
 
     def _declaration_authority(self, conn, session_id, assignment_id, *, fence,
-                               authorization_id, authorization_revision, report, encoded,
+                               authorization_id, authorization_revision, encoded,
                                authorization_admitted=False):
         rule, stamp = self._result_authority("output_manifest")
         revision, epoch, _ = stamp
@@ -3986,7 +3995,13 @@ class AgentSessionService:
         ).fetchone()
         if delivery is None:
             raise QueueConflictError("remote delivered request is unavailable")
-        request = _ResidentAssignmentBundle.from_remote_dict(json.loads(str(delivery["request_json"])))
+        if row["report_json"] is not None and str(row["report_json"]) != encoded:
+            raise QueueConflictError("remote result replay conflicts")
+        session = conn.execute("SELECT agent_root_id FROM agent_sessions WHERE session_id = ?", (session_id,)).fetchone()
+        return row, str(delivery["request_json"]), str(session["agent_root_id"]), stamp
+
+    @staticmethod
+    def _validate_output_request(request, report, roots) -> None:
         output_mismatch = (
             set(item.logical_name for item in report.outputs) != set(request.declared_outputs)
             if report.status is StageStatus.SUCCEEDED else bool(report.outputs)
@@ -4004,14 +4019,10 @@ class AgentSessionService:
         if selected(request) is not None and report.status is StageStatus.SUCCEEDED:
             if report.output_kind != "shared":
                 raise QueueConflictError("shared publication report capability is missing")
-            if not self._daemon.config.coordinator_shared_roots:
+            if not roots:
                 raise QueueConflictError("coordinator shared root mapping is unavailable")
         elif any(shared_binding(item.metadata) is not None for item in report.outputs):
             raise QueueConflictError("shared output was not admitted")
-        if row["report_json"] is not None and str(row["report_json"]) != encoded:
-            raise QueueConflictError("remote result replay conflicts")
-        session = conn.execute("SELECT agent_root_id FROM agent_sessions WHERE session_id = ?", (session_id,)).fetchone()
-        return row, request, str(session["agent_root_id"]), stamp
 
     @_serialized_publication_operation
     def declare_outputs(
@@ -4025,39 +4036,35 @@ class AgentSessionService:
         if len(encoded.encode("utf-8")) > _MAX_REMOTE_WIRE_VALUE_BYTES:
             raise QueueServiceError("remote result manifest exceeds its bound")
         digest = hashlib.sha256(encoded.encode()).hexdigest()
-        arguments = dict(fence=fence, authorization_id=authorization_id,
-                         authorization_revision=authorization_revision, report=report, encoded=encoded)
-        with self._daemon._state_guard(), self._daemon._connection() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            row, request, agent_id, stamp = self._declaration_authority(
-                conn, session_id, assignment_id, authorization_admitted=False, **arguments)
-            if row["report_json"] is not None:
-                conn.commit()
-                return freeze_plain_data(
-                    {"assignment_id": assignment_id, "state": str(row["state"])},
-                    path="remote output manifest",
-                )
-            roots = self._daemon.config.coordinator_shared_roots
-            conn.commit()
+        def authority(conn: sqlite3.Connection, *, admitted: bool):
+            return self._declaration_authority(
+                conn, session_id, assignment_id, fence=fence, authorization_id=authorization_id,
+                authorization_revision=authorization_revision, encoded=encoded, authorization_admitted=admitted,
+            )
+
+        def capture(conn: sqlite3.Connection):
+            return authority(conn, admitted=False), self._daemon.config.coordinator_shared_roots
+
+        (row, payload, agent_id, stamp), roots = short_write(self._daemon, capture)
+        request = _ResidentAssignmentBundle.from_remote_dict(json.loads(payload))
+        self._validate_output_request(request, report, roots)
         from ._shared_publication import selected, prepare_publication, accept_publication
 
         prepared = None
-        if selected(request) is not None and report.status is StageStatus.SUCCEEDED:
+        if row["report_json"] is None and selected(request) is not None and report.status is StageStatus.SUCCEEDED:
             self._remote_execution().remote_publication_fence(assignment_id, fence=fence)
             prepared = prepare_publication(request, report, roots, agent_id=agent_id, fence=fence)
         shared_outputs = None if prepared is None else accept_publication(prepared)
-        with self._daemon._state_guard(), self._daemon._connection() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+
+        def retain(conn: sqlite3.Connection) -> Mapping[str, PlainData]:
             # Expiry bounds admission of an RPC, not the duration of its verified
             # filesystem work. Recheck its epoch, session, fence and policy;
             # every later RPC still needs a currently unexpired authorization.
-            row, current_request, current_agent, current_stamp = self._declaration_authority(
-                conn, session_id, assignment_id, authorization_admitted=True, **arguments)
-            if (current_stamp != stamp or current_request != request or current_agent != agent_id
+            row, current_payload, current_agent, current_stamp = authority(conn, admitted=True)
+            if (current_stamp != stamp or current_payload != payload or current_agent != agent_id
                 or self._daemon.config.coordinator_shared_roots != roots):
                 raise QueueConflictError("remote publication authority changed during verification")
             if row["report_json"] is not None:
-                conn.commit()
                 return freeze_plain_data(
                     {"assignment_id": assignment_id, "state": str(row["state"])},
                     path="remote output manifest",
@@ -4104,11 +4111,12 @@ class AgentSessionService:
                     "result_code = ?, acknowledged = 1 WHERE assignment_id = ?",
                     (code, assignment_id),
                 )
-            conn.commit()
-        return freeze_plain_data(
-            {"assignment_id": assignment_id, "state": "RESULT_RETAINED"},
-            path="remote output manifest",
-        )
+            return freeze_plain_data(
+                {"assignment_id": assignment_id, "state": "RESULT_RETAINED"},
+                path="remote output manifest",
+            )
+
+        return short_write(self._daemon, retain)
 
     def _transfer_authority(self, conn, session_id, assignment_id, authorization_id, authorization_revision, action):
         rule, stamp = self._result_authority(action)
@@ -4145,14 +4153,11 @@ class AgentSessionService:
                 raise QueueConflictError("remote output transfer is not declared")
             return row, stamp
 
-        with self._daemon._state_guard(), self._daemon._connection() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            row, stamp = capture(conn)
-            conn.commit()
+        row, stamp = short_write(self._daemon, capture)
         with phase("output_retention", operation_id=assignment_id):
             received, should_finalize = _retain_output_chunk(row, transfer_id, offset, data, final)
-        with self._daemon._state_guard(), self._daemon._connection() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+
+        def record_offset(conn: sqlite3.Connection) -> None:
             current, current_stamp = capture(conn)
             if tuple(current) != tuple(row) or current_stamp != stamp:
                 raise QueueConflictError("remote transfer authority changed during retention")
@@ -4161,7 +4166,8 @@ class AgentSessionService:
                 "AND direction = 'output' AND transfer_id = ?",
                 (received, int(should_finalize), assignment_id, transfer_id),
             )
-            conn.commit()
+
+        short_write(self._daemon, record_offset)
         return freeze_plain_data({"transfer_id": transfer_id, "received_bytes": received, "final": should_finalize},
                                  path="remote output chunk")
 
@@ -4196,7 +4202,7 @@ class AgentSessionService:
                     path="remote result commit",
                 )
             encoded = str(row["report_json"])
-            report = _RemoteExecutionReport.from_dict(json.loads(encoded))
+        report = _RemoteExecutionReport.from_dict(json.loads(encoded))
         outputs = self._coordinator_output_refs(transfers)
         with self._daemon._state_guard():
             with self._daemon._connection() as conn:
@@ -4212,14 +4218,15 @@ class AgentSessionService:
             self._remote_execution().remote_commit(
                 assignment_id, fence=fence, report=report, outputs=outputs
             )
-        with self._daemon._state_guard(), self._daemon._connection() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+
+        def record_terminal(conn: sqlite3.Connection) -> None:
             current, current_transfers, current_stamp = self._commit_authority(conn, session_id, assignment_id, fence)
             if current_stamp != stamp or str(current["report_json"]) != encoded or current_transfers != transfers:
                 raise QueueConflictError("remote commit authority changed during authority operation")
             conn.execute("UPDATE remote_assignments SET state = 'TERMINAL' WHERE assignment_id = ?",
                          (assignment_id,))
-            conn.commit()
+
+        short_write(self._daemon, record_terminal)
         self._daemon._wake_admission(str(row["run_uri"]))
         return freeze_plain_data(
             {"assignment_id": assignment_id, "state": "TERMINAL"},
@@ -4411,8 +4418,8 @@ class AgentSessionService:
                     or provider_release_proof.claim_id != fact.get("claim_id")
                 ):
                     raise QueueConflictError("recovery provider release proof is stale")
-        with self._daemon._state_guard(), self._daemon._connection() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+
+        def retain_proof(conn: sqlite3.Connection) -> None:
             rule, policy_revision = self._authorize("release")
             current_session = self._require_remote_cleanup_session(
                 conn, rule, policy_revision, session_id, self._daemon._epoch or "")
@@ -4425,7 +4432,8 @@ class AgentSessionService:
                     "WHERE assignment_id = ?",
                     (proof_json, assignment_id),
                 )
-            conn.commit()
+
+        short_write(self._daemon, retain_proof)
         # The persisted provider proof and guarded terminal/containment checks
         # above are the sole seal trigger, including a supervisor-proven death
         # without a worker result. A sealed reference or known budget failure
@@ -4439,13 +4447,14 @@ class AgentSessionService:
             roots = self._daemon.config.coordinator_shared_roots
         from ._shared_recovery import seal, retain_seal
         sealed = seal(request, roots, agent_id=session.agent_root_id, fence=fence)
-        with self._daemon._state_guard(), self._daemon._connection() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+
+        def record_seal(conn: sqlite3.Connection) -> None:
             current = self._require_remote_assignment(conn, session_id, assignment_id)
             if current["provider_release_proof_json"] != proof_json or current["fence"] != fence:
                 raise QueueConflictError("recovery release proof changed during retention")
             retain_seal(conn, request, sealed)
-            conn.commit()
+
+        short_write(self._daemon, record_seal)
         if recovery is None:
             self._remote_execution().remote_release(assignment_id)
         else:
@@ -4464,8 +4473,8 @@ class AgentSessionService:
             session.pools,
             session.state,
         )
-        with self._daemon._state_guard(), self._daemon._connection() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+
+        def record_release(conn: sqlite3.Connection) -> None:
             rule, policy_revision = self._authorize("release")
             current_session = self._require_remote_cleanup_session(
                 conn, rule, policy_revision, session_id, self._daemon._epoch or "")
@@ -4538,7 +4547,8 @@ class AgentSessionService:
                         session_id,
                     ),
                 )
-            conn.commit()
+
+        short_write(self._daemon, record_release)
         self._daemon._poll_waiters.notify(session_id)
         self._daemon._wake_admission(str(row["run_uri"]))
         return resumed
@@ -4754,24 +4764,21 @@ class AgentSessionService:
             daemon._poll_waiters.notify(session_id)
         return result
 
-    @_serialized_session_operation
     def retire_clean(
         self, proof: AgentRetirementProof, *, idempotency_key: str
     ) -> Mapping[str, PlainData]:
-        rule, policy_revision = self._authorize("retire")
         _identifier(idempotency_key, "idempotency_key")
-        if proof.agent_id != rule.agent_id:
-            raise QueueServiceError("agent session is not authorized")
         digest = _digest(proof.value())
-        epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]
 
-        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
-            conn.execute("BEGIN IMMEDIATE")
+        def fence_session(conn: sqlite3.Connection) -> Mapping[str, PlainData] | None:
+            rule, policy_revision = self._authorize("retire")
+            if proof.agent_id != rule.agent_id:
+                raise QueueServiceError("agent session is not authorized")
+            epoch = self._daemon._epoch or ""
             replay = _receipt(
                 conn, rule.principal_id, "retire", idempotency_key, digest
             )
             if replay is not None:
-                conn.commit()
                 return replay
             session = _session_from_row(
                 conn.execute(
@@ -4793,11 +4800,14 @@ class AgentSessionService:
                 "UPDATE agent_sessions SET state = ? WHERE session_id = ?",
                 (AgentSessionState.RETIRING.value, session.session_id),
             )
-            conn.commit()
-        self._daemon._poll_waiters.notify(session.session_id)
+            return None
 
-        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
-            conn.execute("BEGIN IMMEDIATE")
+        replay = short_write(self._daemon, fence_session)
+        if replay is not None:
+            return replay
+        self._daemon._poll_waiters.notify(proof.session_id)
+
+        def finish(conn: sqlite3.Connection) -> Mapping[str, PlainData]:
             rule, _policy_revision = self._authorize("retire")
             if proof.agent_id != rule.agent_id:
                 raise QueueServiceError("agent session is not authorized")
@@ -4805,7 +4815,6 @@ class AgentSessionService:
                 conn, rule.principal_id, "retire", idempotency_key, digest
             )
             if replay is not None:
-                conn.commit()
                 return replay
             session = _session_from_row(
                 conn.execute(
@@ -4823,7 +4832,6 @@ class AgentSessionService:
             _require_matching_retirement_proof(session, proof)
             _verify_retirement_secret(conn, session.session_id, proof.retirement_secret)
             if not _coordinator_references_empty(conn, proof.session_id):
-                conn.commit()
                 raise QueueConflictError("agent session has unresolved references")
             conn.execute(
                 "INSERT INTO agent_retirement_proofs(session_id, proof_json) "
@@ -4852,8 +4860,9 @@ class AgentSessionService:
                 digest,
                 value,
             )
-            conn.commit()
-        return freeze_plain_data(value, path="agent retirement")
+            return freeze_plain_data(value, path="agent retirement")
+
+        return short_write(self._daemon, finish)
 
     def _check_current_session(
         self,

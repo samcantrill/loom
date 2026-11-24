@@ -320,7 +320,7 @@ def test_stalled_session_allows_other_renewals_and_controls(
 def test_sqlite_busy_retries_release_the_state_guard(
     waiting_owner, monkeypatch, transaction
 ):
-    from loom.queue import agent_sessions
+    from loom.queue import _coordinator_transactions
 
     daemon, session, _, _, poll = waiting_owner
     busy, retry = Event(), Event()
@@ -329,7 +329,7 @@ def test_sqlite_busy_retries_release_the_state_guard(
         busy.set()
         assert retry.wait(3)
 
-    monkeypatch.setattr(agent_sessions, "sleep", wait_to_retry)
+    monkeypatch.setattr(_coordinator_transactions, "sleep", wait_to_retry)
     with ThreadPoolExecutor() as pool, daemon._connection() as blocker:
         blocker.execute(transaction)
         # A read transaction in rollback-journal mode blocks COMMIT. An
@@ -352,6 +352,56 @@ def test_sqlite_busy_retries_release_the_state_guard(
             blocker.rollback()
             retry.set()
         assert pending.result(timeout=2)["result"] == "wait"
+
+
+@pytest.mark.parametrize("blocker_transaction", ["BEGIN IMMEDIATE", "BEGIN"])
+def test_registration_releases_state_guard_while_writer_is_busy(tmp_path, monkeypatch, blocker_transaction):
+    from loom.queue import _coordinator_transactions
+    from tests.unit.loom.queue.test_agent_sessions import _register
+
+    monkeypatch.setattr(LocalDaemon, "_serve", lambda self: self._stop.wait())
+    policy = _policy()
+    first = policy.agents[0]
+    second = replace(first, credential_id="agent-b", principal_id="principal-b", agent_id="agent-b")
+    config = _config(tmp_path, replace(policy, agents=(first, second)))
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    waiting, retry = Event(), Event()
+
+    def wait_to_retry(_seconds):
+        waiting.set()
+        assert retry.wait(5)
+
+    try:
+        current = _register(daemon)
+        view = daemon.agent_view(LocalDaemonPrincipal("principal-b", LocalDaemonRole.AGENT, "agent-b"))
+        request = AgentRegistration(
+            "register-b", current.coordinator_id, current.coordinator_epoch, "root-b", "cfg",
+            "inv", "avail", ("default",), ("python",), retirement_verifier=_TEST_RETIREMENT_VERIFIER,
+        )
+        monkeypatch.setattr(_coordinator_transactions, "sleep", wait_to_retry)
+        with ThreadPoolExecutor() as workers, daemon._connection() as blocker:
+            blocker.execute(blocker_transaction)
+            blocker.execute("SELECT * FROM agent_sessions").fetchall()
+            pending = workers.submit(view.register, request)
+            try:
+                assert waiting.wait(3)
+                read = workers.submit(_view(daemon).wait_for_controls, current.session_id,
+                                      received_operation_ids=(), wait_timeout_ms=0)
+                assert read.result(2) == {"control": None, "assignment_control": None}
+            finally:
+                blocker.rollback()
+                retry.set()
+            assert pending.result(3) == view.register(request)
+        with daemon._connection() as conn:
+            assert conn.execute("SELECT count(*) FROM agent_sessions WHERE agent_id='agent-b'").fetchone()[0] == 1
+            assert conn.execute(
+                "SELECT count(*) FROM agent_receipts WHERE principal_id='principal-b' AND operation='register'"
+            ).fetchone()[0] == 1
+    finally:
+        retry.set()
+        daemon.stop()
 
 
 @pytest.mark.parametrize("sleeping", [False, True])

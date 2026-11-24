@@ -25,6 +25,7 @@ from loom.pipeline.cleanup.preparation_pins import retain_preparation_path
 from loom.serialization import PlainData, stable_json_bytes, thaw_plain_data
 from loom.runs.context import SubmissionContext
 
+from ._coordinator_transactions import short_write
 from ._continuation import ContinuationConflict, ContinuationPending
 from .errors import QueueConflictError, QueueServiceError
 from .run import RunRequest, _public_operation_id
@@ -572,10 +573,9 @@ class CoordinatorPreparations:
             ).hexdigest()
         if run_mode == "reconcile":
             intent = hashlib.sha256(stable_json_bytes([intent, run_mode, retry_policy])).hexdigest()
-        coordinator_id = self.daemon._require_started()
-        with self.daemon._state_guard(), self.daemon._connection() as conn:
-            self.daemon._lifetime.require_accepting()
-            conn.execute("BEGIN IMMEDIATE")
+
+        def accept(conn: sqlite3.Connection) -> tuple[LocalDaemonOperation, bool]:
+            coordinator_id = self.daemon._require_started()
             row = conn.execute(
                 "SELECT * FROM preparation_operations WHERE operation_id = ?",
                 (request.operation_id,),
@@ -588,8 +588,7 @@ class CoordinatorPreparations:
                 ):
                     raise QueueConflictError("preparation operation intent conflicts")
                 conn.execute("DELETE FROM daemon_metadata WHERE key = ?", ("startup-attachment:" + request.operation_id,))
-                conn.commit()
-                return self._projection(row)
+                return self._projection(row), False
             if not self.available or self.callbacks is None:
                 raise QueueServiceError("preparation is unsupported")
             if request.run_name is not None and request.run_name.startswith(PREPARATION_RUN_PREFIX):
@@ -731,9 +730,18 @@ class CoordinatorPreparations:
             # Transfer this bounded startup attachment into the durable native
             # operation in the same acceptance transaction.
             conn.execute("DELETE FROM daemon_metadata WHERE key = ?", ("startup-attachment:" + request.operation_id,))
-            conn.commit()
-            self.daemon._scheduling_reference_revision += 1
-        self.daemon._wake.set()
+            return operation, True
+
+        def committed(result: tuple[LocalDaemonOperation, bool]) -> None:
+            if result[1]:
+                self.daemon._scheduling_reference_revision += 1
+
+        operation, created = short_write(
+            self.daemon, accept, before_begin=self.daemon._lifetime.require_accepting,
+            committed=committed,
+        )
+        if created:
+            self.daemon._wake.set()
         return operation
 
     def cancel(self, operation_id: str, principal_id: str) -> LocalDaemonOperation:

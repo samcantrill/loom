@@ -311,11 +311,14 @@ def test_preparation_is_discarded_when_its_authorization_changes(tmp_path, monke
         daemon.stop()
 
 
-def test_cancellation_wins_while_start_authority_is_blocked(tmp_path, monkeypatch):
+@pytest.mark.parametrize("boundary", ["authority", "delivery_decode"])
+def test_cancellation_wins_while_start_authority_is_blocked(tmp_path, monkeypatch, boundary):
     from dataclasses import replace
+    import json
     from loom.queue.agent_sessions import AgentRegistration
-    from loom.queue._remote_stage_execution import REMOTE_EXECUTION_CAPABILITY, REGULAR_FILE_RELAY_CAPABILITY
+    from loom.queue._remote_stage_execution import REMOTE_EXECUTION_CAPABILITY, REGULAR_FILE_RELAY_CAPABILITY, _ResidentAssignmentBundle
     from tests.unit.loom.queue.test_agent_sessions import _TEST_RETIREMENT_VERIFIER
+    from tests.unit.loom.queue.test_remote_stage_execution import _profile, _request
 
     monkeypatch.setattr(LocalDaemon, "_serve", lambda self: self._stop.wait())
     root = tmp_path / "runs"
@@ -357,7 +360,26 @@ def test_cancellation_wins_while_start_authority_is_blocked(tmp_path, monkeypatc
             assert release.wait(10)
             return True
 
-        monkeypatch.setattr(daemon._execution, "remote_start_permit", blocked_authority)
+        if boundary == "delivery_decode":
+            bundle = replace(_request(_profile(tmp_path)), assignment_id="assignment-permit")
+            with daemon._connection() as conn:
+                conn.execute(
+                    "INSERT INTO agent_deliveries(assignment_id, session_id, availability_revision, "
+                    "coordinator_epoch, request_json, state) VALUES (?, ?, ?, ?, ?, 'DELIVERED')",
+                    (bundle.assignment_id, session.session_id, session.availability_revision,
+                     session.coordinator_epoch, json.dumps(bundle.to_dict())),
+                )
+                conn.commit()
+            decode = _ResidentAssignmentBundle.from_remote_dict
+
+            def paused_decode(value):
+                blocked_authority()
+                return decode(value)
+
+            monkeypatch.setattr(_ResidentAssignmentBundle, "from_remote_dict", staticmethod(paused_decode))
+            monkeypatch.setattr(daemon._execution, "remote_start_permit", lambda *_a, **_kw: pytest.fail("cancelled"))
+        else:
+            monkeypatch.setattr(daemon._execution, "remote_start_permit", blocked_authority)
         permit = executor.submit(_view(daemon).start_permit, session.session_id, "assignment-permit", fence="fence-permit")
         assert entered.wait(2)
         cancelled = executor.submit(client.cancel, "permit").result(2)

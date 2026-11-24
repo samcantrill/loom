@@ -6,17 +6,29 @@ accepted-run progression does not pass through fresh admission policy.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 import json
+import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from ._coordinator_transactions import short_write
 from .errors import QueueConflictError, QueueServiceError
 from .local_daemon import LocalDaemonAdmissionState, _admission_from_row
 
 if TYPE_CHECKING:
     from .local_daemon import LocalDaemon, LocalDaemonAdmission, LocalDaemonAdmissionRequest
     from .local_daemon_execution import LocalDaemonExecution
+
+
+def _commit_reference(
+    daemon: LocalDaemon, execution: LocalDaemonExecution, apply: Callable[[sqlite3.Connection], None],
+) -> None:
+    def committed(_: None) -> None:
+        daemon._scheduling_reference_revision += 1
+
+    short_write(daemon, apply, scheduling_guard=execution.scheduling_reload_guard, committed=committed)
 
 
 def _submit(
@@ -126,10 +138,10 @@ def _submit(
         run_priority = self._resolve_admission_priority(request.run_uri)
         admission_id = f"admission-{uuid4()}"
         operation_id = f"authority-bind-{uuid4()}"
-        with execution.scheduling_reload_guard(), self._state_guard(), self._connection() as conn:
+
+        def insert(conn: sqlite3.Connection) -> None:
             if self._execution is not execution or epochs != (self._epoch, self._scheduling_epoch):
                 raise QueueConflictError("admission scheduling changed during preparation")
-            conn.execute("BEGIN IMMEDIATE")
             self._lifetime.require_accepting()
             if run_operation_id is not None:
                 current = conn.execute("SELECT cancellation_requested, state FROM preparation_operations WHERE operation_id = ?", (run_operation_id,)).fetchone()
@@ -172,8 +184,8 @@ def _submit(
                 self._preparations.retain_admission(
                     conn, run_operation_id, _admission_from_row(admitted)
                 )
-            conn.commit()
-            self._scheduling_reference_revision += 1
+
+        _commit_reference(self, execution, insert)
     self._wake.set()
     return self._admission(admission_id)
 
@@ -222,8 +234,24 @@ def _retry_failed_admission(
                     if stage.status.value == "CANCELLED" and stage.attempts and stage.attempts[-1].status.value == "CANCELLED"
                 ],
             )
-        with execution.scheduling_reload_guard(), self._state_guard(), self._connection() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+        if resume_cancelled:
+            from ._shared_recovery import assignment_rows
+            cancelled = {tuple(pair) for pair in record.pop("cancelled_attempts")}
+            with self._connection() as conn:
+                record["cancelled_assignments"] = {
+                    row["assignment_id"]: [admission.run_uri, row["stage_name"], row["attempt_id"], row["fence"]]
+                    for row in assignment_rows(
+                        conn, admission.run_uri, slurm_assignments=execution.slurm_assignments,
+                        embedded=execution._embedded_recovery,
+                    )
+                    if (row["stage_name"], row["attempt_id"]) in cancelled and row["fence"] is not None
+                }
+
+        def retain(conn: sqlite3.Connection) -> None:
+            current = conn.execute("SELECT state, revision FROM managed_admissions WHERE admission_id=?",
+                                   (admission.admission_id,)).fetchone()
+            if current is None or current["state"] != expected_state.value or current["revision"] != revision:
+                raise QueueConflictError("retry failed admission revision is stale")
             from ._maintenance import classify
             classify(conn, request.queue_item_id, parent_id=parent_id)
             if parent_id is not None:
@@ -233,23 +261,12 @@ def _retry_failed_admission(
                 ).fetchone()
                 if parent is None or parent["state"] != "applying" or parent["cancellation_requested"]:
                     raise QueueConflictError("run continuation is suppressed or complete")
-            if resume_cancelled:
-                from ._shared_recovery import assignment_rows
-                cancelled = {tuple(pair) for pair in record.pop("cancelled_attempts")}
-                record["cancelled_assignments"] = {
-                    row["assignment_id"]: [admission.run_uri, row["stage_name"], row["attempt_id"], row["fence"]]
-                    for row in assignment_rows(
-                        conn, admission.run_uri, slurm_assignments=execution.slurm_assignments,
-                        embedded=execution._embedded_recovery,
-                    )
-                    if (row["stage_name"], row["attempt_id"]) in cancelled and row["fence"] is not None
-                }
             conn.execute(
                 "INSERT INTO daemon_metadata(key, value) VALUES (?, ?)",
                 (key, json.dumps(record)),
             )
-            conn.commit()
-            self._scheduling_reference_revision += 1
+
+        _commit_reference(self, execution, retain)
     else:
         record = json.loads(str(row["value"]))
     if record.get("terminal_state", "FAILED") != expected_state.value:
@@ -284,8 +301,8 @@ def _apply_admission_retry(
         resume_cancelled=record.get("terminal_state") == "CANCELLED",
     )
     record["state"] = "applied"
-    with execution.scheduling_reload_guard(), self._state_guard(), self._connection() as conn:
-        conn.execute("BEGIN IMMEDIATE")
+
+    def settle(conn: sqlite3.Connection) -> None:
         updated = conn.execute(
             "UPDATE managed_admissions SET state = ?, blocked_reason = NULL, "
             "cancellation_operation_id = NULL, cancellation_principal_id = NULL, "
@@ -325,8 +342,8 @@ def _apply_admission_retry(
             "UPDATE daemon_metadata SET value = ? WHERE key = ?",
             (json.dumps(record), key),
         )
-        conn.commit()
-        self._scheduling_reference_revision += 1
+
+    _commit_reference(self, execution, settle)
 
 
 def _resume_pending_admission_retries(
