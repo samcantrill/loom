@@ -2355,7 +2355,7 @@ class _SupervisorOperation:
 
 
 class _SupervisorDispatch:
-    """Two physical effects, no submission queue, and coalesced stop intent.
+    """Two general effects, one slow stop, and coalesced per-launch stop intent.
 
     The lock protects admission and operation maps only. Workers own all
     external waits; a disconnected requester cannot cancel an accepted effect.
@@ -2368,7 +2368,13 @@ class _SupervisorDispatch:
         self.lock = RLock()
         self.operations: dict[str, _SupervisorOperation] = {}
         self.active = 0
+        self._active_stops = 0
         self.closing = False
+
+    def _available(self, operation: str) -> int:
+        if operation == "request_stop":
+            return 1 - self._active_stops
+        return self._SLOW_LIMIT - (self.active - self._active_stops)
 
     def _snapshot(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
         self.supervisor._validate_launch(launch)
@@ -2433,7 +2439,7 @@ class _SupervisorDispatch:
                 if launch.backend_kind != "docker" and not current.temporary_storage_pending:
                     return current
             if entry is None:
-                if self.active >= self._SLOW_LIMIT or busy:
+                if not self._available(operation) or busy:
                     # New work is not accepted into a hidden executor queue.
                     if current.state is SupervisorLaunchState.NOT_ACCEPTED:
                         return current
@@ -2442,9 +2448,10 @@ class _SupervisorDispatch:
                 self.operations[launch.launch_operation_id] = entry
             if operation == "request_stop" and entry.active != "request_stop":
                 entry.stop = True
-            if not busy and self.active < self._SLOW_LIMIT:
+            selected = "request_stop" if entry.stop else operation
+            if not busy and self._available(selected):
                 self._start(
-                    entry, "request_stop" if entry.stop else operation,
+                    entry, selected,
                     new_launch=current.state is SupervisorLaunchState.NOT_ACCEPTED,
                 )
             if current.state is SupervisorLaunchState.NOT_ACCEPTED:
@@ -2470,6 +2477,7 @@ class _SupervisorDispatch:
         entry.new_launch = operation == "launch" and new_launch
         if operation == "request_stop":
             entry.stop = False
+            self._active_stops += 1
         self.active += 1
         Thread(target=self._run, args=(entry, operation), daemon=True).start()
 
@@ -2506,10 +2514,11 @@ class _SupervisorDispatch:
             entry.active = None
             entry.new_launch = False
             self.active -= 1
-            # One volatile stop intent per accepted launch, never another
-            # submitted task while both slow slots are charged.
+            if operation == "request_stop":
+                self._active_stops -= 1
+            # A detached caller leaves the accepted intent with the exact launch.
             for candidate in self.operations.values():
-                if self.active >= self._SLOW_LIMIT:
+                if not self._available("request_stop"):
                     break
                 if candidate.stop and candidate.active is None and not any(
                     item.active is not None
@@ -2521,12 +2530,13 @@ class _SupervisorDispatch:
     def retry_temporary_cleanup(self) -> None:
         """Use spare effect slots to resume terminal cleanup on agent reconnect."""
         with self.lock:
-            if self.closing or self.active >= self._SLOW_LIMIT:
+            available = self._available("query")
+            if self.closing or not available:
                 return
             with self.supervisor._connect() as conn:
                 rows = tuple(conn.execute(
                     "SELECT launch_json FROM launches WHERE temporary_storage_pending = 1 AND state = 'contained' LIMIT ?",
-                    (self._SLOW_LIMIT - self.active,),
+                    (available,),
                 ))
             for row in rows:
                 launch = _launch_from_value(json.loads(row["launch_json"]))

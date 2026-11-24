@@ -1116,6 +1116,12 @@ scheduling lock is retained during waiting, and empty checks do not acquire a
 SQLite write transaction. Notifications are hints; every delivery rechecks the
 authenticated session and current durable control state.
 
+The native supervisor has two workers for launch, query, containment and
+cleanup, plus one worker reserved for a stop that requires backend I/O.
+Immediate native signals still use the short IPC path. A busy assignment keeps
+its own ordering. An accepted stop for it remains pending until the worker can
+deliver it. Shutdown waits for the physical effect to settle.
+
 For embedded GPU providers the coordinator runs one background occupancy query
 at a time. CPU admissions can reach terminal state while it runs. The scheduling
 owner installs a fresh result only for the same provider, monitor and revision.
