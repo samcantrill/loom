@@ -1099,6 +1099,22 @@ scheduling lock is retained during waiting, and empty checks do not acquire a
 SQLite write transaction. Notifications are hints; every delivery rechecks the
 authenticated session and current durable control state.
 
+Resource maintenance samples GPU occupancy outside the agent mutation gate.
+It applies the sample while the session, provider and claim revision still
+match and the observation is fresh. A control can take effect during sampling.
+If a drain withdraws an offer just before a poll starts, the service recovers
+the exact poll outcome and predecessor watermark before applying the control.
+Assignment reconciliation bounds queued HTTP attempts, socket exchanges and
+retry delays by its original deadline. Expiration retains the request's replay
+identity and any uncertain physical ownership.
+
+The agent journals a pending provider release against its original delivery and
+availability before sending it. Pending release fences the session's offer and
+work polling. Its HTTP exchange leaves the mutation gate free for controls.
+On acknowledgement the journal resolves that delivery. It applies capacity
+changes only while the captured active session and offer still own them.
+Concurrent releases that advance the same availability revision run in order.
+
 The agent handshake can also advertise `agent-event-batch-v1`. An outbound
 agent sends up to 32 consecutive events for one assignment in a request of at
 most 65,536 bytes. Each event is authorized and persisted by the same owner as

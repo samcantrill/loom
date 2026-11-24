@@ -1046,17 +1046,12 @@ def _complete_remote_result_and_release(
 
 
 
-@_serialized("_delivery_gate")
-@_serialized("_mutation_gate")
+@_serialized("_release_gate")
 def _release_completed_assignment(
     self: LocalDaemonAgentHttpClient, session, assignment, commands, providers, execution_journal, *, fence
 ):
-    next_revision = self._release_provider_claims(
-        session,
-        assignment,
-        commands,
-        providers,
-        execution_journal,
+    next_revision = yield from _steps(
+        self._prepare_provider_release, session, assignment, commands, providers, execution_journal, fence,
     )
     released_session = cast(
         AgentSession,

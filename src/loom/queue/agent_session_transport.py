@@ -114,6 +114,7 @@ from .agent_sessions import (
     AgentControlEffect,
     AgentPollActiveError,
     AgentPollFencedError,
+    AgentPollOfferUnavailable,
     AgentPollSequenceGapError,
     AgentRegistration,
     AgentSession,
@@ -157,6 +158,7 @@ from ._coordinator_control import (
 )
 from ._coordinator_transport import https_connection
 from ._agent_progress import _Progress, _cooperative, _steps, _external, _delay, _Gate, _serialized, _owns_assignment
+from ._agent_progress import _bound_exchanges, _exchange_deadline, _ExternalDeadline
 from .local_daemon import (
     AdmissionNotFoundError,
     LocalDaemon,
@@ -916,6 +918,7 @@ class LocalDaemonAgentHttpClient:
         # Polls and assignment release/decline advance the same availability
         # revision. Their ordering is independent of unchanged-offer renewal.
         self._delivery_gate = _Gate()
+        self._release_gate = _Gate()
         self._supports_event_batch = False
         self._epoch_reconciliation_pending = False
         self._mutation_gate = _Gate()
@@ -2367,7 +2370,7 @@ class LocalDaemonAgentHttpClient:
         ))
 
     @_cooperative
-    @_serialized("_mutation_gate")
+    @_serialized("_release_gate")
     def release_assignment(
         self,
         session_id: str,
@@ -2376,19 +2379,16 @@ class LocalDaemonAgentHttpClient:
         fence: str,
         availability_revision: str,
     ) -> Generator[_Progress, Any, AgentSession]:
-        (yield from _steps(self._replay_pending_resource_mutation, session_id))
         journal = self._require_journal()
         execution_journal = self._execution_journal
         if execution_journal is None:
             raise QueueServiceError("remote execution journal is required")
-        proof = journal.provider_release_proof(
-            session_id, assignment_id, execution_journal
-        )
-        if (
-            proof.execution_fence != fence
-            or proof.released_availability_revision != availability_revision
-        ):
-            raise QueueConflictError("remote provider release proof is stale")
+        if journal.pending_release_assignment(session_id) is None:
+            yield from _steps(self._replay_pending_resource_mutation, session_id)
+        proof = yield from self._delivery_gate.run(self._mutation_gate.run(_steps(
+            self._prepare_release_proof, session_id, assignment_id, execution_journal,
+            fence, availability_revision,
+        )))
         session = _session_from_value(
             (yield from _steps(self._call,
                 "release",
@@ -2401,14 +2401,21 @@ class LocalDaemonAgentHttpClient:
                 },
             ))
         )
-        if session.state not in {AgentSessionState.ACTIVE, AgentSessionState.REPLACED}:
+        if session.session_id != session_id or session.state not in {AgentSessionState.ACTIVE, AgentSessionState.REPLACED}:
             raise QueueConflictError("remote release returned an invalid session state")
-        journal.complete_assignment_release(session, assignment_id)
+        yield from self._mutation_gate.run(_steps(journal.complete_assignment_release, session, assignment_id))
         self._next_resource_maintenance = 0
         return session
 
+    def _prepare_release_proof(self, session_id, assignment_id, execution_journal, fence, availability_revision):
+        journal = self._require_journal()
+        proof = journal.provider_release_proof(session_id, assignment_id, execution_journal)
+        if proof.execution_fence != fence or proof.released_availability_revision != availability_revision:
+            raise QueueConflictError("remote provider release proof is stale")
+        return journal.prepare_assignment_release(proof)
+
     @_cooperative
-    @_serialized("_mutation_gate")
+    @_serialized("_release_gate")
     def release_contained_assignment(
         self, session_id: str, assignment_id: str, *, fence: str
     ) -> Generator[_Progress, Any, AgentSession]:
@@ -2489,13 +2496,9 @@ class LocalDaemonAgentHttpClient:
             AssignmentState.RELEASED,
         }:
             raise QueueConflictError("contained assignment is not provider-releasable")
-        availability_revision = self._release_provider_claims(
-            session,
-            assignment,
-            commands,
-            providers,
-            execution_journal,
-        )
+        journal.contained_assignment_control(session_id, assignment_id, fence)
+        availability_revision = yield from _steps(self._prepare_provider_release,
+            session, assignment, commands, providers, execution_journal, fence)
         return (yield from _steps(self.release_assignment,
             session_id,
             assignment_id,
@@ -2723,7 +2726,7 @@ class LocalDaemonAgentHttpClient:
         wait_timeout_ms: int,
         suspend_requested: Callable[[], bool] | None = None,
     ) -> Generator[_Progress, Any, None]:
-        return (yield from _session_protocol._resume_pending_poll(self, wait_timeout_ms=wait_timeout_ms, suspend_requested=suspend_requested))
+        yield from _session_protocol._resume_pending_poll(self, wait_timeout_ms=wait_timeout_ms, suspend_requested=suspend_requested)
 
     @_cooperative
     def resume_retained_work(
@@ -2767,6 +2770,24 @@ class LocalDaemonAgentHttpClient:
         return (yield from _assignment_progress._cancel_pregrant_if_requested(
             self, session, assignment_id, assignment, commands, providers, execution_journal
         ))
+
+    @_cooperative
+    def _prepare_provider_release(
+        self, session, assignment, commands, providers, execution_journal, fence,
+    ) -> Generator[_Progress, Any, str]:
+        journal = self._require_journal()
+        if journal.pending_release_assignment(session.session_id) is None:
+            yield from _steps(self._replay_pending_resource_mutation, session.session_id)
+
+        def prepare():
+            pending = journal.pending_release_assignment(session.session_id)
+            if pending is not None and pending != assignment.assignment_id:
+                raise QueueConflictError("an earlier assignment release is pending")
+            revision = self._release_provider_claims(session, assignment, commands, providers, execution_journal)
+            self._prepare_release_proof(session.session_id, assignment.assignment_id, execution_journal, fence, revision)
+            return revision
+
+        return (yield from self._delivery_gate.run(self._mutation_gate.run(_steps(prepare))))
 
     def _release_provider_claims(
         self,
@@ -2882,39 +2903,40 @@ class LocalDaemonAgentHttpClient:
         """Retry one exact assignment operation across coordinator restart."""
 
         deadline = monotonic() + _ASSIGNMENT_RECONCILIATION_SECONDS
-        while True:
-            try:
-                return (yield from _steps(operation))
-            except QueueConflictError as conflict:
-                prior = self._require_journal().session(session_id)
-                current = (yield from _steps(self.handshake))
-                epoch = current.get("coordinator_epoch")
-                if not isinstance(epoch, str) or epoch == prior.coordinator_epoch:
-                    raise conflict
-                self._epoch_reconciliation_pending = True
-                (yield from _steps(self.reconcile,
-                    session_id,
-                    epoch,
-                    idempotency_key=(f"{assignment_id}:reconcile:{epoch}"),
-                ))
-            except _IndeterminateAgentProtocolError:
-                _raise_if_application_suspended(getattr(self, "_suspend_requested", None))
-                if monotonic() >= deadline:
-                    raise
+        with _bound_exchanges(deadline):
+            while True:
                 try:
+                    return (yield from _steps(operation))
+                except QueueConflictError as conflict:
+                    prior = self._require_journal().session(session_id)
                     current = (yield from _steps(self.handshake))
                     epoch = current.get("coordinator_epoch")
-                    prior = self._require_journal().session(session_id)
-                    if isinstance(epoch, str) and epoch != prior.coordinator_epoch:
-                        self._epoch_reconciliation_pending = True
-                        (yield from _steps(self.reconcile,
-                            session_id,
-                            epoch,
-                            idempotency_key=(f"{assignment_id}:reconcile:{epoch}"),
-                        ))
+                    if not isinstance(epoch, str) or epoch == prior.coordinator_epoch:
+                        raise conflict
+                    self._epoch_reconciliation_pending = True
+                    (yield from _steps(self.reconcile,
+                        session_id,
+                        epoch,
+                        idempotency_key=(f"{assignment_id}:reconcile:{epoch}"),
+                    ))
                 except _IndeterminateAgentProtocolError:
-                    pass
-                (yield from _delay(0.05))
+                    _raise_if_application_suspended(getattr(self, "_suspend_requested", None))
+                    if monotonic() >= deadline:
+                        raise
+                    try:
+                        current = (yield from _steps(self.handshake))
+                        epoch = current.get("coordinator_epoch")
+                        prior = self._require_journal().session(session_id)
+                        if isinstance(epoch, str) and epoch != prior.coordinator_epoch:
+                            self._epoch_reconciliation_pending = True
+                            (yield from _steps(self.reconcile,
+                                session_id,
+                                epoch,
+                                idempotency_key=(f"{assignment_id}:reconcile:{epoch}"),
+                            ))
+                    except _IndeterminateAgentProtocolError:
+                        pass
+                    (yield from _delay(0.05))
 
     def _runtime_owners(
         self, session: AgentSession
@@ -3180,11 +3202,14 @@ class LocalDaemonAgentHttpClient:
     def _call(
         self, operation: str, value: Mapping[str, PlainData], *, role: str = "agent"
     ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
+        exchange_deadline = _exchange_deadline()
         while self._service_progress and self._epoch_reconciliation_pending and operation in {
             "accept", "start_permit", "started", "event", "event_batch", "authorize", "input",
             "output_manifest", "output", "result", "assignment_control_ack",
         }:
             _raise_if_application_suspended(self._suspend_requested)
+            if exchange_deadline is not None and monotonic() >= exchange_deadline:
+                raise _IndeterminateAgentProtocolError("assignment exchange deadline expired")
             yield from _delay(0.01)
         operation_id, assignment_id = value.get("operation_id"), value.get("assignment_id")
         body = json.dumps(
@@ -3206,14 +3231,20 @@ class LocalDaemonAgentHttpClient:
                     else "control_wait" if operation == "control_wait" else "poll" if operation == "poll" else "bulk" if operation in _AGENT_BULK_OPERATIONS else "control",
                     _timed_agent_exchange, monotonic(), utc_timestamp(), request_identity(value),
                     self._config, operation, body, role, connection,
-                    not self._service_progress, **wait_options,
+                    not self._service_progress, _queue_deadline=exchange_deadline,
+                    exchange_deadline=exchange_deadline, **wait_options,
                 )
                 break
+            except _ExternalDeadline as error:
+                if connection is not None:
+                    connection.close()
+                raise _IndeterminateAgentProtocolError("assignment exchange deadline expired in sender queue") from error
             except _IndeterminateAgentProtocolError as error:
                 if operation == "slurm_work":
                     from ._slurm_result_transport import SlurmRequestUncertain
                     raise SlurmRequestUncertain(str(error)) from error
-                if not self._service_progress or operation == "renew":
+                if (not self._service_progress or operation == "renew"
+                        or (exchange_deadline is not None and monotonic() >= exchange_deadline)):
                     raise
                 connection = None
                 _raise_if_application_suspended(self._suspend_requested)
@@ -3228,6 +3259,8 @@ class LocalDaemonAgentHttpClient:
                         assignment_id=assignment_id if isinstance(assignment_id, str) else None,
                         state=(role, operation),
                     )
+                if exchange_deadline is not None:
+                    delay = min(delay, max(0, exchange_deadline - monotonic()))
                 yield from _delay(delay)
                 _raise_if_application_suspended(self._suspend_requested)
         if self._connection is None and not self._closed and not self._service_progress:
@@ -3337,7 +3370,7 @@ class _AgentHttpReply:
 
 def _timed_agent_exchange(
     queued: float, queued_at: str, identity: str | None,
-    config: AgentTlsClientConfig, operation: str, *args: Any, **options: Any,
+    config: AgentTlsClientConfig, operation: str, *args: Any, exchange_deadline: float | None = None, **options: Any,
 ) -> _AgentHttpReply:
     elapsed = round((monotonic() - queued) * 1_000_000_000)
     with reported_phases("agent_exchange", operation_id=identity, started_monotonic=queued) as timings:
@@ -3346,6 +3379,9 @@ def _timed_agent_exchange(
             "action": "sender_queue_wait", "started_at": queued_at,
             "elapsed_nanoseconds": elapsed, "outcome": "complete",
         })
+        if exchange_deadline is not None and config.transport_policy is not None:
+            if monotonic() + config.transport_policy.response_timeout_seconds >= exchange_deadline:
+                options["attempt_deadline"] = exchange_deadline
         return _exchange_agent_request(config, operation, *args, **options)
 
 
@@ -3353,7 +3389,7 @@ def _exchange_agent_request(
     config: AgentTlsClientConfig, operation: str, body: bytes, role: str,
     connection: http.client.HTTPSConnection | None,
     keep_alive: bool,
-    *, cancel_requested: Callable[[], bool] | None = None,
+    *, cancel_requested: Callable[[], bool] | None = None, attempt_deadline: float | None = None,
 ) -> _AgentHttpReply:
     """Exchange exact prepared bytes using one exclusively owned connection."""
     from threading import Event, Thread
@@ -3362,10 +3398,17 @@ def _exchange_agent_request(
     policy = config.transport_policy
     assert policy is not None  # Normalized by the protected constructor.
     deadline = monotonic() + policy.response_timeout_seconds
+    if attempt_deadline is not None:
+        deadline = min(deadline, attempt_deadline)
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        if connection is not None:
+            connection.close()
+        raise _IndeterminateAgentProtocolError("assignment exchange deadline expired before connection")
     connection = connection or https_connection(
         config.url, config.server_ca_path, config.certificate_path,
         config.private_key_path,
-        timeout=min(policy.connect_timeout_seconds, policy.response_timeout_seconds),
+        timeout=min(policy.connect_timeout_seconds, remaining),
     )
     expired = Event()
     interrupted = Event()
@@ -3504,6 +3547,8 @@ def _read_agent_reply(
             raise AgentPollActiveError("work poll is already active")
         if payload.get("error") == "agent_poll_fenced":
             raise AgentPollFencedError("work poll was fenced and is not reusable")
+        if payload.get("error") == "agent_poll_offer_unavailable":
+            raise AgentPollOfferUnavailable("work poll requires a current offer")
         if payload.get("error") == "agent_poll_stale":
             raise AgentStalePollError("work poll sequence is stale")
         if payload.get("error") == "agent_poll_sequence_gap":
@@ -3875,6 +3920,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._reply(409, {"ok": False, "error": "agent_poll_active"})
         except AgentPollFencedError:
             self._reply(409, {"ok": False, "error": "agent_poll_fenced"})
+        except AgentPollOfferUnavailable:
+            self._reply(409, {"ok": False, "error": "agent_poll_offer_unavailable"})
         except AgentStalePollError:
             self._reply(409, {"ok": False, "error": "agent_poll_stale"})
         except AgentPollSequenceGapError:

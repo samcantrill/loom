@@ -2272,6 +2272,42 @@ def test_unchanged_offer_renews_during_delayed_poll_and_exact_replays(
             unblock.set()
 
 
+def test_drain_applies_while_resource_maintenance_samples_gpu(monkeypatch):
+    arm, sampling, resume = Event(), Event(), Event()
+    applied_samples = []
+    apply = GpuOccupancyMonitor._apply_snapshot
+
+    def observe(observer):
+        if arm.is_set():
+            sampling.set()
+            assert resume.wait(20)
+        return {"GPU-private": GpuProcessObservation("GPU-private", True, False, "available")}
+
+    def remember(monitor, snapshot):
+        applied_samples.append(snapshot)
+        return apply(monitor, snapshot)
+
+    monkeypatch.setattr(NvidiaSmiGpuProcessObserver, "observe", observe)
+    monkeypatch.setattr(GpuOccupancyMonitor, "_apply_snapshot", remember)
+    with _service(monkeypatch, gpu=True, gpu_policy=GpuOccupancyPolicy(0.25, 1, 0.1)) as case:
+        try:
+            arm.set()
+            assert sampling.wait(10), case.failures
+            before = len(applied_samples)
+            session = json.loads(_rows(case.agent_root / "control.sqlite", "SELECT value_json FROM agent_sessions_local")[0][0])
+            case.operator.control_agent(AgentControl(
+                "drain-during-sample", AgentControlKind.DRAIN, "agent-a", session["session_id"],
+                session["config_revision"], None, False, "settle during maintenance",
+            ))
+            _eventually(lambda: _rows(case.database,
+                "SELECT operation_id FROM agent_controls WHERE operation_id = 'drain-during-sample' AND acknowledged = 1"))
+            assert _rows(case.agent_root / "control.sqlite",
+                "SELECT value FROM root_metadata WHERE key = 'availability_state'") == [("drained",)]
+        finally:
+            resume.set()
+    assert len(applied_samples) == before
+
+
 @pytest.mark.parametrize("uncertain_renewal", [False, True])
 def test_gpu_change_defers_offer_replacement_until_held_poll_settles(monkeypatch, uncertain_renewal):
     held, release, occupied, deferred = Event(), Event(), Event(), Event()
@@ -2541,6 +2577,42 @@ def test_control_receipts_survive_lost_reply_from_reconnecting_client(
             release.set()
             release_publication.set()
             _release_gate(gate)
+
+
+def test_delayed_release_receipt_allows_drain_and_preserves_newer_session(monkeypatch):
+    held, resume = Event(), Event()
+    dispatch = transport._dispatch
+
+    def delay_release(view, operation, value):
+        receipt = dispatch(view, operation, value)
+        if operation == "release":
+            held.set()
+            assert resume.wait(25)
+        return receipt
+
+    monkeypatch.setattr(transport, "_dispatch", delay_release)
+    with _service(monkeypatch) as case:
+        control = case.agent_root / "control.sqlite"
+        try:
+            _submit(case, "completed")
+            assert held.wait(20), case.failures
+            pending = _rows(control, "SELECT request_json FROM agent_mutation_intents WHERE operation = 'release'")
+            assert len(pending) == 1 and "retirement_secret" not in pending[0][0]
+            session = json.loads(_rows(control, "SELECT value_json FROM agent_sessions_local")[0][0])
+            case.operator.control_agent(AgentControl(
+                "drain-before-release-reply", AgentControlKind.DRAIN, "agent-a", session["session_id"],
+                session["config_revision"], None, False, "drain while release is in flight",
+            ))
+            _eventually(lambda: _rows(case.database,
+                "SELECT operation_id FROM agent_controls WHERE operation_id = 'drain-before-release-reply' AND acknowledged = 1"))
+            drained = _rows(control, "SELECT value_json FROM agent_sessions_local")
+            assert json.loads(drained[0][0])["availability_revision"] != session["availability_revision"]
+            resume.set()
+            _eventually(lambda: not _rows(control, "SELECT 1 FROM agent_mutation_intents WHERE operation = 'release'"))
+            assert _rows(control, "SELECT value_json FROM agent_sessions_local") == drained
+            assert not _rows(control, "SELECT 1 FROM agent_session_references WHERE reference_kind = 'delivery' AND resolved = 0")
+        finally:
+            resume.set()
 
 
 def test_lost_release_blocks_new_availability_but_not_control_receipts(monkeypatch):
@@ -2815,16 +2887,15 @@ def test_lost_release_orders_other_completion_and_preserves_local_stop(
             assert len(a_releases) >= 2 and all(
                 value == a_releases[0] for value in a_releases
             )
-            local = json.loads(
-                _rows(
-                    case.agent_root / "control.sqlite",
-                    "SELECT value_json FROM agent_sessions_local",
-                )[0][0]
-            )
-            assert _rows(
-                case.database,
-                "SELECT coordinator_epoch, availability_revision FROM agent_sessions",
-            ) == [(local["coordinator_epoch"], local["availability_revision"])]
+            def releases_settled():
+                local_path = case.agent_root / "control.sqlite"
+                if _rows(local_path, "SELECT 1 FROM agent_session_references WHERE reference_kind = 'delivery' AND resolved = 0"):
+                    return False
+                local = json.loads(_rows(local_path, "SELECT value_json FROM agent_sessions_local")[0][0])
+                return _rows(case.database, "SELECT coordinator_epoch, availability_revision FROM agent_sessions") == [
+                    (local["coordinator_epoch"], local["availability_revision"])
+                ]
+            _eventually(releases_settled)
             if restart_epoch:
                 assert (
                     len(

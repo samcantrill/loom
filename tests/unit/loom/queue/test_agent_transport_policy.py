@@ -27,6 +27,51 @@ def test_transport_policy_requires_distinct_complete_budgets():
     assert policy.to_dict() == {"connect_timeout_seconds": 2, "response_timeout_seconds": 9}
 
 
+@pytest.mark.parametrize("saturated", [False, True])
+def test_assignment_deadline_bounds_retry_and_sender_queue(monkeypatch, saturated):
+    from loom.queue import agent_session_transport as transport
+    from loom.queue._agent_progress import _Spawn, _delay, _external, _run_manager, _steps
+
+    config = AgentTlsClientConfig("https://localhost", Path("ca"), Path("cert"), Path("key"))
+    client = transport.LocalDaemonAgentHttpClient(config)
+    client._service_progress = True
+    monkeypatch.setattr(transport, "_ASSIGNMENT_RECONCILIATION_SECONDS", 0.2)
+    attempts = []
+    unblock = Event()
+
+    def uncertain(config, operation, body, role, connection, keep_alive, **options):
+        attempts.append((body, options["attempt_deadline"]))
+        raise _IndeterminateAgentProtocolError("lost exact request")
+
+    monkeypatch.setattr(transport, "_exchange_agent_request", uncertain)
+
+    def primary():
+        if saturated:
+            for _ in range(2):
+                yield _Spawn(_external("bulk", unblock.wait, 3))
+        start = monotonic()
+        try:
+            with pytest.raises(_IndeterminateAgentProtocolError):
+                yield from _steps(client._assignment_call, "session", "assignment",
+                    lambda: _steps(client._call, "output", {"assignment_id": "assignment"}))
+            assert monotonic() - start < 1
+            assert not unblock.is_set()
+        finally:
+            unblock.set()
+
+    def controls():
+        while not unblock.is_set():
+            yield from _delay(0.02)
+
+    _run_manager(primary(), controls())
+    if saturated:
+        assert not attempts
+    else:
+        assert attempts
+        assert len(set(attempts)) == 1
+    client.close()
+
+
 @pytest.mark.parametrize("service_stop", [False, True])
 def test_header_wait_interruption_preserves_the_exact_request(service_stop):
     stopped = Event()

@@ -66,7 +66,7 @@ from .local_daemon import (
 )
 
 from typing import TYPE_CHECKING
-from ._agent_session_codec import _registration
+from ._agent_session_codec import _provider_release_proof, _registration
 if TYPE_CHECKING:
     from .agent_session_transport import AgentTlsClientConfig
 
@@ -128,6 +128,13 @@ class _RemoteAgentJournal:
                 expected_active_configuration_fingerprint,
             )
             require_storage_upgrade_ready(self._root, entering=True)
+            # An older application may have settled a delivery across rollback.
+            with self._connection() as conn:
+                conn.execute(
+                    "DELETE FROM agent_mutation_intents AS m WHERE operation = 'release' AND EXISTS ("
+                    "SELECT 1 FROM agent_session_references AS r WHERE r.session_id = json_extract(m.request_json, '$.session_id') "
+                    "AND r.reference_kind = 'delivery' AND r.reference_id = m.operation_id AND r.resolved = 1)"
+                )
             if start_held:
                 self._hold_for_startup()
         except QueueError:
@@ -854,6 +861,23 @@ class _RemoteAgentJournal:
         value.pop("expected_availability_revision", None)
         return AgentOffer.from_value(value)
 
+    @staticmethod
+    def _pending_release(conn: sqlite3.Connection, session_id: str) -> sqlite3.Row | None:
+        return conn.execute(
+            "SELECT operation_id, request_json FROM agent_mutation_intents WHERE operation = 'release' "
+            "AND json_extract(request_json, '$.session_id') = ? AND result_json IS NULL LIMIT 1",
+            (session_id,),
+        ).fetchone()
+
+    def pending_release_assignment(self, session_id: str) -> str | None:
+        with self._connection() as conn:
+            row = self._pending_release(conn, session_id)
+            return None if row is None else str(row["operation_id"])
+
+    def _require_releasable_capacity(self, conn: sqlite3.Connection, session_id: str) -> None:
+        if self._pending_release(conn, session_id) is not None:
+            raise QueueConflictError("availability is pending assignment release")
+
     def prepare_offer(
         self,
         offer: AgentOffer,
@@ -881,6 +905,7 @@ class _RemoteAgentJournal:
             value["expected_availability_revision"] = expected_availability_revision
         with self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            self._require_releasable_capacity(conn, offer.session_id)
             self._write_mutation(conn, "offer", operation_id, value)
             # A replacement supersedes an uncertain extension. Replaying that
             # extension could advertise capacity the agent has observed changing.
@@ -906,6 +931,7 @@ class _RemoteAgentJournal:
         digest = _canonical_digest(renewal.value())
         with self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            self._require_releasable_capacity(conn, renewal.session_id)
             row = conn.execute(
                 "SELECT offer_id, availability_revision, sequence, digest, result_json "
                 "FROM agent_offer_renewals_local WHERE session_id = ?",
@@ -1013,6 +1039,7 @@ class _RemoteAgentJournal:
         digest = _canonical_digest(request)
         with self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            self._require_releasable_capacity(conn, session_id)
             current = conn.execute(
                 "SELECT sequence, request_digest, state, result_json "
                 "FROM agent_poll_state_local WHERE session_id = ?",
@@ -1611,7 +1638,39 @@ class _RemoteAgentJournal:
             ).rowcount
             if updated != 1:
                 raise QueueConflictError("remote assignment reference is unavailable")
+            conn.execute("DELETE FROM agent_mutation_intents WHERE operation = 'release' AND operation_id = ? "
+                         "AND json_extract(request_json, '$.session_id') = ?", (assignment_id, session_id))
             conn.commit()
+
+    def prepare_assignment_release(self, proof: AgentProviderReleaseProof) -> AgentProviderReleaseProof:
+        """Fence this session's capacity and retain the exact proof without duplicating its secret."""
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            pending = self._pending_release(conn, proof.session_id)
+            if pending is not None:
+                if pending["operation_id"] != proof.assignment_id:
+                    raise QueueConflictError("another assignment release owns this availability transition")
+                retained = json.loads(pending["request_json"])["proof"]
+                for key in ("assignment_id", "agent_root_id", "claim_id", "execution_fence",
+                            "released_availability_revision", "coordinator_id", "session_id", "agent_id"):
+                    if retained[key] != getattr(proof, key):
+                        raise QueueConflictError("retained provider release proof conflicts")
+                return _provider_release_proof({**retained, "retirement_secret": proof.retirement_secret})
+            ref = conn.execute(
+                "SELECT resolved FROM agent_session_references WHERE session_id = ? AND reference_kind = 'delivery' "
+                "AND reference_id = ?", (proof.session_id, proof.assignment_id),
+            ).fetchone()
+            if ref is None:
+                raise QueueConflictError("remote assignment reference is unavailable")
+            if ref["resolved"]:
+                return proof
+            base = conn.execute("SELECT value_json FROM agent_sessions_local WHERE session_id = ?", (proof.session_id,)).fetchone()
+            offer = conn.execute("SELECT offer_id FROM agent_offer_renewals_local WHERE session_id = ?", (proof.session_id,)).fetchone()
+            self._write_mutation(conn, "release", proof.assignment_id, {
+                "session_id": proof.session_id, "session": json.loads(base[0]),
+                "offer_id": None if offer is None else offer[0], "proof": proof.redacted_value(),
+            })
+        return proof
 
     def complete_assignment_release(self, session: AgentSession, assignment_id: str) -> None:
         """Consume the delivery and its offer atomically after proven release."""
@@ -1627,21 +1686,33 @@ class _RemoteAgentJournal:
             if row is None:
                 raise QueueConflictError("remote assignment reference is unavailable")
             if not row["resolved"]:
-                if session.state is AgentSessionState.ACTIVE:
-                    updated = conn.execute(
+                pending = self._pending_release(conn, session.session_id)
+                if pending is None or pending["operation_id"] != assignment_id:
+                    raise QueueConflictError("remote release has no matching intent")
+                intent = json.loads(pending["request_json"])
+                proof = intent["proof"]
+                if (session.availability_revision != proof["released_availability_revision"]
+                    or any(getattr(session, key) != proof[key] for key in ("coordinator_id", "agent_id", "agent_root_id"))):
+                    raise QueueConflictError("remote release receipt conflicts")
+                offer = conn.execute("SELECT offer_id FROM agent_offer_renewals_local WHERE session_id = ?", (session.session_id,)).fetchone()
+                same_offer = (None if offer is None else offer[0]) == intent["offer_id"]
+                local = conn.execute("SELECT value_json, state FROM agent_sessions_local WHERE session_id = ?", (session.session_id,)).fetchone()
+                owns_capacity = same_offer and local["state"] == AgentSessionState.ACTIVE.value and json.loads(local["value_json"]) == intent["session"]
+                if owns_capacity and session.state is AgentSessionState.ACTIVE:
+                    conn.execute(
                         "UPDATE agent_sessions_local SET value_json = ?, state = ? "
                         "WHERE session_id = ? AND state = ?",
                         (_canonical_json(session.value()), session.state.value,
                          session.session_id, AgentSessionState.ACTIVE.value),
-                    ).rowcount
-                    if updated != 1:
-                        raise QueueServiceError("remote agent session evidence is unavailable")
-                self._invalidate_resource_offer(conn, session.session_id)
+                    )
+                if owns_capacity:
+                    self._invalidate_resource_offer(conn, session.session_id)
                 conn.execute(
                     "UPDATE agent_session_references SET resolved = 1 WHERE session_id = ? "
                     "AND reference_kind = 'delivery' AND reference_id = ?",
                     (session.session_id, assignment_id),
                 )
+                conn.execute("DELETE FROM agent_mutation_intents WHERE operation = 'release' AND operation_id = ?", (assignment_id,))
             conn.commit()
 
     @staticmethod

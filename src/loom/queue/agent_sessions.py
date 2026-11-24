@@ -404,6 +404,10 @@ class AgentPollFencedError(QueueConflictError):
     """An exact poll has been fenced without a committed delivery result."""
 
 
+class AgentPollOfferUnavailable(QueueConflictError):
+    """A poll lost its offer before it could return a delivery."""
+
+
 class AgentStalePollError(QueueConflictError):
     """A poll sequence is older than the session's replayable state."""
 
@@ -4914,11 +4918,11 @@ class AgentSessionService:
             (session_id, self._daemon._epoch, availability_revision),
         ).fetchone()
         if offer is None:
-            raise QueueConflictError("work poll requires a current offer")
+            raise AgentPollOfferUnavailable("work poll requires a current offer")
         accepted = self._daemon._accepted_time(conn)
         expires = str(offer["expires_at"])
         if expires < accepted:
-            raise QueueConflictError("work poll requires a current offer")
+            raise AgentPollOfferUnavailable("work poll requires a current offer")
         # Strict expiry permits equality. Wait for the next representable
         # accepted-time tick, rather than repeatedly checking the same timestamp.
         fraction = re.search(r"\.(\d+)", accepted)

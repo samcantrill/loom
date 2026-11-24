@@ -5,11 +5,11 @@ registration, offer and delivery replay without creating another mutable owner.
 Public client entry points retain their serialization gates and progress lanes.
 """
 from __future__ import annotations
-from .gpu.occupancy import _sample_gpu_occupancy
+from .gpu.occupancy import GpuOccupancyMonitor, GpuOccupancySnapshot, _sample_gpu_occupancy
 
 from collections.abc import Callable, Generator, Mapping, Sequence
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 from uuid import uuid4
 
@@ -32,6 +32,7 @@ from .agent_sessions import (
     AgentOfferRenewal,
     AgentProviderDescriptor,
     AgentPollFencedError,
+    AgentPollOfferUnavailable,
     AgentRegistration,
     AgentSession,
     PROTOCOL_VERSION,
@@ -424,22 +425,43 @@ def _exchange_renewal(
     return result
 
 
+@dataclass(frozen=True)
+class _GpuOfferSampling:
+    session: AgentSession
+    selected: tuple[tuple[GpuResourceProvider, int, GpuOccupancyMonitor], ...]
+
+
 def refresh_resource_offer(
     self: LocalDaemonAgentHttpClient, *, ttl_seconds: int = 30
 ) -> Generator[_Progress, Any, Mapping[str, PlainData] | None]:
     prepared = yield from _prepare_resource_refresh(self, ttl_seconds)
+    while isinstance(prepared, _GpuOfferSampling):
+        request = prepared
+        samples = []
+        for _, _, monitor in request.selected:
+            sample = yield from _external(
+                "bulk", _sample_gpu_occupancy, monitor._observer, monitor.selected_uuids,
+                monitor._utc_clock, monitor._monotonic_clock,
+            )
+            samples.append(sample)
+        prepared = yield from _prepare_resource_refresh(self, ttl_seconds, request, samples)
     if isinstance(prepared, AgentOfferRenewal):
         return (yield from _exchange_renewal(self, prepared, refresh_on_rejection=True))
     return prepared
 
 
 @_serialized("_mutation_gate")
-def _prepare_resource_refresh(self: LocalDaemonAgentHttpClient, ttl_seconds: int):
+def _prepare_resource_refresh(
+    self: LocalDaemonAgentHttpClient, ttl_seconds: int,
+    sampling: _GpuOfferSampling | None = None, samples: Sequence[GpuOccupancySnapshot] = (),
+):
     journal = self._require_journal()
     session = journal.active_session()
     if session is None or self._drained or (
         self._service_progress and journal.next_received_control(session.session_id) is not None
     ):
+        return None
+    if journal.pending_release_assignment(session.session_id) is not None:
         return None
     if self._service_progress:
         pending = journal.pending_poll()
@@ -459,6 +481,8 @@ def _prepare_resource_refresh(self: LocalDaemonAgentHttpClient, ttl_seconds: int
         else:
             yield from _steps(self._replay_pending_resource_mutation, session.session_id)
     session = journal.session(session.session_id)
+    if sampling is not None and session != sampling.session:
+        return None
     if not (self._config.resident_profiles or self._config.container_policies):
         if not (yield from _steps(self._qualify_service_admission, retrying_renewal=retry)):
             self._defer_offer_until_poll_settles = self._live_work_poll is not None
@@ -468,18 +492,29 @@ def _prepare_resource_refresh(self: LocalDaemonAgentHttpClient, ttl_seconds: int
     else:
         profile = self._config.execution_inventory
         self._provider_composition(session.agent_id, profile)
-        for provider in self._configured_provider_members or ():
-            if isinstance(provider, GpuResourceProvider):
+        members = self._configured_provider_members or ()
+        if sampling is None:
+            selected = []
+            for provider in members:
+                if not isinstance(provider, GpuResourceProvider):
+                    continue
                 monitor = provider._occupancy_monitor
                 if monitor is not None:
                     cached = monitor.cached_snapshot()
                     if self._live_work_poll is not None or cached is None or not cached.is_fresh(
                         monitor._monotonic_clock(), monitor.policy.poll_interval_seconds,
                     ):
-                        snapshot = yield from _external("bulk", _sample_gpu_occupancy,
-                                                       monitor._observer, monitor.selected_uuids,
-                                                       monitor._utc_clock, monitor._monotonic_clock)
-                        monitor._apply_snapshot(snapshot)
+                        selected.append((provider, provider._revision, monitor))
+            if selected:
+                return _GpuOfferSampling(session, tuple(selected))
+        else:
+            for (provider, revision, monitor), sample in zip(sampling.selected, samples, strict=True):
+                if (provider not in members or provider._occupancy_monitor is not monitor
+                        or provider._revision != revision or not monitor.snapshot_is_fresh(sample)):
+                    self._next_resource_maintenance = 0
+                    return None
+            for (_, _, monitor), sample in zip(sampling.selected, samples, strict=True):
+                monitor._apply_snapshot(sample)
         if not (yield from _steps(self._qualify_service_admission, retrying_renewal=retry)):
             self._defer_offer_until_poll_settles = self._live_work_poll is not None
             return None
@@ -638,6 +673,15 @@ def wait_for_work(
                 self._service_control_due = True
                 return {"result": "idle"}
             raise
+        except AgentPollOfferUnavailable:
+            if not self._service_progress:
+                raise
+            # A drain can withdraw the offer just before the poll is reserved.
+            # Reconcile its actual watermark before applying controls in place.
+            recovered = yield from _resume_pending_poll(self, wait_timeout_ms=wait_timeout_ms)
+            self._service_control_due = True
+            self._next_resource_maintenance = 0
+            return recovered or {"result": "idle"}
         # Journal the exact delivery before any waiting drain can take effect.
         yield from self._mutation_gate.run(_steps(journal.complete_poll, session_id, sequence, result))
         return result
@@ -660,6 +704,8 @@ def _prepare_work_poll(self: LocalDaemonAgentHttpClient, session_id, availabilit
         )
     if self._service_progress:
         journal = self._require_journal()
+        if journal.pending_release_assignment(session_id) is not None:
+            return {"result": "idle"}
         current = journal.current_resource_offer(session_id)
         if current is None:
             self._next_resource_maintenance = 0
@@ -687,7 +733,7 @@ def _resume_pending_poll(
     *,
     wait_timeout_ms: int,
     suspend_requested: Callable[[], bool] | None = None,
-) -> Generator[_Progress, Any, None]:
+) -> Generator[_Progress, Any, Mapping[str, PlainData] | None]:
     """Recover the service's exact outstanding delivery before new capacity.
 
     The retained request digest validates the configured timeout as well as
@@ -729,3 +775,4 @@ def _resume_pending_poll(
         (yield from _steps(self._execute_delivered_assignment,
             session_id, request, suspend_requested=suspend_requested
         ))
+    return result

@@ -8,6 +8,7 @@ inline. A submitted operation owns its slot until its actual call returns.
 from __future__ import annotations
 
 from collections.abc import Callable, Generator
+from contextlib import contextmanager
 from contextvars import ContextVar
 from concurrent.futures import Future, ThreadPoolExecutor, wait, FIRST_COMPLETED
 from dataclasses import dataclass
@@ -17,14 +18,21 @@ from time import monotonic, sleep
 from typing import Any, Concatenate
 
 
+class _ExternalDeadline(TimeoutError):
+    """A queued external operation reached its deadline before dispatch."""
+
+
 @dataclass(frozen=True)
 class _External:
     lane: str
     function: Callable[..., Any]
     args: tuple[Any, ...]
     kwargs: tuple[tuple[str, Any], ...]
+    deadline: float | None = None
 
     def execute(self) -> Any:
+        if self.deadline is not None and monotonic() >= self.deadline:
+            raise _ExternalDeadline("external operation expired in the sender queue")
         return self.function(*self.args, **dict(self.kwargs))
 
 
@@ -39,7 +47,29 @@ class _Spawn:
 
 
 _Progress = _External | _Delay | _Spawn
-_owner: ContextVar[object | None] = ContextVar("agent_progress_owner", default=None)
+@dataclass(kw_only=True)
+class _Owner:
+    exchange_deadline: float | None = None
+
+
+_owner: ContextVar[_Owner | None] = ContextVar("agent_progress_owner", default=None)
+
+
+def _exchange_deadline() -> float | None:
+    owner = _owner.get()
+    return None if owner is None else owner.exchange_deadline
+
+
+@contextmanager
+def _bound_exchanges(deadline: float):
+    owner = _owner.get()
+    assert owner is not None
+    previous = owner.exchange_deadline
+    owner.exchange_deadline = deadline if previous is None else min(deadline, previous)
+    try:
+        yield
+    finally:
+        owner.exchange_deadline = previous
 
 
 class _Gate:
@@ -108,7 +138,7 @@ def _cooperative[**P, R](
 ) -> Callable[P, R]:
     @wraps(function)
     def synchronous(*args: P.args, **kwargs: P.kwargs) -> R:
-        token = _owner.set(_owner.get() or object())
+        token = _owner.set(_owner.get() or _Owner())
         try:
             return drive(*args, **kwargs)
         finally:
@@ -142,10 +172,10 @@ def _cooperative[**P, R](
 
 
 def _external(
-    lane: str, function: Callable[..., Any], *args: Any, **kwargs: Any
+    lane: str, function: Callable[..., Any], *args: Any, _queue_deadline: float | None = None, **kwargs: Any
 ) -> Generator[_Progress, Any, Any]:
     try:
-        return (yield _External(lane, function, args, tuple(kwargs.items())))
+        return (yield _External(lane, function, args, tuple(kwargs.items()), _queue_deadline))
     except Exception as error:
         # Preserve the original error and its dispatch uncertainty. This finite
         # operation label lets the service diagnose recovery without its message.
@@ -158,7 +188,7 @@ def _delay(seconds: float) -> Generator[_Progress, Any, None]:
 
 
 @dataclass
-class _View:
+class _View(_Owner):
     progress: Generator[_Progress, Any, Any]
     pending: _Progress | None = None
     future: Future[Any] | None = None
@@ -256,6 +286,12 @@ def _run_manager(
                     if not any(item is view for item in ready[lane]):
                         ready[lane].append(view)
             for lane, queue in ready.items():
+                for waiting in tuple(queue):
+                    step = waiting.pending
+                    if isinstance(step, _External) and step.deadline is not None and step.deadline <= now:
+                        queue.remove(waiting)
+                        waiting.pending = None
+                        waiting.error = _ExternalDeadline("external operation expired in the sender queue")
                 occupied = sum(
                     other.future is not None
                     and isinstance(other.pending, _External)
@@ -274,6 +310,8 @@ def _run_manager(
             delays = [
                 view.pending.due for view in views if isinstance(view.pending, _Delay)
             ]
+            delays.extend(step.deadline for queue in ready.values() for view in queue
+                          if isinstance(step := view.pending, _External) and step.deadline is not None)
             timeout = max(0, min(delays) - monotonic()) if delays else None
             if any(not view.complete and view.pending is None for view in views):
                 timeout = 0
