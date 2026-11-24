@@ -2771,8 +2771,8 @@ class LocalDaemon:
             self._gpu_samples.advance(self._local_resource_providers())
         if self._event_observers.flush_prepared():
             self._wake.set()
+        time_healthy = self._sample_clock_health(wait_for_writer=False)
         with self._state_guard():
-            time_healthy = self._sample_clock_health()
             execution = self._execution
         if execution is None:
             raise QueueServiceError("local daemon execution is absent")
@@ -4178,15 +4178,24 @@ class LocalDaemon:
             raise QueueConflictError("retained assignment admission is unavailable")
         self._record_admission_health(str(rows[0]["admission_id"]), health)
 
-    def _sample_clock_health(self) -> bool:
-        with self._connection() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            try:
-                self._accepted_time(conn)
-            except QueueServiceError:
-                return False
-            conn.commit()
-        return True
+    def _sample_clock_health(self, *, wait_for_writer: bool = True) -> bool:
+        from ._coordinator_transactions import short_write
+
+        def sample(conn: sqlite3.Connection) -> bool:
+            self._accepted_time(conn)
+            return True
+
+        try:
+            return short_write(self, sample, wait_for_writer=wait_for_writer)
+        except QueueServiceError:
+            # An accepted-time regression commits its diagnostic before raising.
+            return False
+        except sqlite3.OperationalError as exc:
+            if wait_for_writer or (getattr(exc, "sqlite_errorcode", 0) & 255) != sqlite3.SQLITE_BUSY:
+                raise
+            # This turn cannot establish clock health. Recheck before the next
+            # dispatch instead of joining the writer or marking time degraded.
+            return False
 
     def _recover_time(
         self, principal: LocalDaemonPrincipal, request: TimeRecoveryRequest

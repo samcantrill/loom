@@ -342,6 +342,11 @@ expiry, fallback, receipt, and freshness. Detected local regression or an out-
 of-policy jump makes time health degraded, pauses new scheduling, and withholds
 retained capacity until clock/session reconciliation; it never extends an old
 offer by trusting a rolled-back clock.
+The scheduler attempts its clock-health write without waiting for a SQLite
+writer. If that attempt encounters contention, that turn skips new dispatch.
+It can still process independent observations. The next turn samples again.
+Only a committed clock diagnostic changes the durable clock-health status.
+
 Clock sampling and the high-water comparison/update run inside the same
 immediate SQLite write transaction, held through commit or rollback. This also
 applies to work-poll and transfer-authorization checks; filesystem and network

@@ -404,6 +404,35 @@ def test_registration_releases_state_guard_while_writer_is_busy(tmp_path, monkey
         daemon.stop()
 
 
+def test_reconciliation_clock_check_yields_while_sqlite_writer_is_busy(waiting_owner, monkeypatch):
+    daemon, session, _, _, _ = waiting_owner
+    sample = daemon._sample_clock_health
+    outcomes = []
+    sampled = Event()
+
+    def record(**kwargs):
+        result = sample(**kwargs)
+        outcomes.append(result)
+        sampled.set()
+        return result
+
+    monkeypatch.setattr(daemon, "_sample_clock_health", record)
+    with ThreadPoolExecutor() as workers, daemon._connection() as blocker:
+        blocker.execute("BEGIN IMMEDIATE")
+        turn = workers.submit(daemon.reconcile_once)
+        try:
+            assert sampled.wait(2)
+            assert outcomes == [False]
+            assert _view(daemon).wait_for_controls(
+                session.session_id, received_operation_ids=(), wait_timeout_ms=0,
+            ) == {"control": None, "assignment_control": None}
+            assert turn.result(2) == ()
+        finally:
+            blocker.rollback()
+    daemon.reconcile_once()
+    assert outcomes == [False, True]
+
+
 @pytest.mark.parametrize("sleeping", [False, True])
 def test_target_commit_wakes_same_pending_poll_without_deadline(
     waiting_owner,
