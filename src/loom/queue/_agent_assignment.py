@@ -1025,7 +1025,7 @@ def _complete_remote_result_and_release(
         workspace.record_timing(timings.payload())
     # The terminal assignment still accepts events before provider release.
     # Failed transfers leave their diagnostic event in the existing replay outbox.
-    (yield from _steps(self._flush_workspace_events, session.session_id, workspace))
+    (yield from _steps(self._flush_workspace_events, session.session_id, workspace, final=True))
     released_session = yield from _steps(
         _release_completed_assignment, self, session, assignment, commands,
         providers, execution_journal, fence=fence,

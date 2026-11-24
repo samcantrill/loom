@@ -3088,27 +3088,39 @@ class LocalDaemonAgentHttpClient:
 
     @_cooperative
     def _flush_workspace_events(
-        self, session_id: str, workspace: _ResidentAssignmentWorkspace
+        self, session_id: str, workspace: _ResidentAssignmentWorkspace, *, final: bool = False,
     ) -> Generator[_Progress, Any, None]:
-        for sequence, event_id, payload in workspace.pending_events():
-            result = cast(
-                Mapping[str, PlainData],
-                (yield from _steps(self._assignment_call,
-                    session_id,
-                    workspace.assignment_id,
-                    lambda: _steps(self.report_event,
-                        session_id,
-                        workspace.assignment_id,
-                        sequence=sequence,
-                        event_id=event_id,
-                        payload=payload,
-                    ),
-                )),
-            )
-            acknowledged = result.get("acknowledged_sequence")
-            if acknowledged != sequence:
-                raise QueueConflictError("remote event acknowledgement has a gap")
-            workspace.acknowledge_event(sequence)
+        boundary = workspace.last_event_sequence()
+        while True:
+            page = workspace.pending_events(through=boundary, limit=32)
+            if not page:
+                if final:
+                    # Completion owns the last producer and the provider-release
+                    # transition. Include facts handed off during the last exchange.
+                    latest = workspace.last_event_sequence()
+                    if latest > boundary:
+                        boundary = latest
+                        continue
+                return
+            for sequence, event_id, payload in page:
+                result = cast(
+                    Mapping[str, PlainData],
+                    (yield from _steps(self._assignment_call,
+                        session_id, workspace.assignment_id,
+                        lambda: _steps(self.report_event,
+                            session_id, workspace.assignment_id,
+                            sequence=sequence, event_id=event_id, payload=payload,
+                        ),
+                    )),
+                )
+                if (
+                    result.get("assignment_id") != workspace.assignment_id
+                    or type(result.get("acknowledged_sequence")) is not int
+                    or result["acknowledged_sequence"] != sequence
+                ):
+                    raise QueueConflictError("remote event acknowledgement has a gap or conflicting assignment")
+                workspace.acknowledge_event(sequence)
+            yield from _delay(0)
 
     @_cooperative
     def retire_clean(

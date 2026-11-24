@@ -434,6 +434,15 @@ def test_journal_rejects_event_gap_and_conflicting_replay(tmp_path) -> None:
     with pytest.raises(ManagedLocalError, match="conflicts"):
         journal.record_event(assignment.assignment_id, 1, "event-1", {"kind": "result"})
     assert journal.acknowledge(assignment.assignment_id, 1) == 1
+    journal.record_event(assignment.assignment_id, 2, "event-2", {"kind": "end"})
+    journal.acknowledge(assignment.assignment_id, 2)
+    journal.acknowledge(assignment.assignment_id, 2)
+    with pytest.raises(ManagedLocalError, match="gap"):
+        journal.acknowledge(assignment.assignment_id, 3)
+    with sqlite3.connect(journal.path) as conn:
+        assert conn.execute(
+            "SELECT sequence, acknowledged_sequence FROM events ORDER BY sequence"
+        ).fetchall() == [(1, 1), (2, 2)]
 
 
 def test_regular_file_tree_replay_rejects_extra_companion(tmp_path) -> None:

@@ -1707,16 +1707,18 @@ class SQLiteAgentJournal:
 
     def acknowledge(self, assignment_id: str, sequence: int) -> int:
         with self._transaction() as conn:
-            count = int(
-                conn.execute(
-                    "SELECT COUNT(*) FROM events WHERE assignment_id = ? AND sequence <= ?",
-                    (assignment_id, sequence),
-                ).fetchone()[0]
-            )
-            if count != sequence:
+            if sequence and conn.execute(
+                "SELECT 1 FROM events WHERE assignment_id = ? AND sequence = ?",
+                (assignment_id, sequence),
+            ).fetchone() is None:
                 raise ManagedLocalError("cannot acknowledge an event gap")
             conn.execute(
-                "UPDATE events SET acknowledged_sequence = ? WHERE assignment_id = ? AND sequence <= ?",
+                "CREATE INDEX IF NOT EXISTS events_pending_sequence ON events(assignment_id, sequence) "
+                "WHERE acknowledged_sequence IS NULL"
+            )
+            conn.execute(
+                "UPDATE events INDEXED BY events_pending_sequence SET acknowledged_sequence = ? "
+                "WHERE assignment_id = ? AND acknowledged_sequence IS NULL AND sequence <= ?",
                 (sequence, assignment_id, sequence),
             )
             return sequence

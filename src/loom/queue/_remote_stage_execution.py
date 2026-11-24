@@ -2795,24 +2795,33 @@ class _ResidentAssignmentWorkspace:
 
     def acknowledge_event(self, sequence: int) -> None:
         with self._connect() as conn:
-            count = int(
-                conn.execute(
-                    "SELECT COUNT(*) FROM events WHERE sequence <= ?", (sequence,)
-                ).fetchone()[0]
-            )
-            if count != sequence:
+            # Both event producers enforce a contiguous, append-only sequence.
+            if sequence and conn.execute(
+                "SELECT 1 FROM events WHERE sequence = ?", (sequence,)
+            ).fetchone() is None:
                 raise QueueConflictError("cannot acknowledge a remote event gap")
+            # Install on first acknowledgement, including for retained workspaces.
+            conn.execute("CREATE INDEX IF NOT EXISTS events_pending_sequence ON events(sequence) WHERE acknowledged = 0")
             conn.execute(
-                "UPDATE events SET acknowledged = 1 WHERE sequence <= ?",
+                "UPDATE events INDEXED BY events_pending_sequence SET acknowledged = 1 "
+                "WHERE acknowledged = 0 AND sequence <= ?",
                 (sequence,),
             )
 
-    def pending_events(self) -> tuple[tuple[int, str, Mapping[str, PlainData]], ...]:
+    def last_event_sequence(self) -> int:
+        with self._connect() as conn:
+            return int(conn.execute("SELECT COALESCE(MAX(sequence), 0) FROM events").fetchone()[0])
+
+    def pending_events(
+        self, *, through: int | None = None, limit: int | None = None,
+    ) -> tuple[tuple[int, str, Mapping[str, PlainData]], ...]:
         with self._connect() as conn:
             rows = tuple(
                 conn.execute(
                     "SELECT sequence, event_id, payload_json FROM events "
-                    "WHERE acknowledged = 0 ORDER BY sequence"
+                    "WHERE acknowledged = 0 AND sequence <= COALESCE(?, (SELECT MAX(sequence) FROM events)) "
+                    "ORDER BY sequence LIMIT ?",
+                    (through, -1 if limit is None else limit),
                 )
             )
         return tuple(
