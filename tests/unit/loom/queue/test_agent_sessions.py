@@ -1523,6 +1523,7 @@ def test_owned_restart_indexes_current_offers_and_preserves_receipts(
     tmp_path, monkeypatch
 ):
     import sqlite3
+    from loom.queue.agent_sessions import invalidate_current_offers
     from loom.queue.local_daemon import _open_root
 
     monkeypatch.setattr(LocalDaemon, "_serve", lambda daemon: daemon._stop.wait())
@@ -1564,6 +1565,9 @@ def test_owned_restart_indexes_current_offers_and_preserves_receipts(
 
     with sqlite3.connect(config.control_database) as conn:
         conn.execute("DROP INDEX agent_offers_current_session")
+        conn.execute("DROP INDEX agent_offers_session_revision")
+        conn.execute("DROP INDEX agent_offers_session")
+        conn.execute("DROP INDEX agent_controls_session")
         history(conn, range(100))
         expected = conn.execute(lookup, key).fetchall()
         original = rows(conn, "agent_sessions"), rows(conn, "agent_poll_state")
@@ -1598,6 +1602,25 @@ def test_owned_restart_indexes_current_offers_and_preserves_receipts(
             assert conn.execute(lookup, key).fetchall() == expected
             conn.set_progress_handler(None, 0)
             costs.append(len(steps))
+            for table, index, predicate, args in (
+                ("agent_offers", "agent_offers_session_revision",
+                 "session_id=? AND availability_revision=?", (session.session_id, "absent")),
+                ("agent_offers", "agent_offers_session", "session_id=? ORDER BY rowid DESC LIMIT 1",
+                 (session.session_id,)),
+                ("agent_controls", "agent_controls_session", "session_id=? ORDER BY rowid DESC LIMIT 1",
+                 (session.session_id,)),
+            ):
+                plan = conn.execute(
+                    f"EXPLAIN QUERY PLAN SELECT * FROM {table} WHERE {predicate}", args
+                ).fetchall()
+                assert any(f"USING INDEX {index} (" in row[-1] for row in plan), plan
+                assert not any("TEMP B-TREE" in row[-1] for row in plan)
+            conn.execute("SAVEPOINT withdraw")
+            before = conn.total_changes
+            invalidate_current_offers(conn, session.session_id)
+            assert conn.total_changes == before + 1
+            conn.execute("ROLLBACK TO withdraw")
+            conn.execute("RELEASE withdraw")
             if retained == 100:
                 history(conn, range(100, 10000))
     assert costs[0] == costs[1]

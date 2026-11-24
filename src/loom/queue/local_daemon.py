@@ -62,7 +62,8 @@ from .agent_sessions import (
     AgentPolicyConfig,
     AgentSessionView,
     SessionReplacementRequest,
-    ensure_current_offer_index,
+    ensure_agent_lookup_indexes,
+    invalidate_current_offers,
     initialize_agent_session_schema,
     replace_agent_session,
     validate_agent_session_schema,
@@ -1944,7 +1945,7 @@ class LocalDaemon:
             require_storage_upgrade_ready(self.config.coordinator_root, entering=True)
             with self._connection() as conn:
                 conn.execute("BEGIN IMMEDIATE")
-                ensure_current_offer_index(conn)
+                ensure_agent_lookup_indexes(conn)
                 retained = conn.execute("SELECT value FROM root_metadata WHERE key = 'assignment_payload_root_id'").fetchone()
                 selected = self.config.assignment_payload_root_id
                 if retained is not None and retained[0] != selected:
@@ -3154,10 +3155,7 @@ class LocalDaemon:
             # Withdrawal is coordinator-owned and happens before delivery.  It
             # changes only future offers; it never releases a durable claim.
             if control.kind.value in {"drain", "reload", "promote"}:
-                conn.execute(
-                    "UPDATE agent_offers SET current = 0 WHERE session_id = ?",
-                    (control.expected_session_id,),
-                )
+                invalidate_current_offers(conn, control.expected_session_id)
                 conn.execute(
                     "UPDATE agent_poll_state SET active = 0 WHERE session_id = ?",
                     (control.expected_session_id,),

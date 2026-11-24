@@ -2427,10 +2427,7 @@ class AgentSessionService:
                         session_id,
                     ),
                 )
-                conn.execute(
-                    "UPDATE agent_offers SET current = 0 WHERE session_id = ?",
-                    (session_id,),
-                )
+                invalidate_current_offers(conn, session_id)
                 conn.execute(
                     "UPDATE agent_poll_state SET active = 0 WHERE session_id = ?",
                     (session_id,),
@@ -3094,10 +3091,7 @@ class AgentSessionService:
                 session = replace(
                     session, availability_revision=offer.availability_revision
                 )
-            conn.execute(
-                "UPDATE agent_offers SET current = 0 WHERE session_id = ?",
-                (offer.session_id,),
-            )
+            invalidate_current_offers(conn, offer.session_id)
             conn.execute(
                 "DELETE FROM agent_offer_renewals WHERE principal_id = ? AND session_id = ?",
                 (rule.principal_id, offer.session_id),
@@ -3862,10 +3856,7 @@ class AgentSessionService:
                 "WHERE session_id = ?",
                 (availability_revision, session_id),
             )
-            conn.execute(
-                "UPDATE agent_offers SET current = 0 WHERE session_id = ?",
-                (session_id,),
-            )
+            invalidate_current_offers(conn, session_id)
             conn.execute(
                 "UPDATE agent_coordinator_references SET resolved = 1 WHERE "
                 "session_id = ? AND reference_kind = 'delivery' "
@@ -4492,10 +4483,7 @@ class AgentSessionService:
                 "UPDATE agent_sessions SET availability_revision = ? WHERE session_id = ?",
                 (availability_revision, session_id),
             )
-            conn.execute(
-                "UPDATE agent_offers SET current = 0 WHERE session_id = ?",
-                (session_id,),
-            )
+            invalidate_current_offers(conn, session_id)
             conn.execute(
                 "UPDATE agent_coordinator_references SET resolved = 1 WHERE "
                 "session_id = ? AND reference_kind = 'delivery' AND reference_id = ?",
@@ -4742,10 +4730,7 @@ class AgentSessionService:
                         raise QueueConflictError(
                             "agent session has unresolved references"
                         )
-                    conn.execute(
-                        "UPDATE agent_offers SET current = 0 WHERE session_id = ?",
-                        (session_id,),
-                    )
+                    invalidate_current_offers(conn, session_id)
                     conn.execute(
                         "UPDATE agent_poll_state SET active = 0 WHERE session_id = ?",
                         (session_id,),
@@ -4799,10 +4784,7 @@ class AgentSessionService:
             self._check_retirable_session(session, rule, epoch, policy_revision)
             _require_matching_retirement_proof(session, proof)
             _verify_retirement_secret(conn, session.session_id, proof.retirement_secret)
-            conn.execute(
-                "UPDATE agent_offers SET current = 0 WHERE session_id = ?",
-                (session.session_id,),
-            )
+            invalidate_current_offers(conn, session.session_id)
             conn.execute(
                 "UPDATE agent_poll_state SET active = 0 WHERE session_id = ?",
                 (session.session_id,),
@@ -5039,10 +5021,7 @@ def replace_agent_session(
             durable_projection = _bind_replacement_authority_facts(
                 projection, authority_facts
             )
-            conn.execute(
-                "UPDATE agent_offers SET current = 0 WHERE session_id = ?",
-                (old_session.session_id,),
-            )
+            invalidate_current_offers(conn, old_session.session_id)
             conn.execute(
                 "UPDATE agent_poll_state SET active = 0 WHERE session_id = ?",
                 (old_session.session_id,),
@@ -5920,12 +5899,27 @@ def _projection_string(value: Mapping[str, object], name: str) -> str:
     return item
 
 
-def ensure_current_offer_index(conn: sqlite3.Connection) -> None:
-    """Install the additive lookup on a fresh or exclusively owned coordinator."""
+def invalidate_current_offers(conn: sqlite3.Connection, session_id: str) -> None:
+    """Withdraw only the current offers while retaining all session history."""
+    conn.execute(
+        "UPDATE agent_offers INDEXED BY agent_offers_current_session "
+        "SET current = 0 WHERE session_id = ? AND current = 1",
+        (session_id,),
+    )
+
+
+def ensure_agent_lookup_indexes(conn: sqlite3.Connection) -> None:
+    """Install additive session lookups on a fresh or exclusively owned coordinator."""
     conn.execute(
         "CREATE INDEX IF NOT EXISTS agent_offers_current_session ON agent_offers "
         "(session_id, coordinator_epoch, availability_revision) WHERE current = 1"
     )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS agent_offers_session_revision "
+        "ON agent_offers(session_id, availability_revision)"
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS agent_offers_session ON agent_offers(session_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS agent_controls_session ON agent_controls(session_id)")
 
 
 def initialize_agent_session_schema(
@@ -5952,7 +5946,7 @@ def initialize_agent_session_schema(
         CREATE TABLE IF NOT EXISTS agent_controls (operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, session_id TEXT NOT NULL, agent_id TEXT NOT NULL, request_json TEXT NOT NULL, state TEXT NOT NULL, result_code TEXT, effect_json TEXT, acknowledged INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS remote_assignment_controls (operation_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, assignment_id TEXT NOT NULL UNIQUE, request_json TEXT NOT NULL, state TEXT NOT NULL, result_code TEXT, evidence_json TEXT, acknowledged INTEGER NOT NULL DEFAULT 0);
         """)
-        ensure_current_offer_index(conn)
+        ensure_agent_lookup_indexes(conn)
     else:
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS agent_registration_intents (operation_id TEXT PRIMARY KEY, digest TEXT NOT NULL, request_json TEXT NOT NULL, retirement_secret TEXT, result_json TEXT);
