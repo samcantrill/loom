@@ -63,27 +63,34 @@ def test_ordered_delivery_exceeding_control_budget_crosses_http_and_replays(tmp_
             _read_agent_reply(connection, operation, b"{}", role)
 
 
-def test_compact_retry_candidate_exceeding_256_kib_crosses_registration(tmp_path):
+def test_retained_multi_target_retry_exceeding_one_mib_crosses_registration(tmp_path):
     from loom.pipeline.planning.models import StageFingerprintRecord
 
-    # A measured PURE retry has a 440,592-character compressed candidate.
-    candidate = "zlib:" + "A" * 440_592
+    # The retained MMPD two-target retry produced a 1,282,839-byte delivery.
+    candidate = "zlib:" + "A" * 1_280_000
     stage_config = {"preparation": {"purpose": {"kind": "project", "candidate_json": candidate}}}
     value = _response(tmp_path, fingerprint_schema=3, stage_config=stage_config)
-    assert 262_144 < len(json.dumps(value).encode()) < 1_048_576
-    response = _read_agent_reply(cast(Any, _Connection(value)), "register", b"{}", "slurm_bootstrap")
-    delivery = SlurmStageDelivery.from_dict(thaw_plain_data(response["delivery"]))
-    restored = cast(Any, StageFingerprintRecord.from_dict(delivery.fingerprint).payload.stage_config)
-    assert restored["preparation"]["purpose"]["candidate_json"] == candidate
+    connection = cast(Any, _Connection(value))
+    assert 1_048_576 < len(connection.body) < 2_097_152
+    for _ in range(2):
+        response = _read_agent_reply(connection, "register", b"{}", "slurm_bootstrap")
+        delivery = SlurmStageDelivery.from_dict(thaw_plain_data(response["delivery"]))
+        restored = cast(Any, StageFingerprintRecord.from_dict(delivery.fingerprint).payload.stage_config)
+        assert restored["preparation"]["purpose"]["candidate_json"] == candidate
+    for role, operation in [("agent", "register"), ("slurm_bootstrap", "handshake")]:
+        with pytest.raises(_IndeterminateAgentProtocolError):
+            _read_agent_reply(connection, operation, b"{}", role)
 
 
 def test_registration_reply_keeps_a_finite_transport_budget(tmp_path):
+    # An otherwise valid delivery that exceeds the registration byte budget.
     value = _response(tmp_path, fingerprint_schema=3,
-                      stage_config={"content": "x" * 1_048_576})
+                      stage_config={"content": "x" * (8 * 1024 * 1024)})
+    connection = cast(Any, _Connection(value))
     with pytest.raises(QueueServiceError, match="body is too large"):
-        _decode(json.dumps(value).encode(), slurm_registration=True)
+        _decode(connection.body, slurm_registration=True)
     with pytest.raises(_IndeterminateAgentProtocolError):
-        _read_agent_reply(cast(Any, _Connection(value)), "register", b"{}", "slurm_bootstrap")
+        _read_agent_reply(connection, "register", b"{}", "slurm_bootstrap")
 
 
 def test_large_unknown_registration_is_not_treated_as_a_delivery(tmp_path):
