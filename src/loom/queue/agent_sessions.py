@@ -1991,16 +1991,19 @@ class AgentSessionService:
     ) -> Mapping[str, PlainData]:
         from .local_daemon_execution import _SlurmRetentionRequired, _SlurmPublicationRequired
 
+        if evidence is None:
+            # Task pages are observations. Their filesystem-backed reads must
+            # leave the mutation lock available for scheduler acknowledgements.
+            return self._slurm_work_for_session(session_id, coordinator_epoch, None, cursor)
         with self._daemon._cycle_lock:
-            negotiated = self._slurm_work_locked(
+            negotiated = self._slurm_work_for_session(
                 session_id, coordinator_epoch, evidence, cursor, _pending_only=True,
             )
             if negotiated is not None:
                 return negotiated
-        publication = evidence is not None and evidence.get("result_operation") == "commit"
-        release = evidence is not None and evidence.get("provider_released") is True
+        publication = evidence.get("result_operation") == "commit"
+        release = evidence.get("provider_released") is True
         if publication or release:
-            assert evidence is not None
             if publication:
                 assignment_id = evidence.get("assignment_id")
             else:
@@ -2013,7 +2016,7 @@ class AgentSessionService:
                 pending = None
                 with self._daemon._cycle_lock:
                     try:
-                        return self._slurm_work_locked(
+                        return self._slurm_work_for_session(
                             session_id, coordinator_epoch, evidence, cursor,
                             _pending_only=False, **({"_defer_publication": True} if publication else {"_defer_retention": True}),
                         )
@@ -2028,27 +2031,27 @@ class AgentSessionService:
                     pending.retain()
                     completed = {"_retained": pending}
                 with self._daemon._cycle_lock:
-                    return self._slurm_work_locked(
+                    return self._slurm_work_for_session(
                         session_id, coordinator_epoch, evidence, cursor, _pending_only=False, **completed,
                     )
         with self._daemon._cycle_lock:
-            return self._slurm_work_locked(session_id, coordinator_epoch, evidence, cursor)
+            return self._slurm_work_for_session(session_id, coordinator_epoch, evidence, cursor)
 
     @overload
-    def _slurm_work_locked(
+    def _slurm_work_for_session(
         self, session_id: str, coordinator_epoch: str,
         evidence: Mapping[str, PlainData] | None, cursor: str | None,
         _pending_only: Literal[True], **retention: Any,
     ) -> Mapping[str, PlainData] | None: ...
 
     @overload
-    def _slurm_work_locked(
+    def _slurm_work_for_session(
         self, session_id: str, coordinator_epoch: str,
         evidence: Mapping[str, PlainData] | None, cursor: str | None,
         _pending_only: Literal[False] = False, **retention: Any,
     ) -> Mapping[str, PlainData]: ...
 
-    def _slurm_work_locked(
+    def _slurm_work_for_session(
         self, session_id: str, coordinator_epoch: str,
         evidence: Mapping[str, PlainData] | None, cursor: str | None,
         _pending_only: bool = False, **retention,
@@ -2067,7 +2070,8 @@ class AgentSessionService:
                 raise QueueServiceError(
                     "agent session lacks SLURM submission capability"
                 )
-        execution = self._daemon._execution
+            execution = self._daemon._execution
+            scheduling_epoch = self._daemon._scheduling_epoch
         if execution is None:
             raise QueueServiceError("SLURM assignment owner is unavailable")
         if _pending_only and SLURM_PENDING_EFFECTS_CAPABILITY not in session.capabilities:
@@ -2095,6 +2099,11 @@ class AgentSessionService:
             self._check_current_session(current, current_rule, coordinator_epoch, current_revision)
             if current != session:
                 raise QueueConflictError("SLURM session changed during owner observation")
+            if evidence is None and (
+                self._daemon._execution is not execution
+                or self._daemon._scheduling_epoch != scheduling_epoch
+            ):
+                return {"tasks": [], "next_cursor": None}
         return result
 
     def handshake(self) -> Mapping[str, PlainData]:

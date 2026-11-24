@@ -220,7 +220,7 @@ def test_slow_slurm_retention_yields_global_lock_then_revalidates_session(operat
         assert options.get("_retained", options.get("_publication")) is continuation and continuation.completed
         return {"sequence": 1}
 
-    service: Any = SimpleNamespace(_daemon=daemon, _slurm_work_locked=locked)
+    service: Any = SimpleNamespace(_daemon=daemon, _slurm_work_for_session=locked)
 
     def release():
         try:
@@ -379,7 +379,7 @@ def test_concurrent_slurm_commit_retries_share_one_publication_guard(tmp_path, m
         assert token.validates(execution, record, "fence-1")
         return publication.accept_publication(token.prepared)
 
-    service: Any = SimpleNamespace(_daemon=daemon, _slurm_work_locked=locked)
+    service: Any = SimpleNamespace(_daemon=daemon, _slurm_work_for_session=locked)
     evidence = {"result_operation": "commit", "assignment_id": workspace.root.name}
 
     def commit(retry=False):
