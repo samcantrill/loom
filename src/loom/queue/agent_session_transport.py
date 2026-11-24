@@ -147,7 +147,7 @@ from ._agent_process_supervisor import (
     SupervisorLaunchState,
     _launch_from_value,
 )
-from .errors import QueueConflictError, QueueError, QueueServiceError
+from .errors import QueueConflictError, QueueError, QueueServiceError, _AgentReleaseEpochRejected
 from ._coordinator_control import (
     CONTROL_CAPABILITY,
     CoordinatorClientError,
@@ -2389,18 +2389,22 @@ class LocalDaemonAgentHttpClient:
             self._prepare_release_proof, session_id, assignment_id, execution_journal,
             fence, availability_revision,
         )))
-        session = _session_from_value(
-            (yield from _steps(self._call,
-                "release",
-                {
-                    "session_id": session_id,
-                    "assignment_id": assignment_id,
-                    "fence": fence,
-                    "availability_revision": availability_revision,
-                    "provider_release_proof": proof.value(),
-                },
-            ))
-        )
+        def exchange(exact):
+            return _steps(self._call, "release", {
+                "session_id": session_id, "assignment_id": assignment_id, "fence": fence,
+                "availability_revision": availability_revision, "provider_release_proof": exact.value(),
+            })
+
+        try:
+            reply = yield from exchange(proof)
+        except _AgentReleaseEpochRejected:
+            def rebind():
+                current = journal.provider_release_proof(session_id, assignment_id, execution_journal)
+                return journal.rebind_rejected_release(proof, current)
+
+            proof = yield from self._mutation_gate.run(_steps(rebind))
+            reply = yield from exchange(proof)
+        session = _session_from_value(reply)
         if session.session_id != session_id or session.state not in {AgentSessionState.ACTIVE, AgentSessionState.REPLACED}:
             raise QueueConflictError("remote release returned an invalid session state")
         yield from self._mutation_gate.run(_steps(journal.complete_assignment_release, session, assignment_id))
@@ -3540,6 +3544,8 @@ def _read_agent_reply(
                 raise _AcceptedTimeError(str(diagnostic), revision)
         raise QueueServiceError("invalid accepted-time diagnostic")
     if response.status == 409:
+        if operation == "release" and payload.get("error") == "agent_release_epoch_rejected":
+            raise _AgentReleaseEpochRejected("release epoch was rejected before retaining proof")
         if operation == "register" and payload.get("error") == "agent_registration_epoch_rejected":
             from .errors import _AgentRegistrationEpochRejected
             raise _AgentRegistrationEpochRejected("registration epoch was rejected without acceptance")
@@ -3953,6 +3959,9 @@ class _Handler(BaseHTTPRequestHandler):
                 )
         except QueueConflictError as exc:
             from .errors import _AgentRegistrationEpochRejected
+            if isinstance(exc, _AgentReleaseEpochRejected):
+                self._reply(409, {"ok": False, "error": "agent_release_epoch_rejected"})
+                return
             if isinstance(exc, _AgentRegistrationEpochRejected):
                 self._reply(409, {"ok": False, "error": "agent_registration_epoch_rejected"})
                 return

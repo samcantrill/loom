@@ -54,6 +54,10 @@ class QueueConflictError(QueueStorageError):
     """Raised when a queue repository write conflicts with durable state."""
 
 
+class _AgentReleaseEpochRejected(QueueConflictError):
+    """The current release owner has no retained proof for the rejected epoch."""
+
+
 class _AgentRegistrationEpochRejected(QueueConflictError):
     """The exact registration has no receipt and its epoch cannot accept it."""
 

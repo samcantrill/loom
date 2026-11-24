@@ -39,7 +39,7 @@ from loom.timestamps import parse_timestamp
 
 from ._action_results import action_attempt_cancelled, attach_action_fence
 
-from .errors import QueueConflictError, QueueServiceError, QueueStorageError, _AgentRegistrationEpochRejected
+from .errors import QueueConflictError, QueueServiceError, QueueStorageError, _AgentRegistrationEpochRejected, _AgentReleaseEpochRejected
 from ._managed_local import (
     GPU_DECLINE_REASONS,
     ResourceAvailabilityStatus,
@@ -4357,24 +4357,24 @@ class AgentSessionService:
             replaced = session.state is AgentSessionState.REPLACED
             if row["fence"] != fence:
                 raise QueueConflictError("remote release fence is stale")
+            retained_proof = row["provider_release_proof_json"]
+            _verify_retirement_secret(
+                conn, session.session_id, provider_release_proof.retirement_secret
+            )
+            if retained_proof is None and str(row["state"]) == "RELEASED":
+                raise QueueConflictError("released assignment lacks its provider proof")
+            if retained_proof is not None and str(retained_proof) != proof_json:
+                raise QueueConflictError("remote provider release proof conflicts")
             _require_matching_provider_release_proof(
                 session,
                 provider_release_proof,
                 assignment_id=assignment_id,
                 fence=fence,
                 availability_revision=availability_revision,
+                retained=retained_proof is not None,
             )
-            _verify_retirement_secret(
-                conn, session.session_id, provider_release_proof.retirement_secret
-            )
-            retained_proof = row["provider_release_proof_json"]
-            if retained_proof is not None and str(retained_proof) != proof_json:
-                raise QueueConflictError("remote provider release proof conflicts")
             if str(row["state"]) == "RELEASED":
-                if (
-                    row["next_availability_revision"] != availability_revision
-                    or retained_proof is None
-                ):
+                if row["next_availability_revision"] != availability_revision:
                     raise QueueConflictError("remote release replay conflicts")
                 conn.commit()
                 return AgentSession(
@@ -4491,7 +4491,7 @@ class AgentSessionService:
             rule, policy_revision = self._authorize("release")
             current_session = self._require_remote_cleanup_session(
                 conn, rule, policy_revision, session_id, self._daemon._epoch or "")
-            if current_session.state is not session.state:
+            if current_session != session:
                 raise QueueConflictError("remote release session changed during authority release")
             updated = conn.execute(
                 "UPDATE remote_assignments SET state = 'RELEASED', "
@@ -6780,14 +6780,13 @@ def _require_matching_provider_release_proof(
     assignment_id: str,
     fence: str,
     availability_revision: str,
+    retained: bool,
 ) -> None:
     if (
         proof.session_id != session.session_id
         or proof.coordinator_id != session.coordinator_id
-        or proof.coordinator_epoch != session.coordinator_epoch
         or proof.agent_id != session.agent_id
         or proof.agent_root_id != session.agent_root_id
-        or proof.policy_revision != session.policy_revision
         or proof.config_revision != session.config_revision
         or proof.inventory_revision != session.inventory_revision
         or proof.assignment_id != assignment_id
@@ -6795,6 +6794,11 @@ def _require_matching_provider_release_proof(
         or proof.released_availability_revision != availability_revision
     ):
         raise QueueConflictError("agent provider release proof is stale")
+    if proof.coordinator_epoch != session.coordinator_epoch:
+        if not retained:
+            raise _AgentReleaseEpochRejected("release epoch was rejected before retaining proof")
+    elif proof.policy_revision != session.policy_revision:
+        raise QueueConflictError("agent provider release policy is stale")
 
 
 def _plain_identifier(value: Mapping[str, PlainData], key: str) -> str:

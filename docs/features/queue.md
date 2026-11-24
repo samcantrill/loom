@@ -658,6 +658,12 @@ provider claim set. A held worker or publication does not prevent an independent
 eligible assignment from progressing; two blocked bulk operations can delay
 launch/publication/containment, while healthy receipt and stop-request paths
 remain independent. CPU and RAM are accounting reservations, not OS limits;
+An agent replays a pending release with the same provider proof after restart.
+After session reconciliation the coordinator can recognize that exact retained
+proof under the previous epoch. If no proof was accepted, the authenticated
+coordinator can explicitly reject the old epoch. Only that reply allows the
+agent to rebind unchanged physical evidence to its reconciled epoch and policy.
+A delayed receipt settles its own delivery and preserves later session changes.
 GPU claims remain whole-device exclusive through publication and release.
 
 On application restart, each retained assignment recovers independently from

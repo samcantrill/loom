@@ -3898,6 +3898,8 @@ def test_fresh_agent_processes_replay_one_continuous_supervisor_launch(
         ("normal", 1),
         ("normal", 2),
         ("release_restart", 1),
+        ("reconcile_before_accepted_replay", 1),
+        ("reconcile_before_unaccepted_replay", 1),
         ("legacy_renewal", 1),
     ],
 )
@@ -4002,7 +4004,7 @@ def test_repeated_capacity_release_publishes_fresh_offer(
             current = agent.active_session()
             assert current is not None
             coordinator.submit(LocalDaemonAdmissionRequest(f"repeat-{index}", run_uri))
-            if index == 1 and recovery != "normal":
+            if index == 1 and recovery in {"release_restart", "legacy_renewal"}:
                 def prior_release(journal, released, assignment_id):
                     if recovery == "release_restart":
                         raise RuntimeError("release acknowledgement interrupted")
@@ -4014,7 +4016,55 @@ def test_repeated_capacity_release_publishes_fresh_offer(
                 assert current is not None
                 return agent.execute_one(current.session_id, current.availability_revision,
                     sequence=agent.next_poll_sequence(current.session_id), wait_timeout_ms=5000)
-            if index == 1 and recovery == "release_restart":
+            if index == 1 and recovery.startswith("reconcile_before_"):
+                exchange = agent_session_transport._exchange_agent_request
+                attempts = []
+                accepted = recovery == "reconcile_before_accepted_replay"
+
+                def interrupt_once(config, operation, body, *args, **kwargs):
+                    if operation != "release":
+                        return exchange(config, operation, body, *args, **kwargs)
+                    proof = json.loads(body)["provider_release_proof"]
+                    del proof["retirement_secret"]
+                    attempts.append(proof)
+                    if len(attempts) == 1:
+                        if accepted:
+                            result = exchange(config, operation, body, *args, **kwargs)
+                            if result.connection is not None:
+                                result.connection.close()
+                        raise RuntimeError("interrupted release")
+                    return exchange(config, operation, body, *args, **kwargs)
+
+                with monkeypatch.context() as patch:
+                    patch.setattr(agent_session_transport, "_exchange_agent_request", interrupt_once)
+                    with pytest.raises(RuntimeError, match="interrupted release"):
+                        execute()
+                    agent.close()
+                    daemon.stop()
+                    daemon.start()
+                    agent = LocalDaemonAgentHttpClient(remote_config)
+                    epoch = str(agent.handshake()["coordinator_epoch"])
+                    assert epoch != current.coordinator_epoch
+                    # The service negotiates the exact pre/post-release availability
+                    # from the durable execution journal during epoch reconciliation.
+                    agent._service_progress = True
+                    agent.reconcile(current.session_id, epoch, idempotency_key=f"while-release:{epoch}")
+                    agent._service_progress = False
+                    assert agent.resume_retained_work()[0]["state"] == "RELEASED"
+                    assert attempts[1] == attempts[0]
+                    if accepted:
+                        assert len(attempts) == 2
+                    else:
+                        assert attempts[2:] == [{**attempts[0], "coordinator_epoch": epoch}]
+                    recovered = agent.active_session()
+                    assert recovered.coordinator_epoch == epoch
+                    assert recovered.availability_revision == attempts[0]["released_availability_revision"]
+                    assert agent._require_journal().next_offer_renewal(current.session_id) is None
+                    with sqlite3.connect(config.control_database) as conn:
+                        stored = conn.execute("SELECT state, provider_release_proof_json FROM remote_assignments "
+                                              "WHERE assignment_id=?", (attempts[0]["assignment_id"],)).fetchone()
+                    assert stored[0] == "RELEASED" and json.loads(stored[1]) == attempts[-1]
+            elif index == 1 and recovery == "release_restart":
                 with pytest.raises(RuntimeError, match="acknowledgement interrupted"):
                     execute()
                 monkeypatch.setattr(_RemoteAgentJournal, "complete_assignment_release", completed)

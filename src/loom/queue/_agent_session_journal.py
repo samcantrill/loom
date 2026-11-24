@@ -1672,6 +1672,34 @@ class _RemoteAgentJournal:
             })
         return proof
 
+    def rebind_rejected_release(
+        self, rejected: AgentProviderReleaseProof, current: AgentProviderReleaseProof,
+    ) -> AgentProviderReleaseProof:
+        """Replace only epoch/policy after the authenticated owner refused the old proof."""
+        if (current.coordinator_epoch == rejected.coordinator_epoch
+                or replace(rejected, coordinator_epoch=current.coordinator_epoch,
+                           policy_revision=current.policy_revision) != current):
+            raise QueueConflictError("release rebinding requires the same physical proof and a reconciled epoch")
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            pending = self._pending_release(conn, current.session_id)
+            if pending is None or pending["operation_id"] != current.assignment_id:
+                raise QueueConflictError("rejected release no longer owns the delivery")
+            intent = json.loads(pending["request_json"])
+            if intent["proof"] != rejected.redacted_value():
+                raise QueueConflictError("rejected release no longer matches the retained proof")
+            session = conn.execute("SELECT value_json FROM agent_sessions_local WHERE session_id=? AND state=?",
+                                   (current.session_id, AgentSessionState.ACTIVE.value)).fetchone()
+            if session is None:
+                raise QueueConflictError("release session is no longer active")
+            local = json.loads(session[0])
+            if (local["coordinator_epoch"], local["policy_revision"]) != (current.coordinator_epoch, current.policy_revision):
+                raise QueueConflictError("release session changed during rebinding")
+            intent["proof"] = current.redacted_value()
+            conn.execute("UPDATE agent_mutation_intents SET request_json=?, digest=? WHERE operation='release' "
+                         "AND operation_id=?", (_canonical_json(intent), _canonical_digest(intent), current.assignment_id))
+        return current
+
     def complete_assignment_release(self, session: AgentSession, assignment_id: str) -> None:
         """Consume the delivery and its offer atomically after proven release."""
         if session.agent_root_id != self.root_id:
@@ -1697,13 +1725,29 @@ class _RemoteAgentJournal:
                 offer = conn.execute("SELECT offer_id FROM agent_offer_renewals_local WHERE session_id = ?", (session.session_id,)).fetchone()
                 same_offer = (None if offer is None else offer[0]) == intent["offer_id"]
                 local = conn.execute("SELECT value_json, state FROM agent_sessions_local WHERE session_id = ?", (session.session_id,)).fetchone()
-                owns_capacity = same_offer and local["state"] == AgentSessionState.ACTIVE.value and json.loads(local["value_json"]) == intent["session"]
+                latest = _session_from_value(json.loads(local["value_json"]))
+                original = _session_from_value(intent["session"])
+                # Reconciliation can install a newer epoch using either the pre-release
+                # or the already-committed availability revision after a lost reply.
+                authority_fields = ("coordinator_epoch", "policy_revision", "config_revision", "inventory_revision")
+                reply_authority = tuple(getattr(session, key) for key in authority_fields)
+                if reply_authority not in {
+                    tuple(proof[key] for key in authority_fields),
+                    tuple(getattr(latest, key) for key in authority_fields),
+                }:
+                    raise QueueConflictError("remote release receipt belongs to a different authority")
+                same_owner = latest == replace(
+                    original, coordinator_epoch=latest.coordinator_epoch, policy_revision=latest.policy_revision,
+                    availability_revision=latest.availability_revision,
+                )
+                owns_capacity = (same_offer and same_owner and local["state"] == AgentSessionState.ACTIVE.value
+                                 and latest.availability_revision in {original.availability_revision, session.availability_revision})
                 if owns_capacity and session.state is AgentSessionState.ACTIVE:
                     conn.execute(
                         "UPDATE agent_sessions_local SET value_json = ?, state = ? "
                         "WHERE session_id = ? AND state = ?",
-                        (_canonical_json(session.value()), session.state.value,
-                         session.session_id, AgentSessionState.ACTIVE.value),
+                        (_canonical_json(replace(latest, availability_revision=session.availability_revision).value()),
+                         latest.state.value, latest.session_id, AgentSessionState.ACTIVE.value),
                     )
                 if owns_capacity:
                     self._invalidate_resource_offer(conn, session.session_id)
