@@ -19,7 +19,7 @@ import json
 from pathlib import Path
 import re
 import sqlite3
-from time import monotonic
+from time import monotonic, sleep
 from typing import TYPE_CHECKING, Any, Concatenate, Literal, ParamSpec, TypeVar, cast, overload
 from uuid import uuid4
 
@@ -2156,102 +2156,214 @@ class AgentSessionService:
         with daemon._poll_waiters.subscribe(session_id) as signal:
             while True:
                 observed = signal.snapshot()
-                with daemon._state_guard():
-                    self._require_poll_running()
-                    assignment = self.next_assignment_control(session_id, received=received)
-                    control = self.next_control(session_id, received=received)
-                    if assignment is not None or control is not None or monotonic() >= deadline:
-                        return {
-                            "assignment_control": None if assignment is None else assignment.value(),
-                            "control": None if control is None else control.value(),
-                        }
+                assignment, control = self._receive_controls(session_id, received, assignment=True, agent=True)
+                if assignment is not None or control is not None or monotonic() >= deadline:
+                    return {
+                        "assignment_control": None if assignment is None else assignment.value(),
+                        "control": None if control is None else control.value(),
+                    }
                 signal.wait_for_change(observed, max(0, deadline - monotonic()))
 
-    def _control_session(
-        self, conn: sqlite3.Connection, session_id: str, rule: AgentPrincipalPolicy,
-        revision: str,
-    ) -> AgentSession:
-        session = _session_from_row(
-            conn.execute("SELECT * FROM agent_sessions WHERE session_id = ?", (session_id,)).fetchone(),
-            self._daemon._require_started(), expected_principal=rule.principal_id,
+    def _poll_write(self, action: Callable[[sqlite3.Connection], _R]) -> _R:
+        """Order policy and SQLite transitions without sleeping on SQLite under the cycle lock."""
+        daemon = self._daemon
+        with daemon._connection() as conn:
+            timeout = int(conn.execute("PRAGMA busy_timeout").fetchone()[0]) / 1000
+            deadline = monotonic() + timeout
+            conn.execute("PRAGMA busy_timeout = 0")
+            while True:
+                try:
+                    with daemon._state_guard():
+                        self._require_poll_running()
+                        conn.execute("BEGIN IMMEDIATE")
+                        try:
+                            result = action(conn)
+                            conn.commit()
+                        except BaseException:
+                            conn.rollback()
+                            raise
+                        return result
+                except sqlite3.OperationalError as exc:
+                    if (
+                        getattr(exc, "sqlite_errorcode", 0) & 255
+                    ) != sqlite3.SQLITE_BUSY or monotonic() >= deadline:
+                        raise
+                with phase("poll_database_busy_wait"):
+                    sleep(min(0.01, max(0, deadline - monotonic())))
+
+    def _control_permissions(
+        self, assignment: bool, agent: bool
+    ) -> tuple[AgentPrincipalPolicy, str]:
+        if assignment:
+            rule = self._authorize("assignment_control")
+            if agent:
+                self._authorize("control")
+            return rule
+        return self._authorize("control")
+
+    def _inspect_controls(
+        self,
+        session_id: str,
+        received: frozenset[str],
+        *,
+        assignment: bool,
+        agent: bool,
+    ) -> sqlite3.Row | None:
+        # One SELECT supplies a coherent session and both deliverable requests.
+        def projection(table: str, kind: str) -> str:
+            return (
+                f"(SELECT request_json FROM {table} WHERE session_id=s.session_id "
+                "AND state IN ('pending_delivery','applying') "
+                f"AND '{kind}:' || operation_id NOT IN (SELECT value FROM json_each(:received)) "
+                "ORDER BY operation_id LIMIT 1)"
+            )
+
+        assignment_col = (
+            projection("remote_assignment_controls", "assignment")
+            if assignment
+            else "NULL"
         )
-        self._check_current_session(session, rule, self._daemon._epoch or "", revision)
-        return session
+        agent_col = projection("agent_controls", "agent") if agent else "NULL"
+        with self._daemon._connection() as conn:
+            return conn.execute(
+                f"SELECT s.*, {assignment_col} AS assignment_request, {agent_col} AS agent_request "
+                "FROM agent_sessions s WHERE s.session_id=:session",
+                {"session": session_id, "received": json.dumps(sorted(received))},
+            ).fetchone()
 
     @staticmethod
-    def _pending_control(
-        conn: sqlite3.Connection, session_id: str, *, assignment: bool,
-        received: frozenset[str],
-    ) -> sqlite3.Row | None:
-        table = "remote_assignment_controls" if assignment else "agent_controls"
-        kind = "assignment" if assignment else "agent"
-        return next((row for row in conn.execute(
-            f"SELECT operation_id, request_json FROM {table} WHERE session_id = ? "
-            "AND state IN ('pending_delivery', 'applying') ORDER BY operation_id",
-            (session_id,),
-        ) if f"{kind}:{row['operation_id']}" not in received), None)
-
-    @_serialized_session_operation
-    def next_control(
-        self, session_id: str, *, received: frozenset[str] = frozenset(),
-    ) -> AgentControl | None:
-        rule, revision = self._authorize("control")
-        _identifier(session_id, "session_id")
-        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
-            self._control_session(conn, session_id, rule, revision)
-            if self._pending_control(conn, session_id, assignment=False, received=received) is None:
-                return None
-            conn.execute("BEGIN IMMEDIATE")
-            session = self._control_session(conn, session_id, rule, revision)
-            row = self._pending_control(conn, session_id, assignment=False, received=received)
-            if row is None:
-                conn.commit()
-                return None
-            control = AgentControl.from_value(json.loads(str(row["request_json"])))
-            if control.expected_config_revision != session.config_revision:
-                conn.execute(
-                    "UPDATE agent_controls SET state = 'failed', result_code = 'stale_revision' WHERE operation_id = ?",
-                    (control.operation_id,),
-                )
-                conn.commit()
-                return None
-            if control.cancel_active:
-                pending = tuple(
-                    conn.execute(
-                        "SELECT DISTINCT a.run_uri, a.cancellation_operation_id "
-                        "FROM remote_assignments r JOIN managed_admissions a "
-                        "ON a.run_uri = r.run_uri WHERE r.session_id = ? "
-                        "AND r.state != 'RELEASED' AND a.state NOT IN "
-                        "('SUCCEEDED', 'FAILED', 'CANCELLED')",
-                        (session_id,),
-                    )
-                )
-                for cancellation in pending:
-                    operation_id = cancellation["cancellation_operation_id"]
-                    if operation_id is None:
-                        conn.commit()
-                        return None
-                    try:
-                        execution = self._daemon._execution  # type: ignore[attr-defined]
-                        if execution is None:
-                            raise QueueServiceError(
-                                "coordinator execution is unavailable"
-                            )
-                        receipt = execution.cancellation_epoch_receipt(
-                            str(cancellation["run_uri"]),
-                            str(operation_id),
-                        )
-                    except Exception:
-                        receipt = None
-                    if receipt is None:
-                        conn.commit()
-                        return None
-            conn.execute(
-                "UPDATE agent_controls SET state = 'applying' WHERE operation_id = ?",
-                (control.operation_id,),
+    def _cancel_dependencies(
+        conn: sqlite3.Connection, session_id: str
+    ) -> tuple[tuple[str, str | None], ...]:
+        return tuple(
+            (row[0], row[1])
+            for row in conn.execute(
+                "SELECT DISTINCT a.run_uri, a.cancellation_operation_id FROM remote_assignments r "
+                "JOIN managed_admissions a ON a.run_uri=r.run_uri WHERE r.session_id=? "
+                "AND r.state!='RELEASED' AND a.state NOT IN ('SUCCEEDED','FAILED','CANCELLED') ORDER BY 1,2",
+                (session_id,),
             )
-            conn.commit()
-            return control
+        )
+
+    def _receive_controls(
+        self,
+        session_id: str,
+        received: frozenset[str],
+        *,
+        assignment: bool,
+        agent: bool,
+    ) -> tuple[AgentAssignmentControl | None, AgentControl | None]:
+        _identifier(session_id, "session_id")
+        daemon = self._daemon
+        with daemon._state_guard():
+            self._require_poll_running()
+            rule, revision = self._control_permissions(assignment, agent)
+            coordinator, epoch = daemon._require_started(), daemon._epoch or ""
+        row = self._inspect_controls(
+            session_id, received, assignment=assignment, agent=agent
+        )
+        session = _session_from_row(
+            row, coordinator, expected_principal=rule.principal_id
+        )
+        assert row is not None
+        assignment_control = (
+            AgentAssignmentControl.from_value(json.loads(row["assignment_request"]))
+            if row["assignment_request"]
+            else None
+        )
+        control = (
+            AgentControl.from_value(json.loads(row["agent_request"]))
+            if row["agent_request"]
+            else None
+        )
+        if control is None and assignment_control is None:
+            with daemon._state_guard():
+                self._require_poll_running()
+                rule, revision = self._control_permissions(assignment, agent)
+                self._check_current_session(session, rule, epoch, revision)
+            return None, None
+
+        requirements = None
+        if (
+            control is not None
+            and control.cancel_active
+            and control.expected_config_revision == session.config_revision
+        ):
+            with daemon._connection() as conn:
+                pending = self._cancel_dependencies(conn, session_id)
+            execution = daemon._execution
+            try:
+                if all(
+                    op is not None
+                    and execution is not None
+                    and execution.cancellation_epoch_receipt(uri, op) is not None
+                    for uri, op in pending
+                ):
+                    requirements = pending
+            except Exception:
+                pass  # Incomplete authority evidence keeps the control pending.
+
+        def claim(
+            conn: sqlite3.Connection,
+        ) -> tuple[AgentAssignmentControl | None, AgentControl | None]:
+            rule, current_revision = self._control_permissions(assignment, agent)
+            current = _session_from_row(
+                conn.execute(
+                    "SELECT * FROM agent_sessions WHERE session_id=?", (session_id,)
+                ).fetchone(),
+                coordinator,
+                expected_principal=rule.principal_id,
+            )
+            self._check_current_session(current, rule, epoch, current_revision)
+
+            def transition(
+                table: str, operation_id: str, payload: str, stale: bool = False
+            ) -> bool:
+                return (
+                    conn.execute(
+                        f"UPDATE {table} SET state=?, result_code=CASE WHEN ? THEN 'stale_revision' ELSE result_code END "
+                        "WHERE operation_id=? AND session_id=? AND request_json=? AND state IN ('pending_delivery','applying')",
+                        (
+                            "failed" if stale else "applying",
+                            stale,
+                            operation_id,
+                            session_id,
+                            payload,
+                        ),
+                    ).rowcount
+                    == 1
+                )
+
+            assigned = None
+            if assignment_control and transition(
+                "remote_assignment_controls",
+                assignment_control.operation_id,
+                row["assignment_request"],
+            ):
+                assigned = assignment_control
+            if control is not None:
+                stale = control.expected_config_revision != current.config_revision
+                if (
+                    stale
+                    or not control.cancel_active
+                    or requirements == self._cancel_dependencies(conn, session_id)
+                ):
+                    if (
+                        transition(
+                            "agent_controls",
+                            control.operation_id,
+                            row["agent_request"],
+                            stale,
+                        )
+                        and not stale
+                    ):
+                        return assigned, control
+            return assigned, None
+
+        return self._poll_write(claim)
+
+    def next_control(self, session_id: str, *, received: frozenset[str] = frozenset()) -> AgentControl | None:
+        return self._receive_controls(session_id, received, assignment=False, agent=True)[1]
 
     @_serialized_session_operation
     def acknowledge_control(
@@ -2348,32 +2460,8 @@ class AgentSessionService:
             path="agent control acknowledgement",
         )
 
-    @_serialized_session_operation
-    def next_assignment_control(
-        self, session_id: str, *, received: frozenset[str] = frozenset(),
-    ) -> AgentAssignmentControl | None:
-        rule, revision = self._authorize("assignment_control")
-        _identifier(session_id, "session_id")
-        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
-            self._control_session(conn, session_id, rule, revision)
-            if self._pending_control(conn, session_id, assignment=True, received=received) is None:
-                return None
-            conn.execute("BEGIN IMMEDIATE")
-            self._control_session(conn, session_id, rule, revision)
-            row = self._pending_control(conn, session_id, assignment=True, received=received)
-            if row is None:
-                conn.commit()
-                return None
-            control = AgentAssignmentControl.from_value(
-                json.loads(str(row["request_json"]))
-            )
-            conn.execute(
-                "UPDATE remote_assignment_controls SET state = 'applying' "
-                "WHERE operation_id = ?",
-                (control.operation_id,),
-            )
-            conn.commit()
-            return control
+    def next_assignment_control(self, session_id: str, *, received: frozenset[str] = frozenset()) -> AgentAssignmentControl | None:
+        return self._receive_controls(session_id, received, assignment=True, agent=False)[0]
 
     @_serialized_session_operation
     def acknowledge_assignment_control(
@@ -2745,94 +2833,89 @@ class AgentSessionService:
     def renew_offer(self, renewal: AgentOfferRenewal) -> Mapping[str, PlainData]:
         """Extend exactly the current unchanged offer once per sequence."""
         digest = _digest(renewal.value())
-        with self._daemon._state_guard():
-            return self._renew_offer(renewal, digest)
+        return self._poll_write(lambda conn: self._renew_offer(conn, renewal, digest))
 
-    def _renew_offer(self, renewal: AgentOfferRenewal, digest: str) -> Mapping[str, PlainData]:
+    def _renew_offer(self, conn: sqlite3.Connection, renewal: AgentOfferRenewal, digest: str) -> Mapping[str, PlainData]:
         rule, policy_revision = self._authorize("offer")
-        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
-            conn.execute("BEGIN IMMEDIATE")
-            session = _session_from_row(
-                conn.execute(
-                    "SELECT * FROM agent_sessions WHERE session_id = ?",
-                    (renewal.session_id,),
-                ).fetchone(),
-                self._daemon._require_started(),  # type: ignore[attr-defined]
-                expected_principal=rule.principal_id,
-            )
-            self._check_current_session(
-                session, rule, self._daemon._epoch or "", policy_revision
-            )
-            if session.availability_revision != renewal.availability_revision:
-                raise QueueConflictError("offer renewal availability revision is stale")
-            previous = conn.execute(
-                "SELECT sequence, digest, result_json FROM agent_offer_renewals "
-                "WHERE principal_id = ? AND session_id = ?",
-                (rule.principal_id, renewal.session_id),
-            ).fetchone()
-            if previous is not None:
-                previous_sequence = int(previous["sequence"])
-                if renewal.sequence < previous_sequence:
-                    raise AgentStalePollError("offer renewal sequence is stale")
-                if renewal.sequence == previous_sequence:
-                    if str(previous["digest"]) != digest:
-                        raise QueueConflictError(
-                            "offer renewal sequence was reused with different content"
-                        )
-                    value = json.loads(str(previous["result_json"]))
-                    if not isinstance(value, Mapping):
-                        raise QueueServiceError("offer renewal receipt is invalid")
-                    conn.commit()
-                    return freeze_plain_data(value, path="offer renewal receipt")
-                if renewal.sequence != previous_sequence + 1:
-                    raise AgentPollSequenceGapError("offer renewal sequence has a gap")
-            elif renewal.sequence != 1:
+        session = _session_from_row(
+            conn.execute(
+                "SELECT * FROM agent_sessions WHERE session_id = ?",
+                (renewal.session_id,),
+            ).fetchone(),
+            self._daemon._require_started(),  # type: ignore[attr-defined]
+            expected_principal=rule.principal_id,
+        )
+        self._check_current_session(
+            session, rule, self._daemon._epoch or "", policy_revision
+        )
+        if session.availability_revision != renewal.availability_revision:
+            raise QueueConflictError("offer renewal availability revision is stale")
+        previous = conn.execute(
+            "SELECT sequence, digest, result_json FROM agent_offer_renewals "
+            "WHERE principal_id = ? AND session_id = ?",
+            (rule.principal_id, renewal.session_id),
+        ).fetchone()
+        if previous is not None:
+            previous_sequence = int(previous["sequence"])
+            if renewal.sequence < previous_sequence:
+                raise AgentStalePollError("offer renewal sequence is stale")
+            if renewal.sequence == previous_sequence:
+                if str(previous["digest"]) != digest:
+                    raise QueueConflictError(
+                        "offer renewal sequence was reused with different content"
+                    )
+                value = json.loads(str(previous["result_json"]))
+                if not isinstance(value, Mapping):
+                    raise QueueServiceError("offer renewal receipt is invalid")
+                return freeze_plain_data(value, path="offer renewal receipt")
+            if renewal.sequence != previous_sequence + 1:
                 raise AgentPollSequenceGapError("offer renewal sequence has a gap")
-            current = conn.execute(
-                "SELECT offer_json FROM agent_offers WHERE offer_id = ? AND session_id = ? "
-                "AND availability_revision = ? AND coordinator_epoch = ? AND current = 1",
-                (
-                    renewal.offer_id,
-                    renewal.session_id,
-                    renewal.availability_revision,
-                    self._daemon._epoch,
-                ),  # type: ignore[attr-defined]
-            ).fetchone()
-            if current is None:
-                raise QueueConflictError("offer renewal requires the current offer")
-            offer = AgentOffer.from_value(json.loads(str(current["offer_json"])))
-            if [item.decision_dict() for item in renewal.resource_status] != [
-                item.decision_dict() for item in offer.resource_status
-            ]:
-                raise QueueConflictError("offer renewal changes resource availability")
-            accepted = self._daemon._accepted_time(conn)  # type: ignore[attr-defined]
-            expiry = _add_seconds(accepted, offer.ttl_seconds)
-            conn.execute(
-                "UPDATE agent_offers SET accepted_at = ?, expires_at = ? WHERE offer_id = ?",
-                (accepted, expiry, renewal.offer_id),
-            )
-            result: dict[str, PlainData] = {
-                "offer_id": renewal.offer_id,
-                "accepted_at": accepted,
-                "expires_at": expiry,
-                "sequence": renewal.sequence,
-                "state": "renewed",
-                "resource_status": [item.to_dict() for item in renewal.resource_status],
-            }
-            conn.execute(
-                "INSERT INTO agent_offer_renewals(principal_id, session_id, sequence, digest, result_json) "
-                "VALUES (?, ?, ?, ?, ?) ON CONFLICT(principal_id, session_id) DO UPDATE SET "
-                "sequence = excluded.sequence, digest = excluded.digest, result_json = excluded.result_json",
-                (
-                    rule.principal_id,
-                    renewal.session_id,
-                    renewal.sequence,
-                    digest,
-                    json.dumps(result, sort_keys=True, separators=(",", ":")),
-                ),
-            )
-            conn.commit()
-            return freeze_plain_data(result, path="agent offer renewal receipt")
+        elif renewal.sequence != 1:
+            raise AgentPollSequenceGapError("offer renewal sequence has a gap")
+        current = conn.execute(
+            "SELECT offer_json FROM agent_offers WHERE offer_id = ? AND session_id = ? "
+            "AND availability_revision = ? AND coordinator_epoch = ? AND current = 1",
+            (
+                renewal.offer_id,
+                renewal.session_id,
+                renewal.availability_revision,
+                self._daemon._epoch,
+            ),  # type: ignore[attr-defined]
+        ).fetchone()
+        if current is None:
+            raise QueueConflictError("offer renewal requires the current offer")
+        offer = AgentOffer.from_value(json.loads(str(current["offer_json"])))
+        if [item.decision_dict() for item in renewal.resource_status] != [
+            item.decision_dict() for item in offer.resource_status
+        ]:
+            raise QueueConflictError("offer renewal changes resource availability")
+        accepted = self._daemon._accepted_time(conn)  # type: ignore[attr-defined]
+        expiry = _add_seconds(accepted, offer.ttl_seconds)
+        conn.execute(
+            "UPDATE agent_offers SET accepted_at = ?, expires_at = ? WHERE offer_id = ?",
+            (accepted, expiry, renewal.offer_id),
+        )
+        result: dict[str, PlainData] = {
+            "offer_id": renewal.offer_id,
+            "accepted_at": accepted,
+            "expires_at": expiry,
+            "sequence": renewal.sequence,
+            "state": "renewed",
+            "resource_status": [item.to_dict() for item in renewal.resource_status],
+        }
+        conn.execute(
+            "INSERT INTO agent_offer_renewals(principal_id, session_id, sequence, digest, result_json) "
+            "VALUES (?, ?, ?, ?, ?) ON CONFLICT(principal_id, session_id) DO UPDATE SET "
+            "sequence = excluded.sequence, digest = excluded.digest, result_json = excluded.result_json",
+            (
+                rule.principal_id,
+                renewal.session_id,
+                renewal.sequence,
+                digest,
+                json.dumps(result, sort_keys=True, separators=(",", ":")),
+            ),
+        )
+        return freeze_plain_data(result, path="agent offer renewal receipt")
 
     def publish_offer(
         self,
@@ -3181,14 +3264,9 @@ class AgentSessionService:
         _identifier(session_id, "session_id")
         daemon = self._daemon
         with daemon._poll_waiters.subscribe(session_id) as signal:
-            with daemon._state_guard():
-                self._require_poll_running()
-                principal_id, epoch, digest, replay = self._begin_work_poll(
-                    session_id,
-                    availability_revision,
-                    sequence=sequence,
-                    wait_timeout_ms=wait_timeout_ms,
-                )
+            principal_id, epoch, digest, replay = self._begin_work_poll(
+                session_id, availability_revision, sequence=sequence, wait_timeout_ms=wait_timeout_ms,
+            )
             if replay is not None:
                 return replay
             deadline = monotonic() + wait_timeout_ms / 1_000
@@ -3198,26 +3276,17 @@ class AgentSessionService:
                     observed = signal.snapshot()
                     with daemon._state_guard():
                         self._require_poll_running()
-                        offer_recheck, delivered = self._check_work_poll(
-                            principal_id=principal_id,
-                            session_id=session_id,
-                            availability_revision=availability_revision,
-                            sequence=sequence,
-                            epoch=epoch,
-                            digest=digest,
-                        )
-                        if delivered is not None:
-                            return delivered
-                        remaining = deadline - monotonic()
-                        if remaining <= 0:
-                            return self._finish_work_poll(
-                                session_id,
-                                availability_revision,
-                                sequence=sequence,
-                                epoch=epoch,
-                                digest=digest,
-                            )
-                    signal.wait_for_change(observed, min(remaining, offer_recheck))
+                        rule, _ = self._authorize("poll")
+                        if rule.principal_id != principal_id or daemon._epoch != epoch:
+                            raise QueueConflictError("coordinator epoch or poll principal is stale")
+                    offer_recheck, delivered = self._check_work_poll(
+                        principal_id=principal_id, session_id=session_id,
+                        availability_revision=availability_revision, sequence=sequence,
+                        epoch=epoch, digest=digest, deadline=deadline,
+                    )
+                    if delivered is not None:
+                        return delivered
+                    signal.wait_for_change(observed, max(0, min(deadline - monotonic(), offer_recheck)))
             except Exception:
                 with daemon._connection() as conn:
                     conn.execute(
@@ -3241,7 +3310,6 @@ class AgentSessionService:
         sequence: int,
         wait_timeout_ms: int,
     ) -> tuple[str, str, str, Mapping[str, PlainData] | None]:
-        rule, policy_revision = self._authorize("poll")
         _identifier(availability_revision, "availability_revision")
         if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
             raise QueueServiceError("work poll sequence must be positive")
@@ -3251,17 +3319,13 @@ class AgentSessionService:
             or not 1 <= wait_timeout_ms <= _MAX_POLL_WAIT_MILLISECONDS
         ):
             raise QueueServiceError("work poll wait is outside the permitted range")
-        epoch = self._daemon._epoch or ""  # type: ignore[attr-defined]
-        request_value: dict[str, PlainData] = {
-            "session_id": session_id,
-            "sequence": sequence,
-            "availability_revision": availability_revision,
-            "coordinator_epoch": epoch,
-            "wait_timeout_ms": wait_timeout_ms,
-        }
-        digest = _digest(request_value)
-        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
-            conn.execute("BEGIN IMMEDIATE")
+        def reserve(conn: sqlite3.Connection) -> tuple[str, str, str, Mapping[str, PlainData] | None]:
+            rule, policy_revision = self._authorize("poll")
+            epoch = self._daemon._epoch or ""
+            digest = _digest({
+                "session_id": session_id, "sequence": sequence, "availability_revision": availability_revision,
+                "coordinator_epoch": epoch, "wait_timeout_ms": wait_timeout_ms,
+            })
             session = _session_from_row(
                 conn.execute(
                     "SELECT * FROM agent_sessions WHERE session_id = ?", (session_id,)
@@ -3298,7 +3362,6 @@ class AgentSessionService:
                     )
                 if sequence == stored_sequence and existing["result_json"] is not None:
                     value = _plain_result(existing["result_json"], "agent poll receipt")
-                    conn.commit()
                     return rule.principal_id, epoch, digest, value
                 if bool(existing["active"]):
                     raise AgentPollActiveError("work poll is already active")
@@ -3339,9 +3402,17 @@ class AgentSessionService:
                         session_id,
                     ),
                 )
-            conn.commit()
+            return rule.principal_id, epoch, digest, None
 
-        return rule.principal_id, epoch, digest, None
+        return self._poll_write(reserve)
+
+    def _inspect_work_candidate(self, session_id: str) -> sqlite3.Row | None:
+        with self._daemon._connection() as conn:
+            return conn.execute(
+                "SELECT assignment_id, COALESCE(reference_json,request_json) AS payload FROM agent_deliveries "
+                "WHERE session_id=? AND state='TARGETED' ORDER BY assignment_id LIMIT 1",
+                (session_id,),
+            ).fetchone()
 
     def _check_work_poll(
         self,
@@ -3352,91 +3423,32 @@ class AgentSessionService:
         sequence: int,
         epoch: str,
         digest: str,
+        deadline: float,
     ) -> tuple[float, Mapping[str, PlainData] | None]:
-        rule, policy_revision = self._authorize("poll")
-        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
-            conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute(
-                "SELECT active, result_json FROM agent_poll_state "
-                "WHERE principal_id = ? AND session_id = ? "
-                "AND sequence = ? AND digest = ?",
-                (rule.principal_id, session_id, sequence, digest),
-            ).fetchone()
-            if row is None:
-                raise QueueConflictError("work poll was fenced")
-            if not bool(row["active"]):
-                if row["result_json"] is not None:
-                    return 0.0, _plain_result(row["result_json"], "agent poll receipt")
-                # Exact retained identity, inactive, and no delivery: a control
-                # fence consumed this sequence. Give the agent that evidence
-                # instead of a generic rejection requiring reconnection.
-                raise AgentPollFencedError("work poll was fenced")
-            session = _session_from_row(
-                conn.execute(
-                    "SELECT * FROM agent_sessions WHERE session_id = ?",
-                    (session_id,),
-                ).fetchone(),
-                self._daemon._require_started(),  # type: ignore[attr-defined]
-                expected_principal=rule.principal_id,
-            )
-            self._check_current_session(session, rule, epoch, policy_revision)
-            offer_recheck = self._require_current_offer(
-                conn, session_id, availability_revision
-            )
-            conn.commit()
-        delivered = self._take_targeted_delivery(
+        # A detached read can take arbitrarily long. Its result grants no rights.
+        row = self._inspect_work_candidate(session_id)
+        value: dict[str, PlainData] = {
+            "result": "wait",
+            "sequence": sequence,
+            "coordinator_epoch": epoch,
+        }
+        if row is not None:
+            value.update(result="assignment", request=json.loads(row["payload"]))
+        encoded = _canonical_json(value)
+        delay, receipt = self._take_targeted_delivery(
             principal_id=principal_id,
             session_id=session_id,
             availability_revision=availability_revision,
             sequence=sequence,
             epoch=epoch,
             digest=digest,
+            candidate=row,
+            encoded=encoded,
+            deadline=deadline,
         )
-        return offer_recheck, delivered
-
-    def _finish_work_poll(
-        self,
-        session_id: str,
-        availability_revision: str,
-        *,
-        sequence: int,
-        epoch: str,
-        digest: str,
-    ) -> Mapping[str, PlainData]:
-        value = {
-            "result": "wait",
-            "sequence": sequence,
-            "coordinator_epoch": epoch,
-        }
-        rule, policy_revision = self._authorize("poll")
-        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
-            conn.execute("BEGIN IMMEDIATE")
-            session = _session_from_row(
-                conn.execute(
-                    "SELECT * FROM agent_sessions WHERE session_id = ?",
-                    (session_id,),
-                ).fetchone(),
-                self._daemon._require_started(),  # type: ignore[attr-defined]
-                expected_principal=rule.principal_id,
-            )
-            self._check_current_session(session, rule, epoch, policy_revision)
-            self._require_current_offer(conn, session_id, availability_revision)
-            updated = conn.execute(
-                "UPDATE agent_poll_state SET active = 0, result_json = ? "
-                "WHERE principal_id = ? AND session_id = ? AND sequence = ? "
-                "AND digest = ? AND active = 1",
-                (
-                    _canonical_json(value),
-                    rule.principal_id,
-                    session_id,
-                    sequence,
-                    digest,
-                ),
-            ).rowcount
-            if updated != 1:
-                raise QueueConflictError("work poll was fenced")
-            conn.commit()
-        return freeze_plain_data(value, path="agent wait")
+        return delay, None if receipt is None else _plain_result(
+            receipt, "agent poll receipt"
+        )
 
     def _take_targeted_delivery(
         self,
@@ -3447,53 +3459,79 @@ class AgentSessionService:
         sequence: int,
         epoch: str,
         digest: str,
-    ) -> Mapping[str, PlainData] | None:
-        """Consume only an already-CAS-targeted delivery for this exact session.
+        candidate: sqlite3.Row | None,
+        encoded: str,
+        deadline: float,
+    ) -> tuple[float, str | None]:
+        """Revalidate the detached candidate and commit its receipt under the current poll epoch."""
 
-        Target ownership survives a coordinator epoch change. Its original
-        delivery/assignment issuer evidence remains unchanged; the current poll
-        still commits under its own current epoch and exact request digest.
-        """
-        with self._daemon._connection() as conn:  # type: ignore[attr-defined]
-            conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute(
-                "SELECT assignment_id, request_json, reference_json FROM agent_deliveries "
-                "WHERE session_id = ? AND "
-                "state = 'TARGETED' ORDER BY assignment_id LIMIT 1",
+        def decide(conn: sqlite3.Connection) -> tuple[float, str | None]:
+            rule, policy_revision = self._authorize("poll")
+            if rule.principal_id != principal_id or self._daemon._epoch != epoch:
+                raise QueueConflictError("coordinator epoch or poll principal is stale")
+            poll = conn.execute(
+                "SELECT active,result_json FROM agent_poll_state WHERE principal_id=? AND session_id=? "
+                "AND sequence=? AND digest=?",
+                (principal_id, session_id, sequence, digest),
+            ).fetchone()
+            if poll is None:
+                raise QueueConflictError("work poll was fenced")
+            if not poll["active"] and poll["result_json"] is None:
+                raise AgentPollFencedError("work poll was fenced")
+            session = _session_from_row(
+                conn.execute(
+                    "SELECT * FROM agent_sessions WHERE session_id=?", (session_id,)
+                ).fetchone(),
+                self._daemon._require_started(),
+                expected_principal=principal_id,
+            )
+            self._check_current_session(session, rule, epoch, policy_revision)
+            if session.availability_revision != availability_revision:
+                raise QueueConflictError("work poll availability revision is stale")
+            if not poll["active"]:
+                return 0.0, str(poll["result_json"])
+            recheck = self._require_current_offer(
+                conn, session_id, availability_revision
+            )
+            if candidate is None and monotonic() < deadline:
+                return recheck, None
+            # Before a timeout receipt, recheck for a late target in the same
+            # write transaction. A new or changed target needs fresh decoding.
+            current = conn.execute(
+                "SELECT assignment_id FROM agent_deliveries WHERE session_id=? AND state='TARGETED' "
+                "ORDER BY assignment_id LIMIT 1",
                 (session_id,),
             ).fetchone()
-            if row is None:
-                conn.commit()
-                return None
-            value: dict[str, PlainData] = {
-                "result": "assignment",
-                "sequence": sequence,
-                "coordinator_epoch": epoch,
-                "request": cast(PlainData, json.loads(str(row["reference_json"] or row["request_json"]))),
-            }
+            if current is not None:
+                if (
+                    candidate is None
+                    or candidate["assignment_id"] != current["assignment_id"]
+                ):
+                    return 0.0, None
+                changed = conn.execute(
+                    "UPDATE agent_deliveries SET state='DELIVERED',poll_sequence=? WHERE assignment_id=? "
+                    "AND session_id=? AND state='TARGETED' AND COALESCE(reference_json,request_json)=?",
+                    (
+                        sequence,
+                        current["assignment_id"],
+                        session_id,
+                        candidate["payload"],
+                    ),
+                ).rowcount
+                if not changed:
+                    return 0.0, None
+            elif candidate is not None:
+                return 0.0, None
             updated = conn.execute(
-                "UPDATE agent_deliveries SET state = 'DELIVERED', poll_sequence = ? "
-                "WHERE assignment_id = ? AND state = 'TARGETED'",
-                (sequence, str(row["assignment_id"])),
-            ).rowcount
-            if updated != 1:
-                raise QueueConflictError("targeted delivery changed before its poll")
-            updated = conn.execute(
-                "UPDATE agent_poll_state SET active = 0, result_json = ? WHERE "
-                "principal_id = ? AND session_id = ? AND sequence = ? "
-                "AND digest = ? AND active = 1",
-                (
-                    _canonical_json(value),
-                    principal_id,
-                    session_id,
-                    sequence,
-                    digest,
-                ),
+                "UPDATE agent_poll_state SET active=0,result_json=? WHERE principal_id=? AND session_id=? "
+                "AND sequence=? AND digest=? AND active=1",
+                (encoded, principal_id, session_id, sequence, digest),
             ).rowcount
             if updated != 1:
                 raise QueueConflictError("work poll was fenced")
-            conn.commit()
-        return freeze_plain_data(value, path="agent assignment delivery")
+            return 0.0, encoded
+
+        return self._poll_write(decide)
 
     @_serialized_session_operation
     def authorize_transfers(
@@ -5882,6 +5920,14 @@ def _projection_string(value: Mapping[str, object], name: str) -> str:
     return item
 
 
+def ensure_current_offer_index(conn: sqlite3.Connection) -> None:
+    """Install the additive lookup on a fresh or exclusively owned coordinator."""
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS agent_offers_current_session ON agent_offers "
+        "(session_id, coordinator_epoch, availability_revision) WHERE current = 1"
+    )
+
+
 def initialize_agent_session_schema(
     conn: sqlite3.Connection, *, coordinator: bool
 ) -> None:
@@ -5906,6 +5952,7 @@ def initialize_agent_session_schema(
         CREATE TABLE IF NOT EXISTS agent_controls (operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, session_id TEXT NOT NULL, agent_id TEXT NOT NULL, request_json TEXT NOT NULL, state TEXT NOT NULL, result_code TEXT, effect_json TEXT, acknowledged INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS remote_assignment_controls (operation_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, assignment_id TEXT NOT NULL UNIQUE, request_json TEXT NOT NULL, state TEXT NOT NULL, result_code TEXT, evidence_json TEXT, acknowledged INTEGER NOT NULL DEFAULT 0);
         """)
+        ensure_current_offer_index(conn)
     else:
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS agent_registration_intents (operation_id TEXT PRIMARY KEY, digest TEXT NOT NULL, request_json TEXT NOT NULL, retirement_secret TEXT, result_json TEXT);

@@ -474,9 +474,21 @@ def test_ordered_invocation_reaches_checked_report_and_published_runtime(
         ]
         == report["invocation"]
     )
-    receipt = prepare_managed_run(
-        service, composed, "target-1", execution_requirements=requirements
+    from loom.pipeline.stores import LocalArtifactStore
+    from loom.preparation import CoordinatorPreparation
+
+    publisher = CoordinatorPreparation(service)
+    request = PrepareRunRequest(
+        binding.operation_id, "target-1", PreparationSource("shared", "projects", "example", (".",)),
+        "pipeline.yaml", "existing-project",
     )
+    reference = result.outputs["report"]
+    path = LocalArtifactStore(workspace.root / "artifacts").local_path(reference)
+    checked = publisher._read_publication_inputs(
+        service.daemon, request, binding, reference, path,
+    )
+    assert checked.preflight == preflight.to_dict()
+    receipt = publisher.publish_target(service.daemon, request, checked)
     store = LocalRunStore(service.daemon.run_store_root)
     record = cast(
         dict[str, Any], load_managed_local_runtime_record(store, receipt.run_uri)

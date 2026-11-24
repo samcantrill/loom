@@ -67,7 +67,7 @@ def test_empty_control_wait_has_constant_reads_and_no_write_transaction(waiting_
         }
         observations.append(counts.copy())
     assert observations[0] == observations[1]
-    assert observations[0]["connections"] == 4
+    assert observations[0]["connections"] == 2
     assert observations[0]["BEGIN"] == 0
     assert observations[0]["UPDATE"] == 0
 

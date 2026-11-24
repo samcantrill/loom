@@ -62,6 +62,7 @@ from .agent_sessions import (
     AgentPolicyConfig,
     AgentSessionView,
     SessionReplacementRequest,
+    ensure_current_offer_index,
     initialize_agent_session_schema,
     replace_agent_session,
     validate_agent_session_schema,
@@ -1943,6 +1944,7 @@ class LocalDaemon:
             require_storage_upgrade_ready(self.config.coordinator_root, entering=True)
             with self._connection() as conn:
                 conn.execute("BEGIN IMMEDIATE")
+                ensure_current_offer_index(conn)
                 retained = conn.execute("SELECT value FROM root_metadata WHERE key = 'assignment_payload_root_id'").fetchone()
                 selected = self.config.assignment_payload_root_id
                 if retained is not None and retained[0] != selected:
@@ -2139,6 +2141,7 @@ class LocalDaemon:
         self._preparations._verification_reports.clear()
         self._preparations._reports.clear()
         self._preparations._publications.clear()
+        self._preparations._ready_publications.clear()
         self._preparations._children.clear()
         self._preparations._captures.clear()
         self._preparations._images.clear()

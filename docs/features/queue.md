@@ -1054,6 +1054,13 @@ owner is reconsidered and no longer offers that work, or authoritative admission
 state retires the owner; merely missing an asynchronous context result does not
 erase its position. A running operation retains capacity until it actually ends.
 
+A preparation that has validated its child report and selected its publication
+retains the report while the publisher waits for capacity. Validation in progress
+and reports waiting to publish share a two-report limit. An admitted report
+decoder runs in a spawned process within its existing bulk slot. The coordinator
+checks the selected child, input and publication claim when taking the result.
+After restart it uses the durable child evidence and publication claim to recover.
+
 Completion alone cannot authorize a transition. The coordinator rechecks the
 captured epoch, claim/attempt, inputs and current demand before applying results;
 result publication enforces claim revision and producer fencing transactionally.
@@ -1087,6 +1094,14 @@ scheduling lock is retained during waiting, and empty checks do not acquire a
 SQLite write transaction. Notifications are hints; every delivery rechecks the
 authenticated session and current durable control state.
 
+The work and control handlers inspect session candidates outside the coordinator
+state lock and close that read before checking external receipts. Claiming a
+control or delivering work rechecks the session and selected request under the
+current policy. Work delivery and its exact poll receipt commit together.
+Current-offer lookup uses a partial index installed at initialization and on
+owned startup of existing roots. A polling write that encounters a busy database
+releases the state lock before retrying.
+
 Received IDs come from the existing durable local journal and suppress only
 redelivery. Each ID is encoded as `agent:<operation_id>` or
 `assignment:<operation_id>`; the independent operation namespaces cannot
@@ -1111,8 +1126,10 @@ The receipt list accepts up to 1025 unique bounded identifiers within the existi
 64 KiB request envelope. An agent whose current receipt inventory exceeds its
 count or byte limit uses bounded control polling without truncating receipts.
 Explicit synchronous polling remains supported. A coordinator lacking the
-capability is refused during handshake. Resource renewal and GPU freshness
-policies are unchanged.
+capability is refused during handshake. A live outbound agent observes resources
+and renews an unchanged offer while its work poll awaits a reply. Changed
+capacity waits for the original poll to settle. Renewals match an exact offer,
+availability revision and sequence, including replies recovered after a disconnect.
 
 Recoverable admission and retained-assignment failures are paced independently
 with exponential backoff (initial ceiling 0.1 seconds, maximum ceiling five

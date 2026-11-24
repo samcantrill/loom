@@ -162,6 +162,198 @@ def test_assignment_before_subscription_and_exact_reply_replay(waiting_owner):
     assert daemon._poll_waiters._subscribers == {}
 
 
+@pytest.mark.parametrize("kind", ["work", "control"])
+@pytest.mark.parametrize("boundary", ["before_read", "after_read"])
+def test_stalled_session_allows_other_renewals_and_controls(
+    waiting_owner, monkeypatch, kind, boundary
+):
+    from datetime import timedelta
+    from loom.queue.agent_sessions import AgentOfferRenewal
+    from loom.timestamps import parse_timestamp, utc_timestamp
+
+    daemon, session, request, target, poll = waiting_owner
+    policy = daemon._agent_policy
+    peers = [
+        replace(
+            policy.agents[0],
+            agent_id=f"agent-{name}",
+            principal_id=f"principal-{name}",
+            credential_id=f"agent-{name}",
+        )
+        for name in ("b", "c")
+    ]
+    daemon.replace_agent_policy(
+        replace(
+            policy,
+            agents=(*policy.agents, *peers),
+            principals=(
+                replace(policy.principals[0], agent_ids=("agent-a", "agent-c")),
+            ),
+        )
+    )
+    registered = []
+    for peer in peers:
+        view = daemon.agent_view(
+            LocalDaemonPrincipal(
+                peer.principal_id, LocalDaemonRole.AGENT, peer.agent_id
+            )
+        )
+        other = view.register(
+            AgentRegistration(
+                f"register-{peer.agent_id}",
+                session.coordinator_id,
+                session.coordinator_epoch,
+                f"root-{peer.agent_id}",
+                "config-1",
+                "inventory-1",
+                "availability-1",
+                ("default",),
+                peer.capabilities,
+                retirement_verifier=_TEST_RETIREMENT_VERIFIER,
+            )
+        )
+        offer = view.publish_offer(
+            _offer(other.session_id, other.coordinator_epoch), idempotency_key="offer"
+        )
+        registered.append((view, other, offer))
+    (view_b, b, offer_b), (view_c, c, _) = registered
+    operator = daemon.operator_view(
+        LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+    )
+
+    def control(s):
+        return AgentControl(
+            f"drain-{s.agent_id}",
+            AgentControlKind.DRAIN,
+            s.agent_id,
+            s.session_id,
+            s.config_revision,
+            "default",
+            False,
+            "inspection interleaving",
+        )
+
+    if kind == "control":
+        operator.control_agent(control(session))
+    elif boundary == "after_read":
+        target()
+    operator.control_agent(control(c))
+    inspect = "_inspect_work_candidate" if kind == "work" else "_inspect_controls"
+    original = getattr(AgentSessionService, inspect)
+    paused, release = Event(), Event()
+
+    def pause():
+        paused.set()
+        assert release.wait(5)
+
+    def stalled(self, session_id, *args, **kwargs):
+        if session_id == session.session_id and boundary == "before_read":
+            pause()
+        result = original(self, session_id, *args, **kwargs)
+        if session_id == session.session_id and boundary == "after_read":
+            assert result is not None
+            pause()
+        return result
+
+    monkeypatch.setattr(AgentSessionService, inspect, stalled)
+    with ThreadPoolExecutor() as pool:
+        pending = (
+            pool.submit(poll)
+            if kind == "work"
+            else pool.submit(
+                _view(daemon).wait_for_controls,
+                session.session_id,
+                received_operation_ids=(),
+                wait_timeout_ms=0,
+            )
+        )
+        try:
+            assert paused.wait(2)
+            renewal = AgentOfferRenewal(
+                b.session_id, offer_b["offer_id"], b.availability_revision, 1
+            )
+            assert (
+                pool.submit(view_b.renew_offer, renewal).result(timeout=2)["state"]
+                == "renewed"
+            )
+            reply = pool.submit(
+                view_c.wait_for_controls,
+                c.session_id,
+                received_operation_ids=(),
+                wait_timeout_ms=0,
+            )
+            assert reply.result(timeout=2)["control"] == control(c).value()
+            if kind == "work" and boundary == "after_read":
+                # The targeted delivery is live. A drain revokes this offer and fences the poll.
+                operator.control_agent(control(session))
+            else:
+                with daemon._connection() as conn:
+                    expiry = conn.execute(
+                        "SELECT expires_at FROM agent_offers WHERE session_id=? AND current=1",
+                        (session.session_id,),
+                    ).fetchone()
+                if expiry is not None:
+                    now = utc_timestamp(
+                        parse_timestamp(expiry[0]) + timedelta(seconds=1)
+                    )
+                    monkeypatch.setattr(daemon, "_clock", lambda: now)
+                operator.replace_agent_session(
+                    SessionReplacementRequest(
+                        "replace-a", session.agent_id, "lost agent"
+                    )
+                )
+        finally:
+            release.set()
+        with pytest.raises((QueueConflictError, QueueServiceError)):
+            pending.result(timeout=2)
+    with daemon._connection() as conn:
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM agent_deliveries WHERE session_id=? AND state='DELIVERED'",
+                (session.session_id,),
+            ).fetchone()[0]
+            == 0
+        )
+
+
+@pytest.mark.parametrize("transaction", ["BEGIN IMMEDIATE", "BEGIN"])
+def test_sqlite_busy_retries_release_the_state_guard(
+    waiting_owner, monkeypatch, transaction
+):
+    from loom.queue import agent_sessions
+
+    daemon, session, _, _, poll = waiting_owner
+    busy, retry = Event(), Event()
+
+    def wait_to_retry(seconds):
+        busy.set()
+        assert retry.wait(3)
+
+    monkeypatch.setattr(agent_sessions, "sleep", wait_to_retry)
+    with ThreadPoolExecutor() as pool, daemon._connection() as blocker:
+        blocker.execute(transaction)
+        # A read transaction in rollback-journal mode blocks COMMIT. An
+        # immediate transaction blocks the polling writer at BEGIN instead.
+        blocker.execute("SELECT * FROM agent_sessions").fetchall()
+        pending = pool.submit(poll, 1)
+        try:
+            assert busy.wait(2)
+            empty = pool.submit(
+                _view(daemon).wait_for_controls,
+                session.session_id,
+                received_operation_ids=(),
+                wait_timeout_ms=0,
+            )
+            assert empty.result(timeout=1) == {
+                "control": None,
+                "assignment_control": None,
+            }
+        finally:
+            blocker.rollback()
+            retry.set()
+        assert pending.result(timeout=2)["result"] == "wait"
+
+
 @pytest.mark.parametrize("sleeping", [False, True])
 def test_target_commit_wakes_same_pending_poll_without_deadline(
     waiting_owner,

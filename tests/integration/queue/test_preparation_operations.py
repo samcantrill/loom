@@ -1871,6 +1871,61 @@ def test_partial_target_is_preserved_as_a_publication_conflict(tmp_path: Path) -
         daemon.stop()
 
 
+def test_validated_reports_survive_publication_capacity_wait(tmp_path, monkeypatch):
+    from collections import Counter
+
+    service = _service(tmp_path)
+    reads, submissions, publications = Counter(), Counter(), Counter()
+    blocked, release = Event(), Event()
+    requests = [
+        replace(_request(), operation_id=f"capacity-{i}", run_name=f"capacity-{i}")
+        for i in range(2)
+    ]
+
+    class CountedPreparation(CoordinatorPreparation):
+        def read_report(self, config, admission, request, binding):
+            reads[request.operation_id] += 1
+            return super().read_report(config, admission, request, binding)
+
+        def publish_target(self, config, request, report):
+            publications[request.operation_id] += 1
+            return super().publish_target(config, request, report)
+
+    LocalDaemon.initialize_deployment(service.daemon)
+    daemon = LocalDaemon(service.daemon, preparation=CountedPreparation(service))
+    daemon.start()
+    bulk = daemon._result_verifications.bulk
+    submit = bulk.submit
+
+    def limited(operation_id, action, function, *args):
+        if action == "preparation_target_publication" and not release.is_set():
+            submissions[operation_id] += 1
+            if all(submissions[r.operation_id] >= 3 for r in requests):
+                blocked.set()
+            return None
+        return submit(operation_id, action, function, *args)
+
+    monkeypatch.setattr(bulk, "submit", limited)
+    try:
+        for request in requests:
+            daemon.prepare_run(request, principal_id="caller")
+        assert blocked.wait(45), (reads, submissions)
+        expected = {request.operation_id: 1 for request in requests}
+        assert reads == expected
+        release.set()
+        daemon._wake.set()
+        for request in requests:
+            completed = daemon.wait_operation(
+                request.operation_id, timeout=25
+            ).operation
+            assert completed.state == "applied", completed
+            assert daemon.prepare_run(request, principal_id="caller") == completed
+        assert reads == publications == expected
+    finally:
+        release.set()
+        daemon.stop()
+
+
 @pytest.mark.parametrize("boundary", ("before_claim", "after_claim"))
 def test_cancel_and_publication_race_uses_the_durable_claim(
     tmp_path: Path, boundary: str

@@ -1037,6 +1037,35 @@ def _prospective_run_name(request: PrepareRunRequest, binding: PreparationChildI
     return run_uri_to_path(_checked_project_uri(binding, composed.project_result)).name
 
 
+@dataclass(frozen=True, slots=True)
+class _DecodedPublication:
+    composition: _ReceivedComposition
+    options: dict[str, PlainData] | None
+    requirements: dict[str, dict[str, PlainData]]
+    preflight: dict[str, PlainData]
+
+
+def _decode_publication(
+    reference_data: dict[str, PlainData], path: Path, binding_data: dict[str, PlainData]
+) -> _DecodedPublication:
+    reference = ArtifactRef.from_dict(reference_data)
+    binding = PreparationChildInput.from_dict(binding_data)
+    value = load_preparation_report(reference, path)
+    composition, requirements, preflight = decode_preparation_report(
+        value, expected=binding
+    )
+    received = cast(_ReceivedComposition, composition)
+    options = received.effective_run_options
+    # The composition trees are already detached and ordered. Only objects
+    # containing frozen mappings need a plain representation for the pipe.
+    return _DecodedPublication(
+        replace(received, effective_run_options=None, project_preparation=None),
+        None if options is None else options.to_dict(),
+        {key: requirement.to_dict() for key, requirement in requirements.items()},
+        preflight.to_dict(),
+    )
+
+
 class CoordinatorPreparation:
     """Application callbacks installed alongside the native coordinator daemon.
 
@@ -1133,36 +1162,72 @@ class CoordinatorPreparation:
             raise QueueConflictError(
                 "preparation report does not match the committed worker result"
             )
+        artifacts = LocalArtifactStore(store.local_artifact_root(admission.run_uri))
         try:
-            value = LocalArtifactStore(
-                store.local_artifact_root(admission.run_uri)
-            ).load(reference)
+            if binding.action_verification is not None:
+                checked = _decode_action_verification_report(artifacts.load(reference), binding)
+                preflight = PreflightResult((), ())
+                return PreparationReport(reference, preflight.to_dict(), preflight.status.value,
+                                         False, None, None, action_verification=checked)
+            report_path = artifacts.local_path(reference)
         except ArtifactChecksumMismatchError as exc:
-            raise QueueConflictError(
-                "preparation committed report checksum conflicts"
-            ) from exc
+            raise QueueConflictError("preparation committed report checksum conflicts") from exc
         except ArtifactStoreError as exc:
             if isinstance(exc.__cause__, CodecDecodeError):
-                raise QueueConflictError(
-                    "preparation committed report cannot be decoded"
-                ) from exc
+                raise QueueConflictError("preparation committed report cannot be decoded") from exc
             raise
-        if binding.action_verification is not None:
-            checked = _decode_action_verification_report(value, binding)
-            preflight = PreflightResult((), ())
-            return PreparationReport(reference, preflight.to_dict(), preflight.status.value,
-                                     False, None, None, action_verification=checked)
-        value = load_preparation_report(
-            reference, LocalArtifactStore(store.local_artifact_root(admission.run_uri)).local_path(reference)
+
+        return self._read_publication_inputs(config, request, binding, reference, report_path)
+
+    def _read_publication_inputs(
+        self,
+        config: LocalDaemonConfig,
+        request: PrepareRunRequest,
+        binding: PreparationChildInput,
+        reference: ArtifactRef,
+        report_path: Path,
+    ) -> PreparationReport:
+        # The admitted bulk callback owns this child through exit, including
+        # failure. No daemon configuration, locks or open stores cross spawn.
+        from concurrent.futures import ProcessPoolExecutor
+        import multiprocessing
+
+        with ProcessPoolExecutor(
+            max_workers=1, mp_context=multiprocessing.get_context("spawn")
+        ) as worker:
+            decoded = worker.submit(
+                _decode_publication,
+                reference.to_dict(),
+                report_path,
+                binding.to_dict(compact_candidate=True),
+            ).result()
+        composed = replace(
+            decoded.composition,
+            project_preparation=binding.project_preparation,
+            effective_run_options=None
+            if decoded.options is None
+            else RunOptions.from_dict(decoded.options),
         )
-        composed, requirements, preflight = decode_preparation_report(
-            value, expected=binding
-        )
+        requirements = {
+            name: ExecutionRequirement.from_dict(item)
+            for name, item in decoded.requirements.items()
+        }
+        preflight = PreflightResult.from_dict(decoded.preflight)
         if binding.project_preparation is not None:
-            selected = _plain_mapping(cast(Mapping[str, PlainData], binding.project_preparation)["processor"])
-            composed = replace(cast(_ReceivedComposition, composed), project_contracts_entry={
-                "kind": "project_contracts", "data": {"schema_version": 1,
-                "namespace": selected["evidence_namespace"], "report_ref": reference.to_dict()}})
+            selected = _plain_mapping(
+                cast(Mapping[str, PlainData], binding.project_preparation)["processor"]
+            )
+            composed = replace(
+                cast(_ReceivedComposition, composed),
+                project_contracts_entry={
+                    "kind": "project_contracts",
+                    "data": {
+                        "schema_version": 1,
+                        "namespace": selected["evidence_namespace"],
+                        "report_ref": reference.to_dict(),
+                    },
+                },
+            )
         allowed = preparation_checks_allow_publication(preflight)
         prospective = None
         if allowed:
@@ -1173,7 +1238,9 @@ class CoordinatorPreparation:
                     self._service(config),
                     resolved,
                     pipeline,
-                    _prospective_run_name(request, binding, cast(_ReceivedComposition, composed)),
+                    _prospective_run_name(
+                        request, binding, cast(_ReceivedComposition, composed)
+                    ),
                     effective_options=cast(
                         _ReceivedComposition, composed
                     ).effective_run_options,
@@ -1192,7 +1259,12 @@ class CoordinatorPreparation:
             allowed,
             prospective,
             (composed, requirements),
-            None if cast(_ReceivedComposition, composed).project_result is None else cast(Mapping[str, PlainData], cast(_ReceivedComposition, composed).project_result)["reconciliation_key"],
+            None
+            if cast(_ReceivedComposition, composed).project_result is None
+            else cast(
+                Mapping[str, PlainData],
+                cast(_ReceivedComposition, composed).project_result,
+            )["reconciliation_key"],
         )
 
     def capture_candidate(self, config: LocalDaemonConfig, run_uri: str,

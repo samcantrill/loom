@@ -16,7 +16,7 @@ import logging
 from pathlib import Path
 import sqlite3
 from threading import Lock
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, NamedTuple, Protocol, cast
 
 from loom.artifacts import ArtifactRef
 from loom.io.uris import uri_to_path
@@ -113,7 +113,7 @@ class PreparationChildReserved(QueueConflictError):
 
 @dataclass(frozen=True, slots=True)
 class PreparationReport:
-    """One checked committed report, retained only for the current publication pass."""
+    """One checked committed report retained until its publication is admitted."""
 
     reference: ArtifactRef
     preflight: Mapping[str, PlainData]
@@ -125,9 +125,30 @@ class PreparationReport:
     action_verification: Mapping[str, PlainData] | None = None
 
 
+class _ReportIdentity(NamedTuple):
+    epoch: str | None
+    scheduling_epoch: str | None
+    request: str
+    selection: str
+    child: tuple[object, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _ReadyPublication:
+    claim: tuple[object, ...]
+    child: tuple[object, ...]
+    config: LocalDaemonConfig
+    request: PrepareRunRequest
+    report: PreparationReport
+    result: Mapping[str, PlainData]
+    publication_owner: str | None
+
+
 @dataclass(frozen=True, slots=True)
 class _PendingPublication:
     token: tuple[object, ...]
+    child: tuple[object, ...]
+    config: LocalDaemonConfig
     future: Future[ManagedLocalPreparationReceipt]
     result: Mapping[str, PlainData]
     preflight: Mapping[str, PlainData]
@@ -351,6 +372,7 @@ class CoordinatorPreparations:
         self._cancel_cursor = 0
         self._verification_reports: dict[str, _PendingVerificationReport] = {}
         self._reports: dict[str, tuple[tuple[object, ...], Future[PreparationReport]]] = {}
+        self._ready_publications: dict[str, _ReadyPublication] = {}
         self._publications: dict[str, _PendingPublication] = {}
         self._candidates: dict[str, _PendingCandidate] = {}
         self._images: dict[str, tuple[tuple[object, ...], Future[None]]] = {}
@@ -753,6 +775,9 @@ class CoordinatorPreparations:
                     ).fetchone()
                     if admission is None or admission[0] in {"SUCCEEDED", "FAILED", "CANCELLED", "BLOCKED"}:
                         del self._verification_reports[operation_id]
+            for operation_id in tuple(self._ready_publications):
+                if self._read(operation_id)["state"] in _TERMINAL:
+                    del self._ready_publications[operation_id]
             for operation_id, candidate in tuple(self._candidates.items()):
                 if (candidate.future is None or candidate.future.done()) and self._read(operation_id)["state"] in _TERMINAL:
                     del self._candidates[operation_id]
@@ -979,7 +1004,7 @@ class CoordinatorPreparations:
             if pending is not None and pending.future.done():
                 del self._publications[operation_id]
             return
-        if self._complete_publication(row):
+        if self._complete_publication(row) or self._advance_ready_publication(row):
             return
         result = _mapping(json.loads(str(row["result_json"])))
         if row["kind"] == "run" and result["prepared_run"] is not None:
@@ -1213,7 +1238,8 @@ class CoordinatorPreparations:
         if admission.state is not LocalDaemonAdmissionState.SUCCEEDED:
             return
         try:
-            report = self._read_report_async(row, config, admission, request, binding)
+            report_token = self._report_token(row, config, admission)
+            report = self._read_report_async(row, config, admission, request, binding, report_token)
             if report is None:
                 return
             if "reconciliation" in selected:
@@ -1256,7 +1282,7 @@ class CoordinatorPreparations:
             return
         assert report.prospective_receipt is not None
         if "reconciliation" in selected:
-            self._reconcile_target(row, request, selected, config, report, result)
+            self._reconcile_target(row, request, selected, config, report, result, report_token)
             return
         try:
             if row["kind"] == "run":
@@ -1293,7 +1319,7 @@ class CoordinatorPreparations:
                 conn.commit()
             if not claimed:
                 return
-        self._publish_async(config, request, report, result, publication_owner=None)
+        self._publish_async(config, request, report, result, report_token, str(row["selected_json"]), publication_owner=None)
 
     def _save_selection(self, operation_id: str, selected: Mapping[str, PlainData]) -> None:
         with self.daemon._connection() as conn:
@@ -1303,7 +1329,7 @@ class CoordinatorPreparations:
 
     def _reconcile_target(self, row: sqlite3.Row, request: PrepareRunRequest,
                           selected: dict[str, PlainData], config: LocalDaemonConfig,
-                          report: PreparationReport, result: dict[str, PlainData]) -> None:
+                          report: PreparationReport, result: dict[str, PlainData], report_token: _ReportIdentity) -> None:
         from loom.pipeline.stores import run_uri_to_path
         from .local_daemon import AdmissionNotFoundError
 
@@ -1474,19 +1500,34 @@ class CoordinatorPreparations:
         # Publication retains its exact identity; a cancellation accepted during
         # IO suppresses subsequent admission in the final native transaction.
         self._publish_async(
-            config, replace(request, run_name=target_name), report, result,
+            config, replace(request, run_name=target_name), report, result, report_token, _json(selected),
             publication_owner=cast(str, reconciliation["publication_owner"]),
         )
 
     def _report_token(
-        self, row: sqlite3.Row, config: LocalDaemonConfig, admission: LocalDaemonAdmission,
+        self,
+        row: sqlite3.Row,
+        config: LocalDaemonConfig,
+        admission: LocalDaemonAdmission,
+    ) -> _ReportIdentity:
+        return _ReportIdentity(
+            self.daemon._epoch,
+            self.daemon._scheduling_epoch,
+            row["request_json"],
+            row["selected_json"],
+            self._child_token(config, admission),
+        )
+
+    def _child_token(
+        self, config: LocalDaemonConfig, admission: LocalDaemonAdmission
     ) -> tuple[object, ...]:
         factory = config.coordinator_authority_factory
         assert factory is not None
         return (
-            self.daemon._epoch, self.daemon._scheduling_epoch,
-            row["selected_json"], row["request_json"], row["child_admission_id"],
-            admission.revision, factory(admission.run_uri).open_run(admission.run_uri).revision,
+            admission.admission_id,
+            admission.intent_digest,
+            admission.revision,
+            factory(admission.run_uri).open_run(admission.run_uri).revision,
         )
 
     def _capture_candidate_async(
@@ -1605,25 +1646,79 @@ class CoordinatorPreparations:
         )
 
     def _publish_async(
-        self, config: LocalDaemonConfig, request: PrepareRunRequest,
-        report: PreparationReport, result: Mapping[str, PlainData],
-        *, publication_owner: str | None,
+        self,
+        config: LocalDaemonConfig,
+        request: PrepareRunRequest,
+        report: PreparationReport,
+        result: Mapping[str, PlainData],
+        report_token: _ReportIdentity,
+        selected_json: str,
+        *,
+        publication_owner: str | None,
     ) -> None:
-        operation_id = request.operation_id
-        row = self._read(operation_id)
-        if row["state"] != "applying" or len(self._publications) >= 2:
+        row = self._read(request.operation_id)
+        claim = self._publication_token(row)
+        # Only this reconciler selects the owner. Check its exact committed
+        # selection together with the identities that authorized validation.
+        if (
+            report_token.epoch != self.daemon._epoch
+            or report_token.scheduling_epoch != self.daemon._scheduling_epoch
+            or report_token.request != row["request_json"]
+            or selected_json != row["selected_json"]
+        ):
             return
+        self._ready_publications[request.operation_id] = _ReadyPublication(
+            claim,
+            report_token.child,
+            config,
+            request,
+            report,
+            dict(result),
+            publication_owner,
+        )
+        self._advance_ready_publication(row)
+
+    def _advance_ready_publication(self, row: sqlite3.Row) -> bool:
+        operation_id = str(row["operation_id"])
+        ready = self._ready_publications.get(operation_id)
+        if ready is None:
+            return False
+        if (
+            row["state"] != "applying"
+            or ready.claim != self._publication_token(row)
+            or (ready.publication_owner is not None and row["cancellation_requested"])
+            or ready.child
+            != self._child_token(
+                ready.config, self.daemon._admission(str(row["child_admission_id"]))
+            )
+        ):
+            del self._ready_publications[operation_id]
+            return False
+        if len(self._publications) >= 2:
+            return True
         assert self.callbacks is not None
         future = self.daemon._result_verifications.bulk.submit(
-            operation_id, "preparation_target_publication",
-            _publish_owned_target, self.daemon._publication_guards,
-            self.callbacks, config, request, report,
+            operation_id,
+            "preparation_target_publication",
+            _publish_owned_target,
+            self.daemon._publication_guards,
+            self.callbacks,
+            ready.config,
+            ready.request,
+            ready.report,
         )
         if future is not None:
             self._publications[operation_id] = _PendingPublication(
-                self._publication_token(row), future, dict(result),
-                report.preflight, publication_owner,
+                ready.claim,
+                ready.child,
+                ready.config,
+                future,
+                ready.result,
+                ready.report.preflight,
+                ready.publication_owner,
             )
+            del self._ready_publications[operation_id]
+        return True
 
     def _complete_publication(self, row: sqlite3.Row) -> bool:
         operation_id = str(row["operation_id"])
@@ -1634,7 +1729,10 @@ class CoordinatorPreparations:
             return True
         with phase("preparation_publication_completion_apply", operation_id=operation_id):
             del self._publications[operation_id]
-            if row["state"] != "applying" or pending.token != self._publication_token(row):
+            if (row["state"] != "applying" or pending.token != self._publication_token(row)
+                    or pending.child != self._child_token(
+                        pending.config, self.daemon._admission(str(row["child_admission_id"]))
+                    )):
                 # IO may already have published. The durable applying claim owns
                 # exact replay; a stale completion cannot authorize admission.
                 return False
@@ -1666,11 +1764,10 @@ class CoordinatorPreparations:
     def _read_report_async(
         self, row: sqlite3.Row, config: LocalDaemonConfig,
         admission: LocalDaemonAdmission, request: PrepareRunRequest,
-        binding: PreparationChildInput,
+        binding: PreparationChildInput, token: tuple[object, ...],
     ) -> PreparationReport | None:
         operation_id = str(row["operation_id"])
         assert self.callbacks is not None
-        token = self._report_token(row, config, admission)
         candidate = self._candidates.get(operation_id)
         if candidate is not None and candidate.report_token == token:
             return candidate.report
@@ -1682,7 +1779,7 @@ class CoordinatorPreparations:
             del self._reports[operation_id]
             if previous == token:
                 return future.result()
-        if len(self._reports) >= 2:
+        if len(self._reports) + len(self._ready_publications) >= 2:
             return None
         future = self.daemon._result_verifications.bulk.submit(
             operation_id, "preparation_report_hydration", self.callbacks.read_report,
