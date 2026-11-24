@@ -7312,6 +7312,80 @@ def test_native_https_authentication_rejects_before_mutation(
     assert daemon.admissions().admissions == ()
 
 
+def test_independent_authenticated_client_completes_while_negotiation_is_paused(native_control_endpoint, monkeypatch):
+    daemon, server, _, credentials = native_control_endpoint
+    entered, release = Event(), Event()
+    handshake = ssl.SSLSocket.do_handshake
+
+    def pause_first(sock, *args, **kwargs):
+        if sock.server_side and not entered.is_set():
+            entered.set()
+            assert release.wait(8)
+        return handshake(sock, *args, **kwargs)
+
+    monkeypatch.setattr(ssl.SSLSocket, "do_handshake", pause_first)
+    config = AgentTlsClientConfig(
+        f"https://localhost:{server.port}", credentials["ca"].with_suffix(".crt"),
+        credentials["agent"].with_suffix(".crt"), credentials["agent"].with_suffix(".key"),
+    )
+
+    def observed():
+        client = LocalDaemonAgentHttpClient(config)
+        try:
+            return client.handshake()["coordinator_id"]
+        finally:
+            client.close()
+
+    with ThreadPoolExecutor() as callers:
+        first = callers.submit(observed)
+        try:
+            assert entered.wait(3)
+            assert callers.submit(observed).result(3) == daemon._coordinator_id
+            assert not first.done()
+        finally:
+            release.set()
+        assert first.result(3) == daemon._coordinator_id
+
+
+def test_handshake_capacity_and_shutdown_own_queued_sockets(native_control_endpoint, monkeypatch):
+    _, listener, _, _ = native_control_endpoint
+    server = listener._server
+    release, closing = Event(), Event()
+    authenticate = server._authenticate_connection
+    shutdown = server._handshakes.shutdown
+
+    def held(*args):
+        assert release.wait(8)
+        authenticate(*args)
+
+    def shutting_down(*args, **kwargs):
+        closing.set()
+        return shutdown(*args, **kwargs)
+
+    monkeypatch.setattr(server, "_authenticate_connection", held)
+    monkeypatch.setattr(server._handshakes, "shutdown", shutting_down)
+    pairs = [socket.socketpair() for _ in range(9)]
+    try:
+        for connection, _ in pairs:
+            server.process_request(connection, ("localhost", 0))
+        assert len(server._negotiating) == 8
+        assert pairs[-1][0].fileno() == -1
+        with ThreadPoolExecutor() as callers:
+            stopped = callers.submit(listener.stop)
+            try:
+                assert closing.wait(3)
+                assert all(connection.fileno() == -1 for connection, _ in pairs)
+            finally:
+                release.set()
+            stopped.result(3)
+        assert not server._negotiating
+    finally:
+        release.set()
+        for connection, peer in pairs:
+            connection.close()
+            peer.close()
+
+
 def test_worker_keepalive_remains_usable_after_the_tls_accept_deadline(
     native_control_endpoint,
     monkeypatch: pytest.MonkeyPatch,  # type: ignore[no-untyped-def]

@@ -53,6 +53,7 @@ from .gpu.occupancy import GpuOccupancyPolicy, GpuOccupancyMonitor
 from ._phase_timing import log_phases, phase, reported_phases, request_identity
 from ._managed_local import ResourceAvailabilityStatus
 
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 import fcntl
@@ -64,6 +65,7 @@ from pathlib import Path
 import secrets
 import shutil
 import sqlite3
+import socket
 import ssl
 from threading import BoundedSemaphore, RLock, Thread
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -3529,6 +3531,11 @@ class _MutualTlsHttpServer(ThreadingHTTPServer):
         self.agent_slurm_work_slots = BoundedSemaphore(8)
         self.agent_control_wait_slots = BoundedSemaphore(32)
         super().__init__(address, _Handler)
+        self._handshake_lock = RLock()
+        self._negotiating: set[socket.socket] = set()
+        self._handshake_capacity = BoundedSemaphore(8)
+        self._handshakes = ThreadPoolExecutor(max_workers=4, thread_name_prefix="loom-tls")
+        self._closing = False
 
     def acquire_agent_wait(self, role: str, operation: str) -> BoundedSemaphore | None:
         if role != "agent" or operation not in {"poll", "control_wait", "slurm_work"}:
@@ -3543,19 +3550,75 @@ class _MutualTlsHttpServer(ThreadingHTTPServer):
             raise QueueServiceError("agent wait capacity is exhausted")
         return slot
 
-    def get_request(self) -> tuple[ssl.SSLSocket, tuple[str, int]]:
-        connection, address = super().get_request()
+    def process_request(self, request: Any, client_address: tuple[str, int]) -> None:
+        accepted = monotonic()
+        with self._handshake_lock:
+            if self._closing or not self._handshake_capacity.acquire(blocking=False):
+                request.close()
+                return
+            self._negotiating.add(request)
+            try:
+                self._handshakes.submit(self._authenticate_connection, request, client_address,
+                                        self._context, accepted, utc_timestamp(), accepted + _HTTP_TIMEOUT_SECONDS)
+            except BaseException:
+                self._negotiating.discard(request)
+                self._handshake_capacity.release()
+                request.close()
+                raise
+
+    def _authenticate_connection(self, raw: socket.socket, address: tuple[str, int],
+                                 context: ssl.SSLContext, accepted: float, accepted_at: str, deadline: float) -> None:
+        connection = raw
+        handed_off = False
         try:
-            connection.settimeout(_HTTP_TIMEOUT_SECONDS)
-            authenticated = self._context.wrap_socket(connection, server_side=True)
-            # The accept deadline bounds TLS negotiation, not the established
-            # worker protocol's idle keepalive interval. Native control I/O has
-            # its own cumulative client deadline.
-            authenticated.settimeout(None)
-            return authenticated, address
-        except Exception:
-            connection.close()
-            raise
+            with reported_phases("tls_handshake", started_monotonic=accepted) as timings:
+                timings.spans.append({
+                    "action": "tls_handshake_queue_wait", "started_at": accepted_at,
+                    "elapsed_nanoseconds": round((monotonic() - accepted) * 1_000_000_000),
+                    "outcome": "complete",
+                })
+                with self._handshake_lock:
+                    if self._closing or monotonic() >= deadline or self._context is not context:
+                        return
+                    # No negotiation occurs here. Transfer descriptor ownership
+                    # atomically so shutdown can interrupt either socket.
+                    tls = context.wrap_socket(raw, server_side=True, do_handshake_on_connect=False)
+                    self._negotiating.remove(raw)
+                    self._negotiating.add(tls)
+                    connection = tls
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    return
+                tls.settimeout(remaining)
+                tls.do_handshake()
+                with self._handshake_lock:
+                    if self._closing or self._context is not context or monotonic() >= deadline:
+                        return
+                    tls.settimeout(None)
+                    super().process_request(tls, address)
+                    self._negotiating.remove(tls)
+                    handed_off = True
+        except OSError:
+            # Transport refusal or peer disconnect precedes application dispatch.
+            pass
+        finally:
+            with self._handshake_lock:
+                self._negotiating.discard(connection)
+                if not handed_off:
+                    connection.close()
+            self._handshake_capacity.release()
+
+    def server_close(self) -> None:
+        with self._handshake_lock:
+            self._closing = True
+            for connection in self._negotiating:
+                try:
+                    connection.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                connection.close()
+        self._handshakes.shutdown(wait=True)
+        super().server_close()
 
     def replace_tls(
         self,
@@ -3564,8 +3627,9 @@ class _MutualTlsHttpServer(ThreadingHTTPServer):
     ) -> None:
         """Install a fully prepared context for subsequent requests."""
 
-        self._context = context
-        self.credential_fingerprints = credential_fingerprints
+        with self._handshake_lock:
+            self._context = context
+            self.credential_fingerprints = credential_fingerprints
 
 
 def _agent_server_context(config: AgentTlsServerConfig) -> ssl.SSLContext:
