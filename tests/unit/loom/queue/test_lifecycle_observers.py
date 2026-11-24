@@ -2,7 +2,8 @@
 
 import json
 import logging
-from typing import Any, cast
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 
 import pytest
 
@@ -97,8 +98,7 @@ def test_swallowed_failure_record_write_is_diagnostic_and_not_scientific(
     assert store.read_event_sink_failures(uri) == ()
 
 
-def test_slow_observation_yields_and_drains_both_fact_queues(monkeypatch):
-    from types import SimpleNamespace
+def test_slow_audit_yields_between_runs_and_preserves_run_order(monkeypatch):
     import loom.queue._lifecycle_observers as module
 
     now = [0.0]
@@ -106,19 +106,63 @@ def test_slow_observation_yields_and_drains_both_fact_queues(monkeypatch):
     owner = LifecycleObservers()
     observed = []
 
-    def record(kind):
-        observed.append(kind)
+    def record(store, uri, *, sequence):
+        observed.append((uri, sequence))
         now[0] += 0.2
 
-    monkeypatch.setattr(owner, "emit", lambda *a, **kw: record("event"))
-    monkeypatch.setattr(owner, "transitions", lambda *a: record("transition"))
-    for _ in range(3):
-        owner._prepared.append(cast(Any, (None, None, SimpleNamespace(run_uri="run"))))
-        owner.defer_emit(None, "run", event_type="stage.planned")
+    monkeypatch.setattr(owner, "_emit_at_safe_point", record)
+    for index in range(3):
+        for uri in ("a", "b"):
+            owner.defer_emit(None, uri, sequence=index)
     for index in range(6):
         assert owner.flush_prepared() is (index < 5)
         assert len(observed) == index + 1
-    assert observed == ["transition", "event"] * 3
+    assert observed == [(uri, seq) for seq in range(3) for uri in ("a", "b")]
+
+
+def test_blocked_sink_allows_independent_run_mutation_and_bounds_callback_work(tmp_path):
+    from loom.pipeline.status import RunStatus
+
+    owner = LifecycleObservers()
+    entered, release = Event(), Event()
+    a, b = ((tmp_path / name).as_uri() for name in ("a", "b"))
+    store = SQLitePerRunAuthorityStore(a)
+    peer = SQLitePerRunAuthorityStore(b)
+    revision = store.create_run(a)
+    peer.create_run(b)
+    received = []
+
+    def hold(event, context):
+        if event.run_uri == a and not received:
+            entered.set()
+            assert release.wait(6)
+        received.append((event.run_uri, event.event_id))
+
+    owner._registry.register("hold", hold)
+    owner.enable_delivery(lambda: None)
+    try:
+        for seq in range(24):
+            owner.emit(store, a, event_type="stage.planned", revision=revision, identity=str(seq))
+        owner.flush_prepared()
+        assert entered.wait(3)
+        assert 0 < owner.backlog()["pending_callbacks"] <= 16
+        assert owner.backlog()["pending_facts"] > 0
+        authority = owner.authority(peer, b)
+        with ThreadPoolExecutor() as writers:
+            try:
+                future = writers.submit(authority.transition_run, b, from_status=RunStatus.CREATED, to_status=RunStatus.RUNNING)
+                future.result(2)
+                assert peer.open_run(b).status == RunStatus.RUNNING
+                assert not release.is_set()
+            finally:
+                release.set()
+        owner.emit(store, a, event_type="stage.planned", revision=revision, identity="0")
+    finally:
+        release.set()
+        owner.close_delivery()
+    audit = [event.event_id for event in store.list_audit_events(a)]
+    assert len(audit) == 24 and audit == [event_id for uri, event_id in received if uri == a]
+    assert any(uri == b for uri, _ in received)
 
 
 def test_native_event_replay_does_not_read_entire_history(tmp_path, monkeypatch):

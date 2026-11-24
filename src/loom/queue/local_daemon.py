@@ -2157,6 +2157,7 @@ class LocalDaemon:
         self._wake.set()
         self._execution = execution
         self._thread = thread
+        self._event_observers.enable_delivery(self._wake.set)
         try:
             thread.start()
         except Exception:
@@ -2200,6 +2201,7 @@ class LocalDaemon:
         self._thread = None
         if thread is not None:
             thread.join()
+        self._event_observers.close_delivery()
         self._contexts.close()
         self._result_verifications.close()
         if self._execution is not None:

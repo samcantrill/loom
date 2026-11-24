@@ -198,6 +198,8 @@ def test_transport_failure_is_sanitized_and_does_not_change_run_status(
         )
         admission = daemon._wait("target-admission", timeout_seconds=60)
         assert admission.state.value == "SUCCEEDED"
+        from tests.support.lifecycle_observers import wait_for_callbacks
+        wait_for_callbacks(daemon)
         failures = SQLitePerRunAuthorityStore(
             admission.run_uri
         ).read_event_sink_failures(admission.run_uri)

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor
 from collections.abc import Callable, Mapping, Sequence
 from hashlib import sha256
 import logging
-from threading import RLock
+from threading import Lock
 from time import monotonic
 from typing import Any, cast
 
@@ -18,6 +20,7 @@ from loom.pipeline.event_sinks import (
 from loom.pipeline.events import EventScope, PipelineEvent, PipelineEventRecord
 from loom.pipeline.stores.read_models import AuthoritativeRunSnapshot, BackendRevision
 from loom.serialization import PlainData
+from ._publication_guards import PublicationGuards
 from .errors import QueueConfigError, QueueServiceError
 
 _LOG = logging.getLogger(__name__)
@@ -74,12 +77,43 @@ class LifecycleObservers:
         self._specs = tuple(specs)
         self._registry = EventSinkRegistry()
         self._started = False
-        self._lock = RLock()
-        self._prepared: list[
-            tuple[Any, AuthoritativeRunSnapshot, AuthoritativeRunSnapshot]
-        ] = []
-        self._observations: list[tuple[Any, str, dict[str, Any]]] = []
-        self._flush_observation_next = False
+        self._lock = Lock()
+        self._run_guards = PublicationGuards()
+        self._observations: dict[str, deque[tuple[Any, dict[str, Any]]]] = {}
+        self._deliveries: deque[tuple[str, Future[_ObserverContext]]] = deque()
+        self._worker: ThreadPoolExecutor | None = None
+        self._wake: Callable[[], None] | None = None
+        self._flushing = False
+
+    def enable_delivery(self, wake: Callable[[], None]) -> None:
+        self._wake = wake
+        self._worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="loom-observer")
+
+    def backlog(self) -> dict[str, int]:
+        with self._lock:
+            return {
+                "pending_facts": sum(len(queue) for queue in self._observations.values()),
+                "pending_callbacks": len(self._deliveries),
+                "applying": int(self._flushing),
+            }
+
+    def close_delivery(self) -> None:
+        # The coordinator has stopped scheduling and still owns its root. Drain
+        # submitted callbacks and apply their revision-bearing evidence here.
+        if self._worker is None:
+            return
+        while True:
+            self.flush_prepared()
+            with self._lock:
+                waiting = next((future for _, future in self._deliveries if not future.done()), None)
+                if not self._observations and not self._deliveries:
+                    break
+            if waiting is not None:
+                from concurrent.futures import wait
+                wait((waiting,))
+        self._worker.shutdown()
+        self._worker = None
+        self._wake = None
 
     def start(self) -> None:
         """Construct only after the coordinator's root and identity guards."""
@@ -113,52 +147,57 @@ class LifecycleObservers:
         return wrapper(store, self, run_uri)
 
     def flush_prepared(self, run_uri: str | None = None) -> bool:
-        # Emit on the coordinator between readiness windows: observer revisions
-        # must not invalidate an in-flight preparation cursor. The transient
-        # facts carry their original commit revision and time; crash loss is
-        # intentionally best effort, with no durable delivery queue.
+        # This method has a single consumer, called between readiness windows.
         deadline = monotonic() + 0.1
         for _ in range(32):
+            selected = None
             with self._lock:
-                queues: tuple[tuple[list[Any], Callable[[Any], str]], ...] = (
-                    (self._observations, lambda item: item[1]),
-                    (self._prepared, lambda item: item[2].run_uri),
-                )
-                if not self._flush_observation_next:
-                    queues = tuple(reversed(queues))
-                selected = None
-                observation = False
-                for queue, uri_of in queues:
-                    index = next((i for i, item in enumerate(queue)
-                                  if run_uri is None or uri_of(item) == run_uri), None)
-                    if index is not None:
-                        selected = queue.pop(index)
-                        observation = queue is self._observations
-                        self._flush_observation_next = not observation
+                completed = next((entry for entry in self._deliveries
+                                  if entry[1].done() and (run_uri is None or entry[0] == run_uri)), None)
+                if completed is not None:
+                    self._deliveries.remove(completed)
+                else:
+                    uri = next(iter(self._observations), None) if run_uri is None else run_uri
+                    if len(self._deliveries) >= 16 or uri not in self._observations:
                         break
-            if selected is None:
-                break
-            if observation:
-                store, uri, fact = cast(tuple[Any, str, dict[str, Any]], selected)
-                self.emit(store, uri, **fact)
-            else:
-                store, before, after = cast(
-                    tuple[Any, AuthoritativeRunSnapshot, AuthoritativeRunSnapshot], selected,
-                )
-                self.transitions(store, before, after)
-            # Cooperative budget: do not start another callback/history read
-            # after slow storage consumed this turn. One callback cannot be
-            # interrupted; the remaining facts keep their original identity.
+                    assert uri is not None
+                    queue = self._observations.pop(uri)
+                    store, fact = queue.popleft()
+                    selected = (store, uri, fact)
+                    if queue:
+                        self._observations[uri] = queue
+                self._flushing = True
+            try:
+                if completed is not None:
+                    self._apply_callback_evidence(completed[1].result())
+                elif selected is not None:
+                    store, uri, fact = selected
+                    self._emit_at_safe_point(store, uri, **fact)
+            except Exception:
+                _LOG.exception("native lifecycle observation failed")
+            finally:
+                with self._lock:
+                    self._flushing = False
             if monotonic() >= deadline:
                 break
         with self._lock:
-            return bool(self._prepared or self._observations)
+            return bool((self._observations and len(self._deliveries) < 16)
+                        or any(future.done() for _, future in self._deliveries))
 
     def defer_emit(self, store: Any, run_uri: str, **fact: Any) -> None:
         with self._lock:
-            self._observations.append((store, run_uri, fact))
+            self._observations.setdefault(run_uri, deque()).append((store, fact))
 
-    def emit(
+    def emit(self, store: Any, run_uri: str, **fact: Any) -> None:
+        # Standalone publication has no coordinator worker or readiness window.
+        if self._worker is None:
+            self._emit_at_safe_point(store, run_uri, **fact)
+        else:
+            self.defer_emit(store, run_uri, **fact)
+            if self._wake is not None:
+                self._wake()
+
+    def _emit_at_safe_point(
         self,
         store: Any,
         run_uri: str,
@@ -175,7 +214,7 @@ class LifecycleObservers:
             f"{run_uri}\0{stage_name}\0{event_type}\0{identity}".encode()
         ).hexdigest()
         try:
-            with self._lock:
+            with self._run_guards.hold(run_uri):
                 find = getattr(store, "_find_audit_event", None)
                 existing = (
                     find(run_uri, event_id) if callable(find) else next(
@@ -199,13 +238,32 @@ class LifecycleObservers:
                     payload=dict(payload or {}),
                 )
                 record = store.append_audit_event(run_uri, event)
-                _project_event(run_uri, event)
-                self._registry.dispatch(record, _ObserverContext(store, record))
+            if self._worker is None:
+                self._deliver(store, record, event, deferred=False)
+            else:
+                future = self._worker.submit(self._deliver, store, record, event, deferred=True)
+                with self._lock:
+                    self._deliveries.append((run_uri, future))
+                wake = self._wake
+                if wake is not None:
+                    future.add_done_callback(lambda _: wake())
         except Exception:
             # Audit/delivery failure is diagnostic, never scientific failure.
             _LOG.exception(
                 "native lifecycle event or observer evidence was not retained"
             )
+
+    def _deliver(self, store: Any, record: PipelineEventRecord, event: PipelineEvent, *, deferred: bool) -> _ObserverContext:
+        _project_event(record.run_uri, event)
+        context = _ObserverContext(store, record, deferred=deferred)
+        self._registry.dispatch(record, context)
+        return context
+
+    def _apply_callback_evidence(self, context: _ObserverContext) -> None:
+        if context.pending:
+            with self._run_guards.hold(context.run_uri):
+                for method, fact in context.pending:
+                    context.persist(method, fact)
 
     def transitions(
         self,
@@ -220,7 +278,7 @@ class LifecycleObservers:
                 "PLANNED",
             }:
                 name = "opened"
-            self.emit(
+            self.defer_emit(
                 store,
                 after.run_uri,
                 event_type=f"run.{name}",
@@ -236,7 +294,7 @@ class LifecycleObservers:
             if previous is not None and previous.status == stage.status:
                 continue
             name = _NAMES.get(stage.status.name, stage.status.name.lower())
-            self.emit(
+            self.defer_emit(
                 store,
                 after.run_uri,
                 event_type=f"stage.{name}",
@@ -261,7 +319,9 @@ def _project_event(run_uri: str, event: PipelineEvent) -> None:
 
 
 class _ObserverContext:
-    def __init__(self, store: Any, record: PipelineEventRecord) -> None:
+    def __init__(self, store: Any, record: PipelineEventRecord, *, deferred: bool = False) -> None:
+        self.pending: list[tuple[str, Any]] = []
+        self._deferred = deferred
         self._store, self.run_uri = store, record.run_uri
         self.event_reference = record.to_event_reference()
 
@@ -272,9 +332,15 @@ class _ObserverContext:
         self._write("append_event_observer_link", link)
 
     def _write(self, method: str, fact: Any) -> None:
+        if fact.event_reference != self.event_reference:
+            raise QueueServiceError("observer fact event identity conflicts")
+        if self._deferred:
+            self.pending.append((method, fact))
+        else:
+            self.persist(method, fact)
+
+    def persist(self, method: str, fact: Any) -> None:
         try:
-            if fact.event_reference != self.event_reference:
-                raise QueueServiceError("observer fact event identity conflicts")
             getattr(self._store, method)(self.run_uri, fact)
             from loom.pipeline.stores import LocalRunStore, run_uri_to_path
 
@@ -315,7 +381,7 @@ class _ObservedAuthority:
             return method
 
         def commit(*args: Any, **kwargs: Any) -> Any:
-            with self._observers._lock:
+            with self._observers._run_guards.hold(self._run_uri):
                 if name == "ensure_prepared_attempt":
                     # This operation only prepares one PENDING attempt. Its
                     # durable receipt already carries the exact stage/revision;
@@ -333,7 +399,7 @@ class _ObservedAuthority:
                 before = self._store.open_run(self._run_uri)
                 result = method(*args, **kwargs)
                 after = self._store.open_run(self._run_uri)
-                self._observers._prepared.append((self._store, before, after))
+                self._observers.transitions(self._store, before, after)
                 return result
 
         return commit
