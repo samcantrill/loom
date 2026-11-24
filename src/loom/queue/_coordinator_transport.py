@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
+from contextvars import ContextVar
+import hashlib
 import http.client
 from pathlib import Path
 import socket
@@ -19,6 +21,8 @@ from ._coordinator_control import (
     CONTROL_CAPABILITY,
     MAX_RESPONSE_BYTES,
     CoordinatorClientError,
+    decode_envelope,
+    decode_result,
     control_error,
     decode_wire,
     encode_wire,
@@ -170,6 +174,9 @@ class ControlTransport:
     def _exchange(self, exchange: _Exchange) -> Mapping[str, object]:
         raise NotImplementedError
 
+    def _exchange_for(self, operation: str):
+        return self._exchange
+
     def call(
         self,
         operation: str,
@@ -201,10 +208,12 @@ class ControlTransport:
                 )
             self._active.add(exchange)
 
+        perform_exchange = self._exchange_for(operation)
+
         def execute() -> None:
             try:
                 remaining(exchange.deadline)
-                exchange.result = self._exchange(exchange)
+                exchange.result = perform_exchange(exchange)
             except BaseException as exc:
                 exchange.error = exc
             finally:
@@ -314,6 +323,9 @@ class HttpsControlTransport(ControlTransport):
     ) -> None:
         super().__init__()
         self._role = role
+        self._credentials = (server_ca_path, certificate_path, private_key_path)
+        self._range_session: ContextVar[_RangeConnections | None] = ContextVar("artifact_reads", default=None)
+        self._range_owners: set[_RangeConnections] = set()
         self._connection: Callable[[float], http.client.HTTPSConnection] = (
             lambda timeout: https_connection(
                 url,
@@ -324,49 +336,176 @@ class HttpsControlTransport(ControlTransport):
             )
         )
 
-    def _exchange(self, exchange: _Exchange) -> Mapping[str, object]:
-        call_deadline = exchange.deadline
-        connection = self._connection(remaining(call_deadline))
-        raw = encode_wire(exchange.payload)
-        if len(raw) > 65_536:
-            raise exchange.failure("invalid_request", boundary="client_protocol")
+    @property
+    def negotiating_ranges(self) -> bool:
+        return self._range_session.get() is not None
+
+    @contextmanager
+    def range_reads(self):
+        owner = _RangeConnections(self)
+        with self._lock:
+            if self._closed:
+                raise control_error("unavailable", "read_artifact_chunk", {})
+            self._range_owners.add(owner)
+        token = self._range_session.set(owner)
         try:
-            remaining(call_deadline)
+            yield
+        finally:
+            self._range_session.reset(token)
+            with self._lock:
+                self._range_owners.discard(owner)
+            owner.close()
+
+    def close(self):
+        super().close()
+        with self._lock:
+            owners = tuple(self._range_owners)
+        for owner in owners:
+            owner.close()
+
+    def _exchange_for(self, operation: str):
+        owner = self._range_session.get()
+        if owner is not None and operation == "read_artifact_chunk":
+            return owner.exchange
+        return self._exchange
+
+    def _connect(self, exchange):
+        connection = self._connection(remaining(exchange.deadline))
+        try:
             connection.connect()
             if connection.sock is None:
                 raise OSError("coordinator connection has no socket")
             exchange.attach(connection.sock)
-            exchange.before_send()
-            connection.sock.settimeout(remaining(call_deadline))
-            connection.request(
-                "POST",
-                f"/v1/{self._role}/{exchange.operation}",
-                body=raw,
-                headers={
-                    "Content-Type": "application/json",
-                    "X-Loom-Client": CONTROL_CAPABILITY,
-                },
-            )
-            # Header parsing can perform many socket reads; the separate caller
-            # deadline still interrupts the socket if a peer trickles headers.
-            connection.sock.settimeout(remaining(call_deadline))
-            response = connection.getresponse()
-            if 300 <= response.status < 400:
-                raise exchange.failure("invalid_response", boundary="client_protocol")
-            blocks: list[bytes] = []
-            size = 0
-            while not response.isclosed():
-                if exchange.socket is not None:
-                    exchange.socket.settimeout(remaining(call_deadline))
-                block = response.read1(min(65_536, MAX_RESPONSE_BYTES + 1 - size))
-                if not block:
-                    break
-                blocks.append(block)
-                size += len(block)
-                if size > MAX_RESPONSE_BYTES:
-                    raise exchange.failure(
-                        "result_too_large", boundary="client_protocol"
-                    )
-            return decode_wire(b"".join(blocks))
+            return connection
+        except BaseException:
+            connection.close()
+            raise
+
+    def _exchange(self, exchange: _Exchange) -> Mapping[str, object]:
+        raw = self._body(exchange, exchange.payload)
+        connection = self._connect(exchange)
+        try:
+            return self._request(connection, exchange, exchange.operation, raw)
         finally:
+            connection.close()
+
+    @staticmethod
+    def _body(exchange, payload):
+        raw = encode_wire(payload)
+        if len(raw) > 65_536:
+            raise exchange.failure("invalid_request", boundary="client_protocol")
+        return raw
+
+    def _request(self, connection, exchange, operation, raw):
+        call_deadline = exchange.deadline
+        exchange.before_send()
+        connection.sock.settimeout(remaining(call_deadline))
+        connection.request(
+            "POST",
+            f"/v1/{self._role}/{operation}",
+            body=raw,
+            headers={
+                "Content-Type": "application/json",
+                "X-Loom-Client": CONTROL_CAPABILITY,
+            },
+        )
+        # Header parsing can perform many socket reads; the separate caller
+        # deadline still interrupts the socket if a peer trickles headers.
+        connection.sock.settimeout(remaining(call_deadline))
+        response = connection.getresponse()
+        if 300 <= response.status < 400:
+            raise exchange.failure("invalid_response", boundary="client_protocol")
+        blocks: list[bytes] = []
+        size = 0
+        while not response.isclosed():
+            if exchange.socket is not None:
+                exchange.socket.settimeout(remaining(call_deadline))
+            block = response.read1(min(65_536, MAX_RESPONSE_BYTES + 1 - size))
+            if not block:
+                break
+            blocks.append(block)
+            size += len(block)
+            if size > MAX_RESPONSE_BYTES:
+                raise exchange.failure(
+                    "result_too_large", boundary="client_protocol"
+                )
+        return decode_wire(b"".join(blocks))
+
+
+
+class _RangeConnections:
+    """Lease a negotiated socket exclusively to one authenticated range exchange."""
+
+    def __init__(self, transport: HttpsControlTransport):
+        self.transport = transport
+        self.principal_certificate = self._certificate_digest()
+        self.lock = Lock()
+        self.idle: list[tuple[http.client.HTTPSConnection, tuple]] = []
+        self.closed = False
+
+    def _certificate_digest(self):
+        return hashlib.sha256(self.transport._credentials[1].read_bytes()).digest()
+
+    def _credential_version(self):
+        return tuple((s.st_dev, s.st_ino, s.st_size, s.st_ctime_ns)
+                     for s in (path.stat() for path in self.transport._credentials))
+
+    def exchange(self, exchange: _Exchange):
+        transport = self.transport
+        raw = transport._body(exchange, exchange.payload)
+        version = self._credential_version()
+        with self.lock:
+            if self.closed:
+                raise exchange.failure("unavailable")
+            borrowed = self.idle.pop() if self.idle else None
+        connection = None
+        try:
+            if borrowed is not None:
+                candidate, previous = borrowed
+                if previous == version and candidate.sock is not None:
+                    connection = candidate
+                    exchange.attach(candidate.sock)
+                else:
+                    candidate.close()
+            if connection is None:
+                connection = transport._connect(exchange)
+                guard = {"expected_coordinator_id": exchange.payload["expected_coordinator_id"]}
+                response = transport._request(connection, exchange, "handshake", transport._body(exchange, guard))
+                value = decode_envelope(response, "handshake", guard)
+                peer = decode_result("handshake", value)
+                if peer.coordinator_id != guard["expected_coordinator_id"]:
+                    raise exchange.failure("conflict")
+                if peer.protocol_version != "1" or not {
+                    CONTROL_CAPABILITY, "artifact-read-v1"
+                }.issubset(peer.capabilities):
+                    raise exchange.failure("unsupported")
+                if self._credential_version() != version:
+                    raise exchange.failure("unavailable")
+                if self._certificate_digest() != self.principal_certificate:
+                    raise exchange.failure("conflict")
+                if connection.sock is None:
+                    # A peer that closed after the handshake uses the existing
+                    # separate-connection exchange. Never cache its negotiation.
+                    return transport._exchange(exchange)
+            result = transport._request(connection, exchange, exchange.operation, raw)
+            if connection.sock is not None and result.get("ok") is True:
+                # A caller expiring the old exchange must never close a socket
+                # already leased to a different range.
+                with exchange.lock:
+                    reusable = not exchange.cancelled.is_set()
+                    exchange.socket = None
+                with self.lock:
+                    if reusable and not self.closed:
+                        self.idle.append((connection, version))
+                        connection = None
+            return result
+        finally:
+            if connection is not None:
+                connection.close()
+
+    def close(self):
+        with self.lock:
+            self.closed = True
+            idle, self.idle = self.idle, []
+        for connection, _ in idle:
             connection.close()

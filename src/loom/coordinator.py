@@ -360,6 +360,9 @@ class CoordinatorClient(NativeCoordinatorClient):
     def fetch_artifacts(self, selections: Any, destination: str | Path, *, scope: Any = None, expected_coordinator_id: str | None = None, deadline: float | None = None) -> dict[str, Any]:
         """Fetch complete declarations into new directories on this client's host.
 
+        Read up to four ranges concurrently, bound to one coordinator. HTTPS
+        negotiates per reusable authenticated connection. Each request retains
+        the selected scope. Verify declared hashes in file order.
         Preserve input associations and outcomes in order, deduplicating bytes.
         Complete means every input was processed, not that each succeeded. Existing
         directories are never replaced. Linux atomic publication is required.

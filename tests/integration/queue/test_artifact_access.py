@@ -169,3 +169,69 @@ def test_real_complete_tree_transport_and_cli_query_role(tmp_path, https, capsys
                 == 0
             )
             assert json.loads(capsys.readouterr().out)["result"]["success_count"] == 1
+
+
+def test_https_transfer_reuses_authenticated_ranges_and_renegotiates_on_change(tmp_path, download_root, monkeypatch):
+    from loom._artifact_ranges import CHUNK_BYTES, RANGE_WINDOW
+    from loom.queue import agent_session_transport as transport
+    from loom.queue._coordinator_transport import HttpsControlTransport
+
+    with _coordinator(tmp_path, https=True) as (_, daemon, _):
+        uri = (daemon.config.run_store_root / "range-source").as_uri()
+        authority = SQLitePerRunAuthorityStore(uri)
+        authority.create_run(uri)
+        daemon.config = replace(daemon.config, coordinator_authority_factory=lambda _: authority)
+        ref, _ = local_ref(uri, b"r" * (12 * CHUNK_BYTES))
+        locator = publish(authority, uri, ref)
+        calls = []
+        dispatch = transport._Handler._dispatch_post
+        def count(handler):
+            calls.append((handler.client_address, handler.path.rsplit("/", 1)[-1]))
+            return dispatch(handler)
+        monkeypatch.setattr(transport._Handler, "_dispatch_post", count)
+        with CoordinatorClient.from_connection_file(tmp_path / "client.json") as client:
+            result = client.fetch_artifacts([{"locator": locator.to_dict()}], download_root / "ranges", scope=SCOPE)
+            assert result["success_count"] == 1, result
+            ports = {peer for peer, name in calls if name == "read_artifact_chunk"}
+            assert 1 <= len(ports) <= RANGE_WINDOW
+            assert sum(name == "read_artifact_chunk" for _, name in calls) == 12
+            for peer in ports:
+                requests = [name for origin, name in calls if origin == peer]
+                assert requests[0] == "handshake" and requests.count("handshake") == 1
+
+            tls = client._transport
+            assert isinstance(tls, HttpsControlTransport)
+            options = dict(scope=SCOPE, declaration=result["items"][0]["declaration"],
+                           member="result.json", offset=0, length=1,
+                           expected_coordinator_id=daemon._coordinator_id)
+            directory = tmp_path / "tls"
+            with tls.range_reads():
+                assert client.read_artifact_chunk(locator, **options)["outcome"] == "available"
+                previous = calls[-1][0]
+                for extension in ("crt", "key"):
+                    (directory / ("other." + extension)).write_bytes((directory / ("query." + extension)).read_bytes())
+                with pytest.raises(CoordinatorClientError):
+                    client.read_artifact_chunk(locator, **options)
+                assert calls[-1][1] == "handshake" and calls[-1][0] != previous
+
+
+def test_https_peer_closing_after_negotiation_preserves_single_range_fallback(tmp_path, download_root, monkeypatch):
+    from loom.queue import agent_session_transport as transport
+
+    with _coordinator(tmp_path, https=True) as (_, daemon, _):
+        uri = (daemon.config.run_store_root / "close-source").as_uri()
+        authority = SQLitePerRunAuthorityStore(uri)
+        authority.create_run(uri)
+        daemon.config = replace(daemon.config, coordinator_authority_factory=lambda _: authority)
+        ref, _ = local_ref(uri)
+        locator = publish(authority, uri, ref)
+        headers = transport._Handler.end_headers
+        def close_handshake(handler):
+            if handler.path.endswith("/handshake"):
+                handler.send_header("Connection", "close")
+                handler.close_connection = True
+            return headers(handler)
+        monkeypatch.setattr(transport._Handler, "end_headers", close_handshake)
+        with CoordinatorClient.from_connection_file(tmp_path / "client.json") as client:
+            result = client.fetch_artifacts([{"locator": locator.to_dict()}], download_root / "fetch", scope=SCOPE)
+            assert result["success_count"] == 1, result

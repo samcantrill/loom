@@ -511,7 +511,8 @@ def test_storage_deadline_does_not_prevent_gpu_dispatch(tmp_path, monkeypatch):
     temporary_root.mkdir()
     monkeypatch.setenv("TMPDIR", str(temporary_root))
     monkeypatch.setattr(tempfile, "tempdir", None)
-    monkeypatch.setattr(checks_module, "TemporaryDirectory", tempfile.TemporaryDirectory)
+    from loom.fleet import _check_artifacts
+    monkeypatch.setattr(_check_artifacts, "_principal", lambda _: "test-cert")
     operation = "check-storage-deadline"
     inventory, directory, intent, requests = retained_checks(tmp_path, operation)
     retained = (directory / "intent.json").read_bytes()
@@ -542,14 +543,14 @@ def test_storage_deadline_does_not_prevent_gpu_dispatch(tmp_path, monkeypatch):
             to_dict=lambda: {},
         )
 
-    def fetch_artifacts(items, destination, *, deadline):
+    def fetch_artifacts(client, items, destination, *, deadline, **options):
         assert Path(destination).parent == temporary_root
         if current[0] == "storage" and slow_storage[0]:
             clock[0] = deadline
             return {"items": [{"outcome": "failed"}]}
         path = Path(destination) / "report.json"
         path.write_text(json.dumps({"check": current[0]}))
-        return {"items": [{"outcome": "available", "primary_path": str(path)}]}
+        return {"items": [{"outcome": "available", "primary_path": str(path), "declaration": "a" * 64, "verification": "recorded_sha256"}]}
 
     assignment = {"stage_name": "probe", "terminal_acknowledged": True}
     client = SimpleNamespace(
@@ -563,13 +564,13 @@ def test_storage_deadline_does_not_prevent_gpu_dispatch(tmp_path, monkeypatch):
         ),
         observe_agent=lambda identity: SimpleNamespace(value={}, to_dict=lambda: {}),
         select_outputs=lambda selection: SimpleNamespace(
-            items=[{"artifact": {"metadata": {"loom.shared_publication": {}}}}],
+            items=[{"locator": {"run_uri": "file:///run/" + current[0]}, "artifact": {"metadata": {"loom.shared_publication": {}}}}],
             next_cursor=None,
         ),
-        fetch_artifacts=fetch_artifacts,
     )
+    monkeypatch.setattr(_check_artifacts, "fetch_artifacts", fetch_artifacts)
     monkeypatch.setattr(checks_module, "verify_check", lambda *a, **kw: {"outcome": "passed"})
-    monkeypatch.setattr(checks_module, "verify_storage", lambda path: {})
+    monkeypatch.setattr(_check_artifacts, "verify_storage", lambda path: {})
     first = self_test(inventory, operation_id=operation, timeout_seconds=10)
     assert first["outcome"] == "waiting"
     assert first["checks"]["gpu"]["code"] == "deadline_exceeded"
@@ -1113,3 +1114,96 @@ def test_submitted_maintenance_checks_execute_and_replay_with_admission_closed(f
         replay = finish(inventory, "maintenance-" + kind)
         assert replay["checks"][kind]["assignment"]["value"]["assignment_id"] == assignment_id
     assert operator(daemon).observe_maintenance()["state"] == "closed"
+
+
+def test_storage_check_resumes_ranges_and_recovers_published_verification(fleet, monkeypatch):
+    from loom import _artifact_fetch, _artifact_ranges
+    from loom.coordinator import CoordinatorClient
+    from loom.fleet import _check_artifacts
+
+    inventory, deployment, daemon, _ = fleet
+    clock = SimpleNamespace(monotonic=lambda: float("inf") if expired else time.monotonic())
+    expired = False
+    interrupt_ranges = True
+    interrupt_publication = False
+    published = []
+    reads = []
+    saved = []
+    read = CoordinatorClient.read_artifact_chunk
+    save = _artifact_ranges._save
+    publish_directory = _artifact_fetch._publish
+
+    def read_chunk(client, locator, **options):
+        if Path(options["member"]).name == "values.bin":
+            reads.append(options["offset"])
+        return read(client, locator, **options)
+
+    def save_chunk(path, data):
+        nonlocal expired
+        save(path, data)
+        if len(data) == _artifact_ranges.CHUNK_BYTES:
+            saved.append(int(path.name))
+            if interrupt_ranges and len(saved) == 8:
+                expired = True
+
+    def publish(source, target):
+        publish_directory(source, target)
+        published.append(target)
+        if interrupt_publication:
+            raise OSError("publication completed before receipt")
+
+    monkeypatch.setattr(_artifact_fetch, "time", clock)
+    monkeypatch.setattr(_artifact_fetch, "_publish", publish)
+    monkeypatch.setattr(_artifact_ranges, "_save", save_chunk)
+    monkeypatch.setattr(CoordinatorClient, "read_artifact_chunk", read_chunk)
+    first = self_test(inventory, deployment=deployment, checks=("storage",),
+                      operator_connection=inventory.path.parent / "operator.json",
+                      config="pipeline.yaml", timeout_seconds=90)
+    identity = first["operation_id"]
+
+    def advance_until(condition, result):
+        end = time.monotonic() + 180
+        while not condition():
+            assert result["outcome"] == "waiting" and time.monotonic() < end, result
+            result = self_test(inventory, operation_id=identity, timeout_seconds=90)
+        return result
+
+    first = advance_until(lambda: expired, first)
+    assert first["checks"]["storage"]["outcome"] == "waiting"
+    assert first["checks"]["storage"]["transfer"]["received_bytes"] >= 8 * _artifact_ranges.CHUNK_BYTES
+    assert not published
+    with sqlite3.connect(daemon.config.control_database) as db:
+        original_admissions = db.execute("SELECT COUNT(*) FROM managed_admissions").fetchone()
+    retained_offsets = set(saved)
+    assert len(retained_offsets) >= 8
+    reads.clear()
+    interrupt_ranges = expired = False
+    interrupt_publication = True
+    second = self_test(inventory, operation_id=identity, timeout_seconds=90)
+    second = advance_until(lambda: bool(published), second)
+    assert second["checks"]["storage"]["outcome"] == "waiting"
+    assert reads and not retained_offsets.intersection(reads)
+    assert (published[0] / "values.bin").stat().st_size == STORAGE_BYTES
+    assert second["checks"]["storage"]["transfer"]["reused_bytes"] >= len(retained_offsets) * _artifact_ranges.CHUNK_BYTES
+    directory = inventory.path.parent / "checks" / identity
+    verify_receipt = directory / "storage.verified.json"
+    assert not verify_receipt.exists()
+
+    reads.clear()
+    interrupt_publication = False
+    final = finish(inventory, identity)
+    assert final["outcome"] == "passed", final
+    assert not reads and len(published) == 1 and not published[0].parent.exists()
+    receipt = json.loads(verify_receipt.read_text())
+    assert receipt["facts"]["storage"]["bytes"] == STORAGE_BYTES
+    assert final["checks"]["storage"]["operation_id"] == first["checks"]["storage"]["operation_id"]
+
+    # Transient projection loss cannot erase the independent verified receipt.
+    (directory / "result.json").unlink()
+    monkeypatch.setattr(_check_artifacts, "fetch_artifacts", lambda *a, **k: pytest.fail("repeated verified transfer"))
+    assert finish(inventory, identity)["outcome"] == "passed"
+    with sqlite3.connect(daemon.config.control_database) as db:
+        assert db.execute("SELECT COUNT(*) FROM managed_admissions").fetchone() == original_admissions
+        queue_item = final["checks"]["storage"]["native"]["admission"]["queue_item_id"]
+        assert db.execute("SELECT COUNT(*) FROM managed_admissions WHERE queue_item_id=?",
+                          (queue_item,)).fetchone() == (1,)

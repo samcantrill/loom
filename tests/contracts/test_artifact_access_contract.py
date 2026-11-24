@@ -121,6 +121,8 @@ class LocalClient(CoordinatorClient):
         self.daemon = daemon
 
     def _native_call(self, operation, payload, expected=None, **kwargs):
+        if operation == "handshake":
+            return SimpleNamespace(coordinator_id="test-coordinator")
         return artifact_operation(
             self.daemon, operation, validate_artifact_request(operation, payload)
         )
@@ -352,7 +354,7 @@ def test_interrupted_retry_cleanup_corrupt_member_and_unavailable_authority(
     monkeypatch.setattr(client, "read_artifact_chunk", lost_reply)
     result = client.fetch_artifacts([selected], download_root / "retry", scope=SCOPE)
     assert result["success_count"] == 1
-    assert calls[0] == calls[1]
+    assert calls.count(calls[0]) == 2
 
     def corrupt_chunk(loc, **options):
         import base64
@@ -441,3 +443,76 @@ def test_trusted_tree_fetch_refuses_incomplete_companion_export(tmp_path):
         tmp_path / "download", scope=SCOPE, expected_coordinator_id=None)
     assert result["items"][0]["outcome"] == "unsupported_backend"
     assert not (tmp_path / "download").exists()
+
+
+def test_later_ranges_complete_with_first_range_paused(tmp_path, monkeypatch, download_root):
+    from threading import Event, Lock
+    from loom._artifact_ranges import CHUNK_BYTES, RANGE_WINDOW
+
+    daemon, authority, uri = fixture(tmp_path)
+    data = bytes(range(251)) * (CHUNK_BYTES * (RANGE_WINDOW + 2) // 251)
+    ref, _ = local_ref(uri, data)
+    locator = publish(authority, uri, ref)
+    client = LocalClient(daemon)
+    original = client.read_artifact_chunk
+    first, advanced, lock = Event(), Event(), Lock()
+    active = peak = 0
+    def read(loc, **options):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        try:
+            offset = options["offset"]
+            if not offset:
+                first.set()
+                assert advanced.wait(5)
+            assert first.wait(5)
+            result = original(loc, **options)
+            if offset >= CHUNK_BYTES * RANGE_WINDOW:
+                advanced.set()
+            return result
+        finally:
+            with lock:
+                active -= 1
+
+    monkeypatch.setattr(client, "read_artifact_chunk", read)
+    result = client.fetch_artifacts([{"locator": locator.to_dict()}], download_root / "window", scope=SCOPE)
+    assert result["success_count"] == 1 and 1 < peak <= RANGE_WINDOW
+    assert Path(result["items"][0]["primary_path"]).read_bytes() == data
+
+
+def test_check_scratch_reauthorizes_and_restarts_changed_declaration(tmp_path, monkeypatch, download_root):
+    from loom import _artifact_ranges, _artifact_fetch
+
+    daemon, authority, uri = fixture(tmp_path)
+    ref, member = local_ref(uri, b"a" * 320000, checksum=False)
+    locator = publish(authority, uri, ref)
+    client = LocalClient(daemon)
+    selected = [{"locator": locator.to_dict()}]
+    destination = download_root / "private"
+    def fetch():
+        return _artifact_fetch.fetch_artifacts(
+            client, selected, destination, scope=SCOPE, expected_coordinator_id="test-coordinator",
+            check_scratch=True,
+        )["items"][0]
+    save = _artifact_ranges._save
+    def stop(path, data):
+        save(path, data)
+        raise TimeoutError("observer detached")
+    monkeypatch.setattr(_artifact_ranges, "_save", stop)
+    first = fetch()
+    assert first["outcome"] == "failed" and list((destination / ".ranges").glob("*/*"))
+    monkeypatch.setattr(_artifact_ranges, "_save", save)
+    resolver = daemon.config.coordinator_authority_factory
+    def offline(_):
+        raise OSError("owner unavailable")
+    monkeypatch.setattr(daemon.config, "coordinator_authority_factory", offline)
+    assert fetch()["outcome"] == "unavailable"
+    monkeypatch.setattr(daemon.config, "coordinator_authority_factory", resolver)
+    member.write_bytes(b"b" * 320000)
+    result = fetch()
+    assert result["outcome"] == "available" and result["verification"] == "unverified_original"
+    assert result["declaration"] != first["declaration"]
+    assert result["transfer"]["reused_bytes"] == 0
+    assert Path(result["primary_path"]).read_bytes() == member.read_bytes()

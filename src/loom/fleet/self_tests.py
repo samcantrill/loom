@@ -9,7 +9,6 @@ import math
 import os
 from pathlib import Path
 import tempfile
-from tempfile import TemporaryDirectory
 import time
 from typing import Any, cast
 from uuid import uuid4
@@ -39,8 +38,9 @@ from loom.runs.outputs import OutputSelection
 from loom.serialization import thaw_plain_data
 
 from .configuration import _environment_files, Inventory, exclude_captures, protected_directory
-from .probes import probe_configuration, verify_storage
-from ._timing import measure, timed
+from .probes import probe_configuration
+from ._check_artifacts import verify_publication
+from ._timing import timed
 
 
 def _publish(path: Path, value: Any) -> None:
@@ -321,42 +321,11 @@ def _observe_check(
     artifact = selected.items[0].get("artifact") or {}
     if "loom.shared_publication" not in (artifact.get("metadata") or {}):
         return {"outcome": "failed", "code": "shared_publication_required", **facts}
-    retained = (
-        _read(directory / "result.json").get("checks", {}).get(check, {})
-        if (directory / "result.json").exists() else {}
-    )
-    if retained.get("verified_artifact") == artifact:
-        # This exact attempt/publication already crossed the artifact-integrity
-        # boundary. Assignment/owner/release facts above and below remain fresh.
-        report = retained["report"]
-        if check == "storage":
-            facts["storage"] = retained["storage"]
-        with measure("artifact_verification") as timing:
-            timing["outcome"] = "reused"
-    else:
-        # Receipt and download filesystems are independent. Honor the operator's
-        # TMPDIR selection; downloads still require atomic directory publication.
-        with TemporaryDirectory(prefix="loom-fleet-check-") as destination:
-            with measure("artifact_download"):
-                fetched = client.fetch_artifacts(selected.items, destination, deadline=deadline)
-            row = fetched["items"][0]
-            if row["outcome"] != "available":
-                return {
-                    "outcome": "failed"
-                    if row["outcome"] == "integrity_failed"
-                    else "waiting",
-                    "code": "publication_" + row["outcome"],
-                    **facts,
-                }
-            path = Path(row["primary_path"])
-            report = json.loads(path.read_text())
-            if check == "storage":
-                try:
-                    with measure("artifact_verification"):
-                        facts["storage"] = verify_storage(path.parent / "values.bin")
-                except (OSError, ValueError):
-                    return {"outcome": "failed", "code": "storage_result_mismatch", **facts}
-    facts.update(report=report, verified_artifact=thaw_plain_data(artifact))
+    publication = verify_publication(client, directory, check, intent, selected.items[0], deadline)
+    if "outcome" in publication:
+        return {**facts, **publication}
+    facts.update(publication)
+    report = publication["report"]
     profile = intent["profile"]
     if request.preparation.execution is not None and request.preparation.execution.worker_contract == SELECTED_INPUT_WORKER_CONTRACT:
         from loom.queue.shared_execution import stage_scope

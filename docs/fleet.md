@@ -868,10 +868,22 @@ retain their stronger global-settlement ordering.
 Candidate qualification is retained against the upgrade intent. Waiting
 continuations inspect current roots, owners, capabilities and declarations without
 repeating full preparation. Runtime replacement and workload activation still
-verify their mutable inputs. Successful self-tests retain verified artifact
-contents for the exact publication; current assignment/agent and release evidence
-is reobserved. A new publication or attempt requires fresh verification, including
-the complete 65 MiB storage payload.
+verify their mutable inputs. Each check stores its verified report and storage
+evidence in a separate owner-private receipt. The receipt binds the native
+operation, coordinator, client credential, exact output locator and publication.
+Later observations reselect the authorized output and refresh assignment, agent
+and release evidence. An intervening pending observation preserves verification.
+
+An interrupted download can reuse validated ranges in the check's private
+temporary directory. A changed binding or missing scratch starts a fresh
+transfer under the original operation. The client reads up to four 256 KiB
+ranges at once and checks the declared hash in file order. With HTTPS, each
+reusable connection negotiates before its first range. The server authenticates
+and authorizes every request. When a peer closes the connection after negotiation,
+the client uses the existing individual request path. The storage check also
+verifies all 65 MiB against its independent byte pattern. Verification survives
+scratch cleanup. Ordinary artifact fetches clean their temporary downloads on
+interruption.
 
 An apply invocation can retain its own preview qualification only when the
 bound intent matches its host, root, declaration, runtime, profile and image

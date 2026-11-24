@@ -149,6 +149,11 @@ class NativeCoordinatorClient:
         except (ValueError, TypeError, QueueError) as exc:
             raise control_error("invalid_request", operation, envelope) from exc
         waiting = waiting or operation in WAIT_OPERATIONS
+        if (operation == "read_artifact_chunk" and
+                isinstance(self._transport, transport_io.HttpsControlTransport) and
+                self._transport.negotiating_ranges):
+            # The transfer worker negotiates on the same authenticated socket.
+            negotiate = False
         if operation not in {"handshake", "operator_handshake"} and negotiate:
             try:
                 # Separate connections renegotiate within this request's budget.
