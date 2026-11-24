@@ -83,7 +83,10 @@ Capability/authentication failures retain native error codes and details.
 
 Status separates declarations, native session/capacity, service manager, owner,
 installation and storage. Each native observation retains its owner, timestamp,
-revision, freshness and availability. There is no atomic fleet snapshot. Without
+revision, freshness and availability. After observing coordinator status, Fleet
+reads up to four agents concurrently using separate pinned operator clients.
+The complete report retains inventory order and includes individual failures.
+There is no atomic fleet snapshot. Without
 a connection, status reports unavailable native observations, not an empty fleet.
 It can exit successfully while hosts are unhealthy. Status and plan never hash
 release wheels or workload images; plan is a preview, not a reservation.

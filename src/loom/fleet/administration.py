@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 from pathlib import Path
 import ssl
@@ -42,6 +43,16 @@ def _native_failure(error: CoordinatorClientError, owner: str | None) -> dict[st
         {"error": error.to_dict()},
         error.code,
     ).to_dict()
+
+
+def _observe_agent(connection: Path, coordinator_id: str, name: str) -> dict[str, Any]:
+    try:
+        with CoordinatorOperatorClient.from_connection_file(
+            connection, expected_coordinator_id=coordinator_id
+        ) as client:
+            return client.observe_agent(name).to_dict()
+    except CoordinatorClientError as exc:
+        return _native_failure(exc, coordinator_id)
 
 
 def _binding(
@@ -241,23 +252,25 @@ def observe(
             raise QueueConfigError(
                 "Fleet operator connection requires a pinned coordinator identity"
             )
-        with CoordinatorOperatorClient.from_connection_file(connection) as client:
-            try:
+        try:
+            with CoordinatorOperatorClient.from_connection_file(
+                connection, expected_coordinator_id=config.expected_coordinator_id
+            ) as client:
                 coordinator_fact = client.observe_status().to_dict()
-                for name, row in rows.items():
-                    if name == "coordinator":
-                        row["native"] = coordinator_fact
-                    else:
-                        try:
-                            row["native"] = client.observe_agent(name).to_dict()
-                        except CoordinatorClientError as exc:
-                            row["native"] = _native_failure(
-                                exc, config.expected_coordinator_id
-                            )
-            except CoordinatorClientError as exc:
-                coordinator_fact = _native_failure(exc, config.expected_coordinator_id)
-                for row in rows.values():
-                    row["native"] = coordinator_fact
+        except CoordinatorClientError as exc:
+            coordinator_fact = _native_failure(exc, config.expected_coordinator_id)
+            for row in rows.values():
+                row["native"] = coordinator_fact
+        else:
+            if "coordinator" in rows:
+                rows["coordinator"]["native"] = coordinator_fact
+            with ThreadPoolExecutor(max_workers=4, thread_name_prefix="loom-fleet-observe") as pool:
+                pending = {
+                    pool.submit(_observe_agent, connection, config.expected_coordinator_id, name): name
+                    for name in rows if name != "coordinator"
+                }
+                for future in as_completed(pending):
+                    rows[pending[future]]["native"] = future.result()
     release: dict[str, Any] = {"outcome": "not_requested"}
     if command == "preflight":
         try:
