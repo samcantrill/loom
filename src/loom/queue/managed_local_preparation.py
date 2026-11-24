@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from contextlib import ExitStack
 from dataclasses import dataclass
 import fcntl
+import hashlib
+from tempfile import TemporaryDirectory
 from pathlib import Path
 import re
 from typing import Any, cast
@@ -39,7 +42,9 @@ from .errors import QueueConflictError, QueueServiceError
 from .local_daemon_runtime import (
     _runtime_record_matches_current_intent,
     load_managed_local_runtime_record,
-    prepare_managed_local_runtime_record,
+    _runtime_payload,
+    _runtime_placements,
+    _write_runtime_record_payload,
 )
 
 
@@ -63,6 +68,119 @@ class ManagedLocalPreparationReceipt:
             "runtime_digest": self.runtime_digest,
             "stage_names": list(self.stage_names),
         }
+
+
+class _PrivateConfigStore(LocalRunStore):
+    """Render documents with their final logical URI and private physical paths."""
+
+    def __init__(self, root: Path, target_uri: str) -> None:
+        super().__init__(root)
+        self.target_uri = target_uri
+
+    def local_run_dir(self, run_uri: str) -> Path:
+        if run_uri != self.target_uri:
+            raise QueueServiceError(
+                "private preparation store received a different run URI"
+            )
+        return self.root / "run"
+
+
+_CONFIG_DOCUMENTS = (
+    "config/resolved.yaml", "config/resolved.redacted.yaml",
+    "config/composition_manifest.json", "config/recipe_manifest.json",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _RenderedConfig:
+    directory: TemporaryDirectory[str]
+    run_uri: str
+    digests: dict[str, str]
+
+    def install(
+        self, store: LocalRunStore, run_uri: str, digests: dict[str, str]
+    ) -> None:
+        from loom.pipeline.stores.atomic import atomic_write_bytes
+        import json
+
+        with ExitStack() as snapshots:
+            sources = {}
+            for name, digest in digests.items():
+                stream = snapshots.enter_context(
+                    (Path(self.directory.name) / "run" / name).open("rb")
+                )
+                if hashlib.file_digest(stream, "sha256").hexdigest() != digest:
+                    raise _StagingUnavailable("private publication bytes changed")
+                stream.seek(0)
+                sources[name] = stream
+
+            # Keep verified files open across creation: deletion of disposable
+            # staging can never leave a new target with missing inputs.
+            store.create_run(run_uri)
+            metadata = json.load(sources.pop("run.json"))["metadata"]
+            for name, source in sources.items():
+                target = store.local_generated_artifact_path(run_uri, name)
+                atomic_write_bytes(target, source.read())
+                if name == "config/managed_local_runtime.json":
+                    target.chmod(0o600)
+            store._write_projected_run_metadata(run_uri, metadata)
+
+
+class _StagingUnavailable(OSError):
+    """Transient private evidence loss. The committed report owns retry."""
+
+
+def _verify_private_config(
+    private: _PrivateConfigStore, digests: dict[str, str]
+) -> None:
+    for name, digest in digests.items():
+        try:
+            with (private.local_run_dir(private.target_uri) / name).open(
+                "rb"
+            ) as stream:
+                if hashlib.file_digest(stream, "sha256").hexdigest() != digest:
+                    raise _StagingUnavailable("private publication bytes changed")
+        except FileNotFoundError as exc:
+            raise _StagingUnavailable(
+                "private publication bytes are unavailable"
+            ) from exc
+
+
+def _compare_rendered_config(private: _PrivateConfigStore, run_uri: str) -> None:
+    # Read the native logical documents, including retained inline provenance
+    # and older timestamps. A byte comparison would reject valid replays.
+    live = LocalRunStore()
+    for key in ("resolved", "resolved_redacted"):
+        if live.read_config_snapshot(run_uri, key) != private.read_config_snapshot(
+            run_uri, key
+        ):
+            raise QueueServiceError("managed-local configuration conflicts")
+    if (
+        live.read_composition_manifest(run_uri)
+        != private.read_composition_manifest(run_uri)
+        or live.read_recipe_manifest(run_uri) != private.read_recipe_manifest(run_uri)
+        or live.read_run_user_metadata(run_uri)
+        != private.read_run_user_metadata(run_uri)
+    ):
+        raise QueueServiceError("managed-local composition evidence conflicts")
+
+
+def _render_config(
+    private_root: Path,
+    run_uri: str,
+    composed: object,
+    authority_identity: dict[str, PlainData],
+) -> dict[str, str]:
+    store = _PrivateConfigStore(private_root, run_uri)
+    store.create_run(run_uri)
+    _persist_composed_config(
+        store, run_uri, composed, authority_identity=authority_identity
+    )
+    digests = {}
+    for name in (*_CONFIG_DOCUMENTS, "run.json"):
+        with (store.local_run_dir(run_uri) / name).open("rb") as stream:
+            digests[name] = hashlib.file_digest(stream, "sha256").hexdigest()
+    return digests
 
 
 def prepare_managed_local_run(
@@ -168,7 +286,7 @@ def prepare_managed_run(
     run_uri, options = _runtime_for_service(
         service,
         resolved,
-        pipeline,
+        pipeline.stage_names,
         run_name_text,
         effective_options=getattr(composed, "effective_run_options", None),
     )
@@ -185,19 +303,57 @@ def prepare_managed_run(
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+b") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        if store.run_uri_exists(run_uri):
-            return _replay_receipt(
-                store=store,
-                run_uri=run_uri,
-                composed=composed,
-                pipeline=pipeline,
-                options=options,
-                requirements=requirements,
-                service=service,
-            )
+        existing = store.run_uri_exists(run_uri)
+        rendered = getattr(composed, "rendered_config", None)
+        entry = getattr(composed, "project_contracts_entry", None)
+        placements = _runtime_placements(
+            pipeline,
+            options,
+            service.daemon.slurm_profiles,
+            service.daemon.scheduling_components,
+        )
+        if isinstance(rendered, _RenderedConfig):
+            from concurrent.futures import ProcessPoolExecutor
+            from multiprocessing import get_context
 
-        store.create_run(run_uri)
-        try:
+            if rendered.run_uri != run_uri:
+                raise QueueConflictError("rendered configuration target conflicts")
+            with ProcessPoolExecutor(
+                max_workers=1, mp_context=get_context("spawn")
+            ) as worker:
+                receipt, digests = worker.submit(
+                    _render_runtime,
+                    Path(rendered.directory.name),
+                    run_uri,
+                    existing,
+                    rendered.digests,
+                    dict(resolved),
+                    options.to_dict(),
+                    {k: v.to_dict() for k, v in requirements.items()},
+                    placements,
+                    entry,
+                ).result()
+            if not existing:
+                rendered.install(store, run_uri, digests)
+        elif existing:
+            try:
+                _check_composed_config(
+                    store,
+                    run_uri,
+                    composed,
+                    coordinator_authority_identity(
+                        service.daemon.coordinator_authority_factory
+                    ),
+                )
+                receipt = _replay_runtime(
+                    store, run_uri, pipeline, options, requirements, placements
+                )
+            except Exception as exc:
+                raise QueueConflictError(
+                    "managed-local preparation conflicts with existing partial, corrupt, or changed state"
+                ) from exc
+        else:
+            store.create_run(run_uri)
             _persist_composed_config(store, run_uri, composed)
             store.write_run_user_metadata(
                 run_uri,
@@ -208,48 +364,114 @@ def prepare_managed_run(
                     ),
                 },
             )
-            plan = plan_pipeline(
-                pipeline,
+            receipt = _prepare_runtime(
+                store, run_uri, pipeline, options, requirements, placements, entry
+            )
+
+        if existing and is_embedded_coordinator_authority(
+            service.daemon.coordinator_authority_factory
+        ):
+            _check_embedded_replay(service, run_uri)
+        else:
+            _publish_authority(service, run_uri, receipt.runtime_digest)
+        return receipt
+
+
+def _prepare_runtime(
+    store: LocalRunStore,
+    run_uri: str,
+    pipeline: PipelineSpec,
+    options: RunOptions,
+    requirements: Mapping[str, ManagedExecutionRequirement],
+    placements: dict[str, PlainData],
+    entry: Mapping[str, PlainData] | None,
+) -> ManagedLocalPreparationReceipt:
+    plan = plan_pipeline(
+        pipeline,
+        run_uri=run_uri,
+        stage_state=store,
+        artifact_index=store,
+        plans=store,
+        artifact_store=LocalArtifactStore(store.local_artifact_root(run_uri)),
+        selectors=options.to_plan_selectors(),
+        resume=options.to_resume_options(),
+        persist=True,
+    )
+    store.write_runtime_metadata(
+        run_uri,
+        build_runtime_metadata(options, stage_ids=pipeline.stage_names).to_dict(),
+    )
+    if entry is not None:
+        from loom.pipeline.execution.prepared_run import PreparedRunRecord
+        from loom.timestamps import utc_timestamp
+
+        store.write_prepared_run(
+            run_uri,
+            PreparedRunRecord(
+                schema_version=1,
                 run_uri=run_uri,
-                stage_state=store,
-                artifact_index=store,
-                plans=store,
-                artifact_store=LocalArtifactStore(store.local_artifact_root(run_uri)),
-                selectors=options.to_plan_selectors(),
-                resume=options.to_resume_options(),
-                persist=True,
-            )
-            store.write_runtime_metadata(
-                run_uri,
-                build_runtime_metadata(
-                    options, stage_ids=pipeline.stage_names
-                ).to_dict(),
-            )
-            entry = getattr(composed, "project_contracts_entry", None)
-            if entry is not None:
-                from loom.pipeline.execution.prepared_run import PreparedRunRecord
-                from loom.timestamps import utc_timestamp
-                store.write_prepared_run(run_uri, PreparedRunRecord(
-                    schema_version=1, run_uri=run_uri, prepared_at=utc_timestamp(),
-                    executor_name="managed", continuation_type="whole_run",
-                    metadata={"loom.project_contracts": entry},
-                ).to_dict())
-            runtime_digest = prepare_managed_local_runtime_record(
-                store=store,
-                run_uri=run_uri,
-                plan=plan,
-                pipeline=pipeline,
-                execution_requirements=requirements,
-                options=options,
-                scheduling_components=service.daemon.scheduling_components,
-                slurm_profiles=service.daemon.slurm_profiles,
-            )
-            _publish_authority(service, run_uri, runtime_digest)
-        except Exception:
-            # A partial directory is intentionally a durable conflict, not a repair
-            # opportunity for a subsequent preparation call.
-            raise
-        return _receipt(run_uri, plan, runtime_digest)
+                prepared_at=utc_timestamp(),
+                executor_name="managed",
+                continuation_type="whole_run",
+                metadata={"loom.project_contracts": dict(entry)},
+            ).to_dict(),
+        )
+    payload = _runtime_payload(
+        store=store,
+        run_uri=run_uri,
+        plan=plan,
+        pipeline=pipeline,
+        execution_requirements=requirements,
+        options=options,
+        placements=placements,
+    )
+    return _receipt(run_uri, plan, _write_runtime_record_payload(store, run_uri, payload))
+
+
+def _render_runtime(
+    private_root: Path,
+    run_uri: str,
+    existing: bool,
+    config_digests: dict[str, str],
+    resolved: dict[str, object],
+    options_data: dict[str, PlainData],
+    requirement_data: dict[str, dict[str, PlainData]],
+    placements: dict[str, PlainData],
+    entry: Mapping[str, PlainData] | None,
+) -> tuple[ManagedLocalPreparationReceipt, dict[str, str]]:
+    pipeline = _pipeline_from_resolved(resolved)
+    options = RunOptions.from_dict(options_data)
+    requirements = {
+        k: ExecutionRequirement.from_dict(v) for k, v in requirement_data.items()
+    }
+    private = _PrivateConfigStore(private_root, run_uri)
+    if existing:
+        _verify_private_config(private, config_digests)
+        # An exact replay can follow later stage execution. Reuse its retained
+        # plan and compare native logical evidence with the checked composition.
+        try:
+            _compare_rendered_config(private, run_uri)
+            return _replay_runtime(
+                LocalRunStore(), run_uri, pipeline, options, requirements, placements
+            ), {}
+        except Exception as exc:
+            _verify_private_config(private, config_digests)
+            raise QueueConflictError(
+                "managed-local preparation conflicts with existing partial, corrupt, or changed state"
+            ) from exc
+    try:
+        receipt = _prepare_runtime(
+            private, run_uri, pipeline, options, requirements, placements, entry
+        )
+    except Exception:
+        _verify_private_config(private, config_digests)
+        raise
+    digests = dict(config_digests)
+    files = ("plan.json", "runtime.json", "config/managed_local_runtime.json")
+    for name in (*files, *(("prepared_run.json",) if entry is not None else ())):
+        with (private.local_run_dir(run_uri) / name).open("rb") as stream:
+            digests[name] = hashlib.file_digest(stream, "sha256").hexdigest()
+    return receipt, digests
 
 
 def _publish_authority(
@@ -344,7 +566,7 @@ def _pipeline_from_resolved(resolved: Mapping[str, object]) -> PipelineSpec:
 def _runtime_for_service(
     service: CoordinatorServiceConfig,
     resolved: Mapping[str, object],
-    pipeline: PipelineSpec,
+    stage_names: Sequence[str],
     run_name: str,
     *,
     effective_options: RunOptions | None = None,
@@ -352,7 +574,7 @@ def _runtime_for_service(
     protected_root = service.daemon.run_store_root.resolve()
     run_uri = path_to_run_uri(protected_root / run_name)
     authored = effective_options or merge_config_run_options(
-        resolved, known_stage_ids=pipeline.stage_names
+        resolved, known_stage_ids=tuple(stage_names)
     )
     if authored.run_uri not in {None, run_uri}:
         raise QueueServiceError("managed-local runtime options belong to another run")
@@ -416,7 +638,11 @@ def _validated_execution_requirements(
 
 
 def _persist_composed_config(
-    store: LocalRunStore, run_uri: str, composed: object
+    store: LocalRunStore,
+    run_uri: str,
+    composed: object,
+    *,
+    authority_identity: dict[str, PlainData] | None = None,
 ) -> None:
     resolved = _resolved_mapping(composed)
     redacted = getattr(composed, "redacted", None)
@@ -438,59 +664,68 @@ def _persist_composed_config(
     )
     store.write_recipe_manifest(run_uri, recipe_manifest)
     store.write_run_user_metadata(
-        run_uri, {"config_provenance": _plain_mapping(cast(Any, provenance).to_dict())}
+        run_uri,
+        {
+            "config_provenance": _plain_mapping(cast(Any, provenance).to_dict()),
+            **(
+                {"coordinator_authority": authority_identity}
+                if authority_identity is not None
+                else {}
+            ),
+        },
     )
 
 
-def _replay_receipt(
-    *,
-    store: LocalRunStore,
-    run_uri: str,
-    composed: object,
-    pipeline: PipelineSpec,
-    options: RunOptions,
-    requirements: Mapping[str, ManagedExecutionRequirement],
-    service: CoordinatorServiceConfig,
-) -> ManagedLocalPreparationReceipt:
+def _check_embedded_replay(service: CoordinatorServiceConfig, run_uri: str) -> None:
+    factory = service.daemon.coordinator_authority_factory
+    assert factory is not None
     try:
-        _replay_matches(
-            store, run_uri, composed, pipeline, options, requirements, service
-        )
-        if is_embedded_coordinator_authority(service.daemon.coordinator_authority_factory):
-            # Local publication failures leave an inspectable conflict. Only the
-            # authenticated owner reconciles uncertain remote publication.
-            factory = service.daemon.coordinator_authority_factory
-            assert factory is not None
-            authority = factory(run_uri)
-            if authority.open_run(run_uri).status is RunStatus.CREATED:
-                raise QueueServiceError("local authority publication is incomplete")
-        record = load_managed_local_runtime_record(store, run_uri)
-        plan = ExecutionPlan.from_dict(store.read_plan(run_uri))
-        runtime_digest = record["digest"]
-        if not isinstance(runtime_digest, str):
-            raise QueueServiceError("managed-local runtime record digest is invalid")
+        if factory(run_uri).open_run(run_uri).status is RunStatus.CREATED:
+            raise QueueServiceError("local authority publication is incomplete")
     except Exception as exc:
-        if isinstance(exc, QueueConflictError):
-            raise
         raise QueueConflictError(
             "managed-local preparation conflicts with existing partial, corrupt, or changed state"
         ) from exc
 
-    if not is_embedded_coordinator_authority(service.daemon.coordinator_authority_factory):
-        _publish_authority(service, run_uri, runtime_digest)
-    return _receipt(run_uri, plan, runtime_digest)
 
-
-def _replay_matches(
+def _replay_runtime(
     store: LocalRunStore,
     run_uri: str,
-    composed: object,
     pipeline: PipelineSpec,
     options: RunOptions,
     requirements: Mapping[str, ManagedExecutionRequirement],
-    service: CoordinatorServiceConfig,
-) -> None:
+    placements: dict[str, PlainData],
+) -> ManagedLocalPreparationReceipt:
     store.open_run(run_uri)
+    # Publication owns this plan. Later accepted results may alter reuse facts,
+    # but replay must retain the exact original prepared target.
+    plan = ExecutionPlan.from_dict(store.read_plan(run_uri))
+    if (
+        store.read_runtime_metadata(run_uri)
+        != build_runtime_metadata(options, stage_ids=pipeline.stage_names).to_dict()
+    ):
+        raise QueueServiceError("managed-local runtime metadata conflicts")
+    record = load_managed_local_runtime_record(store, run_uri)
+    if not _runtime_record_matches_current_intent(
+        record,
+        store=store,
+        run_uri=run_uri,
+        plan=plan,
+        pipeline=pipeline,
+        execution_requirements=requirements,
+        options=options,
+        placements=placements,
+    ):
+        raise QueueServiceError("managed-local exact runtime intent conflicts")
+    return _receipt(run_uri, plan, cast(str, record["digest"]))
+
+
+def _check_composed_config(
+    store: LocalRunStore,
+    run_uri: str,
+    composed: object,
+    authority_identity: dict[str, PlainData],
+) -> None:
     resolved = _resolved_mapping(composed)
     redacted = getattr(composed, "redacted", None)
     manifest = getattr(composed, "manifest", None)
@@ -516,32 +751,9 @@ def _replay_matches(
         raise QueueServiceError("managed-local recipe manifest conflicts")
     if store.read_run_user_metadata(run_uri) != {
         "config_provenance": _plain_mapping(cast(Any, provenance).to_dict()),
-        "coordinator_authority": coordinator_authority_identity(
-            service.daemon.coordinator_authority_factory
-        ),
+        "coordinator_authority": authority_identity,
     }:
         raise QueueServiceError("managed-local config provenance conflicts")
-    # Publication owns this plan. Later accepted results may alter reuse facts,
-    # but replay must retain the exact original prepared target.
-    plan = ExecutionPlan.from_dict(store.read_plan(run_uri))
-    if (
-        store.read_runtime_metadata(run_uri)
-        != build_runtime_metadata(options, stage_ids=pipeline.stage_names).to_dict()
-    ):
-        raise QueueServiceError("managed-local runtime metadata conflicts")
-    record = load_managed_local_runtime_record(store, run_uri)
-    if not _runtime_record_matches_current_intent(
-        record,
-        store=store,
-        run_uri=run_uri,
-        plan=plan,
-        pipeline=pipeline,
-        execution_requirements=requirements,
-        options=options,
-        slurm_profiles=service.daemon.slurm_profiles,
-        scheduling_components=service.daemon.scheduling_components,
-    ):
-        raise QueueServiceError("managed-local exact runtime intent conflicts")
 
 
 def _receipt(

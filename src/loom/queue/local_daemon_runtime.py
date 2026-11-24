@@ -82,6 +82,10 @@ def prepare_managed_local_runtime_record(
         slurm_profiles=slurm_profiles,
         scheduling_components=scheduling_components,
     )
+    return _write_runtime_record_payload(store, run_uri, payload)
+
+
+def _write_runtime_record_payload(store: LocalRunStore, run_uri: str, payload: dict[str, PlainData]) -> str:
     payload["digest"] = _digest(payload)
     path = _record_path(store, run_uri)
     atomic_write_json(path, payload)
@@ -100,6 +104,7 @@ def _runtime_record_matches_current_intent(
     options: RunOptions | Mapping[str, object] | None = None,
     slurm_profiles: Sequence[SlurmReadyStageProfile] = (),
     scheduling_components: LocalDaemonSchedulingComponents | None = None,
+    placements: dict[str, PlainData] | None = None,
 ) -> bool:
     """Return whether a verified record is the current executable intent.
 
@@ -117,6 +122,7 @@ def _runtime_record_matches_current_intent(
         options=options,
         slurm_profiles=slurm_profiles,
         scheduling_components=scheduling_components,
+        placements=placements,
     )
     expected["digest"] = _digest(expected)
     return dict(record) == expected
@@ -132,6 +138,7 @@ def _runtime_payload(
     options: RunOptions | Mapping[str, object] | None = None,
     slurm_profiles: Sequence[SlurmReadyStageProfile] = (),
     scheduling_components: LocalDaemonSchedulingComponents | None = None,
+    placements: dict[str, PlainData] | None = None,
 ) -> dict[str, PlainData]:
     """Build the exact payload shared by preparation and replay comparison."""
 
@@ -155,6 +162,49 @@ def _runtime_payload(
         raise QueueServiceError("managed-local runtime requires the local executor")
     runtime_options = normalized.to_dict()
     _reject_forbidden(runtime_options, path="runtime_options")
+    resolved_snapshot = store.read_config_snapshot(run_uri, "resolved")
+    if resolved_snapshot is None:
+        raise QueueServiceError(
+            "managed-local preparation requires a resolved config snapshot"
+        )
+    if placements is None:
+        placements = _runtime_placements(pipeline, normalized, slurm_profiles, scheduling_components)
+    from loom.pipeline._project_contracts import prepared_contracts_digest
+    contracts_digest = prepared_contracts_digest(store, run_uri)
+    composition_ref = store._composition_reference_from_metadata(run_uri)
+    if composition_ref is not None:
+        store.read_composition_manifest(run_uri)
+    return {
+        "schema_version": (
+            8 if parallel_execution_options(normalized).max_parallel_stages is None
+            else _SCHEMA_VERSION
+        ),
+        **({"composition_manifest_ref": composition_ref} if composition_ref is not None else {}),
+        **({"project_contracts_digest": contracts_digest} if contracts_digest is not None else {}),
+        "run_uri": run_uri,
+        "plan": plan.to_dict(),
+        "plan_digest": _digest(plan.to_dict()),
+        "pipeline_digest": hashlib.sha256(
+            resolved_snapshot.encode("utf-8")
+        ).hexdigest(),
+        "runtime_options": runtime_options,
+        "placements": placements,
+        "execution_requirements": {
+            name: execution_requirements[name].to_dict() for name in plan.stage_order
+        },
+        "max_parallel_stages": parallel_execution_options(
+            normalized
+        ).max_parallel_stages,
+    }
+
+
+def _runtime_placements(
+    pipeline: PipelineSpec,
+    normalized: RunOptions,
+    slurm_profiles: Sequence[SlurmReadyStageProfile],
+    scheduling_components: LocalDaemonSchedulingComponents | None,
+) -> dict[str, PlainData]:
+    """Resolve protected scheduling components before transmitting inert placement decisions."""
     composition = scheduling_components or _default_scheduling_components()
     if not isinstance(composition, LocalDaemonSchedulingComponents):
         raise QueueServiceError("managed-local scheduling composition is invalid")
@@ -162,11 +212,6 @@ def _runtime_payload(
     preference_scorers = {
         item.descriptor.kind: item for item in composition.preference_scorers
     }
-    resolved_snapshot = store.read_config_snapshot(run_uri, "resolved")
-    if resolved_snapshot is None:
-        raise QueueServiceError(
-            "managed-local preparation requires a resolved config snapshot"
-        )
     runtime = resolve_run_runtime(normalized, stage_ids=pipeline.stage_names)
     profiles = _slurm_profile_registry(slurm_profiles)
     placements: dict[str, PlainData] = {}
@@ -198,33 +243,7 @@ def _runtime_payload(
             planners=planners,
             resource_policy=exact.resource_policy,
         ).to_dict()
-    from loom.pipeline._project_contracts import prepared_contracts_digest
-    contracts_digest = prepared_contracts_digest(store, run_uri)
-    composition_ref = store._composition_reference_from_metadata(run_uri)
-    if composition_ref is not None:
-        store.read_composition_manifest(run_uri)
-    return {
-        "schema_version": (
-            8 if parallel_execution_options(normalized).max_parallel_stages is None
-            else _SCHEMA_VERSION
-        ),
-        **({"composition_manifest_ref": composition_ref} if composition_ref is not None else {}),
-        **({"project_contracts_digest": contracts_digest} if contracts_digest is not None else {}),
-        "run_uri": run_uri,
-        "plan": plan.to_dict(),
-        "plan_digest": _digest(plan.to_dict()),
-        "pipeline_digest": hashlib.sha256(
-            resolved_snapshot.encode("utf-8")
-        ).hexdigest(),
-        "runtime_options": runtime_options,
-        "placements": placements,
-        "execution_requirements": {
-            name: execution_requirements[name].to_dict() for name in plan.stage_order
-        },
-        "max_parallel_stages": parallel_execution_options(
-            normalized
-        ).max_parallel_stages,
-    }
+    return placements
 
 
 def _stage_placement_policy(

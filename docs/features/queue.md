@@ -1057,8 +1057,13 @@ erase its position. A running operation retains capacity until it actually ends.
 A preparation that has validated its child report and selected its publication
 retains the report while the publisher waits for capacity. Validation in progress
 and reports waiting to publish share a two-report limit. An admitted report
-decoder runs in a spawned process within its existing bulk slot. The coordinator
-checks the selected child, input and publication claim when taking the result.
+decoder renders native configuration documents in a private temporary directory
+within its existing bulk slot. Publication resolves the protected scheduling
+policy in the coordinator and passes its placement decisions to a worker to
+render the plan and exact runtime record. The coordinator checks the selected
+child, input and publication claim, verifies the rendered bytes before creating
+the target, and publishes through the configured authority. Temporary files
+belong to the checked report and can be regenerated from the committed child.
 After restart it uses the durable child evidence and publication claim to recover.
 
 Completion alone cannot authorize a transition. The coordinator rechecks the

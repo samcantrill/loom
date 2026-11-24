@@ -441,8 +441,9 @@ def test_preparation_report_requires_its_exact_selected_profile(tmp_path: Path) 
         )
 
 
+@pytest.mark.parametrize("existing", (False, True))
 def test_ordered_invocation_reaches_checked_report_and_published_runtime(
-    tmp_path: Path,
+    tmp_path: Path, existing: bool,
 ) -> None:
     from loom.queue.local_daemon_runtime import load_managed_local_runtime_record
     from loom.pipeline.stores.coordinator_authority import (
@@ -488,7 +489,25 @@ def test_ordered_invocation_reaches_checked_report_and_published_runtime(
         service.daemon, request, binding, reference, path,
     )
     assert checked.preflight == preflight.to_dict()
+    target_path = service.daemon.run_store_root / "target-1"
+    original = None
+    if existing:
+        original = prepare_managed_run(service, composed, "target-1", execution_requirements=requirements)
+    target_files = {f: f.stat().st_mtime_ns for f in target_path.rglob("*") if f.is_file()}
+
+    # The committed child survives loss of temporary data on either side of
+    # target creation. Recovery reads the same report without running the child.
+    target, _ = cast(tuple[Any, Any], checked.publication_data)
+    (Path(target.rendered_config.directory.name) / "run/config/resolved.yaml").unlink()
+    with pytest.raises(OSError):
+        publisher.publish_target(service.daemon, request, checked)
+    assert target_path.exists() == existing
+
+    checked = publisher._read_publication_inputs(service.daemon, request, binding, reference, path)
     receipt = publisher.publish_target(service.daemon, request, checked)
+    if existing:
+        assert receipt == original
+        assert {f: f.stat().st_mtime_ns for f in target_path.rglob("*") if f.is_file()} == target_files
     store = LocalRunStore(service.daemon.run_store_root)
     record = cast(
         dict[str, Any], load_managed_local_runtime_record(store, receipt.run_uri)
