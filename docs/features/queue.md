@@ -1175,6 +1175,19 @@ a terminal acknowledgement, and preserves the committed result. Lost replies
 replay the same acknowledgement after reconnect or application restart. Controls
 for assignments that still own work remain with their execution views.
 
+Peers negotiating `agent-lifecycle-progress-v1` can advance assignment accept,
+start permit, started and release over two dedicated sender slots and four
+short receiver slots. A request that needs external authority or storage work
+returns pending. The agent retries the same authenticated payload within its
+original attempt budget. The receiver runs up to two authority preparations
+and two grant/publication preparations. Only actual workers consume those
+slots. It can discard a completed preparation and reconstruct it from the
+durable assignment after disconnection or restart. A busy assignment guard
+or SQLite writer yields another pending response. Before replying, the
+coordinator checks the current session and assignment and applies the short
+transition. A cancellation that commits before the permit prevents start.
+Older peers use the original synchronous exchange.
+
 Control waits have a dedicated agent execution slot, separate from work polling,
 short controls/renewals and bulk IO. The HTTPS listener admits at most 32 active
 work waits and 32 control waits independently; those limits do not consume its

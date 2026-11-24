@@ -4026,14 +4026,19 @@ def test_repeated_capacity_release_publishes_fresh_offer(
                         return exchange(config, operation, body, *args, **kwargs)
                     proof = json.loads(body)["provider_release_proof"]
                     del proof["retirement_secret"]
+                    if not attempts and not accepted:
+                        attempts.append(proof)
+                        raise RuntimeError("interrupted release")
+                    try:
+                        result = exchange(config, operation, body, *args, **kwargs)
+                    except agent_session_transport._AgentReleaseEpochRejected:
+                        attempts.append(proof)
+                        raise
                     attempts.append(proof)
                     if len(attempts) == 1:
-                        if accepted:
-                            result = exchange(config, operation, body, *args, **kwargs)
-                            if result.connection is not None:
-                                result.connection.close()
+                        result.connection.close()
                         raise RuntimeError("interrupted release")
-                    return exchange(config, operation, body, *args, **kwargs)
+                    return result
 
                 with monkeypatch.context() as patch:
                     patch.setattr(agent_session_transport, "_exchange_agent_request", interrupt_once)

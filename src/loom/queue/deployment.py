@@ -1276,7 +1276,11 @@ def _outbound_service_steps(
                     sequence=sequence,
                     wait_timeout_ms=_OUTBOUND_POLL_WAIT_MS,
                 ))
-                if delivery.get("result") == "assignment":
+                if delivery.get("result") == "idle":
+                    # A fenced release or unavailable offer can return immediately,
+                    # without yielding to the control receiver or the release owner.
+                    yield from _delay(0.05)
+                elif delivery.get("result") == "assignment":
                     # complete_poll already owns the original request by ID.
                     for reference in journal.unresolved_assignment_references():
                         if reference not in assignments:

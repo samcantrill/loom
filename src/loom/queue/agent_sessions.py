@@ -82,6 +82,7 @@ SLURM_SUBMISSION_CAPABILITY = "slurm-agent-jobs-v1"
 SLURM_PENDING_EFFECTS_CAPABILITY = "slurm-pending-effects-v1"
 SLURM_ASYNC_OUTPUT_CAPABILITY = "slurm-pending-output-v1"
 EVENT_BATCH_CAPABILITY = "agent-event-batch-v1"
+LIFECYCLE_CAPABILITY = "agent-lifecycle-progress-v1"
 _MAX_IDENTIFIER = 160
 _MAX_COLLECTION = 32
 _MAX_OFFER_TTL_SECONDS = 3600
@@ -2119,6 +2120,7 @@ class AgentSessionService:
                     "agent-sessions-v12",
                     CONTROL_WAIT_CAPABILITY,
                     EVENT_BATCH_CAPABILITY,
+                    LIFECYCLE_CAPABILITY,
                     "concurrent-resident-assignments-v1",
                     SUBMITTED_CONTAINER_CAPABILITY,
                     "shared-assignment-reference-v1",
@@ -3656,24 +3658,35 @@ class AgentSessionService:
     def accept_assignment(
         self, session_id: str, assignment_id: str, *, request_digest: str,
     ) -> Mapping[str, PlainData]:
+        return self.prepare_accept(session_id, assignment_id, request_digest=request_digest)(True)
+
+    def prepare_accept(
+        self, session_id: str, assignment_id: str, *, request_digest: str,
+    ) -> Callable[[bool], Mapping[str, PlainData]]:
         """Retain the exact authority grant without holding control writes over IO."""
         _secret_digest(request_digest, "request digest")
 
-        def capture(conn: sqlite3.Connection) -> tuple[sqlite3.Row, str]:
+        def capture(conn: sqlite3.Connection) -> tuple[sqlite3.Row, int]:
             rule, revision = self._authorize("accept")
             self._require_remote_session(conn, rule, revision, session_id, self._daemon._epoch or "")
             row = self._require_remote_assignment(conn, session_id, assignment_id)
             delivery = conn.execute(
-                "SELECT request_json, state FROM agent_deliveries WHERE assignment_id = ? AND session_id = ?",
+                "SELECT rowid, state FROM agent_deliveries WHERE assignment_id = ? AND session_id = ?",
                 (assignment_id, session_id),
             ).fetchone()
             if delivery is None or str(delivery["state"]) != "DELIVERED":
                 raise QueueConflictError("remote assignment was not delivered")
-            return row, str(delivery["request_json"])
+            return row, int(delivery["rowid"])
 
         with self._daemon._state_guard(), self._daemon._connection() as conn:
-            row, request_json = capture(conn)
+            row, delivery_id = capture(conn)
             cancelled = action_attempt_cancelled(conn, str(row["run_uri"]), str(row["attempt_id"]))
+        with self._daemon._connection() as conn:
+            payload = conn.execute("SELECT request_json FROM agent_deliveries WHERE rowid=? AND assignment_id=? AND session_id=?",
+                                   (delivery_id, assignment_id, session_id)).fetchone()
+        if payload is None:
+            raise QueueConflictError("remote delivery changed before grant")
+        request_json = str(payload[0])
         if hashlib.sha256(request_json.encode()).hexdigest() != request_digest:
             raise QueueConflictError("remote durable request digest conflicts")
         fence = row["fence"]
@@ -3683,8 +3696,8 @@ class AgentSessionService:
             fence = self._remote_execution().remote_accept(assignment_id)
 
         def retain_grant(conn: sqlite3.Connection) -> str:
-            current, current_request = capture(conn)
-            if current_request != request_json or (current["fence"] is not None and current["fence"] != fence):
+            current, current_id = capture(conn)
+            if current_id != delivery_id or (current["fence"] is not None and current["fence"] != fence):
                 raise QueueConflictError("remote grant authority changed during observation")
             if current["fence"] is None:
                 # A grant that raced cancellation remains authoritative. Retain
@@ -3697,7 +3710,9 @@ class AgentSessionService:
                 state = str(current["state"])
             return state
 
-        state = short_write(self._daemon, retain_grant)
+        # The execution authority has already granted the fence. Make it
+        # discoverable for cancellation even if the peer never polls again.
+        short_write(self._daemon, retain_grant)
         request = _ResidentAssignmentBundle.from_remote_dict(json.loads(request_json))
         from ._shared_staging_continuation import WIRE as staging_wire, finish_grant_continuation, requested
         if requested(request) or staging_wire in request.worker_metadata:
@@ -3708,8 +3723,8 @@ class AgentSessionService:
 
             def live_owner():
                 with self._daemon._state_guard(), self._daemon._connection() as conn:
-                    current, current_request = capture(conn)
-                    if (current_request != request_json or current["fence"] != fence
+                    current, current_id = capture(conn)
+                    if (current_id != delivery_id or current["fence"] != fence
                         or current["state"] != "GRANTED" or current["start_permitted"]
                         or action_attempt_cancelled(conn, str(current["run_uri"]), str(current["attempt_id"]))):
                         raise QueueConflictError("staging continuation grant is no longer live")
@@ -3723,11 +3738,25 @@ class AgentSessionService:
                 agent_id=str(machine), fence=str(fence), connection=self._daemon._connection,
                 require_live_owner=live_owner,
             )
-        return freeze_plain_data({"assignment_id": assignment_id, "fence": str(fence), "state": state},
-                                 path="remote assignment grant")
+
+        def finish(wait: bool) -> Mapping[str, PlainData]:
+            with self._daemon._connection() as conn:
+                if not wait:
+                    conn.execute("PRAGMA busy_timeout=0")
+                with self._daemon._state_guard():
+                    current, current_id = capture(conn)
+                    if current_id != delivery_id or current["fence"] != fence:
+                        raise QueueConflictError("remote grant changed before acknowledgement")
+            return freeze_plain_data({"assignment_id": assignment_id, "fence": str(fence), "state": str(current["state"])},
+                                     path="remote assignment grant")
+
+        return finish
 
     @_serialized_publication_operation
     def start_permit(self, session_id: str, assignment_id: str, *, fence: str) -> bool:
+        return self.prepare_start_permit(session_id, assignment_id, fence=fence)(True)
+
+    def prepare_start_permit(self, session_id: str, assignment_id: str, *, fence: str) -> Callable[[bool], bool]:
         """Linearize permission against cancellation after authority observation."""
         _identifier(fence, "fence")
 
@@ -3735,7 +3764,7 @@ class AgentSessionService:
             WIRE as staging_wire, expected_grant_receipt, requested, require_grant_receipt,
         )
 
-        def capture(conn: sqlite3.Connection) -> tuple[str, int | None] | None:
+        def capture(conn: sqlite3.Connection):
             rule, revision = self._authorize("start_permit")
             session = self._require_remote_session(conn, rule, revision, session_id, self._daemon._epoch or "")
             row = self._require_remote_assignment(conn, session_id, assignment_id)
@@ -3749,14 +3778,23 @@ class AgentSessionService:
                 "SELECT rowid FROM agent_deliveries WHERE assignment_id=? AND session_id=?",
                 (assignment_id, session_id),
             ).fetchone()
-            return session.agent_root_id, None if delivery is None else int(delivery[0])
+            return (session.agent_root_id, None if delivery is None else int(delivery[0]),
+                    self._daemon._epoch, self._daemon._scheduling_epoch, revision, session.coordinator_epoch)
+
+        def refused(wait: bool) -> bool:
+            with self._daemon._connection() as conn:
+                if not wait:
+                    conn.execute("PRAGMA busy_timeout=0")
+                with self._daemon._state_guard():
+                    capture(conn)
+            return False
 
         with self._daemon._connection() as conn:
             with self._daemon._state_guard():
                 original = capture(conn)
             if original is None:
-                return False
-            root_id, delivery_id = original
+                return refused
+            root_id, delivery_id = original[:2]
             expected = None
             if delivery_id is not None:
                 payload = conn.execute(
@@ -3780,7 +3818,7 @@ class AgentSessionService:
 
             with self._daemon._state_guard():
                 if not check(conn):
-                    return False
+                    return refused
 
         permitted = self._remote_execution().remote_start_permit(assignment_id, fence=fence)
 
@@ -3793,7 +3831,7 @@ class AgentSessionService:
             )
             return True
 
-        return short_write(self._daemon, apply)
+        return lambda wait: short_write(self._daemon, apply, wait_for_writer=wait)
 
     @_serialized_publication_operation
     def decline_assignment(
@@ -3903,6 +3941,16 @@ class AgentSessionService:
         fence: str,
         process_execution_id: str,
     ) -> Mapping[str, PlainData]:
+        return self.prepare_started(session_id, assignment_id, fence=fence, process_execution_id=process_execution_id)(True)
+
+    def prepare_started(
+        self,
+        session_id: str,
+        assignment_id: str,
+        *,
+        fence: str,
+        process_execution_id: str,
+    ) -> Callable[[bool], Mapping[str, PlainData]]:
         rule, policy_revision = self._authorize("started")
         _identifier(fence, "fence")
         _identifier(process_execution_id, "process_execution_id")
@@ -3922,19 +3970,25 @@ class AgentSessionService:
         def record_started(conn: sqlite3.Connection) -> None:
             rule, policy_revision = self._authorize("started")
             self._require_remote_session(conn, rule, policy_revision, session_id, self._daemon._epoch or "")
+            current = self._require_remote_assignment(conn, session_id, assignment_id)
+            if current["fence"] != fence or current["state"] not in {"GRANTED", "RUNNING"}:
+                raise QueueConflictError("remote start grant changed before confirmation")
             conn.execute(
                 "UPDATE remote_assignments SET state = 'RUNNING' "
                 "WHERE assignment_id = ? AND fence = ? AND state IN ('GRANTED', 'RUNNING')",
                 (assignment_id, fence),
             )
 
-        short_write(self._daemon, record_started)
-        if str(row["state"]) != "RUNNING":
-            self._daemon._wake_admission(str(row["run_uri"]))
-        return freeze_plain_data(
-            {"assignment_id": assignment_id, "state": "RUNNING"},
-            path="remote start confirmation",
-        )
+        def finish(wait: bool) -> Mapping[str, PlainData]:
+            short_write(self._daemon, record_started, wait_for_writer=wait)
+            if str(row["state"]) != "RUNNING":
+                self._daemon._wake_admission(str(row["run_uri"]))
+            return freeze_plain_data(
+                {"assignment_id": assignment_id, "state": "RUNNING"},
+                path="remote start confirmation",
+            )
+
+        return finish
 
     @_serialized_publication_operation
     def report_event(
@@ -4340,6 +4394,20 @@ class AgentSessionService:
         availability_revision: str,
         provider_release_proof: AgentProviderReleaseProof,
     ) -> AgentSession:
+        return self.prepare_release(
+            session_id, assignment_id, fence=fence, availability_revision=availability_revision,
+            provider_release_proof=provider_release_proof,
+        )(True)
+
+    def prepare_release(
+        self,
+        session_id: str,
+        assignment_id: str,
+        *,
+        fence: str,
+        availability_revision: str,
+        provider_release_proof: AgentProviderReleaseProof,
+    ) -> Callable[[bool], AgentSession]:
         rule, policy_revision = self._authorize("release")
         _identifier(fence, "fence")
         _identifier(availability_revision, "availability_revision")
@@ -4376,21 +4444,18 @@ class AgentSessionService:
             if str(row["state"]) == "RELEASED":
                 if row["next_availability_revision"] != availability_revision:
                     raise QueueConflictError("remote release replay conflicts")
-                conn.commit()
-                return AgentSession(
-                    session.session_id,
-                    session.coordinator_id,
-                    session.coordinator_epoch,
-                    session.agent_id,
-                    session.agent_root_id,
-                    session.policy_revision,
-                    session.config_revision,
-                    session.inventory_revision,
-                    availability_revision,
-                    session.capabilities,
-                    session.pools,
-                    session.state,
-                )
+                def replay(wait: bool) -> AgentSession:
+                    with self._daemon._connection() as current_conn:
+                        if not wait:
+                            current_conn.execute("PRAGMA busy_timeout=0")
+                        with self._daemon._state_guard():
+                            current_rule, revision = self._authorize("release")
+                            current = self._require_remote_cleanup_session(
+                                current_conn, current_rule, revision, session_id, self._daemon._epoch or "",
+                            )
+                            # A RELEASED assignment and its retained proof are immutable.
+                            return replace(current, availability_revision=availability_revision)
+                return replay
             if replaced:
                 recovery, released_claim_id = _replacement_cleanup_recovery(
                     conn,
@@ -4562,10 +4627,13 @@ class AgentSessionService:
                     ),
                 )
 
-        short_write(self._daemon, record_release)
-        self._daemon._poll_waiters.notify(session_id)
-        self._daemon._wake_admission(str(row["run_uri"]))
-        return resumed
+        def finish(wait: bool) -> AgentSession:
+            short_write(self._daemon, record_release, wait_for_writer=wait)
+            self._daemon._poll_waiters.notify(session_id)
+            self._daemon._wake_admission(str(row["run_uri"]))
+            return resumed
+
+        return finish
 
     def _require_remote_session(
         self,

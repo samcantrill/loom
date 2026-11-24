@@ -19,6 +19,7 @@ from ._storage_policy import StoragePolicy
 from loom.pipeline.stores.atomic import _fsync_path_strict
 
 from . import _agent_session_protocol as _session_protocol
+from ._agent_lifecycle import LIFECYCLE_OPERATIONS, LifecyclePending, LifecyclePreparations
 from ._agent_event_batch import apply_event_batch, pack_event_batch
 from . import _agent_assignment as _assignment_progress
 from ._agent_session_protocol import _raise_if_application_suspended
@@ -106,6 +107,7 @@ from loom.scheduling import CapacityAtom
 
 from .agent_sessions import (
     _MAX_RECEIVED_CONTROLS,
+    LIFECYCLE_CAPABILITY,
     AgentAssignmentControl,
     AgentOffer,
     AgentOfferRenewal,
@@ -920,6 +922,7 @@ class LocalDaemonAgentHttpClient:
         self._delivery_gate = _Gate()
         self._release_gate = _Gate()
         self._supports_event_batch = False
+        self._supports_lifecycle = False
         self._epoch_reconciliation_pending = False
         self._mutation_gate = _Gate()
         self._suspend_requested: Callable[[], bool] | None = None
@@ -1520,6 +1523,7 @@ class LocalDaemonAgentHttpClient:
                 journal.complete_reload(control, plan.replacement, effect)
                 self._config = plan.replacement
                 self._supports_event_batch = False
+                self._supports_lifecycle = False
                 if self._slurm_agent is not None:
                     self._slurm_agent.submit_interval_seconds = plan.replacement.slurm_submit_interval_seconds
                     self._slurm_agent.observation_policy = plan.replacement.slurm_observation_policy
@@ -3207,6 +3211,12 @@ class LocalDaemonAgentHttpClient:
         self, operation: str, value: Mapping[str, PlainData], *, role: str = "agent"
     ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
         exchange_deadline = _exchange_deadline()
+        lifecycle = role == "agent" and self._supports_lifecycle and operation in LIFECYCLE_OPERATIONS
+        lane = _agent_exchange_lane(operation, lifecycle=lifecycle, evidence=value.get("evidence") is not None)
+        if lifecycle and exchange_deadline is None:
+            policy = self._config.transport_policy
+            assert policy is not None
+            exchange_deadline = monotonic() + policy.response_timeout_seconds
         while self._service_progress and self._epoch_reconciliation_pending and operation in {
             "accept", "start_permit", "started", "event", "event_batch", "authorize", "input",
             "output_manifest", "output", "result", "assignment_control_ack",
@@ -3223,22 +3233,36 @@ class LocalDaemonAgentHttpClient:
             _decode(body, failure_report=True)
         connection, self._connection = self._connection, None
         retry = _RecoveryRetry()
+        prepared_config = self._config
+        pending_delay = 0.025
         while True:
             try:
-                wait_options = (
+                wait_options: dict[str, Any] = (
                     {"cancel_requested": self._suspend_requested}
                     if self._service_progress and operation in {"poll", "control_wait"}
                     else {}
                 )
+                if lifecycle:
+                    if self._config is not prepared_config:
+                        if connection is not None:
+                            connection.close()
+                        raise QueueConflictError("agent configuration changed during lifecycle exchange")
+                    wait_options["lifecycle"] = True
                 reply = yield from _external(
-                    "slurm_http" if operation == "slurm_work" and value.get("evidence") is not None
-                    else "control_wait" if operation == "control_wait" else "poll" if operation == "poll" else "bulk" if operation in _AGENT_BULK_OPERATIONS else "control",
+                    lane,
                     _timed_agent_exchange, monotonic(), utc_timestamp(), request_identity(value),
                     self._config, operation, body, role, connection,
                     not self._service_progress, _queue_deadline=exchange_deadline,
                     exchange_deadline=exchange_deadline, **wait_options,
                 )
                 break
+            except LifecyclePending:
+                connection = None
+                if exchange_deadline is None or monotonic() >= exchange_deadline:
+                    raise _IndeterminateAgentProtocolError("lifecycle preparation deadline expired")
+                _raise_if_application_suspended(self._suspend_requested)
+                yield from _delay(min(pending_delay, max(0, exchange_deadline - monotonic())))
+                pending_delay = min(0.25, 2 * pending_delay)
             except _ExternalDeadline as error:
                 if connection is not None:
                     connection.close()
@@ -3394,6 +3418,7 @@ def _exchange_agent_request(
     connection: http.client.HTTPSConnection | None,
     keep_alive: bool,
     *, cancel_requested: Callable[[], bool] | None = None, attempt_deadline: float | None = None,
+    lifecycle: bool = False,
 ) -> _AgentHttpReply:
     """Exchange exact prepared bytes using one exclusively owned connection."""
     from threading import Event, Thread
@@ -3455,7 +3480,7 @@ def _exchange_agent_request(
         require_uninterrupted()
         if expired.is_set() or monotonic() >= deadline:
             raise TimeoutError("agent response deadline exceeded before send")
-        value = _read_agent_reply(connection, operation, body, role, deadline=deadline)
+        value = _read_agent_reply(connection, operation, body, role, deadline=deadline, lifecycle=lifecycle)
         require_uninterrupted()
         if expired.is_set():
             raise TimeoutError("agent response deadline exceeded")
@@ -3480,7 +3505,7 @@ def _exchange_agent_request(
 
 def _read_agent_reply(
     connection: http.client.HTTPSConnection, operation: str, body: bytes, role: str,
-    *, deadline: float | None = None,
+    *, deadline: float | None = None, lifecycle: bool = False,
 ) -> Mapping[str, PlainData]:
     slurm_registration = role == "slurm_bootstrap" and operation == "register"
     maximum = _MAX_SLURM_REGISTRATION_BYTES if slurm_registration else _MAX_BODY_BYTES
@@ -3498,7 +3523,7 @@ def _read_agent_reply(
             "POST",
             f"/v1/{role}/{operation}",
             body=body,
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", **({"X-Loom-Agent-Lifecycle": LIFECYCLE_CAPABILITY} if lifecycle else {})},
         )
         refresh_timeout()
         response = connection.getresponse()
@@ -3543,6 +3568,8 @@ def _read_agent_reply(
                 and revision >= 0):
                 raise _AcceptedTimeError(str(diagnostic), revision)
         raise QueueServiceError("invalid accepted-time diagnostic")
+    if lifecycle and response.status == 202 and payload == {"ok": False, "error": "lifecycle_pending"}:
+        raise LifecyclePending()
     if response.status == 409:
         if operation == "release" and payload.get("error") == "agent_release_epoch_rejected":
             raise _AgentReleaseEpochRejected("release epoch was rejected before retaining proof")
@@ -3589,9 +3616,19 @@ def _read_agent_reply(
 # Slurm evidence has separate bounded admission and pending-effect replies; it
 # must not wait for the artifact-transfer lane to become free.
 _AGENT_BULK_OPERATIONS = frozenset({
-    "authorize", "input", "accept", "start_permit", "started", "event", "event_batch",
-    "output_manifest", "output", "result", "release", "recovery_release_ready",
-})
+    "authorize", "input", "event", "event_batch",
+    "output_manifest", "output", "result", "recovery_release_ready",
+}) | LIFECYCLE_OPERATIONS
+def _agent_exchange_lane(operation: str, *, lifecycle: bool, evidence: bool = False) -> str:
+    if lifecycle and operation in LIFECYCLE_OPERATIONS:
+        return "lifecycle"
+    if operation == "slurm_work" and evidence:
+        return "slurm_http"
+    if operation in {"poll", "control_wait"}:
+        return operation
+    return "bulk" if operation in _AGENT_BULK_OPERATIONS else "control"
+
+
 _CLIENT_SHORT_OPERATIONS = frozenset({
     "handshake", "status", "cancel", "cancel_preparation", "cancel_run_operation",
     "admissions", "admission_for_queue_item", "agents", "service_lifetime",
@@ -3619,6 +3656,8 @@ class _MutualTlsHttpServer(ThreadingHTTPServer):
         self.client_slots = BoundedSemaphore(8)
         self.client_wait_slots = BoundedSemaphore(6)
         self.agent_bulk_slots = BoundedSemaphore(4)
+        self.agent_lifecycle_slots = BoundedSemaphore(4)
+        self.lifecycle = LifecyclePreparations()
         self.agent_work_wait_slots = BoundedSemaphore(32)
         self.agent_slurm_work_slots = BoundedSemaphore(8)
         self.agent_control_wait_slots = BoundedSemaphore(32)
@@ -3710,6 +3749,7 @@ class _MutualTlsHttpServer(ThreadingHTTPServer):
                     pass
                 connection.close()
         self._handshakes.shutdown(wait=True)
+        self.lifecycle.close()
         super().server_close()
 
     def replace_tls(
@@ -3806,6 +3846,60 @@ class _Handler(BaseHTTPRequestHandler):
             mapped_role = LocalDaemonRole.SLURM_BOOTSTRAP.value
         return principal_id, mapped_role, credential
 
+    def _acquire_agent_request(self, operation: str, lifecycle: bool) -> BoundedSemaphore | None:
+        lane = _agent_exchange_lane(operation, lifecycle=lifecycle)
+        if lane not in {"bulk", "lifecycle"}:
+            return None
+        slot = self._daemon_server.agent_lifecycle_slots if lane == "lifecycle" else self._daemon_server.agent_bulk_slots
+        with phase("request_admission_wait"):
+            if not slot.acquire(blocking=False):
+                raise control_error("capacity_exhausted", operation, {}, boundary="coordinator")
+        return slot
+
+    def _dispatch_agent(self, principal: LocalDaemonPrincipal, operation: str, payload: dict, lifecycle: bool):
+        if operation not in {
+            "slurm_work",
+            "service_lifetime",
+            "handshake",
+            "register",
+            "reconcile",
+            "offer",
+            "renew",
+            "poll",
+            "recover_poll",
+            "authorize",
+            "input",
+            "accept",
+            "decline",
+            "started",
+            "event",
+            "event_batch",
+            "output_manifest",
+            "output",
+            "result",
+            "release",
+            "recovery_release_ready",
+            "control",
+            "control_wait",
+            "control_ack",
+            "assignment_control",
+            "assignment_control_ack",
+            "start_permit",
+            "retire",
+        }:
+            raise QueueServiceError("agent protocol operation is unsupported")
+        # Handler threads do not inherit the service's ContextVars.
+        # Keep diagnostic context bounded and free of request contents.
+        self._reply_context = {"operation": operation, **{
+            key: value for key in ("assignment_id", "session_id")
+            if isinstance(value := payload.get(key), str) and len(value) <= 256
+        }}
+        with phase(operation, operation_id=request_identity(payload)):
+            owner = self._daemon_server.daemon_owner
+            view = (self._daemon_server.lifecycle.view(owner, principal, operation, payload)
+                    if lifecycle and operation in LIFECYCLE_OPERATIONS else owner.agent_view(principal))
+            return _dispatch(view, operation, payload)
+
     def _dispatch_post(self) -> None:
         self._reply_context = {}
         query_path = self.path.startswith("/v1/query/")
@@ -3819,7 +3913,7 @@ class _Handler(BaseHTTPRequestHandler):
         authenticated = dispatched = False
         client_acquired = wait_acquired = False
         agent_wait_slot: BoundedSemaphore | None = None
-        bulk_acquired = False
+        agent_slot: BoundedSemaphore | None = None
         try:
             principal_id, mapped_role, credential = self._authenticate_transport()
             query_credential = mapped_role == LocalDaemonRole.QUERY.value
@@ -3831,11 +3925,9 @@ class _Handler(BaseHTTPRequestHandler):
                 raise QueueServiceError("agent TLS credential is not authorized")
             authenticated = True
             agent_wait_slot = self._daemon_server.acquire_agent_wait(role_name, operation)
-            if role_name == "agent" and operation in _AGENT_BULK_OPERATIONS:
-                with phase("request_admission_wait"):
-                    bulk_acquired = self._daemon_server.agent_bulk_slots.acquire(blocking=False)
-                if not bulk_acquired:
-                    raise control_error("capacity_exhausted", operation, payload, boundary="coordinator")
+            lifecycle = self.headers.get("X-Loom-Agent-Lifecycle") == LIFECYCLE_CAPABILITY
+            if role_name == "agent":
+                agent_slot = self._acquire_agent_request(operation, lifecycle)
             if role_name == "client":
                 if operation not in _CLIENT_SHORT_OPERATIONS:
                     wait_acquired = self._daemon_server.client_wait_slots.acquire(
@@ -3860,49 +3952,7 @@ class _Handler(BaseHTTPRequestHandler):
                 principal_id, LocalDaemonRole(mapped_role), credential
             )
             if role_name == "agent":
-                if operation not in {
-                    "slurm_work",
-                    "service_lifetime",
-                    "handshake",
-                    "register",
-                    "reconcile",
-                    "offer",
-                    "renew",
-                    "poll",
-                    "recover_poll",
-                    "authorize",
-                    "input",
-                    "accept",
-                    "decline",
-                    "started",
-                    "event",
-                    "event_batch",
-                    "output_manifest",
-                    "output",
-                    "result",
-                    "release",
-                    "recovery_release_ready",
-                    "control",
-                    "control_wait",
-                    "control_ack",
-                    "assignment_control",
-                    "assignment_control_ack",
-                    "start_permit",
-                    "retire",
-                }:
-                    raise QueueServiceError("agent protocol operation is unsupported")
-                # Handler threads do not inherit the service's ContextVars.
-                # Keep diagnostic context bounded and free of request contents.
-                self._reply_context = {"operation": operation, **{
-                    key: value for key in ("assignment_id", "session_id")
-                    if isinstance(value := payload.get(key), str) and len(value) <= 256
-                }}
-                with phase(operation, operation_id=request_identity(payload)):
-                    result = _dispatch(
-                        self._daemon_server.daemon_owner.agent_view(principal),
-                        operation,
-                        payload,
-                    )
+                result = self._dispatch_agent(principal, operation, payload, lifecycle)
             else:
                 dispatched = True
                 result = _dispatch_application(
@@ -3918,6 +3968,8 @@ class _Handler(BaseHTTPRequestHandler):
                 self._reply_query_result(result)
             else:
                 self._reply(200, {"ok": True, "result": result})
+        except LifecyclePending:
+            self._reply(202, {"ok": False, "error": "lifecycle_pending"})
         except _SlurmWorkCapacityError:
             self._reply(503, {"ok": False, "error": "slurm_work_capacity"})
         except _RunInspectionHttpError as exc:
@@ -3993,8 +4045,8 @@ class _Handler(BaseHTTPRequestHandler):
         finally:
             if agent_wait_slot is not None:
                 agent_wait_slot.release()
-            if bulk_acquired:
-                self._daemon_server.agent_bulk_slots.release()
+            if agent_slot is not None:
+                agent_slot.release()
             if client_acquired:
                 self._daemon_server.client_slots.release()
             if wait_acquired:

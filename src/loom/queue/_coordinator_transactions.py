@@ -24,6 +24,7 @@ def short_write(
     before_begin: Callable[[], None] | None = None,
     committed: Callable[[_T], None] | None = None,
     wait_phase: str = "coordinator_database_busy_wait",
+    wait_for_writer: bool = True,
 ) -> _T:
     """Retry the whole transition on SQLite busy after releasing both guards."""
     with daemon._connection() as conn:
@@ -43,6 +44,7 @@ def short_write(
                     if (
                         not isinstance(exc, sqlite3.OperationalError)
                         or (getattr(exc, "sqlite_errorcode", 0) & 255) != sqlite3.SQLITE_BUSY
+                        or not wait_for_writer
                         or monotonic() >= deadline
                     ):
                         raise

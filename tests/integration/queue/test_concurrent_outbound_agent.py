@@ -2620,6 +2620,7 @@ def test_lost_release_blocks_new_availability_but_not_control_receipts(monkeypat
     dispatch = transport._dispatch
     exchange = transport._exchange_agent_request
     requests = []
+    lost_dispatch = []
 
     def record(config, operation, body, role, connection, keep_alive, **kwargs):
         requests.append((operation, body))
@@ -2628,6 +2629,7 @@ def test_lost_release_blocks_new_availability_but_not_control_receipts(monkeypat
     def lose_release(view, operation, value):
         result = dispatch(view, operation, value)
         if operation == "release" and not entered.is_set():
+            lost_dispatch.append(next(i for i in reversed(range(len(requests))) if requests[i][0] == "release"))
             entered.set()
             assert unblock.wait(20)
             raise ConnectionError("release committed but reply was lost")
@@ -2673,10 +2675,12 @@ def test_lost_release_blocks_new_availability_but_not_control_receipts(monkeypat
                 for index, (operation, body) in enumerate(requests)
                 if operation == "release"
             ]
-            assert releases[0][1] == releases[1][1]
+            lost = lost_dispatch[0]
+            replay, body = next((index, body) for index, body in releases if index > lost)
+            assert body == requests[lost][1]
             assert not any(
                 operation in {"offer", "renew", "poll"}
-                for operation, _ in requests[releases[0][0] + 1 : releases[1][0]]
+                for operation, _ in requests[lost + 1 : replay]
             )
             assert _rows(
                 case.agent_root / "journal.sqlite",
@@ -3900,3 +3904,125 @@ def test_accept_conflict_recovers_cancellation_after_observation_budget(monkeypa
             accept_release.set()
             control_release.set()
             _release_gate(peer)
+
+
+def test_fresh_start_permit_while_sender_and_receiver_transfer_slots_are_occupied(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Lock
+    from loom.queue._agent_progress import _cooperative, _delay, _Spawn, _steps
+
+    one, two, four, release = Event(), Event(), Event(), Event()
+    running = Event()
+    chunk = {}
+    guard = Lock()
+    occupied = 0
+    dispatch = transport._dispatch
+    permit = LocalDaemonAgentHttpClient.start_permit
+
+    def hold_output(view, operation, value):
+        nonlocal occupied
+        result = dispatch(view, operation, value)
+        if operation == "output" and not release.is_set():
+            with guard:
+                if not chunk:
+                    chunk.update(value)
+                assert chunk == value
+                occupied += 1
+                if occupied == 1:
+                    one.set()
+                if occupied == 2:
+                    two.set()
+                if occupied == 4:
+                    four.set()
+            try:
+                assert release.wait(30)
+            finally:
+                with guard:
+                    occupied -= 1
+        return result
+
+    @_cooperative
+    def permit_during_transfers(client, session_id, assignment_id, *, fence):
+        if chunk and chunk["assignment_id"] != assignment_id and not release.is_set():
+            # Replaying the exact accepted chunk takes the service manager's
+            # second bulk sender slot. Two independent clients fill the receiver.
+            replay = yield _Spawn(_steps(client._call, "output", dict(chunk)))
+            while not four.is_set() and not release.is_set():
+                yield from _delay(0.01)
+            result = yield from _steps(permit, client, session_id, assignment_id, fence=fence)
+            assert result and not replay.complete
+            running.set()
+            return result
+        return (yield from _steps(permit, client, session_id, assignment_id, fence=fence))
+
+    monkeypatch.setattr(transport, "_dispatch", hold_output)
+    monkeypatch.setattr(LocalDaemonAgentHttpClient, "start_permit", permit_during_transfers)
+    with _service(monkeypatch, ceiling=2) as case, ThreadPoolExecutor(max_workers=2) as extra:
+        try:
+            _submit(case, "uploading")
+            assert one.wait(20), case.retries
+            uri, _ = _submit(case, "starting")
+            assert two.wait(20), case.retries
+            futures = [extra.submit(transport._exchange_agent_request, case.config.client, "output",
+                                    json.dumps(chunk).encode(), "agent", None, False) for _ in range(2)]
+            assert four.wait(5)
+            assert running.wait(5), case.retries
+            assert _rows(case.database, "SELECT start_permitted FROM remote_assignments WHERE run_uri=?", (uri,)) == [(1,)]
+            assert occupied == 4
+        finally:
+            release.set()
+        for future in futures:
+            future.result(5)
+        for name in ("uploading", "starting"):
+            assert case.client.wait(name, timeout_seconds=20).state is LocalDaemonAdmissionState.SUCCEEDED
+
+
+def test_prepared_permit_yields_on_busy_writer_and_rechecks_cancellation(monkeypatch):
+    from loom.queue.agent_sessions import AgentSessionService
+
+    prepared, writer_held = Event(), Event()
+    yielded_twice, final_check, resume = Event(), Event(), Event()
+    calls, busy = [], []
+    prepare = AgentSessionService.prepare_start_permit
+
+    def pause_preparation(service, session_id, assignment_id, *, fence):
+        finish = prepare(service, session_id, assignment_id, fence=fence)
+        calls.append(assignment_id)
+        prepared.set()
+        assert writer_held.wait(10)
+
+        def finish_after_writer(wait):
+            assert not wait
+            if yielded_twice.is_set():
+                final_check.set()
+                assert resume.wait(10)
+            try:
+                return finish(wait)
+            except sqlite3.OperationalError as exc:
+                assert exc.sqlite_errorcode & 255 == sqlite3.SQLITE_BUSY
+                busy.append(assignment_id)
+                if len(busy) == 2:
+                    yielded_twice.set()
+                raise
+        return finish_after_writer
+
+    monkeypatch.setattr(AgentSessionService, "prepare_start_permit", pause_preparation)
+    with _service(monkeypatch) as case:
+        try:
+            uri, _ = _submit(case, "cancel-prepared")
+            assert prepared.wait(15)
+            with sqlite3.connect(case.database) as writer:
+                writer.execute("BEGIN IMMEDIATE")
+                writer_held.set()
+                assert yielded_twice.wait(4), case.failures
+                assert final_check.wait(4)
+                writer.rollback()
+            assert case.client.cancel("cancel-prepared").cancellation_operation_id
+            resume.set()
+            assert case.client.wait("cancel-prepared", timeout_seconds=25).state is LocalDaemonAdmissionState.CANCELLED
+            assert _rows(case.database, "SELECT start_permitted FROM remote_assignments WHERE run_uri=?", (uri,)) == [(0,)]
+            assert len(calls) == 1
+            assert len(busy) >= 2 and set(busy) == set(calls)
+        finally:
+            writer_held.set()
+            resume.set()

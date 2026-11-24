@@ -28,6 +28,7 @@ from loom.queue._managed_local import (
 from .agent_sessions import (
     CONTROL_WAIT_CAPABILITY,
     EVENT_BATCH_CAPABILITY,
+    LIFECYCLE_CAPABILITY,
     AgentOffer,
     AgentOfferRenewal,
     AgentProviderDescriptor,
@@ -96,6 +97,7 @@ def handshake(self: LocalDaemonAgentHttpClient, *, role: str = "agent") -> Gener
         if self._config.container_policies and SUBMITTED_CONTAINER_CAPABILITY not in capabilities:
             raise QueueServiceError("coordinator upgrade required: submitted containers unsupported")
         self._supports_event_batch = EVENT_BATCH_CAPABILITY in capabilities
+        self._supports_lifecycle = LIFECYCLE_CAPABILITY in capabilities
     return result
 
 
