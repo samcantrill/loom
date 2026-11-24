@@ -1,0 +1,306 @@
+# Loom lifecycle responsiveness implementation plan
+
+Draft for the fleet running the polling release based on `91a2e86e98b1`. Source references are relative to the Loom repository. Python snippets show proposed control flow. Identifiers newly introduced in a snippet describe the change to implement. The SQL snippets identify the intended production query shapes.
+
+## What an acknowledgement means
+
+A client may be waiting for different events. For a cancellation, Loom can return an operation ID when the coordinator commits the request. An agent can later acknowledge receipt, the supervisor can request a stop, the execution owner can establish containment, and the resource owner can release the claim. Terminal cancellation requires the relevant owners to settle. For an artifact, the analogous distinctions are result committed, declaration visible, bytes received, integrity checked, and verification receipt committed. Attach each reply and status field to the event it actually establishes.
+
+The investigation recorded a renewal with 1.264 s of coordinator lock wait, a start permit with 789 ms of lock hold across two acquisitions, and an image-retention task with 28.355 s of worker wait for 10.5 ms of execution. They are individual observations. They identify three different places to measure and fix. A job can increase traffic and expose the coupling even when that job is healthy. The existing five-agent fixture passed on the reference revision with p99 renewals of 0.211 s across 360 normal samples and 0.124 s across 752 samples during its 31.5 s injected delay. This fixture exercises one slow-I/O path. Each additional source of coupling below needs its own reproduction. [Existing qualification scope](coordinator-responsiveness.md) · [Five-agent fixture](../tests/integration/queue/test_coordinator_responsiveness.py)
+
+| Order | Deliver together | User-visible result |
+|---|---|---|
+| 1 | Coordinator writes, offer lookups, observer dispatch | A busy writer, historical offers, or another run’s sink stop delaying independent control reads and run mutations. |
+| 2 | Agent release, transport capacity, TLS accept, reconciler turns, cancellation fan-out | An independent agent or assignment can connect, start, receive a stop and report progress during transfers or containment. |
+| 3 | Event acknowledgement, SLURM task pages, keyed watches and fleet reads | New feedback costs scale with the new events, requested page and affected owners. |
+| 4 | Artifact verification, fleet check observation, sweep submission window | Verified checks become visible as they finish and independent trials can be admitted together. |
+
+Start each wave with a test that holds the identified dependency at a barrier. Assert the other owner completes before releasing the barrier. Use timeouts as test deadlock guards. Then exercise replay or a concurrent change at the new boundary. Keep each numbered change separately reviewable, with its relevant tests and documentation.
+
+## 1. Release broad guards before SQLite contention waits
+
+**Current path.** `_poll_write` already sets an immediate SQLite busy response and releases the daemon state guard between attempts. Registration acquires a serialization decorator outside the transaction. Preparation acceptance and other transitions enter `BEGIN IMMEDIATE` inside the guard. The connection’s busy handler can therefore park a thread that still owns the process lock. Even a control read on a different session can queue behind it. Start permission has an additional cost. Both guarded checks load JSON and reconstruct the same delivery bundle. [Polling, registration, transfers and start permission](../src/loom/queue/agent_sessions.py) · [Preparation acceptance](../src/loom/queue/_preparation_operations.py) · [Admission transitions](../src/loom/queue/_coordinator_admission.py)
+
+**Change.** Extract the transaction mechanics from `_poll_write` into a coordinator helper. Inventory registration/reconciliation, admission and retry, offer publication, start permission, and assignment/transfer write boundaries. Classify each guarded block by SQL, immutable preparation, external effect and post-commit action. Open the connection and set its busy timeout before entering the guards. Preserve the established ordering for operations that also require the scheduling-reload guard. On every attempt repeat operation-specific authorization, lifetime and fence checks. Roll back on failure, including a busy commit. Retry only SQLite's recognized busy condition up to the original deadline. Wake listeners after commit. Keep process-local generation changes synchronized with a successful commit when their semantics require it.
+
+```python
+delivery = load_exact_delivery(request)
+prepared = decode_delivery(delivery.payload)       # outside the state guard
+authority_ok = observe_start_authority_once(request, prepared)
+
+def apply(conn):
+    current = read_current_start_facts(conn, request)
+    require_same_delivery_and_fence(current, delivery)
+    require_current_session_policy_and_staging(conn, current, prepared)
+    if current.cancelled or not authority_ok:
+        return False
+    return record_start_permission(conn, current)
+
+return retry_short_write(apply, required_guards, deadline)
+```
+
+The critical detail is the scope of the retry. A decorator acquiring the same lock outside this helper would reintroduce the original wait. The connection is configured for an immediate busy response for the entire loop.
+
+```python
+def retry_short_write(apply, required_guards, deadline):
+    with connection_with_zero_busy_timeout() as conn:
+        while True:
+            try:
+                with acquire_in_existing_order(required_guards):
+                    try:
+                        conn.execute("BEGIN IMMEDIATE")
+                        receipt = apply(conn)
+                        conn.commit()
+                    except BaseException:
+                        conn.rollback()
+                        raise
+                return receipt
+            except sqlite3.OperationalError as exc:
+                if not sqlite_busy(exc) or monotonic() >= deadline:
+                    raise
+            sleep_until_next_attempt(deadline)
+```
+
+Authorize the initial read before accessing a protected delivery. Stale identity or a superseded grant follows the existing conflict path. Keep provider actions, authority calls and filesystem I/O outside retryable callbacks. For input chunks, authorize before and after reading the exact bytes. Expiry checks can advance the accepted-time high-water mark, so place those writes through the same short transition. A real competing SQLite writer will still delay another writer. It should leave independent reads and unrelated daemon state accessible.
+
+**Proof.** Extend the polling contention fixture to registration and the other converted entry points. Hold a real SQLite write transaction, start registration B, and complete C’s empty zero-wait control read while B is waiting. Release the writer and assert one registration receipt under replay. Pause start-permit decoding or external observation, commit cancellation, resume and assert permission is refused. Also exercise busy-at-commit, shutdown during retry, and an authorization change during a chunk read. [Existing busy-at-BEGIN and busy-at-COMMIT cases](../tests/unit/loom/queue/test_agent_waiting.py) · [Session tests](../tests/unit/loom/queue/test_agent_sessions.py) · [Responsiveness tests](../tests/unit/loom/queue/test_coordinator_responsiveness.py)
+
+## 2. Separate current offer mutation from historical lookup
+
+**Current path.** The database snapshot in the investigation had 18,184 offer rows and 12 current rows. Several session-level invalidations match every retained offer for a session, including those already retired. At the same time, replacement must search retired availability revisions to reject reuse. Operator status also needs the latest retained offer and control for an offline agent. A current-only index cannot answer all three queries. [Offer replacement, decline and release](../src/loom/queue/agent_sessions.py) · [Operator reads and drain](../src/loom/queue/local_daemon.py)
+
+**Change.** Use a single session-scoped invalidation helper for every session mutation. Keep epoch-wide invalidation explicitly global. Keep the historical check and replacement write in the same transaction. For the pinned base this includes the separate drain mutation in the daemon as well as the session-service callers. Install lookup indexes during both fresh initialization and exclusively owned startup of an existing database.
+
+```sql
+UPDATE agent_offers SET current = 0
+WHERE session_id = ? AND current = 1;
+
+CREATE INDEX IF NOT EXISTS agent_offers_session_revision
+    ON agent_offers(session_id, availability_revision);
+CREATE INDEX IF NOT EXISTS agent_offers_session ON agent_offers(session_id);
+CREATE INDEX IF NOT EXISTS agent_controls_session ON agent_controls(session_id);
+```
+
+Use the existing partial current-session index for the update. Verify the session-leading indexes serve the actual latest-row queries including their ordering. Keep the historical index nonunique, since making it unique would impose a new constraint on retained data.
+
+**Proof.** Open a retained-root fixture with many obsolete rows across several sessions. Compare query plans and matched rows as history grows. With one current row, invalidation must change one row. Verify retired-revision reuse still fails and an offline agent still reports its latest historical offer and control. Measure index construction during owned startup separately from steady-state latency. [Existing retained-root index test](../tests/unit/loom/queue/test_agent_sessions.py)
+
+## 3. Separate run mutations, audit appends and callback delivery
+
+**Current path.** The authority wrapper acquires the observer lock around mutation and before/after snapshots. The observer acquires that same lock around event lookup, audit append, local projection and sink dispatch. A slow sink for A therefore delays a state transition for B. The 100 ms flush budget is checked after an item returns. [Authority wrapper and event emission](../src/loom/queue/_lifecycle_observers.py)
+
+**Change.** Use a run-scoped mutation guard for the cases requiring a coherent before/after pair. Prefer existing mutation receipts that already contain the committed revision and occurrence time. Enqueue those facts in order under short bookkeeping ownership. Append each stable event ID at an existing revision-safe point between readiness windows. Audit appends can advance the run revision. Deliver local projection and sink callbacks outside both the mutation guard and the coordinator thread.
+
+```python
+with guard_for_run(run_uri):
+    result, facts = mutate_and_capture(authority, request)
+    pending_facts.extend(run_uri, facts)
+
+# Called at the run's existing revision-safe flush point.
+if deliveries.try_reserve():
+    fact = pending_facts.claim_next(run_uri)
+    append_and_enqueue_if_new(fact, deliveries)
+```
+
+Reserve dispatch capacity before consuming a fact, release unused capacity on empty, duplicate or failed work, and keep the original owner’s pending fact when the queue is full. Preserve same-run ordering and any sink-wide serialization contract. Send sink failures to the existing evidence owner. Track oldest pending age, queue depth and actual worker exit. Preserve event-ID deduplication and the current best-effort delivery contract across a crash.
+
+**Proof.** Pause A inside a real sink, commit B to RUNNING, then release A. Verify ordered delivery for A, duplicate event suppression, sink failure evidence and restart behavior. Exercise a readiness decision across an audit-generated revision change. [Observer integration tests](../tests/integration/queue/test_lifecycle_observers.py)
+
+## 4. Free the agent mutation gate during release and reserve lifecycle transport capacity
+
+**Current path.** `_release_completed_assignment` holds the delivery and mutation gates. It calls `release_assignment`, which itself holds the mutation gate across the RPC. The inner transport can retry an uncertain response. An asynchronous network call still leaves those logical gates owned. Separately, the sender classifies accept, start permit, started and release with artifact traffic. The sender’s bulk lane has two workers and the receiver admits four agent bulk requests. A free coordinator thread cannot help a start permit still queued at the sender. GPU occupancy sampling also yields to an external worker while its enclosing resource preparation owns the mutation gate. [Release caller](../src/loom/queue/_agent_assignment.py) · [RPC and request classification](../src/loom/queue/agent_session_transport.py) · [Sender allocation](../src/loom/queue/_agent_progress.py) · [Resource preparation](../src/loom/queue/_agent_session_protocol.py)
+
+**Change.** Split the outer release caller and its decorated callee. Use the per-assignment owner for physical release and its existing execution journal. Under the brief agent gate, bind the exact session/root, assignment, fence, prior and released availability revisions, and provider proof to the pending delivery. A locally released resource must stay unavailable for conflicting advertisement until its coordinator transition settles. Exchange the same request with a cumulative attempt deadline, including internal retries. Re-enter the gate only to apply the response to its original journal owner.
+
+```python
+pending = yield from prepare_journaled_release(assignment)
+reply = yield from exchange_once("release", pending.request, deadline)
+with mutation_gate():
+    journal.resolve_exact_delivery(pending, reply)
+    if journal.offer_still_matches(pending.session, pending.prior_revision):
+        journal.apply_released_capacity(pending, reply)
+```
+
+Perform the local journal checks and updates atomically. If the session has moved, settle only the matching predecessor proof under the existing replacement rules. Keep newer offers and unresolved claims intact. Reconstruct pending work on restart from the execution proof and delivery reference. A timeout leaves the outcome uncertain. For GPU refresh, capture provider identity and claim revision, sample outside the gate, then recheck both and sample freshness before publishing.
+
+Use one cost classification at both sender and receiver. Reserve bounded capacity for short lifecycle transitions while preserving the existing poll, control-wait and SLURM lanes. Split expensive proof or external-authority preparation from its short final commit before giving a request reserved capacity. Share bounded bulk capacity fairly and measure its throughput. [Release completion and provider proof](../src/loom/queue/_agent_session_journal.py)
+
+**Proof.** Occupy both ends’ bulk capacity with normal transfers. A second assignment must obtain a start permit before the transfers finish. Lose a release reply after coordinator commit, restart, replay, and assert one provider release and one coordinator transition. Deliver a late old reply after session replacement and verify the newer offer survives. Pause GPU sampling and receive an independent control.
+
+## 5. Move TLS negotiation off the accept loop
+
+**Current path.** The HTTP server is threaded, but `get_request()` calls `wrap_socket(..., server_side=True)` before returning the connection. Request threading starts after this point. A slow negotiation can therefore delay otherwise independent agents before their request types are known. [TLS listener and worker handoff](../src/loom/queue/agent_session_transport.py)
+
+**Change.** Accept raw sockets promptly. Admit each to a bounded handshake worker with a deadline measured from acceptance, including queue time. After mutual TLS succeeds, hand socket ownership to the existing request worker and immediately free the handshake slot. Keep the application’s current credential-to-role check at dispatch. Capture a coherent TLS context on reload, close refused or expired sockets, and close tracked queued/in-flight negotiations on shutdown. Bound outstanding accepted sockets as well as worker count.
+
+```python
+accepted = AcceptedSocket(sock, address, expires=monotonic() + budget)
+if not handshakes.try_submit(accepted):
+    accepted.close()
+
+# Handshake worker owns the socket until dispatch accepts ownership.
+with accepted.close_unless_transferred():
+    tls = authenticate(accepted, deadline=accepted.expires)
+    accepted.transfer_to(request_workers, tls)
+```
+
+**Proof.** Use a controlled isolated handshake fixture that pauses one worker. A second authenticated connection must reach its ordinary handler while the first is paused and capacity remains. Verify invalid credentials, credential rotation, a full queue and shutdown return the expected outcomes and release sockets. Measure acceptance-to-authentication separately from request latency. [Transport integration tests](../tests/integration/queue/test_agent_session_transport.py)
+
+## 6. Make coordinator turns resumable and keep storage waits from occupying all workers
+
+**Current path.** `_reconcile_once` runs preparation, GPU refresh, observer flush, recovery and admission processing in sequence. Some subpaths already have budgets and cursors. One slow call inside a phase can still delay later phases. The two shared bulk workers also admit FIFO work. Target publication takes a blocking file lock and can wait on a renderer subprocess. An unrelated short image-retention operation can spend most of its lifetime waiting for a worker. [Coordinator pass](../src/loom/queue/local_daemon.py) · [Bulk ownership](../src/loom/queue/_bulk_operations.py) · [Target lock and rendering](../src/loom/queue/managed_local_preparation.py)
+
+**Change.** Keep one owner for scheduling decisions and reuse the admission cursor, priority rules, existing work owners and completion wakeups. Rotate bounded turns for cancellation/recovery, applying completions, discovery, preparation and scheduling. Page large inventories. Make a slow provider or authority observation a keyed pending operation whose completion wakes that owner. Apply only after checking the configuration/epoch, current admission and cancellation. A wall-time check between items cannot interrupt a blocking system call.
+
+```python
+for owner in rotate_ready_owners():
+    outcome = owner.advance(item_limit=limit, deadline=turn_deadline())
+    if outcome.more_ready_now:
+        wake_scheduler()
+    # An outstanding future wakes its owner when it actually completes.
+```
+
+Acquire the per-target publication lock without blocking a general worker. On contention, keep the prepared candidate and its identity, release the execution slot, and retry fairly with bounded backoff. Give long renders/publications a bounded budget that leaves capacity for short preparation. Count any running renderer through actual exit, including after timeout. Recheck the candidate and destination under the acquired target lock before atomic install. Hold that lock through the installation and replay check.
+
+**Proof.** Hold A’s publication lock and pause a renderer. Before releasing either, complete an unrelated image-retention task, advance a fresh admission and record a cancellation. Then verify A publishes exactly once and global runnable priority is preserved. Compare queue age and execution duration by action, plus maximum running workers and child processes. [Preparation integration tests](../tests/integration/queue/test_preparation_operations.py) · [Coordinator responsiveness](../tests/unit/loom/queue/test_coordinator_responsiveness.py)
+
+## 7. Fan out stop delivery and collect containment per assignment
+
+**Current path.** After installing a cancellation epoch the coordinator visits SLURM, local and remote owners sequentially. On the agent, the active-assignment loop waits for stop and containment of each launch before proceeding to the next. Preparation cancellation can collect child admission and ownership evidence under the state guard. An accepted cancellation of a multi-assignment run can thus appear inert while the first process settles. [Coordinator cancellation](../src/loom/queue/local_daemon_execution.py) · [Agent containment](../src/loom/queue/agent_session_transport.py) · [Child settlement](../src/loom/queue/_preparation_operations.py)
+
+**Change.** Commit the request and install the existing cancellation epoch before fan-out. Build a bounded set of stop operations keyed by cancellation, assignment and execution fence. Give delivery and containment separate concurrency budgets. Persist each owner’s progress on completion. On restart reconcile uncertain stop effects using the retained supervisor or scheduler identity. Collect child and ownership evidence outside the daemon guard. Recheck the current child set and its ownership at finalization under the existing authority.
+
+```python
+for owner in cancellation.eligible_owners():
+    stop_delivery.offer_once(cancellation.id, owner.id, owner.fence)
+for receipt in containment.completed():
+    cancellation.record_if_current(receipt)
+if authority.all_required_owners_settled(cancellation):
+    authority.finalize_cancellation(cancellation)
+```
+
+Expose request recorded, control received, stop requested, containment confirmed and resources released from their respective receipts. Keep an unknown SLURM submission, uncontained process or unresolved release visibly pending. Retain the existing single-process root ownership rule during drain and shutdown. Recheck late naturally terminal runs against the authority before finalization.
+
+**Proof.** Hold A’s containment proof, observe B receive its stop and record containment, then restart before A’s proof is recorded. The same operation must resume, keep A named as pending, and become terminal only after all required ownership is settled. Include mixed local/remote/SLURM owners and a late valid terminal result.
+
+## 8. Acknowledge only new events and relay bounded pages
+
+**Current path.** The outbound workspace reads all pending events, sends one RPC per event, counts the entire prefix to check for a gap, and marks the whole prefix acknowledged again. For 1,024 sequential acknowledgements that matches 524,800 rows on the updates alone. The managed-local journal has the same prefix-count/update shape with an assignment-scoped nullable `acknowledged_sequence` column. Terminal result and release can sit behind the relay. [Workspace journal](../src/loom/queue/_remote_stage_execution.py) · [Relay](../src/loom/queue/agent_session_transport.py) · [Managed journal](../src/loom/queue/_managed_local.py) · [Upgrade consumer of acknowledgement state](../src/loom/queue/service_upgrade.py)
+
+**Change.** Page pending events in sequence order. In one transaction verify that the acknowledgement refers to the exact range sent, starts at the first outstanding event, and covers contiguous retained identities. A duplicate exact acknowledgement is a successful replay. For a partially accepted batch, advance the proven prefix and retain the remainder. Index outstanding work and update only newly acknowledged rows. The per-workspace store already scopes events to its assignment. The shared managed store requires an assignment predicate and an assignment-leading index. Preserve every supported reader’s interpretation of its nullable watermark, including upgrade checks.
+
+```sql
+CREATE INDEX IF NOT EXISTS events_pending_sequence
+    ON events(sequence) WHERE acknowledged = 0;
+
+SELECT sequence, event_id, payload_json FROM events
+WHERE acknowledged = 0 ORDER BY sequence LIMIT ?;
+
+UPDATE events SET acknowledged = 1
+WHERE acknowledged = 0 AND sequence BETWEEN ? AND ?;
+```
+
+Use each journal’s existing state as the authority. For the managed store, confirm which consumers require the latest acknowledged sequence, expose the equivalent answer from indexed retained rows, and test old-format reads before changing per-row values. Avoid a full prefix count by validating the bounded newly acknowledged range against the last contiguous acknowledged boundary, including the first-ever range. Yield after each page. At completion seal or capture the final required sequence under the assignment owner, after the last producer has handed off its events. Confirm the terminal boundary before release.
+
+Ship the local journal improvement first. Add an explicitly negotiated batch RPC with count and encoded-byte limits. The receiver validates the assignment, ordered sequence, stable IDs and payload equality through the existing event owner, then reports the highest contiguous durable sequence for that request. An older peer uses paged single-event delivery.
+
+**Proof.** At 1,024 events, count approximately 1,024 newly updated acknowledgement rows per journal and check that the full-prefix counts also disappear. Test exact replay, changed payload for the same ID, gaps, reply loss after a partial batch, restart and an event arriving during final flush. Keep old-agent/old-workspace interoperability and upgrade detection of unacknowledged events. [Workspace tests](../tests/unit/loom/queue/test_remote_stage_execution.py) · [Managed journal tests](../tests/unit/loom/queue/test_managed_local.py)
+
+## 9. Batch recovery facts for SLURM task pages
+
+**Current path.** The session service calls the task-page builder under its cycle lock. Pages have a 32-record cap, yet each task scans and parses recovery requests, then page construction separately asks whether recovery withholds that assignment. The work grows with both task count and historical recovery population. Repeated envelope encoding adds work under the same guard. [Session dispatch](../src/loom/queue/agent_sessions.py) · [Task construction and cursor semantics](../src/loom/queue/local_daemon_execution.py)
+
+**Change.** Authorize the session, capture its execution owner and epochs, select one bounded candidate page with its existing lookahead, and retrieve recovery facts for the candidate assignment IDs in one indexed lookup. Use the same facts for recovery proof and withholding. Match the index expression to the actual query on the retained JSON assignment ID and check its plan on retained data. Preserve all relevant records for an assignment, including pending, evidence-confirmed and closed recovery. Continue using the real encoded response envelope for the byte ceiling.
+
+```python
+session = capture_authorized_session(request)
+rows = assignments.agent_page(session.agent_id, session.root, after=cursor)
+facts = recoveries.for_assignment_ids([row.assignment_id for row in rows])
+page = pack_page(rows, facts, response_byte_limit)
+return return_if_still_current(session, rows, facts, page)
+```
+
+Build and encode outside the coordinator lock. Before returning actionable evidence, revalidate the session, policy/epoch, relevant assignment facts and recovery state, including creation of a previously absent recovery. Use exact versions or bounded comparisons at the existing authorities. On a change rebuild under the original cursor and deadline. Preserve the last safe cursor if a task would exceed the response budget and advance correctly across withheld records. Evidence acknowledgements remain separate mutations.
+
+**Proof.** Compare 1- and 32-task pages with a large unrelated recovery history. Assert bounded recovery queries per page, stable encoding and correct cursors. Pause construction while another agent renews, change a formerly absent recovery to pending, then demand the newer withholding/proof result. Include closed recovery and an overlarge single task. [SLURM page tests](../tests/unit/loom/queue/test_slurm_task_pages.py)
+
+## 10. Wake affected watchers and observe fleet members independently
+
+**Current path.** Waiters already snapshot a generation before reading durable state, which closes a lost-wakeup race. The control database’s commit callback wakes a shared signal. Routine changes for B can cause all of A’s operation/admission watchers to reread. In the operator view, one client reads agents in inventory order, so a delayed response postpones all later observations. [Commit notifications](../src/loom/queue/_service_signals.py) · [Durable waits](../src/loom/queue/local_daemon.py) · [Fleet view](../src/loom/fleet/administration.py)
+
+**Change.** Reuse the existing session subscription pattern for operation and admission keys. During a transaction accumulate affected keys at the code that knows which receipts/revisions it changed. Publish once after successful commit. Discard pending keys on rollback. Release subscriptions when the last waiter exits. For derived projections include each affected owner, and retain the bounded fallback read for other owner stores and other processes. Broadcast shutdown to every subscription.
+
+```python
+with changes.subscribe(("admission", admission_id)) as signal:
+    while True:
+        generation = signal.snapshot()
+        admission = read_durable_admission(admission_id)
+        if should_return(admission, expected_revision, deadline):
+            return admission
+        signal.wait_for_change(generation, min(fallback, remaining(deadline)))
+```
+
+For fleet reads use a bounded set of independent clients pinned to the selected coordinator, one per worker unless concurrent use is supported. Record per-host observation time, owner and failure as each result arrives. Assemble the final report in inventory order. A caller requesting a complete report waits for the slowest outstanding host or its deadline. Faster hosts can finish and report progress independently.
+
+**Proof.** Watch A while B commits repeated offer changes. Count A’s reads against the fallback interval. Commit between the snapshot and the wait, roll back a write, commit from another process, and stop the daemon. For the fleet view hold host A, observe B complete, then verify the final order and individual errors. [Generation and shutdown tests](../tests/unit/loom/queue/test_service_signals.py) · [Session subscription implementation](../src/loom/queue/_agent_poll_waiters.py)
+
+## 11. Make artifact verification resumable and give fleet checks fair observation time
+
+**Current path.** A 65 MiB artifact takes 260 sequential 256 KiB range requests at the current public limit. Each range calls the native client, whose default path performs a separate protocol handshake before the request. A fetch failure cleans ordinary staging, so resuming a fleet check can repeat completed bytes. The upgrader already dispatches checks before observing them and already has three workers. It uses a shared deadline and consumes observation futures in submission order. A slow early check can delay publishing a later finished result, while queued steps can start with almost no allowance. [Range fetching](../src/loom/_artifact_fetch.py) · [Native negotiation](../src/loom/queue/_coordinator_client.py) · [Self-test verification](../src/loom/fleet/self_tests.py) · [Upgrade check orchestration](../src/loom/fleet/upgrades.py)
+
+**Change the transfer.** Bind a private reader to coordinator identity, principal, scope, exact locator, declaration and member. Negotiate once per eligible connection and renegotiate after reconnect, credential rotation or coordinator replacement. Preserve producer and consumer authorization on each read. Use a small bounded window of independent offsets and a bounded aggregate memory budget across checks. Validate offset, declaration and length before writing into a private staging file. Mark a range complete only after its bytes are safely reusable under the selected crash model. Verify the final digest in file order and publish atomically with the existing no-overwrite rule.
+
+```python
+for chunk in reader.completed_ranges(member, window=window, deadline=step_end):
+    staging.write_validated_range(chunk)
+if staging.complete(member):
+    verify_declared_length_and_digest(staging, member)
+if staging.all_members_verified():
+    publish_and_recover_existing_exact_result(staging, destination)
+    checks.record_verification(check_id, declaration, verification_level)
+```
+
+Select resumable staging for fleet verification only. Bind private progress to the check ID, declaration and member identities. On resume reauthorize and revalidate the declaration. Missing scratch can restart a transfer under the same check. Keep the verified receipt with the check so scratch cleanup does not invalidate completed work. If publication completed just before a crash, reconcile the exact existing output and verify it before recording success. Ordinary fetch retains its existing cleanup behavior. Legacy declarations keep their weaker verification status and producer-declared shared artifacts retain their access contract.
+
+**Change check orchestration.** Give each selected check a bounded dispatch opportunity and record its exact ID/outcome. Preserve the dispatch-first barrier. Next, fairly schedule small observation, fetch or verification steps with separate attempt, execution-policy and caller-observation deadlines. Write results in completion order under the existing receipt owner. Bounded step means the actual wait or transfer checkpoints by its budget. Ensure pool shutdown or a joining context manager cannot hold the caller past detachment. Retain any outstanding worker slot until the worker actually stops.
+
+```python
+dispatch_or_recover_each_check_once(checks)
+while watcher.has_time() and checks.pending():
+    workers.offer_fair_steps(checks, watcher.deadline)
+    for check_id, progress in workers.completed_until(watcher.deadline):
+        checks.record_progress(check_id, progress)
+return checks.snapshot()
+```
+
+**Proof.** Use the reviewed 24-check shape and 65 MiB fixture. Pause an early transfer, finish a later check and persist its result. Detach mid-download, resume the same check IDs and verify no duplicate admissions, reuse of completed verification and bounded memory. Exercise changed declaration, revoked access, bad bytes and a crash between publication and receipt. Reopen fleet admission only after every required check passes. [Artifact-access contract](../tests/contracts/test_artifact_access_contract.py) · [Dispatch-first regression](../tests/unit/loom/fleet/test_upgrade_efficiency.py)
+
+## 12. Separate sweep submission from terminal waiting
+
+**Current path.** A waiting sweep iterates trials and calls `run(..., wait=True)` for each trial. The next independent trial may be absent from the coordinator while the first occupies only one execution slot. Detaching a waiting sweep currently leaves later trials unsent. That is observable behavior users rely on. [Sweep dispatcher](../src/loom/pipeline/sweep/dispatch.py) · [Waiting-detachment test](../tests/unit/loom/pipeline/sweep/test_native_dispatch.py)
+
+**Change.** Add an opt-in positive submission window, for example `--max-in-flight N`, for waiting sweeps. Default to one and preserve `--no-wait` semantics. Build on the existing manifest update/lock, per-trial operation ID, queue-item ID, deployment attachment and cleanup records. Under a short atomic manifest update, retain the exact intent and reserve a window slot before the network send. Count accepted nonterminal and uncertain submissions. Recover existing intents before selecting new ones, including after restart or concurrent invocation for the same sweep. Perform the RPC outside the manifest lock.
+
+```python
+while watcher.has_time() and sweep.has_work():
+    for intent in sweep.reserve_up_to(window):
+        submit_or_recover_original_operation(intent)
+    for observation in observe_ready(sweep.in_flight(), watcher.deadline):
+        sweep.record_observation(observation)
+    sweep.wait_for_progress_if_needed(watcher.deadline)
+```
+
+Refill as a slot really becomes available. A lost reply occupies its slot until the original operation is reconciled. Keep deployment lifetime ownership correct when trials share a service. On detachment record accepted, unresolved and unsent work. Status and collection stay passive. Explicit resumption via the execution entry point can continue the remaining selected trials.
+
+**Proof.** With window two, hold A in RUNNING and observe B admitted before A reaches terminal. With the default window detach and verify B remains unsent. Interrupt immediately before send and immediately after durable acceptance, then resume under the same operation and queue-item IDs. Check cleanup with a shared deployment and verify status/collection cause no new admissions. [Sweep dispatch integration](../tests/integration/pipeline/sweep/test_native_dispatch_integration.py)
+
+## Qualification and rollout
+
+1. **Take comparable measurements.** Use full qualification sampling on the isolated deployment with the same agents, manifests, admission mix and injected delays before and after. Correlate existing operation/assignment/session IDs and renewal sequence. Measure sender queue, transport exchange, coordinator lock wait and hold, SQLite busy wait, durable request receipt, worker queue age and execution, physical effect, result commit, release and caller observation. Use monotonic durations within a process. Relate machines by identity. Record percentiles and sample counts per operation and lane, queue maxima, errors/retries, bulk throughput and actual worker/resource occupancy. Keep production telemetry sampled. [Timing implementation](../src/loom/queue/_phase_timing.py)
+2. **Prove independence at each change.** Run the item’s barrier, stale-state and restart cases on the affected entry points. For capacity bounds, hold the actual dependency after the caller times out and assert that its occupied slot is still accounted for. Reuse tests for exact ownership, replay, containment and cursor/receipt durability. Record the precise revision and selectors. A passing fixture covers only the exercised path.
+3. **Qualify retained state and mixed versions.** Exercise owned upgrade of existing coordinator, workspace and agent SQLite roots, including old receipts and offline hosts. Run an old agent against the new coordinator and the new agent against an older coordinator using negotiated fallback. Check old-client artifact/event behavior, lost replies around committed effects, stale responses across replacement, and actual reopening of a qualified retained root by the proposed rollback version.
+4. **Run the canary in isolation.** Combine concurrent registrations, renewals, cancellations, event backlog, publication and artifact verification. Require existing renewal p99 below 1 s normally and below 5 s under injected delay with the 30 s offer lifetime. Compare bulk throughput to the same baseline. Require the per-issue independence and ownership checks even if renewal p99 already passes. Record request, start, containment, verified completion and release separately.
+5. **Use the existing whole-fleet maintenance upgrade.** After the canary passes, confirm admitted work has settled or that the authorized cancellations have durable settlement. Drain through the supported upgrader, preserve coordinator roots, agent journals, inventory and submission IDs, and use one retained upgrade operation. Verify every required check and fresh per-host evidence before reopening normal admission. If verification stalls or a check fails, keep the maintenance state, expose the exact pending check and resume the same operation or follow the validated rollback path.
+
+The first reviewable delivery is short coordinator transactions plus indexed current-offer updates, with the observer change independently testable in the same wave. It narrows the fleet-wide critical section, has a direct reproduction, and establishes how later changes must protect a decision when slow work moves outside a lock.
+
