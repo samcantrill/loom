@@ -483,6 +483,7 @@ class SlurmStageRecord:
     compute_released_at: str | None = None
     start_request_id: str | None = None
     terminal_observation: Mapping[str, PlainData] | None = None
+    agent_sequence: int = 0
 
 
 class SQLiteSlurmStageAssignments:
@@ -1779,6 +1780,7 @@ class SQLiteSlurmStageAssignments:
             start_consumed=bool(row["start_consumed"]),
             start_request_id=(None if "start_request_id" not in row.keys() else row["start_request_id"]),
             terminal_observation=(json.loads(row["terminal_observation_json"]) if "terminal_observation_json" in row.keys() and row["terminal_observation_json"] is not None else None),
+            agent_sequence=int(row["agent_sequence"]),
             agent_evidence_accepted_at=cast(
                 str | None, row["agent_evidence_accepted_at"]
             ),

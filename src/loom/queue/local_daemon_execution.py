@@ -2182,34 +2182,42 @@ class LocalDaemonExecution:
                     ),
                 )
 
-    def _slurm_task(self, record: SlurmStageRecord) -> dict[str, PlainData]:
+    def _slurm_recoveries(
+        self, assignment_ids: tuple[str, ...],
+    ) -> dict[str, list[tuple[str, str, bool]]]:
+        """Read the recovery requests and their withholding decisions for one task page."""
+        grouped: dict[str, list[tuple[str, str, bool]]] = {}
+        if assignment_ids:
+            placeholders = ", ".join("?" for _ in assignment_ids)
+            with self.config.connect_database(self.config.control_database) as conn:
+                rows = conn.execute(
+                    "SELECT json_extract(request_json, '$.assignment_id'), request_json, state, "
+                    "NOT (state = 'closed' AND json_extract(request_json, '$.target.kind') = 'slurm') "
+                    "FROM recovery_operations WHERE state IN ('pending', 'evidence_confirmed', 'closed') "
+                    f"AND json_extract(request_json, '$.assignment_id') IN ({placeholders}) ORDER BY rowid",
+                    assignment_ids,
+                )
+                for assignment_id, request, state, retains in rows:
+                    grouped.setdefault(assignment_id, []).append((request, state, bool(retains)))
+        return grouped
+
+    def _slurm_task(
+        self, record: SlurmStageRecord, recoveries: Sequence[tuple[str, str, bool]] | None = None,
+    ) -> dict[str, PlainData]:
         profile = self._slurm_profile(
             record.assignment.profile_id, record.assignment.profile_configuration_fingerprint,
         )
-        sequence, _ = self.slurm_assignments.agent_evidence(
-            record.assignment.assignment_id
-        )
+        identity = record.assignment.assignment_id
+        if recoveries is None:
+            recoveries = self._slurm_recoveries((identity,)).get(identity, ())
         recovery_proof = None
         recovery_closed = False
-        with self.config.connect_database(self.config.control_database) as conn:
-            requests = conn.execute(
-                "SELECT request_json, state FROM recovery_operations WHERE state IN ('pending', 'evidence_confirmed', 'closed')"
-            ).fetchall()
-        for row in requests:
-            value = json.loads(str(row[0]))
-            if value.get("assignment_id") == record.assignment.assignment_id:
-                if row[1] == "closed":
-                    recovery_closed = True
-                    continue
-                request = RecoverUnknownAssignment.from_dict(value)
-                profile = self._slurm_profile(
-                    record.assignment.profile_id,
-                    record.assignment.profile_configuration_fingerprint,
-                )
-                if profile.containment_helper is not None:
-                    recovery_proof = self._slurm_recovery_proof(
-                        request, record, profile
-                    )
+        for encoded, state, _ in recoveries:
+            if state == "closed":
+                recovery_closed = True
+            elif profile.containment_helper is not None:
+                request = RecoverUnknownAssignment.from_dict(json.loads(encoded))
+                recovery_proof = self._slurm_recovery_proof(request, record, profile)
         return {
             "terminal_result_probe": self._terminal_result_probe(record) if recovery_proof is None and not recovery_closed else None,
             "result_identity": None if recovery_closed else self.slurm_result_identity(record),
@@ -2217,7 +2225,7 @@ class LocalDaemonExecution:
             "schema_version": 1,
             "assignment": record.assignment.to_dict(),
             "request": dict(record.request),
-            "expected_sequence": sequence,
+            "expected_sequence": record.agent_sequence,
             "cancel_requested": self._attempt_cancel_requested(record.assignment.run_uri, record.assignment.attempt_id),
             "job_id": record.job_id,
             "cluster": record.cluster,
@@ -2261,15 +2269,14 @@ class LocalDaemonExecution:
         from ._agent_session_journal import _canonical_json
 
         rows = self.slurm_assignments.agent_page(agent_id, agent_root_id, after=cursor)
+        recovery = self._slurm_recoveries(tuple(row.assignment.assignment_id for row in rows[:32]))
         tasks: list[PlainData] = []
         scanned = cursor
         last_safe: dict[str, PlainData] = {"tasks": [], "next_cursor": cursor}
         for index, record in enumerate(rows[:32]):
-            task = self._slurm_task(record)
-            withheld = (
-                self._recovery_retains_assignment(record.assignment.assignment_id)
-                and task["recovery_request"] is None
-            )
+            facts = recovery.get(record.assignment.assignment_id, ())
+            task = self._slurm_task(record, facts)
+            withheld = any(retains for _, _, retains in facts) and task["recovery_request"] is None
             next_cursor = record.assignment.assignment_id if index + 1 < len(rows) else None
             candidate: dict[str, PlainData] = {"tasks": list(tasks) if withheld else [*tasks, task], "next_cursor": next_cursor}
             if len(_canonical_json({"ok": True, "result": candidate}).encode("utf-8")) > _MAX_BODY_BYTES:

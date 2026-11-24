@@ -1946,6 +1946,7 @@ class LocalDaemon:
             with self._connection() as conn:
                 conn.execute("BEGIN IMMEDIATE")
                 ensure_agent_lookup_indexes(conn)
+                _ensure_recovery_assignment_index(conn)
                 retained = conn.execute("SELECT value FROM root_metadata WHERE key = 'assignment_payload_root_id'").fetchone()
                 selected = self.config.assignment_payload_root_id
                 if retained is not None and retained[0] != selected:
@@ -4877,6 +4878,13 @@ def _initialize_root(path: Path, *, role: str, sqlite_policy: SQLitePolicy | Non
     database.chmod(0o600)
 
 
+def _ensure_recovery_assignment_index(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS recovery_by_assignment "
+        "ON recovery_operations(json_extract(request_json, '$.assignment_id'))"
+    )
+
+
 def _initialize_coordinator_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE TABLE daemon_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
@@ -4937,6 +4945,7 @@ def _initialize_coordinator_schema(conn: sqlite3.Connection) -> None:
         "recorded_at TEXT NOT NULL, state TEXT NOT NULL, "
         "evidence_json TEXT, result_json TEXT NOT NULL)"
     )
+    _ensure_recovery_assignment_index(conn)
     conn.execute(
         "CREATE TABLE time_recoveries ("
         "operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
