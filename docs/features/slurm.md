@@ -420,6 +420,9 @@ authorize another submission. Results are not containment evidence.
 The coordinator reads assignment identity, submission details, and current
 control evidence for task pages and scheduler acknowledgements without release.
 Bootstrap, result processing, and release load the worker payloads they need.
+New reservations retain their validated deliveries in a byte-bounded cache.
+Concurrent reads of the same retained bytes share one validation after a restart,
+and registration replay reads the delivery after ending its write transaction.
 
 Each query receives the smaller of its command timeout and the remaining
 monotonic cycle budget. Unqueried operations remain due. The call/time budget
