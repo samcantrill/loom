@@ -6,6 +6,7 @@ does not import diagnostics, the integration facade, or worker process owners.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 import json
@@ -16,6 +17,7 @@ from typing import Any, cast
 
 from loom.serialization import PlainData, thaw_plain_data
 
+from ._phase_timing import reported_phases, qualification_timings
 from ._shared_assignment import _AssignmentPayloadRootRequired
 from .errors import (
     QueueConflictError,
@@ -831,7 +833,9 @@ def dispatch_control(
                 )
             dispatched = True
             try:
-                result = view.start_run(run_request) if run_request is not None else view.prepare_run(request)
+                with (reported_phases("durable_acceptance", operation_id=request.operation_id)
+                      if qualification_timings() else nullcontext()):
+                    result = view.start_run(run_request) if run_request is not None else view.prepare_run(request)
             except QueueConflictError as exc:
                 raise control_error(
                     "conflict",

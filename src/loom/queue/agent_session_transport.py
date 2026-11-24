@@ -50,7 +50,7 @@ from ._agent_session_journal import (
 )
 
 from .gpu.occupancy import GpuOccupancyPolicy, GpuOccupancyMonitor
-from ._phase_timing import log_phases, phase
+from ._phase_timing import log_phases, phase, reported_phases, request_identity
 from ._managed_local import ResourceAvailabilityStatus
 
 from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
@@ -72,6 +72,7 @@ from typing import Any, Literal, cast
 from urllib.parse import urlsplit
 
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
+from loom.timestamps import utc_timestamp
 from loom.queue._managed_local import (
     AgentResourceProvider,
     AssignmentState,
@@ -3160,7 +3161,8 @@ class LocalDaemonAgentHttpClient:
                 reply = yield from _external(
                     "slurm_http" if operation == "slurm_work" and value.get("evidence") is not None
                     else "control_wait" if operation == "control_wait" else "poll" if operation == "poll" else "bulk" if operation in _AGENT_BULK_OPERATIONS else "control",
-                    _exchange_agent_request, self._config, operation, body, role, connection,
+                    _timed_agent_exchange, monotonic(), utc_timestamp(), request_identity(value),
+                    self._config, operation, body, role, connection,
                     not self._service_progress, **wait_options,
                 )
                 break
@@ -3288,6 +3290,20 @@ def _retire_agent_session(
 class _AgentHttpReply:
     connection: http.client.HTTPSConnection
     value: Mapping[str, PlainData]
+
+
+def _timed_agent_exchange(
+    queued: float, queued_at: str, identity: str | None,
+    config: AgentTlsClientConfig, operation: str, *args: Any, **options: Any,
+) -> _AgentHttpReply:
+    elapsed = round((monotonic() - queued) * 1_000_000_000)
+    with reported_phases("agent_exchange", operation_id=identity, started_monotonic=queued) as timings:
+        timings.related["operation"] = operation
+        timings.spans.append({
+            "action": "sender_queue_wait", "started_at": queued_at,
+            "elapsed_nanoseconds": elapsed, "outcome": "complete",
+        })
+        return _exchange_agent_request(config, operation, *args, **options)
 
 
 def _exchange_agent_request(
@@ -3722,7 +3738,7 @@ class _Handler(BaseHTTPRequestHandler):
                     key: value for key in ("assignment_id", "session_id")
                     if isinstance(value := payload.get(key), str) and len(value) <= 256
                 }}
-                with phase(operation, operation_id=self._reply_context.get("assignment_id")):
+                with phase(operation, operation_id=request_identity(payload)):
                     result = _dispatch(
                         self._daemon_server.daemon_owner.agent_view(principal),
                         operation,

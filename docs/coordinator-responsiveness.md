@@ -6,6 +6,16 @@ Merged responsiveness change: `codex/coordinator-responsiveness`, based on
 Follow-up branch: `codex/slow-publication-recovery`, based on merged `c65af543`.
 This is a focused maintenance change, not a numbered roadmap stage.
 
+## Measuring lifecycle latency
+
+Set `LOOM_QUALIFICATION_TIMINGS=all` on the isolated coordinator, agents,
+and observing client to capture every timed operation. Normal service logs
+sample ordinary requests. Compare elapsed times on the process that measured
+them and correlate processes by the retained operation or assignment identity.
+The agent reports sender queue wait separately from the network exchange.
+Result commit, control application, release, and the caller's observation can
+therefore be inspected separately from coordinator lock and bulk capacity waits.
+
 ## Accepted scope
 
 Slow reconciliation must not block healthy offer renewals, bounded work polls,

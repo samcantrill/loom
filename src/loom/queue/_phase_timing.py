@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
 import json
 from itertools import count
+import os
 import sys
 from time import monotonic
 from typing import Any, cast
@@ -36,6 +37,32 @@ def log_phases(value: dict[str, PlainData]) -> None:
     sys.stderr.write(json.dumps({"diagnostic": "loom.phase_timings", **value}) + "\n")
 
 
+def request_identity(value: Mapping[str, object]) -> str | None:
+    """Use existing bounded wire identities for matching sender and receiver spans."""
+    renewal = value.get("renewal")
+    if isinstance(renewal, Mapping):
+        session, offer, sequence = (renewal.get(k) for k in ("session_id", "offer_id", "sequence"))
+        if (isinstance(session, str) and len(session) <= 256 and isinstance(offer, str)
+            and len(offer) <= 256 and type(sequence) is int and 0 <= sequence <= 2**63 - 1):
+            return f"{session}:{offer}:{sequence}"
+    for key in ("operation_id", "assignment_id", "admission_id", "idempotency_key", "session_id"):
+        identity = value.get(key)
+        if isinstance(identity, str) and 0 < len(identity) <= 256:
+            return identity
+    request = value.get("request")
+    if isinstance(request, Mapping):
+        preparation = request.get("preparation", request)
+        if isinstance(preparation, Mapping):
+            identity = preparation.get("operation_id")
+            if isinstance(identity, str) and 0 < len(identity) <= 256:
+                return identity
+    return None
+
+
+def qualification_timings() -> bool:
+    return os.environ.get("LOOM_QUALIFICATION_TIMINGS") == "all"
+
+
 @contextmanager
 def phase(action: str, *, operation_id: str | None = None) -> Iterator[dict[str, PlainData]]:
     """Record one boundary through the current diagnostic observer, if any.
@@ -54,6 +81,8 @@ def phase(action: str, *, operation_id: str | None = None) -> Iterator[dict[str,
         try:
             if attributes:
                 cast(dict[str, PlainData], timing.spans[0])["attributes"] = dict(attributes)
+            if operation_id is not None:
+                cast(dict[str, PlainData], timing.spans[0])["operation_id"] = operation_id
             value = {**timing.payload(), "operation_id": _operation.get()}
             observer = _observer.get()
             if observer is not None:
@@ -155,7 +184,8 @@ def reported_phases(
         with observe_phases(timings.observe), phase(action, operation_id=operation_id):
             yield timings
     finally:
-        if monotonic() - start >= 1.0 or next(_operation_samples) % 64 == 0:
+        if (qualification_timings()
+            or monotonic() - start >= 1.0 or next(_operation_samples) % 64 == 0):
             try:
                 log_phases({**timings.payload(), "operation_id": operation_id})
             except Exception:

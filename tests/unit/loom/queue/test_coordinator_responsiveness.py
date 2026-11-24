@@ -478,3 +478,18 @@ def test_slow_worker_preparation_cannot_reserve_after_authorization_changes(tmp_
     finally:
         release.set()
         daemon.stop()
+
+
+def test_qualification_timings_retain_every_request_identity(monkeypatch):
+    from loom.queue import _phase_timing as timing
+
+    captured = []
+    monkeypatch.setenv("LOOM_QUALIFICATION_TIMINGS", "all")
+    monkeypatch.setattr(timing, "log_phases", captured.append)
+    for sequence in range(1, 4):
+        payload = {"renewal": {"session_id": "session", "offer_id": "offer", "sequence": sequence}}
+        with timing.request_phases(), timing.phase("renew", operation_id=timing.request_identity(payload)):
+            pass
+    assert [entry["spans"][0]["operation_id"] for entry in captured] == [
+        "session:offer:1", "session:offer:2", "session:offer:3",
+    ]

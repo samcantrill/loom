@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import nullcontext
 import math
 import time
 from typing import Any, Self, cast
@@ -24,6 +25,7 @@ from ._coordinator_control import (
     validate_request,
 )
 from . import _coordinator_transport as transport_io
+from ._phase_timing import qualification_timings, reported_phases, request_identity
 from ._coordinator_transport import ControlTransport
 from .errors import QueueError
 from .local_daemon import (
@@ -102,12 +104,11 @@ class NativeCoordinatorClient:
         delay = 0.01
         while True:
             try:
-                response = self._transport.call(
-                    operation,
-                    payload,
-                    deadline,
-                    waiting=waiting,
-                )
+                with (reported_phases("client." + operation, operation_id=request_identity(payload))
+                      if qualification_timings() else nullcontext()):
+                    response = self._transport.call(
+                        operation, payload, deadline, waiting=waiting,
+                    )
                 try:
                     return decode_envelope(response, operation, payload)
                 except (ValueError, TypeError, KeyError, RecursionError) as exc:
