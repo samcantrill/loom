@@ -17,6 +17,18 @@ The investigation recorded a renewal with 1.264 s of coordinator lock wait, a st
 
 Start each wave with a test that holds the identified dependency at a barrier. Assert the other owner completes before releasing the barrier. Use timeouts as test deadlock guards. Then exercise replay or a concurrent change at the new boundary. Keep each numbered change separately reviewable, with its relevant tests and documentation.
 
+### Which acknowledgement a caller can act on
+
+| Caller is waiting for | First durable acknowledgement | What establishes completion |
+|---|---|---|
+| Assignment start | Coordinator accepts the exact assignment and fence | The start permit survives the final cancellation check, and the execution owner records the matching started evidence. |
+| Drain or cancellation | The coordinator records the requested control or cancellation epoch | The agent records receipt, each affected owner proves containment, and each required claim is released. Drain may stop new work while existing releases are pending. |
+| Agent event | The event owner persists the contiguous sequence and confirms the exact request | The sender advances the proven workspace range. The terminal handoff includes the last event the producer supplied. |
+| Fleet check | The check operation retains the admission identity | The result is committed and the check owner retains the required verification receipt. A caller's observation deadline can expire in between. |
+| Waiting sweep | The manifest retains the trial identity and the coordinator accepts its operation | The trial's terminal observation frees a submission slot. An uncertain send continues to own its slot. |
+
+Use these boundaries when timing the feedback. For example, measure cancellation request-to-receipt separately from receipt-to-containment for each assignment. A slow stop on A belongs in A's containment time. If B's first stop is also delayed, inspect the dispatch queue before tuning containment.
+
 ### Implementation dependencies
 
 | Deliverable | What must be in place first | Reason |
@@ -140,6 +152,24 @@ One availability revision represents the whole resource offer. Order competing r
 
 Use one cost classification at both sender and receiver. Reserve bounded capacity for short lifecycle transitions while preserving the existing poll, control-wait and SLURM lanes. Split expensive proof or external-authority preparation from its short final commit before giving a request reserved capacity. Share bounded bulk capacity fairly and measure its throughput. [Release completion and provider proof](../src/loom/queue/_agent_session_journal.py)
 
+For the negotiated transport, submit a short, exact-identity request that can immediately return pending. A reserved sender and receiver slot must both be available for this request. On the coordinator, give start-authority observations bounded worker capacity independent of artifact transfers. A completely saturated transfer pool otherwise recreates the original start-permit wait one step earlier. File reads, sealing and byte transfer remain subject to their storage budget. A release waiting on its own seal can yield its lifecycle slot. Keep an outstanding proof keyed by session, assignment, fence and operation so a duplicate poll attaches to the same work. Reuse existing durable receipts for crash recovery. Leave queued and running work accounted for until withdrawn or actually finished.
+
+```python
+# Each pass through the reserved receiver is short. A poll may arrive again.
+prepared = proofs.completed(exact_request)
+if prepared is None:
+    proofs.offer_once(exact_request, workers=workers_for_preparation(operation))
+    return pending(exact_request)
+
+def commit(conn):
+    require_current_authority(conn, exact_request, prepared)
+    return record_or_replay_transition(conn, exact_request, prepared)
+
+return short_write(daemon, commit)
+```
+
+If a coordinator epoch changes while a release reply is uncertain, reauthenticate and look up the retained proof. A byte-identical previously authorized proof can settle its matching delivery after validating the session, secret and fence. Rebinding an unaccepted proof to a new epoch requires a definite response from the authorized coordinator and a fresh validation of the original physical evidence. A timeout supplies no such evidence. Test both sides of the commit and an overlapping drain. Older peers retain their existing exchange through explicit capability negotiation.
+
 **Proof.** Occupy both ends’ bulk capacity with normal transfers. A second assignment must obtain a start permit before the transfers finish. Lose a release reply after coordinator commit, restart, replay, and assert one provider release and one coordinator transition. Deliver a late old reply after session replacement and verify the newer offer survives. Pause GPU sampling and receive an independent control.
 
 ## 5. Move TLS negotiation off the accept loop
@@ -196,13 +226,15 @@ if authority.all_required_owners_settled(cancellation):
 
 Expose request recorded, control received, stop requested, containment confirmed and resources released from their respective receipts. Keep an unknown SLURM submission, uncontained process or unresolved release visibly pending. Retain the existing single-process root ownership rule during drain and shutdown. Recheck late naturally terminal runs against the authority before finalization.
 
+Service retirement needs the same ownership check. In the baseline, `service_lifetime()` wraps `CoordinatorLifetime.retained()` inside the shared cycle lock. The latter inspects coordinator records, expires startup attachments, and inspects physical owner stores. Capture the generation and candidate owners, gather physical evidence outside the guard, and recheck generation, attachments, references and admission eligibility before authorizing closure. Expire attachments in a short coordinator transaction. Calling the existing `retained()` from inside a new write transaction would introduce a second connection that can wait for the first writer. Pause an owner read, verify another agent's renewal, then create a retained reference and require retirement to stay pending. [Service request](../src/loom/queue/agent_sessions.py) · [Lifetime owner](../src/loom/queue/_service_lifetime.py)
+
 **Proof.** Hold A’s containment proof, observe B receive its stop and record containment, then restart before A’s proof is recorded. The same operation must resume, keep A named as pending, and become terminal only after all required ownership is settled. Include mixed local/remote/SLURM owners and a late valid terminal result.
 
 ## 8. Acknowledge only new events and relay bounded pages
 
 **Current path.** The outbound workspace reads all pending events, sends one RPC per event, counts the entire prefix to check for a gap, and marks the whole prefix acknowledged again. For 1,024 sequential acknowledgements that matches 524,800 rows on the updates alone. The managed-local journal has the same prefix-count/update shape with an assignment-scoped nullable `acknowledged_sequence` column. Terminal result and release can sit behind the relay. [Workspace journal](../src/loom/queue/_remote_stage_execution.py) · [Relay](../src/loom/queue/agent_session_transport.py) · [Managed journal](../src/loom/queue/_managed_local.py) · [Upgrade consumer of acknowledgement state](../src/loom/queue/service_upgrade.py)
 
-**Change.** Page pending events in sequence order. In one transaction verify that the acknowledgement refers to the exact range sent, starts at the first outstanding event, and covers contiguous retained identities. A duplicate exact acknowledgement is a successful replay. For a partially accepted batch, advance the proven prefix and retain the remainder. Index outstanding work and update only newly acknowledged rows. The per-workspace store already scopes events to its assignment. The shared managed store requires an assignment predicate and an assignment-leading index. Preserve every supported reader’s interpretation of its nullable watermark, including upgrade checks.
+**Change.** Page pending events in sequence order. In one transaction verify that the acknowledgement refers to the exact range sent, starts at the first outstanding event, and covers contiguous retained identities. A duplicate exact acknowledgement is a successful replay. If the exchange ends before a valid receipt, retain the entire sent batch locally. Replay its original bytes so the receiver can recognize the already committed prefix. Index outstanding work and update only newly acknowledged rows. The per-workspace store already scopes events to its assignment. The shared managed store requires an assignment predicate and an assignment-leading index. Preserve every supported reader’s interpretation of its nullable watermark, including upgrade checks.
 
 ```sql
 CREATE INDEX IF NOT EXISTS events_pending_sequence
@@ -217,7 +249,7 @@ WHERE acknowledged = 0 AND sequence BETWEEN ? AND ?;
 
 Use each journal’s existing state as the authority. For the managed store, confirm which consumers require the latest acknowledged sequence, expose the equivalent answer from indexed retained rows, and test old-format reads before changing per-row values. Avoid a full prefix count by validating the bounded newly acknowledged range against the last contiguous acknowledged boundary, including the first-ever range. Yield after each page. At completion seal or capture the final required sequence under the assignment owner, after the last producer has handed off its events. Confirm the terminal boundary before release.
 
-Ship the local journal improvement first. Add an explicitly negotiated batch RPC with count and encoded-byte limits. The receiver validates the assignment, ordered sequence, stable IDs and payload equality through the existing event owner, then reports the highest contiguous durable sequence for that request. An older peer uses paged single-event delivery.
+Ship the local journal improvement first. Add an explicitly negotiated batch RPC with count and encoded-byte limits. The receiver validates the assignment, ordered sequence, stable IDs and payload equality through the existing event owner, then reports the highest contiguous durable sequence for that request. Bind the receipt to the assignment, canonical request digest and exact final sequence. An older peer uses paged single-event delivery.
 
 **Proof.** At 1,024 events, count approximately 1,024 newly updated acknowledgement rows per journal and check that the full-prefix counts also disappear. Test exact replay, changed payload for the same ID, gaps, reply loss after a partial batch, restart and an event arriving during final flush. Keep old-agent/old-workspace interoperability and upgrade detection of unacknowledged events. [Workspace tests](../tests/unit/loom/queue/test_remote_stage_execution.py) · [Managed journal tests](../tests/unit/loom/queue/test_managed_local.py)
 
@@ -236,6 +268,8 @@ return return_if_still_current(session, rows, facts, page)
 ```
 
 Build and encode outside the coordinator lock. Before returning actionable evidence, revalidate the session, policy/epoch, relevant assignment facts and recovery state, including creation of a previously absent recovery. Use exact versions or bounded comparisons at the existing authorities. On a change rebuild under the original cursor and deadline. Preserve the last safe cursor if a task would exceed the response budget and advance correctly across withheld records. Evidence acknowledgements remain separate mutations.
+
+On the baseline the expected agent sequence has another hidden cost. `_slurm_task()` calls `agent_evidence()` for each row, which enters the assignment store's `BEGIN IMMEDIATE` transaction just to read a sequence. The assignment page already selected that column. Carry it in the returned record. For final page validation compare only that page's assignment identities, sequence, execution fence, cancellation, and recovery/projection facts together with session and scheduling authority. Use the same cursor when the comparison fails. Routine offer renewals for an unrelated session should allow a stable page to be delivered. Add that case alongside recovery creation during packing. [Assignment-store query and evidence transaction](../src/loom/queue/slurm_ready_stage.py)
 
 **Proof.** Compare 1- and 32-task pages with a large unrelated recovery history. Assert bounded recovery queries per page, stable encoding and correct cursors. Pause construction while another agent renews, change a formerly absent recovery to pending, then demand the newer withholding/proof result. Include closed recovery and an overlarge single task. [SLURM page tests](../tests/unit/loom/queue/test_slurm_task_pages.py)
 
@@ -328,7 +362,10 @@ The numbered current paths above describe the pinned baseline. The following cha
 | Current and historical offers | `e8603761` | Session invalidation updates the current row while retained revision and latest-row lookups retain their indexes. [Agent session tests](../tests/unit/loom/queue/test_agent_sessions.py) |
 | Run observers | `be32999e` | B reaches RUNNING with A's callback still blocked. The callback queue is bounded and audit evidence is applied at a revision-safe point. [Observer regression](../tests/unit/loom/queue/test_lifecycle_observers.py) |
 | TLS accept | `7ea2918f` | A second authenticated client reaches dispatch with a negotiation paused, and shutdown closes sockets still owned by the handshake workers. [TLS transport tests](../tests/integration/queue/test_agent_session_transport.py) |
-| Local event journals and single-event relay portion of item 8 | `edb2327b` | A 1,024-event workspace changes 1,024 acknowledgement rows in total, including replay of the last acknowledgement. The final flush includes a fact handed off during the last exchange. The selected remote restart and managed release/decline integration cases passed. Negotiated network batching remains a separate deliverable. [Outbox regressions](../tests/unit/loom/queue/test_remote_stage_execution.py) |
+| Local event journals and single-event relay portion of item 8 | `edb2327b` | A 1,024-event workspace changes 1,024 acknowledgement rows in total, including replay of the last acknowledgement. The final flush includes a fact handed off during the last exchange. The selected remote restart and managed release/decline integration cases passed. [Outbox regressions](../tests/unit/loom/queue/test_remote_stage_execution.py) |
+| Negotiated relay portion of item 8 | `4362651e` | The sender uses at most 32 events and 65,536 encoded bytes. An interrupted append or lost reply replays the same events. A wrong digest leaves the local outbox pending. An old-peer handshake selects singles. [Protocol and journal tests](../tests/unit/loom/queue/test_managed_local.py) |
+| Release, sampling and sender deadlines in item 4 | `64967ad0` | A drain completed while sampling was paused and while an independent release reply was delayed. Applying the delayed reply preserved the newer session. Queue expiry prevented dispatch of a waiting request. The two-ended lifecycle reservation and the epoch-rebinding cases still require qualification. [Overlapping agent operations](../tests/integration/queue/test_concurrent_outbound_agent.py) · [Retry and queue budget](../tests/unit/loom/queue/test_agent_transport_policy.py) |
+| Recovery lookup and sequence read in item 9 | `526c5c16` | One- and 32-assignment lookups each issued one indexed recovery query against 4,096 unrelated records. Closed SLURM recovery retained its special withholding rule. The page-cursor tests and guarded-recovery integration passed. Moving complete page preparation outside the cycle lock still requires the source-fact revalidation described in item 9. [Page tests](../tests/unit/loom/queue/test_slurm_task_pages.py) · [Guarded recovery](../tests/integration/queue/test_slurm_ready_stage.py) |
 | Fleet observation portion of item 10 | `c95270b7` | A second observation completes while the first is paused. The report preserves inventory order, per-host time and per-host failure. [Fleet observation test](../tests/integration/fleet/test_configuration.py) |
 
 Production acceptance requires the mixed-version checks, the isolated combined canary, a qualified rollback, and every required whole-fleet check described above. Individual local passes establish the stated component behavior.
