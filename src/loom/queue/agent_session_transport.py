@@ -269,6 +269,7 @@ class AgentTlsClientConfig:
     transport_policy: AgentTransportPolicy | None = None
     slurm_submit_interval_seconds: float | None = None
     slurm_observation_policy: SlurmObservationPolicy | None = None
+    _transport_reload_fingerprint: str | None = None
 
     @property
     def sqlite_policy(self) -> SQLitePolicy | None:
@@ -1676,9 +1677,11 @@ class LocalDaemonAgentHttpClient:
             )
         if retained_work is None:
             retained_work = self._has_retained_agent_work()
-        if retained_work and _agent_active_fingerprint(
-            replacement
-        ) != _agent_active_fingerprint(self._config):
+        if (
+            retained_work
+            and _agent_active_fingerprint(replacement) != _agent_active_fingerprint(self._config)
+            and not self._slurm_transport_only_reload(replacement)
+        ):
             raise QueueConflictError(
                 "agent reload cannot replace active configuration with retained work"
             )
@@ -1694,6 +1697,16 @@ class LocalDaemonAgentHttpClient:
                     raise QueueConflictError(
                         "agent reload reuses a live profile identity for changed bindings"
                     )
+
+    def _slurm_transport_only_reload(self, replacement: AgentTlsClientConfig) -> bool:
+        current = self._config
+        return (
+            current._transport_reload_fingerprint is not None
+            and current._transport_reload_fingerprint == replacement._transport_reload_fingerprint
+            and current.transport_policy != replacement.transport_policy
+            and tuple(profile.configuration_fingerprint for profile in current.slurm_profiles)
+            == tuple(profile.configuration_fingerprint for profile in replacement.slurm_profiles)
+        )
 
     def _has_retained_agent_work(self) -> bool:
         return _has_retained_agent_work(
