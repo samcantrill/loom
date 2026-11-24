@@ -1790,6 +1790,11 @@ class LocalDaemonAgentHttpClient:
             self._restart_with_retained_work = _has_retained_agent_work(
                 self._journal, self._execution_journal, None,
             )
+            if not self._restart_with_retained_work:
+                # External jobs have joined the current coordinator epoch.
+                # Later assignment-local pending effects must not reopen
+                # this service's startup admission assessment.
+                self._service_recovery_admission = False
             return not self._restart_with_retained_work
         execution = self._execution_journal
         supervisor = self._supervisor
