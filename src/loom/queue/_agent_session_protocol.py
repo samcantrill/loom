@@ -502,10 +502,7 @@ def _prepare_resource_refresh(
                     continue
                 monitor = provider._occupancy_monitor
                 if monitor is not None:
-                    cached = monitor.cached_snapshot()
-                    if self._live_work_poll is not None or cached is None or not cached.is_fresh(
-                        monitor._monotonic_clock(), monitor.policy.poll_interval_seconds,
-                    ):
+                    if self._live_work_poll is not None or monitor.refresh_due():
                         selected.append((provider, provider._revision, monitor))
             if selected:
                 return _GpuOfferSampling(session, tuple(selected))

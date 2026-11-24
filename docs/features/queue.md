@@ -1111,6 +1111,12 @@ scheduling lock is retained during waiting, and empty checks do not acquire a
 SQLite write transaction. Notifications are hints; every delivery rechecks the
 authenticated session and current durable control state.
 
+For embedded GPU providers the coordinator runs one background occupancy query
+at a time. CPU admissions can reach terminal state while it runs. The scheduling
+owner installs a fresh result only for the same provider, monitor and revision.
+A replaced provider starts with unknown occupancy. An outstanding query retains
+its worker until it exits, including during shutdown.
+
 Resource maintenance samples GPU occupancy outside the agent mutation gate.
 It applies the sample while the session, provider and claim revision still
 match and the observation is fresh. A control can take effect during sampling.

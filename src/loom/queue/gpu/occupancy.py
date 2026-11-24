@@ -282,6 +282,13 @@ class GpuOccupancyMonitor:
             self._monotonic_clock(), self.policy.max_observation_age_seconds
         )
 
+    def refresh_due(self) -> bool:
+        """Return whether the polling interval for the installed snapshot has elapsed."""
+        cached = self._snapshot
+        return cached is None or not cached.is_fresh(
+            self._monotonic_clock(), self.policy.poll_interval_seconds,
+        )
+
     def refresh(self, force: bool = False) -> GpuOccupancySnapshot:
         cached = self._snapshot
         now = self._monotonic_clock()

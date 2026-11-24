@@ -2681,6 +2681,56 @@ def test_gpu_monitoring_follows_execution_owners_across_reload(
         daemon.stop()
 
 
+def test_coordinator_discards_gpu_sample_from_replaced_provider(tmp_path, monkeypatch):
+    from loom.queue import ConfiguredGpuDevice, GpuDeviceDescriptor
+    from loom.queue.gpu.occupancy import (
+        GpuOccupancyPolicy, GpuProcessObservation, NvidiaSmiGpuProcessObserver,
+    )
+
+    old_policy = GpuOccupancyPolicy(0.01, 2, 0.1)
+    old_started, old_release = Event(), Event()
+    new_started, new_release = Event(), Event()
+
+    def observe(observer: NvidiaSmiGpuProcessObserver):
+        old = observer.policy == old_policy
+        (old_started if old else new_started).set()
+        assert (old_release if old else new_release).wait(10)
+        return {uuid: GpuProcessObservation(uuid, True, not old, "available")
+                for uuid in observer.selected_uuids}
+
+    monkeypatch.setattr(NvidiaSmiGpuProcessObserver, "observe", observe)
+    config = replace(
+        _config(tmp_path), agent_resource_providers=None, gpu_occupancy_policy=old_policy,
+        gpu_devices=(ConfiguredGpuDevice(GpuDeviceDescriptor("gpu-0", "model", 1024), "GPU-private"),),
+    )
+    replacement = replace(
+        config, agent_resource_providers=None, gpu_occupancy_policy=GpuOccupancyPolicy(0.02, 2, 0.1),
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config, trusted_scheduling_loader=lambda: replacement)
+    before = daemon.start()
+    try:
+        assert old_started.wait(3)
+        operator = daemon.operator_view(LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR))
+        receipt = operator.reload_scheduling(
+            CoordinatorSchedulingReload("gpu-reload", before.scheduling_epoch, "replace held probe")
+        )
+        assert receipt["state"] == "applied"
+        assert not new_started.is_set()
+        old_release.set()
+        assert new_started.wait(3)
+        assert daemon.status().local_resource_status[0].reason_code == "observation_unavailable"
+        new_release.set()
+        deadline = time.monotonic() + 3
+        while daemon.status().local_resource_status[0].reason_code != "external_process_detected":
+            assert time.monotonic() < deadline
+            daemon.reconcile_once()
+    finally:
+        old_release.set()
+        new_release.set()
+        daemon.stop()
+
+
 @pytest.mark.parametrize("second_operation", ["_accepted_snapshot", "_sample_clock_health"])
 def test_accepted_time_serializes_sampling_through_commit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, second_operation: str,

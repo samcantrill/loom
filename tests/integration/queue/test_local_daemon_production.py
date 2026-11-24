@@ -1935,6 +1935,45 @@ def test_admission_reconciliation_failure_does_not_stop_other_runs(
         daemon.stop()
 
 
+def test_cpu_admission_finishes_during_coordinator_gpu_sample(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loom.queue.gpu.occupancy import (
+        GpuOccupancyPolicy, GpuProcessObservation, NvidiaSmiGpuProcessObserver,
+    )
+
+    entered, resume = Event(), Event()
+
+    def observe(observer: NvidiaSmiGpuProcessObserver):
+        entered.set()
+        assert resume.wait(20)
+        return {
+            uuid: GpuProcessObservation(uuid, True, False, "available")
+            for uuid in observer.selected_uuids
+        }
+
+    monkeypatch.setattr(NvidiaSmiGpuProcessObserver, "observe", observe)
+    uri = _persist_sleep_run(tmp_path / "runs", run_name="cpu-job", stage_name="cpu", seconds=0.01)
+    config = LocalDaemonConfig(
+        tmp_path / "coordinator", tmp_path / "agent", tmp_path / "runs",
+        _launch_profile(), cpu_capacity=1,
+        gpu_devices=(ConfiguredGpuDevice(GpuDeviceDescriptor("gpu-0", "model", 1024), "GPU-private"),),
+        gpu_occupancy_policy=GpuOccupancyPolicy(0.1, 2, 0.1),
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        assert entered.wait(5)
+        client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+        receipt = client.submit(LocalDaemonAdmissionRequest("cpu-job", uri))
+        assert client.wait(receipt.queue_item_id, timeout_seconds=10).state is LocalDaemonAdmissionState.SUCCEEDED
+        assert daemon.status().local_resource_status[0].reason_code == "observation_unavailable"
+    finally:
+        resume.set()
+        daemon.stop()
+
+
 def test_daemon_bypasses_run_limited_older_work_for_another_run(
     tmp_path: Path,
 ) -> None:

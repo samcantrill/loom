@@ -1723,7 +1723,9 @@ class LocalDaemon:
         self._reconcile_guard = RLock()
         from ._admission_scan import AdmissionScan
         from ._context_preparation import ContextPreparations
+        from ._coordinator_gpu import CoordinatorGpuSamples
 
+        self._gpu_samples = CoordinatorGpuSamples(self._wake.set)
         self._admission_scan = AdmissionScan()
         self._contexts = ContextPreparations(self._wake.set)
         from ._result_verification import ResultVerifications
@@ -2134,10 +2136,13 @@ class LocalDaemon:
         self._cancelled_admission_repairs = None
         self._verified_local_owner_subject = verified_local_owner_subject
         self._contexts.close()
+        self._gpu_samples.close()
         self._result_verifications.close()
         from ._admission_scan import AdmissionScan
         from ._context_preparation import ContextPreparations
+        from ._coordinator_gpu import CoordinatorGpuSamples
 
+        self._gpu_samples = CoordinatorGpuSamples(self._wake.set)
         self._admission_scan = AdmissionScan()
         self._contexts = ContextPreparations(self._wake.set)
         from ._result_verification import ResultVerifications
@@ -2210,6 +2215,7 @@ class LocalDaemon:
             thread.join()
         self._event_observers.close_delivery()
         self._contexts.close()
+        self._gpu_samples.close()
         self._result_verifications.close()
         if self._execution is not None:
             self._execution.close()
@@ -2761,13 +2767,10 @@ class LocalDaemon:
     def _reconcile_once(self) -> tuple[LocalDaemonAdmission, ...]:
         self._require_started()
         self._preparations.reconcile()
-        for provider in self._local_resource_providers():
-            if isinstance(provider, GpuResourceProvider):
-                provider.refresh_occupancy()
+        with self._state_guard():
+            self._gpu_samples.advance(self._local_resource_providers())
         if self._event_observers.flush_prepared():
             self._wake.set()
-        # A reload may replace providers while the bounded query runs.
-        # Its new provider starts unknown and is refreshed next cycle.
         with self._state_guard():
             time_healthy = self._sample_clock_health()
             execution = self._execution
