@@ -353,7 +353,7 @@ def test_nonterminal_admission_waits_are_passive(
     def record_wake() -> None:
         wake_calls.append(None)
 
-    def stop_after_observation(_observed: int, _deadline: float | None) -> None:
+    def stop_after_observation(_signal, _observed: int, _deadline: float | None) -> None:
         raise RuntimeError("stop after one nonterminal observation")
 
     monkeypatch.setattr(daemon._wake, "set", record_wake)

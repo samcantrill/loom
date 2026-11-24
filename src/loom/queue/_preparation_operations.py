@@ -25,6 +25,7 @@ from loom.pipeline.cleanup.preparation_pins import retain_preparation_path
 from loom.serialization import PlainData, stable_json_bytes, thaw_plain_data
 from loom.runs.context import SubmissionContext
 
+from ._service_signals import write_status
 from ._coordinator_transactions import short_write
 from ._continuation import ContinuationConflict, ContinuationPending
 from .errors import QueueConflictError, QueueServiceError
@@ -452,7 +453,7 @@ class CoordinatorPreparations:
                     "preflight_status": None, "preflight": None, "report_ref": None,
                     "prepared_run": None, "evidence_refs": [],
                 }
-                conn.execute("INSERT INTO preparation_operations(operation_id, principal_id, kind, intent_digest, request_json, selected_json, target_name, child_name, state, result_json) VALUES (?, ?, 'prepare_run', ?, ?, ?, NULL, ?, 'pending', ?)",
+                write_status(conn, "operation", "INSERT INTO preparation_operations(operation_id, principal_id, kind, intent_digest, request_json, selected_json, target_name, child_name, state, result_json) VALUES (?, ?, 'prepare_run', ?, ?, ?, NULL, ?, 'pending', ?)",
                              (operation_id, source["principal_id"], intent, _json(request.to_dict()), _json(selected), child_name, _json(result)))
                 conn.commit()
                 self.daemon._wake.set()
@@ -710,7 +711,8 @@ class CoordinatorPreparations:
                 request.operation_id, "cancelled", "invalid_preparation_report", result
             )
             operation = _operation(request.operation_id, "pending", None, result)
-            conn.execute(
+            write_status(
+                conn, "operation",
                 "INSERT INTO preparation_operations(operation_id, principal_id, kind, queue_item_id, intent_digest, request_json, selected_json, target_name, child_name, state, result_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
                 (
                     request.operation_id,
@@ -725,7 +727,7 @@ class CoordinatorPreparations:
                     _json(result),
                 ),
             )
-            conn.execute("UPDATE preparation_operations SET accepted_at = ? WHERE operation_id = ?",
+            write_status(conn, "operation", "UPDATE preparation_operations SET accepted_at = ? WHERE operation_id = ?",
                          (accepted_at, request.operation_id))
             # Transfer this bounded startup attachment into the durable native
             # operation in the same acceptance transaction.
@@ -760,7 +762,8 @@ class CoordinatorPreparations:
             if row["kind"] != "prepare_run":
                 raise QueueConflictError("use cancel_run_operation for run intent")
             if row["state"] not in _TERMINAL:
-                conn.execute(
+                write_status(
+                    conn, "operation",
                     "UPDATE preparation_operations SET cancellation_requested = 1 WHERE operation_id = ?",
                     (operation_id,),
                 )
@@ -882,7 +885,8 @@ class CoordinatorPreparations:
                     if result["preflight"] is None
                     else _mapping(result["preflight"]),
                 )
-            conn.execute(
+            write_status(
+                conn, "operation",
                 "UPDATE preparation_operations SET state = ?, result_code = ?, result_json = ? WHERE operation_id = ?",
                 (
                     operation.state,
@@ -1181,7 +1185,8 @@ class CoordinatorPreparations:
                     if current["cancellation_requested"]:
                         conn.commit()
                         return
-                    conn.execute(
+                    write_status(
+                        conn, "operation",
                         "UPDATE preparation_operations SET dispatch_claimed = 1 WHERE operation_id = ?",
                         (operation_id,),
                     )
@@ -1211,7 +1216,8 @@ class CoordinatorPreparations:
                         str(current["result_json"])
                     )["cancellation_operation_id"]
                     projected = _operation(operation_id, "pending", None, result)
-                conn.execute(
+                write_status(
+                    conn, "operation",
                     "UPDATE preparation_operations SET child_admission_id = ?, result_json = ? WHERE operation_id = ?",
                     (admission.admission_id, _json(projected.result), operation_id),
                 )
@@ -1320,7 +1326,8 @@ class CoordinatorPreparations:
             )
             with self.daemon._connection() as conn:
                 conn.execute("BEGIN IMMEDIATE")
-                claimed = conn.execute(
+                claimed = write_status(
+                    conn, "operation",
                     "UPDATE preparation_operations SET state = 'applying', result_json = ? WHERE operation_id = ? AND state = 'pending' AND cancellation_requested = 0",
                     (_json(projected.result), operation_id),
                 ).rowcount
@@ -1331,7 +1338,7 @@ class CoordinatorPreparations:
 
     def _save_selection(self, operation_id: str, selected: Mapping[str, PlainData]) -> None:
         with self.daemon._connection() as conn:
-            conn.execute("UPDATE preparation_operations SET selected_json = ? WHERE operation_id = ?",
+            write_status(conn, "operation", "UPDATE preparation_operations SET selected_json = ? WHERE operation_id = ?",
                          (_json(selected), operation_id))
             conn.commit()
 
@@ -1390,7 +1397,7 @@ class CoordinatorPreparations:
                     conn.rollback()
                     self._fail(row, "result_too_large")
                     return
-                conn.execute("UPDATE preparation_operations SET target_name = ?, queue_item_id = ?, selected_json = ?, result_json = ? WHERE operation_id = ?",
+                write_status(conn, "operation", "UPDATE preparation_operations SET target_name = ?, queue_item_id = ?, selected_json = ?, result_json = ? WHERE operation_id = ?",
                              (target_name, queue_id, _json(selected), _json(result), operation_id))
                 conn.commit()
             row = self._read(operation_id)
@@ -1491,7 +1498,7 @@ class CoordinatorPreparations:
                         conn.execute("BEGIN IMMEDIATE")
                         current = conn.execute("SELECT result_json FROM preparation_operations WHERE operation_id = ?", (operation_id,)).fetchone()
                         result["cancellation_operation_id"] = json.loads(current["result_json"])["cancellation_operation_id"]
-                        conn.execute("UPDATE preparation_operations SET selected_json = ?, child_name = ?, child_admission_id = NULL, dispatch_claimed = 0, state = 'pending', result_code = NULL, result_json = ? WHERE operation_id = ?",
+                        write_status(conn, "operation", "UPDATE preparation_operations SET selected_json = ?, child_name = ?, child_admission_id = NULL, dispatch_claimed = 0, state = 'pending', result_code = NULL, result_json = ? WHERE operation_id = ?",
                                      (_json(selected), child_name, _json(result), operation_id))
                         conn.commit()
                     return
@@ -1931,7 +1938,8 @@ class CoordinatorPreparations:
             result,
             None if result["preflight"] is None else _mapping(result["preflight"]),
         )
-        conn.execute(
+        write_status(
+            conn, "operation",
             "UPDATE preparation_operations SET state = 'applied', result_code = NULL, result_json = ? WHERE operation_id = ?",
             (_json(projected.result), operation_id),
         )
@@ -2038,7 +2046,7 @@ class CoordinatorPreparations:
                     "native_cancellation_operation_id": original["cancellation_operation_id"],
                     "native_control": {key: original[key] for key in ("admission_id", "state", "revision")},
                 })
-                conn.execute("INSERT INTO preparation_cancellations VALUES (?, ?, 'applied', NULL, ?)",
+                write_status(conn, "operation", "INSERT INTO preparation_cancellations VALUES (?, ?, 'applied', NULL, ?)",
                              (cancel_id, operation_id, _json(operation.result)))
                 conn.commit()
                 return operation
@@ -2073,15 +2081,17 @@ class CoordinatorPreparations:
                 result,
                 None if result["preflight"] is None else _mapping(result["preflight"]),
             )
-            conn.execute(
+            write_status(
+                conn, "operation",
                 "UPDATE preparation_operations SET cancellation_requested = 1, result_json = ? WHERE operation_id = ?",
                 (_json(projected.result), operation_id),
             )
             selected = _mapping(json.loads(str(row["selected_json"])))
             if bound and "reconciliation" in selected and row["target_name"] is not None:
-                conn.execute("UPDATE preparation_operations SET cancellation_requested = 1 WHERE target_name = ? AND principal_id = ?",
+                write_status(conn, "operation", "UPDATE preparation_operations SET cancellation_requested = 1 WHERE target_name = ? AND principal_id = ?",
                              (row["target_name"], principal_id))
-            conn.execute(
+            write_status(
+                conn, "operation",
                 "INSERT INTO preparation_cancellations VALUES (?, ?, 'pending', NULL, ?)",
                 (cancel_id, operation_id, _json(operation.result)),
             )
@@ -2167,7 +2177,8 @@ class CoordinatorPreparations:
                     str(control["operation_id"]), state, None, result
                 )
                 with self.daemon._connection() as conn:
-                    conn.execute(
+                    write_status(
+                        conn, "operation",
                         "UPDATE preparation_cancellations SET state = ?, result_json = ? WHERE operation_id = ?",
                         (state, _json(projected.result), control["operation_id"]),
                     )

@@ -78,7 +78,7 @@ from ._remote_stage_execution import GpuDeviceDescriptor, ResidentProfileDescrip
 from ._preparation_policy import PreparationPolicy
 from .submitted_execution import SubmittedContainerCapability
 from .errors import QueueConflictError, QueueServiceError, QueueStorageError, _AcceptedTimeError
-from ._service_signals import _ChangeConnection, _ServiceSignal
+from ._service_signals import _ChangeConnection, _ChangeSignal, _KeyedWaiters, _ServiceSignal, write_status
 from ._recovery_retry import _RecoveryRetry
 
 if TYPE_CHECKING:
@@ -1715,7 +1715,7 @@ class LocalDaemon:
         self._scheduling_epoch: str | None = None
         self._stop = Event()
         self._wake = _ServiceSignal()
-        self._status_changed = _ServiceSignal()
+        self._status_changed = _KeyedWaiters()
         self._thread: Thread | None = None
         self._execution: LocalDaemonExecution | None = None
         self._cycle_lock = RLock()
@@ -2155,6 +2155,7 @@ class LocalDaemon:
         from ._agent_poll_waiters import _PollWaiters
 
         self._poll_waiters = _PollWaiters()
+        self._status_changed = _KeyedWaiters()
         from ._publication_guards import PublicationGuards
 
         self._publication_guards = PublicationGuards()
@@ -2198,8 +2199,9 @@ class LocalDaemon:
             self._poll_waiters.close()
             self._publication_guards.close()
             self._wake.set()
-            self._status_changed.set()
+            self._status_changed.close()
         self._poll_waiters.drain()
+        self._status_changed.drain()
         self._publication_guards.drain()
         thread = self._thread
         self._thread = None
@@ -2642,30 +2644,31 @@ class LocalDaemon:
         ):
             raise QueueServiceError("operation wait timeout is invalid")
         deadline = None if timeout is None else time.monotonic() + float(timeout)
-        while True:
-            observed = self._status_changed.snapshot()
-            self._require_wait_running()
-            operation = self.operation(operation_id)
-            state = operation.state
-            if operation.kind == "slurm_stage_assignment":
-                if state in {"released", "conflict"}:
+        with self._status_changed.subscribe("operation:" + operation_id) as signal:
+            while True:
+                observed = signal.snapshot()
+                self._require_wait_running()
+                operation = self.operation(operation_id)
+                state = operation.state
+                if operation.kind == "slurm_stage_assignment":
+                    if state in {"released", "conflict"}:
+                        return OperationWaitResult(OperationWaitKind.TERMINAL, operation)
+                    if deadline is not None and time.monotonic() >= deadline:
+                        return OperationWaitResult(OperationWaitKind.TIMEOUT, operation)
+                    self._wait_for_status_change(signal, observed, deadline)
+                    continue
+                if state not in {
+                    "pending_delivery",
+                    "applying",
+                    "pending",
+                    "evidence_confirmed",
+                    "decision",
+                    "bound",
+                }:
                     return OperationWaitResult(OperationWaitKind.TERMINAL, operation)
                 if deadline is not None and time.monotonic() >= deadline:
                     return OperationWaitResult(OperationWaitKind.TIMEOUT, operation)
-                self._wait_for_status_change(observed, deadline)
-                continue
-            if state not in {
-                "pending_delivery",
-                "applying",
-                "pending",
-                "evidence_confirmed",
-                "decision",
-                "bound",
-            }:
-                return OperationWaitResult(OperationWaitKind.TERMINAL, operation)
-            if deadline is not None and time.monotonic() >= deadline:
-                return OperationWaitResult(OperationWaitKind.TIMEOUT, operation)
-            self._wait_for_status_change(observed, deadline)
+                self._wait_for_status_change(signal, observed, deadline)
 
     def wait_admission(
         self, admission_id: str, *, expected_revision: int, timeout: float | None
@@ -2689,45 +2692,46 @@ class LocalDaemon:
             LocalDaemonAdmissionState.CANCELLED,
             LocalDaemonAdmissionState.BLOCKED,
         }
-        while True:
-            observed = self._status_changed.snapshot()
-            self._require_wait_running()
-            with self._connection() as conn:
-                row = conn.execute(
-                    "SELECT * FROM managed_admissions WHERE admission_id = ?",
-                    (admission_id,),
-                ).fetchone()
-            if row is None:
-                raise AdmissionNotFoundError("managed admission was not found")
-            current = _positive_revision(int(row["revision"]))
-            if expected_revision > current:
-                raise QueueConflictError(
-                    "expected admission revision is ahead of current revision"
-                )
-            admission = _admission_from_row(row)
-            if admission.state in terminal:
-                return AdmissionWaitResult(
-                    AdmissionWaitKind.TERMINAL, admission, current
-                )
-            if current != expected_revision:
-                return AdmissionWaitResult(
-                    AdmissionWaitKind.CHANGED, admission, current
-                )
-            if deadline is not None and time.monotonic() >= deadline:
-                return AdmissionWaitResult(
-                    AdmissionWaitKind.TIMEOUT, admission, current
-                )
-            self._wait_for_status_change(observed, deadline)
+        with self._status_changed.subscribe("admission:" + admission_id) as signal:
+            while True:
+                observed = signal.snapshot()
+                self._require_wait_running()
+                with self._connection() as conn:
+                    row = conn.execute(
+                        "SELECT * FROM managed_admissions WHERE admission_id = ?",
+                        (admission_id,),
+                    ).fetchone()
+                if row is None:
+                    raise AdmissionNotFoundError("managed admission was not found")
+                current = _positive_revision(int(row["revision"]))
+                if expected_revision > current:
+                    raise QueueConflictError(
+                        "expected admission revision is ahead of current revision"
+                    )
+                admission = _admission_from_row(row)
+                if admission.state in terminal:
+                    return AdmissionWaitResult(
+                        AdmissionWaitKind.TERMINAL, admission, current
+                    )
+                if current != expected_revision:
+                    return AdmissionWaitResult(
+                        AdmissionWaitKind.CHANGED, admission, current
+                    )
+                if deadline is not None and time.monotonic() >= deadline:
+                    return AdmissionWaitResult(
+                        AdmissionWaitKind.TIMEOUT, admission, current
+                    )
+                self._wait_for_status_change(signal, observed, deadline)
 
     def _require_wait_running(self) -> None:
         if self._stop.is_set():
             raise QueueServiceError("coordinator is stopping")
 
-    def _wait_for_status_change(self, observed: int, deadline: float | None) -> None:
+    def _wait_for_status_change(self, signal: _ChangeSignal, observed: int, deadline: float | None) -> None:
         # Other owner databases and external processes can change without this
         # process observing their commit. Re-read at the bounded safety deadline.
         remaining = 1.0 if deadline is None else max(0.0, deadline - time.monotonic())
-        self._status_changed.wait_for_change(observed, min(1.0, remaining))
+        signal.wait_for_change(observed, min(1.0, remaining))
 
     def _local_resource_providers(self) -> tuple[AgentResourceProvider, ...]:
         """Read the installed execution owners, including owners retained by reload."""
@@ -3148,7 +3152,8 @@ class LocalDaemon:
             if control.promotion is not None:
                 from ._profile_promotion import authorize
                 authorize(self, conn, control)
-            conn.execute(
+            write_status(
+                conn, "operation",
                 "INSERT INTO agent_controls(operation_id, principal_id, session_id, agent_id, request_json, state, result_code, acknowledged) VALUES (?, ?, ?, ?, ?, 'pending_delivery', NULL, 0)",
                 (
                     control.operation_id,
@@ -3361,7 +3366,8 @@ class LocalDaemon:
                             "VALUES ('active_configuration_revision', ?)",
                             (str(next_revision),),
                         )
-                        conn.execute(
+                        write_status(
+                            conn, "operation",
                             "UPDATE scheduling_reloads SET state = 'applied', "
                             "result_code = 'applied', scheduling_epoch = ?, "
                             "configuration_revision = ? "
@@ -3450,7 +3456,8 @@ class LocalDaemon:
                     if raced is not None:
                         raise _RecoveryNotAccepted("recovery operation conflicts")
                     recorded_at = self._accepted_time(conn)
-                    conn.execute(
+                    write_status(
+                        conn, "recovery",
                         "INSERT INTO recovery_operations("
                         "recovery_id, principal_id, request_json, request_digest, "
                         "recorded_at, state, evidence_json, result_json) "
@@ -3566,7 +3573,8 @@ class LocalDaemon:
             )
             with self._connection() as conn:
                 conn.execute("BEGIN IMMEDIATE")
-                updated = conn.execute(
+                updated = write_status(
+                    conn, "recovery",
                     "UPDATE recovery_operations SET state = 'evidence_confirmed', "
                     "evidence_json = ? WHERE recovery_id = ? AND state = 'pending'",
                     (encoded_evidence, request.recovery_id),
@@ -3602,7 +3610,8 @@ class LocalDaemon:
         )
         with self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            conn.execute(
+            write_status(
+                conn, "recovery",
                 "UPDATE recovery_operations SET state = ?, result_json = ? "
                 "WHERE recovery_id = ?",
                 (state, encoded, recovery_id),
@@ -3714,7 +3723,8 @@ class LocalDaemon:
                 if retained is not None and retained[0] != assignment_payload_root_id:
                     raise QueueConflictError("assignment payload root conflicts with durable deployment binding")
                 conn.execute("INSERT OR IGNORE INTO root_metadata(key, value) VALUES ('assignment_payload_root_id', ?)", (assignment_payload_root_id,))
-            conn.execute(
+            write_status(
+                conn, "operation",
                 "INSERT INTO scheduling_reloads(operation_id, principal_id, "
                 "request_json, state, result_code, scheduling_epoch, "
                 "configuration_revision, replacement_fingerprint) "
@@ -3748,7 +3758,8 @@ class LocalDaemon:
         request_json: str,
     ) -> Mapping[str, PlainData]:
         with self._connection() as conn:
-            conn.execute(
+            write_status(
+                conn, "operation",
                 "INSERT INTO scheduling_reloads(operation_id, principal_id, "
                 "request_json, state, result_code, scheduling_epoch, "
                 "configuration_revision, replacement_fingerprint) "
@@ -3847,7 +3858,8 @@ class LocalDaemon:
                 "VALUES ('active_configuration_revision', ?)",
                 (str(next_revision),),
             )
-            conn.execute(
+            write_status(
+                conn, "operation",
                 "UPDATE scheduling_reloads SET state = 'applied', "
                 "result_code = 'applied', scheduling_epoch = ?, "
                 "configuration_revision = ? WHERE operation_id = ?",
@@ -4016,17 +4028,18 @@ class LocalDaemon:
             LocalDaemonAdmissionState.CANCELLED,
             LocalDaemonAdmissionState.BLOCKED,
         }
-        while True:
-            observed = self._status_changed.snapshot()
-            self._require_wait_running()
-            admission = self._admission_for_queue_item(queue_item_id)
-            if admission.state in terminal:
-                return admission
-            if deadline is not None and time.monotonic() >= deadline:
-                raise TimeoutError(
-                    "managed local admission did not reach terminal state"
-                )
-            self._wait_for_status_change(observed, deadline)
+        with self._status_changed.subscribe("queue_item:" + queue_item_id) as signal:
+            while True:
+                observed = signal.snapshot()
+                self._require_wait_running()
+                admission = self._admission_for_queue_item(queue_item_id)
+                if admission.state in terminal:
+                    return admission
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        "managed local admission did not reach terminal state"
+                    )
+                self._wait_for_status_change(signal, observed, deadline)
 
     def _cancellation_operation_id(self, admission_id: str) -> str | None:
         return self._admission(admission_id).cancellation_operation_id
@@ -4063,7 +4076,8 @@ class LocalDaemon:
 
     def _activate_admission(self, admission_id: str) -> None:
         with self._connection() as conn:
-            conn.execute(
+            write_status(
+                conn, "admission",
                 "UPDATE managed_admissions SET state = ?, blocked_reason = NULL, "
                 "revision = revision + 1 "
                 "WHERE admission_id = ? AND cancellation_operation_id IS NULL "
@@ -4108,7 +4122,8 @@ class LocalDaemon:
         observed: LocalDaemonAdmission | None = None,
     ) -> None:
         with self._connection() as conn:
-            conn.execute(
+            write_status(
+                conn, "admission",
                 "UPDATE managed_admissions SET state = ?, blocked_reason = ?, "
                 "revision = revision + 1 WHERE admission_id = ? AND "
                 "(state != ? OR blocked_reason IS NOT ?) "
@@ -4249,7 +4264,8 @@ class LocalDaemon:
                     "DELETE FROM daemon_metadata WHERE key = 'accepted_time_diagnostic'"
                 )
                 conn.execute("UPDATE agent_offers SET current = 0 WHERE current = 1")
-                conn.execute(
+                write_status(
+                    conn, "operation",
                     "INSERT INTO time_recoveries(operation_id, principal_id, "
                     "request_json, request_digest, result_json) VALUES (?, ?, ?, ?, ?)",
                     (
@@ -4294,7 +4310,7 @@ class LocalDaemon:
                 ) if self.config.storage is None else
                 self.config.connect_database(self.config.control_database, factory=_ChangeConnection)
             )
-            cast(_ChangeConnection, conn).on_commit = self._status_changed.set
+            cast(_ChangeConnection, conn).on_commit = self._status_changed.notify
             conn.row_factory = sqlite3.Row
             expected = self._coordinator_id
             if expected is not None:
@@ -5149,7 +5165,8 @@ def _request_admission_cancellation(
     operation_id = admission.cancellation_operation_id or (
         request_operation_id or f"authority-cancel-{uuid4()}"
     )
-    conn.execute(
+    write_status(
+        conn, "admission",
         "UPDATE managed_admissions SET state = ?, "
         "cancellation_operation_id = ?, "
         "cancellation_principal_id = COALESCE("

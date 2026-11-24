@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from ._service_signals import write_status
 from ._coordinator_transactions import short_write
 from .errors import QueueConflictError, QueueServiceError
 from .local_daemon import LocalDaemonAdmissionState, _admission_from_row
@@ -151,7 +152,8 @@ def _submit(
             classify(conn, request.queue_item_id, parent_id=preparation_operation_id or run_operation_id,
                      intent=intent, preparation_child=preparation_operation_id is not None)
             accepted_at = self._accepted_time(conn)
-            conn.execute(
+            write_status(
+                conn, "admission",
                 """
                     INSERT INTO managed_admissions (
                         admission_id, queue_item_id, coordinator_id, run_uri,
@@ -303,7 +305,8 @@ def _apply_admission_retry(
     record["state"] = "applied"
 
     def settle(conn: sqlite3.Connection) -> None:
-        updated = conn.execute(
+        updated = write_status(
+            conn, "admission",
             "UPDATE managed_admissions SET state = ?, blocked_reason = NULL, "
             "cancellation_operation_id = NULL, cancellation_principal_id = NULL, "
             "revision = revision + 1 WHERE admission_id = ? AND revision = ? "
@@ -326,7 +329,8 @@ def _apply_admission_retry(
                 (admission.run_uri, admission.cancellation_operation_id),
             )
             # Bound operations from the cancelled run still own their original cancellation scope.
-            conn.execute(
+            write_status(
+                conn, "operation",
                 "UPDATE preparation_operations SET selected_json=json_set(selected_json, "
                 "'$.reconciliation.superseded_by', ?) "
                 "WHERE kind='run' AND queue_item_id=? AND operation_id IS NOT ? "

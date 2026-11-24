@@ -519,6 +519,7 @@ class SQLiteSlurmStageAssignments:
         _allow_initialize: bool = True,
         sqlite_policy: SQLitePolicy | None = None,
         schema_version: int = 3,
+        _on_terminal_operation: Callable[[str], None] | None = None,
     ) -> None:
         if type(schema_version) is not int or schema_version not in {3, 4, 5, 6, 7}:
             raise QueueServiceError("SLURM assignment schema selection is unsupported")
@@ -527,6 +528,7 @@ class SQLiteSlurmStageAssignments:
         self.transfer_root = Path(transfer_root)
         self._allow_initialize = _allow_initialize and sqlite_policy is None
         self._sqlite_policy = sqlite_policy
+        self._on_terminal_operation = _on_terminal_operation
 
     def _initialize(self) -> None:
         previous = self._allow_initialize
@@ -809,11 +811,14 @@ class SQLiteSlurmStageAssignments:
     def agent_evidence(
         self, assignment_id: str
     ) -> tuple[int, Mapping[str, PlainData] | None]:
-        with self._transaction() as conn:
-            row = self._row(conn, assignment_id)
-            return int(row["agent_sequence"]), None if row[
-                "agent_evidence_json"
-            ] is None else json.loads(str(row["agent_evidence_json"]))
+        with _connect(self.path, sqlite_policy=self._sqlite_policy, require_existing=True) as conn:
+            row = conn.execute(
+                f"SELECT agent_sequence, agent_evidence_json FROM {_ASSIGNMENT_TABLE} WHERE assignment_id = ?",
+                (assignment_id,),
+            ).fetchone()
+        if row is None:
+            raise QueueConflictError("SLURM assignment is not retained")
+        return int(row[0]), None if row[1] is None else json.loads(row[1])
 
     def accept_agent_evidence(
         self, assignment_id: str, sequence: int, evidence: Mapping[str, PlainData]
@@ -861,7 +866,7 @@ class SQLiteSlurmStageAssignments:
         }
         if (expected, next_state) not in allowed:
             raise QueueServiceError("invalid SLURM assignment transition")
-        with self._transaction() as conn:
+        with self._transaction(terminal_for=assignment_id if next_state in {"released", "conflict"} else None) as conn:
             row = self._row(conn, assignment_id)
             if str(row["state"]) == next_state:
                 return next_state
@@ -1002,7 +1007,7 @@ class SQLiteSlurmStageAssignments:
         }.get(state)
         if mapped is None:
             raise QueueServiceError("SLURM submission state is unsupported")
-        with self._transaction() as conn:
+        with self._transaction(terminal_for=assignment_id) as conn:
             row = self._row(conn, assignment_id)
             current = str(row["state"])
             if current in {
@@ -1722,7 +1727,7 @@ class SQLiteSlurmStageAssignments:
         self.advance(assignment_id, expected="logical_released", next_state="released")
 
     @contextmanager
-    def _transaction(self) -> Iterator[sqlite3.Connection]:
+    def _transaction(self, *, terminal_for: str | None = None) -> Iterator[sqlite3.Connection]:
         if self.path.is_file():
             with inspect_sqlite_database(self.path) as conn:
                 initialize = _requires_initialization(conn, self._allow_initialize, self.schema_version)
@@ -1777,13 +1782,21 @@ class SQLiteSlurmStageAssignments:
                 conn.execute(f"PRAGMA user_version = {self.schema_version}")
             else:
                 _require_schema(conn, expected_version=self.schema_version)
+            before = conn.total_changes
+            terminal = None
             try:
                 yield conn
+                if terminal_for is not None and self._on_terminal_operation is not None and conn.total_changes != before:
+                    terminal = conn.execute(
+                        f"SELECT operation_id FROM {_ASSIGNMENT_TABLE} WHERE assignment_id = ? "
+                        "AND state IN ('released', 'conflict')", (terminal_for,),
+                    ).fetchone()
+                conn.commit()
             except Exception:
                 conn.rollback()
                 raise
-            else:
-                conn.commit()
+        if terminal is not None and self._on_terminal_operation is not None:
+            self._on_terminal_operation(terminal[0])
 
     @staticmethod
     def _row(conn: sqlite3.Connection, assignment_id: str) -> sqlite3.Row:

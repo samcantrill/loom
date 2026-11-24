@@ -1115,6 +1115,13 @@ On acknowledgement the journal resolves that delivery. It applies capacity
 changes only while the captured active session and offer still own them.
 Concurrent releases that advance the same availability revision run in order.
 
+Operation, admission and queue-item waits subscribe to their own identifiers
+before reading durable state. A coordinator transaction notifies those waiters
+after commit using the identities of the modified rows. A rolled-back change
+leaves the waiter asleep. SLURM terminal assignment commits signal their own
+operation. Waiters also reread at least once per second to discover changes
+from other processes and wake on shutdown.
+
 A submit agent reads up to 32 SLURM tasks and one cursor lookahead from its
 indexed active assignments. The coordinator collects matching recovery facts
 in one query and builds the byte-limited reply outside the scheduling lock.

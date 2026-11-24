@@ -266,3 +266,28 @@ def test_compute_release_preserves_assignment_and_storage_ownership(tmp_path):
     assert reopened.read(assignment.assignment_id).compute_released_at == record.compute_released_at
     with pytest.raises(QueueConflictError):
         reopened.release_compute(assignment.assignment_id, 2, evidence)
+
+
+def test_terminal_operation_hint_observes_committed_state_and_evidence_read_is_passive(tmp_path):
+    import sqlite3
+
+    fixture = ReservationFixture(tmp_path)
+    assignment, args = fixture.candidate("work", 0)
+    fixture.store.reserve(assignment, **args)
+    hints = []
+
+    def terminal(operation_id):
+        retained = fixture.reopen().find_operation(operation_id)
+        assert retained is not None
+        hints.append((operation_id, retained.state))
+
+    fixture.store._on_terminal_operation = terminal
+    with sqlite3.connect(fixture.path) as writer:
+        writer.execute("BEGIN IMMEDIATE")
+        assert fixture.store.agent_evidence(assignment.assignment_id) == (0, None)
+    fixture.store.advance("work", expected="reserved", next_state="bound")
+    fixture.store.record_submission("work", state="accepted", job_id="1", cluster="test")
+    assert hints == []
+    assert fixture.store.record_submission("work", state="accepted", job_id="2", cluster="test") == "conflict"
+    assert fixture.store.record_submission("work", state="accepted", job_id="2", cluster="test") == "conflict"
+    assert hints == [("work", "conflict")]

@@ -1385,6 +1385,7 @@ class LocalDaemonExecution:
             config.slurm_transfer_root,
             _allow_initialize=False,
             sqlite_policy=config.sqlite_policy, schema_version=config.slurm_schema_version,
+            _on_terminal_operation=None if daemon is None else lambda op: daemon._status_changed.notify("operation:" + op),
         )
         self.journal = (
             SQLiteAgentJournal(config.agent_journal, _allow_initialize=False, sqlite_policy=config.sqlite_policy)

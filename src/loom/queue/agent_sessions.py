@@ -7,6 +7,7 @@ admission, and process launch remain protected agent-local concerns.
 
 from __future__ import annotations
 
+from ._service_signals import write_status
 from ._coordinator_transactions import short_write
 from ._phase_timing import phase
 
@@ -2419,7 +2420,8 @@ class AgentSessionService:
             ):
                 raise QueueConflictError("failed agent control changed revisions")
             state = "applied" if applied else "failed"
-            conn.execute(
+            write_status(
+                conn, "operation",
                 "UPDATE agent_controls SET state = ?, result_code = ?, "
                 "effect_json = ?, acknowledged = 1 WHERE operation_id = ?",
                 (state, effect.code, encoded, effect.operation_id),
@@ -2661,7 +2663,8 @@ class AgentSessionService:
                     withholding_reason="successor_observation_required",
                     projection=cast(Mapping[str, PlainData], projection),
                 )
-                updated = conn.execute(
+                updated = write_status(
+                    conn, "operation",
                     "UPDATE session_replacements SET successor_session_id = ?, "
                     "state = 'bound', readiness = 'withheld', "
                     "withholding_reason = 'successor_observation_required', "
@@ -3110,7 +3113,8 @@ class AgentSessionService:
                     withholding_reason=None,
                     projection=replacement_admission.durable_projection,
                 )
-                updated = conn.execute(
+                updated = write_status(
+                    conn, "operation",
                     "UPDATE session_replacements SET state = 'ready', "
                     "readiness = 'ready', withholding_reason = NULL, "
                     "observed_claim_ids_json = ?, "
@@ -4543,7 +4547,8 @@ class AgentSessionService:
                         "replacement cleanup claim is not currently withheld"
                     )
                 result = _replacement_cleanup_result(replacement["result_json"])
-                conn.execute(
+                write_status(
+                    conn, "operation",
                     "UPDATE session_replacements SET observed_claim_ids_json = ?, "
                     "result_json = ? "
                     "WHERE old_session_id = ?",
@@ -5023,7 +5028,8 @@ def replace_agent_session(
             )
             if current_session != old_session:
                 raise QueueConflictError("old session changed before replacement fence")
-            conn.execute(
+            write_status(
+                conn, "operation",
                 "UPDATE agent_controls SET state = 'superseded', "
                 "result_code = 'session_replaced' WHERE session_id = ? "
                 "AND state IN ('pending_delivery','applying')",
@@ -5069,7 +5075,8 @@ def replace_agent_session(
                 projection=durable_projection,
             )
             projection_json = _canonical_json(durable_projection)
-            conn.execute(
+            write_status(
+                conn, "operation",
                 "INSERT INTO session_replacements("
                 "operation_id, principal_id, request_json, request_digest, agent_id, "
                 "old_session_id, successor_session_id, state, readiness, "
