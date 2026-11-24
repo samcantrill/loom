@@ -1246,6 +1246,14 @@ def _outbound_service_steps(
                 if client._drained or client._restart_with_retained_work or len(journal.unresolved_assignment_references()) >= active.client.max_concurrent_assignments:
                     yield from _delay(0.05)
                     continue
+                if active.client.slurm_profiles and not (
+                    active.client.resident_profiles or active.client.container_policies
+                ):
+                    # External scheduler work has its own transport and cannot
+                    # receive a resident assignment. A stranded resident poll
+                    # would otherwise prevent this owner's next offer refresh.
+                    yield from _delay(0.25)
+                    continue
                 sequence = client.next_poll_sequence(session.session_id)
                 delivery = (yield from _steps(client.wait_for_work_with_slurm,
                     session.session_id,
