@@ -33,6 +33,7 @@ import sqlite3
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from ._validated_context_cache import ValidatedContextCache
 from ._phase_timing import phase
+from ._slurm_task_page import TaskFacts, read_recoveries, read_task_page
 from threading import Event, Lock
 from time import monotonic
 from types import MappingProxyType
@@ -2186,47 +2187,45 @@ class LocalDaemonExecution:
         self, assignment_ids: tuple[str, ...],
     ) -> dict[str, list[tuple[str, str, bool]]]:
         """Read the recovery requests and their withholding decisions for one task page."""
-        grouped: dict[str, list[tuple[str, str, bool]]] = {}
-        if assignment_ids:
-            placeholders = ", ".join("?" for _ in assignment_ids)
-            with self.config.connect_database(self.config.control_database) as conn:
-                rows = conn.execute(
-                    "SELECT json_extract(request_json, '$.assignment_id'), request_json, state, "
-                    "NOT (state = 'closed' AND json_extract(request_json, '$.target.kind') = 'slurm') "
-                    "FROM recovery_operations WHERE state IN ('pending', 'evidence_confirmed', 'closed') "
-                    f"AND json_extract(request_json, '$.assignment_id') IN ({placeholders}) ORDER BY rowid",
-                    assignment_ids,
-                )
-                for assignment_id, request, state, retains in rows:
-                    grouped.setdefault(assignment_id, []).append((request, state, bool(retains)))
-        return grouped
+        with self.config.connect_database(self.config.control_database) as conn:
+            return read_recoveries(conn, assignment_ids)
 
     def _slurm_task(
-        self, record: SlurmStageRecord, recoveries: Sequence[tuple[str, str, bool]] | None = None,
+        self, record: SlurmStageRecord, facts: TaskFacts | None = None,
+        submission: SlurmReadyStageSubmission | None = None,
     ) -> dict[str, PlainData]:
         profile = self._slurm_profile(
             record.assignment.profile_id, record.assignment.profile_configuration_fingerprint,
         )
         identity = record.assignment.assignment_id
-        if recoveries is None:
-            recoveries = self._slurm_recoveries((identity,)).get(identity, ())
+        if facts is None:
+            now = self._terminal_accepted_time() if record.terminal_observation is not None else None
+            facts = TaskFacts(
+                self._slurm_recoveries((identity,)).get(identity, ()),
+                self._attempt_cancel_requested(record.assignment.run_uri, record.assignment.attempt_id),
+                self._terminal_probe_due(record, now),
+            )
+            if profile.accounting_history is not None or facts.probe_due:
+                submission = self.slurm_submissions.find(record.assignment.operation_id)
+        history = self._slurm_history_from_submission(profile, submission)
         recovery_proof = None
         recovery_closed = False
-        for encoded, state, _ in recoveries:
+        for encoded, state, _ in facts.recoveries:
             if state == "closed":
                 recovery_closed = True
             elif profile.containment_helper is not None:
                 request = RecoverUnknownAssignment.from_dict(json.loads(encoded))
-                recovery_proof = self._slurm_recovery_proof(request, record, profile)
+                recovery_proof = self._slurm_recovery_proof(request, record, profile, history=history)
         return {
-            "terminal_result_probe": self._terminal_result_probe(record) if recovery_proof is None and not recovery_closed else None,
+            "terminal_result_probe": self._terminal_probe_from_submission(record, submission)
+            if facts.probe_due and recovery_proof is None and not recovery_closed else None,
             "result_identity": None if recovery_closed else self.slurm_result_identity(record),
             "recovery_request": recovery_proof,
             "schema_version": 1,
             "assignment": record.assignment.to_dict(),
             "request": dict(record.request),
             "expected_sequence": record.agent_sequence,
-            "cancel_requested": self._attempt_cancel_requested(record.assignment.run_uri, record.assignment.attempt_id),
+            "cancel_requested": facts.cancelled,
             "job_id": record.job_id,
             "cluster": record.cluster,
             "compute_release_requested": (
@@ -2248,46 +2247,24 @@ class LocalDaemonExecution:
                 "bootstrap_incarnation_id": record.bootstrap_incarnation,
                 "process_execution_id": record.process_execution_id,
                 "execution_fence": record.fence,
-                **self._slurm_history_proof(record, profile),
+                **history,
             },
         }
 
-    def _slurm_history_proof(
-        self, record: SlurmStageRecord, profile: SlurmReadyStageProfile,
+    @staticmethod
+    def _slurm_history_from_submission(
+        profile: SlurmReadyStageProfile, submission: SlurmReadyStageSubmission | None,
     ) -> dict[str, PlainData]:
         if profile.accounting_history is None:
             return {}
-        submission = self.slurm_submissions.find(record.assignment.operation_id)
         identity = None if submission is None else submission.accounting_identity
         return {"accounting_identity": None if identity is None else identity.to_dict()}
 
     def slurm_agent_task_page(
         self, agent_id: str, agent_root_id: str, *, cursor: str | None = None,
     ) -> dict[str, PlainData]:
-        """Pack one bounded page against the actual control response envelope."""
-        from ._agent_session_codec import _MAX_BODY_BYTES
-        from ._agent_session_journal import _canonical_json
-
-        rows = self.slurm_assignments.agent_page(agent_id, agent_root_id, after=cursor)
-        recovery = self._slurm_recoveries(tuple(row.assignment.assignment_id for row in rows[:32]))
-        tasks: list[PlainData] = []
-        scanned = cursor
-        last_safe: dict[str, PlainData] = {"tasks": [], "next_cursor": cursor}
-        for index, record in enumerate(rows[:32]):
-            facts = recovery.get(record.assignment.assignment_id, ())
-            task = self._slurm_task(record, facts)
-            withheld = any(retains for _, _, retains in facts) and task["recovery_request"] is None
-            next_cursor = record.assignment.assignment_id if index + 1 < len(rows) else None
-            candidate: dict[str, PlainData] = {"tasks": list(tasks) if withheld else [*tasks, task], "next_cursor": next_cursor}
-            if len(_canonical_json({"ok": True, "result": candidate}).encode("utf-8")) > _MAX_BODY_BYTES:
-                if not tasks:
-                    raise QueueServiceError("SLURM task exceeds control response budget")
-                return last_safe
-            last_safe = candidate
-            if not withheld:
-                tasks.append(task)
-            scanned = record.assignment.assignment_id
-        return {"tasks": tasks, "next_cursor": scanned if len(rows) > 32 else None}
+        """Build outside coordinator ownership and recheck actionable inputs before returning."""
+        return read_task_page(self, agent_id, agent_root_id, cursor)
 
     def relay_slurm_result(
         self, agent_id: str, agent_root_id: str, evidence: Mapping[str, PlainData],
@@ -2965,11 +2942,19 @@ class LocalDaemonExecution:
         return in_flight, diagnostic
 
     def _terminal_accounting_identity(self, record: SlurmStageRecord) -> dict[str, PlainData] | None:
-        if (record.report is not None or record.state not in {"granted", "running", "unknown"}
-            or not record.start_consumed or record.fence is None or record.bootstrap_incarnation is None
-            or record.cluster is None):
+        if not self._terminal_identity_candidate(record):
             return None
-        submission = self.slurm_submissions.find(record.assignment.operation_id)
+        return self._terminal_identity_from_submission(record, self.slurm_submissions.find(record.assignment.operation_id))
+
+    @staticmethod
+    def _terminal_identity_candidate(record: SlurmStageRecord) -> bool:
+        return (record.report is None and record.state in {"granted", "running", "unknown"}
+                and record.start_consumed and record.fence is not None and record.bootstrap_incarnation is not None
+                and record.cluster is not None)
+
+    def _terminal_identity_from_submission(
+        self, record: SlurmStageRecord, submission: SlurmReadyStageSubmission | None,
+    ) -> dict[str, PlainData] | None:
         if (submission is None or submission.scheduler_source != "sacct"
             or submission.scheduler_state not in {"TIMEOUT", "FAILED", "CANCELLED", "COMPLETED"}
             or submission.accounting_identity is None
@@ -2983,26 +2968,38 @@ class LocalDaemonExecution:
 
     def _terminal_accepted_time(self) -> str | None:
         with self.config.connect_database(self.config.control_database) as conn:
-            state = dict(conn.execute(
-                "SELECT key, value FROM daemon_metadata WHERE key IN "
-                "('accepted_time_health', 'accepted_time_high_water')"
-            ))
+            return self._read_terminal_accepted_time(conn)
+
+    @staticmethod
+    def _read_terminal_accepted_time(conn: sqlite3.Connection) -> str | None:
+        state = dict(conn.execute(
+            "SELECT key, value FROM daemon_metadata WHERE key IN "
+            "('accepted_time_health', 'accepted_time_high_water')"
+        ))
         return state.get("accepted_time_high_water") if state.get("accepted_time_health") == "healthy" else None
 
-    def _terminal_result_probe(self, record: SlurmStageRecord) -> dict[str, PlainData] | None:
-        from ._slurm_terminal_recovery import probe_request
-
+    def _terminal_probe_due(self, record: SlurmStageRecord, now: str | None) -> bool:
         policy = self.config.slurm_terminal_recovery
         observation = record.terminal_observation
-        if policy is None or not policy.enabled or observation is None:
-            return None
-        identity = self._terminal_accounting_identity(record)
-        now = self._terminal_accepted_time()
-        if identity != observation["identity"] or now is None:
-            return None
-        if (parse_timestamp(now) - parse_timestamp(str(observation["first_observed_at"]))).total_seconds() < policy.terminal_result_grace_seconds:
+        return bool(policy is not None and policy.enabled and observation is not None and now is not None
+                    and (parse_timestamp(now) - parse_timestamp(str(observation["first_observed_at"]))).total_seconds()
+                    >= policy.terminal_result_grace_seconds)
+
+    def _terminal_probe_from_submission(
+        self, record: SlurmStageRecord, submission: SlurmReadyStageSubmission | None,
+    ) -> dict[str, PlainData] | None:
+        from ._slurm_terminal_recovery import probe_request
+
+        observation = record.terminal_observation
+        if (observation is None or not self._terminal_identity_candidate(record)
+                or self._terminal_identity_from_submission(record, submission) != observation["identity"]):
             return None
         return probe_request(observation)
+
+    def _terminal_result_probe(self, record: SlurmStageRecord) -> dict[str, PlainData] | None:
+        if record.terminal_observation is None or not self._terminal_probe_due(record, self._terminal_accepted_time()):
+            return None
+        return self._terminal_probe_from_submission(record, self.slurm_submissions.find(record.assignment.operation_id))
 
     def _reconcile_terminal_without_report(
         self, record: SlurmStageRecord, authority: _ScopedCoordinatorAuthority,
@@ -3797,11 +3794,14 @@ class LocalDaemonExecution:
         self,
         request: RecoverUnknownAssignment,
         record: SlurmStageRecord,
-        profile: SlurmReadyStageProfile,
+        profile: SlurmReadyStageProfile, *, history: dict[str, PlainData] | None = None,
     ) -> dict[str, PlainData]:
         helper = profile.containment_helper
         if helper is None:
             raise QueueServiceError("SLURM containment helper is unavailable")
+        if history is None:
+            submission = self.slurm_submissions.find(record.assignment.operation_id) if profile.accounting_history is not None else None
+            history = self._slurm_history_from_submission(profile, submission)
         return {
             "assignment_id": record.assignment.assignment_id,
             "profile_id": record.assignment.profile_id,
@@ -3813,7 +3813,7 @@ class LocalDaemonExecution:
             "bootstrap_incarnation_id": record.bootstrap_incarnation,
             "process_execution_id": request.process_execution_id,
             "execution_fence": request.execution_fence,
-            **self._slurm_history_proof(record, profile),
+            **history,
         }
 
     def _validate_persisted_recovery_evidence(

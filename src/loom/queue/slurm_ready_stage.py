@@ -486,6 +486,28 @@ class SlurmStageRecord:
     agent_sequence: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class _TaskPageSource:
+    assignment_id: str
+    mutable_fields: tuple
+    submission_json: str | None
+
+
+_AGENT_PAGE_FILTER = (
+    "WHERE a.state != 'released' AND json_extract(a.identity_json, '$.agent_id') = ? "
+    "AND json_extract(a.identity_json, '$.agent_root_id') = ? AND a.assignment_id > ? "
+    "ORDER BY a.assignment_id LIMIT ?"
+)
+
+
+def ensure_slurm_page_index(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        f"CREATE INDEX IF NOT EXISTS slurm_active_agent_page ON {_ASSIGNMENT_TABLE}"
+        "(json_extract(identity_json, '$.agent_id'), json_extract(identity_json, '$.agent_root_id'), assignment_id) "
+        "WHERE state != 'released'"
+    )
+
+
 class SQLiteSlurmStageAssignments:
     """Atomic run/profile reservation and bootstrap/result evidence owner."""
 
@@ -510,8 +532,8 @@ class SQLiteSlurmStageAssignments:
         previous = self._allow_initialize
         self._allow_initialize = True
         try:
-            with self._transaction():
-                pass
+            with self._transaction() as conn:
+                ensure_slurm_page_index(conn)
         finally:
             self._allow_initialize = previous
 
@@ -1296,13 +1318,39 @@ class SQLiteSlurmStageAssignments:
         with _connect(self.path, sqlite_policy=self._sqlite_policy, require_existing=True) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
-                f"SELECT * FROM {_ASSIGNMENT_TABLE} WHERE state != 'released' "
-                "AND json_extract(identity_json, '$.agent_id') = ? "
-                "AND json_extract(identity_json, '$.agent_root_id') = ? "
-                "AND (? IS NULL OR assignment_id > ?) ORDER BY assignment_id LIMIT ?",
-                (agent_id, agent_root_id, after, after, limit),
+                f"SELECT a.* FROM {_ASSIGNMENT_TABLE} a " + _AGENT_PAGE_FILTER,
+                (agent_id, agent_root_id, after or "", limit),
             ).fetchall()
             return tuple(self._record(row) for row in rows)
+
+    def task_page_source(
+        self, conn: sqlite3.Connection, agent_id: str, root_id: str, after: str | None,
+        *, include_records: bool,
+    ) -> tuple[tuple[_TaskPageSource, ...], tuple[SlurmStageRecord, ...]]:
+        """Capture mutable task inputs and, on the initial read, the immutable deliveries."""
+        columns = [
+            "a.assignment_id", "a.state", "a.agent_sequence", "a.job_id", "a.cluster",
+            "a.bootstrap_incarnation", "a.process_execution_id", "a.fence", "a.start_consumed",
+            "a.report_json IS NOT NULL",
+        ]
+        if self.schema_version >= 5:
+            columns.extend(("a.publication_requested_at", "a.publication_completed_at", "a.compute_released_at"))
+        if self.schema_version >= 7:
+            columns.append("a.terminal_observation_json")
+        columns.append("s.value_json")
+        projection = ", ".join(columns)
+        if include_records:
+            projection += ", a.*"
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            f"SELECT {projection} FROM {_ASSIGNMENT_TABLE} a "
+            "LEFT JOIN ready_stage_submissions s ON s.operation_id = a.operation_id "
+            + _AGENT_PAGE_FILTER,
+            (agent_id, root_id, after or "", 33),
+        ).fetchall()
+        sources = tuple(_TaskPageSource(row[0], row[1:len(columns) - 1], row[len(columns) - 1]) for row in rows)
+        records = tuple(self._record(row) for row in rows[:32]) if include_records else ()
+        return sources, records
 
     def read_input_chunk(
         self, assignment_id: str, incarnation: str, transfer_id: str, offset: int

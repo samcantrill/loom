@@ -1997,6 +1997,9 @@ class AgentSessionService:
     ) -> Mapping[str, PlainData]:
         from .local_daemon_execution import _SlurmRetentionRequired, _SlurmPublicationRequired
 
+        if evidence is None:
+            return self._slurm_work_locked(session_id, coordinator_epoch, None, cursor)
+
         with self._daemon._cycle_lock:
             negotiated = self._slurm_work_locked(
                 session_id, coordinator_epoch, evidence, cursor, _pending_only=True,
@@ -2099,7 +2102,7 @@ class AgentSessionService:
                 self._daemon._require_started(), expected_principal=current_rule.principal_id,
             )
             self._check_current_session(current, current_rule, coordinator_epoch, current_revision)
-            if current != session:
+            if current != session or self._daemon._execution is not execution:
                 raise QueueConflictError("SLURM session changed during owner observation")
         return result
 

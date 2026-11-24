@@ -1115,6 +1115,14 @@ On acknowledgement the journal resolves that delivery. It applies capacity
 changes only while the captured active session and offer still own them.
 Concurrent releases that advance the same availability revision run in order.
 
+A submit agent reads up to 32 SLURM tasks and one cursor lookahead from its
+indexed active assignments. The coordinator collects matching recovery facts
+in one query and builds the byte-limited reply outside the scheduling lock.
+Before returning, it checks the session and scheduling epoch and verifies
+changes to the relevant assignments, submission evidence, cancellation and
+recovery. A changing page retries the original cursor. Other agents can renew
+their offers while the reply is being assembled.
+
 The agent handshake can also advertise `agent-event-batch-v1`. An outbound
 agent sends up to 32 consecutive events for one assignment in a request of at
 most 65,536 bytes. Each event is authorized and persisted by the same owner as

@@ -1943,6 +1943,9 @@ class LocalDaemon:
             from .retirement import require_unretired
             require_unretired(self.config.coordinator_root)
             require_storage_upgrade_ready(self.config.coordinator_root, entering=True)
+            from .slurm_ready_stage import ensure_slurm_page_index
+            with self.config.connect_database(self.config.execution_database) as execution_conn:
+                ensure_slurm_page_index(execution_conn)
             with self._connection() as conn:
                 conn.execute("BEGIN IMMEDIATE")
                 ensure_agent_lookup_indexes(conn)
