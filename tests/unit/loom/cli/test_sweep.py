@@ -196,3 +196,23 @@ def test_sweep_stopped_run_without_authority_is_unavailable(tmp_path: Path) -> N
     LocalRunStore(tmp_path / "runs").create_run(run_uri)
     with pytest.raises(CliError, match="authority"):
         build_sweep_status_result(sweep_dir)
+
+
+def test_sweep_run_passes_waiting_window_to_dispatcher(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from loom import deployment
+    from loom.pipeline import sweep
+    from loom.queue.preparation import PreparationSource
+
+    monkeypatch.setattr(deployment, "load_deployment", lambda _: SimpleNamespace(
+        source=PreparationSource("shared", "project", ".", (".",)), preparation_profile="local",
+    ))
+    calls = []
+    def dispatch(plan, **kwargs):
+        calls.append((kwargs["wait"], kwargs["max_in_flight"]))
+        return sweep.build_sweep_status(plan)
+    monkeypatch.setattr(sweep, "run_sweep", dispatch)
+    args = ["sweep", "run", str(_write_spec(tmp_path)), "--deployment", "selection.json",
+            "--config", "pipeline.yaml", "--sweep-dir", str(tmp_path / "sweep"), "--max-in-flight", "2"]
+    assert main(args, stdout=io.StringIO(), stderr=io.StringIO()) == 0
+    assert calls == [(True, 2)]

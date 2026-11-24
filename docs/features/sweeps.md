@@ -55,9 +55,27 @@ later trials from being selected. A stage's explicit early-stop signal is
 reported as `early_stopped` and counts toward successful aggregate completion;
 ordinary cancellation remains `cancelled`.
 
-`--no-wait` submits selected trials without waiting for their workers. `--timeout`
-bounds each native call. Closing the client does not cancel accepted work.
-Interrupting selection leaves later unsent trials unaccepted. Explicit
+A waiting sweep defaults to one outstanding trial. Use `--max-in-flight 2`
+or `run_sweep(..., max_in_flight=2)` to let B reach admission while A runs.
+The window counts retained requests with uncertain replies and accepted
+nonterminal trials. Selection reserves each slot under the manifest lock.
+Each send and each observation runs after releasing that lock. A terminal
+admission frees its slot while the caller continues to collect the native
+per-role cleanup result. Concurrent invocations reuse the same trial identities.
+
+With a wider waiting window, `--timeout` bounds the invocation. The deployment's
+observation limit starts after the initial submissions. A deadline, interruption
+or blocked admission detaches the observer. The manifest preserves each accepted
+operation and each intent awaiting confirmation. Explicitly run the same sweep
+to resume. The status field `metadata.submission_state` on each trial distinguishes
+`unselected`, `intent_retained`, `uncertain`, `accepted` and `rejected`.
+A saved intent without an acceptance receipt may have been sent before the
+caller stopped. Only the execution entry point can send that request again.
+
+`--no-wait` submits selected trials without waiting for their workers. Its
+timeout and the default single-trial waiting timeout apply to each native call.
+Closing a caller preserves accepted work and leaves later unselected trials
+available for an explicit resume. Explicit
 cancellation uses the native operation reference. Status without a deployment
 reads retained observations and available local run projections; supply the same
 deployment to refresh operations. Collection reopens the retained native deployment for a read of committed

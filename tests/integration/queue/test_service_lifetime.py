@@ -941,7 +941,7 @@ def test_startup_qualification_timeout_is_not_applied_and_creates_no_roots(tmp_p
 
 @pytest.mark.parametrize("existing", ["cold", "initialized", "bound"])
 def test_wrong_run_owner_precedes_binding_and_startup_mutations(tmp_path, existing):
-    from loom._run import run
+    from loom import run
     from loom.coordinator import CoordinatorClientError
     from loom.queue import LocalDaemon
     from loom.queue.deployment import load_coordinator_service_config
