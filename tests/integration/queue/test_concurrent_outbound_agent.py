@@ -104,6 +104,7 @@ def _service(
     threaded_supervisor=False,
     shared=False,
     gpu: bool | int = False,
+    gpu_policy=None,
     cpu=2,
     memory=0,
     container=None,
@@ -240,7 +241,7 @@ def _service(
                 if gpu or memory
                 else ResidentProviderFactory(capacity=cpu)
             ),
-            gpu_occupancy_policy=GpuOccupancyPolicy(3600, 7200, 0.1) if gpu else None,
+            gpu_occupancy_policy=(gpu_policy or GpuOccupancyPolicy(3600, 7200, 0.1)) if gpu else None,
             max_concurrent_assignments=ceiling,
         )
         LocalDaemonAgentHttpClient.initialize_agent_root(client_config)
@@ -2204,91 +2205,164 @@ def test_restart_recovers_rejected_next_poll_without_losing_queued_work(monkeypa
         assert len(_rows(case.database, "SELECT admission_id FROM managed_admissions WHERE queue_item_id = 'queued-through-rejection'")) == 1
 
 
-def test_indeterminate_poll_replays_exact_bytes_before_due_offer_and_next_poll(
+def test_unchanged_offer_renews_during_delayed_poll_and_exact_replays(
     monkeypatch,
 ):
-    entered, unblock, control_progress, replayed = Event(), Event(), Event(), Event()
+    from datetime import datetime, timedelta, timezone
+
+    entered, unblock, replayed = Event(), Event(), Event()
     original = transport._dispatch
     exchange = transport._exchange_agent_request
-    requests = []
-    held_request = []
-    active_polls = []
-    clock_offset = [0.0]
-    monkeypatch.setattr(deployment, "monotonic", lambda: monotonic() + clock_offset[0])
+    requests, renewals = [], []
+    offset = [0]
+    start = datetime.now(timezone.utc)
+    monkeypatch.setattr(deployment, "monotonic", lambda: monotonic() + offset[0])
+
+    def clock():
+        return (start + timedelta(seconds=offset[0])).isoformat().replace("+00:00", "Z")
 
     def record(config, operation, body, role, connection, keep_alive, **kwargs):
         requests.append((operation, body))
         return exchange(config, operation, body, role, connection, keep_alive, **kwargs)
 
+    lost = Event()
+
     def dispatch(view, operation, value):
-        if operation != "poll":
-            if operation in {"assignment_control", "control_wait"} and entered.is_set():
-                control_progress.set()
-            return original(view, operation, value)
-        active_polls.append(value)
-        assert len(active_polls) == 1
-        try:
-            result = original(view, operation, value)
+        result = original(view, operation, value)
+        if operation == "renew":
+            if not lost.is_set():
+                lost.set()
+                raise ConnectionError("renewal accepted, reply lost")
+            renewals.append(result)
+        if operation == "poll":
             if not entered.is_set():
-                held_request.append(dict(value))
                 entered.set()
-                assert unblock.wait(20)
-                raise ConnectionError("lost response after exact poll committed")
-            if dict(value) == held_request[0]:
-                replayed.set()
-            return result
-        finally:
-            active_polls.remove(value)
+                assert unblock.wait(30)
+                raise ConnectionError("poll committed, reply lost")
+            replayed.set()
+        return result
 
     monkeypatch.setattr(transport, "_exchange_agent_request", record)
     monkeypatch.setattr(transport, "_dispatch", dispatch)
-    with _service(monkeypatch) as case:
+    with _service(monkeypatch, clock=clock) as case:
         try:
-            assert entered.wait(10)
-            assert control_progress.wait(5)
-            first = next(
-                index
-                for index, (operation, _) in enumerate(requests)
-                if operation == "poll"
-            )
-            assert not any(
-                operation in {"offer", "renew"}
-                for operation, _ in requests[first + 1 :]
-            )
-            clock_offset[0] = deployment._OUTBOUND_OFFER_TTL_SECONDS
+            assert entered.wait(10), case.failures
+            offer_id, expiry = _rows(case.database, "SELECT offer_id, expires_at FROM agent_offers")[0]
+            for sequence in range(1, 5):
+                offset[0] += 12
+                _eventually(lambda: len(renewals) == sequence)
+                receipt = renewals[-1]
+                assert receipt["state"] == "renewed"
+                assert receipt["offer_id"] == offer_id and receipt["sequence"] == sequence
+                assert datetime.fromisoformat(receipt["accepted_at"]) < datetime.fromisoformat(expiry)
+                expiry = receipt["expires_at"]
+                assert _rows(case.agent_root / "control.sqlite",
+                    "SELECT sequence, state FROM agent_poll_state_local") == [(1, "PENDING")]
+            assert len([body for op, body in requests if op == "poll"]) == 1
+            attempts = [body for op, body in requests if op == "renew"]
+            assert len(attempts) == 5 and attempts[0] == attempts[1]
+            assert len([body for op, body in requests if op == "offer"]) == 1
             unblock.set()
             assert replayed.wait(10), case.failures
-            _eventually(
-                lambda: len([item for item in requests if item[0] == "poll"]) >= 3
-            )
-            polls = [
-                (index, body)
-                for index, (operation, body) in enumerate(requests)
-                if operation == "poll"
-            ]
-            assert polls[0][1] == polls[1][1]
-            assert polls[2][1] != polls[1][1]
-            assert any(
-                operation in {"offer", "renew"}
-                for operation, _ in requests[polls[1][0] + 1 : polls[2][0]]
-            )
-            assert not any(
-                operation in {"offer", "renew"}
-                for operation, _ in requests[polls[0][0] + 1 : polls[1][0]]
-            )
+            _eventually(lambda: len([body for op, body in requests if op == "poll"]) >= 3)
+            polls = [body for op, body in requests if op == "poll"]
+            assert polls[0] == polls[1]
+            assert json.loads(polls[2])["sequence"] == 2
         finally:
             unblock.set()
+
+
+@pytest.mark.parametrize("uncertain_renewal", [False, True])
+def test_gpu_change_defers_offer_replacement_until_held_poll_settles(monkeypatch, uncertain_renewal):
+    held, release, occupied, deferred = Event(), Event(), Event(), Event()
+    lost, let_reply_fail = Event(), Event()
+    original = transport._dispatch
+    requests = []
+
+    def observe(observer):
+        busy = occupied.is_set()
+        return {"GPU-private": GpuProcessObservation(
+            "GPU-private", True, busy, "externally_occupied" if busy else "available",
+        )}
+
+    from loom.queue._agent_progress import _cooperative, _steps
+    refresh = LocalDaemonAgentHttpClient.refresh_resource_offer
+
+    @_cooperative
+    def observed_refresh(client, **kwargs):
+        result = yield from _steps(refresh, client, **kwargs)
+        if client._defer_offer_until_poll_settles:
+            deferred.set()
+        return result
+
+    def dispatch(view, operation, value):
+        requests.append(operation)
+        if operation == "renew" and uncertain_renewal and held.is_set() and not lost.is_set():
+            lost.set()
+            assert let_reply_fail.wait(10)
+            raise ConnectionError("unconfirmed renewal, capacity now occupied")
+        result = original(view, operation, value)
+        if operation == "poll" and not held.is_set():
+            held.set()
+            assert release.wait(20)
+        return result
+
+    monkeypatch.setattr(NvidiaSmiGpuProcessObserver, "observe", observe)
+    monkeypatch.setattr(LocalDaemonAgentHttpClient, "refresh_resource_offer", observed_refresh)
+    monkeypatch.setattr(transport, "_dispatch", dispatch)
+    with _service(monkeypatch, gpu=True, gpu_policy=GpuOccupancyPolicy(0.25, 1, 0.1)) as case:
+        try:
+            assert held.wait(10)
+            if uncertain_renewal:
+                assert lost.wait(5)
+            before_change = requests.count("renew")
+            occupied.set()
+            let_reply_fail.set()
+            assert deferred.wait(5), case.failures
+            boundary = len(requests)
+            assert requests.count("offer") == 1
+            assert requests.count("renew") == before_change
+            assert _rows(case.agent_root / "control.sqlite",
+                "SELECT sequence, state FROM agent_poll_state_local") == [(1, "PENDING")]
+            release.set()
+            _eventually(lambda: requests.count("offer") == 2)
+            assert [op for op in requests[boundary:] if op in {"offer", "renew", "poll"}][0] == "offer"
+            current = _eventually(lambda: _rows(case.database,
+                "SELECT offer_json FROM agent_offers WHERE current = 1 AND availability_revision != 'availability-1'"))
+            from loom.queue.agent_sessions import AgentOffer
+            offer = AgentOffer.from_value(json.loads(current[0][0]))
+            assert not offer.gpu_atoms
+            assert offer.resource_status[0].reason_code == "external_process_detected"
+        finally:
+            let_reply_fail.set()
+            release.set()
 
 
 @pytest.mark.parametrize("shared", [False, True])
 def test_drain_retains_late_poll_delivery_and_settles_it_without_fresh_admission(
     monkeypatch, shared,
 ):
-    entered, unblock = Event(), Event()
+    from loom.queue._agent_progress import _cooperative, _steps
+
+    entered, unblock, drain_received, checked = (Event() for _ in range(4))
     original = transport._dispatch
-    assignment = []
+    refresh = LocalDaemonAgentHttpClient.refresh_resource_offer
+    assignment, capacity_after_drain = [], []
+    offset = [0]
+    monkeypatch.setattr(deployment, "monotonic", lambda: monotonic() + offset[0])
+
+    @_cooperative
+    def observe_refresh(client, **kwargs):
+        result = yield from _steps(refresh, client, **kwargs)
+        if drain_received.is_set():
+            checked.set()
+        return result
+
+    monkeypatch.setattr(LocalDaemonAgentHttpClient, "refresh_resource_offer", observe_refresh)
 
     def dispatch(view, operation, value):
+        if drain_received.is_set() and operation in {"renew", "offer"}:
+            capacity_after_drain.append(operation)
         result = original(view, operation, value)
         if (
             operation == "poll"
@@ -2332,6 +2406,10 @@ def test_drain_retains_late_poll_delivery_and_settles_it_without_fresh_admission
             ))
             assert _rows(case.agent_root / "control.sqlite",
                 "SELECT state FROM agent_poll_state_local") == [("PENDING",)]
+            drain_received.set()
+            offset[0] += 10
+            assert checked.wait(5), case.failures
+            assert not capacity_after_drain
             unblock.set()
             assert (
                 case.client.wait("late", timeout_seconds=30).state

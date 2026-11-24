@@ -1046,6 +1046,7 @@ def _complete_remote_result_and_release(
 
 
 
+@_serialized("_delivery_gate")
 @_serialized("_mutation_gate")
 def _release_completed_assignment(
     self: LocalDaemonAgentHttpClient, session, assignment, commands, providers, execution_journal, *, fence
@@ -1103,6 +1104,7 @@ def _cancel_pregrant_if_requested(
 
 
 
+@_serialized("_delivery_gate")
 @_serialized("_mutation_gate")
 def _decline_pregrant_assignment(
     self: LocalDaemonAgentHttpClient, session, assignment, commands, providers, execution_journal, *, cancelled=False

@@ -1026,6 +1026,9 @@ def _outbound_service_steps(
     while True:
         assignments = {}
         recovery = None
+        maintenance = None
+        refreshing = False
+        retiring = False
         suspended = Event()
 
         def suspending(suspended=suspended):
@@ -1069,6 +1072,24 @@ def _outbound_service_steps(
             request = yield from _steps(client._resolve_delivery, session_id, delivery.get("request"))
             return (yield from _steps(client._execute_delivered_assignment,
                 session_id, request, suspend_requested=suspending))
+
+        def maintain_offers():
+            nonlocal refreshing
+            assert client is not None
+            while not suspending() and not retiring:
+                now = monotonic()
+                if now >= client._next_resource_maintenance and not client._defer_offer_until_poll_settles:
+                    policy = active.client.gpu_occupancy_policy
+                    interval = min(5.0, _OUTBOUND_OFFER_TTL_SECONDS / 2)
+                    if policy is not None:
+                        interval = min(interval, policy.poll_interval_seconds)
+                    client._next_resource_maintenance = now + interval
+                    refreshing = True
+                    try:
+                        yield from _steps(client.refresh_resource_offer, ttl_seconds=_OUTBOUND_OFFER_TTL_SECONDS)
+                    finally:
+                        refreshing = False
+                yield from _delay(0.05)
 
         def repair_session():
             assert client is not None
@@ -1170,7 +1191,13 @@ def _outbound_service_steps(
                     session_id=session.session_id,
                     sqlite_policy=active.client.sqlite_policy,
                 )
+            # A reopened client first recovers the original poll and its session.
+            # This task owns all periodic observations until that client closes.
+            client._resource_maintenance_enabled = True
+            maintenance = yield _Spawn(maintain_offers())
             while not stop.is_set():
+                if maintenance.complete and maintenance.error is not None:
+                    raise maintenance.error
                 for reference, view in tuple(assignments.items()):
                     if view.complete:
                         del assignments[reference]
@@ -1192,6 +1219,9 @@ def _outbound_service_steps(
                             raise QueueConflictError(
                                 "service retirement evidence is stale"
                             )
+                        retiring = True
+                        while not maintenance.complete:
+                            yield from _delay(0.01)
                         (yield from _steps(client.retire_clean,
                             session.session_id,
                             idempotency_key="service-retire-" + generation,
@@ -1223,17 +1253,6 @@ def _outbound_service_steps(
                 session = client.active_session()
                 if session is None:
                     raise QueueServiceError("agent session ended without retirement")
-                client._resource_maintenance_enabled = True  # noqa: SLF001
-                if monotonic() >= client._next_resource_maintenance:
-                    policy = active.client.gpu_occupancy_policy
-                    interval = min(5.0, _OUTBOUND_OFFER_TTL_SECONDS / 2)
-                    if policy is not None:
-                        interval = min(interval, policy.poll_interval_seconds)
-                    client._next_resource_maintenance = monotonic() + interval
-                    yield from _steps(client.refresh_resource_offer, ttl_seconds=_OUTBOUND_OFFER_TTL_SECONDS)
-                session = client.active_session()
-                if session is None:
-                    raise QueueServiceError("agent session ended without retirement")
                 yield from _steps(client.drive_slurm_jobs)
                 # A scheduler step can yield while the receipt lane records a
                 # drain. Apply it before opening another assignment poll.
@@ -1245,6 +1264,10 @@ def _outbound_service_steps(
                         raise QueueServiceError("agent session ended without retirement")
                 if client._drained or client._restart_with_retained_work or len(journal.unresolved_assignment_references()) >= active.client.max_concurrent_assignments:
                     yield from _delay(0.05)
+                    continue
+                if refreshing or monotonic() >= client._next_resource_maintenance:
+                    # Observe changed capacity before opening the next poll.
+                    yield from _delay(0.01)
                     continue
                 sequence = client.next_poll_sequence(session.session_id)
                 delivery = (yield from _steps(client.wait_for_work_with_slurm,
@@ -1266,6 +1289,7 @@ def _outbound_service_steps(
         except (QueueError, _SupervisorCommunicationError) as exc:
             if stop.is_set():
                 return
+            suspended.set()
             logging.getLogger(__name__).warning(
                 "outbound agent reconnect deferred (%s): %s", type(exc).__name__, exc,
             )
@@ -1275,7 +1299,10 @@ def _outbound_service_steps(
         finally:
             suspended.set()
             observing[0] = None
-            while any(not view.complete for view in assignments.values()) or (recovery is not None and not recovery.complete):
+            while any(
+                view is not None and not view.complete
+                for view in (*assignments.values(), recovery, maintenance)
+            ):
                 yield from _delay(0.01)
             if client is not None:
                 observing[0] = None

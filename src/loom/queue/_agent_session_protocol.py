@@ -30,7 +30,6 @@ from .agent_sessions import (
     AgentOffer,
     AgentOfferRenewal,
     AgentProviderDescriptor,
-    AgentPollActiveError,
     AgentPollFencedError,
     AgentRegistration,
     AgentSession,
@@ -46,7 +45,7 @@ from ._remote_stage_execution import (
 from .errors import QueueConflictError, QueueServiceError, _AgentRegistrationEpochRejected
 from .submitted_execution import SUBMITTED_CONTAINER_CAPABILITY
 
-from ._agent_progress import _Progress, _steps, _external
+from ._agent_progress import _Progress, _steps, _external, _serialized
 
 from typing import TYPE_CHECKING
 from ._agent_session_codec import _IndeterminateAgentProtocolError
@@ -386,32 +385,81 @@ def renew_offer(self: LocalDaemonAgentHttpClient, renewal: AgentOfferRenewal) ->
     if self._drained or self._restart_with_retained_work:
         raise QueueConflictError("agent cannot renew executable capacity")
     journal = self._require_journal()
-    operation_id = f"{renewal.session_id}:{renewal.offer_id}:{renewal.sequence}"
-    journal._persist_mutation("renew", operation_id, renewal.value())
-    replay = journal.prepare_offer_renewal(renewal)
+    replay = yield from self._mutation_gate.run(_steps(journal.prepare_offer_renewal, renewal))
     if replay is not None:
-        journal.complete_mutation("renew", operation_id, replay)
         return replay
-    result = (yield from _steps(self._call, "renew", {"renewal": renewal.value()}))
-    journal.complete_offer_renewal(renewal, result)
-    journal.complete_mutation("renew", operation_id, result)
+    result = yield from _exchange_renewal(self, renewal)
+    assert result is not None
+    return result
+
+
+def _exchange_renewal(
+    self: LocalDaemonAgentHttpClient, renewal: AgentOfferRenewal, *, refresh_on_rejection: bool = False,
+):
+    journal = self._require_journal()
+    operation_id = f"{renewal.session_id}:{renewal.offer_id}:{renewal.sequence}"
+    try:
+        result = yield from _steps(self._call, "renew", {"renewal": renewal.value()})
+    except _IndeterminateAgentProtocolError:
+        if self._service_progress and refresh_on_rejection:
+            # Re-observe capacity before replaying this persisted request.
+            self._next_resource_maintenance = 0
+            return None
+        raise
+    except (QueueConflictError, QueueServiceError):
+        if self._service_progress:
+            invalidated = yield from self._mutation_gate.run(_steps(
+                journal.discard_rejected_resource_mutation,
+                renewal.session_id, "renew", operation_id,
+            ))
+            if invalidated:
+                self._next_resource_maintenance = 0
+                self._defer_offer_until_poll_settles = self._live_work_poll is not None
+            if refresh_on_rejection:
+                return None
+        raise
+    yield from self._mutation_gate.run(_steps(journal.complete_offer_renewal, renewal, result))
     return result
 
 
 def refresh_resource_offer(
     self: LocalDaemonAgentHttpClient, *, ttl_seconds: int = 30
 ) -> Generator[_Progress, Any, Mapping[str, PlainData] | None]:
-    """Refresh cached host facts and report one serial, replayable resource view."""
+    prepared = yield from _prepare_resource_refresh(self, ttl_seconds)
+    if isinstance(prepared, AgentOfferRenewal):
+        return (yield from _exchange_renewal(self, prepared, refresh_on_rejection=True))
+    return prepared
+
+
+@_serialized("_mutation_gate")
+def _prepare_resource_refresh(self: LocalDaemonAgentHttpClient, ttl_seconds: int):
     journal = self._require_journal()
     session = journal.active_session()
-    if session is None or self._drained:
+    if session is None or self._drained or (
+        self._service_progress and journal.next_received_control(session.session_id) is not None
+    ):
         return None
+    if self._service_progress:
+        pending = journal.pending_poll()
+        if pending is not None and pending != self._live_work_poll:
+            return None
     if self._restart_with_retained_work and not self._service_progress:
         return None
-    (yield from _steps(self._replay_pending_resource_mutation, session.session_id))
+    retry = None
+    pending_resource = journal.pending_resource_mutation(session.session_id)
+    if pending_resource is not None:
+        operation, _, value = pending_resource
+        if self._service_progress and operation == "renew":
+            retry = AgentOfferRenewal.from_value(value)
+        elif self._live_work_poll is not None:
+            self._defer_offer_until_poll_settles = True
+            return None
+        else:
+            yield from _steps(self._replay_pending_resource_mutation, session.session_id)
     session = journal.session(session.session_id)
     if not (self._config.resident_profiles or self._config.container_policies):
-        if not (yield from _steps(self._qualify_service_admission)):
+        if not (yield from _steps(self._qualify_service_admission, retrying_renewal=retry)):
+            self._defer_offer_until_poll_settles = self._live_work_poll is not None
             return None
         profile = None
         descriptors, atoms, claims, statuses = (), (), (), ()
@@ -423,12 +471,15 @@ def refresh_resource_offer(
                 monitor = provider._occupancy_monitor
                 if monitor is not None:
                     cached = monitor.cached_snapshot()
-                    if cached is None or not cached.is_fresh(monitor._monotonic_clock(), monitor.policy.poll_interval_seconds):
+                    if self._live_work_poll is not None or cached is None or not cached.is_fresh(
+                        monitor._monotonic_clock(), monitor.policy.poll_interval_seconds,
+                    ):
                         snapshot = yield from _external("bulk", _sample_gpu_occupancy,
                                                        monitor._observer, monitor.selected_uuids,
                                                        monitor._utc_clock, monitor._monotonic_clock)
                         monitor._apply_snapshot(snapshot)
-        if not (yield from _steps(self._qualify_service_admission)):
+        if not (yield from _steps(self._qualify_service_admission, retrying_renewal=retry)):
+            self._defer_offer_until_poll_settles = self._live_work_poll is not None
             return None
         descriptors, atoms, claims, statuses = self._offer_provider_snapshot(
             session_id=session.session_id,
@@ -474,14 +525,34 @@ def refresh_resource_offer(
         capacity_atoms=atoms,
         resource_status=statuses,
     )
+    if self._service_progress and (
+        self._suspend_requested is not None and self._suspend_requested()
+        or journal.next_received_control(session.session_id) is not None
+    ):
+        return None
     current = journal.current_resource_offer(session.session_id)
     renewal = journal.next_offer_renewal(session.session_id)
     if (
         current is not None
         and current.decision_value() == offer.decision_value()
         and renewal is not None
+        and (retry is None or (
+            retry.offer_id == renewal.offer_id
+            and retry.availability_revision == renewal.availability_revision
+        ))
     ):
-        return (yield from _steps(self.renew_offer, replace(renewal, resource_status=statuses)))
+        # A retry keeps the original sample times and digest. The scheduling
+        # content, including current claims and occupancy, was just re-observed.
+        renewal = retry or replace(renewal, resource_status=statuses)
+        replay = journal.prepare_offer_renewal(renewal)
+        if replay is not None:
+            journal.complete_offer_renewal(renewal, replay)
+            return replay
+        return renewal
+    if self._live_work_poll is not None:
+        # The outstanding delivery must settle before replacing its capacity.
+        self._defer_offer_until_poll_settles = True
+        return None
     expected = None
     if current is not None:
         expected = session.availability_revision
@@ -501,10 +572,18 @@ def _replay_pending_resource_mutation(self: LocalDaemonAgentHttpClient, session_
     if pending is None:
         return
     operation, operation_id, value = pending
+    if operation == "renew" and self._service_progress:
+        # Only resource maintenance can re-observe capacity for a safe retry.
+        # Renewal cannot change the availability revision used by other calls.
+        return
     try:
         if operation == "renew":
             renewal = AgentOfferRenewal.from_value(value)
-            result = (yield from _steps(self._call, "renew", {"renewal": renewal.value()}))
+            # Older clients could stop after journalling the exact mutation
+            # but before reserving its sequence in the bounded renewal row.
+            result = journal.prepare_offer_renewal(renewal)
+            if result is None:
+                result = yield from _steps(self._call, "renew", {"renewal": renewal.value()})
         else:
             offered = dict(value)
             expected = offered.pop("expected_availability_revision", None)
@@ -525,7 +604,8 @@ def _replay_pending_resource_mutation(self: LocalDaemonAgentHttpClient, session_
         return
     if operation == "renew":
         journal.complete_offer_renewal(AgentOfferRenewal.from_value(value), result)
-    journal.complete_mutation(operation, operation_id, result)
+    else:
+        journal.complete_mutation(operation, operation_id, result)
 
 
 def renew_current_offer(self: LocalDaemonAgentHttpClient, session_id: str) -> Generator[_Progress, Any, Mapping[str, PlainData] | None]:
@@ -541,6 +621,33 @@ def wait_for_work(
     sequence: int,
     wait_timeout_ms: int,
 ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
+    value = yield from _prepare_work_poll(
+        self, session_id, availability_revision, sequence, wait_timeout_ms,
+    )
+    if "result" in value:
+        return value
+    journal = self._require_journal()
+    try:
+        try:
+            result = yield from _steps(self._call, "poll", value)
+        except AgentPollFencedError:
+            yield from self._mutation_gate.run(_steps(journal.fence_poll, session_id, sequence))
+            if self._service_progress:
+                self._service_control_due = True
+                return {"result": "idle"}
+            raise
+        # Journal the exact delivery before any waiting drain can take effect.
+        yield from self._mutation_gate.run(_steps(journal.complete_poll, session_id, sequence, result))
+        return result
+    finally:
+        self._live_work_poll = None
+        if self._defer_offer_until_poll_settles:
+            self._next_resource_maintenance = 0
+            self._defer_offer_until_poll_settles = False
+
+
+@_serialized("_mutation_gate")
+def _prepare_work_poll(self: LocalDaemonAgentHttpClient, session_id, availability_revision, sequence, wait_timeout_ms):
     if self._drained:
         raise QueueConflictError("drained agent cannot poll for new work")
     if self._service_progress and not (yield from _steps(self._qualify_service_admission)):
@@ -568,22 +675,9 @@ def wait_for_work(
     )
     if replay is not None:
         return replay
-    try:
-        result = (yield from _steps(self._call, "poll", value))
-    except AgentPollActiveError:
-        # The original held request still owns this exact poll identity.
-        # Preserve the local intent so the same identity can be retried.
-        raise
-    except AgentPollFencedError:
-        journal.fence_poll(session_id, sequence)
-        if self._service_progress:
-            self._service_control_due = True
-            return {"result": "idle"}
-        raise
-    # Other rejection and indeterminate responses leave the exact request
-    # pending. Only native outcome evidence proves sequence consumption.
-    journal.complete_poll(session_id, sequence, result)
-    return result
+    if self._service_progress:
+        self._live_work_poll = (session_id, availability_revision, sequence)
+    return value
 
 
 def _resume_pending_poll(

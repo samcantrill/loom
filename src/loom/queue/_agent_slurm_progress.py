@@ -8,7 +8,7 @@ from threading import Lock
 from time import monotonic
 
 from ._agent_progress import _Spawn, _delay, _external, _steps
-from .errors import QueueError, QueueServiceError
+from .errors import QueueServiceError
 from ._slurm_result_transport import SlurmEffectPending
 
 
@@ -100,7 +100,6 @@ def drive_operation(client, operation, binding, *args, **kwargs):
         return operation(*args, acknowledge=request, **kwargs)
 
     view = yield _Spawn(_external("slurm", work))
-    next_renewal = monotonic()
     try:
         while not view.complete:
             try:
@@ -119,18 +118,6 @@ def drive_operation(client, operation, binding, *args, **kwargs):
                     raise
                 else:
                     reply.set_result(value)
-            # Do not apply reload/drain effects while the scheduler owns a
-            # captured profile. The separate receipt view remains responsive;
-            # effects are applied at the existing next scheduler boundary.
-            if monotonic() >= next_renewal:
-                next_renewal = monotonic() + 5
-                if (not client._drained and not client._restart_with_retained_work
-                    and not getattr(client, "_resident_poll_active", False)):
-                    try:
-                        yield from _steps(client.renew_current_offer, binding["session_id"])
-                    except QueueError:
-                        # The durable renewal is retried by normal maintenance.
-                        pass
             yield from _delay(0.01)
         if view.error is not None:
             raise view.error

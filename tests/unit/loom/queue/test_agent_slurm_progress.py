@@ -41,8 +41,8 @@ def test_completed_child_does_not_rethrow_an_external_error_it_handled():
 
 
 @pytest.mark.parametrize("acknowledgement_fails", [False, True])
-def test_blocked_scheduler_preserves_control_renewal_and_acknowledgement_owner(acknowledgement_fails):
-    started, release, control_advanced, renewed = Event(), Event(), Event(), Event()
+def test_blocked_scheduler_preserves_control_and_acknowledgement_owner(acknowledgement_fails):
+    started, release, control_advanced = Event(), Event(), Event()
     owner_threads, worker_threads, results, failures = [], [], [], []
 
     def replay(acknowledge):
@@ -68,7 +68,6 @@ def test_blocked_scheduler_preserves_control_renewal_and_acknowledgement_owner(a
                                     replay_pending=replay, observation_policy=None),
         active_session=lambda: SimpleNamespace(session_id="session", coordinator_epoch="epoch"),
         _slurm_cursor=None, _call=call,
-        renew_current_offer=lambda session: renewed.set() if started.is_set() else None,
     )
 
     def primary():
@@ -93,7 +92,6 @@ def test_blocked_scheduler_preserves_control_renewal_and_acknowledgement_owner(a
     try:
         assert started.wait(10)
         assert control_advanced.wait(10)
-        assert renewed.wait(10)
         assert not results
     finally:
         release.set()
@@ -163,7 +161,7 @@ def test_slow_http_ack_allows_same_agent_peer_submission_observation_and_cancel(
 
     client = SimpleNamespace(
         _service_progress=True, _drained=False, _restart_with_retained_work=False,
-        _call=call, renew_current_offer=lambda session: None,
+        _call=call,
     )
     binding = {"session_id": "session", "coordinator_epoch": "epoch"}
     first, peer = _task(profile), _task(profile, key="2")

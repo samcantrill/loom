@@ -793,19 +793,33 @@ class _RemoteAgentJournal:
 
     def discard_rejected_resource_mutation(
         self, session_id: str, operation: str, operation_id: str
-    ) -> None:
+    ) -> bool:
+        """Discard this intent and report whether it invalidated current capacity."""
+        invalidated = False
         with self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             if operation == "renew":
-                # A definite rejection cannot be fixed by renewing the same
-                # consumed offer, even if capacity returned to identical bytes.
-                self._invalidate_resource_offer(conn, session_id)
+                # A late rejection belongs only to the still-pending sequence.
+                # A release or a replacement offer may already own this session.
+                row = conn.execute(
+                    "SELECT 1 FROM agent_offer_renewals_local r JOIN agent_mutation_intents m "
+                    "ON m.digest = r.digest WHERE m.operation = 'renew' AND m.operation_id = ? "
+                    "AND m.result_json IS NULL AND r.result_json IS NULL AND r.session_id = ? "
+                    "AND r.offer_id = json_extract(m.request_json, '$.offer_id') "
+                    "AND r.availability_revision = json_extract(m.request_json, '$.availability_revision') "
+                    "AND r.sequence = json_extract(m.request_json, '$.sequence')",
+                    (operation_id, session_id),
+                ).fetchone()
+                if row is not None:
+                    self._invalidate_resource_offer(conn, session_id)
+                    invalidated = True
             conn.execute(
                 "DELETE FROM agent_mutation_intents WHERE operation = ? "
                 "AND operation_id = ? AND result_json IS NULL",
                 (operation, operation_id),
             )
             conn.commit()
+        return invalidated
 
     def pending_resource_mutation(
         self, session_id: str
@@ -846,6 +860,8 @@ class _RemoteAgentJournal:
         operation_id: str,
         expected_availability_revision: str | None = None,
     ) -> None:
+        if self.pending_poll() is not None:
+            raise AgentPollActiveError("offer replacement requires a settled work poll")
         session = self.session(offer.session_id)
         if (
             offer.coordinator_epoch != session.coordinator_epoch
@@ -863,8 +879,16 @@ class _RemoteAgentJournal:
         value = offer.value()
         if expected_availability_revision is not None:
             value["expected_availability_revision"] = expected_availability_revision
-        self._persist_mutation("offer", operation_id, value)
         with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._write_mutation(conn, "offer", operation_id, value)
+            # A replacement supersedes an uncertain extension. Replaying that
+            # extension could advertise capacity the agent has observed changing.
+            conn.execute(
+                "DELETE FROM agent_mutation_intents WHERE operation = 'renew' "
+                "AND json_extract(request_json, '$.session_id') = ?",
+                (offer.session_id,),
+            )
             conn.execute(
                 "INSERT INTO agent_offers_local(session_id, availability_revision, state) VALUES (?, ?, 'PENDING') ON CONFLICT(session_id) DO UPDATE SET availability_revision = excluded.availability_revision, state = 'PENDING'",
                 (offer.session_id, offer.availability_revision),
@@ -913,6 +937,10 @@ class _RemoteAgentJournal:
                 return freeze_plain_data(value, path="agent offer renewal replay")
             if renewal.sequence != current + 1:
                 raise AgentPollSequenceGapError("offer renewal sequence has a gap")
+            self._write_mutation(
+                conn, "renew", f"{renewal.session_id}:{renewal.offer_id}:{renewal.sequence}",
+                renewal.value(),
+            )
             conn.execute(
                 "UPDATE agent_offer_renewals_local SET sequence = ?, digest = ?, result_json = NULL WHERE session_id = ?",
                 (renewal.sequence, digest, renewal.session_id),
@@ -923,20 +951,29 @@ class _RemoteAgentJournal:
     def complete_offer_renewal(
         self, renewal: AgentOfferRenewal, result: Mapping[str, PlainData]
     ) -> None:
+        if (
+            result.get("offer_id") != renewal.offer_id
+            or result.get("sequence") != renewal.sequence
+            or result.get("state") != "renewed"
+        ):
+            raise QueueServiceError("offer renewal receipt does not match its request")
         with self._connection() as conn:
-            updated = conn.execute(
+            conn.execute("BEGIN IMMEDIATE")
+            digest = _canonical_digest(renewal.value())
+            conn.execute(
                 "UPDATE agent_offer_renewals_local SET result_json = ? WHERE session_id = ? "
-                "AND offer_id = ? AND availability_revision = ? AND sequence = ?",
+                "AND offer_id = ? AND availability_revision = ? AND sequence = ? AND digest = ?",
                 (
-                    _canonical_json(result),
-                    renewal.session_id,
-                    renewal.offer_id,
-                    renewal.availability_revision,
-                    renewal.sequence,
+                    _canonical_json(result), renewal.session_id, renewal.offer_id,
+                    renewal.availability_revision, renewal.sequence, digest,
                 ),
-            ).rowcount
-            if updated != 1:
-                raise QueueConflictError("offer renewal intent is unavailable")
+            )
+            # Even a superseded renewal's response settles its own full intent.
+            conn.execute(
+                "DELETE FROM agent_mutation_intents WHERE operation = 'renew' AND operation_id = ? "
+                "AND digest = ?",
+                (f"{renewal.session_id}:{renewal.offer_id}:{renewal.sequence}", digest),
+            )
             conn.commit()
 
     def next_offer_renewal(self, session_id: str) -> AgentOfferRenewal | None:
@@ -1095,13 +1132,6 @@ class _RemoteAgentJournal:
                     "VALUES (?, ?, ?, 0, '', NULL) ON CONFLICT(session_id) DO UPDATE SET "
                     "offer_id = excluded.offer_id, availability_revision = excluded.availability_revision, sequence = 0, digest = '', result_json = NULL",
                     (session_id, offer_id, availability_revision),
-                )
-            if operation == "renew":
-                # The bounded renewal row owns completed sequence replay. Keep
-                # only a pending full request here to recover a lost response.
-                conn.execute(
-                    "DELETE FROM agent_mutation_intents WHERE operation = ? AND operation_id = ?",
-                    (operation, operation_id),
                 )
             conn.commit()
 
@@ -1883,6 +1913,10 @@ class _RemoteAgentJournal:
                 (str(row["registration_operation_id"]), str(row["retirement_secret"])),
             )
             conn.execute(
+                "DELETE FROM agent_mutation_intents WHERE operation = 'renew' "
+                "AND json_extract(request_json, '$.session_id') = ?", (session_id,),
+            )
+            conn.execute(
                 "DELETE FROM agent_retirement_proofs_local WHERE session_id = ?",
                 (session_id,),
             )
@@ -1900,23 +1934,29 @@ class _RemoteAgentJournal:
     def _persist_mutation(
         self, operation: str, operation_id: str, value: Mapping[str, PlainData]
     ) -> None:
+        with self._connection() as conn:
+            self._write_mutation(conn, operation, operation_id, value)
+            conn.commit()
+
+    @staticmethod
+    def _write_mutation(
+        conn: sqlite3.Connection, operation: str, operation_id: str, value: Mapping[str, PlainData]
+    ) -> None:
         digest = _canonical_digest(value)
         encoded = _canonical_json(value)
-        with self._connection() as conn:
-            row = conn.execute(
-                "SELECT digest FROM agent_mutation_intents WHERE operation = ? AND operation_id = ?",
-                (operation, operation_id),
-            ).fetchone()
-            if row is None:
-                conn.execute(
-                    "INSERT INTO agent_mutation_intents(operation, operation_id, digest, request_json, result_json) VALUES (?, ?, ?, ?, NULL)",
-                    (operation, operation_id, digest, encoded),
-                )
-            elif str(row["digest"]) != digest:
-                raise QueueConflictError(
-                    "idempotency key was reused with different content"
-                )
-            conn.commit()
+        row = conn.execute(
+            "SELECT digest FROM agent_mutation_intents WHERE operation = ? AND operation_id = ?",
+            (operation, operation_id),
+        ).fetchone()
+        if row is None:
+            conn.execute(
+                "INSERT INTO agent_mutation_intents(operation, operation_id, digest, request_json, result_json) VALUES (?, ?, ?, ?, NULL)",
+                (operation, operation_id, digest, encoded),
+            )
+        elif str(row["digest"]) != digest:
+            raise QueueConflictError(
+                "idempotency key was reused with different content"
+            )
 
 
 def _canonical_json(value: Mapping[str, PlainData]) -> str:

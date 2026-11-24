@@ -907,7 +907,11 @@ class LocalDaemonAgentHttpClient:
         self._closed = False
         self._service_progress = False
         self._service_control_due = True
-        self._resident_poll_active = False
+        self._live_work_poll: tuple[str, str, int] | None = None
+        self._defer_offer_until_poll_settles = False
+        # Polls and assignment release/decline advance the same availability
+        # revision. Their ordering is independent of unchanged-offer renewal.
+        self._delivery_gate = _Gate()
         self._epoch_reconciliation_pending = False
         self._mutation_gate = _Gate()
         self._suspend_requested: Callable[[], bool] | None = None
@@ -1297,12 +1301,10 @@ class LocalDaemonAgentHttpClient:
         return (yield from _session_protocol.publish_offer(self, offer, idempotency_key=idempotency_key, expected_availability_revision=expected_availability_revision, _observed_snapshot=_observed_snapshot))
 
     @_cooperative
-    @_serialized("_mutation_gate")
     def renew_offer(self, renewal: AgentOfferRenewal) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
         return (yield from _session_protocol.renew_offer(self, renewal))
 
     @_cooperative
-    @_serialized("_mutation_gate")
     def refresh_resource_offer(
         self, *, ttl_seconds: int = 30
     ) -> Generator[_Progress, Any, Mapping[str, PlainData] | None]:
@@ -1338,7 +1340,7 @@ class LocalDaemonAgentHttpClient:
         return (yield from _session_protocol.renew_current_offer(self, session_id))
 
     @_cooperative
-    @_serialized("_mutation_gate")
+    @_serialized("_delivery_gate")
     def wait_for_work(
         self,
         session_id: str,
@@ -1359,18 +1361,10 @@ class LocalDaemonAgentHttpClient:
                                      sequence=sequence, wait_timeout_ms=wait_timeout_ms))
         from ._agent_progress import _Spawn
 
-        self._resident_poll_active = True
-
-        def receive_poll():
-            try:
-                return (yield from _steps(self.wait_for_work, session_id, availability_revision,
-                                         sequence=sequence, wait_timeout_ms=wait_timeout_ms))
-            finally:
-                # A long scheduler command may outlive the resident poll. Its
-                # offer renewals can resume as soon as the mutation gate opens.
-                self._resident_poll_active = False
-
-        poll = yield _Spawn(receive_poll())
+        poll = yield _Spawn(_steps(
+            self.wait_for_work, session_id, availability_revision,
+            sequence=sequence, wait_timeout_ms=wait_timeout_ms,
+        ))
         try:
             while not poll.complete:
                 yield from _steps(self.drive_slurm_jobs)
@@ -1383,16 +1377,15 @@ class LocalDaemonAgentHttpClient:
             # Its exact receipt is retained even when scheduler progress fails.
             while not poll.complete:
                 yield from _delay(0.01)
-            self._resident_poll_active = False
 
     @_cooperative
     @_serialized("_mutation_gate")
     def poll_control(self, session_id: str) -> Generator[_Progress, Any, AgentControl | None]:
-        (yield from _steps(self._replay_pending_resource_mutation, session_id))
         journal = self._require_journal()
         if self._service_progress and journal.pending_poll() is not None:
             self._service_control_due = True
             return None
+        yield from _steps(self._replay_pending_resource_mutation, session_id)
         pending = journal.next_unacknowledged_control()
         if pending is not None:
             control, effect = pending
@@ -1765,7 +1758,9 @@ class LocalDaemonAgentHttpClient:
 
     @_cooperative
     @_serialized("_mutation_gate")
-    def _qualify_service_admission(self) -> Generator[_Progress, Any, bool]:
+    def _qualify_service_admission(
+        self, *, retrying_renewal: AgentOfferRenewal | None = None,
+    ) -> Generator[_Progress, Any, bool]:
         """Prove current recovery ownership without joining the workers' exit.
 
         Only the concurrent service can use this proof. The ordered mutation
@@ -1790,6 +1785,7 @@ class LocalDaemonAgentHttpClient:
             self._restart_with_retained_work = _has_retained_agent_work(
                 self._journal, self._execution_journal, None,
             )
+            self._service_recovery_admission = self._restart_with_retained_work
             return not self._restart_with_retained_work
         execution = self._execution_journal
         supervisor = self._supervisor
@@ -1800,7 +1796,10 @@ class LocalDaemonAgentHttpClient:
         references, rows, pending, session, poll, control, received, acknowledgement = (
             inventory
         )
-        if pending or poll or control or received or acknowledgement or session is None:
+        if retrying_renewal is not None:
+            operation_id = f"{retrying_renewal.session_id}:{retrying_renewal.offer_id}:{retrying_renewal.sequence}"
+            pending = tuple(item for item in pending if item[:2] != ("renew", operation_id))
+        if pending or (poll is not None and poll != self._live_work_poll) or control or received or acknowledgement or session is None:
             return False
         ids = {assignment_id for _, assignment_id in references}
         states = {row["assignment_id"]: AssignmentState(row["state"]) for row in rows}
@@ -3169,7 +3168,7 @@ class LocalDaemonAgentHttpClient:
                 if operation == "slurm_work":
                     from ._slurm_result_transport import SlurmRequestUncertain
                     raise SlurmRequestUncertain(str(error)) from error
-                if not self._service_progress:
+                if not self._service_progress or operation == "renew":
                     raise
                 connection = None
                 _raise_if_application_suspended(self._suspend_requested)
