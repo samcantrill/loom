@@ -267,7 +267,11 @@ def _observe_check(
             ),
         )
     except CoordinatorClientError as exc:
-        if exc.code == "not_found":
+        if (
+            exc.code == "not_found"
+            and exc.operation == "operation"
+            and exc.ids.get("operation_id") == identity
+        ):
             # The native API owns exact replay: no new ID, source or retry policy.
             return _submit_check(client, directory, check, request) or _waiting(
                 "exact_request_replayed"

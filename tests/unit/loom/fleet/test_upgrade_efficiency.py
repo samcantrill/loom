@@ -367,7 +367,9 @@ def test_probe_qualifies_source_once_and_reuses_it_for_promotion(tmp_path, monke
 
 
 def test_upgrade_dispatches_every_slot_before_waiting_or_download(tmp_path, monkeypatch):
-    names = ("first", "second", "third")
+    from threading import Event
+
+    names = ("first", *(f"agent-{index}" for index in range(2, 9)))
     operation = SimpleNamespace(
         directory=tmp_path, inventory=object(), observation=None,
         intent={"operation_id": "upgrade", "timeout_seconds": 30,
@@ -378,6 +380,15 @@ def test_upgrade_dispatches_every_slot_before_waiting_or_download(tmp_path, monk
         settled=lambda: pytest.fail("pending GPU cannot reopen admission"),
     )
     prepared, dispatched, observed = {}, set(), set()
+    storage_published = Event()
+    write = upgrades.atomic
+
+    def publish(path, value):
+        write(path, value)
+        if path.name == upgrades._check_identity(operation, "first", "storage") + "-result.json":
+            storage_published.set()
+
+    monkeypatch.setattr(upgrades, "atomic", publish)
 
     def prepare(op, name, kind, identity):
         prepared[identity] = (name, kind)
@@ -388,8 +399,10 @@ def test_upgrade_dispatches_every_slot_before_waiting_or_download(tmp_path, monk
         if _dispatch_only:
             dispatched.add(operation_id)
             return {"outcome": "waiting"}
-        assert len(dispatched) == 9
+        assert len(dispatched) == 24
         observed.add(operation_id)
+        if prepared[operation_id] == ("first", "cpu"):
+            assert storage_published.wait(timeout=5), "later completed check was never published"
         pending = prepared[operation_id] == ("first", "gpu")
         return {
             "outcome": "waiting" if pending else "passed",
@@ -404,11 +417,11 @@ def test_upgrade_dispatches_every_slot_before_waiting_or_download(tmp_path, monk
     monkeypatch.setattr(upgrades, "self_test", check)
     with pytest.raises(upgrades._Waiting, match="checks pending"):
         upgrades._run_checks(operation)
-    assert observed == dispatched and len(dispatched) == 9
-    assert len(read(tmp_path / "checks.json")) == 9
+    assert observed == dispatched and len(dispatched) == 24
+    assert len(read(tmp_path / "checks.json")) == 24
     results = [read(path) for path in tmp_path.glob("check-*-result.json")]
-    assert sum(row["outcome"] == "passed" for row in results) == 8
-    assert len(operation.check_observations) == 9
+    assert sum(row["outcome"] == "passed" for row in results) == 23
+    assert len(operation.check_observations) == 24
     pending = [row for row in operation.check_observations.values() if row["outcome"] == "waiting"]
     assert pending[0]["checks"]["gpu"]["code"] == "waiting_for_capacity"
 

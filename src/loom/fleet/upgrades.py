@@ -6,7 +6,7 @@ capacity, settlement and policy decision comes from a fresh native observation.
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import as_completed, ThreadPoolExecutor
 from contextvars import copy_context
 from dataclasses import replace
 import fcntl
@@ -970,10 +970,13 @@ def _run_checks(operation):
                 dispatch_errors.append(exc)
         if dispatch_errors:
             raise dispatch_errors[0]
-        observed = [(identity, workers.submit(copy_context().run, advance, identity, dispatch=False))
-                    for identity in active]
+        observed = {
+            workers.submit(copy_context().run, advance, identity, dispatch=False): identity
+            for identity in active
+        }
         failures, waiting, errors = [], [], []
-        for identity, future in observed:
+        for future in as_completed(observed):
+            identity = observed[future]
             try:
                 result = future.result()
             except Exception as exc:

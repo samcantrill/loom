@@ -83,3 +83,34 @@ def test_upgrade_observation_is_bounded_while_standalone_waits(tmp_path, monkeyp
     assert all(options["wait"] is wait for _, options in calls)
     assert all(100 < options["timeout_seconds"] <= 120 if wait
                else 0 < options["timeout_seconds"] <= 10 for _, options in calls)
+
+
+@pytest.mark.parametrize(("operation", "ids", "replay"), [
+    ("operation", {"operation_id": "check-id"}, True),
+    ("admission", {"admission_id": "admission"}, False),
+    ("operation", {"operation_id": "other-check"}, False),
+])
+def test_check_replays_only_its_missing_start_operation(tmp_path, monkeypatch, operation, ids, replay):
+    request = SimpleNamespace(preparation=SimpleNamespace(operation_id="check-id"))
+    monkeypatch.setattr(self_tests.RunRequest, "from_dict", lambda _: request)
+    missing = self_tests.CoordinatorClientError("not_found", boundary="coordinator",
+                                                operation=operation, ids=ids)
+    sent = []
+
+    def observe(*args, **kwargs):
+        raise missing
+
+    client: Any = SimpleNamespace(observe_run=observe, start_run=sent.append)
+    operator: Any = None
+    intent = {"requests": {"cpu": {}}}
+    if replay:
+        result = self_tests._observe_check(client, operator, tmp_path, intent, "cpu",
+                                           self_tests.time.monotonic() + 10)
+        assert result["code"] == "exact_request_replayed"
+        assert sent == [request]
+    else:
+        with pytest.raises(self_tests.CoordinatorClientError) as caught:
+            self_tests._observe_check(client, operator, tmp_path, intent, "cpu",
+                                      self_tests.time.monotonic() + 10)
+        assert caught.value is missing
+        assert sent == []
