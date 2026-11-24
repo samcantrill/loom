@@ -17,6 +17,19 @@ The investigation recorded a renewal with 1.264 s of coordinator lock wait, a st
 
 Start each wave with a test that holds the identified dependency at a barrier. Assert the other owner completes before releasing the barrier. Use timeouts as test deadlock guards. Then exercise replay or a concurrent change at the new boundary. Keep each numbered change separately reviewable, with its relevant tests and documentation.
 
+### Implementation dependencies
+
+| Deliverable | What must be in place first | Reason |
+|---|---|---|
+| Short writes and indexed offers (1–2) | Correlated timings and the pinned baseline | A registry write can incur both lock wait and history-dependent SQL cost. Measure the two separately. |
+| Observer delivery and TLS acceptance (3, 5) | A run-scoped mutation owner for callbacks, or a socket owner through authentication for TLS | These can ship independently. In both cases shutdown must account for the worker until it actually exits. |
+| Agent release and transport capacity (4) | Exact recoverable release evidence before relaxing the gate, plus compatible sender and receiver classification | Freeing one end of an exchange leaves a queue at the other. A timed-out release may already have succeeded. |
+| Reconciliation and cancellation (6–7) | Durable cancellation epoch and bounded external workers | The coordinator can rotate only after a turn returns. Stop delivery needs a worker even when all containment waits are slow. |
+| Events, task pages and watches (8–10) | Page/sequence boundaries, revalidation of actionable evidence, and post-commit notification | Local SQL and fleet-read changes can ship independently. Enable wire extensions only after negotiation and old-peer tests. |
+| Artifact verification and sweeps (11–12) | Check/trial receipts stable across detachment | A lost reply must resume the original admission. Both changes can proceed independently once their own receipt contracts are tested. |
+
+Use the component's existing authority as the recovery point. For example, a cancelled start is decided by the final coordinator transaction, an uncertain physical release is resolved from the agent's provider proof, and a completed artifact check is established by its verification receipt. These choices determine where to place barriers in the tests and which evidence survives a restart.
+
 ## 1. Release broad guards before SQLite contention waits
 
 **Current path.** `_poll_write` already sets an immediate SQLite busy response and releases the daemon state guard between attempts. Registration acquires a serialization decorator outside the transaction. Preparation acceptance and other transitions enter `BEGIN IMMEDIATE` inside the guard. The connection’s busy handler can therefore park a thread that still owns the process lock. Even a control read on a different session can queue behind it. Start permission has an additional cost. Both guarded checks load JSON and reconstruct the same delivery bundle. [Polling, registration, transfers and start permission](../src/loom/queue/agent_sessions.py) · [Preparation acceptance](../src/loom/queue/_preparation_operations.py) · [Admission transitions](../src/loom/queue/_coordinator_admission.py)
@@ -122,6 +135,8 @@ with mutation_gate():
 ```
 
 Perform the local journal checks and updates atomically. If the session has moved, settle only the matching predecessor proof under the existing replacement rules. Keep newer offers and unresolved claims intact. Reconstruct pending work on restart from the execution proof and delivery reference. A timeout leaves the outcome uncertain. For GPU refresh, capture provider identity and claim revision, sample outside the gate, then recheck both and sample freshness before publishing.
+
+One availability revision represents the whole resource offer. Order competing release transitions that would both advance it, using a dedicated release owner if necessary. Keep local stop delivery, unrelated result journaling and control receipts independent of that ordering. A physically released GPU can remain ineligible for advertisement until the coordinator has accepted the exact revision change. [Existing overlapping-release and local-stop tests](../tests/integration/queue/test_concurrent_outbound_agent.py)
 
 Use one cost classification at both sender and receiver. Reserve bounded capacity for short lifecycle transitions while preserving the existing poll, control-wait and SLURM lanes. Split expensive proof or external-authority preparation from its short final commit before giving a request reserved capacity. Share bounded bulk capacity fairly and measure its throughput. [Release completion and provider proof](../src/loom/queue/_agent_session_journal.py)
 
@@ -302,5 +317,19 @@ Refill as a slot really becomes available. A lost reply occupies its slot until 
 4. **Run the canary in isolation.** Combine concurrent registrations, renewals, cancellations, event backlog, publication and artifact verification. Require existing renewal p99 below 1 s normally and below 5 s under injected delay with the 30 s offer lifetime. Compare bulk throughput to the same baseline. Require the per-issue independence and ownership checks even if renewal p99 already passes. Record request, start, containment, verified completion and release separately.
 5. **Use the existing whole-fleet maintenance upgrade.** After the canary passes, confirm admitted work has settled or that the authorized cancellations have durable settlement. Drain through the supported upgrader, preserve coordinator roots, agent journals, inventory and submission IDs, and use one retained upgrade operation. Verify every required check and fresh per-host evidence before reopening normal admission. If verification stalls or a check fails, keep the maintenance state, expose the exact pending check and resume the same operation or follow the validated rollback path.
 
-The first reviewable delivery is short coordinator transactions plus indexed current-offer updates, with the observer change independently testable in the same wave. It narrows the fleet-wide critical section, has a direct reproduction, and establishes how later changes must protect a decision when slow work moves outside a lock.
+### What has evidence on the implementation branch
+
+The numbered current paths above describe the pinned baseline. The following changes have separate, local evidence on `fix/lifecycle-progress`.
+
+| Change | Implementation | What the evidence establishes |
+|---|---|---|
+| Timings | `04b48049` | The isolated deployment can record all requests and separate sender queue time from the exchange. |
+| Short coordinator writes and start permission | `7a7d9be6` | A waiting registration releases the state guard during contention. Cancellation during delivery decoding or the external authority check prevents the subsequent start permit. [SQLite contention tests](../tests/unit/loom/queue/test_agent_waiting.py) · [Start-permit race test](../tests/unit/loom/queue/test_coordinator_responsiveness.py) |
+| Current and historical offers | `e8603761` | Session invalidation updates the current row while retained revision and latest-row lookups retain their indexes. [Agent session tests](../tests/unit/loom/queue/test_agent_sessions.py) |
+| Run observers | `be32999e` | B reaches RUNNING with A's callback still blocked. The callback queue is bounded and audit evidence is applied at a revision-safe point. [Observer regression](../tests/unit/loom/queue/test_lifecycle_observers.py) |
+| TLS accept | `7ea2918f` | A second authenticated client reaches dispatch with a negotiation paused, and shutdown closes sockets still owned by the handshake workers. [TLS transport tests](../tests/integration/queue/test_agent_session_transport.py) |
+| Local event journals and single-event relay portion of item 8 | `edb2327b` | A 1,024-event workspace changes 1,024 acknowledgement rows in total, including replay of the last acknowledgement. The final flush includes a fact handed off during the last exchange. The selected remote restart and managed release/decline integration cases passed. Negotiated network batching remains a separate deliverable. [Outbox regressions](../tests/unit/loom/queue/test_remote_stage_execution.py) |
+| Fleet observation portion of item 10 | `c95270b7` | A second observation completes while the first is paused. The report preserves inventory order, per-host time and per-host failure. [Fleet observation test](../tests/integration/fleet/test_configuration.py) |
+
+Production acceptance requires the mixed-version checks, the isolated combined canary, a qualified rollback, and every required whole-fleet check described above. Individual local passes establish the stated component behavior.
 
