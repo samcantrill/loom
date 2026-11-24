@@ -2658,3 +2658,104 @@ class Consumer:
     finally:
         server.stop()
         daemon.stop()
+
+
+def _held_report_renderer(entered, release, render, args):
+    entered.touch()
+    deadline = monotonic() + 35
+    while not release.exists():
+        if monotonic() >= deadline:
+            raise TimeoutError("renderer barrier timed out")
+        sleep(0.02)
+    return render(*args)
+
+
+def test_external_target_lock_and_renderer_leave_capacity_for_image_admission_and_cancel(tmp_path, monkeypatch):
+    from collections import Counter
+    from concurrent.futures import ProcessPoolExecutor
+    import fcntl
+    from weave import compose_config
+    from loom.queue.local_daemon import LocalDaemonPrincipal, LocalDaemonRole
+    from loom.queue.errors import _PreparationTargetBusy
+    from loom.pipeline.cleanup.preparation_pins import preparation_path_is_retained
+    from tests.unit.loom.queue.test_submitted_execution import _policy, _capability, _execution
+
+    service = _service(tmp_path)
+    policy = service.daemon.preparation_policy
+    assert policy is not None
+    submitted = _policy(tmp_path).profiles["shared-container"]
+    service = replace(service, daemon=replace(service.daemon,
+        preparation_policy=replace(policy, profiles={**policy.profiles, "shared-container": submitted}),
+        container_capabilities=(_capability(tmp_path),)))
+    image = tmp_path / "workloads/images/aaa/image.sif"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b"x" * 1024)
+    image.chmod(0o444)
+    ordinary = prepare_managed_run(service, compose_config(tmp_path / "projects/pipeline.yaml"), "ordinary",
+                                  execution_requirements={"produce": ExecutionRequirement("project", "environment", "executor")})
+    lock_seen = Event()
+    reads, applied = Counter(), Counter()
+
+    class Preparation(CoordinatorPreparation):
+        def read_report(self, config, admission, request, binding):
+            reads[request.operation_id] += 1
+            return super().read_report(config, admission, request, binding)
+
+        def publish_target(self, config, request, report):
+            try:
+                result = super().publish_target(config, request, report)
+            except _PreparationTargetBusy:
+                if request.operation_id == "locked":
+                    lock_seen.set()
+                raise
+            applied[request.operation_id] += 1
+            return result
+
+    entered, release = tmp_path / "rendering", tmp_path / "release-renderer"
+    submit = ProcessPoolExecutor.submit
+
+    def controlled_submit(pool, function, *args, **kwargs):
+        if function.__name__ == "_decode_publication" and args[4] == "rendering":
+            return submit(pool, _held_report_renderer, entered, release, function, args)
+        return submit(pool, function, *args, **kwargs)
+
+    monkeypatch.setattr(ProcessPoolExecutor, "submit", controlled_submit)
+    LocalDaemon.initialize_deployment(service.daemon)
+    daemon = LocalDaemon(service.daemon, preparation=Preparation(service))
+    daemon.start()
+    client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+    lock_path = service.daemon.run_store_root / ".loom/preparation-locks/locked.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    locked = replace(_request(), operation_id="locked", run_name="locked")
+    try:
+        with lock_path.open("a+b") as other_publisher:
+            fcntl.flock(other_publisher.fileno(), fcntl.LOCK_EX)
+            client.prepare_run(locked)
+            assert lock_seen.wait(30), daemon.operation("locked")
+            client.prepare_run(replace(_request(), operation_id="render", run_name="rendering"))
+            deadline = monotonic() + 30
+            while not entered.exists() and monotonic() < deadline:
+                sleep(0.02)
+            assert entered.exists(), daemon.operation("render")
+            client.prepare_run(replace(_request(), operation_id="pin", run_name="pin",
+                                       preparation_profile="shared-container", execution=_execution()))
+            deadline = monotonic() + 10
+            while not preparation_path_is_retained(image) and monotonic() < deadline:
+                sleep(0.02)
+            assert preparation_path_is_retained(image), daemon.operation("pin")
+            admitted = client.submit(LocalDaemonAdmissionRequest("ordinary", ordinary.run_uri))
+            assert client.cancel("ordinary").cancellation_operation_id is not None
+            assert client.wait("ordinary", timeout_seconds=10).state.value == "CANCELLED", admitted
+            client.cancel_preparation("pin")
+            assert daemon.wait_operation("pin", timeout=10).operation.state == "cancelled"
+            assert not (service.daemon.run_store_root / "locked").exists()
+            assert not release.exists()
+        release.touch()
+        done = daemon.wait_operation("locked", timeout=30).operation
+        assert done.state == "applied", done
+        assert client.prepare_run(locked) == done
+        assert reads["locked"] == applied["locked"] == 1
+        assert daemon.wait_operation("render", timeout=30).operation.state == "applied"
+    finally:
+        release.touch()
+        daemon.stop()

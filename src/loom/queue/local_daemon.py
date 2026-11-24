@@ -2151,6 +2151,7 @@ class LocalDaemon:
         self._preparations._captures.clear()
         self._preparations._images.clear()
         self._preparations._candidates.clear()
+        self._preparations._target_retries.clear()
         self._stop.clear()
         from ._agent_poll_waiters import _PollWaiters
 
@@ -2982,6 +2983,9 @@ class LocalDaemon:
                         local_retry = self._execution.next_local_retry_at(now)
                         if local_retry is not None:
                             delay = min(delay, local_retry - now)
+                target_delay = self._preparations.next_target_delay()
+                if target_delay is not None:
+                    delay = min(delay, target_delay)
                 context_delay = self._contexts.next_delay()
                 if context_delay is not None:
                     delay = min(delay, context_delay)

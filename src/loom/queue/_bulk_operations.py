@@ -12,6 +12,11 @@ from typing import Any, TypeVar
 
 _T = TypeVar("_T")
 
+# Each of these owners can construct a run or wait for a renderer child to exit.
+_PUBLICATION_ACTIONS = {
+    "preparation_child_construction", "preparation_report_hydration", "preparation_target_publication",
+}
+
 
 class BulkOperations:
     """Disposable capacity; callers retain tokens and apply completed results.
@@ -23,6 +28,7 @@ class BulkOperations:
     def __init__(self, wake: Callable[[], None]) -> None:
         self._workers = ThreadPoolExecutor(max_workers=2, thread_name_prefix="loom-bulk")
         self._active: list[Future[Any]] = []
+        self._publication: Future[Any] | None = None
         self._wake = wake
         self._closed = False
         self._waiting: dict[tuple[tuple[str, ...], str, str], tuple[str, float]] = {}
@@ -92,13 +98,20 @@ class BulkOperations:
             key = (scope, operation_id, action)
             seen.add(key)
             queued = self._waiting.setdefault(key, queued)
-        if len(self._active) >= 2 or (self._waiting and next(iter(self._waiting)) != key):
+        publication = action in _PUBLICATION_ACTIONS
+        if len(self._active) >= 2 or (publication and self._publication is not None):
+            return None
+        first = next((ticket for ticket in self._waiting
+                      if self._publication is None or ticket[2] not in _PUBLICATION_ACTIONS), None)
+        if first is not None and first != key:
             return None
         if key is not None:
             del self._waiting[key]
         future = self._workers.submit(
             copy_context().run, _run, operation_id, action, function, args, queued,
         )
+        if publication:
+            self._publication = future
         self._active.append(future)
         future.add_done_callback(lambda _future: self._wake())
         return future
@@ -107,6 +120,8 @@ class BulkOperations:
         # Completion owners retain their futures until application. Capacity
         # bookkeeping must not retain hydrated reports after those owners finish.
         self._active = [future for future in self._active if not future.done()]
+        if self._publication is not None and self._publication.done():
+            self._publication = None
 
     def running(self) -> bool:
         self.reap()

@@ -1048,15 +1048,21 @@ new scheduling cycle.
 
 Coordinator artifact audits, preparation capture/publication, contract/report
 hydration, worker-request construction and remote input preflight share two
-actual bulk IO slots outside reconciliation. Waiting owners retain small FIFO
-identity hints, not an executor backlog of payloads. A hint is retired when its
+actual bulk IO slots outside reconciliation. Child construction, report hydration
+and target publication can occupy one of those slots collectively. The oldest
+eligible waiting operation goes first. A waiting publisher keeps its position
+while an image-retention operation uses the other slot. Waiting owners retain
+small identity hints. A hint is retired when its
 owner is reconsidered and no longer offers that work, or authoritative admission
 state retires the owner; merely missing an asynchronous context result does not
 erase its position. A running operation retains capacity until it actually ends.
 
 A preparation that has validated its child report and selected its publication
 retains the report while the publisher waits for capacity. Validation in progress
-and reports waiting to publish share a two-report limit. An admitted report
+and reports awaiting or undergoing publication share a two-report limit. When
+another publisher holds the target file lock, the coordinator releases the worker
+and retries the retained candidate after 100 ms. It checks the child and current
+publication claim on retry and holds the target lock through installation. An admitted report
 decoder renders native configuration documents in a private temporary directory
 within its existing bulk slot. Publication resolves the protected scheduling
 policy in the coordinator and passes its placement decisions to a worker to

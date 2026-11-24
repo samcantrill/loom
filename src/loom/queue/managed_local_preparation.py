@@ -218,6 +218,7 @@ def prepare_managed_run(
     run_name: str,
     *,
     execution_requirements: Mapping[str, ManagedExecutionRequirement],
+    _defer_locked: bool = False,
 ) -> ManagedLocalPreparationReceipt:
     """Prepare one managed run from trusted resolved inputs.
 
@@ -302,7 +303,15 @@ def prepare_managed_run(
     )
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+b") as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        if _defer_locked:
+            from .errors import _PreparationTargetBusy
+
+            try:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise _PreparationTargetBusy(run_uri) from exc
+        else:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         existing = store.run_uri_exists(run_uri)
         rendered = getattr(composed, "rendered_config", None)
         entry = getattr(composed, "project_contracts_entry", None)

@@ -896,6 +896,7 @@ def prepare_child_run(
     run_name: str,
     *,
     runtime_options: RunOptions,
+    _defer_locked: bool = False,
 ) -> ManagedLocalPreparationReceipt:
     """Publish the fixed internal child without composing any project configuration."""
     resolved: dict[str, PlainData] = {
@@ -940,6 +941,7 @@ def prepare_child_run(
         service,
         composed,
         run_name,
+        _defer_locked=_defer_locked,
         execution_requirements={
             "prepare": _binding_requirement(binding),
         },
@@ -1127,7 +1129,7 @@ class CoordinatorPreparation:
         options: RunOptions,
     ) -> ManagedLocalPreparationReceipt:
         return prepare_child_run(
-            self._service(config), binding, run_name, runtime_options=options
+            self._service(config), binding, run_name, runtime_options=options, _defer_locked=True
         )
 
     def read_report(
@@ -1390,6 +1392,7 @@ class CoordinatorPreparation:
                 composed,
                 cast(str, request.run_name),
                 execution_requirements=requirements,
+                _defer_locked=True,
             )
         except QueueServiceError as exc:
             # Native publisher rejects existing changed/partial targets. Keep

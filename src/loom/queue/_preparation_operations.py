@@ -16,6 +16,7 @@ import logging
 from pathlib import Path
 import sqlite3
 from threading import Lock
+from time import monotonic
 from typing import TYPE_CHECKING, NamedTuple, Protocol, cast
 
 from loom.artifacts import ArtifactRef
@@ -28,7 +29,7 @@ from loom.runs.context import SubmissionContext
 from ._service_signals import write_status
 from ._coordinator_transactions import short_write
 from ._continuation import ContinuationConflict, ContinuationPending
-from .errors import QueueConflictError, QueueServiceError
+from .errors import QueueConflictError, QueueServiceError, _PreparationTargetBusy
 from .run import RunRequest, _public_operation_id
 from ._maintenance import MaintenanceCheckConflict
 from ._service_lifetime import ServiceRetiring
@@ -148,13 +149,8 @@ class _ReadyPublication:
 
 @dataclass(frozen=True, slots=True)
 class _PendingPublication:
-    token: tuple[object, ...]
-    child: tuple[object, ...]
-    config: LocalDaemonConfig
+    ready: _ReadyPublication
     future: Future[ManagedLocalPreparationReceipt]
-    result: Mapping[str, PlainData]
-    preflight: Mapping[str, PlainData]
-    publication_owner: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -374,6 +370,7 @@ class CoordinatorPreparations:
         self._cancel_cursor = 0
         self._verification_reports: dict[str, _PendingVerificationReport] = {}
         self._reports: dict[str, tuple[tuple[object, ...], Future[PreparationReport]]] = {}
+        self._target_retries: dict[str, float] = {}
         self._ready_publications: dict[str, _ReadyPublication] = {}
         self._publications: dict[str, _PendingPublication] = {}
         self._candidates: dict[str, _PendingCandidate] = {}
@@ -777,6 +774,8 @@ class CoordinatorPreparations:
         if self.callbacks is None or not self._reconcile_lock.acquire(blocking=False):
             return
         try:
+            now = monotonic()
+            self._target_retries = {op: when for op, when in self._target_retries.items() if when > now}
             self._reconcile_cancellations()
             with self.daemon._connection() as conn:
                 for operation_id, pending in tuple(self._verification_reports.items()):
@@ -1627,6 +1626,19 @@ class CoordinatorPreparations:
             self._captures[operation_id] = (token, future)
         return None
 
+    def next_target_delay(self) -> float | None:
+        deadlines = tuple(self._target_retries.values())
+        return max(0.0, min(deadlines) - monotonic()) if deadlines else None
+
+    def _target_retry_ready(self, operation_id: str) -> bool:
+        deadline = self._target_retries.get(operation_id)
+        if deadline is None:
+            return True
+        if monotonic() < deadline:
+            return False
+        del self._target_retries[operation_id]
+        return True
+
     def _prepare_child_async(
         self, row: sqlite3.Row, config: LocalDaemonConfig,
         binding: PreparationChildInput, child_name: str, options: RunOptions,
@@ -1640,8 +1652,12 @@ class CoordinatorPreparations:
                 return None
             del self._children[operation_id]
             if previous == token:
-                return future.result()
-        if len(self._children) >= 2:
+                try:
+                    return future.result()
+                except _PreparationTargetBusy:
+                    self._target_retries[operation_id] = monotonic() + 0.1
+                    return None
+        if not self._target_retry_ready(operation_id) or len(self._children) >= 2:
             return None
         assert self.callbacks is not None
         future = self.daemon._result_verifications.bulk.submit(
@@ -1709,7 +1725,7 @@ class CoordinatorPreparations:
         ):
             del self._ready_publications[operation_id]
             return False
-        if len(self._publications) >= 2:
+        if not self._target_retry_ready(operation_id) or len(self._publications) >= 2:
             return True
         assert self.callbacks is not None
         future = self.daemon._result_verifications.bulk.submit(
@@ -1723,15 +1739,7 @@ class CoordinatorPreparations:
             ready.report,
         )
         if future is not None:
-            self._publications[operation_id] = _PendingPublication(
-                ready.claim,
-                ready.child,
-                ready.config,
-                future,
-                ready.result,
-                ready.report.preflight,
-                ready.publication_owner,
-            )
+            self._publications[operation_id] = _PendingPublication(ready, future)
             del self._ready_publications[operation_id]
         return True
 
@@ -1744,9 +1752,10 @@ class CoordinatorPreparations:
             return True
         with phase("preparation_publication_completion_apply", operation_id=operation_id):
             del self._publications[operation_id]
-            if (row["state"] != "applying" or pending.token != self._publication_token(row)
-                    or pending.child != self._child_token(
-                        pending.config, self.daemon._admission(str(row["child_admission_id"]))
+            ready = pending.ready
+            if (row["state"] != "applying" or ready.claim != self._publication_token(row)
+                    or ready.child != self._child_token(
+                        ready.config, self.daemon._admission(str(row["child_admission_id"]))
                     )):
                 # IO may already have published. The durable applying claim owns
                 # exact replay; a stale completion cannot authorize admission.
@@ -1755,22 +1764,26 @@ class CoordinatorPreparations:
             self._configuration(_mapping(json.loads(str(row["selected_json"]))), request)
             try:
                 prepared = pending.future.result()
+            except _PreparationTargetBusy:
+                self._ready_publications[operation_id] = ready
+                self._target_retries[operation_id] = monotonic() + 0.1
+                return True
             except QueueConflictError:
                 self._fail(row, "publication_conflict", conflict=True)
                 return True
             # Unknown errors propagate with the durable claim still applying.
             self._initialize_context(row, prepared.run_uri)
-            result = dict(pending.result)
+            result = dict(ready.result)
             result["prepared_run"] = prepared.to_dict()
-            if pending.publication_owner is not None:
+            if ready.publication_owner is not None:
                 result["binding"] = {
                     "run_uri": prepared.run_uri,
-                    "publication_operation_id": pending.publication_owner,
+                    "publication_operation_id": ready.publication_owner,
                 }
                 result["decision"] = "new_attempt"
             self._store_result(_with_report(
                 operation_id, "applying" if row["kind"] == "run" else "applied",
-                None, result, pending.preflight,
+                None, result, ready.report.preflight,
             ))
             if row["kind"] == "run":
                 self._continue_run(self._read(operation_id))
@@ -1794,7 +1807,7 @@ class CoordinatorPreparations:
             del self._reports[operation_id]
             if previous == token:
                 return future.result()
-        if len(self._reports) + len(self._ready_publications) >= 2:
+        if len(self._reports) + len(self._ready_publications) + len(self._publications) >= 2:
             return None
         future = self.daemon._result_verifications.bulk.submit(
             operation_id, "preparation_report_hydration", self.callbacks.read_report,

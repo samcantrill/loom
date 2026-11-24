@@ -19,6 +19,10 @@ class QueueServiceError(RuntimeError, QueueError):
     """Raised when queue service operations are unavailable or invalid."""
 
 
+class _PreparationTargetBusy(QueueError):
+    """The target lock is held by another publisher. No target mutation was attempted."""
+
+
 class _AcceptedTimeError(QueueServiceError):
     """Bounded clock-health evidence for coordinator and agent retry logs."""
 
