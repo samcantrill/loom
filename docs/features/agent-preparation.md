@@ -1608,6 +1608,15 @@ new scope. Fleet supplies this field from the qualified candidate automatically.
 Keep the existing image selected
 for this one-time promotion; later submitted image changes use no promotion.
 
+At physical launch the host binds the submitted digest to a private image file.
+The launcher uses a copy-on-write clone when supported. The streaming fallback
+needs temporary space up to the full image size per independent launch. The
+resident supervisor holds this file through physical use. A staging-continuation
+probe for that launch uses the same verified file. Independent submissions
+on mutable storage verify fresh bytes. Concurrent submissions of the same
+kernel SquashFS object and qualified root can share the active verified copy.
+
+
 Submitted child inputs and preparation reports use schema 11; their private
 worker context uses schema 7. Installed child/report/context forms remain
 10/10/6. Action-verification reports use schema 10 for submitted execution and

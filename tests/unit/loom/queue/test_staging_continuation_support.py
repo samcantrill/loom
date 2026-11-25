@@ -244,14 +244,17 @@ def test_submitted_continuation_launch_verifies_image_once(tmp_path, monkeypatch
         }})
         profile = policy.launch_profile(execution, workspace=workspace.root)
         audited = []
-        verify = submitted.verify_submitted_image
-
-        def observe(image, roots):
+        from contextlib import ExitStack
+        from loom.queue import _submitted_image_launch as physical
+        copy = physical._copy_verified
+        def observe(source, image, private):
             audited.append(image.sha256)
-            return verify(image, roots)
-
-        monkeypatch.setattr(submitted, "verify_submitted_image", observe)
-        qualify_shared_worker_inputs(profile, request, agent_id="agent-1")
+            return copy(source, image, private)
+        monkeypatch.setattr(physical, "_copy_verified", observe)
+        with ExitStack() as inputs:
+            def capture(image, roots):
+                return inputs.enter_context(physical.image_for_launch(image, roots, request.assignment_id))
+            qualify_shared_worker_inputs(profile, request, agent_id="agent-1", capture_image=capture)
         assert audited == [execution.image.sha256]
 
 

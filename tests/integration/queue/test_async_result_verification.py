@@ -203,7 +203,8 @@ def test_shutdown_retains_deployment_ownership_until_publication_finishes(tmp_pa
         executor.shutdown(wait=True)
 
 
-def test_cancelled_child_construction_never_dispatches_and_other_run_progresses(tmp_path, monkeypatch):
+@pytest.mark.parametrize("hold_pin", [False, True])
+def test_cancelled_child_construction_never_dispatches_and_other_run_progresses(tmp_path, monkeypatch, hold_pin):
     service = _text_service(tmp_path, qualify_actions=True)
     LocalDaemon.initialize_deployment(service.daemon)
     entered, release, finished = Event(), Event(), Event()
@@ -221,18 +222,50 @@ def test_cancelled_child_construction_never_dispatches_and_other_run_progresses(
                 finished.set()
         return prepare(owner, *args)
 
-    monkeypatch.setattr(CoordinatorPreparation, "prepare_child", hold_first_child)
+    if hold_pin:
+        from loom.queue import _preparation_operations as operations
+        from loom.pipeline.cleanup import preparation_pins
+        from threading import local
+
+        thread = local()
+        pin = operations.retain_preparation_path
+        fsync = preparation_pins.os.fsync
+
+        def mark_pin(path, **owner):
+            thread.held = path.name.startswith("loom-preparation-") and owner["operation_id"] == "held-child"
+            if thread.held:
+                held_name.append(path.name)
+            try:
+                return pin(path, **owner)
+            finally:
+                if thread.held:
+                    finished.set()
+                thread.held = False
+
+        def hold_sync(fd):
+            if getattr(thread, "held", False) and not entered.is_set():
+                entered.set()
+                assert release.wait(120)
+            fsync(fd)
+
+        monkeypatch.setattr(operations, "retain_preparation_path", mark_pin)
+        monkeypatch.setattr(preparation_pins.os, "fsync", hold_sync)
+    else:
+        monkeypatch.setattr(CoordinatorPreparation, "prepare_child", hold_first_child)
     daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
     daemon.start()
     try:
         daemon.start_run(_reconciled_request("held-child"), principal_id="caller")
         assert entered.wait(timeout=40), daemon._service_error
-        daemon.cancel_run_operation("held-child", principal_id="caller")
-        cancelled = daemon.wait_operation("held-child", timeout=30).operation
-        assert cancelled.state == "cancelled", cancelled.to_dict()
+        if not hold_pin:
+            daemon.cancel_run_operation("held-child", principal_id="caller")
         second = _start(daemon, "independent-child")
         outcome = daemon._wait(second["queue_item_id"], timeout_seconds=50)
         assert outcome.state.value == "SUCCEEDED", (outcome, daemon._service_error)
+        if hold_pin:
+            daemon.cancel_run_operation("held-child", principal_id="caller")
+        cancelled = daemon.wait_operation("held-child", timeout=30).operation
+        assert cancelled.state == "cancelled", cancelled.to_dict()
         assert not release.is_set()
         release.set()
         assert finished.wait(timeout=20)

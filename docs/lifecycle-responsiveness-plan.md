@@ -727,3 +727,462 @@ Review revision `67828d85` combines the qualified lifecycle work with the outbou
 | **8. Artifact paging can repeat full-tree verification.** A description page resolves and verifies the shared declaration before slicing the page. For a checksummed shared publication that can inventory and hash the entire closure on each page. Chunk reads still reopen and parse the manifest and locate the member. | Two one-member pages through the real Unix client for one three-member checksummed publication each inventoried all three members. Producer-declared publications have a different verification contract. The production storage throughput reported above exercises a different workload. | Reuse verified manifest membership for the same declaration and protected filesystem generation. Reauthorize every request and preserve each publication's integrity level. Test a multi-page closure, a changed companion, and access revoked between pages. [Artifact access](../src/loom/queue/_artifact_access.py) · [Receipt verification](../src/loom/pipeline/stores/shared_artifacts.py) |
 
 Full digest verification of a submitted image also runs before an ordinary fresh container worker or submitted probe launch. The production probe image was 4,936,478,720 bytes. This cost belongs to the physical launch boundary and can add storage traffic from concurrent launches. Measure launch-to-first-work and actual filesystem throughput before changing it. Any reuse must prove the same immutable file and root through launch, including detection of replacement. [Worker launch](../src/loom/queue/_container_worker.py) · [Probe launch](../src/loom/queue/_resident_probe.py) · [Image verification](../src/loom/queue/submitted_execution.py)
+
+### Root causes and implementation contracts
+
+The 400 ms poll stall and the preparation stall arise on different threads.
+A zero-wait agent read still has to acquire the coordinator state lock. A
+runnable job needs a scheduling turn even if status reads and the submission
+endpoint are healthy. No production trace in this audit attributes the general
+fleet symptom to a workload on a particular agent. The before examples show
+revision `67e6ccc3`. The solution examples abbreviate the implementation and
+its ordering requirements. The gate receipt section labels a conditional
+design separately. Isolated qualification
+covers four SQLite writers, peer execution during held filesystem and
+admission work, host dispatch and recovery, release packing, protected
+configuration invalidation, historical receipt replay, and physical
+verification on ordinary and kernel-mounted storage. The twelve-agent
+rollout above describes the earlier deployed release.
+
+#### 1. A SQLite retry can occupy the coordinator state lock
+
+```python
+# develop, maintenance.mutate
+with daemon._cycle_lock, daemon._connection() as conn:
+    conn.execute("BEGIN IMMEDIATE")
+    # Read receipt, compare gate revision, update gate and retain receipt.
+    conn.commit()
+```
+
+A competing writer can delay the begin. In rollback-journal mode a reader can
+also delay the commit. Polling uses the same cycle lock via `_state_guard()`.
+A zero wait duration skips sleeping for new controls after the read. It places
+no upper bound on entry to the critical section.
+
+```python
+def apply(conn):
+    authorize_current_operator(principal, control)
+    prior = lookup_receipt(conn, operation_id)
+    if prior is not None:
+        return exact_replay(prior, intent_digest)
+    gate = read_gate(conn)
+    require_owner_and_revision(gate, control)
+    return apply_and_record(conn, gate, control)
+
+return short_write(daemon, apply)
+```
+
+Loom's existing `short_write` uses a nonblocking SQLite attempt and rolls
+back a busy transaction. It releases the state and scheduling guards before
+sleeping, then repeats the comparison and mutation. The receipt and state
+advance commit together. Each of the four users needs its own authority check.
+
+| Operation | Decision at the committing attempt |
+|---|---|
+| Maintenance | Reauthorize the principal and target. Replay an exact earlier gate receipt even after another operation advances the revision. A fresh mutation requires the expected gate owner and revision. |
+| Targeted delivery | Recheck session, epoch, exact assignment and input bindings. A new delivery also requires a current unexpired offer, capacity and an uncancelled attempt. Notify its pollers after commit. |
+| Session replacement | Obtain fresh execution assignment evidence under the scheduling-reload guard. Rejoin current controls, deliveries and unresolved claims, bind the physical evidence and fence the old session. Release both broad guards on contention. Sample accepted time before mutating session state because a clock fault can commit its degradation record. |
+| Accepted-time recovery | Require the expected degraded clock revision, current epoch and a clock at or above the high-water mark. Publish the new epoch in memory after the durable commit. Replaying an older receipt must preserve the current in-memory epoch. |
+
+Exercise all four paths with a second registered agent reading controls before
+the blocker is released. Hold a writer for begin contention and a read
+transaction for commit contention. Change a fence during a retry and lose a
+successful reply to distinguish refusal from exact replay.
+
+#### 2. A preparation worker exists, but pinning happens before it starts
+
+```python
+# develop, scheduler thread
+retain_preparation_path(child_path, coordinator_id=owner, operation_id=operation_id)
+child = self._prepare_child_async(...)
+if child is None:
+    return
+```
+
+The pin claims a directory against cleanup. Even a matching pin causes four
+synchronous calls to `fsync` on the pin and its containing paths. The next
+scheduler visit can repeat this work while the child is pending. Target pinning
+has the same dependency, and cancellation can walk and remove temporary files
+on this thread. An isolated held pin left an operation read responsive while
+reconciliation stayed inside the pin.
+
+```python
+# Proposed worker, keyed by preparation operation and child identity
+def build_child(job):
+    retain_preparation_path(job.path, coordinator_id=job.owner, operation_id=job.id)
+    return prepare_child(job)
+
+# On a scheduling turn
+future = offer_once(job.id, job.token, build_child, job)
+if future is not None and future.done():
+    claim_dispatch_if_current(job.token, future.result())
+```
+
+Retain the pin before constructing the child. Pin the resolved target before
+claiming it. The final claim reads cancellation, child generation and owner in
+the same transaction. A waiter can detach while the physical worker still owns
+capacity. Schedule cleanup under the same operation identity once workers using
+those temporary paths have exited. Hold A in a pin, require an already-runnable
+B to reach execution, cancel A and release the pin. Check that A acquired no
+child admission and B's files survived.
+
+In the branch regression the fixed internal child also occupied the one slot
+reserved for report rendering and target publication. A peer remained pending
+for the test's 50-second wait after the scheduling thread was freed. The fixed
+child uses a received composition and bypasses the renderer process. Keeping
+it in the two-worker bulk pool and reserving the renderer slot for work
+that can use that renderer allowed the peer to finish in both the pin and
+child-construction interleavings.
+
+Qualification also exposed two more precise ownership boundaries. Report
+hydration and target publication originally reserved the single renderer
+slot for their entire callbacks. The follow-up acquires that slot only while
+the renderer process exists. A publication paused outside rendering leaves
+another owner able to render. A committed child admission can precede the
+child authority's final `run.completed` revision. Hydrating at the earlier
+revision caused a second full report read. The scheduler now waits for
+the terminal child authority and carries that report through target pinning.
+The external-target-lock test observed one report read and one publication.
+[Renderer ownership](../src/loom/preparation.py)
+[Rendering regression](../tests/integration/queue/test_preparation_operations.py)
+
+#### 3. Completion on the scheduler can immediately enter another slow operation
+
+```python
+# develop, after pending.future.done()
+prepared = pending.future.result()
+self._initialize_context(row, prepared.run_uri)
+self._store_result(...)
+if row["kind"] == "run":
+    self._continue_run(self._read(operation_id))
+```
+
+The completed future can return immediately. The newly synchronous calls that
+follow it read run annotations, read runtime metadata and sometimes initialize
+annotations through the authority. Child submission and target continuation
+can then wait for the run's admission lock, read its managed intent, check
+placement and resolve priority. A competing direct submitter for A can
+therefore take scheduling opportunities from B. The follow-up integration
+test held A inside annotation initialization and, separately, inside native
+admission. In both cases B reached execution while A was held. Cancelling A
+before releasing the hold prevented its target admission.
+
+```python
+# Proposed bounded per-run continuation
+with admission_guard(run_uri):
+    annotations = initialize_or_recover(operation_id, run_uri)
+    candidate = validate_intent_and_priority(request, annotations)
+
+def insert(conn):
+    require_current_claim(conn, operation_id, queue_item_id, run_uri, epochs)
+    require_not_cancelled(conn, operation_id)
+    return insert_or_replay_matching_admission(conn, candidate)
+
+return short_write(daemon, insert)
+```
+
+Retain the original publication claim through the handoff. Use the preparation
+operation identity to recover an annotation write whose reply was lost.
+Commit the native admission and the parent receipt atomically. Direct submit
+still returns a committed receipt. Test independent execution with A held first
+in annotation access and then in intent loading. Cancel A during either wait,
+and restart after annotations commit but before admission. Count annotation
+initializations and admissions for the original operation.
+
+#### 4. The SSH client delays publication of completed results
+
+```python
+# develop
+for key, future in pending.items():
+    results[key] = future.result()
+return results
+
+# call_many writes the first local receipt only after that return
+for name, response in responses.items():
+    self._finish_call(name, directory, request, response)
+```
+
+The first submitted host can hold up result collection. Even when all futures
+are consumed in completion order, returning one aggregated dictionary retains
+the second barrier. The remote action may already have succeeded while
+passive fleet status still reports an uncertain dispatch.
+
+```python
+for future in as_completed(future_to_host):
+    host = future_to_host[future]
+    yield host, get_outcome(future)     # Preserve each transport error as an outcome.
+
+for host, outcome in completed_calls:
+    persist_or_record_error(host, retained_requests[host], outcome)
+```
+
+Each exact host intent and its dispatch marker must exist before sending.
+Keep the local receipt writer on the controller thread because it can also
+publish accepted configuration. Collect errors per host and enforce global
+prerequisites after recording all available successes. Hold A, observe B as
+applied through passive status, drop A's response and resume with the same
+IDs. B must execute physically once.
+
+#### 5. Some phases defer dispatch itself until an unrelated host finishes
+
+```python
+# develop, initial offers and setup checks
+if all(client.observe_agent(name).value.get("offer") for name in workers):
+    break
+for name in workers:
+    results[name] = self_test(..., agent_id=name)
+```
+
+A missing first offer short-circuits the generator. The full self-test loop
+then grants each host its own default 120-second observation budget. Upgrade
+preflight captures every host's bindings through the coordinator before any
+captured host can prepare. Settlement and restoration make further serial RPCs.
+A 60-second check observer and a 300-second default SSH ceiling govern different
+calls. Neither value establishes an end-to-end bound.
+
+```python
+deadline = monotonic() + observer_budget
+while pending and monotonic() < deadline:
+    for step in eligible_steps(pending):
+        offer_bounded(step.identity, step, deadline=deadline)
+    for step, outcome in completed_until(deadline):
+        persist(step, outcome)
+        enable_successors(step, outcome)
+return retained_status(operation_id)
+```
+
+Give eligible hosts bounded, fair turns. Feed a completed capture's bindings
+straight into that host's preparation. Carry the same absolute deadline through
+SSH, coordinator calls and receipt lookup, and avoid joining outstanding work
+on timeout. Keep a per-host certificate issuance and receipt prerequisite for
+enrollment, one writer for shared coordinator declarations, sequential gate
+revisions, and the stop / coordinator replacement / agent restoration barriers.
+An accepted check keeps its own execution budget. At observer expiry, return
+the stable operation ID and reconcile each uncertain request before further
+dispatch. Hold the first host and verify that later eligible checks are actually
+submitted and visible during that invocation. Lose a reply and verify exact
+resumption and that the gate stays closed until restoration is complete.
+
+The implementation drives per-host generators on the controller. Only the
+individual transport runs on a worker. The generator resumes on the receipt
+writer as soon as that transport finishes. For example, the upgrade proceeds
+directly from a coordinator capture to the matching agent's preparation.
+
+```python
+captured = yield from operation.call_steps(
+    "coordinator", "upgrade-check-capture", agent_id=name, **capture_inputs
+)
+yield from operation.call_steps(
+    name, "upgrade-check-prepare", agent_id=name,
+    bindings=captured["bindings"], **agent_inputs
+)
+```
+
+The original host helper also acquired an exclusive role-wide lock for every
+capture. Independent capture request IDs now share the role lock and each
+locks its own native request directory. Mutating role configuration still
+requires the exclusive role lock. During setup, issuance and enrollment
+take an ordered coordinator turn. A missing offer pauses only that agent.
+The setup check ID derives from the retained setup nonce and agent identity.
+A resumed invocation can recover an earlier native check ID as well.
+A test paused the first coordinator capture through observer expiry. The
+second agent published its preparation receipt before expiry. After losing
+the first reply, continuation recovered all four capture/prepare effects
+without dispatching one twice. [Host flows](../src/loom/fleet/ssh_operations.py)
+[Completion and recovery tests](../tests/unit/loom/fleet/test_host_dispatch.py)
+
+#### 6. Upgrade repeats release packing and protected configuration composition
+
+```python
+# develop, inside the per-host candidate-install comprehension
+{"action": "install-candidate", **sshops._bundle(operation.inventory)}
+# Inside the packer
+{"sha256": _file_hash(path), "data": base64.b64encode(path.read_bytes()).decode()}
+```
+
+A 13-role replay built 106.43 MiB of encoded data from the same 8.187 MiB
+payload in 1.007 s before transport. Reading twice can also associate one
+version's hash with another version's bytes. At another boundary, composing
+the 13 protected roles took 1.251 s and 1.600 s on the production inventory.
+The affected grant initially had about 1.25 s to reach the coordinator.
+
+```python
+def pack(path, expected):
+    raw = read_bounded(path)
+    actual = hashlib.sha256(raw).hexdigest()
+    require_equal(actual, expected)
+    return {"sha256": actual, "data": base64.b64encode(raw).decode("ascii")}
+
+bundle = pack_selected_release_once(intent["release"])
+for host in hosts:
+    dispatch_install(host, bundle)
+```
+
+Bind the descriptor to the selected release, verify its requirements and
+manifest hashes, and verify each wheel against that manifest. Each host still
+verifies its installation. For protected role YAML, retain parsed declarations
+only with complete evidence for base and included bytes, include resolution,
+selected environment and current file protection. Recheck those facts at the
+mutation boundary and use fresh composition whenever dependencies cannot be
+proved. Count constructions for 13 targets. Change a wheel after selection,
+an include with the base unchanged, the selected environment and file permissions.
+
+The runtime and retirement installation paths use the same candidate
+installer. A 13-role dispatch test packed one real synthetic release and
+delivered the same encoded member collection to every transport.
+[Candidate installer](../src/loom/fleet/ssh_operations.py)
+[Release qualification](../tests/integration/fleet/test_releases.py)
+
+#### 7. Gate mutations copy every active grant into every exact receipt
+
+```python
+receipt = dict(operation_fields, control=value, gate=state)
+conn.execute(update_current_gate, (json.dumps(state), ...))
+conn.execute(insert_receipt, (..., json.dumps(receipt)))
+```
+
+For 24 grants and 24 revocations, receipt slot counts advance from 1 to 24 and
+then fall from 23 to 0. Their sum is 576. The original 48 local JSON receipts
+used 2,278,780 bytes. The largest reply had 94,106 bytes.
+
+A follow-up isolated replay used those 48 retained controls seven times, a
+scratch SQLite database with DELETE journal and FULL synchronization, and the
+native mutation path with supplied policy selection and operator authorization.
+Each reproduced receipt compared equal to the original. Guarded JSON encoding
+was 0.65 ms median and 1.20 ms p95. SQLite writer hold was 1.91 ms median
+and 3.18 ms p95, with a 26.03 ms maximum. Commit was 0.42 ms median and
+0.60 ms p95. These intervals overlap. The measurements exclude transport
+and production storage contention. At this fleet size, preserve the historical
+format pending evidence of material time on the deployment storage.
+
+```python
+# Conditional design if larger deployments or production profiles justify it
+slot = retain_exact_check_binding(conn, control.check)
+rev = advance_gate(conn, expected_revision=control.expected_revision)
+retain_transition(conn, operation_id, intent_digest, rev, added_slot=slot.id)
+# For a legacy reply, reconstruct the gate at the recorded revision.
+```
+
+The live gate and historical receipt must commit atomically. Replaying grant A
+after granting B and revoking A must return A's original full gate. A compact
+internal format still has to produce the complete wire reply for existing
+clients. Verify the previous binary can reopen the resulting store before
+changing its durable representation.
+
+The previous implementation at `67e6ccc3` also reopened the newly written
+scratch database and reproduced all 48 original replies through its native
+maintenance operation. The original payload and durable format are preserved.
+
+#### 8. Pagination changes the reply size without bounding verification work
+
+```python
+root, description = _resolve(daemon, value, verify=operation != "read_artifact_chunk")
+members = description.pop("members")
+page = members[start:start + limit]
+```
+
+For a checksummed publication, `read_receipt` compares the recorded membership
+with a fresh physical inventory, including member digests. In a real Unix
+client exercise, each of two single-member pages inventoried all three
+members. Chunk reads avoid this full audit but still reopen the manifest,
+parse it and search the members by path. Schema 2 carries producer-declared
+digests and has a different verification contract.
+
+```python
+binding = authorize_current_locator(principal, scope, locator)
+raw = read_and_check_bound_declaration(binding)
+index = bounded_member_index(raw, binding)
+if needs_verified_contents:
+    snapshot = storage.immutable_generation(binding)
+    if snapshot is None:
+        verify_current_contents(binding, index)
+    else:
+        verify_once(binding, index, snapshot)
+return index.page(cursor, limit)
+```
+
+Index exact declaration membership and totals once, and use direct lookup for
+chunks. Repeat authorization, locator resolution, binding, budgets and the
+requested declaration check on every request. Reuse physical verification
+only while the backend can prove the same immutable tree including its
+membership. A digest of a manifest cannot detect replacement of a companion.
+Exercise multiple pages, replacement on mutable storage, revocation between
+pages and both reported integrity levels.
+
+For schema 1, a root on kernel SquashFS can reuse a complete
+content audit. The first audit opens members relative to directory
+descriptors, checks their mount identities, and compares every name, size
+and digest. A bounded cache retains the root descriptor so the mount and
+inode identity cannot be recycled. Each lookup checks the live mount table
+for overlays beneath the selected tree. A read-only bind of a mutable
+filesystem goes through the ordinary verification path. Two pages on a
+real mounted SquashFS publication used one full audit. Mutable companion
+replacement and between-request revocation were separately exercised.
+[Snapshot verification](../src/loom/queue/_immutable_tree.py)
+[Paging tests](../tests/contracts/test_artifact_access_contract.py)
+
+#### Submitted images add a separate pre-launch integrity cost
+
+```python
+# On an ordinary fresh submitted worker and on a submitted probe
+if path.stat().st_size != image.size_bytes or _file_digest(path) != image.sha256:
+    raise ValueError("submitted image differs")
+```
+
+The production probe image contained 4,936,478,720 bytes. Each fresh verifier
+reads the full file before proceeding. A valid admission can therefore coexist
+with no container progress yet. An isolated read of that image through the native verifier took
+6.986 seconds on the controller. A separate Singularity invocation using the
+same image took 0.168 seconds through a guest shell marker and clean exit.
+These are single-host measurements with a minimal command following the hash.
+They exclude fleet transport, worker setup and production workload startup.
+
+```python
+with phase("submitted_image_verification", operation_id=assignment_id):
+    image = verify_for_launch(expected_image, qualified_root)
+with phase("submitted_container_start", operation_id=assignment_id):
+    launch_verified_object(image)
+record_first_worker_progress(assignment_id)
+```
+
+Correlate digest start and finish, physical container start and first workload
+progress with one assignment or probe identity. Coalescing a digest check
+requires proof of one immutable object under the same qualified root through
+the runtime's actual open. A file descriptor pins an inode but does not by
+itself prevent in-place writes. Race replacement between verification and
+launch and require execution of the verified bytes or refusal. Keep the full
+fresh check wherever those guarantees are unavailable.
+
+The follow-up implementation binds the runtime to a launcher-owned regular
+file. Singularity canonicalized a sealed memfd link and refused to open the
+resulting deleted filename in a physical exercise. The launcher therefore
+makes a private copy-on-write clone when supported, or copies and hashes the
+same bounded byte stream. It substitutes only the projected Apptainer image
+operand. The retained command and assignment keep the original logical
+identity. A future coordinates overlapping consumers only when they selected
+the same pinned kernel snapshot object, root and image digest. The private
+file lives through physical use. A mutable source is checked afresh on every
+launch.
+
+```python
+with image_for_launch(selected_image, qualified_roots, assignment_id) as paths:
+    command = physical_command(projected_command, paths)
+    run_and_observe(command)
+```
+
+A real Singularity guest executed the verified original after the submitted
+pathname was replaced with invalid bytes. On the 4,936,478,720-byte fleet
+image, the private-copy verification path took 8.198 s in an isolated run,
+process creation took 0.001 s and reaching the guest marker and exiting took
+0.116 s. A separate baseline fresh hash took 6.986 s. These are individual
+controller measurements and neither is a fleet latency percentile. Without a
+copy-on-write clone, each independent mutable-image launch needs scratch
+space up to the full image size. Qualification exercised overlapping consumers
+on a kernel SquashFS mount. [Image owner](../src/loom/queue/_submitted_image_launch.py)
+[Physical command tests](../tests/unit/loom/queue/test_submitted_container_policy.py)
+
+The supervisor records `submitted_process_spawn` and `submitted_namespace_ready`.
+Resident and Slurm guest metadata record `guest_assignment_read`, and the probe
+records its guest marker in `container_probe_exec`. These observations separate
+image preparation, process creation, namespace readiness and the first read
+inside the worker. A successful workload has its own completion evidence.

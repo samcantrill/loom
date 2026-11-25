@@ -29,6 +29,8 @@ def host_result(result):
     if isinstance(reply, dict):
         HOST_TIMINGS.extend(reply.pop("_fleet_timings", []))
     if result.returncode:
+        if reply.get("host_error", {}).get("code") == "BlockingIOError":
+            raise BlockingIOError("host operation has an active writer")
         if reply.get("host_error", {}).get("code") == "ServiceStarting":
             raise ServiceStarting(reply["host_error"]["reason"])
         raise ValueError(reply.get("host_error", {}).get(
@@ -192,8 +194,9 @@ def main():
     import fcntl
 
     with (admin / "installation.lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        if request["action"] in {"install", "install-candidate"}:
+        installing = request["action"] in {"install", "install-candidate"}
+        fcntl.flock(lock, (fcntl.LOCK_EX if installing else fcntl.LOCK_SH) | fcntl.LOCK_NB)
+        if installing:
             if marker.exists():
                 if json.loads(marker.read_text()) != release:
                     raise ValueError("installed immutable release differs")

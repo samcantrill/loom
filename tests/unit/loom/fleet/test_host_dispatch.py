@@ -36,10 +36,16 @@ def test_all_hosts_dispatch_before_ack_with_parent_receipts_and_exact_replay(tmp
     remote = {}
     dispatched = []
     writes = []
+    peer_persisted = Event()
+    op.inventory.name = "fleet"
+    monkeypatch.setattr(ssh, "_directory", lambda *_: tmp_path)
+    atomic(tmp_path / "intent.json", op.intent)
     original_atomic = ssh.atomic
     def publish(path, value):
         writes.append(get_ident())
         original_atomic(path, value)
+        if path == op.receipts / "second-workload-stage" / "receipt.json":
+            peer_persisted.set()
     monkeypatch.setattr(ssh, 'atomic', publish)
     def transport(host, request):
         if request['action'] == 'receipt':
@@ -48,7 +54,10 @@ def test_all_hosts_dispatch_before_ack_with_parent_receipts_and_exact_replay(tmp
         assert len(list(op.receipts.glob('*/intent.json'))) == 3
         barrier.wait()
         if host == 'first':
-            assert completed['second'].wait(5)
+            assert peer_persisted.wait(5)
+            status = ssh.operation_status(op.inventory, op.intent["operation_id"])
+            assert status["steps"]["second-workload-stage"]["native_outcome"] == "applied"
+            assert status["steps"]["first-workload-stage"]["native_outcome"] == "unknown"
         elif host == 'second':
             assert completed['third'].wait(5)
         dispatched.append((host, request['request_id']))
@@ -142,3 +151,144 @@ def test_all_hosts_stage_before_promotion_preserves_native_settlement(tmp_path):
     acknowledged.update(names)
     workloads._promote_agents(op)
     assert observed[-3:] == list(names)
+
+def test_preflight_prepares_peer_and_detaches_before_slow_capture(tmp_path, monkeypatch):
+    import time
+    from loom.fleet import upgrades
+    from loom.queue.preparation import PreparationSource
+
+    op = operation(tmp_path, monkeypatch)
+    op.intent["hosts"]["coordinator"] = op.intent["hosts"].pop("third")
+    op.intent["declarations"]["coordinator"] = op.intent["declarations"].pop("third")
+    for name, row in op.intent["hosts"].items():
+        row["expected_root_id"] = name + "-root"
+    op.intent.update(agents={"first": {}, "second": {}}, check_selection={"deployment": "fixture", "config": "probe.yaml"})
+    op.intent["target_declarations"] = {
+        "coordinator": {"preparation": {"profiles": {"probe": {"resident_profile_id": "test"}}}},
+        **{name: {"resident_profiles": [{"descriptor": {"profile_id": "test"}}]} for name in op.intent["agents"]},
+    }
+    monkeypatch.setattr(upgrades, "load_deployment", lambda _: SimpleNamespace(
+        preparation_profile="probe", source=PreparationSource("shared", "projects", ".", ("probe.yaml",))))
+    release, finished = Event(), Event()
+    effects = {}
+    def transport(host, request):
+        identity = request["request_id"]
+        if request["action"] == "receipt":
+            return effects.get(identity)
+        assert identity not in effects
+        if request["action"] == "upgrade-check-capture":
+            if request["agent_id"] == "first":
+                assert release.wait(10)
+            effects[identity] = {"bindings": {"value": request["agent_id"]}}
+            if request["agent_id"] == "first":
+                finished.set()
+                raise ssh.SshUnavailable("reply dropped")
+        else:
+            assert request["bindings"] == {"value": request["agent_id"]}
+            effects[identity] = {"outcome": "applied"}
+        return effects[identity]
+
+    monkeypatch.setattr(ssh, "ssh", transport)
+    op.deadline = time.monotonic() + 1.5
+    try:
+        with pytest.raises(ssh.SshUnavailable, match="deadline"):
+            upgrades._preflight_checks(op)
+        assert not finished.is_set()
+        assert (op.receipts / "second-upgrade-check-prepare-second/receipt.json").is_file()
+        assert not (op.receipts / "first-upgrade-check-prepare-first/intent.json").exists()
+    finally:
+        release.set()
+    assert finished.wait(5)
+    op.deadline = time.monotonic() + 5
+    upgrades._preflight_checks(op)
+    assert len(effects) == 4
+
+
+def test_setup_submits_later_checks_during_first_missing_offer(tmp_path, monkeypatch):
+    import time
+    from contextlib import nullcontext
+    from dataclasses import make_dataclass
+    from loom.coordinator import CoordinatorOperatorClient
+    from loom.fleet import self_tests
+
+    op = operation(tmp_path, monkeypatch)
+    op.inventory = make_dataclass("Selected", [("path", object), ("runtime_release", object)])(
+        tmp_path / "inventory", op.inventory.runtime_release)
+    op.intent["hosts"]["coordinator"] = op.intent["hosts"].pop("third")
+    op.intent["declarations"]["coordinator"] = op.intent["declarations"].pop("third")
+    for name, decl in op.intent["declarations"].items():
+        if name != "coordinator":
+            decl.update(url="https://localhost", registration=name)
+            path = tmp_path / (name + ".json")
+            atomic(path, decl)
+            op.intent["inputs"][str(path)] = hashlib.sha256(path.read_bytes()).hexdigest()
+    op.intent.update(issuer="issuer", fresh_coordinator=False, nonce="nonce", check_selection={"config": "probe.yaml"})
+    op.deadline = time.monotonic() + 8
+    offered, checked = set(), set()
+    first_observed = Event()
+    actions = []
+    def transport(host, req):
+        name = req.get("agent_id", "coordinator" if host == "third" else host)
+        action = req["action"]
+        actions.append((name, action))
+        if action == "prepare":
+            return {"ca": "ca", "issuer_fingerprint": "issuer", "csr": "csr-" + name}
+        if action == "issue":
+            return {"ca": "ca", "certificate": "cert-" + name}
+        if action == "enroll":
+            assert ("receive" in [kind for agent, kind in actions if agent == name]
+                    and req["certificate"] == "cert-" + name)
+        if action in {"observe", "initialize"}:
+            return {"owner": name, "gpu_devices": [], "profile": "profile"}
+        return {"outcome": "applied"}
+    def offer(name, *, deadline):
+        assert deadline == op.deadline and (name, "start") in actions
+        offered.add(name)
+        if name == "first":
+            first_observed.set()
+        return SimpleNamespace(value={"offer": name == "second" or "second" in checked})
+    def check(inventory, *, agent_id, _setup_id, timeout_seconds, **kwargs):
+        assert agent_id in offered and timeout_seconds <= 8
+        assert agent_id not in checked and _setup_id.startswith("check-")
+        if agent_id == "second":
+            assert first_observed.wait(3) and "first" not in checked
+        checked.add(agent_id)
+        return {"outcome": "passed"}
+
+    monkeypatch.setattr(ssh, "ssh", transport)
+    monkeypatch.setattr(ssh, "_connections", lambda *args: (tmp_path / "deployment", tmp_path / "operator"))
+    monkeypatch.setattr(ssh, "_bundle", lambda *args: {})
+    monkeypatch.setattr(ssh, "_fingerprint", lambda cert: cert)
+    monkeypatch.setattr(self_tests, "self_test", check)
+    monkeypatch.setattr(CoordinatorOperatorClient, "from_connection_file", lambda _: nullcontext(SimpleNamespace(observe_agent=offer)))
+    result = ssh._continue(op)
+    assert result["state"] == "complete" and checked == {"first", "second"}
+
+def test_native_capture_allows_independent_request_and_excludes_shared_mutation(tmp_path, monkeypatch):
+    import fcntl
+    import io
+    import json
+    import sys
+    from loom.fleet import _host
+
+    admin = tmp_path / "admin"
+    first = admin / "operations" / "first"
+    _host.protected_directory(first)
+    monkeypatch.setattr(_host.os, "umask", lambda _: 0o077)
+    calls = []
+    monkeypatch.setattr(_host, "execute", lambda request, *args:
+                        calls.append(request["request_id"]) or {"bindings": {"ok": True}})
+    def native(request_id, action):
+        request = {"admin": str(admin), "action": action, "request_id": request_id}
+        monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(json.dumps(request).encode())))
+        return _host.main()
+    with (admin / "native.lock").open("a") as shared, (first / "capture.lock").open("a") as owner:
+        fcntl.flock(shared, fcntl.LOCK_SH)
+        fcntl.flock(owner, fcntl.LOCK_EX)
+        assert native("second", "upgrade-check-capture")["native_outcome"] == "applied"
+        assert native("second", "upgrade-check-capture")["bindings"] == {"ok": True}
+        with pytest.raises(BlockingIOError):
+            native("first", "upgrade-check-capture")
+        with pytest.raises(BlockingIOError):
+            native("change", "enroll")
+    assert calls == ["second"]

@@ -404,6 +404,102 @@ def test_registration_releases_state_guard_while_writer_is_busy(tmp_path, monkey
         daemon.stop()
 
 
+@pytest.mark.parametrize("transition", ["gate", "delivery", "replacement", "recovery"])
+@pytest.mark.parametrize(("blocker_sql", "change_authority"), [
+    ("BEGIN IMMEDIATE", False), ("BEGIN", False), ("BEGIN IMMEDIATE", True),
+])
+def test_other_agent_reads_while_transition_waits(waiting_owner, monkeypatch, transition, blocker_sql, change_authority):
+    from functools import partial
+    from loom.queue import _coordinator_transactions
+    from loom.queue.local_daemon import TimeRecoveryRequest
+
+    daemon, session, _, target, _ = waiting_owner
+    policy = daemon._agent_policy
+    peer = replace(policy.agents[0], credential_id="agent-b", principal_id="principal-b", agent_id="agent-b")
+    principal = policy.principals[0]
+    daemon.replace_agent_policy(replace(
+        policy, agents=(*policy.agents, peer),
+        principals=(replace(principal, agent_ids=(*principal.agent_ids, peer.agent_id),
+                            actions=(*principal.actions, "maintenance", "recover_time")),),
+    ))
+    peer_view = daemon.agent_view(LocalDaemonPrincipal("principal-b", LocalDaemonRole.AGENT, "agent-b"))
+    other = peer_view.register(AgentRegistration(
+        "register-b", session.coordinator_id, session.coordinator_epoch, "root-b", "cfg",
+        "inv", "avail", ("default",), peer.capabilities, retirement_verifier=_TEST_RETIREMENT_VERIFIER,
+    ))
+    reader, reader_id = peer_view, other.session_id
+    operator = daemon.operator_view(LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR))
+    if transition == "gate":
+        call = partial(operator.maintenance, {
+            "operation_id": "close-test", "maintenance_id": "test", "maintenance_intent_digest": "a" * 64,
+            "action": "close", "expected_revision": 0, "check": None,
+        }, expected_coordinator_id=session.coordinator_id)
+        count = "SELECT count(*) FROM daemon_metadata WHERE key='maintenance-control:close-test'"
+    elif transition == "delivery":
+        call = target
+        count = "SELECT count(*) FROM agent_deliveries"
+    elif transition == "replacement":
+        reader, reader_id = _view(daemon), session.session_id
+        call = partial(operator.replace_agent_session, SessionReplacementRequest("replace-test", other.agent_id, "root lost"))
+        count = "SELECT count(*) FROM session_replacements"
+    else:
+        with monkeypatch.context() as back:
+            back.setattr(daemon, "_clock", lambda: "2000-01-01T00:00:00Z")
+            with pytest.raises(QueueServiceError, match="regressed|degraded"):
+                daemon._accepted_snapshot()
+        call = partial(operator.recover_time, TimeRecoveryRequest(
+            "recover-test", daemon.status().accepted_time_revision, session.coordinator_epoch, "verified clock",
+        ))
+        count = "SELECT count(*) FROM time_recoveries"
+
+    waiting, retry = Event(), Event()
+
+    def pause(_seconds):
+        waiting.set()
+        assert retry.wait(5)
+
+    monkeypatch.setattr(_coordinator_transactions, "sleep", pause)
+    with ThreadPoolExecutor() as workers, daemon._connection() as blocker:
+        blocker.execute(blocker_sql)
+        blocker.execute("SELECT * FROM agent_sessions").fetchall()
+        pending = workers.submit(call)
+        try:
+            assert waiting.wait(3)
+            read = workers.submit(reader.wait_for_controls, reader_id,
+                                  received_operation_ids=(), wait_timeout_ms=0)
+            assert read.result(2) == {"control": None, "assignment_control": None}
+            blocker.rollback()
+            if change_authority:
+                if transition == "delivery":
+                    with daemon._connection() as conn:
+                        conn.execute("UPDATE agent_offers SET current=0 WHERE session_id=?", (session.session_id,))
+                        conn.commit()
+                elif transition == "replacement":
+                    peer_view.publish_offer(
+                        replace(_offer(other.session_id, other.coordinator_epoch, availability=other.availability_revision),
+                                config_revision=other.config_revision, inventory_revision=other.inventory_revision),
+                        idempotency_key="returned",
+                    )
+                elif transition == "recovery":
+                    monkeypatch.setattr(daemon, "_clock", lambda: "2000-01-01T00:00:00Z")
+                else:
+                    operator.maintenance({
+                        "operation_id": "other-close", "maintenance_id": "other",
+                        "maintenance_intent_digest": "b" * 64, "action": "close",
+                        "expected_revision": 0, "check": None,
+                    }, expected_coordinator_id=session.coordinator_id)
+        finally:
+            blocker.rollback()
+            retry.set()
+        if change_authority:
+            with pytest.raises(QueueConflictError):
+                pending.result(3)
+        else:
+            assert pending.result(3) == call()
+    with daemon._connection() as conn:
+        assert conn.execute(count).fetchone()[0] == (0 if change_authority else 1)
+
+
 @pytest.mark.parametrize(("store", "transaction"), [
     ("control", "BEGIN IMMEDIATE"), ("control", "BEGIN"),
     ("execution", "BEGIN IMMEDIATE"), ("execution", "BEGIN"),

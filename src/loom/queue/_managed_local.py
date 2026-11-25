@@ -3063,7 +3063,7 @@ class SQLiteCoordinatorAssignments:
 
         if not isinstance(session_id, str) or not session_id:
             raise ManagedLocalError("session assignment inventory requires an ID")
-        with self._transaction() as conn:
+        with self._transaction(read_only=True) as conn:
             rows = tuple(
                 conn.execute(
                     "SELECT assignment_id, identity_json, run_uri, stage_work_id, "

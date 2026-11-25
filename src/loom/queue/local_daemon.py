@@ -3068,12 +3068,13 @@ class LocalDaemon:
         *,
         preparation_operation_id: str | None = None,
         run_operation_id: str | None = None,
+        preparation_claim: tuple[object, ...] | None = None,
     ) -> LocalDaemonAdmission:
         from ._coordinator_admission import _submit
 
         return _submit(
             self, request, preparation_operation_id=preparation_operation_id,
-            run_operation_id=run_operation_id,
+            run_operation_id=run_operation_id, preparation_claim=preparation_claim,
         )
 
 
@@ -4303,105 +4304,110 @@ class LocalDaemon:
             request.to_dict(), sort_keys=True, separators=(",", ":"), allow_nan=False
         )
         digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
-        with self._state_guard():
-            with self._connection() as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                existing = conn.execute(
-                    "SELECT principal_id, request_digest, result_json FROM time_recoveries "
-                    "WHERE operation_id = ?",
-                    (request.operation_id,),
-                ).fetchone()
-                if existing is not None:
-                    if (
-                        str(existing["principal_id"]) != principal.subject
-                        or str(existing["request_digest"]) != digest
-                    ):
-                        raise QueueConflictError(
-                            "time recovery operation was reused with different content"
-                        )
-                    value = json.loads(str(existing["result_json"]))
-                    if not isinstance(value, Mapping):
-                        raise QueueStorageError("time recovery receipt is invalid")
-                    conn.commit()
-                    return TimeRecoveryReceipt.from_dict(value)
-                state = {
-                    str(row["key"]): str(row["value"])
-                    for row in conn.execute(
-                        "SELECT key, value FROM daemon_metadata WHERE key IN "
-                        "('accepted_time_high_water', 'accepted_time_health', "
-                        "'accepted_time_revision')"
-                    )
-                }
-                current_epoch = self._epoch or ""
-                revision = int(state.get("accepted_time_revision", "0"))
-                if state.get("accepted_time_health") != "degraded":
+        from ._coordinator_transactions import short_write
+
+        def apply(conn: sqlite3.Connection) -> tuple[TimeRecoveryReceipt, bool]:
+            self._authorizer().require_operator(principal, "recover_time")
+            existing = conn.execute(
+                "SELECT principal_id, request_digest, result_json FROM time_recoveries "
+                "WHERE operation_id = ?",
+                (request.operation_id,),
+            ).fetchone()
+            if existing is not None:
+                if (
+                    str(existing["principal_id"]) != principal.subject
+                    or str(existing["request_digest"]) != digest
+                ):
                     raise QueueConflictError(
-                        "coordinator accepted-time is not degraded"
+                        "time recovery operation was reused with different content"
                     )
-                if request.expected_time_revision != revision:
-                    raise QueueConflictError("time recovery revision is stale")
-                if request.expected_coordinator_epoch != current_epoch:
-                    raise QueueConflictError("time recovery coordinator epoch is stale")
-                high_water = state.get("accepted_time_high_water")
-                if high_water is None:
-                    raise QueueStorageError("accepted-time high-water is unavailable")
-                now = self._clock()
-                parse_timestamp(now)
-                if parse_timestamp(now) < parse_timestamp(high_water):
-                    raise QueueConflictError(
-                        "coordinator clock is still below accepted-time high-water"
-                    )
-                new_epoch = f"coordinator-epoch-{uuid4()}"
-                next_revision = revision + 1
-                receipt = TimeRecoveryReceipt(
-                    operation_id=request.operation_id,
-                    request_digest=digest,
-                    recovered_at=now,
-                    previous_coordinator_epoch=current_epoch,
-                    coordinator_epoch=new_epoch,
-                    time_revision=next_revision,
+                value = json.loads(str(existing["result_json"]))
+                if not isinstance(value, Mapping):
+                    raise QueueStorageError("time recovery receipt is invalid")
+                return TimeRecoveryReceipt.from_dict(value), False
+            state = {
+                str(row["key"]): str(row["value"])
+                for row in conn.execute(
+                    "SELECT key, value FROM daemon_metadata WHERE key IN "
+                    "('accepted_time_high_water', 'accepted_time_health', "
+                    "'accepted_time_revision')"
                 )
-                conn.execute(
-                    "INSERT INTO coordinator_epochs(epoch, started_at) VALUES (?, ?)",
-                    (new_epoch, now),
+            }
+            current_epoch = self._epoch or ""
+            revision = int(state.get("accepted_time_revision", "0"))
+            if state.get("accepted_time_health") != "degraded":
+                raise QueueConflictError(
+                    "coordinator accepted-time is not degraded"
                 )
-                conn.executemany(
-                    "INSERT OR REPLACE INTO daemon_metadata(key, value) VALUES (?, ?)",
-                    (
-                        ("accepted_time_high_water", now),
-                        ("accepted_time_health", "healthy"),
-                        ("accepted_time_revision", str(next_revision)),
+            if request.expected_time_revision != revision:
+                raise QueueConflictError("time recovery revision is stale")
+            if request.expected_coordinator_epoch != current_epoch:
+                raise QueueConflictError("time recovery coordinator epoch is stale")
+            high_water = state.get("accepted_time_high_water")
+            if high_water is None:
+                raise QueueStorageError("accepted-time high-water is unavailable")
+            now = self._clock()
+            parse_timestamp(now)
+            if parse_timestamp(now) < parse_timestamp(high_water):
+                raise QueueConflictError(
+                    "coordinator clock is still below accepted-time high-water"
+                )
+            new_epoch = f"coordinator-epoch-{uuid4()}"
+            next_revision = revision + 1
+            receipt = TimeRecoveryReceipt(
+                operation_id=request.operation_id,
+                request_digest=digest,
+                recovered_at=now,
+                previous_coordinator_epoch=current_epoch,
+                coordinator_epoch=new_epoch,
+                time_revision=next_revision,
+            )
+            conn.execute(
+                "INSERT INTO coordinator_epochs(epoch, started_at) VALUES (?, ?)",
+                (new_epoch, now),
+            )
+            conn.executemany(
+                "INSERT OR REPLACE INTO daemon_metadata(key, value) VALUES (?, ?)",
+                (
+                    ("accepted_time_high_water", now),
+                    ("accepted_time_health", "healthy"),
+                    ("accepted_time_revision", str(next_revision)),
+                ),
+            )
+            conn.execute(
+                "DELETE FROM daemon_metadata WHERE key = 'accepted_time_diagnostic'"
+            )
+            conn.execute("UPDATE agent_offers SET current = 0 WHERE current = 1")
+            write_status(
+                conn, "operation",
+                "INSERT INTO time_recoveries(operation_id, principal_id, "
+                "request_json, request_digest, result_json) VALUES (?, ?, ?, ?, ?)",
+                (
+                    request.operation_id,
+                    principal.subject,
+                    encoded,
+                    digest,
+                    json.dumps(
+                        receipt.to_dict(),
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        allow_nan=False,
                     ),
-                )
-                conn.execute(
-                    "DELETE FROM daemon_metadata WHERE key = 'accepted_time_diagnostic'"
-                )
-                conn.execute("UPDATE agent_offers SET current = 0 WHERE current = 1")
-                write_status(
-                    conn, "operation",
-                    "INSERT INTO time_recoveries(operation_id, principal_id, "
-                    "request_json, request_digest, result_json) VALUES (?, ?, ?, ?, ?)",
-                    (
-                        request.operation_id,
-                        principal.subject,
-                        encoded,
-                        digest,
-                        json.dumps(
-                            receipt.to_dict(),
-                            sort_keys=True,
-                            separators=(",", ":"),
-                            allow_nan=False,
-                        ),
-                    ),
-                )
-                conn.commit()
-            self._epoch = new_epoch
-            self._poll_waiters.notify_all()
-            execution = self._execution
-            if execution is not None:
-                execution.coordinator_epoch = new_epoch
-            self._wake.set()
-            return receipt
+                ),
+            )
+            return receipt, True
+
+        def committed(result: tuple[TimeRecoveryReceipt, bool]) -> None:
+            receipt, applied = result
+            if applied:
+                self._epoch = receipt.coordinator_epoch
+                if self._execution is not None:
+                    self._execution.coordinator_epoch = receipt.coordinator_epoch
+                self._poll_waiters.notify_all()
+                self._wake.set()
+
+        receipt, _ = short_write(self, apply, committed=committed)
+        return receipt
 
     def _require_started(self) -> str:
         if self._coordinator_lock is None or self._coordinator_id is None:

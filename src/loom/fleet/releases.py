@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 from pathlib import Path
 import re
@@ -44,11 +45,49 @@ def verify_release(path: Path, *, previous: Path | None = None) -> dict[str, Any
     transitive hash lock using standard packaging tools; installation remains
     responsible for checking that graph against the selected interpreter.
     """
+    result, _ = _verify_release(path)
+    if previous is not None:
+        retained = verify_release(previous)
+        if retained["release_id"] == result["release_id"] and retained != result:
+            raise QueueConflictError("same release label has different immutable bytes")
+    return result
+
+
+def pack_release(path: Path, expected: dict[str, Any]) -> dict[str, Any]:
+    """Pack exactly the selected descriptor and the bytes its manifest verifies."""
+    result, envelope = _verify_release(path, pack=True)
+    if result != expected:
+        raise QueueConflictError("immutable service bundle changed")
+    return envelope
+
+
+def _verify_release(path: Path, *, pack: bool = False) -> tuple[dict[str, Any], dict[str, Any]]:
     import yaml
     from packaging.requirements import Requirement, InvalidRequirement
     from packaging.utils import canonicalize_name, parse_wheel_filename
 
-    payload = path.read_bytes()
+    root = path.resolve().parent
+    files = []
+    encoded_bytes = 0
+
+    def read_member(member: Path, archive_path: str) -> tuple[bytes, str]:
+        nonlocal encoded_bytes
+        if not pack:
+            raw = member.read_bytes()
+            return raw, hashlib.sha256(raw).hexdigest()
+        # Encoded payload alone cannot exceed the SSH request limit.
+        remaining = (128 * 1024 * 1024 - encoded_bytes) // 4 * 3
+        with member.open("rb") as stream:
+            raw = stream.read(remaining + 1)
+        if len(raw) > remaining:
+            raise QueueConfigError("selected bundle exceeds the fixed host request limit")
+        data = base64.b64encode(raw).decode("ascii")
+        encoded_bytes += len(data)
+        digest = hashlib.sha256(raw).hexdigest()
+        files.append({"path": archive_path, "sha256": digest, "data": data})
+        return raw, digest
+
+    payload, descriptor_digest = read_member(path, path.name)
     value = yaml.safe_load(payload)
     if (
         not isinstance(value, dict)
@@ -70,7 +109,6 @@ def verify_release(path: Path, *, previous: Path | None = None) -> dict[str, Any
         raise QueueConfigError("unsupported Python: service releases require 3.12")
     if not isinstance(value["release_id"], str) or not value["release_id"]:
         raise QueueConfigError("release_id is required")
-    root = path.resolve().parent
     requirements, req = _hashed_file(
         root, value["requirements"], fields={"path", "sha256"}
     )
@@ -78,10 +116,13 @@ def verify_release(path: Path, *, previous: Path | None = None) -> dict[str, Any
         root, value["wheelhouse"], fields={"path", "manifest", "sha256"}
     )
     manifest = _contained(root, wheel["manifest"])
-    if _digest(requirements) != req["sha256"] or _digest(manifest) != wheel["sha256"]:
+    requirements_data, req_digest = read_member(requirements, req["path"])
+    manifest_data, manifest_digest = read_member(manifest, wheel["manifest"])
+    if req_digest != req["sha256"] or manifest_digest != wheel["sha256"]:
         raise QueueConfigError("release requirements or manifest hash changed")
     entries: dict[str, tuple[str, str]] = {}
-    for line in manifest.read_text().splitlines():
+    hashes = {}
+    for line in manifest_data.decode().splitlines():
         match = re.fullmatch(r"([0-9a-f]{64}) [ *](.+)", line)
         if match is None:
             raise QueueConfigError("wheel manifest must use SHA-256 sum lines")
@@ -91,25 +132,25 @@ def verify_release(path: Path, *, previous: Path | None = None) -> dict[str, Any
             filename in entries
             or selected.suffix != ".whl"
             or not selected.is_file()
-            or _digest(selected) != digest
         ):
+            raise QueueConfigError("selected wheel is missing, duplicated or changed")
+        actual_digest = (read_member(selected, str(Path(wheel["path"]) / filename))[1]
+                         if pack else _digest(selected))
+        if actual_digest != digest:
             raise QueueConfigError("selected wheel is missing, duplicated or changed")
         try:
             package, version, _, _ = parse_wheel_filename(selected.name)
         except ValueError as exc:
             raise QueueConfigError("invalid wheel filename") from exc
         entries[filename] = (str(package), str(version))
+        hashes[filename] = digest
     if not entries:
         raise QueueConfigError("wheel manifest is empty")
     actual = {str(p.relative_to(wheels)) for p in wheels.rglob("*") if p.is_file()}
     if actual != set(entries):
         raise QueueConfigError("wheelhouse must contain exactly its manifest's wheels")
-    hashes = {
-        line.split()[1].lstrip("*"): line.split()[0]
-        for line in manifest.read_text().splitlines()
-    }
     locked: set[str] = set()
-    text = requirements.read_text().replace("\\\n", " ")
+    text = requirements_data.decode().replace("\\\n", " ")
     for line in text.splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
@@ -156,7 +197,7 @@ def verify_release(path: Path, *, previous: Path | None = None) -> dict[str, Any
         )
     result = {
         "release_id": value["release_id"],
-        "descriptor_sha256": hashlib.sha256(payload).hexdigest(),
+        "descriptor_sha256": descriptor_digest,
         "requirements_sha256": req["sha256"],
         "manifest_sha256": wheel["sha256"],
         "python": "3.12",
@@ -164,8 +205,4 @@ def verify_release(path: Path, *, previous: Path | None = None) -> dict[str, Any
         "scope": "local_bundle_bytes",
         "installed": False,
     }
-    if previous is not None:
-        retained = verify_release(previous)
-        if retained["release_id"] == result["release_id"] and retained != result:
-            raise QueueConflictError("same release label has different immutable bytes")
-    return result
+    return result, {"files": files, "requirements": req["path"], "wheelhouse": wheel["path"]}

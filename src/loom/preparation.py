@@ -13,6 +13,8 @@ from weave.ordered import encode_ordered_config
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from copy import deepcopy
+from contextlib import contextmanager
+from threading import BoundedSemaphore
 import importlib
 import json
 import os
@@ -1114,6 +1116,17 @@ class CoordinatorPreparation:
 
     def __init__(self, service: CoordinatorServiceConfig) -> None:
         self.service = service
+        self._renderer = BoundedSemaphore(1)
+
+    @contextmanager
+    def _renderer_slot(self):
+        from loom.queue.errors import _PreparationTargetBusy
+        if not self._renderer.acquire(blocking=False):
+            raise _PreparationTargetBusy("preparation renderer in use")
+        try:
+            yield
+        finally:
+            self._renderer.release()
 
     def _service(self, config: LocalDaemonConfig) -> CoordinatorServiceConfig:
         return replace(self.service, daemon=config)
@@ -1237,7 +1250,7 @@ class CoordinatorPreparation:
 
         directory = TemporaryDirectory(prefix="loom-preparation-config-")
         try:
-            with ProcessPoolExecutor(
+            with self._renderer_slot(), ProcessPoolExecutor(
                 max_workers=1, mp_context=multiprocessing.get_context("spawn")
             ) as worker:
                 decoded = worker.submit(
@@ -1392,7 +1405,7 @@ class CoordinatorPreparation:
                 composed,
                 cast(str, request.run_name),
                 execution_requirements=requirements,
-                _defer_locked=True,
+                _defer_locked=True, _renderer_slot=self._renderer_slot,
             )
         except QueueServiceError as exc:
             # Native publisher rejects existing changed/partial targets. Keep

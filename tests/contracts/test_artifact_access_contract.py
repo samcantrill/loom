@@ -252,6 +252,65 @@ def test_local_exact_preview_corruption_legacy_and_authorization(tmp_path, backe
     assert client.describe_artifact(legacy, scope=SCOPE)["outcome"] == "unavailable"
 
 
+def test_pages_reuse_exact_declaration_and_recheck_companions_and_access(tmp_path, monkeypatch):
+    from loom.queue import _artifact_access, _output_selection
+
+    daemon, authority, uri = fixture(tmp_path)
+    ref, tree = shared_ref(daemon, uri)
+    locator = publish(authority, uri, ref)
+    client = LocalClient(daemon)
+    _artifact_access._cached_members.cache_clear()
+    counts = {"parse": 0, "inventory": 0}
+    parse, inventory = shared._parse_receipt, shared.inventory
+
+    def parsed(*args):
+        counts["parse"] += 1
+        return parse(*args)
+    def audited(*args):
+        counts["inventory"] += 1
+        return inventory(*args)
+    monkeypatch.setattr(shared, "_parse_receipt", parsed)
+    monkeypatch.setattr(shared, "inventory", audited)
+    page = client.describe_artifact(locator, scope=SCOPE, limit=1)
+    options = dict(scope=SCOPE, declaration=page["declaration"])
+    assert client.describe_artifact(locator, cursor=1, limit=1, **options)["outcome"] == "available"
+    assert client.read_artifact_chunk(locator, member=page["primary"], offset=0, length=1, **options)["outcome"] == "available"
+    assert counts == {"parse": 1, "inventory": 2}
+    (tree / "nested/002.bin").write_bytes(b"replacement")
+    assert client.describe_artifact(locator, cursor=2, limit=1, **options)["outcome"] == "integrity_failed"
+    monkeypatch.setattr(_output_selection, "authorized_run", lambda *args: False)
+    assert client.describe_artifact(locator, cursor=2, limit=1, **options)["outcome"] == "unavailable"
+    assert client.read_artifact_chunk(locator, member=page["primary"], offset=1, length=1, **options)["outcome"] == "unavailable"
+
+
+def test_kernel_snapshot_verification_across_pages(tmp_path, monkeypatch):
+    """LOOM_TEST_IMMUTABLE_PUBLICATION selects a SquashFS mount of shared_ref's root."""
+    import os
+    from loom.queue import _immutable_tree, _output_selection
+
+    mounted = os.environ.get("LOOM_TEST_IMMUTABLE_PUBLICATION")
+    if mounted is None:
+        pytest.skip("requires a mounted kernel publication snapshot")
+    daemon, authority, uri = fixture(tmp_path)
+    ref, _ = shared_ref(daemon, uri)
+    mapping = daemon.config.coordinator_shared_roots["shared"]
+    mapping["host_path"] = mounted
+    locator = publish(authority, uri, ref)
+    client = LocalClient(daemon)
+    audited = []
+    original = _immutable_tree._audit
+    def counted(*args):
+        audited.append(args[1])
+        return original(*args)
+    monkeypatch.setattr(_immutable_tree, "_audit", counted)
+    first = client.describe_artifact(locator, scope=SCOPE, limit=1)
+    second = client.describe_artifact(locator, scope=SCOPE, limit=1, cursor=1, declaration=first["declaration"])
+    assert first["verification"] == second["verification"] == "recorded_sha256"
+    assert first["members"] != second["members"] and len(audited) == 1
+    monkeypatch.setattr(_output_selection, "authorized_run", lambda *args: False)
+    assert client.describe_artifact(locator, scope=SCOPE, limit=1, cursor=2, declaration=first["declaration"])["outcome"] == "unavailable"
+
+
 def test_complete_inventory_mixed_batch_dedup_conflict_and_receipt_changes(tmp_path, download_root):
     daemon, authority, uri = fixture(tmp_path)
     ref, tree = shared_ref(daemon, uri, count=205)

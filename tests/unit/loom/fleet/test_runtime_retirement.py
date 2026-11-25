@@ -80,10 +80,10 @@ def test_bootstrap_restarts_coordinator_before_serial_agent_conversion(tmp_path,
         probes=lambda: events.append("qualify"), call=call, call_many=lambda values: events.append("stage"),
         maintenance=lambda *args: events.append("close"), settled=lambda: None,
         gate=lambda: {"maintenance_id": "migration", "intent_digest": "digest", "revision": 2},
-        host_observe=lambda *args: {"availability": "available", "value": {"settled": True}},
+        host_observations=lambda names, action: [(n, {"availability": "available", "value": {"settled": True}}) for n in names],
         qualification=lambda name: {"retirement_target": {"active": name}},
         runtime_arguments=lambda name: {}, promote_stopped=promote)
-    monkeypatch.setattr(retirement.sshops, "_bundle", lambda _: {})
+    monkeypatch.setattr(retirement.sshops, "_bundle", lambda inventory, selected: {})
     monkeypatch.setattr(retirement.sshops, "_ssh_many", lambda _: {"ok": {}})
     monkeypatch.setattr(upgrades, "phase", lambda *args: None)
     monkeypatch.setattr(upgrades, "_capable", lambda *args: {})

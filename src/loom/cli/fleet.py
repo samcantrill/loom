@@ -58,6 +58,7 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     apply_command.add_argument("--fleet", required=True)
     apply_command.add_argument("--operation-id", required=True)
     apply_command.add_argument("--hosts")
+    apply_command.add_argument("--timeout", type=float, default=120, help="setup observation budget in seconds")
     apply_command.add_argument(
         "--issuer", type=Path, help="original coordinator-host-local CA directory"
     )
@@ -119,6 +120,8 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
         item.add_argument("--fleet", required=True)
         if action in {"resume", "abort", "retry-check", "retry-control"}:
             item.add_argument("--progress", choices=("none", "json"), default="none")
+        if action == "resume":
+            item.add_argument("--timeout", type=float, default=120, help="continuation observation budget in seconds")
         if action == "defer-checks":
             item.add_argument("--agent-id", dest="defer_agents", action="append", required=True)
             item.add_argument("--reason", dest="defer_reason", required=True)
@@ -302,16 +305,16 @@ def handle(namespace: argparse.Namespace) -> int:
                     result = operation_status(inventory, namespace.operation_id)
                 elif intent.get("kind") in {"runtime-upgrade", "workload-upgrade", "runtime-upgrade-publication", "workload-upgrade-publication", "configuration-retirement", "configuration-retirement-publication", "container-policy-addition", "container-policy-addition-publication", "publication-budget-increase", "publication-budget-increase-publication"}:
                     from loom.fleet.upgrades import upgrade
-                    result = upgrade(inventory, operation_id=namespace.operation_id, action=namespace.operation_command, runtime_release=getattr(namespace, "runtime_release", None), deployment=getattr(namespace, "deployment", None), failed_check=getattr(namespace, "failed_check", None), new_check=getattr(namespace, "new_check", None), failed_control=getattr(namespace, "failed_control", None), new_control=getattr(namespace, "new_control", None), workload_profile=getattr(namespace, "workload_profile", None), image=getattr(namespace, "image", None), workload_inventory=getattr(namespace, "workload_inventory", None), defer_agents=getattr(namespace, "defer_agents", None), defer_reason=getattr(namespace, "defer_reason", None), repair_agent_id=getattr(namespace, "repair_agent_id", None), progress=progress)
+                    result = upgrade(inventory, operation_id=namespace.operation_id, timeout_seconds=getattr(namespace, "timeout", 120), action=namespace.operation_command, runtime_release=getattr(namespace, "runtime_release", None), deployment=getattr(namespace, "deployment", None), failed_check=getattr(namespace, "failed_check", None), new_check=getattr(namespace, "new_check", None), failed_control=getattr(namespace, "failed_control", None), new_control=getattr(namespace, "new_control", None), workload_profile=getattr(namespace, "workload_profile", None), image=getattr(namespace, "image", None), workload_inventory=getattr(namespace, "workload_inventory", None), defer_agents=getattr(namespace, "defer_agents", None), defer_reason=getattr(namespace, "defer_reason", None), repair_agent_id=getattr(namespace, "repair_agent_id", None), progress=progress)
                 elif namespace.operation_command == "resume":
-                    result = apply(inventory, operation_id=namespace.operation_id, resume=True)
+                    result = apply(inventory, operation_id=namespace.operation_id, resume=True, timeout_seconds=namespace.timeout)
                 else:
                     raise ValueError("abort/retry requires a maintenance upgrade")
             else:
                 execution = _execution(namespace.check_execution)
                 result = apply(
                     inventory,
-                    operation_id=namespace.operation_id,
+                    operation_id=namespace.operation_id, timeout_seconds=namespace.timeout,
                     hosts=hosts,
                     issuer=namespace.issuer,
                     env_file=namespace.env_file,

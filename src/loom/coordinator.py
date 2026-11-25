@@ -530,7 +530,7 @@ class CoordinatorOperatorClient(NativeCoordinatorClient):
         """Observe one assignment; local claims remain independently sourced."""
         return self._native_call("operator_assignment", {"assignment_id": assignment_id}, deadline=deadline)
 
-    def control_agent(self, control: AgentControl, *, expected_coordinator_id: str | None = None, condition: Mapping[str, PlainData] | None = None) -> Mapping[str, PlainData]:
+    def control_agent(self, control: AgentControl, *, expected_coordinator_id: str | None = None, condition: Mapping[str, PlainData] | None = None, deadline: float | None = None) -> Mapping[str, PlainData]:
         """Commit/replay a native control with optional predecessor ownership.
 
         ``condition={"expected_control_id": id}`` requires that exact latest
@@ -544,7 +544,7 @@ class CoordinatorOperatorClient(NativeCoordinatorClient):
         if condition is not None:
             payload["condition"] = dict(condition)
         payload["intent_digest"] = control_intent_digest(value if condition is None else {"control": value, "condition": dict(condition)})
-        return self._native_call("operator_control", payload, expected_coordinator_id)
+        return self._native_call("operator_control", payload, expected_coordinator_id, deadline=deadline)
 
     def retire(self, operation_id: str, expected_coordinator_id: str | None = None) -> Mapping[str, PlainData]:
         """Permanently fence the expected idle coordinator; retain its receipt."""
@@ -590,9 +590,9 @@ class CoordinatorOperatorClient(NativeCoordinatorClient):
         """
         return self._native_call("operator_reconcile", {}, expected_coordinator_id)
 
-    def observe_control(self, operation_id: str) -> Mapping[str, PlainData]:
+    def observe_control(self, operation_id: str, *, deadline: float | None = None) -> Mapping[str, PlainData]:
         """Resolve the original operation after a lost mutation response."""
-        return self._native_call("operator_operation", {"operation_id": operation_id})
+        return self._native_call("operator_operation", {"operation_id": operation_id}, deadline=deadline)
 
     def observe_maintenance(self, *, deadline: float | None = None) -> Mapping[str, PlainData]:
         """Read current native gate ownership, revision and check permissions."""

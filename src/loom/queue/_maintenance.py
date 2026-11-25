@@ -12,6 +12,7 @@ import sqlite3
 from typing import TYPE_CHECKING, Any, cast
 
 from loom.serialization import PlainData
+from ._coordinator_transactions import short_write
 from .errors import QueueConflictError, QueueServiceError, QueueError
 from .operations import control_intent_digest
 
@@ -209,22 +210,22 @@ def mutate(
 ) -> dict[str, PlainData]:
     value = validate_control(control)
     check = value["check"]
-    daemon._authorizer().require_operator(principal, "maintenance")
-    if isinstance(check, Mapping):
-        daemon._authorizer().require_operator(
-            principal,
-            "maintenance",
-            agent_id=cast(str, check["agent_id"]),
-            pool=cast(str, check["pool"]),
-        )
-    if expected_coordinator_id != daemon._require_started():
-        raise QueueConflictError("maintenance coordinator identity conflicts")
     digest = control_intent_digest(
         {**value, "expected_coordinator_id": expected_coordinator_id}
     )
     key = _PREFIX + cast(str, value["operation_id"])
-    with daemon._cycle_lock, daemon._connection() as conn:
-        conn.execute("BEGIN IMMEDIATE")
+
+    def apply(conn: sqlite3.Connection) -> dict[str, PlainData]:
+        daemon._authorizer().require_operator(principal, "maintenance")
+        if isinstance(check, Mapping):
+            daemon._authorizer().require_operator(
+                principal,
+                "maintenance",
+                agent_id=cast(str, check["agent_id"]),
+                pool=cast(str, check["pool"]),
+            )
+        if expected_coordinator_id != daemon._require_started():
+            raise QueueConflictError("maintenance coordinator identity conflicts")
         existing = conn.execute(
             "SELECT value FROM daemon_metadata WHERE key = ?", (key,)
         ).fetchone()
@@ -358,8 +359,9 @@ def mutate(
             "INSERT INTO daemon_metadata(key, value) VALUES (?, ?)",
             (key, json.dumps(receipt)),
         )
-        conn.commit()
-    return receipt
+        return receipt
+
+    return short_write(daemon, apply)
 
 
 def operation(daemon: LocalDaemon, operation_id: str) -> dict[str, PlainData]:

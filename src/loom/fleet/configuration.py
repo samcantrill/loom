@@ -85,14 +85,14 @@ def exclude_captures(path: Path, capture_roots: list[Path]) -> None:
 
 def protected_directory(path: Path) -> None:
     """Create absent parents owner-only; refuse an insecure existing destination."""
-    if path.exists():
-        info = path.stat()
-        if not path.is_dir() or info.st_uid != os.getuid() or info.st_mode & 0o077:
-            raise QueueConfigError("Fleet directory must be owner-protected")
-        return
-    if not path.parent.exists():
-        protected_directory(path.parent)
-    path.mkdir(mode=0o700)
+    if not path.exists():
+        if not path.parent.exists():
+            protected_directory(path.parent)
+        # Independent checks and host capture requests can create a common parent.
+        path.mkdir(mode=0o700, exist_ok=True)
+    info = path.stat()
+    if not path.is_dir() or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise QueueConfigError("Fleet directory must be owner-protected")
 
 
 def write_new(path: Path, value: object) -> None:

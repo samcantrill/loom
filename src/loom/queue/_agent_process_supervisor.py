@@ -472,6 +472,7 @@ class AgentProcessSupervisor:
         self._agent_id = self._configuration.agent_id
         self._children: dict[str, OwnedProcessGroup] = {}
         self._namespace_inits: dict[str, int] = {}
+        self._image_inputs = {}
         self._pending_namespaces: dict[str, subprocess.Popen[bytes]] = {}
         self._stop_requested: set[str] = set()
         self._containment_success: dict[str, bool] = {}
@@ -752,6 +753,19 @@ class AgentProcessSupervisor:
             return self._gate_locks.setdefault(launch.assignment_id, RLock())
 
     def _launch(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
+        from contextlib import ExitStack
+        with ExitStack() as inputs:
+            return self._launch_with_inputs(launch, inputs)
+
+    def _launch_with_inputs(self, launch: ResidentWorkerLaunch, inputs) -> SupervisorReceipt:
+        from loom.pipeline.executors.apptainer.commands import ApptainerExecCommand
+        from ._submitted_image_launch import image_for_launch, physical_command
+        image_paths = None
+        def capture_image(image, roots):
+            nonlocal image_paths
+            image_paths = inputs.enter_context(image_for_launch(image, roots, launch.assignment_id))
+            return image_paths
+
         self._validate_launch(launch)
         if launch.backend_kind == "docker":
             return self._docker_reconcile(launch, start=True)
@@ -763,7 +777,7 @@ class AgentProcessSupervisor:
                 "SELECT 1 FROM launches WHERE operation_id = ?", (launch.launch_operation_id,)
             ).fetchone()
         if existing is None:
-            self._qualify_new_launch(launch)
+            self._qualify_new_launch(launch, capture_image=capture_image)
             if launch.backend_kind == "apptainer":
                 from loom._pidfd import require_pidfd_support
 
@@ -825,15 +839,22 @@ class AgentProcessSupervisor:
                 )
             if launch.backend_kind != "apptainer":
                 self._write_start_gate(gate)
-            child = subprocess.Popen(
-                launch.command_argv,
-                cwd=launch.profile.project_root,
-                env=environment,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
+            argv = (physical_command(cast(ApptainerExecCommand, launch.container_command), image_paths).argv
+                    if image_paths is not None else launch.command_argv)
+            from contextlib import ExitStack
+            with ExitStack() as timing:
+                if image_paths is not None:
+                    timing.enter_context(observe_phases(log_phases))
+                    timing.enter_context(phase("submitted_process_spawn", operation_id=launch.assignment_id))
+                child = subprocess.Popen(
+                    argv,
+                    cwd=launch.profile.project_root,
+                    env=environment,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
         except OSError as exc:
             if launch.profile.temporary_mounts:
                 self._record_no_start(launch, exc)
@@ -845,6 +866,8 @@ class AgentProcessSupervisor:
                 )
                 conn.commit()
             raise AgentProcessSupervisorError("resident root was not created") from exc
+        if image_paths is not None:
+            self._image_inputs[launch.launch_operation_id] = inputs.pop_all()
         self._children[launch.launch_operation_id] = OwnedProcessGroup(child)
         self._startup_started_at[launch.launch_operation_id] = monotonic()
         if launch.backend_kind == "apptainer":
@@ -887,6 +910,9 @@ class AgentProcessSupervisor:
         if namespace is None:
             return
         self._namespace_inits[launch.launch_operation_id] = namespace
+        if launch.profile.submitted_execution is not None:
+            with observe_phases(log_phases), phase("submitted_namespace_ready", operation_id=launch.assignment_id) as timing:
+                timing["seconds_since_spawn"] = max(0., monotonic() - self._startup_started_at[launch.launch_operation_id])
         # Stop acceptance and gate publication share one ordering boundary.
         with self._gate_lock(launch):
             if launch.launch_operation_id in self._stop_requested:
@@ -905,20 +931,20 @@ class AgentProcessSupervisor:
             )
             conn.commit()
 
-    def _qualify_new_launch(self, launch: ResidentWorkerLaunch) -> None:
+    def _qualify_new_launch(self, launch: ResidentWorkerLaunch, *, capture_image=None) -> None:
         """Inspect input storage only before this owner accepts a new launch."""
         from .errors import QueueError
         from loom.pipeline.errors import RuntimeResourceError
 
         try:
             with observe_phases(log_phases), phase("new_launch_input_qualification", operation_id=launch.assignment_id):
-                self._require_new_launch_inputs(launch)
+                self._require_new_launch_inputs(launch, capture_image=capture_image)
         except CancelledError as exc:
             raise _SupervisorNoStartError("input qualification cancelled before start") from exc
         except (ValueError, OSError, QueueError, RuntimeResourceError) as exc:
             raise _SupervisorNoStartError(str(exc)) from exc
 
-    def _require_new_launch_inputs(self, launch: ResidentWorkerLaunch) -> None:
+    def _require_new_launch_inputs(self, launch: ResidentWorkerLaunch, *, capture_image=None) -> None:
         profile = launch.profile
         if not launch.workspace_root.is_dir():
             raise AgentProcessSupervisorError("resident workspace is unavailable")
@@ -949,7 +975,7 @@ class AgentProcessSupervisor:
             qualify_shared_worker_inputs(
                 profile, assignment, agent_id=launch.agent_id,
                 cancelled=lambda: launch.launch_operation_id in self._stop_requested,
-                progress=report_progress,
+                progress=report_progress, capture_image=capture_image,
             )
         if profile.container is not None and launch.schema_version is not None:
             expected = _validated_resource_controls(
@@ -999,6 +1025,10 @@ class AgentProcessSupervisor:
             child = self._children.get(launch.launch_operation_id)
             if child is not None:
                 code = child.root_status()
+                if code is not None:
+                    inputs = self._image_inputs.pop(launch.launch_operation_id, None)
+                    if inputs is not None:
+                        inputs.close()
                 if code is not None and str(row["state"]) in {
                     SupervisorLaunchState.STARTING.value,
                     SupervisorLaunchState.RUNNING.value,
@@ -1121,6 +1151,9 @@ class AgentProcessSupervisor:
                 os.close(namespace)
                 self._namespace_inits.pop(launch.launch_operation_id, None)
                 self._pending_namespaces.pop(launch.launch_operation_id, None)
+                inputs = self._image_inputs.pop(launch.launch_operation_id, None)
+                if inputs is not None:
+                    inputs.close()
         if not contained:
             owned = child.ownership_retained()
             return replace(
@@ -2004,7 +2037,7 @@ class AgentProcessSupervisorClient(_SupervisorControlClient):
                 if operation == "query":
                     receipt = yield from _external("control", self.query, launch)
                 elif operation in {"request_stop", "contain"}:
-                    receipt = yield from self._control_exchange(operation, launch)
+                    receipt = cast(SupervisorReceipt, (yield from self._control_exchange(operation, launch)))
                 else:
                     receipt = _receipt_from_value((yield from _external("bulk", self._call, operation, _launch_value(launch))))
             except AgentProcessSupervisorError as exc:

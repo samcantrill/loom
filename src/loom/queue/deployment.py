@@ -1389,11 +1389,39 @@ def _open_outbound_agent(
     )
 
 
+@dataclass(frozen=True)
+class _ComposedRole:
+    sources: tuple[tuple[Path, Path, str, bool], ...]
+    environment_digest: str
+    declaration: bytes
+    digest: str
+
+    def current(self, environment_digest: str) -> bool:
+        if environment_digest != self.environment_digest:
+            return False
+        for authored, resolved, digest, base in self.sources:
+            current = _protected_input_path(authored, label="deployment config source", require_owner_only=base)
+            if current != resolved:
+                return False
+            with current.open("rb") as stream:
+                if "sha256:" + hashlib.file_digest(stream, "sha256").hexdigest() != digest:
+                    return False
+        return True
+
+
 def _load_protected_config(
-    path: str | Path, *, env_file: str | Path | None = None
+    path: str | Path, *, env_file: str | Path | None = None,
+    cache: dict[tuple[Path, Path | None], _ComposedRole] | None = None,
 ) -> tuple[Path, Path | None, Mapping[str, object], str]:
     source = _protected_input_path(path, label="deployment config")
     environment_path, environment = _read_explicit_environment(env_file)
+    key = (source, environment_path)
+    environment_digest = ""
+    if cache is not None:
+        environment_digest = hashlib.sha256(json.dumps(dict(environment), sort_keys=True).encode()).hexdigest()
+        cached = cache.get(key)
+        if cached is not None and cached.current(environment_digest):
+            return source, environment_path, json.loads(cached.declaration), cached.digest
     try:
         from weave import compose_config
     except ModuleNotFoundError as exc:
@@ -1420,12 +1448,25 @@ def _load_protected_config(
     encoded = json.dumps(
         plain, sort_keys=True, separators=(",", ":"), allow_nan=False
     ).encode("utf-8")
-    return (
-        source,
-        environment_path,
-        cast(Mapping[str, object], plain),
-        hashlib.sha256(encoded).hexdigest(),
-    )
+    digest = hashlib.sha256(encoded).hexdigest()
+    if cache is not None:
+        cache.pop(key, None)
+        # Relative and absolute file includes have a single authored target.
+        # Search-based includes, recipes and overlays must run the loader again.
+        sources = []
+        for artifact in composed.source_artifacts:
+            resolved = Path(artifact.path)
+            if artifact.kind == "base":
+                authored = source
+            elif artifact.kind == "include" and artifact.metadata.get("target_kind") in {"absolute", "explicit_relative"}:
+                authored = Path(str(artifact.metadata["source_path"])).parent / str(artifact.metadata["authored_target"])
+            else:
+                break
+            sources.append((authored, resolved, artifact.content_digest, artifact.kind == "base"))
+        else:
+            if sources and sources[0][:2] == (source, source) and sources[0][3] and not composed.recipe_manifest:
+                cache[key] = _ComposedRole(tuple(sources), environment_digest, encoded, digest)
+    return source, environment_path, cast(Mapping[str, object], plain), digest
 
 
 _ENVIRONMENT_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")

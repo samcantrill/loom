@@ -225,15 +225,16 @@ def preview(
         gate = dict(operator.observe_maintenance())
         binding = _existing_maintenance_binding(gate, maintenance_id)
         agents = {}
-        for name in rows:
-            if name != "coordinator":
-                observation = operator.observe_agent(name)
-                if observation.availability != "available" or (
-                    observation.freshness != "current"
-                    and not observation.value.get("drained")
-                ):
-                    raise QueueConflictError("source agent unavailable: " + name)
-                agents[name] = thaw_plain_data(observation.value)
+        flows = {name: sshops.rpc((name,), operator.observe_agent, name)
+                 for name in rows if name != "coordinator"}
+        observations = sshops.host_steps(object(), flows, sshops.observer_end(), sshops.SshUnavailable)
+        for name in flows:
+            observation = observations[name]
+            if observation.availability != "available" or (
+                observation.freshness != "current" and not observation.value.get("drained")
+            ):
+                raise QueueConflictError("source agent unavailable: " + name)
+            agents[name] = thaw_plain_data(observation.value)
     from loom.queue.deployment import read_coordinator_scheduling_fingerprint
 
     authored_fingerprint = read_coordinator_scheduling_fingerprint(
@@ -263,10 +264,12 @@ def preview(
         raise QueueConfigError(
             "upgrade operator requires declared maintenance, drain and resume authority"
         )
+    observations = sshops._ssh_many({name: (row["host"], {**row, "action": "inspect", "release": target})
+                                     for name, row in rows.items()})
     for name, row in rows.items():
-        observed = sshops.ssh(
-            row["host"], {**row, "action": "inspect", "release": target}
-        )
+        observed = observations[name]
+        if isinstance(observed, Exception):
+            raise observed
         if (
             not observed["root_exists"]
             or observed["installed"] is None
@@ -361,6 +364,7 @@ class _Upgrade(sshops._Operation):
         _check_selection(self)
 
     def observe_gate(self, *, deadline=None):
+        deadline = sshops.observer_end(deadline)
         budget = {"deadline": deadline} if deadline is not None else {}
         gate = cast(dict[str, Any], thaw_plain_data(self.operator.observe_maintenance(**budget)))
         binding = _maintenance_binding(self.intent)
@@ -383,6 +387,9 @@ class _Upgrade(sshops._Operation):
         return gate
 
     def native(self, key, request, invoke):
+        return sshops.inline(self.native_steps(key, request, invoke))
+
+    def native_steps(self, key, request, invoke):
         directory = self.receipts / key
         protected_directory(directory)
         path = directory / "intent.json"
@@ -397,11 +404,12 @@ class _Upgrade(sshops._Operation):
             {"request_id": request["operation_id"], "outcome": "unknown"},
         )
         # Native exact replay, including after a lost reply, is authoritative.
-        result = dict(invoke(request))
+        result = dict((yield from sshops.rpc((key, "native"), invoke, request)))
         atomic(directory / "receipt.json", result)
         return result
 
     def maintenance(self, key, action, check=None, *, deadline=None, revision=None):
+        deadline = sshops.observer_end(deadline)
         path = self.receipts / key / "intent.json"
         fresh = not (self.receipts / key / "dispatch.json").exists()
         if action in {"close", "open"}:
@@ -437,13 +445,16 @@ class _Upgrade(sshops._Operation):
         return result
 
     def policy(self, name, key, kind, predecessor):
+        return sshops.inline(self.policy_steps(name, key, kind, predecessor))
+
+    def policy_steps(self, name, key, kind, predecessor):
+        budget: dict[str, Any] = {} if self.deadline is None else {"deadline": self.deadline}
         path = self.receipts / key / "intent.json"
         if path.exists():
             request = read(path)
         else:
-            current = cast(
-                dict[str, Any], thaw_plain_data(self.operator.observe_agent(name).value)
-            )
+            observed = yield from sshops.rpc((key, "observe"), self.operator.observe_agent, name, **budget)
+            current = cast(dict[str, Any], thaw_plain_data(observed.value))
             request = {
                 **AgentControl(
                     self.intent["operation_id"] + "-" + key,
@@ -472,11 +483,11 @@ class _Upgrade(sshops._Operation):
                 AgentControl.from_value(
                     {k: v for k, v in value.items() if k != "condition"}
                 ),
-                condition=condition,
+                condition=condition, **budget,
             )
-            return self.operator.observe_control(value["operation_id"])
+            return self.operator.observe_control(value["operation_id"], **budget)
 
-        result = self.native(key, request, invoke)
+        result = yield from self.native_steps(key, request, invoke)
         if result["state"] != "applied" or not result["acknowledged"]:
             if result["state"] == "failed":
                 detail = "native control failed"
@@ -486,9 +497,9 @@ class _Upgrade(sshops._Operation):
             raise _Waiting("native control acknowledgement: " + request["operation_id"])
         return request["operation_id"]
 
-    def host_observe(self, name, action, **values):
+    def _observation_request(self, name, action, **values):
         row = self.intent["hosts"][name]
-        return sshops.ssh(
+        return (
             row["host"],
             {
                 **row,
@@ -498,6 +509,17 @@ class _Upgrade(sshops._Operation):
                 **values,
             },
         )
+
+    def host_observe(self, name, action, **values):
+        return sshops.ssh(*self._observation_request(name, action, **values))
+
+    def host_observations(self, names, action, **values):
+        requests = {name: self._observation_request(name, action, **values) for name in names}
+        results = sshops._ssh_many(requests)
+        for name in requests:
+            if isinstance(results[name], Exception):
+                raise results[name]
+            yield name, results[name]
 
     def accepted_declaration(self, name):
         path = Path(self.intent["hosts"][name]["config"])
@@ -561,7 +583,11 @@ class _Upgrade(sshops._Operation):
             )
 
     def verify_policy(self, name, expected):
-        observation = self.operator.observe_agent(name)
+        return sshops.inline(self.verify_policy_steps(name, expected))
+
+    def verify_policy_steps(self, name, expected):
+        budget: dict[str, Any] = {} if self.deadline is None else {"deadline": self.deadline}
+        observation = yield from sshops.rpc((name, expected, "verify"), self.operator.observe_agent, name, **budget)
         if observation.availability != "available":
             raise _Waiting("agent policy observation required: " + name)
         value = cast(dict[str, Any], thaw_plain_data(observation.value))
@@ -571,7 +597,7 @@ class _Upgrade(sshops._Operation):
             if not value.get("drained"):
                 raise _Waiting("fresh agent identity required: " + name)
             row = self.intent["hosts"][name]
-            inspected = sshops.ssh(
+            inspected = yield from sshops.rpc((name, expected, "inspect"), sshops.ssh,
                 row["host"],
                 {**row, "action": "inspect", "release": self.intent["release"]},
             )
@@ -699,8 +725,7 @@ def _repair_check_selection(operation, deployment):
         _require_failed_check(operation, failed)
         failed_ids.update(row["operation_id"] for row in rows)
     if attempts:
-        for name in operation.intent["hosts"]:
-            fact = operation.host_observe(name, "upgrade-settlement", include_pending_poll=False)
+        for name, fact in operation.host_observations(operation.intent["hosts"], "upgrade-settlement", include_pending_poll=False):
             if fact["availability"] != "available" or not fact["value"].get("settled"):
                 raise _Waiting("prior check native effects remain before profile repair")
     original = load_deployment(operation.intent["check_selection"]["deployment"])
@@ -773,10 +798,7 @@ def _preflight_checks(operation):
     deployment = load_deployment(selection["deployment"])
     declarations = operation.intent.get("target_declarations", operation.intent["declarations"])
     deferred = _deferred_checks(operation).get("agents", ())
-    preparations = []
-    for name in operation.intent["agents"]:
-        if name in deferred:
-            continue
+    def preflight(name):
         chosen = _check_profile(declarations, name, deployment, _check_execution(selection))
         requests = {}
         for check in _check_kinds(operation, name, declarations[name]):
@@ -791,17 +813,19 @@ def _preflight_checks(operation):
                 overrides=tuple(key + "=" + json.dumps(value)
                                 for key, value in probe_configuration(check, name).items()),
             ).to_dict()
-        captured = operation.call(
+        captured = yield from operation.call_steps(
             "coordinator", "upgrade-check-capture", agent_id=name,
             expected_root_id=operation.intent["hosts"]["coordinator"]["expected_root_id"],
             candidate_declaration=declarations["coordinator"], checks=requests,
         )
-        preparations.append((name, "upgrade-check-prepare", {
+        return (yield from operation.call_steps(name, "upgrade-check-prepare", **{
             "agent_id": name,
             "expected_root_id": operation.intent["hosts"][name]["expected_root_id"],
             "candidate_declaration": declarations[name], "bindings": captured["bindings"],
         }))
-    operation.call_many(preparations)
+
+    flows = {name: preflight(name) for name in operation.intent["agents"] if name not in deferred}
+    sshops.host_steps(operation.directory, flows, operation.deadline, sshops.SshUnavailable)
 
 
 def _prepare_attempt(operation, name, check, identity, previous=None, *, deadline=None, revision=None):
@@ -1026,7 +1050,7 @@ def _transferred_bytes(observation):
 
 
 def _run_checks(operation):
-    deadline = time.monotonic() + operation.intent["timeout_seconds"]
+    deadline = cast(float, sshops.observer_end(time.monotonic() + operation.intent["timeout_seconds"]))
     phase(operation, "checking")
     operation.check_observations = {}
     attempts = _attempts(operation)
@@ -1210,7 +1234,7 @@ def _restore(operation, *, abort=False):
 
         publish(operation)
     phase(operation, "restoring")
-    for name, original in operation.intent.get("restore_agents", operation.intent["agents"]).items():
+    def restore_agent(name, original):
         keys = [name + "-drain", name + "-checks-capacity"]
         predecessor = (original.get("control") or {}).get("operation_id")
         changed = False
@@ -1218,7 +1242,7 @@ def _restore(operation, *, abort=False):
             path = operation.receipts / key / "intent.json"
             if path.exists():
                 request = read(path)
-                predecessor = operation.policy(
+                predecessor = yield from operation.policy_steps(
                     name,
                     key,
                     request["kind"],
@@ -1234,13 +1258,25 @@ def _restore(operation, *, abort=False):
                     operation.receipts / (name + "-checks-capacity") / "intent.json"
                 ).exists()
             ):
-                operation.verify_policy(name, predecessor)
+                yield from operation.verify_policy_steps(name, predecessor)
             else:
                 key = name + ("-abort-restore" if abort else "-restore")
-                restored = operation.policy(
+                restored = yield from operation.policy_steps(
                     name, key, "drain" if original["drained"] else "resume", predecessor
                 )
-                operation.verify_policy(name, restored)
+                yield from operation.verify_policy_steps(name, restored)
+    agents = operation.intent.get("restore_agents", operation.intent["agents"])
+    pending = []
+    def restore_one(name, original):
+        try:
+            yield from restore_agent(name, original)
+        except _Waiting as exc:
+            pending.append(exc)
+
+    flows = {name: restore_one(name, original) for name, original in agents.items()}
+    sshops.host_steps(operation.directory, flows, operation.deadline, sshops.SshUnavailable)
+    if pending:
+        raise pending[0]
     if (operation.receipts / "open" / "intent.json").exists():
         operation.maintenance("open", "open")
         return
@@ -1261,14 +1297,17 @@ def _independent_policies(operation, requests):
     Promotions require global settlement and must never use this helper.
     """
     pending = []
-    for name, key, kind, predecessor in requests:
+    def apply(name, key, kind, predecessor):
         if kind not in {"drain", "resume"}:
             raise QueueConflictError("independent policies require drain or resume")
         try:
-            accepted = operation.policy(name, key, kind, predecessor)
-            operation.verify_policy(name, accepted)
-        except _Waiting as waiting:
-            pending.append(waiting)
+            accepted = yield from operation.policy_steps(name, key, kind, predecessor)
+            yield from operation.verify_policy_steps(name, accepted)
+        except _Waiting as exc:
+            pending.append(exc)
+
+    flows = {name: apply(name, key, kind, predecessor) for name, key, kind, predecessor in requests}
+    sshops.host_steps(operation.directory, flows, operation.deadline, sshops.SshUnavailable)
     if pending:
         raise pending[0]
 
@@ -1298,16 +1337,7 @@ def _continue(operation):
     if not irreversible.exists():
         phase(operation, "preparing")
         _capable(operation.operator)
-        installed = sshops._ssh_many({
-            name: (row["host"], {
-                **row, "action": "install-candidate",
-                "release": operation.intent["release"],
-                **sshops._bundle(operation.inventory),
-            }) for name, row in operation.intent["hosts"].items()
-        })
-        for response in installed.values():
-            if isinstance(response, Exception):
-                raise response
+        sshops._install_candidates(operation)
         operation.probes()
         _preflight_checks(operation)
         if "maintenance_binding" in operation.intent:
@@ -1324,8 +1354,7 @@ def _continue(operation):
         ])
         if recovery:
             results = []
-            for name in operation.intent["agents"]:
-                fact = operation.host_observe(name, "upgrade-result-recovery")
+            for name, fact in operation.host_observations(operation.intent["agents"], "upgrade-result-recovery"):
                 if fact["availability"] != "available" or not fact["value"].get("recoverable"):
                     raise _Waiting("host result recovery: " + name + ": " + str(fact), "settlement_pending")
                 results.extend(fact["value"]["results"])
@@ -1337,8 +1366,7 @@ def _continue(operation):
             atomic(recovery_path, {"results": results})
         else:
             operation.settled()
-            for name in operation.intent["hosts"]:
-                fact = operation.host_observe(name, "upgrade-settlement")
+            for name, fact in operation.host_observations(operation.intent["hosts"], "upgrade-settlement"):
                 if fact["availability"] != "available" or not fact["value"].get("settled"):
                     raise _Waiting("host native settlement: " + name + ": " + str(fact), "settlement_pending")
         atomic(
@@ -1386,11 +1414,13 @@ def _continue(operation):
     restoring = operation.directory / "restoring.json"
     if not restoring.exists():
         capacity_controls = []
-        for name in operation.intent["agents"]:
-            if recovery and not (operation.receipts / (name + "-checks-capacity") / "intent.json").exists():
-                fact = operation.host_observe(name, "upgrade-settlement", include_pending_poll=False)
+        if recovery:
+            pending = [name for name in operation.intent["agents"]
+                       if not (operation.receipts / (name + "-checks-capacity") / "intent.json").exists()]
+            for name, fact in operation.host_observations(pending, "upgrade-settlement", include_pending_poll=False):
                 if fact["availability"] != "available" or not fact["value"].get("settled"):
                     raise _Waiting("retained result replay: " + name, "settlement_pending")
+        for name in operation.intent["agents"]:
             predecessor = operation.intent["operation_id"] + "-" + name + "-drain"
             capacity_controls.append((name, name + "-checks-capacity", "resume", predecessor))
         _independent_policies(operation, capacity_controls)
@@ -1464,7 +1494,7 @@ def upgrade(
         raise QueueConfigError("progress requires an applied or retained upgrade")
     observation = Observation(progress, "apply" if apply else action)
     try:
-        with recording(), measure("upgrade_continuation") as timing:
+        with sshops.observer_budget(timeout_seconds), recording(), measure("upgrade_continuation") as timing:
             result = _upgrade(**options, observation=observation)
             if result.get("outcome") == "waiting":
                 timing["outcome"] = "waiting"

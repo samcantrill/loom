@@ -132,25 +132,31 @@ def file_identity(
         raise ArtifactStoreError("shared publication requires regular files")
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
-        details = os.fstat(descriptor)
-        if not stat.S_ISREG(details.st_mode):
-            raise ArtifactStoreError("shared publication requires regular files")
-        if max_bytes is not None:
-            check_budget("max_payload_bytes", max_bytes, preceding_bytes + details.st_size)
-        digest = hashlib.sha256()
-        read_bytes = 0
-        with os.fdopen(descriptor, "rb", closefd=False) as stream:
-            while data := stream.read(1024 * 1024):
-                read_bytes += len(data)
-                if max_bytes is not None:
-                    check_budget("max_payload_bytes", max_bytes, preceding_bytes + read_bytes)
-                digest.update(data)
-        after = os.fstat(descriptor)
-        if (details.st_size, details.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
-            raise ArtifactStoreError("shared publication changed while reading")
-        return details.st_size, digest.hexdigest()
+        return descriptor_identity(descriptor, max_bytes=max_bytes, preceding_bytes=preceding_bytes)
     finally:
         os.close(descriptor)
+
+
+def descriptor_identity(descriptor: int, *, max_bytes: int | None, preceding_bytes: int) -> tuple[int, str]:
+    """Hash this freshly opened regular file while enforcing the publication budget."""
+    details = os.fstat(descriptor)
+    if not stat.S_ISREG(details.st_mode):
+        raise ArtifactStoreError("shared publication requires regular files")
+    if max_bytes is not None:
+        check_budget("max_payload_bytes", max_bytes, preceding_bytes + details.st_size)
+    digest = hashlib.sha256()
+    read_bytes = 0
+    with os.fdopen(descriptor, "rb", closefd=False) as stream:
+        while data := stream.read(1024 * 1024):
+            read_bytes += len(data)
+            if max_bytes is not None:
+                check_budget("max_payload_bytes", max_bytes, preceding_bytes + read_bytes)
+            digest.update(data)
+    after = os.fstat(descriptor)
+    if (details.st_size, details.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+        raise ArtifactStoreError("shared publication changed while reading")
+    return details.st_size, digest.hexdigest()
+
 
 
 def receipt_bytes(path: Path, limit: int) -> bytes:
@@ -255,6 +261,11 @@ def inspect_receipt(
     selected = budgets(reference["budgets"]) if limits is None else budgets(limits)
     path = contained(tree, RECEIPT)
     data = receipt_bytes(path, selected["max_manifest_bytes"])
+    return _parse_receipt(data, reference, selected)
+
+
+def _parse_receipt(data: bytes, reference: Mapping[str, PlainData], selected: Mapping[str, int]) -> dict[str, PlainData]:
+    """Validate one already bounded read of the manifest against its exact binding."""
     if hashlib.sha256(data).hexdigest() != reference["receipt_digest"]:
         raise ArtifactStoreError("shared publication receipt integrity conflicts")
     receipt = json.loads(data)

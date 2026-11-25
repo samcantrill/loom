@@ -570,6 +570,9 @@ def test_completed_setup_reports_retained_boot_capability(
         "check_selection": {"config": "probe"},
     }
     operation = ssh_operations._Operation(inventory, tmp_path / "operation", intent)
+    import time
+    operation.deadline = time.monotonic() + 15
+    intent.update(release={}, nonce="nonce")
     receipt = operation.receipts / "worker-initialize"
     receipt.mkdir(mode=0o700)
     write_new(receipt / "receipt.json", {"gpu_devices": []})
@@ -588,13 +591,13 @@ def test_completed_setup_reports_retained_boot_capability(
         def __exit__(self, *args):
             pass
 
-        def observe_agent(self, name):
+        def observe_agent(self, name, **budget):
             return SimpleNamespace(value={"offer": {"ready": True}})
 
     monkeypatch.setattr(operation, "call", call)
     monkeypatch.setattr(operation, "recheck", lambda: None)
     monkeypatch.setattr(operation, "observe", lambda name: {"owner": name + "-root"})
-    monkeypatch.setattr(ssh_operations, "_bundle", lambda inventory: {})
+    monkeypatch.setattr(ssh_operations, "_bundle", lambda inventory, selected: {})
     monkeypatch.setattr(ssh_operations, "_fingerprint", lambda certificate: "fingerprint")
     monkeypatch.setattr(
         ssh_operations, "_connections",
@@ -607,6 +610,10 @@ def test_completed_setup_reports_retained_boot_capability(
         self_tests, "self_test", lambda *args, **kwargs: {"outcome": "passed"}
     )
 
+    monkeypatch.setattr(operation, "call_steps", lambda name, action, **values:
+        ssh_operations.rpc((name, action), call, name, action, **values))
+    monkeypatch.setattr(operation, "observe_steps", lambda name:
+        ssh_operations.rpc((name, "observe"), operation.observe, name))
     result = ssh_operations._continue(operation)
     assert result["state"] == "complete"
     assert result["boot_start"] is expected

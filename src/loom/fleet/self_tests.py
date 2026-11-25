@@ -420,6 +420,7 @@ def self_test(
     timeout_seconds: float = 120,
     env_file: Path | None = None,
     _prepare_id: str | None = None,
+    _setup_id: str | None = None,
     _maintenance_binding: Mapping[str, Any] | None = None,
     _dispatch_only: bool = False,
     _wait: bool = True,
@@ -448,7 +449,7 @@ def self_test(
     continuing = operation_id is not None
     if continuing and execution is not None:
         raise QueueConfigError("continued checks use their retained execution; omit execution")
-    operation_id = operation_id or _prepare_id or "check-" + uuid4().hex
+    operation_id = operation_id or _prepare_id or _setup_id or "check-" + uuid4().hex
     if _prepare_id is not None and (continuing or len(checks) != 1):
         raise QueueConfigError("maintenance preparation requires one new check slot")
     validate_queue_id(operation_id, "self-test operation ID")
@@ -584,7 +585,7 @@ def self_test(
                                 "check_owner_busy", operation_id=request["preparation"]["operation_id"]
                             ) for name, request in retained["requests"].items()},
                             next="Continue this check operation to refresh its receipts.")
-        if not continuing:
+        if not continuing and not (_setup_id is not None and (directory / "intent.json").exists()):
             _publish(directory / "intent.json", intent)
         intent = _read(directory / "intent.json")
         if _prepare_id is not None:

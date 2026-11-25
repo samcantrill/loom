@@ -7,6 +7,9 @@ their identity, never image bytes, host executables, mounts or runtime options.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import contextmanager
+import hashlib
+import os
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 import stat
@@ -386,22 +389,31 @@ class SubmittedContainerCapability:
         )
 
 
-def verify_submitted_image(image: SubmittedImage, roots: Mapping[str, PlainData]) -> Path:
-    """Verify immutable image bytes at a physical worker or probe launch boundary."""
-    from ._remote_stage_execution import _file_digest
+@contextmanager
+def _opened_image(image: SubmittedImage, roots: Mapping[str, PlainData]):
+    from loom.io._local_files import open_member_descriptor
     from .shared_execution import resolve
 
     root = cast(Mapping[str, PlainData], roots[str(image.location["root_id"])])
-    path = resolve(root, str(image.location["path"]))
-    details = path.stat()
-    if (
-        not stat.S_ISREG(details.st_mode)
-        or details.st_mode & 0o222
-        or details.st_size != image.size_bytes
-        or _file_digest(path) != image.sha256
-    ):
-        raise ValueError("submitted image bytes or immutable publication differ from retained intent")
-    return path
+    member = str(image.location["path"])
+    path = resolve(root, member)
+    descriptor = open_member_descriptor(Path(str(root["host_path"])).resolve(strict=True), member)
+    try:
+        details = os.fstat(descriptor)
+        if not stat.S_ISREG(details.st_mode) or details.st_mode & 0o222 or details.st_size != image.size_bytes:
+            raise ValueError("submitted image bytes or immutable publication differ from retained intent")
+        with os.fdopen(descriptor, "rb", closefd=False) as source:
+            yield path, source
+    finally:
+        os.close(descriptor)
+
+
+def verify_submitted_image(image: SubmittedImage, roots: Mapping[str, PlainData]) -> Path:
+    """Verify the selected regular file at inspection time and return its authored path."""
+    with _opened_image(image, roots) as (path, source):
+        if hashlib.file_digest(source, "sha256").hexdigest() != image.sha256:
+            raise ValueError("submitted image bytes or immutable publication differ from retained intent")
+        return path
 
 
 def retain_submitted_image(

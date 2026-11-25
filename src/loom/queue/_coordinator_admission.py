@@ -38,6 +38,7 @@ def _submit(
     *,
     preparation_operation_id: str | None = None,
     run_operation_id: str | None = None,
+    preparation_claim: tuple[object, ...] | None = None,
 ) -> LocalDaemonAdmission:
     coordinator_id = self._require_started()
     from .local_daemon_execution import load_managed_local_intent
@@ -123,7 +124,7 @@ def _submit(
             ):
                 if request.continuation_revision is not None:
                     return _retry_failed_admission(self,
-                        existing, request, execution, parent_id=run_operation_id
+                        existing, request, execution, parent_id=run_operation_id, preparation_claim=preparation_claim
                     )
                 return existing
             raise QueueConflictError("managed run admission intent conflicts")
@@ -141,6 +142,11 @@ def _submit(
         operation_id = f"authority-bind-{uuid4()}"
 
         def insert(conn: sqlite3.Connection) -> None:
+            parent = preparation_operation_id or run_operation_id
+            if parent is not None and preparation_claim is not None:
+                self._preparations.require_admission_claim(
+                    conn, parent, request, preparation_claim, child=preparation_operation_id is not None,
+                )
             if self._execution is not execution or epochs != (self._epoch, self._scheduling_epoch):
                 raise QueueConflictError("admission scheduling changed during preparation")
             self._lifetime.require_accepting()
@@ -197,7 +203,7 @@ def _retry_failed_admission(
     admission: LocalDaemonAdmission,
     request: LocalDaemonAdmissionRequest,
     execution: LocalDaemonExecution,
-    *, parent_id: str | None = None,
+    *, parent_id: str | None = None, preparation_claim: tuple[object, ...] | None = None,
 ) -> LocalDaemonAdmission:
     # The coordinator journal bridges its local admission update and the
     # authority's atomic, replayable lifecycle continuation across restart.
@@ -250,6 +256,8 @@ def _retry_failed_admission(
                 }
 
         def retain(conn: sqlite3.Connection) -> None:
+            if parent_id is not None and preparation_claim is not None:
+                self._preparations.require_admission_claim(conn, parent_id, request, preparation_claim, child=False)
             current = conn.execute("SELECT state, revision FROM managed_admissions WHERE admission_id=?",
                                    (admission.admission_id,)).fetchone()
             if current is None or current["state"] != expected_state.value or current["revision"] != revision:

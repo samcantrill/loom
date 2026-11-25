@@ -87,13 +87,7 @@ def continue_upgrade(operation):
     if not irreversible.exists():
         maintenance.phase(operation, "preparing")
         maintenance._capable(operation.operator)
-        installed = sshops._ssh_many({name: (row["host"], {
-            **row, "action": "install-candidate", "release": intent["release"],
-            **sshops._bundle(operation.inventory),
-        }) for name, row in intent["hosts"].items()})
-        for result in installed.values():
-            if isinstance(result, Exception):
-                raise result
+        sshops._install_candidates(operation)
         operation.probes()
         operation.call_many([(name, "workload-stage", {
             "retire_configuration": True, "declaration": intent["target_declarations"][name],
@@ -107,8 +101,7 @@ def continue_upgrade(operation):
             (name, name + "-drain", "drain", (agent.get("control") or {}).get("operation_id"))
             for name, agent in intent["agents"].items()])
         operation.settled()
-        for name in intent["hosts"]:
-            fact = operation.host_observe(name, "upgrade-settlement")
+        for name, fact in operation.host_observations(intent["hosts"], "upgrade-settlement"):
             if fact["availability"] != "available" or not fact["value"].get("settled"):
                 raise maintenance._Waiting("host native settlement: " + name, "settlement_pending")
         gate = operation.gate()

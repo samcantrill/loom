@@ -12,6 +12,7 @@ from ._coordinator_transactions import short_write
 from ._phase_timing import phase
 
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from functools import wraps
@@ -5084,113 +5085,119 @@ def replace_agent_session(
             observed_at=daemon._clock(),  # type: ignore[attr-defined]
         )
     authority_facts = _replacement_authority_facts(daemon, candidate)
-    with execution.scheduling_reload_guard():
-        current_execution_facts = execution.session_replacement_assignment_facts(
-            old_session.session_id
+    @contextmanager
+    def observe_assignments():
+        nonlocal execution_facts
+        with execution.scheduling_reload_guard():
+            execution_facts = execution.session_replacement_assignment_facts(old_session.session_id)
+            yield
+
+    def apply(conn: sqlite3.Connection) -> Mapping[str, PlainData]:
+        daemon._authorizer().require_operator(principal, "replace_session", agent_id=request.agent_id)
+        if daemon._execution is not execution:
+            raise QueueConflictError("session replacement execution owner changed")
+        raced = conn.execute(
+            "SELECT principal_id, request_json, request_digest, result_json "
+            "FROM session_replacements WHERE operation_id = ?",
+            (request.operation_id,),
+        ).fetchone()
+        if raced is not None:
+            result = _replacement_replay(
+                raced,
+                principal_id=principal.subject,
+                request_json=encoded,
+                request_digest=digest,
+            )
+            return result
+        current = conn.execute(
+            "SELECT * FROM agent_sessions WHERE session_id = ?",
+            (old_session.session_id,),
+        ).fetchone()
+        current_session = _session_from_row(
+            current,
+            daemon._require_started(),  # type: ignore[attr-defined]
+            expected_principal=str(old["principal_id"]),
         )
-        with daemon._state_guard(), daemon._connection() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            raced = conn.execute(
-                "SELECT principal_id, request_json, request_digest, result_json "
-                "FROM session_replacements WHERE operation_id = ?",
-                (request.operation_id,),
-            ).fetchone()
-            if raced is not None:
-                result = _replacement_replay(
-                    raced,
-                    principal_id=principal.subject,
-                    request_json=encoded,
-                    request_digest=digest,
-                )
-                conn.commit()
-                return result
-            current = conn.execute(
-                "SELECT * FROM agent_sessions WHERE session_id = ?",
-                (old_session.session_id,),
-            ).fetchone()
-            current_session = _session_from_row(
-                current,
-                daemon._require_started(),  # type: ignore[attr-defined]
-                expected_principal=str(old["principal_id"]),
-            )
-            if current_session != old_session:
-                raise QueueConflictError("old session changed before replacement fence")
-            write_status(
-                conn, "operation",
-                "UPDATE agent_controls SET state = 'superseded', "
-                "result_code = 'session_replaced' WHERE session_id = ? "
-                "AND state IN ('pending_delivery','applying')",
-                (old_session.session_id,),
-            )
-            projection = _build_replacement_projection(
-                conn,
-                session=old_session,
-                execution_facts=current_execution_facts,
-                observed_at=daemon._clock(),  # type: ignore[attr-defined]
-            )
-            _require_monotonic_replacement_projection(candidate.value, projection.value)
-            durable_projection = _bind_replacement_authority_facts(
-                projection, authority_facts
-            )
-            invalidate_current_offers(conn, old_session.session_id)
-            conn.execute(
-                "UPDATE agent_poll_state SET active = 0 WHERE session_id = ?",
-                (old_session.session_id,),
-            )
-            updated = conn.execute(
-                "UPDATE agent_sessions SET state = ? WHERE session_id = ? AND state = ?",
-                (
-                    AgentSessionState.REPLACED.value,
-                    old_session.session_id,
-                    AgentSessionState.ACTIVE.value,
-                ),
-            ).rowcount
-            if updated != 1:
-                raise QueueConflictError("old session changed before replacement fence")
-            conn.execute(
-                "INSERT INTO agent_session_tombstones(session_id, state) VALUES (?, ?)",
-                (old_session.session_id, AgentSessionState.REPLACED.value),
-            )
-            decided_at = daemon._accepted_time(conn)  # type: ignore[attr-defined]
-            result = _replacement_result(
-                request=request,
-                old_session_id=old_session.session_id,
-                successor_session_id=None,
-                state="decision",
-                readiness="withheld",
-                withholding_reason="successor_registration_required",
-                projection=durable_projection,
-            )
-            projection_json = _canonical_json(durable_projection)
-            write_status(
-                conn, "operation",
-                "INSERT INTO session_replacements("
-                "operation_id, principal_id, request_json, request_digest, agent_id, "
-                "old_session_id, successor_session_id, state, readiness, "
-                "withholding_reason, decision_projection_json, "
-                "decision_projection_digest, required_claim_ids_json, "
-                "observed_claim_ids_json, successor_observation_digest, "
-                "readiness_projection_digest, result_json, decided_at, ready_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, NULL, 'decision', 'withheld', ?, ?, ?, "
-                "?, '[]', NULL, NULL, ?, ?, NULL)",
-                (
-                    request.operation_id,
-                    principal.subject,
-                    encoded,
-                    digest,
-                    request.agent_id,
-                    old_session.session_id,
-                    "successor_registration_required",
-                    projection_json,
-                    hashlib.sha256(projection_json.encode("utf-8")).hexdigest(),
-                    json.dumps(projection.required_claim_ids, separators=(",", ":")),
-                    _canonical_json(result),
-                    decided_at,
-                ),
-            )
-            conn.commit()
-        daemon._poll_waiters.notify(old_session.session_id)
+        if current_session != old_session:
+            raise QueueConflictError("old session changed before replacement fence")
+        decided_at = daemon._accepted_time(conn)
+        write_status(
+            conn, "operation",
+            "UPDATE agent_controls SET state = 'superseded', "
+            "result_code = 'session_replaced' WHERE session_id = ? "
+            "AND state IN ('pending_delivery','applying')",
+            (old_session.session_id,),
+        )
+        projection = _build_replacement_projection(
+            conn,
+            session=old_session,
+            execution_facts=execution_facts,
+            observed_at=daemon._clock(),  # type: ignore[attr-defined]
+        )
+        _require_monotonic_replacement_projection(candidate.value, projection.value)
+        durable_projection = _bind_replacement_authority_facts(
+            projection, authority_facts
+        )
+        invalidate_current_offers(conn, old_session.session_id)
+        conn.execute(
+            "UPDATE agent_poll_state SET active = 0 WHERE session_id = ?",
+            (old_session.session_id,),
+        )
+        updated = conn.execute(
+            "UPDATE agent_sessions SET state = ? WHERE session_id = ? AND state = ?",
+            (
+                AgentSessionState.REPLACED.value,
+                old_session.session_id,
+                AgentSessionState.ACTIVE.value,
+            ),
+        ).rowcount
+        if updated != 1:
+            raise QueueConflictError("old session changed before replacement fence")
+        conn.execute(
+            "INSERT INTO agent_session_tombstones(session_id, state) VALUES (?, ?)",
+            (old_session.session_id, AgentSessionState.REPLACED.value),
+        )
+        result = _replacement_result(
+            request=request,
+            old_session_id=old_session.session_id,
+            successor_session_id=None,
+            state="decision",
+            readiness="withheld",
+            withholding_reason="successor_registration_required",
+            projection=durable_projection,
+        )
+        projection_json = _canonical_json(durable_projection)
+        write_status(
+            conn, "operation",
+            "INSERT INTO session_replacements("
+            "operation_id, principal_id, request_json, request_digest, agent_id, "
+            "old_session_id, successor_session_id, state, readiness, "
+            "withholding_reason, decision_projection_json, "
+            "decision_projection_digest, required_claim_ids_json, "
+            "observed_claim_ids_json, successor_observation_digest, "
+            "readiness_projection_digest, result_json, decided_at, ready_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, NULL, 'decision', 'withheld', ?, ?, ?, "
+            "?, '[]', NULL, NULL, ?, ?, NULL)",
+            (
+                request.operation_id,
+                principal.subject,
+                encoded,
+                digest,
+                request.agent_id,
+                old_session.session_id,
+                "successor_registration_required",
+                projection_json,
+                hashlib.sha256(projection_json.encode("utf-8")).hexdigest(),
+                json.dumps(projection.required_claim_ids, separators=(",", ":")),
+                _canonical_json(result),
+                decided_at,
+            ),
+        )
         return freeze_plain_data(result, path="session replacement receipt")
+
+    result = short_write(daemon, apply, scheduling_guard=observe_assignments)
+    daemon._poll_waiters.notify(old_session.session_id)
+    return result
 
 
 def _replacement_replay(
@@ -6234,8 +6241,8 @@ def _target_remote_delivery(
             reference_json=None if existing is None else existing["reference_json"],
         )
     prepared_paths = {str(item[2]): Path(str(item[6])) for item in retained_inputs}
-    with daemon._state_guard(), daemon._connection() as conn:
-        conn.execute("BEGIN IMMEDIATE")
+
+    def apply(conn: sqlite3.Connection) -> None:
         if daemon.config is not config or daemon._epoch != epoch:
             raise QueueConflictError("targeted delivery authority changed during preparation")
         session = _require_target_session(daemon, conn, session_id, request)
@@ -6324,8 +6331,6 @@ def _target_remote_delivery(
                 raise QueueConflictError(
                     "targeted delivery agent-owner coverage is incomplete"
                 )
-            conn.commit()
-            daemon._poll_waiters.notify(session_id)
             return
         offer = conn.execute(
             "SELECT offer_json, expires_at FROM agent_offers WHERE session_id = ? "
@@ -6418,7 +6423,8 @@ def _target_remote_delivery(
                 for reference_class in _REPLACEMENT_ASSIGNMENT_REFERENCE_CLASSES
             ],
         )
-        conn.commit()
+
+    short_write(daemon, apply)
     daemon._poll_waiters.notify(session_id)
 
 

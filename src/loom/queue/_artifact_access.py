@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import base64
 import codecs
+from dataclasses import dataclass
+from functools import lru_cache
 import hashlib
 import json
 import os
 from pathlib import Path
 import stat
 from typing import Any, cast
+
+from loom.serialization import PlainData
 
 from loom.io._local_files import open_member_descriptor
 from loom.io.uris import uri_to_path
@@ -96,6 +100,30 @@ def _open_member(root: Path, member: str) -> int:
     return result
 
 
+@dataclass(frozen=True, slots=True)
+class _Members:
+    ordered: list[dict[str, Any]]
+    by_path: dict[str, dict[str, Any]]
+    total_bytes: int
+
+    @classmethod
+    def index(cls, members: list[dict[str, Any]]) -> _Members:
+        return cls(members, {m["path"]: m for m in members}, sum(m["size_bytes"] for m in members))
+
+
+def _declaration_members(raw: bytes, declaration: str, version: int, publication: str, primary: str,
+                         limits: tuple[tuple[str, int], ...]) -> _Members:
+    reference: dict[str, PlainData] = {
+        "receipt_digest": declaration, "schema_version": version, "publication_id": publication, "primary": primary,
+    }
+    receipt = shared._parse_receipt(raw, reference, dict(limits))
+    return _Members.index(cast(list[dict[str, Any]], receipt["members"]))
+
+
+# Cache only declaration data. Authorization and physical checks run on every use.
+_cached_members = lru_cache(maxsize=8)(_declaration_members)
+
+
 def _resolve(
     daemon: Any, value: dict[str, Any], *, verify: bool
 ) -> tuple[Path, dict[str, Any]]:
@@ -117,17 +145,18 @@ def _resolve(
             shared.contained(root, shared.RECEIPT),
             shared.budgets(binding["budgets"])["max_manifest_bytes"],
         )
-        if hashlib.sha256(raw).hexdigest() != binding["receipt_digest"]:
-            raise AccessFailure("integrity_failed")
-        receipt = json.loads(raw)
-        if verify:
-            # Distinguish missing companions from present but corrupt bytes.
-            for member in receipt["members"]:
-                os.close(_open_member(root, member["path"]))
-            receipt = shared.read_receipt(root, binding)
         declaration = str(binding["receipt_digest"])
-        members = cast(list[dict[str, Any]], receipt["members"])
         primary_name = str(binding["primary"])
+        limits = shared.budgets(binding["budgets"])
+        parse = _cached_members if len(raw) <= 2 * 1024 * 1024 else _declaration_members
+        index = parse(raw, declaration, int(cast(int, binding["schema_version"])), str(binding["publication_id"]),
+                      primary_name, tuple(limits.items()))
+        from ._immutable_tree import verified
+        if verify and (binding["schema_version"] == 2 or not verified(root, declaration, index.by_path, limits)):
+            for member in index.ordered:
+                os.close(_open_member(root, member["path"]))
+            if binding["schema_version"] != 2 and shared.inventory(root, limits) != index.ordered:
+                raise AccessFailure("integrity_failed")
         verification = "producer_declared" if binding["schema_version"] == 2 else "recorded_sha256"
     else:
         try:
@@ -165,6 +194,7 @@ def _resolve(
             )
         finally:
             os.close(fd)
+        index = _Members.index(members)
         primary_name = member
         verification = "recorded_sha256" if ref.checksum else "unverified_original"
     if value.get("declaration") not in (None, declaration):
@@ -174,8 +204,8 @@ def _resolve(
         "locator": locator.to_dict(),
         "declaration": declaration,
         "primary": primary_name,
-        "total_bytes": sum(m["size_bytes"] for m in members),
-        "members": members,
+        "total_bytes": index.total_bytes,
+        "members": index,
         "verification": verification,
     }
 
@@ -227,12 +257,12 @@ def artifact_operation(
         root, description = _resolve(
             daemon, value, verify=operation != "read_artifact_chunk"
         )
-        members = description.pop("members")
+        index: _Members = description.pop("members")
         if operation == "describe_artifact":
             start, limit = value["cursor"], value["limit"]
             page = []
             size = 0
-            for member in members[start : start + limit]:
+            for member in index.ordered[start : start + limit]:
                 member = {key: member[key] for key in ("path", "size_bytes", "digest")}
                 cost = len(shared.encoded(member))
                 if page and size + cost > 512 * 1024:
@@ -243,10 +273,10 @@ def artifact_operation(
             return {
                 **description,
                 "members": page,
-                "next_cursor": end if end < len(members) else None,
+                "next_cursor": end if end < len(index.ordered) else None,
             }
         name = value.get("member") or description["primary"]
-        member = next((m for m in members if m["path"] == name), None)
+        member = index.by_path.get(name)
         if member is None:
             raise AccessFailure("unavailable")
         if operation == "read_artifact_chunk":
