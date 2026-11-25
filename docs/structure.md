@@ -358,6 +358,10 @@ src/loom/
     __init__.py
     models.py
     preflight.py
+    _preflight_common.py
+    _preflight_apptainer.py
+    _preflight_docker.py
+    _preflight_slurm.py
 
   plugins/
     __init__.py
@@ -1023,7 +1027,11 @@ Current diagnostics modules:
 ```text
 __init__.py    import-light public exports for preflight models and runner entrypoint
 models.py      preflight statuses, severities, groups, request/result models, and plain-data serialization
-preflight.py   local non-persistent preflight runner and check groups
+preflight.py            group dispatch, common checks and check ordering
+_preflight_common.py    per-request context and check result construction
+_preflight_apptainer.py Apptainer execution, storage and resource checks
+_preflight_docker.py    Docker execution, storage and resource checks
+_preflight_slurm.py     Slurm submission, scheduling and path checks
 ```
 
 The diagnostics package root must stay lightweight. `import loom.diagnostics`
@@ -1455,6 +1463,13 @@ current responsibilities without adding processes or durable formats:
   identity calculations and transaction boundaries. Retirement and GPU probing
   use this same journal; assignment references remain in its existing store.
 
+`_agent_role_reload.py` qualifies a trusted replacement against retained profiles
+and binds its activation in the session journal. `_agent_assignment_control.py`
+replays assignment commands and containment evidence. On the coordinator,
+`_coordinator_assignment_control.py` authorizes the session and persists the
+acknowledgement in one transaction. `_agent_session_replacement.py` fences the
+previous session using its recorded assignments and recovery evidence.
+
 The protocol and journal refer to client/configuration types only during type
 checking. Runtime dependencies flow from the public adapter to these private
 owners, and from protocol decisions through the journal to the existing native
@@ -1469,6 +1484,26 @@ Supervisor physical ownership, progress lanes and journal formats are unchanged.
 See [Queue](features/queue.md) for replay and concurrency behavior.
 
 ## Coordinator Admission And Progression
+
+`_local_daemon_config.py` owns role declarations, normalization and local resource
+composition. `local_daemon.py` re-exports the existing configuration types.
+`_ready_window.py` owns the bounded CPU and GPU scan cursors. The stage-work store
+supplies each page and the dispatcher makes the reservation decision.
+
+`_slurm_bootstrap.py` authorizes registered workers and handles input transfer,
+grant, start permission and result handoff. `_slurm_bootstrap_settlement.py`
+arbitrates grants and pre-start failures using the authority's exact prepared
+binding. The control writer closes before remote calls. Recovery retains an
+authoritative fence in the action claim and then the assignment journal.
+A cancellation accepted during those writes can still deny start permission.
+At startup, older assignments with a durable grant can repair an unfenced
+shared-action claim for the same run and attempt.
+
+Resident execution in `_managed_local.py` prepares the workspace, obtains its
+grant, launches or resumes the worker, and settles the result. Resource
+providers live in `_managed_providers.py`. `_managed_agent_journal.py` owns
+physical claims and launch receipts. `_managed_coordinator_assignments.py` owns
+logical reservations and release.
 
 `local_daemon.py` retains the protected daemon, control store and service entry
 points. `_coordinator_admission.py` owns the existing fresh acceptance, exact

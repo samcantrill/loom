@@ -950,8 +950,20 @@ def _exercise_mixed_route_run(
             with monkeypatch.context() as patch:
                 patch.setattr(SQLitePerRunAuthorityStore, "grant_prepared_attempt", intercepted)
                 if grant_boundary in {"lost", "blocked_read"}:
+                    from loom.pipeline.stores import AuthorityStoreError
+
+                    read_binding = SQLitePerRunAuthorityStore.read_prepared_binding
+
+                    def disconnected(store, uri, **scope):
+                        if scope["assignment_id"] == assignment_id:
+                            raise AuthorityStoreError("grant receipt unavailable until restart")
+                        return read_binding(store, uri, **scope)
+
+                    patch.setattr(SQLitePerRunAuthorityStore, "read_prepared_binding", disconnected)
                     with daemon._cycle_lock, pytest.raises(ConnectionError, match="grant response lost"):
                         view.grant(assignment_id, incarnation)
+                    daemon.stop()
+                    assert execution.slurm_assignments.read(assignment_id).fence is None
                 else:
                     peer_uri = _persist_rejected_slurm_run(run_root, profile)
                     with ThreadPoolExecutor(max_workers=2) as workers:
@@ -972,7 +984,6 @@ def _exercise_mixed_route_run(
                     assert not view.start_permit(assignment_id, incarnation, fences[0])
                     assert not execution.slurm_assignments.read(assignment_id).start_consumed
                     return
-            daemon.stop()
             daemon = LocalDaemon(reopened_config, clock=clock)
             entered_read, finish_read = Event(), Event()
             if grant_boundary == "blocked_read":

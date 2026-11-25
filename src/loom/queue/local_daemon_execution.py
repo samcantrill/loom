@@ -1418,6 +1418,8 @@ class LocalDaemonExecution:
             lambda: self.config.connect_database(self.config.control_database),
             self._recovery_retains_assignment,
         )
+        if daemon is not None and config.slurm_profiles:
+            self._bootstrap_settlement.restore_action_fences()
         self._bootstrap = SlurmBootstrapLifecycle(
             settlement=self._bootstrap_settlement,
             profile_for=self._slurm_profile,

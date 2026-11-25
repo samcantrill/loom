@@ -107,7 +107,15 @@ def test_slurm_shared_grant_and_start_use_exact_live_demand(tmp_path, request_id
         retained = restarted.settlement.assignments.read("slurm-assignment")
         restarted.settlement.recover_grant(retained, authority)
         assert record.fence == consumed_projection[0]
-        assert actions.claim(claim_id)["state"] == "settling"
+        # Reproduce a predecessor's opposite commit order. Its Slurm journal
+        # recorded the grant before the control transaction rolled back.
+        with actions.connection() as conn:
+            conn.execute("UPDATE action_claims SET fencing_token=NULL, assignment_id=NULL WHERE claim_id=?", (claim_id,))
+        restarted.settlement.restore_action_fences()
+        claim = actions.claim(claim_id)
+        assert claim["state"] == "settling" and claim["fencing_token"] == consumed_projection[0]
+        restarted.settlement.restore_action_fences()
+        assert actions.claim(claim_id)["revision"] == claim["revision"]
         assert not restarted.slurm_start_permit(**request, fence=consumed_projection[0], request_id=request_id)
         return
     fence = execution.slurm_grant(**request)

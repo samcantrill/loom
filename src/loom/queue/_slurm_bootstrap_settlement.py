@@ -44,6 +44,20 @@ class SlurmBootstrapSettlement:
         with closing(self.connect()) as conn, conn:
             yield conn
 
+    def restore_action_fences(self) -> None:
+        """Older coordinators committed the assignment before the shared action claim."""
+        with self.connection() as conn:
+            missing = {(uri, attempt) for uri, attempt in conn.execute(
+                "SELECT owner_run_uri, attempt_id FROM action_claims WHERE "
+                "state IN ('owned','settling') AND attempt_id IS NOT NULL AND fencing_token IS NULL"
+            )}
+        fences = self.assignments.retained_action_fences(missing)
+        if fences:
+            with self.connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                for run_uri, attempt_id, assignment_id, fence in fences:
+                    attach_action_fence(conn, run_uri, attempt_id, assignment_id, fence, allow_settling=True)
+
     def needs_observation(self, assignment_id: str) -> bool:
         with self._lock:
             due = self._ambiguous.get(assignment_id)
@@ -57,9 +71,9 @@ class SlurmBootstrapSettlement:
             self._ambiguous.pop(assignment_id, None)
             self._cancel_unbound.discard(assignment_id)
 
-    def current_owner(self, captured: SlurmStageRecord) -> SlurmStageRecord:
+    def current_owner(self, captured: SlurmStageRecord) -> SlurmAgentTaskRecord:
         identity = captured.assignment.assignment_id
-        current = self.assignments.read(identity)
+        current = self.assignments.read_agent_task(identity)
         if (current.assignment != captured.assignment or current.job_id != captured.job_id
                 or current.cluster != captured.cluster
                 or current.bootstrap_incarnation != captured.bootstrap_incarnation
@@ -88,7 +102,7 @@ class SlurmBootstrapSettlement:
                 assignment.run_uri, assignment_id=assignment.assignment_id,
                 attempt_id=assignment.attempt_id,
             )
-            self.retain_grant(current, fence.fencing_token)
+            self.retain_grant(record, fence.fencing_token)
         except Exception:
             with self._lock:
                 self._ambiguous[assignment.assignment_id] = 0.0
@@ -170,7 +184,7 @@ class SlurmBootstrapSettlement:
                 self._ambiguous.pop(assignment.assignment_id, None)
                 self._cancel_unbound.add(assignment.assignment_id)
 
-    def failure_reason(self, record: SlurmStageRecord) -> LifecycleReason | None:
+    def failure_reason(self, record: SlurmStageRecord | SlurmAgentTaskRecord) -> LifecycleReason | None:
         assignment = record.assignment
         if (record.state != "accepted" or record.bootstrap_incarnation is None
                 or record.fence is not None or record.start_consumed

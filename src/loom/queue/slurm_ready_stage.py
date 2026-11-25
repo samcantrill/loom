@@ -539,6 +539,7 @@ class SlurmAgentTaskRecord:
     agent_sequence: int
     compute_release_requested: bool
     terminal_observation: Mapping[str, PlainData] | None
+    input_ready: bool = False
 
 
 class SQLiteSlurmStageAssignments:
@@ -1191,7 +1192,7 @@ class SQLiteSlurmStageAssignments:
         return self.read(assignment.assignment_id)
 
     def claim_failed_bootstrap(
-        self, record: SlurmStageRecord, identity: Mapping[str, PlainData], observed_at: str,
+        self, record: SlurmStageRecord | SlurmAgentTaskRecord, identity: Mapping[str, PlainData], observed_at: str,
     ) -> None:
         """Journal the authoritative unstarted failure before retry evaluation and release."""
         observation = {"identity": thaw_plain_data(identity), "first_observed_at": observed_at, "phase": "bootstrap"}
@@ -1232,24 +1233,27 @@ class SQLiteSlurmStageAssignments:
     def mark_granted(self, assignment_id: str, incarnation: str, fence: str) -> str:
         _identifier(fence, "SLURM fence")
         with self._transaction() as conn:
-            row = self._row(conn, assignment_id)
+            changed = conn.execute(
+                f"UPDATE {_ASSIGNMENT_TABLE} SET state='granted', fence=? "
+                "WHERE assignment_id=? AND state='accepted' AND bootstrap_incarnation=? "
+                "AND input_ready=1 AND fence IS NULL", (fence, assignment_id, incarnation),
+            ).rowcount
+            if changed:
+                return "granted"
+            row = conn.execute(
+                f"SELECT state, bootstrap_incarnation, input_ready, fence FROM {_ASSIGNMENT_TABLE} "
+                "WHERE assignment_id=?", (assignment_id,),
+            ).fetchone()
+            if row is None:
+                raise QueueConflictError("SLURM assignment is not retained")
             self._incarnation(row, incarnation)
-            if not bool(row["input_ready"]):
+            if not row["input_ready"]:
                 raise QueueConflictError("SLURM grant requires durable inputs")
-            state = str(row["state"])
+            if row["fence"] == fence:
+                return str(row["state"])
             if row["fence"] is not None:
-                if str(row["fence"]) != fence:
-                    raise QueueConflictError("SLURM grant fence conflicts")
-                return state
-            if state != "accepted":
-                raise QueueConflictError("SLURM assignment cannot be granted")
-            state = "granted"
-            conn.execute(
-                f"UPDATE {_ASSIGNMENT_TABLE} SET state = ?, fence = ? "
-                "WHERE assignment_id = ?",
-                (state, fence, assignment_id),
-            )
-        return state
+                raise QueueConflictError("SLURM grant fence conflicts")
+            raise QueueConflictError("SLURM assignment cannot be granted")
 
     def mark_running(
         self,
@@ -1311,6 +1315,21 @@ class SQLiteSlurmStageAssignments:
                 (operation_id,),
             ).fetchone()
             return None if row is None else self._record(row)
+
+    def retained_action_fences(
+        self, attempts: set[tuple[str, str]],
+    ) -> tuple[tuple[str, str, str, str], ...]:
+        """Project only recorded Slurm fences for action claims missing their local copy."""
+        if not attempts:
+            return ()
+        with _connect(self.path, sqlite_policy=self._sqlite_policy, require_existing=True) as conn:
+            return tuple(conn.execute(
+                "SELECT run_uri, json_extract(identity_json, '$.attempt_id'), assignment_id, fence "
+                f"FROM {_ASSIGNMENT_TABLE} WHERE fence IS NOT NULL AND "
+                "(run_uri, json_extract(identity_json, '$.attempt_id')) IN "
+                "(SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?))",
+                (json.dumps(sorted(attempts)),),
+            ))
 
     def unresolved_bootstrap_grants(self) -> tuple[str, ...]:
         """A prior coordinator could have issued a grant for these exact owners."""
@@ -1415,7 +1434,7 @@ class SQLiteSlurmStageAssignments:
         return (
             "a.identity_json, a.request_json, a.state, a.job_id, a.cluster, a.bootstrap_incarnation, "
             "a.fence, a.process_execution_id, a.report_json IS NOT NULL AS report_present, "
-            f"a.start_consumed, a.agent_sequence, {compute_release} AS compute_release_requested, "
+            f"a.input_ready, a.start_consumed, a.agent_sequence, {compute_release} AS compute_release_requested, "
             f"{terminal} AS terminal_observation"
         )
 
@@ -1432,6 +1451,7 @@ class SQLiteSlurmStageAssignments:
             process_execution_id=row["process_execution_id"],
             report_present=bool(row["report_present"]),
             start_consumed=bool(row["start_consumed"]),
+            input_ready=bool(row["input_ready"]),
             agent_sequence=int(row["agent_sequence"]),
             compute_release_requested=bool(row["compute_release_requested"]),
             terminal_observation=(
@@ -1447,7 +1467,7 @@ class SQLiteSlurmStageAssignments:
         columns = [
             "a.assignment_id", "a.state", "a.agent_sequence", "a.job_id", "a.cluster",
             "a.bootstrap_incarnation", "a.process_execution_id", "a.fence", "a.start_consumed",
-            "a.report_json IS NOT NULL",
+            "a.report_json IS NOT NULL", "a.input_ready",
         ]
         if self.schema_version >= 5:
             columns.extend(("a.publication_requested_at", "a.publication_completed_at", "a.compute_released_at"))

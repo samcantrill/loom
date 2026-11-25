@@ -31,7 +31,11 @@ def registered_bootstrap(record, *, assignment_id, incarnation, connect, authori
         return record
 
     assignments = SimpleNamespace(
-        read=read, mark_granted=mark_granted, consume_start=consume_start,
+        read=read, read_agent_task=read, mark_granted=mark_granted, consume_start=consume_start,
+        retained_action_fences=lambda attempts: (
+            ((record.assignment.run_uri, record.assignment.attempt_id, assignment_id, record.fence),)
+            if record.fence is not None and (record.assignment.run_uri, record.assignment.attempt_id) in attempts else ()
+        ),
         unresolved_bootstrap_grants=lambda: (assignment_id,) if record.fence is None else (),
     )
     settlement = SlurmBootstrapSettlement(
