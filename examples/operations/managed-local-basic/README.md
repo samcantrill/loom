@@ -21,16 +21,12 @@ For a project checkout at `/work/loom`, create that selected environment before
 setting `LOOM_PYTHON`:
 
 ```sh
-# Choose one installation style; both install Loom into the selected environment.
 cd /work/loom
 uv sync --locked --no-dev --extra config
 . .venv/bin/activate
-# Alternatively, using pip from a Python 3.12 virtualenv:
-# python3.12 -m venv .venv
-# . .venv/bin/activate
-# python -m pip install 'weave @ git+https://github.com/samcantrill/weave.git@388377b61cffbb225057082365f03cb0738996fd'
-# python -m pip install -e '.[config]'
 ```
+
+For pip, follow the [checkout installation instructions](../../../docs/downstream-installation.md#installing-a-checkout-with-pip).
 
 Return to the copied example directory with that environment activated. The
 `LOOM_PROJECT_ROOT` value in `agent.env` is this directory (containing `stages.py`),

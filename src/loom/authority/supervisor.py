@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TextIO, cast
 
+from loom._proc_stat import read_process_stat
 from loom._pidfd import open_pidfd, send_pidfd_signal
 from loom.pipeline.stores import (
     AuthorityBackendKind,
@@ -1280,20 +1281,14 @@ def _reap_exited_child(pid: int) -> None:
 def _process_start_ticks(pid: int) -> str | None:
     """Read Linux's immutable process start identity when the host exposes it."""
 
-    stat_path = Path(f"/proc/{pid}/stat")
     try:
-        value = stat_path.read_text(encoding="utf-8")
+        return read_process_stat(pid).start_ticks
     except FileNotFoundError as exc:
         if _process_running(pid):
             return None
         raise ProcessLookupError(pid) from exc
-    except OSError:
+    except (OSError, ValueError):
         return None
-    closing_parenthesis = value.rfind(")")
-    fields = value[closing_parenthesis + 2 :].split()
-    if closing_parenthesis < 0 or len(fields) <= 19:
-        return None
-    return fields[19]
 
 
 def _captured_process_start_ticks(pid: int) -> str | None:

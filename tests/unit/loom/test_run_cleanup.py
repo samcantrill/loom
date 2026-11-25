@@ -1,6 +1,8 @@
 """Terminal science and this caller's physical release are separate facts."""
 
+import json
 from pathlib import Path
+import sqlite3
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -86,3 +88,25 @@ def test_cleanup_skips_assignment_join_for_unowned_services(monkeypatch, lifetim
     result = _run._cleanup(cast(Any, available), cast(Any, observation), 0.2)
     assert cast(dict[str, Any], result["coordinator"])["state"] == "persistent/borrowed"
     assert clock.admissions == []
+
+@pytest.mark.parametrize(("state", "observed_start", "expected"), [
+    ("S", "427", "running"), ("Z", "427", "stopped"),
+    ("S", "428", "stopped"), (None, None, "stopped"),
+])
+def test_stopped_receipt_matches_process_birth(tmp_path, monkeypatch, state, observed_start, expected):
+    receipt = {"pid": 812, "started": "427", "stopped": True}
+    with sqlite3.connect(tmp_path / "control.sqlite") as conn:
+        conn.execute("CREATE TABLE root_metadata (key TEXT, value TEXT)")
+        conn.executemany("INSERT INTO root_metadata VALUES (?, ?)", [
+            ("service_lifetime", "run"), ("service_process", json.dumps(receipt)),
+        ])
+
+    def read_stat(path):
+        assert path == Path("/proc/812/stat")
+        if state is None:
+            raise FileNotFoundError(path)
+        fields = [state, *(["0"] * 18), observed_start]
+        return b"812 (loom ) worker\\xff) " + " ".join(fields).encode()
+
+    monkeypatch.setattr(Path, "read_bytes", read_stat)
+    assert _run._process_receipt(tmp_path) == (expected, receipt)

@@ -5,8 +5,8 @@ from __future__ import annotations
 import errno
 import os
 from dataclasses import dataclass
-from pathlib import Path
 
+from loom._proc_stat import read_process_stat
 
 @dataclass(frozen=True, slots=True)
 class OwnedProcessIdentity:
@@ -38,9 +38,8 @@ def kill_owned_process(identity: OwnedProcessIdentity, signal_number: int) -> bo
 
 def _start_ticks(pid: int) -> str:
     try:
-        fields = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").split()
+        return read_process_stat(pid).start_ticks
     except FileNotFoundError as exc:
         raise ProcessLookupError(errno.ESRCH, "process does not exist", pid) from exc
-    if len(fields) <= 21:
-        raise RuntimeError(f"cannot read process start identity for PID {pid}")
-    return fields[21]
+    except ValueError as exc:
+        raise RuntimeError(f"cannot read process start identity for PID {pid}") from exc

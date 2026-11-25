@@ -12,6 +12,7 @@ import time
 from typing import TYPE_CHECKING, NamedTuple
 from pathlib import Path
 
+from loom._proc_stat import read_process_stat
 from loom._sqlite_policy import SQLitePolicy, connect_existing
 
 from ._coordinator_transactions import short_write
@@ -196,7 +197,7 @@ def record_process(
     import sqlite3
 
     pid = os.getpid()
-    started = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
+    started = read_process_stat(pid).start_ticks
     with (
         sqlite3.connect(root / "control.sqlite")
         if sqlite_policy is None

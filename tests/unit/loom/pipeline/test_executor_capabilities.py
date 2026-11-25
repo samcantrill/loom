@@ -189,6 +189,8 @@ def test_default_registry_contains_import_light_builtin_descriptors() -> None:
     prerequisites = apptainer_descriptor.details["timeout_prerequisites"]
     assert isinstance(prerequisites, str)
     assert "execution-host admission" in prerequisites
+    assert "4.1.5" in prerequisites
+    assert "loom-apptainer-guard version 1" in prerequisites
     assert {
         kind: capability.to_dict()["support_level"]
         for kind, capability in cast(

@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, cast
 
 from ._agent_gpu_policy import CAPABILITY as GPU_POLICY_CONTRACTION_CAPABILITY
 from ._agent_gpu_policy import EXPANSION_CAPABILITY as GPU_POLICY_EXPANSION_CAPABILITY
+from loom._proc_stat import read_process_stat
 from loom._sqlite_inspection import inspect_sqlite_database
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.timestamps import utc_timestamp as utc_now
@@ -263,13 +264,8 @@ def inspect_native_service(
             and state.get("boot_id") == boot
         ):
             try:
-                fields = (
-                    Path(f"/proc/{state['pid']}/stat")
-                    .read_text()
-                    .rsplit(")", 1)[1]
-                    .split()
-                )
-                live = fields[0] != "Z" and fields[19] == state.get("started")
+                process = read_process_stat(state["pid"])
+                live = process.state != "Z" and process.start_ticks == state.get("started")
                 reason = None if live else "process_identity_changed"
             except FileNotFoundError:
                 reason = "process_missing"

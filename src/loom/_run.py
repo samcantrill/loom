@@ -12,6 +12,7 @@ import time
 from typing import cast
 from uuid import uuid4
 
+from loom._proc_stat import read_process_stat
 from loom.coordinator import CoordinatorClientError, RunObservation, RunRequest
 from loom.deployment import AvailableDeployment, DeploymentSelection, ensure_available, load_deployment
 from loom.queue.errors import QueueConfigError, QueueError
@@ -48,10 +49,9 @@ def _process_receipt(root: Path) -> tuple[str, dict[str, PlainData]]:
         return "persistent/borrowed", {}
     value = json.loads(rows.get("service_process", "{}"))
     if value.get("stopped"):
-        process = Path(f"/proc/{value['pid']}/stat")
         try:
-            current = process.read_text().split()
-            alive = current[21] == value["started"] and current[2] != "Z"
+            current = read_process_stat(value["pid"])
+            alive = current.start_ticks == value["started"] and current.state != "Z"
         except FileNotFoundError:
             alive = False
         if not alive:
