@@ -4529,7 +4529,9 @@ def test_two_remote_agents_execute_two_globally_selected_runs(
         daemon.stop()
 
 
-def test_same_run_local_and_remote_stages_overlap(tmp_path: Path) -> None:
+@pytest.mark.parametrize("scenario", ["execution", "cancel-pregrant", "restart-before-coordinator-release", "lost-committed-grant"])
+def test_same_run_local_and_remote_stages_overlap(tmp_path: Path, monkeypatch, scenario: str) -> None:
+    cancel_pregrant = scenario != "execution"
     credentials = _credentials(tmp_path / "tls")
     descriptor = ResidentProfileDescriptor(
         "resident-1", "revision-1", "project-1", "environment-1", "executor-1"
@@ -4563,7 +4565,40 @@ def test_same_run_local_and_remote_stages_overlap(tmp_path: Path) -> None:
     )
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config)
+    grant_entered, allow_grant = Event(), Event()
+    abort_entered, allow_abort = Event(), Event()
+    if cancel_pregrant:
+        from threading import current_thread
+        scoped = local_daemon_execution._ScopedCoordinatorAuthority
+        grant = scoped.grant_prepared_attempt
+        abort = AtomResourceProvider.abort
+
+        def hold_local_grant(owner, uri, **kwargs):
+            if current_thread().name.startswith("loom-local-assignment") and not grant_entered.is_set():
+                if scenario == "lost-committed-grant":
+                    grant(owner, uri, **kwargs)
+                grant_entered.set()
+                assert allow_grant.wait(40)
+                if scenario == "lost-committed-grant":
+                    raise OSError("authority committed the local grant before the reply was lost")
+            return grant(owner, uri, **kwargs)
+
+        def hold_abort(provider, command):
+            if command.assignment.agent_id == config.machine_id:
+                abort_entered.set()
+                assert allow_abort.wait(40)
+            return abort(provider, command)
+
+        monkeypatch.setattr(scoped, "grant_prepared_attempt", hold_local_grant)
+        monkeypatch.setattr(AtomResourceProvider, "abort", hold_abort)
     daemon.start()
+    release_attempted = Event()
+    if scenario == "restart-before-coordinator-release":
+        def interrupt_release(assignment_id):
+            release_attempted.set()
+            raise OSError("execution-store release unavailable until restart")
+
+        monkeypatch.setattr(daemon._execution.coordinator, "cancellation_release_pregrant", interrupt_release)
     server = LocalDaemonAgentHttpServer(
         daemon,
         AgentTlsServerConfig(
@@ -4628,7 +4663,17 @@ def test_same_run_local_and_remote_stages_overlap(tmp_path: Path) -> None:
         coordinator = daemon.client_view(
             LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
         )
-        with ThreadPoolExecutor(max_workers=1) as workers:
+        if cancel_pregrant and scenario != "lost-committed-grant":
+            call = agent._call
+
+            def wait_for_local_abort(operation, payload, **kwargs):
+                response = call(operation, payload, **kwargs)
+                if operation == "assignment_control" and response.get("control") is not None:
+                    assert abort_entered.wait(30)
+                return response
+
+            monkeypatch.setattr(agent, "_call", wait_for_local_abort)
+        with ThreadPoolExecutor(max_workers=2) as workers:
             remote = workers.submit(
                 _execute_available_assignment,
                 agent,
@@ -4653,13 +4698,67 @@ def test_same_run_local_and_remote_stages_overlap(tmp_path: Path) -> None:
                     break
                 sleep(0.01)
             assert active_agent_ids == {"machine-A", "agent-a"}
+            if cancel_pregrant:
+                try:
+                    assert grant_entered.wait(10)
+                    with sqlite3.connect(config.control_database) as conn:
+                        deadline = monotonic() + 20
+                        while monotonic() < deadline and not conn.execute(
+                            "SELECT 1 FROM remote_assignments WHERE run_uri=? AND state='RUNNING'", (run_uri,)
+                        ).fetchone():
+                            sleep(0.01)
+                        assert conn.execute("SELECT 1 FROM remote_assignments WHERE run_uri=? AND state='RUNNING'", (run_uri,)).fetchone()
+                    coordinator.cancel("mixed-item")
+                    with sqlite3.connect(config.control_database) as conn:
+                        deadline = monotonic() + 15
+                        while monotonic() < deadline and not conn.execute("SELECT 1 FROM remote_assignment_controls").fetchone():
+                            sleep(0.01)
+                        assert conn.execute("SELECT COUNT(*) FROM remote_assignment_controls").fetchone() == (1,)
+                    allow_grant.set()
+                    if scenario != "lost-committed-grant":
+                        assert abort_entered.wait(20)
+                        assert remote.result(timeout=20).get("state") == "RELEASED"
+                        workers.submit(daemon.reconcile_once).result(timeout=5)
+                        with pytest.raises(TimeoutError):
+                            coordinator.wait("mixed-item", timeout_seconds=0.1)
+                        assert authority.open_run(run_uri).status is RunStatus.RUNNING
+                finally:
+                    allow_grant.set()
+                    allow_abort.set()
             result = remote.result(timeout=90)
             assert result.get("state") == "RELEASED", result
+        if scenario == "restart-before-coordinator-release":
+            assert release_attempted.wait(10)
+            with sqlite3.connect(config.agent_journal) as conn:
+                assert conn.execute(
+                    "SELECT state, declined, grant_fence, process_execution_id FROM assignments"
+                ).fetchall() == [("released", 1, None, None)]
+            with sqlite3.connect(config.execution_database) as conn:
+                assert conn.execute(
+                    "SELECT state FROM coordinator_assignments WHERE agent_id=?", (config.machine_id,)
+                ).fetchone() == ("accepted",)
+            daemon.stop()
+            daemon = LocalDaemon(config)
+            daemon.start()
+            coordinator = daemon.client_view(LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT))
         assert coordinator.wait("mixed-item", timeout_seconds=90).state is (
-            LocalDaemonAdmissionState.SUCCEEDED
+            LocalDaemonAdmissionState.CANCELLED if cancel_pregrant else LocalDaemonAdmissionState.SUCCEEDED
         )
-        assert authority.open_run(run_uri).status is RunStatus.SUCCEEDED
+        assert authority.open_run(run_uri).status is (RunStatus.CANCELLED if cancel_pregrant else RunStatus.SUCCEEDED)
+        if scenario == "lost-committed-grant":
+            assert not abort_entered.is_set()
+            with sqlite3.connect(config.agent_journal) as conn:
+                assert conn.execute(
+                    "SELECT state, grant_fence IS NOT NULL, process_execution_id FROM assignments"
+                ).fetchall() == [("released", 1, None)]
+        if cancel_pregrant:
+            with sqlite3.connect(config.execution_database) as conn:
+                assert conn.execute(
+                    "SELECT state FROM coordinator_assignments WHERE run_uri=?", (run_uri,)
+                ).fetchall() == [("released",), ("released",)]
     finally:
+        allow_grant.set()
+        allow_abort.set()
         agent.close()
         server.stop()
         daemon.stop()

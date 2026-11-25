@@ -416,6 +416,29 @@ def test_pregrant_cancellation_releases_exact_claim_before_decline(
     )
 
 
+def test_cancel_reconciles_a_claim_acquired_before_prepare_result_was_recorded(tmp_path, monkeypatch):
+    journal = SQLiteAgentJournal(tmp_path / "journal.sqlite")
+    assignment = _assignment()
+    provider, command = _provider()
+    providers = {"cpu": provider}
+    journal.persist_request(assignment, {"request": "durable"})
+
+    def interrupt_before_journal_write(*args):
+        raise OSError("interrupt between provider prepare and journal write")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(journal, "_set_state", interrupt_before_journal_write)
+        with pytest.raises(OSError):
+            journal.prepare_composite(assignment, (command,), providers)
+    assert journal.read_state(assignment.assignment_id) is AssignmentState.REQUEST_DURABLE
+    assert provider.observe(ObserveRequest("agent", "session", "before")).live_claim_ids
+    reopened = SQLiteAgentJournal(journal.path, _allow_initialize=False)
+    assert reopened.cancel_pregrant(assignment.assignment_id, providers) is AssignmentState.DECLINED
+    assert not provider.observe(ObserveRequest("agent", "session", "after")).live_claim_ids
+    reopened.release_declined(assignment.assignment_id, "released-revision")
+    assert reopened.cancel_pregrant(assignment.assignment_id, {}) is AssignmentState.RELEASED
+
+
 def test_journal_rejects_event_gap_and_conflicting_replay(tmp_path) -> None:
     journal = SQLiteAgentJournal(tmp_path / "journal.sqlite")
     assignment = _assignment()

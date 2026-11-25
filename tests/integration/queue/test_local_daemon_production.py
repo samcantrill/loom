@@ -1035,7 +1035,7 @@ def test_mixed_owner_cancellation_waits_for_every_owner_before_final_cas(
         execution._cancel(admission, scoped, ("build",)).state
         is LocalDaemonAdmissionState.CANCELLING
     )
-    assert calls == ["slurm", "local", "remote"]
+    assert calls == ["remote", "local", "slurm"]
     assert authority.open_run(run_uri).status is RunStatus.RUNNING
 
     monkeypatch.setattr(

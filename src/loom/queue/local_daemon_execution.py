@@ -85,6 +85,7 @@ from loom.queue._managed_local import (
     _read_decline_reason,
     _compose_agent_resource_providers,
     _persist_managed_result,
+    _release_revision,
     run_managed_local_assignment,
 )
 from loom.pipeline.orchestration import (
@@ -1305,6 +1306,14 @@ class _AuthorityReliabilityStore:
         return self._authority.list_timeout_outcomes(run_uri, stage_name=stage_name)
 
 
+_PREGRANT_CANCELLATION_STATES = frozenset({
+    AssignmentState.REQUEST_DURABLE, AssignmentState.PREPARE_UNKNOWN,
+    AssignmentState.PREPARED, AssignmentState.ACCEPTED, AssignmentState.DECLINED,
+    AssignmentState.RELEASED,  # The journal checks the definitive decline marker.
+})
+_PREGRANT_WORKERS = 2
+
+
 class LocalDaemonExecution:
     """Build and drive the existing Phase 1 and Phase 2 owners."""
 
@@ -1458,6 +1467,10 @@ class LocalDaemonExecution:
             max_workers=max(2, config.cpu_capacity),
             thread_name_prefix="loom-local-assignment",
         )
+        self._pregrant_abort_workers = ThreadPoolExecutor(
+            max_workers=_PREGRANT_WORKERS, thread_name_prefix="loom-pregrant-abort",
+        )
+        self._pregrant_aborts: set[str] = set()
         # Retention must progress even when every resident observer is occupied.
         self._slurm_storage_workers = ThreadPoolExecutor(
             max_workers=2, thread_name_prefix="loom-slurm-storage",
@@ -1500,6 +1513,8 @@ class LocalDaemonExecution:
         self._ready_preparations.close()
         if self._slurm_agent is not None:
             self._slurm_agent.close()
+        self._pregrant_abort_workers.shutdown(wait=True)
+        self._pregrant_aborts.clear()
         self._local_assignment_workers.shutdown(wait=True)
         self._slurm_storage_workers.shutdown(wait=True)
         self._local_assignment_futures.clear()
@@ -1635,6 +1650,7 @@ class LocalDaemonExecution:
             if not future.done():
                 continue
             self._local_assignment_futures.pop(assignment_id, None)
+            self._pregrant_aborts.discard(assignment_id)
             for work_id, pending_id in tuple(self._local_preparing.items()):
                 if pending_id == assignment_id:
                     self._local_preparing.pop(work_id, None)
@@ -1669,10 +1685,17 @@ class LocalDaemonExecution:
         for assignment_id, run_uri in tuple(self._pending_local_assignment_reconciliation.items()):
             if assignment_id in self._local_assignment_futures:
                 continue
-            retry = self._local_assignment_retries[assignment_id]
-            if not retry.ready(self._local_recovery_progress(assignment_id, run_uri)):
+            progress = self._local_recovery_progress(assignment_id, run_uri)
+            if not self._local_assignment_retries[assignment_id].ready(progress):
                 continue
-            future = self._local_assignment_workers.submit(
+            executor = self._local_assignment_workers
+            if (progress is not None and progress[0] in _PREGRANT_CANCELLATION_STATES
+                and progress[1] is None and progress[2] is not None):
+                if len(self._pregrant_aborts) >= _PREGRANT_WORKERS:
+                    continue
+                executor = self._pregrant_abort_workers
+                self._pregrant_aborts.add(assignment_id)
+            future = executor.submit(
                 self._reconcile_exact_local_assignment, assignment_id
             )
             daemon = self.daemon
@@ -1812,6 +1835,36 @@ class LocalDaemonExecution:
             ordinary_mutation_frozen=self._ordinary_mutation_frozen,
             on_grant=None if self._action_resolution is None else self._action_resolution.attach_fence,
         )
+        if (
+            self.coordinator.state(assignment.assignment_id) in {"bound", "accepted"}
+            and self.journal.find_state(assignment.assignment_id) in _PREGRANT_CANCELLATION_STATES
+            and self.journal.read_grant_fence(assignment.assignment_id) is None
+            and self._run_cancellation_operation(assignment.run_uri) is not None
+            and self._install_run_cancellation_if_requested(
+                assignment.run_uri, scoped_authority, intent.plan.stage_order,
+                attempt_id=assignment.attempt_id,
+            )
+        ):
+            try:
+                scoped_authority.unbind_prepared_attempt(
+                    assignment.run_uri, assignment_id=assignment.assignment_id,
+                    attempt_id=assignment.attempt_id,
+                )
+            except AuthorityStoreError:
+                # A grant can commit immediately before cancellation and lose
+                # its reply. Recover its original fence through the ordinary
+                # grant/replay path below. An effective epoch fences new work.
+                if self.journal.read_state(assignment.assignment_id) is not AssignmentState.ACCEPTED:
+                    raise
+            else:
+                state = self.journal.cancel_pregrant(assignment.assignment_id, self.providers)
+                if state is AssignmentState.DECLINED:
+                    _release_revision(
+                        journal=self.journal, assignment=assignment, providers=self.providers,
+                        operation="declined", release=self.journal.release_declined,
+                    )
+                self.coordinator.cancellation_release_pregrant(assignment.assignment_id)
+                return True
         try:
             run_managed_local_assignment(
                 coordinator=self.coordinator,
@@ -5027,14 +5080,12 @@ class LocalDaemonExecution:
         # every other submission (including SUBMITTING-without-a-handle) for
         # reconciliation.  In particular, do not let a successful scancel
         # response turn the run terminal: it is merely a requested fact.
-        settling = self._fan_out_slurm_cancellation(admission.run_uri)
-        settling = (
-            self._fan_out_local_cancellation(admission.run_uri, authority) or settling
-        )
-        settling = (
-            self._fan_out_remote_cancellation(admission.run_uri, operation_id)
-            or settling
-        )
+        # Publish durable outbound stops first. Each physical owner can then
+        # advance its own retained operation while the other owners settle.
+        remote_pending = self._fan_out_remote_cancellation(admission.run_uri, operation_id)
+        local_pending = self._fan_out_local_cancellation(admission.run_uri, authority)
+        slurm_pending = self._fan_out_slurm_cancellation(admission.run_uri)
+        settling = remote_pending or local_pending or slurm_pending
         snapshot = authority.open_run(admission.run_uri)
         if snapshot.status is RunStatus.CANCELLED:
             return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.CANCELLED)
@@ -5103,6 +5154,15 @@ class LocalDaemonExecution:
                 settling = True
                 continue
             journal_state = self.journal.find_state(assignment_id)
+            if journal_state is None and self.daemon is not None and self._remote_delivery_retained(assignment_id):
+                # A remote delivery has a separate agent journal and release owner.
+                settling = True
+                continue
+            if assignment_id in self._local_assignment_futures:
+                # REQUEST_DURABLE can already have an in-flight provider prepare.
+                # A local observer owns that transition until its call returns.
+                settling = True
+                continue
             if coordinator_state == "reserved" and journal_state is None:
                 self.coordinator.cancellation_release_unstarted(assignment_id)
                 continue
@@ -5117,23 +5177,14 @@ class LocalDaemonExecution:
                 )
                 self.coordinator.cancellation_release_pregrant(assignment_id)
                 continue
-            if journal_state in {
-                AssignmentState.REQUEST_DURABLE,
-                AssignmentState.PREPARED,
-                AssignmentState.ACCEPTED,
-                AssignmentState.DECLINED,
-            }:
-                try:
-                    self.journal.cancel_pregrant(assignment_id, self.providers)
-                    authority.unbind_prepared_attempt(
-                        run_uri,
-                        assignment_id=assignment_id,
-                        attempt_id=self._attempt_id(assignment_id),
-                    )
-                    self.coordinator.cancellation_release_pregrant(assignment_id)
-                except Exception:
-                    settling = True
-                continue
+            if (journal_state in _PREGRANT_CANCELLATION_STATES
+                and assignment_id not in self._pending_local_assignment_reconciliation):
+                # Ordinary observer failure, cancellation and restart all join
+                # the same retained assignment. Only one worker may touch it.
+                self._pending_local_assignment_reconciliation[assignment_id] = run_uri
+                self._local_assignment_retries[assignment_id] = _RecoveryRetry()
+                if self.daemon is not None:
+                    self.daemon._wake.set()
             settling = True
         return settling
 

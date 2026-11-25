@@ -1397,6 +1397,12 @@ class SQLiteAgentJournal:
                 return state
             if state not in {AssignmentState.PREPARED, AssignmentState.ACCEPTED}:
                 raise ManagedLocalError("only prepared pre-grant claims can be aborted")
+        return self._abort_exact_claims(assignment_id, commands, providers)
+
+    def _abort_exact_claims(
+        self, assignment_id: str, commands: Sequence[ClaimCommand],
+        providers: Mapping[str, AgentResourceProvider],
+    ) -> AssignmentState:
         for command in sorted(
             commands, key=lambda item: item.claim.resource_kind, reverse=True
         ):
@@ -1413,43 +1419,31 @@ class SQLiteAgentJournal:
     def cancel_pregrant(
         self, assignment_id: str, providers: Mapping[str, AgentResourceProvider]
     ) -> AssignmentState:
-        """Settle a durable no-start local claim using its retained exact commands."""
-
+        """Settle exact claims after the authority has unbound the attempt."""
         with self._transaction() as conn:
             row = self._assignment(conn, assignment_id)
             state = AssignmentState(row["state"])
-            if state is AssignmentState.REQUEST_DURABLE:
+            if row["grant_fence"] is not None or row["process_execution_id"] is not None:
+                raise ManagedLocalError("local assignment has a grant or process")
+            if state is AssignmentState.DECLINED:
+                return state
+            if state is AssignmentState.RELEASED and row["declined"] and row["availability_revision"]:
+                return state
+            if state is AssignmentState.REQUEST_DURABLE and row["claims_json"] is None:
                 conn.execute(
-                    "UPDATE assignments SET state = ? WHERE assignment_id = ?",
+                    "UPDATE assignments SET state = ?, declined = 1 WHERE assignment_id = ?",
                     (AssignmentState.DECLINED.value, assignment_id),
                 )
                 return AssignmentState.DECLINED
-            if state is AssignmentState.DECLINED:
-                return state
-            if state not in {AssignmentState.PREPARED, AssignmentState.ACCEPTED}:
+            if state not in {
+                AssignmentState.REQUEST_DURABLE, AssignmentState.PREPARE_UNKNOWN,
+                AssignmentState.PREPARED, AssignmentState.ACCEPTED,
+            }:
                 raise ManagedLocalError("local assignment is not proven pre-grant")
-            identity = json.loads(cast(str, row["identity_json"]))
-            commands = json.loads(cast(str, row["claims_json"]))
-        values = commands.get("commands") if isinstance(commands, dict) else None
-        if not isinstance(values, list):
-            raise ManagedLocalError("retained local claim commands are invalid")
-        assignment = ManagedAssignment(
-            assignment_id=cast(str, identity["assignment_id"]),
-            run_uri=cast(str, identity["run_uri"]),
-            stage_work_id=cast(str, identity["stage_work_id"]),
-            stage_name=cast(str, identity["stage_name"]),
-            attempt=cast(int, identity["attempt"]),
-            attempt_id=cast(str, identity["attempt_id"]),
-            agent_id=cast(str, identity["agent_id"]),
-            session_id=cast(str, identity["session_id"]),
-            offer_id=cast(str, identity["offer_id"]),
-            claim_id=cast(str, identity["claim_id"]),
-        )
-        return self.abort_pregrant(
-            assignment_id,
-            tuple(_claim_command_from_dict(assignment, value) for value in values),
-            providers,
-        )
+            # The commands precede the first physical prepare. A crash can leave
+            # any prefix applied while the overall state still reads REQUEST_DURABLE.
+            commands = _claim_commands_from_row(row)
+        return self._abort_exact_claims(assignment_id, commands, providers)
 
     def grant(self, assignment_id: str, fence: str) -> AssignmentState:
         if not fence:
