@@ -928,26 +928,33 @@ def _gpu_capability(operation, name, declaration, deadline):
         raise QueueConflictError("GPU capability failed: " + str(result))
 
 
-def _observe_gpu_checks(operation, declarations, names, deadline):
-    # Retained successes still get their live profile and request checked.
-    # Only outstanding probes need a share of the physical SSH budget.
-    pending, retained = [], []
+def _gpu_checks_to_observe(operation, names):
+    outstanding, passed = [], []
     for name in names:
         successors = _gpu_check_successors(operation, name)
         key = successors[-1]["step_key"] if successors else name + "-gpu-capability"
-        receipt = operation.receipts / key / "receipt.json"
-        (retained if receipt.is_file() else pending).append(name)
+        path = operation.receipts / key / "receipt.json"
+        receipt = read(path) if path.is_file() else None
+        if receipt is None or receipt.get("outcome") != "passed":
+            outstanding.append(name)
+        else:
+            operation.check_observations[name + ":gpu-capability"] = receipt
+            passed.append(name)
+    return outstanding, passed
+
+
+def _observe_gpu_checks(operation, declarations, names, deadline, *, final=False):
     errors = []
-    for group in (pending, retained):
-        for index, name in enumerate(group):
-            now = time.monotonic()
-            if now >= deadline:
-                return errors
-            step_end = now + (deadline - now) / (1 + len(group) - index)
-            try:
-                _gpu_capability(operation, name, declarations[name], step_end)
-            except (sshops.SshUnavailable, _Waiting, CoordinatorClientError, QueueConflictError) as exc:
-                errors.append(exc)
+    for index, name in enumerate(names):
+        now = time.monotonic()
+        if now >= deadline:
+            errors.append(_Waiting("GPU capability profile confirmation pending: " + name))
+            break
+        step_end = deadline if final else now + (deadline - now) / (1 + len(names) - index)
+        try:
+            _gpu_capability(operation, name, declarations[name], step_end)
+        except (sshops.SshUnavailable, _Waiting, CoordinatorClientError, QueueConflictError) as exc:
+            errors.append(exc)
     return errors
 
 
@@ -1060,8 +1067,10 @@ def _run_checks(operation):
                          _dispatch_only=dispatch, _wait=False)
 
     def steps(selected, dispatch, end):
-        transfers = {key for key in selected if not dispatch
-                     and _transferred_bytes(records[key].get("last_observation") or {}) > 0}
+        # Give every check a short first observation. A returning storage
+        # check needs enough time even to reach its first declared range.
+        transfers = {key for key in selected if not dispatch and slots[key][2] == "storage"
+                     and records[key].get("observation_turns", 0) > 0}
         return completed_steps(operation.directory, records, selected, dispatch=dispatch, transfers=transfers,
                                deadline=end, advance=advance, started=save_attempts)
 
@@ -1089,7 +1098,8 @@ def _run_checks(operation):
     # The native dispatch pass has run. Bound direct GPU reads and the
     # receipt lookup/replay by the same deadline, leaving time for native
     # observations even if a capability host uses its entire share.
-    errors.extend(_observe_gpu_checks(operation, declarations, capabilities, deadline))
+    outstanding_gpu, retained_gpu = _gpu_checks_to_observe(operation, capabilities)
+    errors.extend(_observe_gpu_checks(operation, declarations, outstanding_gpu, deadline))
 
     first_pass = all(records[key].get("dispatch_turns") for key in dispatch)
     eligible = [key for key in active if first_pass and (key not in dispatch or key in dispatched)]
@@ -1146,6 +1156,11 @@ def _run_checks(operation):
                    if operation.check_observations[name + ":gpu-capability"]["outcome"] != "passed")
     if waiting:
         raise _Waiting("checks pending: " + ", ".join(sorted(waiting)))
+    # A passed capability is an immutable result throughout download. Confirm
+    # its live profile and exact request once at the restoration boundary.
+    confirmations = _observe_gpu_checks(operation, declarations, retained_gpu, deadline, final=True)
+    if confirmations:
+        raise confirmations[0]
     operation.settled(deadline=deadline)
     # Fresh invocations after settlement reobserve the checks. A partial
     # round across detachments retains exact, verified predecessors.

@@ -653,11 +653,11 @@ def test_outstanding_gpu_probe_gets_budget_before_eleven_retained_profiles(tmp_p
     clock = [0.0]
     monkeypatch.setattr(upgrades, "time", SimpleNamespace(monotonic=lambda: clock[0]))
     names = [str(n) for n in range(12)]
-    op = SimpleNamespace(receipts=tmp_path)
+    op = SimpleNamespace(receipts=tmp_path, check_observations={})
     for name in names:
         key = tmp_path / (name + "-gpu-capability")
         key.mkdir()
-        (key / "receipt.json").write_text("{}")
+        upgrades.atomic(key / "receipt.json", {"outcome": "passed"})
     # A failed predecessor with a selected successor still needs a physical turn.
     upgrades.atomic(tmp_path / "11-gpu-capability" / "successors.json", [{"step_key": "11-retry"}])
     observed = []
@@ -667,5 +667,70 @@ def test_outstanding_gpu_probe_gets_budget_before_eleven_retained_profiles(tmp_p
             assert clock[0] < deadline
         observed.append(name)
     monkeypatch.setattr(upgrades, "_gpu_capability", probe)
-    assert not upgrades._observe_gpu_checks(op, dict.fromkeys(names), names, 60)
+    pending, passed = upgrades._gpu_checks_to_observe(op, names)
+    assert not upgrades._observe_gpu_checks(op, dict.fromkeys(names), pending, 60)
+    assert observed == ["11"]
+    assert all(row["outcome"] == "passed" for row in op.check_observations.values())
+    assert not upgrades._observe_gpu_checks(op, dict.fromkeys(names), passed, 60, final=True)
     assert observed == ["11", *names[:-1]]
+
+
+def test_full_transfer_budget_preserves_a_status_slot_with_24_pending_checks(tmp_path):
+    from threading import Event
+    from time import monotonic
+    from loom.fleet._check_workers import completed_steps
+
+    identities = [str(index) for index in range(24)]
+    transfers = set(identities[:3])
+    records = {key: {} for key in identities}
+    entered = {key: Event() for key in identities[:2]}
+    peer_finished = Event()
+    deadline = monotonic() + 4
+    def advance(key, dispatch, step_end):
+        if key in entered:
+            assert step_end == deadline
+            entered[key].set()
+            assert peer_finished.wait(2)
+        elif key == "3":
+            assert all(event.wait(2) for event in entered.values())
+            peer_finished.set()
+        return "passed"
+    jobs = completed_steps(tmp_path, records, identities, transfers=transfers, dispatch=False,
+                           deadline=deadline, advance=advance, started=lambda: None)
+    assert {key for key, job in jobs if job.result() == "passed"} == set(identities)
+    assert peer_finished.is_set()
+
+
+def test_gpu_receipt_does_not_spend_download_budget_and_changed_final_profile_blocks(tmp_path, check_gate, monkeypatch):
+    op = SimpleNamespace(
+        directory=tmp_path, receipts=tmp_path / "steps", inventory=object(), observation=None,
+        intent={"operation_id": "final-profile", "agents": {"host": {}},
+                "declarations": {"host": {"resident_profiles": [{}]}},
+                "gpu_qualification": "nonexclusive", "timeout_seconds": 5},
+        gate=check_gate.observe, maintenance=check_gate.authorize,
+        settled=lambda **kw: pytest.fail("changed profile must withhold settlement"),
+    )
+    path=op.receipts / "host-gpu-capability"
+    path.mkdir(parents=True)
+    upgrades.atomic(path / "receipt.json", {"outcome": "passed", "device_uuid": "original"})
+    monkeypatch.setattr(upgrades, "_check_kinds", lambda *args: ("cpu", "storage", "gpu"))
+    monkeypatch.setattr(upgrades, "_prepare_attempt", lambda op, name, kind, key, **kw:
+                        {"operation_id": key, "authorization": {"kind":kind}})
+    complete = False
+    def observe(inventory, *, operation_id, _dispatch_only, **kw):
+        if _dispatch_only:
+            return {"checks":{"native":{"disposition":"accepted"}}}
+        return {"outcome":"passed" if complete else "waiting"}
+    monkeypatch.setattr(upgrades, "self_test", observe)
+    confirmations = []
+    def confirm(op, name, declaration, deadline):
+        confirmations.append(name)
+        raise upgrades.QueueConflictError("retained host intent differs")
+    monkeypatch.setattr(upgrades, "_gpu_capability", confirm)
+    with pytest.raises(upgrades._Waiting, match="checks pending"):
+        upgrades._run_checks(op)
+    assert not confirmations and op.check_observations["host:gpu-capability"]["device_uuid"] == "original"
+    complete = True
+    with pytest.raises(upgrades.QueueConflictError, match="retained host intent differs"):
+        upgrades._run_checks(op)
+    assert confirmations == ["host"]

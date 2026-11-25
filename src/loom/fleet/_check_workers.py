@@ -50,16 +50,23 @@ def completed_steps(directory, records, selected, *, dispatch, deadline, advance
     while pending or running:
         left = deadline - monotonic()
         if left > 0:
-            # Divide the allowance among successive groups. Preserve room for
-            # a slow late check when an earlier native request uses its full cut.
+            # First dispatch offers every selected slot an opportunity before
+            # download. Accepted observations rotate across durable turn counts.
             groups = max(1, (len(pending) + len(running) + WORKERS - 1) // WORKERS)
             now = monotonic()
             fair_end = min(deadline, now + left / groups)
             for identity in tuple(pending):
-                # Known transfers can use their whole fair share. An unknown
-                # check gets a short first observation so peers can report.
-                step_end = fair_end if identity in transfers else min(fair_end, now + 10.0)
-                if len(running) >= WORKERS or monotonic() >= step_end:
+                if len(running) >= WORKERS:
+                    break
+                step_end = min(fair_end if dispatch else deadline, now + 10.0)
+                if identity in transfers:
+                    # A transfer can use this observer's remaining time. Leave
+                    # a worker for status when downloads and short reads coexist.
+                    if (any(key not in transfers for key in pending)
+                            and sum(key in transfers for key in running.values()) >= WORKERS - 1):
+                        continue
+                    step_end = deadline
+                if monotonic() >= step_end:
                     break
                 future = _offer((directory, identity), dispatch, advance, (identity, dispatch, step_end))
                 if future is not None:
