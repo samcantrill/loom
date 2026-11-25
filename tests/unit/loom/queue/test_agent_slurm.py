@@ -1109,6 +1109,9 @@ def test_slow_scheduler_effect_does_not_block_peer_observation_or_cancel(tmp_pat
         drive_until(lambda: agent.step(peer, acknowledge), lambda: (value := agent.journal.find("operation-2")) is not None and value.job_id is not None)
         drive_until(lambda: agent.step(first, acknowledge), entered.is_set)
         calls_before = len(runner.calls)
+        agent._next_poll.pop("operation-2", None)
+        drive_until(lambda: agent.step(peer, acknowledge),
+                    lambda: any(name in {"squeue", "sacct"} for name, _ in runner.calls[calls_before:]))
         cancel_peer = True
         closing = {**peer, "cancel_requested": True, "containment_request": {}}
         drive_until(lambda: agent.step(closing, acknowledge), lambda: agent.journal.read("operation-2").cancel_requested)
@@ -1121,6 +1124,52 @@ def test_slow_scheduler_effect_does_not_block_peer_observation_or_cancel(tmp_pat
         release.set()
         drive_until(lambda: agent.step(first, acknowledge), lambda: agent.journal.read("operation-1").job_id is not None)
         assert sum(call[0] == "sbatch" for call in runner.calls) == 2
+    finally:
+        release.set()
+        agent.close()
+
+def test_cancel_reaches_exact_job_with_both_observation_workers_occupied(tmp_path, monkeypatch):
+    from threading import Event
+
+    runner = FakeSlurmCommandRunner()
+    profile = replace(_profile(runner, tmp_path, retention_bytes=4 * 65 * 1024**2), max_outstanding=3)
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,), asynchronous_preparation=True)
+    tasks = [_task(profile, key=str(i)) for i in (1, 2, 3)]
+    held = {}
+    release = Event()
+    original = runner.squeue
+    cancel_job = False
+
+    def acknowledge(value):
+        return {"sequence": value["sequence"],
+                "cancel_requested": cancel_job and value["assignment"]["assignment_id"] == "assignment-3"}
+
+    def observe(*, job_ids=()):
+        if len(job_ids) == 1 and job_ids[0] in held:
+            held[job_ids[0]].set()
+            assert release.wait(15)
+        return original(job_ids=job_ids)
+
+    try:
+        for task in tasks:
+            op = task["assignment"]["operation_id"]
+            drive_until(lambda: agent.step(task, acknowledge),
+                        lambda: (current := agent.journal.find(op)) is not None and current.job_id is not None)
+        monkeypatch.setattr(runner, "squeue", observe)
+        for task in tasks[:2]:
+            op = task["assignment"]["operation_id"]
+            job_id = agent.journal.read(op).job_id
+            entered = held[job_id] = Event()
+            agent._next_poll.pop(op, None)
+            drive_until(lambda: agent.step(task, acknowledge), entered.is_set)
+        cancel_job = True
+        closing = {**tasks[2], "cancel_requested": True, "containment_request": {}}
+        drive_until(lambda: agent.step(closing, acknowledge),
+                    lambda: agent.journal.read("operation-3").cancel_requested)
+        job = agent.journal.read("operation-3").job_id
+        assert [argv for name, argv in runner.calls if name == "scancel"] == [("scancel", job)]
+        assert not release.is_set()
     finally:
         release.set()
         agent.close()

@@ -34,22 +34,42 @@ class SlurmCommandProgress:
         self._wake = wake
         self._executors = {
             "submit": ThreadPoolExecutor(max_workers=1, thread_name_prefix="loom-slurm-submit"),
+            "cancel": ThreadPoolExecutor(max_workers=1, thread_name_prefix="loom-slurm-cancel"),
             "control": ThreadPoolExecutor(max_workers=2, thread_name_prefix="loom-slurm-control"),
         }
-        self._limits = {"submit": 1, "control": 8}
+        self._limits = {"submit": 1, "control": 8, "cancel": 2}
         self._pending: dict[str, _Command] = {}
+        self._retiring_observations: set[Future[Any]] = set()
+
+    def supersede_observation(self, operation_id: str) -> None:
+        """Discard the stale observation result when a known job needs a stop."""
+        current = self._pending.get(operation_id)
+        if current is None or current.kind != "observe":
+            return
+        future = current.future
+        assert future is not None
+        if not future.cancel() and not future.done():
+            self._retiring_observations.add(future)
+        # Only the owner advances the generator and writes its result. The
+        # worker executes a read-only scheduler command and may still be busy.
+        current.steps.close()
+        del self._pending[operation_id]
 
     def contains(self, operation_id: str) -> bool:
         return operation_id in self._pending
 
     def start(
-        self, operation_id: str, lane: Literal["submit", "control"],
+        self, operation_id: str, lane: Literal["submit", "control", "cancel"],
         steps: Generator[Callable[[], Any] | _SubmissionAuthorization, Any, Any], *, kind: str,
         authorize: Callable[[Any], bool] | None = None,
     ) -> None:
         if operation_id in self._pending:
             raise QueueConflictError("SLURM command already has an owner")
-        if sum(item.lane == lane for item in self._pending.values()) >= self._limits[lane]:
+        occupied = sum(item.lane == lane for item in self._pending.values())
+        if lane == "control":
+            self._retiring_observations = {f for f in self._retiring_observations if not f.done()}
+            occupied += len(self._retiring_observations)
+        if occupied >= self._limits[lane]:
             steps.close()
             raise SlurmEffectPending(0.05)
         try:
@@ -119,3 +139,4 @@ class SlurmCommandProgress:
         for current in self._pending.values():
             current.steps.close()
         self._pending.clear()
+        self._retiring_observations.clear()
