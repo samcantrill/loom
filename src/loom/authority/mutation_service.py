@@ -141,6 +141,7 @@ class AuthorityMutationOperation(StrEnum):
     FINALIZE_CANCELLATION = "finalize_cancellation"
     ENSURE_PREPARED_ATTEMPT = "ensure_prepared_attempt"
     BIND_PREPARED_ATTEMPT = "bind_prepared_attempt"
+    FAIL_PREPARED_ATTEMPT = "fail_prepared_attempt"
     UNBIND_PREPARED_ATTEMPT = "unbind_prepared_attempt"
     GRANT_PREPARED_ATTEMPT = "grant_prepared_attempt"
     CONFIRM_EXECUTION_STARTED = "confirm_execution_started"
@@ -195,6 +196,7 @@ _COORDINATOR_EXECUTION_MUTATIONS = frozenset(
         AuthorityMutationOperation.FINALIZE_CANCELLATION,
         AuthorityMutationOperation.ENSURE_PREPARED_ATTEMPT,
         AuthorityMutationOperation.BIND_PREPARED_ATTEMPT,
+        AuthorityMutationOperation.FAIL_PREPARED_ATTEMPT,
         AuthorityMutationOperation.UNBIND_PREPARED_ATTEMPT,
         AuthorityMutationOperation.GRANT_PREPARED_ATTEMPT,
         AuthorityMutationOperation.CONFIRM_EXECUTION_STARTED,
@@ -686,6 +688,12 @@ class AuthorityMutationService:
                 return self._ensure_prepared_attempt(request)
             case AuthorityMutationOperation.BIND_PREPARED_ATTEMPT:
                 return self._bind_prepared_attempt(request)
+            case AuthorityMutationOperation.FAIL_PREPARED_ATTEMPT:
+                failed = self._repository.fail_prepared_attempt(
+                    _required_run_uri(request), assignment_id=_required_body_string(request, "assignment_id"),
+                    attempt_id=_required_body_string(request, "attempt_id"), reason=_required_reason(request),
+                )
+                return _result(service_generation=self._service_generation, body={"failed": failed})
             case AuthorityMutationOperation.UNBIND_PREPARED_ATTEMPT:
                 return self._unbind_prepared_attempt(request)
             case AuthorityMutationOperation.GRANT_PREPARED_ATTEMPT:

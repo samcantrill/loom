@@ -521,6 +521,7 @@ def test_native_reservation_leaves_no_claim_on_busy_or_store_substitution(
         offer_id = conn.execute("SELECT offer_id FROM agent_offers WHERE current=1").fetchone()[0]
     _, command = managed._provider()
     assignment = replace(command.assignment, session_id=session.session_id, agent_id=session.agent_id, offer_id=offer_id)
+    assert isinstance(assignment, managed.ManagedAssignment)
     atom = replace(command.claim.atoms[0], local_capacity_key=f"{session.agent_id}:cpu")
     claim = replace(command.claim, atoms=(atom,))
     path = daemon.config.execution_database

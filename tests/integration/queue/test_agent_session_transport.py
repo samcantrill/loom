@@ -4062,6 +4062,7 @@ def test_repeated_capacity_release_publishes_fresh_offer(
                     else:
                         assert attempts[2:] == [{**attempts[0], "coordinator_epoch": epoch}]
                     recovered = agent.active_session()
+                    assert recovered is not None
                     assert recovered.coordinator_epoch == epoch
                     assert recovered.availability_revision == attempts[0]["released_availability_revision"]
                     assert agent._require_journal().next_offer_renewal(current.session_id) is None
@@ -4586,11 +4587,11 @@ def test_same_run_local_and_remote_stages_overlap(tmp_path: Path, monkeypatch, s
             return observe(provider, request)
 
         monkeypatch.setattr(AtomResourceProvider, "observe", pause_provider)
+    scoped = local_daemon_execution._ScopedCoordinatorAuthority
+    unbind = scoped.unbind_prepared_attempt
     if cancel_pregrant:
         from threading import current_thread
-        scoped = local_daemon_execution._ScopedCoordinatorAuthority
         bind = scoped.bind_prepared_attempt
-        unbind = scoped.unbind_prepared_attempt
         grant = scoped.grant_prepared_attempt
         abort = AtomResourceProvider.abort
 
@@ -4640,7 +4641,9 @@ def test_same_run_local_and_remote_stages_overlap(tmp_path: Path, monkeypatch, s
             release_attempted.set()
             raise OSError("execution-store release unavailable until restart")
 
-        monkeypatch.setattr(daemon._execution.coordinator, "cancellation_release_pregrant", interrupt_release)
+        execution = daemon._execution
+        assert execution is not None
+        monkeypatch.setattr(execution.coordinator, "cancellation_release_pregrant", interrupt_release)
     server = LocalDaemonAgentHttpServer(
         daemon,
         AgentTlsServerConfig(

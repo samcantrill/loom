@@ -52,6 +52,10 @@ class CoordinatorAuthorityStore(
     arbitrary repository access, and database construction.
     """
 
+    def fail_prepared_attempt(
+        self, run_uri: str, *, assignment_id: str, attempt_id: str, reason: LifecycleReason,
+    ) -> bool: ...
+
     def append_audit_event(
         self, run_uri: str, event: PipelineEvent
     ) -> PipelineEventRecord: ...

@@ -215,35 +215,24 @@ def _before_start_retry(
     deadline: float,
     delay: float,
     diagnostic: Path,
+    last_completed: str = "initialization",
+    awaiting: str = "coordinator",
     durable_files: Literal["best_effort", "strict"] = "best_effort",
 ) -> Mapping[str, PlainData]:
-    while True:
-        if time.monotonic() >= deadline:
-            atomic_write_bytes(
-                diagnostic,
-                b'{"failure":"slurm_bootstrap_deadline_expired","offline_grant":false}',
-                durability=durable_files,
-            )
-            raise QueueServiceError(
-                "SLURM bootstrap deadline expired; no offline grant"
-            )
+    while time.monotonic() < deadline:
         try:
             value = operation()
-            if time.monotonic() >= deadline:
-                continue
-            return value
         except _IndeterminateAgentProtocolError:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                atomic_write_bytes(
-                    diagnostic,
-                    b'{"failure":"slurm_bootstrap_deadline_expired","offline_grant":false}',
-                    durability=durable_files,
-                )
-                raise QueueServiceError(
-                    "SLURM bootstrap deadline expired; no offline grant"
-                ) from None
-            time.sleep(min(delay, remaining))
+            time.sleep(min(delay, max(0, deadline - time.monotonic())))
+            continue
+        if time.monotonic() < deadline:
+            return value
+    failure = {
+        "failure": "slurm_bootstrap_deadline_expired", "offline_grant": False,
+        "last_completed": last_completed, "awaiting": awaiting,
+    }
+    atomic_write_bytes(diagnostic, json.dumps(failure).encode(), durability=durable_files)
+    raise QueueServiceError(f"SLURM bootstrap deadline expired; no offline grant (awaiting {awaiting})")
 
 
 def run_slurm_bootstrap(
@@ -299,16 +288,26 @@ def run_slurm_bootstrap(
         "bootstrap-failure-" + _sha256(operation_id) + ".json"
     )
 
+    last_completed = "initialization"
+    waiting_for_submission = False
+
     def prestart(
         operation: str, value: Mapping[str, PlainData]
     ) -> Mapping[str, PlainData]:
-        return _before_start_retry(
+        nonlocal last_completed, waiting_for_submission
+        reply = _before_start_retry(
             lambda: client.call_application(_ROLE, operation, value),
             deadline=deadline,
             delay=selected.reconnect_seconds,
             diagnostic=diagnostic,
             durable_files=selected.durable_files,
+            last_completed=last_completed,
+            awaiting="submission_ack" if operation == "inputs_ready" and waiting_for_submission else operation,
         )
+        waiting_for_submission = reply.get("state") == "awaiting_submission_ack"
+        if not waiting_for_submission:
+            last_completed = operation
+        return reply
 
     try:
         handshake = _before_start_retry(
@@ -316,7 +315,10 @@ def run_slurm_bootstrap(
             deadline=deadline,
             delay=selected.reconnect_seconds,
             diagnostic=diagnostic,
+            durable_files=selected.durable_files,
+            awaiting="handshake",
         )
+        last_completed = "handshake"
         capabilities = handshake.get("capabilities")
         descriptor = SchedulingComponentDescriptor.from_dict(
             thaw_plain_data(
@@ -424,10 +426,18 @@ def run_slurm_bootstrap(
                 )
                 if final:
                     break
-        if shared_roots is None:
-            workspace.accept_inputs()
-        else:
-            workspace.accept_inputs(shared_roots=shared_roots)
+        def stage_inputs() -> Mapping[str, PlainData]:
+            if shared_roots is None:
+                workspace.accept_inputs()
+            else:
+                workspace.accept_inputs(shared_roots=shared_roots)
+            return {}
+
+        _before_start_retry(
+            stage_inputs, deadline=deadline, delay=selected.reconnect_seconds, diagnostic=diagnostic,
+            durable_files=selected.durable_files, last_completed=last_completed, awaiting="input_staging",
+        )
+        last_completed = "inputs_staged"
         while True:
             readiness = prestart(
                 "inputs_ready",

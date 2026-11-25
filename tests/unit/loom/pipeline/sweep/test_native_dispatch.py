@@ -135,14 +135,17 @@ def test_refused_resend_cannot_resolve_prior_unknown_acceptance(tmp_path, monkey
         return _outcome(request)
 
     monkeypatch.setattr(loom, "run", send)
-    args = dict(request_template=_template(), deployment="selection.json", sweep_dir=tmp_path)
+    def submit():
+        return run_sweep(
+            _plan(), request_template=_template(), deployment="selection.json", sweep_dir=tmp_path,
+        )
     for _ in range(2):
-        status = run_sweep(_plan(), **args)
+        status = submit()
         assert [row.metadata["submission_state"] for row in status.trials] == [
             "uncertain", "unselected"
         ]
     assert sent[0] == sent[1]
-    assert run_sweep(_plan(), **args).succeeded_count == 2
+    assert submit().succeeded_count == 2
     assert sent[2] == sent[0]
 
 

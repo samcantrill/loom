@@ -5,6 +5,7 @@ from dataclasses import replace
 import json
 import sqlite3
 from threading import Barrier
+from typing import cast
 
 import pytest
 
@@ -1137,6 +1138,7 @@ def test_event_batch_recovers_exact_content_across_restart(tmp_path, interruptio
     from types import SimpleNamespace
     from loom.queue import agent_session_transport as transport
     from loom.queue._agent_event_batch import apply_event_batch, pack_event_batch
+    from loom.queue.agent_sessions import AgentSessionView
     from loom.queue._agent_session_codec import _MAX_BODY_BYTES, _decode
     from loom.queue._agent_session_journal import _canonical_json
     from loom.queue._remote_stage_execution import _ResidentAssignmentWorkspace
@@ -1144,6 +1146,7 @@ def test_event_batch_recovers_exact_content_across_restart(tmp_path, interruptio
 
     _, command = _provider()
     assignment = command.assignment
+    assert isinstance(assignment, ManagedAssignment)
     identity = assignment.assignment_id
     path = tmp_path / "coordinator.sqlite"
     _seed_stage_work(path, assignment)
@@ -1162,7 +1165,7 @@ def test_event_batch_recovers_exact_content_across_restart(tmp_path, interruptio
         ack = coordinator.record_event(assignment_id, sequence, event_id, payload)
         return {"assignment_id": assignment_id, "acknowledged_sequence": ack}
 
-    view = SimpleNamespace(report_event=record)
+    view = cast(AgentSessionView, SimpleNamespace(report_event=record))
     requests = []
 
     def exchange(operation, request):
@@ -1177,8 +1180,10 @@ def test_event_batch_recovers_exact_content_across_restart(tmp_path, interruptio
             return {**receipt, "request_digest": "wrong"}
         return receipt
 
-    client = SimpleNamespace(_supports_event_batch=True, _assignment_call=lambda s, a, fn: fn(),
-                             _call=exchange, report_event=record)
+    client = cast(transport.LocalDaemonAgentHttpClient, SimpleNamespace(
+        _supports_event_batch=True, _assignment_call=lambda s, a, fn: fn(),
+        _call=exchange, report_event=record,
+    ))
     interrupted = True
     with pytest.raises(QueueConflictError if interruption == "wrong_receipt" else ConnectionError):
         transport.LocalDaemonAgentHttpClient._flush_workspace_events(client, "session", workspace)

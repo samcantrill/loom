@@ -188,12 +188,13 @@ def test_ranges_read_the_named_original_fact_and_reauthorize_every_offset(tmp_pa
     monkeypatch.setattr(SQLitePerRunAuthorityStore, "list_output_commits", lambda *a, **kw: pytest.fail("historical scan"))
     description = client.describe_artifact(locator, scope=SCOPE)
     assert description["outcome"] == "available"
-    options = dict(scope=SCOPE, declaration=description["declaration"], member=description["primary"], length=4)
-    assert client.read_artifact_chunk(locator, offset=0, **options)["data"] == "Zmlycw=="
+    declaration, member = description["declaration"], description["primary"]
+    assert isinstance(declaration, str) and isinstance(member, str)
+    assert client.read_artifact_chunk(locator, scope=SCOPE, declaration=declaration, member=member, offset=0, length=4)["data"] == "Zmlycw=="
     for wrong in (replace(locator, stage_name="other"), replace(locator, output_name="other"), replace(locator, commit_id="other")):
         assert client.describe_artifact(wrong, scope=SCOPE)["outcome"] == "unavailable"
     monkeypatch.setattr(_output_selection, "authorized_run", lambda *args: False)
-    assert client.read_artifact_chunk(locator, offset=4, **options)["outcome"] == "unavailable"
+    assert client.read_artifact_chunk(locator, scope=SCOPE, declaration=declaration, member=member, offset=4, length=4)["outcome"] == "unavailable"
 
 
 @pytest.mark.parametrize("backend", ["embedded", "authenticated"])
@@ -272,15 +273,16 @@ def test_pages_reuse_exact_declaration_and_recheck_companions_and_access(tmp_pat
     monkeypatch.setattr(shared, "_parse_receipt", parsed)
     monkeypatch.setattr(shared, "inventory", audited)
     page = client.describe_artifact(locator, scope=SCOPE, limit=1)
-    options = dict(scope=SCOPE, declaration=page["declaration"])
-    assert client.describe_artifact(locator, cursor=1, limit=1, **options)["outcome"] == "available"
-    assert client.read_artifact_chunk(locator, member=page["primary"], offset=0, length=1, **options)["outcome"] == "available"
+    declaration, member = page["declaration"], page["primary"]
+    assert isinstance(declaration, str) and isinstance(member, str)
+    assert client.describe_artifact(locator, cursor=1, limit=1, scope=SCOPE, declaration=declaration)["outcome"] == "available"
+    assert client.read_artifact_chunk(locator, member=member, offset=0, length=1, scope=SCOPE, declaration=declaration)["outcome"] == "available"
     assert counts == {"parse": 1, "inventory": 2}
     (tree / "nested/002.bin").write_bytes(b"replacement")
-    assert client.describe_artifact(locator, cursor=2, limit=1, **options)["outcome"] == "integrity_failed"
+    assert client.describe_artifact(locator, cursor=2, limit=1, scope=SCOPE, declaration=declaration)["outcome"] == "integrity_failed"
     monkeypatch.setattr(_output_selection, "authorized_run", lambda *args: False)
-    assert client.describe_artifact(locator, cursor=2, limit=1, **options)["outcome"] == "unavailable"
-    assert client.read_artifact_chunk(locator, member=page["primary"], offset=1, length=1, **options)["outcome"] == "unavailable"
+    assert client.describe_artifact(locator, cursor=2, limit=1, scope=SCOPE, declaration=declaration)["outcome"] == "unavailable"
+    assert client.read_artifact_chunk(locator, member=member, offset=1, length=1, scope=SCOPE, declaration=declaration)["outcome"] == "unavailable"
 
 
 def test_kernel_snapshot_verification_across_pages(tmp_path, monkeypatch):

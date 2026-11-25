@@ -56,8 +56,8 @@ def recovery(tmp_path, monkeypatch):
 
     monkeypatch.setattr(operation, "operator", SimpleNamespace(observe_control=observe, control_agent=control), raising=False)
     monkeypatch.setattr(operation, "recheck", lambda: None)
-    operation.gate = lambda: {"checks": {}}
-    operation.settled = lambda: None
+    monkeypatch.setattr(operation, "gate", lambda: {"checks": {}}, raising=False)
+    monkeypatch.setattr(operation, "settled", lambda: None, raising=False)
     operation.host_observe = lambda *a, **k: {"availability": "available", "value": {"settled": state.settled}}
     operation.verify_policy = verify
     monkeypatch.setattr(operation, "maintenance", lambda *a: None)

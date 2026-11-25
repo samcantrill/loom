@@ -7,6 +7,7 @@ from types import SimpleNamespace, MethodType
 
 import pytest
 
+from loom.queue._coordinator_run_authority import _ScopedCoordinatorAuthority
 from loom.queue.local_daemon_execution import LocalDaemonExecution, _SlurmRetentionRequired
 from loom.queue.errors import QueueConflictError
 
@@ -94,7 +95,8 @@ def test_storage_pending_deduplicates_and_allows_peer_commit(monkeypatch):
             owner.acknowledge_slurm_pending = MethodType(LocalDaemonExecution.acknowledge_slurm_pending, owner)
             owner._slurm_record_steps = MethodType(LocalDaemonExecution._slurm_record_steps, owner)
             with pytest.raises(StopIteration) as done:
-                next(LocalDaemonExecution._reconcile_slurm_steps(owner, "peer-run", None))
+                unused_authority = object.__new__(_ScopedCoordinatorAuthority)
+                next(LocalDaemonExecution._reconcile_slurm_steps(owner, "peer-run", unused_authority))
             assert done.value.value == (False, None)
             assert replies[0]['disposition'] == 'pending' and not release.is_set()
             for _ in range(20):

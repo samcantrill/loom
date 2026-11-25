@@ -1,6 +1,7 @@
 """Slow retained-input IO must not own the coordinator control path."""
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
+from typing import cast
 
 import pytest
 
@@ -528,14 +529,23 @@ def test_qualification_timings_retain_every_request_identity(monkeypatch):
 def test_waiting_admission_reads_before_a_long_run_takes_its_next_slice():
     from types import SimpleNamespace
     from loom.queue._bulk_operations import BulkOperations
+    from loom.queue._context_preparation import PreparedAdmissionContext
     from loom.queue._run_observations import RunObservationPending, RunObservations
+    from loom.queue.local_daemon import LocalDaemonAdmission
+    from loom.queue.local_daemon_execution import LocalDaemonExecutionOutcome
 
     readers = RunObservations(lambda: None)
     bulk = BulkOperations(lambda: None)
     entered = {key: Event() for key in ("held", "long", "new")}
     release = {key: Event() for key in entered}
     calls = []
-    admissions = {key: SimpleNamespace(admission_id=key, run_uri=key, revision=1) for key in entered}
+    admissions = {
+        key: LocalDaemonAdmission(
+            key, key, "coordinator", key, "intent", "owner", LocalDaemonAdmissionState.ACTIVE,
+            "2026-01-01T00:00:00Z", key,
+        )
+        for key in entered
+    }
     epochs = ("daemon", "policy")
 
     def read(key):
@@ -547,11 +557,12 @@ def test_waiting_admission_reads_before_a_long_run_takes_its_next_slice():
     def steps():
         yield
         yield
-        return object()
+        return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.SUCCEEDED)
 
     def advance(key):
         with pytest.raises(RunObservationPending):
-            readers.advance(admissions[key], epochs, (None, SimpleNamespace(open_run=read)), steps, bulk)
+            read_context = cast(PreparedAdmissionContext, (None, SimpleNamespace(open_run=read)))
+            readers.advance(admissions[key], epochs, read_context, steps, bulk)
 
     try:
         advance("held")
@@ -560,6 +571,7 @@ def test_waiting_admission_reads_before_a_long_run_takes_its_next_slice():
         advance("new")
         assert not entered["new"].is_set()
         first_read = readers._current["long"].read
+        assert first_read is not None
         release["long"].set()
         first_read.result(timeout=5)
         assert [job.admission.admission_id for job in readers.completed()] == ["long"]

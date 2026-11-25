@@ -1,9 +1,10 @@
 """A finite admission sweep advances despite cancellation and new submissions."""
 
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 from loom.queue._admission_scan import AdmissionScan
+from loom.queue.local_daemon import LocalDaemonAdmission
 
 
 def accept(_admission):
@@ -109,7 +110,7 @@ def test_retained_database_seeks_past_deleted_cursor_and_limits_materialized_row
         assert [item["enqueue_sequence"] for item in page] == list(range(7970, 8003))
         assert len(steps) < 20  # Both queries seek past the preceding 7,970 rows.
         def project(db_row):
-            return SimpleNamespace(**dict(db_row))
+            return cast(LocalDaemonAdmission, SimpleNamespace(**dict(db_row)))
         assert len(scan.take([project(item) for item in page], accept)) == 32
         remaining = [project(item) for item in scan.page(conn, 12000)]
         assert [item.enqueue_sequence for item in scan.take(remaining, accept)] == list(range(8002, 8034))
