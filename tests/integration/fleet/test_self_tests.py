@@ -1170,6 +1170,7 @@ def test_storage_check_resumes_ranges_and_recovers_published_verification(fleet,
 
     first = advance_until(lambda: expired, first)
     assert first["checks"]["storage"]["outcome"] == "waiting"
+    assert first["checks"]["storage"]["code"] == "publication_deadline_exceeded"
     assert first["checks"]["storage"]["transfer"]["received_bytes"] >= 8 * _artifact_ranges.CHUNK_BYTES
     assert not published
     with sqlite3.connect(daemon.config.control_database) as db:

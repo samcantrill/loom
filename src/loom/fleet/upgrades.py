@@ -983,6 +983,14 @@ def _authorize_check_slots(operation, slots, attempts, deadline, save_attempts):
     return active, errors
 
 
+def _transferred_bytes(observation):
+    total = 0
+    for row in observation.get("checks", {}).values():
+        transfer = row.get("transfer") or {}
+        total += transfer.get("received_bytes", 0) + transfer.get("reused_bytes", 0)
+    return total
+
+
 def _run_checks(operation):
     deadline = time.monotonic() + operation.intent["timeout_seconds"]
     phase(operation, "checking")
@@ -1025,7 +1033,9 @@ def _run_checks(operation):
                          _dispatch_only=dispatch, _wait=False)
 
     def steps(selected, dispatch, end):
-        return completed_steps(operation.directory, records, selected, dispatch=dispatch,
+        transfers = {key for key in selected if not dispatch
+                     and _transferred_bytes(records[key].get("last_observation") or {}) > 0}
+        return completed_steps(operation.directory, records, selected, dispatch=dispatch, transfers=transfers,
                                deadline=end, advance=advance, started=save_attempts)
 
     # Dispatch gets the first opportunity for every selected slot. Accepted and
@@ -1069,30 +1079,41 @@ def _run_checks(operation):
     for identity in eligible:
         if not records[identity].get("passed_this_round"):
             waiting.add(identity)
-    for identity, future in steps([key for key in eligible if key in waiting], False, deadline):
-        try:
-            result = future.result()
-        except Exception as exc:
-            errors.append(exc)
-            continue
-        atomic(operation.directory / (identity + "-result.json"), result)
-        observation = {
-            "operation_id": identity, "outcome": result["outcome"],
-            "checks": {
-                name: {key: row.get(key) for key in ("operation_id", "outcome", "code", "transfer") if key in row}
-                for name, row in result.get("checks", {}).items()
-                if row["outcome"] != "not_requested"
-            },
-        }
-        records[identity]["last_observation"] = observation
-        operation.check_observations[identity] = observation
-        if result["outcome"] == "passed":
-            records[identity]["passed_this_round"] = True
-        save_attempts()
-        if result["outcome"] in {"failed", "unsupported"}:
-            failures.append((identity, result["outcome"]))
-        elif result["outcome"] == "passed":
-            waiting.discard(identity)
+    selected = [key for key in eligible if key in waiting]
+    while selected and time.monotonic() < deadline:
+        progressed = False
+        for identity, future in steps(selected, False, deadline):
+            try:
+                result = future.result()
+            except Exception as exc:
+                errors.append(exc)
+                continue
+            atomic(operation.directory / (identity + "-result.json"), result)
+            observation = {
+                "operation_id": identity, "outcome": result["outcome"],
+                "checks": {
+                    name: {key: row.get(key) for key in ("operation_id", "outcome", "code", "transfer") if key in row}
+                    for name, row in result.get("checks", {}).items()
+                    if row["outcome"] != "not_requested"
+                },
+            }
+            previous = records[identity].get("last_observation") or {}
+            if result["outcome"] == "waiting" and _transferred_bytes(observation) > _transferred_bytes(previous):
+                progressed = True
+            records[identity]["last_observation"] = observation
+            operation.check_observations[identity] = observation
+            if result["outcome"] == "passed":
+                records[identity]["passed_this_round"] = True
+            save_attempts()
+            if result["outcome"] in {"failed", "unsupported"}:
+                failures.append((identity, result["outcome"]))
+            elif result["outcome"] == "passed":
+                waiting.discard(identity)
+        # Every eligible check received a bounded opportunity. A transfer
+        # with new retained bytes can use the same caller's remaining budget.
+        if not progressed or failures or errors:
+            break
+        selected = [key for key in eligible if key in waiting]
     if failures:
         reason(operation, "check_failed" if any(outcome == "failed" for _, outcome in failures)
                else "native_refusal")

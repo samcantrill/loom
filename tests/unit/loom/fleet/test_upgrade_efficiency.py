@@ -426,6 +426,48 @@ def test_upgrade_dispatches_every_slot_before_waiting_or_download(tmp_path, chec
     assert pending[0]["checks"]["gpu"]["code"] == "waiting_for_capacity"
 
 
+@pytest.mark.parametrize("stalls", [False, True])
+def test_upgrade_spends_remaining_watch_time_on_growing_transfer(tmp_path, check_gate, monkeypatch, stalls):
+    operation = SimpleNamespace(
+        directory=tmp_path, inventory=object(), observation=None,
+        intent={"operation_id": "upgrade", "timeout_seconds": 30, "agents": {"agent": {}},
+                "declarations": {"agent": {"resident_profiles": [{}]}}},
+        gate=check_gate.observe, maintenance=check_gate.authorize, settled=lambda **kwargs: None,
+    )
+    kinds = {}
+    turns = {"cpu": 0, "storage": 0}
+
+    def prepare(owner, name, kind, identity, **kwargs):
+        kinds[identity] = kind
+        return {"operation_id": identity, "authorization": {}}
+
+    def check(inventory, *, operation_id, _dispatch_only, timeout_seconds, **kwargs):
+        kind = kinds[operation_id]
+        if _dispatch_only:
+            return {"outcome": "waiting", "checks": {kind: {"disposition": "accepted"}}}
+        turns[kind] += 1
+        if turns[kind] == 1:
+            assert 0 < timeout_seconds <= 10.0
+        else:
+            assert 10.0 < timeout_seconds <= 30.0
+        if kind == "storage" and (stalls or turns[kind] < 3):
+            progress = 4096 if stalls else 4096 * turns[kind]
+            return {"outcome": "waiting", "checks": {kind: {"outcome": "waiting",
+                    "code": "publication_deadline_exceeded", "transfer": {"received_bytes": progress}}}}
+        return {"outcome": "passed", "checks": {kind: {"outcome": "passed"}}}
+
+    monkeypatch.setattr(upgrades, "_prepare_attempt", prepare)
+    monkeypatch.setattr(upgrades, "self_test", check)
+    if stalls:
+        with pytest.raises(upgrades._Waiting, match="checks pending"):
+            upgrades._run_checks(operation)
+        assert turns == {"cpu": 1, "storage": 2}
+    else:
+        upgrades._run_checks(operation)
+        assert turns == {"cpu": 1, "storage": 3}
+    assert len(read(tmp_path / "checks.json")) == 2
+
+
 def test_upgrade_finishes_other_observations_after_one_check_error(tmp_path, check_gate, monkeypatch):
     operation = SimpleNamespace(
         directory=tmp_path, inventory=object(), observation=None,

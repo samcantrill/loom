@@ -42,7 +42,7 @@ def _offer(key, dispatch, function, args):
         return future
 
 
-def completed_steps(directory, records, selected, *, dispatch, deadline, advance, started):
+def completed_steps(directory, records, selected, *, dispatch, deadline, advance, started, transfers=()):
     """Offer one fair turn per selected ID, yielding results before later waits."""
     count = "dispatch_turns" if dispatch else "observation_turns"
     pending = sorted(selected, key=lambda key: records[key].get(count, 0))
@@ -53,8 +53,12 @@ def completed_steps(directory, records, selected, *, dispatch, deadline, advance
             # Divide the allowance among successive groups. Preserve room for
             # a slow late check when an earlier native request uses its full cut.
             groups = max(1, (len(pending) + len(running) + WORKERS - 1) // WORKERS)
-            step_end = min(deadline, monotonic() + min(10.0, left / groups))
+            now = monotonic()
+            fair_end = min(deadline, now + left / groups)
             for identity in tuple(pending):
+                # Known transfers can use their whole fair share. An unknown
+                # check gets a short first observation so peers can report.
+                step_end = fair_end if identity in transfers else min(fair_end, now + 10.0)
                 if len(running) >= WORKERS or monotonic() >= step_end:
                     break
                 future = _offer((directory, identity), dispatch, advance, (identity, dispatch, step_end))

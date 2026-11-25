@@ -482,6 +482,96 @@ def test_later_ranges_complete_with_first_range_paused(tmp_path, monkeypatch, do
     assert Path(result["items"][0]["primary_path"]).read_bytes() == data
 
 
+def test_concurrent_fleet_checks_share_range_capacity_and_verify_each_destination(tmp_path, monkeypatch, download_root):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event, Lock
+    from loom import _artifact_fetch, _artifact_ranges
+
+    daemon, authority, uri = fixture(tmp_path)
+    data = b"v" * (_artifact_ranges.CHUNK_BYTES * 5)
+    ref, _ = local_ref(uri, data)
+    locator = publish(authority, uri, ref)
+    gate, full, submitted, lock = Event(), Event(), Event(), Lock()
+    clients, pools = set(), set()
+    active = peak = 0
+    read = LocalClient.read_artifact_chunk
+    submit = ThreadPoolExecutor.submit
+
+    def offer(pool, fn, *args, **kwargs):
+        future = submit(pool, fn, *args, **kwargs)
+        if args and args[0] is _artifact_ranges._read:
+            with lock:
+                clients.add(args[1])
+                pools.add(pool)
+                if len(clients) == 3:
+                    submitted.set()
+        return future
+
+    def held(client, locator, **kw):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+            if active == _artifact_ranges.RANGE_WINDOW:
+                full.set()
+        try:
+            assert gate.wait(10)
+            return read(client, locator, **kw)
+        finally:
+            with lock:
+                active -= 1
+
+    monkeypatch.setattr(ThreadPoolExecutor, "submit", offer)
+    monkeypatch.setattr(LocalClient, "read_artifact_chunk", held)
+    with ThreadPoolExecutor(max_workers=3) as callers:
+        checks = [callers.submit(_artifact_fetch.fetch_artifacts, LocalClient(daemon), [{"locator": locator.to_dict()}],
+                                 download_root / str(i), scope=SCOPE, expected_coordinator_id="test-coordinator",
+                                 check_scratch=True) for i in range(3)]
+        try:
+            assert submitted.wait(10) and full.wait(10)
+            assert len(pools) == 1
+        finally:
+            gate.set()
+        for check in checks:
+            result = check.result()["items"][0]
+            assert result["verification"] == "recorded_sha256"
+            assert Path(result["primary_path"]).read_bytes() == data
+    assert peak == _artifact_ranges.RANGE_WINDOW
+    assert "test-coordinator" not in _artifact_ranges._check_pools
+
+
+@pytest.mark.parametrize(("errors", "outcome"), [
+    (["deadline_exceeded"], "available"),
+    (["deadline_exceeded", "deadline_exceeded"], "transport_deadline_exceeded"),
+    (["capacity_exhausted"], "capacity_exhausted"),
+])
+def test_range_attempt_deadline_and_capacity_remain_distinct_from_observer_expiry(
+    tmp_path, monkeypatch, download_root, errors, outcome,
+):
+    from time import monotonic
+    from loom import _artifact_fetch
+    from loom.queue._coordinator_control import CoordinatorClientError
+
+    daemon, authority, uri = fixture(tmp_path)
+    ref, _ = local_ref(uri)
+    locator = publish(authority, uri, ref)
+    client = LocalClient(daemon)
+    read = client.read_artifact_chunk
+    failures = iter(errors)
+    offsets = []
+    def limited(loc, **options):
+        offsets.append(options["offset"])
+        code = next(failures, None)
+        if code is not None:
+            raise CoordinatorClientError(code, operation="read_artifact_chunk", ids={}, boundary="connection")
+        return read(loc, **options)
+    monkeypatch.setattr(client, "read_artifact_chunk", limited)
+    result = _artifact_fetch.fetch_artifacts(client, [{"locator": locator.to_dict()}], download_root / "check",
+        scope=SCOPE, expected_coordinator_id="test-coordinator", check_scratch=True, deadline=monotonic() + 30)
+    assert result["items"][0]["outcome"] == outcome
+    assert offsets == ([0, 0] if errors[0] == "deadline_exceeded" else [0])
+
+
 def test_check_scratch_reauthorizes_and_restarts_changed_declaration(tmp_path, monkeypatch, download_root):
     from loom import _artifact_ranges, _artifact_fetch
 

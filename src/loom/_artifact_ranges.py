@@ -4,16 +4,50 @@ from __future__ import annotations
 
 import base64
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from contextlib import contextmanager
 from contextvars import copy_context
 import hashlib
 import os
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from loom.queue._coordinator_control import CoordinatorClientError
 
 CHUNK_BYTES = 256 * 1024
 RANGE_WINDOW = 4
+
+
+# Fleet can advance three checks concurrently against the same control service.
+# Share physical range capacity. Credentials, deadlines and sockets stay with
+# the authenticated request that submitted each range.
+_pool_lock = Lock()
+_check_pools: dict[str, tuple[ThreadPoolExecutor, int]] = {}
+
+
+@contextmanager
+def transfer_readers(check_coordinator: str | None):
+    if check_coordinator is None:
+        with ThreadPoolExecutor(max_workers=RANGE_WINDOW) as pool:
+            yield pool
+        return
+    with _pool_lock:
+        entry = _check_pools.get(check_coordinator)
+        pool, users = entry if entry is not None else (
+            ThreadPoolExecutor(max_workers=RANGE_WINDOW, thread_name_prefix="loom-check-range"), 0,
+        )
+        _check_pools[check_coordinator] = pool, users + 1
+    try:
+        yield pool
+    finally:
+        with _pool_lock:
+            _, users = _check_pools[check_coordinator]
+            if users == 1:
+                del _check_pools[check_coordinator]
+            else:
+                _check_pools[check_coordinator] = pool, users - 1
+        if users == 1:
+            pool.shutdown()
 
 
 class TransferFailure(Exception):
@@ -37,7 +71,7 @@ def _read(client, locator, options, declaration, member, offset, length, check_t
             )
             break
         except CoordinatorClientError as exc:
-            if attempt or exc.code not in {"unavailable", "timeout", "transport_error"}:
+            if attempt or exc.code not in {"unavailable", "timeout", "transport_error", "deadline_exceeded"}:
                 raise
     if chunk["outcome"] != "available":
         raise TransferFailure(chunk["outcome"])
@@ -121,7 +155,7 @@ def copy_member(
                     )
                     if data is not None:
                         store(offset, data, from_cache=True)
-                    elif size <= CHUNK_BYTES:
+                    elif size <= CHUNK_BYTES and cache is None:
                         store(
                             offset,
                             _read(
@@ -157,3 +191,7 @@ def copy_member(
     finally:
         for future in inflight:
             future.cancel()
+        # Another check may retain the pool. Settle just this member's reads
+        # before its authenticated connection owner or destination is released.
+        if inflight:
+            wait(inflight)

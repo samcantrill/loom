@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from collections.abc import Iterable
 import ctypes
@@ -15,7 +14,7 @@ import tempfile
 import time
 from typing import Any
 
-from loom._artifact_ranges import RANGE_WINDOW, TransferFailure, copy_member
+from loom._artifact_ranges import TransferFailure, copy_member, transfer_readers
 from loom.pipeline.stores.shared_artifacts import encoded, relative
 from loom.runs.outputs import OutputLocator
 from loom.queue._coordinator_control import CoordinatorClientError
@@ -148,7 +147,7 @@ def fetch_artifacts(
                     if isinstance(transport, HttpsControlTransport)
                     else nullcontext()
                 )
-                with session, ThreadPoolExecutor(max_workers=RANGE_WINDOW) as readers:
+                with session, transfer_readers(options["expected_coordinator_id"] if check_scratch else None) as readers:
                     for member in members:
                         check_deadline()
                         name = relative(member["path"])
@@ -194,7 +193,18 @@ def fetch_artifacts(
             result["outcome"] = "destination_exists"
         except TransferFailure as exc:
             result["outcome"] = exc.outcome
-        except (OSError, ValueError, KeyError, TypeError, CoordinatorClientError):
+        except (TimeoutError, CoordinatorClientError) as error:
+            outcome = "failed"
+            if check_scratch:
+                if deadline is not None and time.monotonic() >= deadline:
+                    outcome = "deadline_exceeded"
+                elif isinstance(error, CoordinatorClientError):
+                    if error.code == "deadline_exceeded":
+                        outcome = "transport_deadline_exceeded"
+                    elif error.code == "capacity_exhausted":
+                        outcome = error.code
+            result["outcome"] = outcome
+        except (OSError, ValueError, KeyError, TypeError):
             result["outcome"] = "failed"
         finally:
             if pending is not None:

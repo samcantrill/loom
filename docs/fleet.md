@@ -843,7 +843,14 @@ until it exits. A continuation can attach to the same check. The observation
 budget starts at entry to the check phase. A check whose preparation times out
 keeps its original ID. A lost permission reply is reconciled against the live
 maintenance gate before any subsequent revision-dependent grant. The controller
-attempts native dispatch before probing a nonexclusive GPU over SSH. A partly
+attempts native dispatch before probing a nonexclusive GPU over SSH. A storage transfer reports retained byte counts and `publication_deadline_exceeded`
+when its observation allowance expires. An earlier timeout of the range exchange
+can retry the same offset within that allowance. An exhausted transport attempt
+or refused capacity has its own pending code. A growing transfer gets another fair
+share of the same caller budget after pending peers receive a turn. Concurrent
+checks in the same controller share at most four range workers per coordinator.
+Each check retains its own authorization, scratch ranges and final digest. A round
+with no new transfer bytes returns its pending receipts. A partly
 completed observation round retains its passed checks, and restoration requires
 current native settlement and the existing host identity and policy checks.
 Standalone
