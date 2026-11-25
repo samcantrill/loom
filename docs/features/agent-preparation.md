@@ -18,6 +18,17 @@ the submitted container capability. Configuration capture remains a coordinator
 operation; composition and scientific input inspection run in the allocation.
 See [Slurm execution](slurm.md) for bootstrap, image and shared-artifact contracts.
 
+The coordinator reads the preparation child's authority revision and status on a
+bounded I/O worker. An embedded authority observes both in one SQLite query.
+An authenticated authority supplies the same facts through its snapshot. When a
+same-run retry has Slurm allocation history, a worker loads the stage and attempt
+snapshot before the coordinator checks release and recovery evidence. Other
+admissions can prepare and execute while one read waits. The coordinator checks
+the operation, child admission revision and coordinator epochs before consuming
+an observation. The publisher checks the child revision again under its publication
+guard. If the target was published before the coordinator recorded the receipt,
+the original operation ID and durable publication claim govern recovery.
+
 ## Executable And Diagnostic Configuration
 
 Preparation binds local placement, shared roots and submitted-container execution

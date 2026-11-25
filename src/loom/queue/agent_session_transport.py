@@ -52,7 +52,7 @@ from ._agent_session_journal import (
 )
 
 from .gpu.occupancy import GpuOccupancyPolicy, GpuOccupancyMonitor
-from ._phase_timing import log_phases, phase, reported_phases, request_identity
+from ._phase_timing import log_phases, phase, received_idle_duration, reported_phases, request_identity
 from ._managed_local import ResourceAvailabilityStatus
 
 from concurrent.futures import ThreadPoolExecutor
@@ -3471,7 +3471,9 @@ def _timed_agent_exchange(
     config: AgentTlsClientConfig, operation: str, *args: Any, exchange_deadline: float | None = None, **options: Any,
 ) -> _AgentHttpReply:
     elapsed = round((monotonic() - queued) * 1_000_000_000)
-    with reported_phases("agent_exchange", operation_id=identity, started_monotonic=queued) as timings:
+    with reported_phases(
+        "agent_exchange", operation_id=identity, started_monotonic=queued, pending=(LifecyclePending,),
+    ) as timings:
         timings.related["operation"] = operation
         timings.spans.append({
             "action": "sender_queue_wait", "started_at": queued_at,
@@ -3596,7 +3598,10 @@ def _read_agent_reply(
             headers={"Content-Type": "application/json", **({"X-Loom-Agent-Lifecycle": LIFECYCLE_CAPABILITY} if lifecycle else {})},
         )
         refresh_timeout()
+        wait_started = monotonic()
         response = connection.getresponse()
+        if operation in {"poll", "control_wait"}:
+            received_idle_duration(response.getheader("X-Loom-Idle-Nanoseconds"), monotonic() - wait_started)
         parts = []
         size = 0
         while True:
@@ -3888,7 +3893,7 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         from ._phase_timing import request_phases
 
-        with request_phases():
+        with request_phases() as self._request_timings:
             self._dispatch_post()
 
     def _authenticate_transport(self) -> tuple[str, str, str]:
@@ -4192,7 +4197,11 @@ class _Handler(BaseHTTPRequestHandler):
             allow_nan=False,
         ).encode("utf-8")
         try:
+            self._request_timings.failed = status >= 400
             self.send_response(status)
+            if self._request_timings.idle_seconds:
+                idle_nanoseconds = round(self._request_timings.idle_seconds * 1_000_000_000)
+                self.send_header("X-Loom-Idle-Nanoseconds", str(idle_nanoseconds))
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             if status != 200:
@@ -4204,6 +4213,7 @@ class _Handler(BaseHTTPRequestHandler):
             # The operation already finished. A disconnected reply cannot undo
             # retention and must not trigger a second reply or a certificate diagnosis.
             self.close_connection = True
+            self._request_timings.failed = True
             result = payload.get("result")
             log_phases({
                 "action": "http_reply_disconnected", "http_status": status,

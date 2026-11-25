@@ -64,7 +64,9 @@ class LifecyclePreparations:
         guards = daemon._publication_guards
 
         def observe():
-            with reported_phases("agent_lifecycle_preparation", operation_id=assignment_id) as timings:
+            with reported_phases(
+                "agent_lifecycle_preparation", operation_id=assignment_id, pending=(LifecyclePending,),
+            ) as timings:
                 timings.related["operation"] = operation
                 with guards.try_hold(assignment_id) as held:
                     if not held:

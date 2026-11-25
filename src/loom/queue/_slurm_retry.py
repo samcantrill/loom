@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -15,8 +16,14 @@ from .errors import QueueConflictError
 from .local_daemon import LocalDaemonAdmissionState, RecoverUnknownAssignment, SlurmRecoveryTarget
 
 if TYPE_CHECKING:
+    from loom.pipeline.stores.read_models import AuthoritativeRunSnapshot
     from .local_daemon_execution import LocalDaemonExecution
     from .slurm_ready_stage import SlurmStageRecord
+
+
+type ObserveRetrySnapshot = Callable[
+    [tuple[str, ...], Callable[[], AuthoritativeRunSnapshot]], AuthoritativeRunSnapshot
+]
 
 
 PROVIDER_RECOVERY_PREFIX = "slurm-provider-close-"
@@ -44,6 +51,7 @@ def _terminal_state(observed, record: SlurmStageRecord) -> str | None:
 
 def reconcile(
     execution: LocalDaemonExecution, run_uri: str, *, accepted_at: str | None = None,
+    observe_snapshot: ObserveRetrySnapshot | None = None,
 ) -> ContinuationPending | ContinuationConflict | None:
     from .local_daemon import _RecoveryNotAccepted
 
@@ -52,7 +60,16 @@ def reconcile(
     if not history:
         return None
     admission = daemon.admission_for_run_uri(run_uri)
-    snapshot = execution._authority_store(run_uri).open_run(run_uri)
+    def read_snapshot() -> AuthoritativeRunSnapshot:
+        return execution._authority_store(run_uri).open_run(run_uri)
+
+    if observe_snapshot is None:
+        snapshot = read_snapshot()
+    else:
+        # A new allocation can add a stage or attempt absent from a pending
+        # snapshot. Revisit its current history before making recovery decisions.
+        assignments = tuple(record.assignment.assignment_id for record, _ in history)
+        snapshot = observe_snapshot(assignments, read_snapshot)
     stages = {stage.stage_name: stage for stage in snapshot.stages}
     waiting = None
     for record, evidence in history:

@@ -11,6 +11,7 @@ from loom.fleet import ssh_operations
 
 
 def test_queue_phase_timings_join_host_trace_and_keep_control_identity_in_service_log(capsys):
+    from loom.queue._phase_diagnostics import diagnostics
     from loom.queue._phase_timing import phase, log_phases, observe_phases
 
     with _timing.recording() as trace:
@@ -25,6 +26,7 @@ def test_queue_phase_timings_join_host_trace_and_keep_control_identity_in_servic
         with phase("control_application", operation_id="exact-control"):
             with phase("interpreter_probe"):
                 pass
+    assert diagnostics.flush()
     records = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
     assert [row["operation_id"] for row in records] == ["exact-control"] * 2
     assert [row["spans"][0]["action"] for row in records] == ["interpreter_probe", "control_application"]

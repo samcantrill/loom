@@ -18,7 +18,7 @@ from pathlib import Path
 import sqlite3
 from threading import Lock
 from time import monotonic
-from typing import TYPE_CHECKING, NamedTuple, Protocol, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, cast
 
 from loom.artifacts import ArtifactRef
 from loom.io.uris import uri_to_path
@@ -53,6 +53,8 @@ from .preparation import (
 )
 
 if TYPE_CHECKING:
+    from loom.pipeline.status import RunStatus
+    from loom.pipeline.stores.read_models import BackendRevision
     from ._managed_local import SQLiteCoordinatorAssignments
     from ._publication_guards import PublicationGuards
     from .managed_local_preparation import ManagedLocalPreparationReceipt
@@ -168,7 +170,7 @@ class _ReportIdentity(NamedTuple):
 @dataclass(frozen=True, slots=True)
 class _ReadyPublication:
     claim: tuple[object, ...]
-    child: tuple[object, ...]
+    child: _ChildIdentity
     config: LocalDaemonConfig
     request: PrepareRunRequest
     report: PreparationReport
@@ -222,13 +224,26 @@ class PreparationCallbacks(Protocol):
     ) -> ManagedLocalPreparationReceipt: ...
 
 
-def _publish_owned_target(
-    guards: PublicationGuards, callbacks: PreparationCallbacks,
-    config: LocalDaemonConfig, request: PrepareRunRequest, report: PreparationReport,
-) -> ManagedLocalPreparationReceipt:
-    # Existing shutdown drains these guards before releasing deployment ownership.
-    with guards.hold("preparation-" + request.operation_id):
-        return callbacks.publish_target(config, request, report)
+class _AuthorityReadPending(Exception):
+    """Resume this operation once its bounded authority observation is available."""
+
+
+class _PublicationChildChanged(Exception):
+    """The report's child no longer has the revision that authorized publication."""
+
+
+def _read_revision_status(config: LocalDaemonConfig, uri: str) -> tuple[BackendRevision, RunStatus]:
+    from loom.pipeline.stores.coordinator_authority import _embedded_artifact_reader
+
+    factory = config.coordinator_authority_factory
+    assert factory is not None
+    # The normal embedded factory opens a complete snapshot to prove existence.
+    # The narrow read validates the same selected owner and existing schema itself.
+    embedded = _embedded_artifact_reader(factory)
+    if embedded is not None:
+        return embedded(uri).read_revision_status(uri)
+    snapshot = factory(uri).open_run(uri)
+    return snapshot.revision, snapshot.status
 
 
 def _prepare_owned_child(
@@ -412,6 +427,9 @@ class CoordinatorPreparations:
         self._reconcile_lock = Lock()
         self._cursor = 0
         self._cancel_cursor = 0
+        self._authority_reads: dict[
+            str, dict[str, tuple[tuple[object, ...], Future[Any]]]
+        ] = {}
         self._child_release_checks: dict[str, tuple[_ChildReleaseScope, Future[bool]]] = {}
         self._verification_reports: dict[str, _PendingVerificationReport] = {}
         self._reports: dict[str, tuple[tuple[object, ...], Future[PreparationReport]]] = {}
@@ -870,14 +888,14 @@ class CoordinatorPreparations:
         self.daemon._wake.set()
         return operation
 
-    def reconcile(self) -> None:
+    def reconcile(self, priorities: tuple[tuple[str, ...], ...] = ()) -> None:
         self.daemon._result_verifications.bulk.reap()
         if self.callbacks is None or not self._reconcile_lock.acquire(blocking=False):
             return
         try:
             now = monotonic()
             self._target_retries = {op: when for op, when in self._target_retries.items() if when > now}
-            self._reconcile_cancellations()
+            self._reconcile_cancellations(priorities)
             with self.daemon._connection() as conn:
                 for operation_id, pending in tuple(self._verification_reports.items()):
                     admission = conn.execute(
@@ -896,18 +914,8 @@ class CoordinatorPreparations:
                 for operation_id, (_, future) in tuple(pending.items()):
                     if future.done() and self._read(operation_id)["state"] in _TERMINAL:
                         del pending[operation_id]
-            with self.daemon._connection() as conn:
-                rows = tuple(
-                    conn.execute(
-                        "SELECT rowid AS sequence, * FROM preparation_operations WHERE rowid > ? AND state IN ('pending', 'applying') ORDER BY rowid LIMIT 32",
-                        (self._cursor,),
-                    )
-                )
-            if not rows:
-                self._cursor = 0
-                return
+            rows, self._cursor = self._pending_page("preparation", self._cursor, priorities)
             for row in rows:
-                self._cursor = int(row["sequence"])
                 try:
                     self._advance(row)
                 except MaintenanceCheckConflict:
@@ -944,6 +952,32 @@ class CoordinatorPreparations:
                         )
         finally:
             self._reconcile_lock.release()
+
+    def _pending_page(
+        self, owner: str, cursor: int, priorities: tuple[tuple[str, ...], ...],
+    ) -> tuple[tuple[sqlite3.Row, ...], int]:
+        table = "preparation_operations" if owner == "preparation" else "preparation_cancellations"
+        columns = "*" if owner == "preparation" else "operation_id"
+        query = f"SELECT rowid AS sequence, {columns} FROM {table} WHERE state IN ('pending', 'applying')"
+        with self.daemon._connection() as conn:
+            page = conn.execute(query + " AND rowid > ? ORDER BY rowid LIMIT 32", (cursor,)).fetchall()
+            page_rows = {row["operation_id"]: row for row in page}
+            selected: dict[str, sqlite3.Row] = {}
+            for scope in priorities:
+                if len(scope) != 2 or scope[0] != owner:
+                    continue
+                operation_id = scope[1]
+                row = page_rows.get(operation_id)
+                if row is None:
+                    row = conn.execute(query + " AND operation_id = ?", (operation_id,)).fetchone()
+                if row is None:
+                    self.daemon._result_verifications.bulk.discard(scope)
+                    if owner == "preparation":
+                        self._authority_reads.pop(operation_id, None)
+                else:
+                    selected[operation_id] = row
+        selected.update(page_rows)
+        return tuple(selected.values()), page[-1]["sequence"] if page else 0
 
     def _read(self, operation_id: str) -> sqlite3.Row:
         with self.daemon._connection() as conn:
@@ -988,18 +1022,20 @@ class CoordinatorPreparations:
                     if result["preflight"] is None
                     else _mapping(result["preflight"]),
                 )
+            result_json = _json(operation.result)
+            changed = current is not None and (current["state"], current["result_code"], current["result_json"]) != (
+                operation.state, operation.code, result_json,
+            )
             write_status(
                 conn, "operation",
                 "UPDATE preparation_operations SET state = ?, result_code = ?, result_json = ? WHERE operation_id = ?",
-                (
-                    operation.state,
-                    operation.code,
-                    _json(operation.result),
-                    operation.operation_id,
-                ),
+                (operation.state, operation.code, result_json, operation.operation_id),
             )
             conn.commit()
-        self.daemon._wake.set()
+        if changed and operation.state not in _TERMINAL:
+            self.daemon._result_verifications.bulk.resume(("preparation", operation.operation_id))
+        else:
+            self.daemon._wake.set()
         return True
 
     def _fail(self, row: sqlite3.Row, code: str, *, conflict: bool = False) -> None:
@@ -1103,8 +1139,22 @@ class CoordinatorPreparations:
         )
 
     def _advance(self, row: sqlite3.Row) -> None:
-        with self.daemon._result_verifications.bulk.offering(("preparation", str(row["operation_id"]))):
-            self._advance_owned(row)
+        operation_id = str(row["operation_id"])
+        scope = ("preparation", operation_id)
+        bulk = self.daemon._result_verifications.bulk
+        try:
+            with bulk.offering(scope):
+                self._advance_owned(row)
+        except _AuthorityReadPending:
+            # A second observation may depend on the first. Retain both until
+            # the scheduler can reach the waiting action.
+            return
+        except Exception:
+            self._authority_reads.pop(operation_id, None)
+            raise
+        if operation_id in self._authority_reads and not bulk.scopes(scope):
+            # Once the action runs, its completion needs a fresh observation.
+            self._authority_reads.pop(operation_id, None)
 
     def _advance_owned(self, row: sqlite3.Row) -> None:
         from .local_daemon import LocalDaemonAdmissionRequest, LocalDaemonAdmissionState
@@ -1342,6 +1392,12 @@ class CoordinatorPreparations:
         if admission.state is not LocalDaemonAdmissionState.SUCCEEDED:
             return
         try:
+            report_job = self._reports.get(operation_id)
+            candidate_job = self._candidates.get(operation_id)
+            if report_job is not None and not report_job[1].done():
+                return
+            if candidate_job is not None and candidate_job.future is not None and not candidate_job.future.done():
+                return
             report_token = self._report_token(row, config, admission)
             # Admission can settle before the child authority records run.completed.
             # Hydrating its report at that prior revision forces a second render.
@@ -1535,7 +1591,13 @@ class CoordinatorPreparations:
                 execution = self.daemon._execution
                 if execution is None:
                     return
-                outcome = execution.settle_continuation(admission, accepted_at=row["accepted_at"])
+                admission_identity = (admission.admission_id, admission.intent_digest, admission.revision)
+                outcome = execution.settle_continuation(
+                    admission, accepted_at=row["accepted_at"],
+                    observe_snapshot=lambda assignments, read: self._observe_authority(
+                        row, uri, "preparation_slurm_retry_authority_read", (*admission_identity, assignments), read,
+                    ),
+                )
                 if isinstance(outcome, ContinuationConflict):
                     self._fail(row, outcome.reason, conflict=True)
                     return
@@ -1569,9 +1631,11 @@ class CoordinatorPreparations:
                 publish = True
             else:
                 try:
-                    candidate = self._capture_candidate_async(row, config, uri, admission, report)
+                    candidate = self._capture_candidate_async(row, config, uri, admission, report, report_token)
                     if candidate is None:
                         return
+                except _AuthorityReadPending:
+                    raise
                 except Exception:
                     self._fail(row, "candidate_unavailable", conflict=True)
                     return
@@ -1600,6 +1664,7 @@ class CoordinatorPreparations:
                         write_status(conn, "operation", "UPDATE preparation_operations SET selected_json = ?, child_name = ?, child_admission_id = NULL, dispatch_claimed = 0, state = 'pending', result_code = NULL, result_json = ? WHERE operation_id = ?",
                                      (_json(selected), child_name, _json(result), operation_id))
                         conn.commit()
+                    self.daemon._result_verifications.bulk.resume(("preparation", operation_id))
                     return
                 # read_report checked a committed installed verifier against this pinned input.
                 if reconciliation["verification_generation"] == 0:
@@ -1629,34 +1694,54 @@ class CoordinatorPreparations:
             self.daemon._scheduling_epoch,
             row["request_json"],
             row["selected_json"],
-            self._child_token(config, admission),
+            self._child_token(row, config, admission),
         )
 
-    def _child_token(
-        self, config: LocalDaemonConfig, admission: LocalDaemonAdmission
-    ) -> _ChildIdentity:
-        factory = config.coordinator_authority_factory
-        assert factory is not None
-        snapshot = factory(admission.run_uri).open_run(admission.run_uri)
-        return _ChildIdentity(
-            admission.admission_id,
-            admission.intent_digest,
-            admission.revision,
-            snapshot.revision, snapshot.status.value,
+    def _observe_authority[T](
+        self, row: sqlite3.Row, uri: str, action: str, identity: tuple[object, ...], read: Callable[[], T],
+    ) -> T:
+        operation_id = str(row["operation_id"])
+        reads = self._authority_reads.setdefault(operation_id, {})
+        key = (*self._publication_token(row), row["state"], row["cancellation_requested"], uri, *identity)
+        previous = reads.get(action)
+        if previous is not None and previous[0] == key:
+            future = previous[1]
+            if not future.done():
+                raise _AuthorityReadPending
+            try:
+                return future.result()
+            except Exception:
+                del reads[action]
+                raise
+        future = self.daemon._result_verifications.bulk.submit(
+            operation_id, action, read,
         )
+        if future is not None:
+            reads[action] = key, future
+        raise _AuthorityReadPending
+
+    def _child_token(
+        self, row: sqlite3.Row, config: LocalDaemonConfig, admission: LocalDaemonAdmission,
+    ) -> _ChildIdentity:
+        identity = (admission.admission_id, admission.intent_digest, admission.revision)
+        revision, status = self._observe_authority(
+            row, admission.run_uri, "preparation_child_authority_read", identity,
+            partial(_read_revision_status, config, admission.run_uri),
+        )
+        return _ChildIdentity(*identity, revision, status.value)
 
     def _capture_candidate_async(
         self, row: sqlite3.Row, config: LocalDaemonConfig, uri: str,
-        admission: LocalDaemonAdmission | None, report: PreparationReport,
+        admission: LocalDaemonAdmission | None, report: PreparationReport, report_token: _ReportIdentity,
     ) -> dict[str, PlainData] | None:
         operation_id = str(row["operation_id"])
-        factory = config.coordinator_authority_factory
-        assert factory is not None and self.callbacks is not None
-        token = (
-            *self._publication_token(row), uri,
-            _candidate_admission(None if admission is None else admission.to_dict()),
-            factory(uri).open_run(uri).revision,
+        assert self.callbacks is not None
+        admission_identity = _candidate_admission(None if admission is None else admission.to_dict())
+        revision, _ = self._observe_authority(
+            row, uri, "preparation_candidate_authority_read", (admission_identity, report_token),
+            partial(_read_revision_status, config, uri),
         )
+        token = (*self._publication_token(row), uri, admission_identity, revision, report_token)
         pending = self._candidates.get(operation_id)
         if pending is not None and pending.future is not None:
             if not pending.future.done():
@@ -1666,7 +1751,6 @@ class CoordinatorPreparations:
                 return pending.future.result()
         if operation_id not in self._candidates and len(self._candidates) >= 2:
             return None
-        child = self.daemon._admission(str(row["child_admission_id"]))
         future = self.daemon._result_verifications.bulk.submit(
             operation_id, "preparation_candidate_inspection",
             self.callbacks.capture_candidate, config, uri, admission,
@@ -1675,7 +1759,7 @@ class CoordinatorPreparations:
         # capacity waits. Do not rehydrate it on every reconciliation turn.
         self._reports.pop(operation_id, None)
         self._candidates[operation_id] = _PendingCandidate(
-            token, self._report_token(row, config, child), report, future,
+            token, report_token, report, future,
         )
         return None
 
@@ -1832,6 +1916,26 @@ class CoordinatorPreparations:
         )
         self._advance_ready_publication(row)
 
+    def _publish_owned_target(
+        self, ready: _ReadyPublication, child_uri: str,
+    ) -> ManagedLocalPreparationReceipt:
+        assert self.callbacks is not None
+        operation_id = ready.request.operation_id
+        with self.daemon._publication_guards.hold("preparation-" + operation_id):
+            revision, status = _read_revision_status(ready.config, child_uri)
+            row = self._read(operation_id)
+            # A read on another store can outlive cancellation, reload or a new
+            # admission revision. Only the exact durable claim can publish.
+            if (row["state"] != "applying" or ready.claim != self._publication_token(row)
+                    or (ready.publication_owner is not None and row["cancellation_requested"])):
+                raise _PublicationChildChanged
+            admission = self.daemon._admission(str(row["child_admission_id"]))
+            if ready.child != _ChildIdentity(
+                admission.admission_id, admission.intent_digest, admission.revision, revision, status.value,
+            ):
+                raise _PublicationChildChanged
+            return self.callbacks.publish_target(ready.config, ready.request, ready.report)
+
     def _advance_ready_publication(self, row: sqlite3.Row) -> bool:
         operation_id = str(row["operation_id"])
         ready = self._ready_publications.get(operation_id)
@@ -1841,25 +1945,18 @@ class CoordinatorPreparations:
             row["state"] != "applying"
             or ready.claim != self._publication_token(row)
             or (ready.publication_owner is not None and row["cancellation_requested"])
-            or ready.child
-            != self._child_token(
-                ready.config, self.daemon._admission(str(row["child_admission_id"]))
-            )
         ):
             del self._ready_publications[operation_id]
             return False
         if not self._target_retry_ready(operation_id) or len(self._publications) >= 2:
             return True
-        assert self.callbacks is not None
+        admission = self.daemon._admission(str(row["child_admission_id"]))
+        if ready.child[:3] != (admission.admission_id, admission.intent_digest, admission.revision):
+            del self._ready_publications[operation_id]
+            return False
         future = self.daemon._result_verifications.bulk.submit(
-            operation_id,
-            "preparation_target_publication",
-            _publish_owned_target,
-            self.daemon._publication_guards,
-            self.callbacks,
-            ready.config,
-            ready.request,
-            ready.report,
+            operation_id, "preparation_target_publication", self._publish_owned_target,
+            ready, admission.run_uri,
         )
         if future is not None:
             self._publications[operation_id] = _PendingPublication(ready, future)
@@ -1871,22 +1968,26 @@ class CoordinatorPreparations:
         pending = self._publications.get(operation_id)
         if pending is None:
             return False
-        if not pending.future.done():
+        annotation = self._annotations.get(operation_id)
+        if not pending.future.done() or (annotation is not None and not annotation[1].done()):
             return True
+        ready = pending.ready
+        if (row["state"] != "applying" or ready.claim != self._publication_token(row)
+                or ready.child != self._child_token(
+                    row, ready.config, self.daemon._admission(str(row["child_admission_id"]))
+                )):
+            # IO may already have published. The durable applying claim owns
+            # exact replay; a stale completion cannot authorize admission.
+            del self._publications[operation_id]
+            return False
         with phase("preparation_publication_completion_apply", operation_id=operation_id):
-            ready = pending.ready
-            if (row["state"] != "applying" or ready.claim != self._publication_token(row)
-                    or ready.child != self._child_token(
-                        ready.config, self.daemon._admission(str(row["child_admission_id"]))
-                    )):
-                # IO may already have published. The durable applying claim owns
-                # exact replay; a stale completion cannot authorize admission.
-                del self._publications[operation_id]
-                return False
             request = PrepareRunRequest.from_dict(_mapping(json.loads(str(row["request_json"]))))
             self._configuration(_mapping(json.loads(str(row["selected_json"]))), request)
             try:
                 prepared = pending.future.result()
+            except _PublicationChildChanged:
+                del self._publications[operation_id]
+                return False
             except _PreparationTargetBusy:
                 del self._publications[operation_id]
                 self._ready_publications[operation_id] = ready
@@ -1899,11 +2000,8 @@ class CoordinatorPreparations:
             except Exception:
                 del self._publications[operation_id]
                 raise
-            annotation = self._annotations.get(operation_id)
             if annotation is not None:
                 claim, job = annotation
-                if not job.done():
-                    return True
                 del self._annotations[operation_id]
                 if claim == ready.claim:
                     # A lost annotation reply leaves the applying claim for exact recovery.
@@ -2402,17 +2500,10 @@ class CoordinatorPreparations:
             return None
         return scope
 
-    def _reconcile_cancellations(self) -> None:
-        with self.daemon._connection() as conn:
-            rows = conn.execute(
-                "SELECT rowid, operation_id FROM preparation_cancellations "
-                "WHERE rowid > ? AND state IN ('pending', 'applying') ORDER BY rowid LIMIT 32",
-                (self._cancel_cursor,),
-            ).fetchall()
-        if not rows:
-            self._cancel_cursor = 0
-        for sequence, operation_id in rows:
-            self._cancel_cursor = sequence
+    def _reconcile_cancellations(self, priorities: tuple[tuple[str, ...], ...] = ()) -> None:
+        rows, self._cancel_cursor = self._pending_page("cancel", self._cancel_cursor, priorities)
+        for row in rows:
+            operation_id = str(row["operation_id"])
             with self.daemon._result_verifications.bulk.offering(("cancel", operation_id)):
                 self._advance_child_release(operation_id, self._project_cancellation)
 

@@ -77,11 +77,14 @@ class SlurmSubmissionProjection:
 
     def _open_existing(self) -> None:
         with self._connect() as conn:
-            columns = {
-                str(row[1])
-                for row in conn.execute("PRAGMA table_info(ready_stage_submissions)")
-            }
-            version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+            self._require_schema(conn)
+
+    def _require_schema(self, conn: sqlite3.Connection) -> None:
+        columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(ready_stage_submissions)")
+        }
+        version = int(conn.execute("PRAGMA user_version").fetchone()[0])
         if version != self.schema_version or columns != {"operation_id", "state", "value_json"}:
             raise QueueServiceError("SLURM submission projection is incompatible")
 

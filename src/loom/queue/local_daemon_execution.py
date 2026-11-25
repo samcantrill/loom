@@ -90,6 +90,7 @@ from loom.queue._managed_local import (
     _release_revision,
     _prepare_local_workspace,
     _run_reserved_local_assignment,
+    _require_agent_journal_schema,
     _require_coordinator_assignment_schema,
     run_managed_local_assignment,
 )
@@ -98,6 +99,7 @@ from loom.pipeline.orchestration import (
     ManagedExecutionRequirement,
     SchedulingProjectionState,
     SQLiteStageWorkStore,
+    _raise_for_store_schema,
     StageWorkRecord,
 )
 from loom.pipeline.planning import (
@@ -786,18 +788,16 @@ def _require_local_daemon_owner_stores(
             _allow_initialize=False,
             sqlite_policy=config.sqlite_policy, schema_version=config.slurm_schema_version,
         )._open_existing()
-        capacity = _coordinator_capacity(config)
-        SQLiteStageWorkStore(
-            config.execution_database, _allow_initialize=False
-        , sqlite_policy=config.sqlite_policy)._open_existing()
-        SQLiteCoordinatorAssignments(
-            config.execution_database, capacity, _allow_initialize=False
-        , sqlite_policy=config.sqlite_policy)._open_existing()
-        SlurmSubmissionProjection(
-            config.execution_database, _allow_initialize=False,
-            sqlite_policy=config.sqlite_policy, schema_version=config.slurm_schema_version,
-        )._open_existing()
-        with _connect_existing_sqlite(config.execution_database, sqlite_policy=config.sqlite_policy) as conn:
+        # These projections share one database. Read their schemas and the
+        # retained owner binding from the same configured connection and snapshot.
+        with closing(_connect_existing_sqlite(config.execution_database, sqlite_policy=config.sqlite_policy)) as conn:
+            conn.row_factory = sqlite3.Row
+            conn.execute("BEGIN")
+            _raise_for_store_schema(conn)
+            _require_coordinator_assignment_schema(conn)
+            SlurmSubmissionProjection(
+                config.execution_database, schema_version=config.slurm_schema_version,
+            )._require_schema(conn)
             _verify_owner_store_binding(
                 conn, role="coordinator", stable_id=coordinator_id
             )
@@ -809,7 +809,10 @@ def _require_local_daemon_owner_stores(
             }
         agent_revision = True
         if agent_id is not None:
-            with _connect_existing_sqlite(config.agent_journal, sqlite_policy=config.sqlite_policy) as conn:
+            with closing(_connect_existing_sqlite(config.agent_journal, sqlite_policy=config.sqlite_policy)) as conn:
+                conn.row_factory = sqlite3.Row
+                conn.execute("BEGIN")
+                _require_agent_journal_schema(conn)
                 _verify_owner_store_binding(
                     conn, role="local-agent", stable_id=agent_id
                 )
@@ -844,8 +847,6 @@ def local_daemon_owner_work_is_retained(
             _coordinator_capacity(config),
             _allow_initialize=False,
          sqlite_policy=config.sqlite_policy)
-        journal._open_existing()
-        coordinator._open_existing()
         return bool(journal.retained_claim_commands()) or bool(
             coordinator.retained_assignments(agent_id=config.machine_id)
         )
@@ -1491,7 +1492,15 @@ class LocalDaemonExecution:
         )
         from ._input_validation import InputValidationPool
         from ._ready_preparation import ReadyPreparationPool
-        self._ready_preparations = ReadyPreparationPool(lambda: self._daemon_owner()._wake.set())
+        from ._completion_inbox import CompletionInbox
+        from ._scheduling_waits import SchedulingWaits
+        self._ready_continuations = CompletionInbox[str](lambda: self._daemon_owner()._wake.set())
+        self._completed_local_runs = CompletionInbox[str](lambda: self._daemon_owner()._wake.set())
+        self._ready_preparations = ReadyPreparationPool(
+            lambda: self._daemon_owner()._wake.set(), on_ready=self._ready_continuations.post,
+        )
+        self._scheduling_waits = SchedulingWaits()
+        self._observed_ready: dict[str, AuthoritativeRunSnapshot] = {}
         self.dispatch_observations = DispatchObservations(lambda: self._daemon_owner()._wake.set())
         self.run_observations = RunObservations(lambda: self._daemon_owner()._wake.set(), self._event_observers.offer_audit)
         self._input_validations = InputValidationPool(
@@ -1630,6 +1639,7 @@ class LocalDaemonExecution:
     def begin_cycle(self) -> None:
         """Observe completed exact assignment work before scheduling again."""
 
+        self._observed_ready.clear()
         if self._action_resolution is not None:
             # Live requests detach demands in their acceptance transaction.
             # Startup repairs retained cancellations before workers resume.
@@ -1709,36 +1719,44 @@ class LocalDaemonExecution:
             future = executor.submit(
                 self._reconcile_exact_local_assignment, assignment_id
             )
-            daemon = self.daemon
-            if daemon is not None:
+            if self.daemon is not None:
 
-                def wake_daemon(
-                    _future: Future[None], target: LocalDaemon = daemon
-                ) -> None:
-                    # Failed replay already has a pending owner. Retry on the
-                    # normal poll so self-wakes cannot starve operator access
-                    # to the cycle lock; successful progress is still immediate.
-                    if _future.exception() is None:
-                        target._wake.set()
+                def resume_run(finished: Future[None], owner: str = run_uri) -> None:
+                    # Failed recovery already has a paced retry. Successful
+                    # recovery can release dependent work or settle the run.
+                    if finished.exception() is None:
+                        self._completed_local_runs.post(owner)
 
-                future.add_done_callback(wake_daemon)
+                future.add_done_callback(resume_run)
             self._local_assignment_futures[assignment_id] = future
-        # A worker may finish staging in a turn when a different admission's
-        # context loader completes. Keep authority for in-progress inputs
-        # available to the common selector until its revision is superseded.
-        preparing = self._ready_preparations.preparing_runs()
-        for identity, (intent, _) in tuple(self._cycle_contexts.items()):
-            if intent.plan.run_uri not in preparing:
-                self.discard_dispatch_context(identity)
 
     def discard_dispatch_context(self, identity: str) -> None:
         self._cycle_contexts.pop(identity, None)
         self._cycle_context_epochs.pop(identity, None)
         self._cycle_context_revisions.pop(identity, None)
 
-    def invalidate_dispatch_contexts(self, run_uris: set[str]) -> None:
+    def continuation_context(
+        self, admission: LocalDaemonAdmission, epochs: tuple[str | None, str | None],
+    ) -> PreparedAdmissionContext | None:
+        identity = admission.admission_id
+        if self._cycle_context_revisions.get(identity) == admission.revision and self._cycle_context_epochs.get(identity) == epochs:
+            return self._cycle_contexts.get(identity)
+        return None
+
+    def retain_dispatch_contexts(
+        self, invalidated: set[str], epochs: tuple[str | None, str | None], bulk_runs: set[str],
+    ) -> None:
+        # A run step, requested dispatch observation, or stage preparation can
+        # resume on another turn. Keep its checked inputs and scoped binding
+        # until it finishes or its admission, policy, or owner is superseded.
+        continuing = (
+            bulk_runs
+            | self._ready_preparations.preparing_runs()
+            | self.run_observations.pending_runs()
+            | self.dispatch_observations.requested_runs()
+        ) - invalidated
         for identity, (intent, _) in tuple(self._cycle_contexts.items()):
-            if intent.plan.run_uri in run_uris:
+            if intent.plan.run_uri not in continuing or self._cycle_context_epochs.get(identity) != epochs:
                 self.discard_dispatch_context(identity)
 
     def next_local_retry_at(self, now: float) -> float | None:
@@ -2094,10 +2112,6 @@ class LocalDaemonExecution:
         """Recheck retained owners before any new scheduling mutation."""
 
         try:
-            if self.journal is not None:
-                self.journal._open_existing()
-            # This boundary validates coordinator structures and live owner
-            # bindings together; do not open those same structures twice.
             _require_local_daemon_owner_stores(
                 self.config,
                 coordinator_id=self.coordinator_id,
@@ -3299,9 +3313,12 @@ class LocalDaemonExecution:
 
     def settle_continuation(
         self, admission: LocalDaemonAdmission, *, accepted_at: str,
+        observe_snapshot: _slurm_retry.ObserveRetrySnapshot | None = None,
     ) -> ContinuationPending | ContinuationConflict | None:
         """Collect provider evidence before verifying and freezing a target revision."""
-        unresolved = _slurm_retry.reconcile(self, admission.run_uri, accepted_at=accepted_at)
+        unresolved = _slurm_retry.reconcile(
+            self, admission.run_uri, accepted_at=accepted_at, observe_snapshot=observe_snapshot,
+        )
         if unresolved is not None:
             return unresolved
         if admission.state in {LocalDaemonAdmissionState.FAILED, LocalDaemonAdmissionState.CANCELLED} and (
@@ -4134,7 +4151,7 @@ class LocalDaemonExecution:
 
     def _prepared_ready_request(
         self, record: StageWorkRecord, snapshot: AuthoritativeRunSnapshot,
-        intent: ManagedLocalIntent,
+        intent: ManagedLocalIntent, *, speculative: bool = False,
     ) -> tuple[StageWorkerRequest | None, str | None]:
         from functools import partial
         from ._ready_preparation import prepare_ready_request
@@ -4156,10 +4173,15 @@ class LocalDaemonExecution:
             produced=_produced_outputs(snapshot),
         )
         gpu = record.placement.resource_request.entries.get("gpu")
-        return self._ready_preparations.poll(
+        result, reason = self._ready_preparations.poll(
             (record.run_uri, record.stage_name), identity, prepare,
+            work_id=record.stage_work_id, speculative=speculative,
             resource_class="gpu" if gpu is not None and gpu.amount > 0 else "cpu",
         )
+
+        if reason is not None and not speculative:
+            self._scheduling_waits.record(record.run_uri, record.stage_name, "request_preparation")
+        return result, reason
 
     def _prepared_input_descriptors(self, record, worker_request):
         from functools import partial
@@ -4346,11 +4368,13 @@ class LocalDaemonExecution:
                     poll_inspection, phase="input-inspection",
                 )
                 if validation_reason is not None:
+                    self._scheduling_waits.record(record.run_uri, record.stage_name, "request_preparation")
                     return LocalDaemonExecutionOutcome(
                         LocalDaemonAdmissionState.WAITING, validation_reason,
                     )
             inspected, preparation_reason = self._prepared_input_descriptors(record, worker_request)
             if inspected is None:
+                self._scheduling_waits.record(record.run_uri, record.stage_name, "request_preparation")
                 return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.WAITING, preparation_reason)
             remote_inputs = []
             input_paths = {}
@@ -4383,7 +4407,9 @@ class LocalDaemonExecution:
                 )
             verified, preparation_reason = self._prepared_recovery_predecessors(record, delivery)
             if verified is None:
+                self._scheduling_waits.record(record.run_uri, record.stage_name, "request_preparation")
                 return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.WAITING, preparation_reason)
+            self._scheduling_waits.record(record.run_uri, record.stage_name, "reservation")
             self.slurm_assignments.reserve(
                 assignment,
                 request_json=request.to_dict(),
@@ -4417,13 +4443,16 @@ class LocalDaemonExecution:
         except _ReservationBusy:
             return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.WAITING, "reservation_store_busy")
         except SlurmAdmissionDeferred as exc:
+            self._scheduling_waits.record(record.run_uri, record.stage_name, "reservation")
             return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.WAITING, exc.code)
         except SlurmResourceMappingError:
+            self._scheduling_waits.record(record.run_uri, record.stage_name, "host_eligibility")
             return LocalDaemonExecutionOutcome(
                 LocalDaemonAdmissionState.WAITING,
                 "slurm_route_unmappable",
             )
         except SlurmPlanningError as exc:
+            self._scheduling_waits.record(record.run_uri, record.stage_name, "host_eligibility")
             diagnostic = str(exc)
             return LocalDaemonExecutionOutcome(
                 LocalDaemonAdmissionState.WAITING,
@@ -6402,6 +6431,7 @@ class LocalDaemonExecution:
                 return False
             if self._attempt_cancel_requested(record.run_uri, record.attempt_id):
                 return False
+            self._scheduling_waits.record(record.run_uri, record.stage_name, "reservation")
             self.coordinator.reserve(
                 assignment,
                 claims,
@@ -6480,6 +6510,7 @@ class LocalDaemonExecution:
             ), phase="local-workspace",
         )
         if prepared is None:
+            self._scheduling_waits.record(record.run_uri, record.stage_name, "request_preparation")
             return False
 
         # Only the scheduling owner acquires capacity for a freshly prepared
@@ -6489,6 +6520,7 @@ class LocalDaemonExecution:
         assignment_id = assignment.assignment_id
         daemon = self._daemon_owner()
         try:
+            self._scheduling_waits.record(record.run_uri, record.stage_name, "reservation")
             self.coordinator.reserve(
                 assignment, claims, max_parallel_stages=intent.max_parallel_stages,
                 decision_receipt=decision_receipt,
@@ -6521,7 +6553,7 @@ class LocalDaemonExecution:
         future = self._local_assignment_workers.submit(observe_and_finalize)
         self._local_assignment_futures[assignment_id] = future
         self._local_preparing[record.stage_work_id] = assignment_id
-        future.add_done_callback(lambda _: daemon._wake.set())
+        future.add_done_callback(lambda _, uri=record.run_uri: self._completed_local_runs.post(uri))
         self._ready_preparations.discard(stage_key)
         daemon._activate_admission(admission.admission_id)
         return True

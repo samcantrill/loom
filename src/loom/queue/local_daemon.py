@@ -2163,6 +2163,8 @@ class LocalDaemon:
         self._result_verifications = ResultVerifications(self._wake.set)
         self._preparations._verification_reports.clear()
         self._preparations._reports.clear()
+        self._preparations._authority_reads.clear()
+        self._resuming_runs: dict[str, None] = {}
         self._preparations._publications.clear()
         self._preparations._ready_publications.clear()
         self._preparations._children.clear()
@@ -2478,6 +2480,7 @@ class LocalDaemon:
             raise QueueStorageError("targeted admission owner detail is unavailable")
         owners = dict(views[0])
         if self._execution is not None:
+            owners["scheduling_waits"] = self._execution._scheduling_waits.observed(admission.run_uri)
             owners["input_validation"] = self._execution._input_validations.observations(admission.run_uri)
             with self._cycle_lock:
                 owners["slurm_storage"] = self._execution.slurm_storage_observations(admission.run_uri)
@@ -2792,7 +2795,14 @@ class LocalDaemon:
 
     def _reconcile_once(self, checked=None) -> tuple[LocalDaemonAdmission, ...]:
         self._require_started()
-        self._preparations.reconcile()
+        bulk = self._result_verifications.bulk
+        scopes = bulk.ready_scopes()
+
+        priorities = tuple(scope for scope in scopes if scope[0] in {"preparation", "cancel"})
+        if priorities:
+            self._preparations.reconcile(priorities)
+        else:
+            self._preparations.reconcile()
         with self._state_guard():
             self._gpu_samples.advance(self._local_resource_providers())
         time_healthy = self._sample_clock_health(wait_for_writer=False)
@@ -2800,6 +2810,14 @@ class LocalDaemon:
             execution = self._execution
         if execution is None:
             raise QueueServiceError("local daemon execution is absent")
+        completed_runs = (*[scope[1] for scope in scopes if scope[0] == "run"],
+                          *execution._completed_local_runs.take())
+        for uri in completed_runs:
+            if len(self._resuming_runs) < 256:
+                self._resuming_runs.setdefault(uri, None)
+        for scope in scopes:
+            if scope[0] == "dispatch":
+                execution._ready_continuations.offer(scope[2])
         self._event_observers.offer_audit(excluded=execution.run_observations.pending_runs())
         epochs = (self._epoch, self._scheduling_epoch)
         if checked != (execution, epochs) and not execution.owner_stores_ready(epochs):
@@ -2814,14 +2832,13 @@ class LocalDaemon:
             ).fetchone()[0])
             admissions = tuple(_admission_from_row(row) for row in self._admission_scan.page(conn, enqueue_through))
         self._retire_inactive_scheduling_owners(execution)
-        bulk = self._result_verifications.bulk
         with self._state_guard():
             epochs = (self._epoch, self._scheduling_epoch)
             invalidated = set(self._context_invalidations)
             self._context_invalidations.clear()
-        execution.invalidate_dispatch_contexts(invalidated)
         execution.run_observations.invalidate(invalidated, bulk)
         execution.dispatch_observations.begin_cycle(invalidated, epochs, self.config.poll_interval_seconds)
+        execution.retain_dispatch_contexts(invalidated, epochs, bulk.active_runs() | self._resuming_runs.keys())
         self._contexts.begin_cycle(minimum_interval=self.config.poll_interval_seconds, invalidated=invalidated)
         prepared = {item.admission.admission_id: item for item in (
             *self._contexts.completed(), *execution.run_observations.completed(),
@@ -2862,6 +2879,7 @@ class LocalDaemon:
                     continue
                 with self._state_guard():
                     self._admission_retries.pop(admission.run_uri, None)
+                execution._scheduling_waits.retain(admission.run_uri, set())
                 self._record_admission_health(admission.admission_id, "failed")
                 self._set_state(
                     admission.admission_id,
@@ -2916,6 +2934,8 @@ class LocalDaemon:
         # The durable ready query owns the 256-item window.  A cycle may
         # launch at most that many assignments, but a larger pipeline is
         # never rejected merely for having more stages.
+        from ._coordinator_run_progress import resume_ready_inputs
+        resume_ready_inputs(execution, execution._ready_continuations.take(), schedulable, epochs)
         started_admissions: set[str] = set()
         with bulk.visiting(schedulable.visited_dispatch):
             if time_healthy:
@@ -2960,15 +2980,38 @@ class LocalDaemon:
                 ),
             )
 
-        def visit(admission: LocalDaemonAdmission) -> bool:
+        def visit(admission: LocalDaemonAdmission, *, resume: bool = False) -> bool:
             retry = self._admission_retries.get(admission.run_uri)
             if retry is not None and not retry.ready((admission.revision, epochs[1])):
                 return True
             if execution.run_observations.awaiting_read(admission, epochs, bulk):
-                return True
+                return not resume
             if not execution.run_observations.can_start(admission.admission_id):
                 return False
-            return self._contexts.try_submit(admission, epochs, execution.prepare_admission_context)
+            if admission.state is LocalDaemonAdmissionState.PENDING_AUTHORITY:
+                execution._scheduling_waits.record(admission.run_uri, None, "preparation")
+            return self._contexts.try_submit(
+                admission, epochs, execution.prepare_admission_context, resume=resume,
+                continuation=execution.continuation_context(admission, epochs) if resume else None,
+            )
+
+        # Reconstruct the oldest waiting operation from current durable ownership
+        # even when discovery is visiting a different admission page.
+        if self._resuming_runs:
+            from itertools import islice
+            uris = tuple(islice(self._resuming_runs, 32))
+            placeholders = ",".join("?" for _ in uris)
+            with self._connection() as conn:
+                active = {row["run_uri"]: _admission_from_row(row) for row in conn.execute(
+                    f"SELECT * FROM managed_admissions WHERE run_uri IN ({placeholders}) "
+                    "AND state NOT IN ('SUCCEEDED','FAILED','CANCELLED','BLOCKED')", uris,
+                )}
+            for uri in uris:
+                del self._resuming_runs[uri]
+                if uri in active and not visit(active[uri], resume=True):
+                    self._resuming_runs[uri] = None
+                elif uri not in active:
+                    bulk.discard(("run", uri))
 
         visited = self._admission_scan.take(admissions, visit)
         if self._admission_scan.high_water is not None and self._contexts.has_capacity() and execution.run_observations.has_capacity():

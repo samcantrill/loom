@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from time import monotonic
 from typing import Any, TypeVar
 
+from ._completion_inbox import CompletionInbox
+
 
 _T = TypeVar("_T")
 
@@ -21,8 +23,9 @@ class BulkOperations:
 
     def __init__(self, wake: Callable[[], None]) -> None:
         self._workers = ThreadPoolExecutor(max_workers=2, thread_name_prefix="loom-bulk")
-        self._active: list[Future[Any]] = []
+        self._active: dict[Future[Any], tuple[str, ...] | None] = {}
         self._wake = wake
+        self._completed = CompletionInbox[tuple[str, ...]](wake)
         self._closed = False
         self._waiting: dict[tuple[tuple[str, ...], str, str], tuple[str, float]] = {}
         self._visiting: set[tuple[str, ...]] | None = None
@@ -50,7 +53,7 @@ class BulkOperations:
     def finish_offering(self, scope: tuple[str, ...], seen: set[tuple[tuple[str, ...], str, str]]) -> None:
         for key in tuple(self._waiting):
             if key[0] == scope and key not in seen:
-                del self._waiting[key]
+                self._withdraw(key)
 
     def scopes(self, prefix: tuple[str, ...]) -> set[tuple[str, ...]]:
         return {key[0] for key in self._waiting if key[0][:len(prefix)] == prefix}
@@ -66,7 +69,7 @@ class BulkOperations:
             for key in tuple(self._waiting):
                 scope = key[0]
                 if scope not in visited and any(scope[:len(prefix)] == prefix for prefix in prefixes):
-                    del self._waiting[key]
+                    self._withdraw(key)
         finally:
             self._visiting = previous
 
@@ -74,13 +77,35 @@ class BulkOperations:
         """Withdraw retired owners without changing actual running capacity."""
         for key in tuple(self._waiting):
             if key[0][:len(prefix)] == prefix:
-                del self._waiting[key]
+                self._withdraw(key)
 
     def retain(self, prefix: tuple[str, ...], scopes: set[tuple[str, ...]]) -> None:
         """Retire scopes absent from the owner's current authoritative inventory."""
         for key in tuple(self._waiting):
             if key[0][:len(prefix)] == prefix and key[0] not in scopes:
-                del self._waiting[key]
+                self._withdraw(key)
+
+    def _withdraw(self, key) -> None:
+        head = next(iter(self._waiting), None)
+        del self._waiting[key]
+        if key == head and self._waiting and sum(not f.done() for f in self._active) < 2:
+            self._wake()
+
+    def active_runs(self) -> set[str]:
+        """An operation actually occupying one of the two slots may carry its context."""
+        return {scope[1] for scope in self._active.values()
+                if scope is not None and scope[0] in {"run", "dispatch"}}
+
+    def resume(self, scope: tuple[str, ...]) -> None:
+        """Offer one owner again after its prerequisite or durable state advances."""
+        self._completed.post(scope)
+
+    def ready_scopes(self) -> tuple[tuple[str, ...], ...]:
+        """Resume the oldest capacity waiter and owners of newly finished IO."""
+        self.reap()
+        head = next(iter(self._waiting), None)
+        waiters = (head[0],) if head is not None and len(self._active) < 2 else ()
+        return tuple(dict.fromkeys((*waiters, *self._completed.take())))
 
     def submit(
         self, operation_id: str, action: str, function: Callable[..., _T], *args: Any,
@@ -94,6 +119,10 @@ class BulkOperations:
             scope, seen = self._offering
             key = (scope, operation_id, action)
             seen.add(key)
+            # Additional demand stays in durable discovery until an offered
+            # position opens. Retained waiters keep their original FIFO place.
+            if key not in self._waiting and len(self._waiting) >= 256:
+                return None
             queued = self._waiting.setdefault(key, queued)
         if len(self._active) >= 2:
             return None
@@ -105,14 +134,20 @@ class BulkOperations:
         future = self._workers.submit(
             copy_context().run, _run, operation_id, action, function, args, queued,
         )
-        self._active.append(future)
-        future.add_done_callback(lambda _future: self._wake())
+        self._active[future] = None if key is None else key[0]
+        if key is None:
+            future.add_done_callback(lambda _: self._wake())
+        else:
+            owner = key[0]
+            future.add_done_callback(lambda _: self.resume(owner))
+            if self._waiting and len(self._active) < 2:
+                self._wake()
         return future
 
     def reap(self) -> None:
         # Completion owners retain their futures until application. Capacity
         # bookkeeping must not retain hydrated reports after those owners finish.
-        self._active = [future for future in self._active if not future.done()]
+        self._active = {future: scope for future, scope in self._active.items() if not future.done()}
 
     def running(self) -> bool:
         self.reap()

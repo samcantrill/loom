@@ -104,6 +104,28 @@ idle CPUs can run another complete preprocess placement while training waits
 for a GPU or a larger search bound. Exhaustion is not infeasibility, and Stage
 29 has no partial-search winner-proof path.
 
+The coordinator can start the host-independent worker request for a managed-agent
+stage in the active READY window once its durable attempt and bound inputs are
+visible. One stage can occupy the preparation pool in anticipation of selection.
+Further work uses the current placement demand. Reservation rechecks the host,
+offer, capacity, cancellation and scheduling epoch. A restart rebuilds this
+work from the durable admission and attempt.
+
+Workers notify the scheduling thread of completed run observations and READY
+prerequisites. When a bulk IO slot opens, the scheduler revisits the oldest
+offered operation by identity, including operations outside the current
+discovery page. Up to 256 waiting bulk offers retain their FIFO position and
+additional demand stays in the durable backlog. Withdrawal releases the
+waiting position. Cancelled IO that is already running occupies its worker
+until it returns.
+
+Targeted admission detail exposes `owners.scheduling_waits` with the observed
+stage, boundary, UTC start and monotonic elapsed nanoseconds. The four
+boundaries are `preparation` (admission or authority observation),
+`host_eligibility`, `request_preparation` and `reservation`. The coordinator
+retains observations for the most recent 288 admission/stage keys and clears
+them as work settles. Process restart begins a new observation interval.
+
 All dependency-ready unassigned `PENDING` attempts in the bounded window may be
 projected; they consume no `max_parallel_stages` slot. The coordinator
 assignment CAS atomically counts the run's reserved, bound, accepted, granted,

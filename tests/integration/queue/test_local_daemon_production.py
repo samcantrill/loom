@@ -655,6 +655,113 @@ def test_managed_local_hard_cutover_rejects_old_import_and_existing_roots(
     assert coordinator.read_bytes() == before
 
 
+@pytest.mark.parametrize("boundary", ["unchanged", "policy_reload", "missing_store"])
+def test_dispatch_continuation_reuses_checked_inputs_and_authority(tmp_path, monkeypatch, boundary):
+    from collections import Counter
+    from threading import current_thread
+
+    from loom.queue import CoordinatorSchedulingReload, local_daemon_execution as execution_module
+    from tests.unit.loom.queue.test_coordinator_responsiveness import _drive_until
+
+    monkeypatch.setattr(LocalDaemon, "_serve", lambda self: self._stop.wait())
+    config = replace(
+        _daemon_config(tmp_path), poll_interval_seconds=60,
+        agent_policy=AgentPolicyConfig(principals=(
+            TransportPrincipalPolicy("operator-credential", "operator", "operator", actions=("scheduling_reload",)),
+        )),
+    )
+    uri = _persist_sleep_run(config.run_store_root, run_name="checked", stage_name="stage", seconds=0)
+    LocalDaemon.initialize(config)
+    replacement = replace(config, active_configuration_fingerprint="2" * 64)
+    daemon = LocalDaemon(config, trusted_scheduling_loader=lambda: replacement)
+    status = daemon.start()
+    execution = daemon._execution
+    assert execution is not None
+    release, entered = Event(), Event()
+    counts = Counter()
+
+    def counted(original, label):
+        def call(*args, **kwargs):
+            result = original(*args, **kwargs)
+            if current_thread().name.startswith("loom-context"):
+                counts[label] += 1
+                if label == "captures":
+                    counts["bytes"] += len(result)
+            return result
+        return call
+
+    for owner, name, label in (
+        (LocalRunStore, "_read_document_bytes", "captures"),
+        (execution_module, "_connect_existing_sqlite", "owner_connections"),
+        (SQLitePerRunAuthorityStore, "bind_coordinator_admission", "binds"),
+    ):
+        monkeypatch.setattr(owner, name, counted(getattr(owner, name), label))
+
+    try:
+        execution.local_profile_ready = False
+        client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+        admission = client.submit(LocalDaemonAdmissionRequest("checked", uri))
+        _drive_until(daemon, lambda: daemon._admission(admission.admission_id).state is LocalDaemonAdmissionState.WAITING)
+
+        open_run = _ScopedCoordinatorAuthority.open_run
+
+        def held_read(authority, run_uri):
+            if current_thread().name.startswith("loom-dispatch-observation"):
+                entered.set()
+                assert release.wait(10)
+            return open_run(authority, run_uri)
+
+        monkeypatch.setattr(_ScopedCoordinatorAuthority, "open_run", held_read)
+        execution.local_profile_ready = True
+        _drive_until(daemon, entered.is_set)
+        # Drive the rest of run reconciliation to completion. From here the
+        # pending dispatch read alone owns the current admission's continuation.
+        _drive_until(daemon, lambda: uri not in execution.run_observations.pending_runs())
+        before = counts.copy()
+        assert all(before[name] > 0 for name in ("captures", "bytes", "owner_connections", "binds"))
+        for _ in range(4):
+            daemon.reconcile_once()
+        assert counts == before
+        if boundary == "policy_reload":
+            operator = daemon.operator_view(LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR))
+            receipt = operator.reload_scheduling(CoordinatorSchedulingReload(
+                "new-policy", status.scheduling_epoch, "refresh the policy",
+            ))
+            assert receipt["state"] == "applied"
+            path = LocalRunStore(config.run_store_root).local_config_path(uri, "resolved")
+            stat = path.stat()
+            original = path.read_bytes()
+            changed = original.replace(b'"seconds": 0', b'"seconds": 1')
+            assert changed != original and len(changed) == len(original)
+            path.write_bytes(changed)
+            os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+            release.set()
+            _drive_until(daemon, lambda: uri in daemon._admission_retries)
+            assert counts["captures"] > before["captures"] and counts["binds"] == before["binds"]
+            assert not execution.coordinator.retained_assignments(agent_id=config.machine_id)
+            return
+        if boundary == "missing_store":
+            store = config.execution_database
+            backup = store.with_suffix(".absent")
+            store.rename(backup)
+            try:
+                release.set()
+                with pytest.raises(QueueServiceError, match="retained daemon owner state"):
+                    daemon.reconcile_once()
+                assert not store.exists()
+            finally:
+                backup.rename(store)
+            assert not execution.coordinator.retained_assignments(agent_id=config.machine_id)
+            return
+        release.set()
+        _drive_until(daemon, lambda: bool(execution.coordinator.retained_assignments(agent_id=config.machine_id)))
+        assert counts == before
+        _drive_until(daemon, lambda: daemon._admission(admission.admission_id).state is LocalDaemonAdmissionState.SUCCEEDED)
+    finally:
+        release.set()
+        daemon.stop()
+
+
 def test_changed_scheduling_configuration_rejects_before_starting_supervisor(
     tmp_path: Path,
 ) -> None:
