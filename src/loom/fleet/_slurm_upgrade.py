@@ -1,7 +1,8 @@
 """Read-only Slurm evidence for the selected fleet role, also sent to older installations."""
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections import deque
+from collections.abc import Iterator, Mapping
 import json
 import os
 from pathlib import Path
@@ -40,6 +41,52 @@ def _targets(value):
             yield from _targets(item)
 
 
+def _path_chain(path: Path) -> Iterator[Path]:
+    """Include symlink dependencies that disappear from a fully resolved pathname."""
+    yield path
+    pending = deque(path.parts[1:])
+    parent = Path(path.anchor)
+    hops = 0
+    while pending:
+        part = pending.popleft()
+        if part == "..":
+            parent = parent.parent
+            continue
+        entry = parent / part
+        if not entry.is_symlink():
+            parent = entry
+            continue
+        yield entry
+        hops += 1
+        if hops > 40:
+            raise ValueError("unresolved executable symlink chain")
+        target = entry.readlink()
+        if target.is_absolute():
+            parent = Path(target.anchor)
+            pending.extendleft(reversed(target.parts[1:]))
+        else:
+            pending.extendleft(reversed(target.parts))
+        yield parent.joinpath(*pending)
+    yield parent
+
+
+def _executable_paths(path: Path) -> set[str]:
+    paths: set[str] = set()
+    while path.is_absolute() and str(path) not in paths:
+        paths.update(map(str, _path_chain(path)))
+        if not path.is_file():
+            break
+        with path.open("rb") as stream:
+            prefix = stream.readline(4096)
+        if not prefix.startswith(b"#!"):
+            break
+        fields = prefix[2:].split()
+        if not fields:
+            raise ValueError("configured executable has an incomplete shebang")
+        path = Path(os.fsdecode(fields[0]))
+    return paths
+
+
 def _profile_paths(raw, profile):
     paths = {path for path in _strings(raw) if Path(path).is_absolute()}
     if len(profile.bootstrap_argv) == 4:
@@ -49,17 +96,10 @@ def _profile_paths(raw, profile):
     executables = [profile.bootstrap_argv[0]]
     if profile.containment_helper is not None:
         executables.extend(profile.containment_helper.argv[:1])
+    provider = raw.get("job_private_file_provider", {})
+    executables.extend(provider.get("helper_argv", ())[:1])
     for executable in executables:
-        path = Path(executable)
-        if path.is_absolute():
-            paths.add(str(path.resolve()))
-            if path.is_file():
-                with path.open("rb") as stream:
-                    prefix = stream.readline(4096)
-                if prefix.startswith(b"#!"):
-                    interpreter = os.fsdecode(prefix[2:].strip().split()[0])
-                    if Path(interpreter).is_absolute():
-                        paths.add(interpreter)
+        paths.update(_executable_paths(Path(executable)))
     return sorted(paths)
 
 

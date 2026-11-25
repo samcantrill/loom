@@ -9,7 +9,7 @@ import shutil
 from loom.fleet._host import owner, read
 from loom.fleet.releases import verify_release
 from loom.queue.errors import QueueConflictError
-from ._slurm_upgrade import _strings
+from ._slurm_upgrade import _path_chain, _strings
 
 
 def recovery_consumers(operation):
@@ -82,9 +82,7 @@ def retire(request):
     profile_paths = []
     for path in set(request["role_paths"]) | set(_strings(slurm.get("profiles", ()))):
         candidate = Path(path)
-        if candidate.is_absolute() and (
-            candidate.is_relative_to(environment) or candidate.resolve().is_relative_to(environment)
-        ):
+        if candidate.is_absolute() and any(part.is_relative_to(environment) for part in _path_chain(candidate)):
             profile_paths.append(path)
     if profile_paths:
         reasons.append("installed_profile_reference")

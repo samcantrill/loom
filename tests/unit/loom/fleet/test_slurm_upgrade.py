@@ -51,7 +51,9 @@ def test_slurm_host_preview_is_read_only_and_marks_unknown_separately(tmp_path, 
         assert facts["assignments"][0]["job_id"] is None
 
 
-@pytest.mark.parametrize("consumer", ["none", "profile", "resident_peer", "process", "job", "recovery"])
+@pytest.mark.parametrize("consumer", [
+    "none", "profile", "resident_peer", "credential_helper", "intermediate_symlink", "process", "job", "recovery",
+])
 def test_only_verified_superseded_environment_retires(tmp_path, monkeypatch, consumer):
     from loom.fleet import _upgrade_host
 
@@ -78,7 +80,25 @@ def test_only_verified_superseded_environment_retires(tmp_path, monkeypatch, con
             "source_descriptor_name": descriptor.name, "expected_root_id": "agent",
             "recovery_consumers": ["pending"] if consumer == "recovery" else [],
             "role_paths": [str(environment / "bin/python")] if consumer == "resident_peer" else []}
+    if consumer in {"credential_helper", "intermediate_symlink"}:
+        old_bin = environment / "bin"
+        old_bin.mkdir()
+        interpreter = tmp_path / "system-python"
+        interpreter.touch()
+        (old_bin / "python").symlink_to(interpreter)
+        middle = tmp_path / "python-alias"
+        middle.symlink_to(old_bin / "python")
+        if consumer == "intermediate_symlink":
+            args["role_paths"] = [str(middle)]
+        else:
+            helper = tmp_path / "credentials"
+            helper.write_text(f"#!{middle}\n")
+            raw = {"job_private_file_provider": {"helper_argv": [str(helper)]}}
+            profile = SimpleNamespace(bootstrap_argv=("loom", "slurm-bootstrap"), containment_helper=None)
+            evidence["profiles"] = [{"paths": _slurm_upgrade._profile_paths(raw, profile)}]
     result = _slurm_retirement.retire(args)
+    if consumer in {"credential_helper", "intermediate_symlink"}:
+        assert result["reasons"] == ["installed_profile_reference"]
     assert descriptor.read_text() == "restore"
     assert environment.exists() == (consumer != "none")
     assert result["outcome"] == ("retired" if consumer == "none" else "retained")
