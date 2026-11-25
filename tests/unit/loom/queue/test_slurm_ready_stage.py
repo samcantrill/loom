@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import Future, ThreadPoolExecutor
 import json
+from threading import Event
 from typing import Any, cast
 import sqlite3
 import subprocess
@@ -20,10 +22,12 @@ def test_repeated_delivery_reads_preserve_live_state_and_revalidate_changed_byte
 
     fixture = ReservationFixture(tmp_path)
     assignment, arguments = fixture.candidate("delivery-cache", 1)
+    monkeypatch.setattr(module, "_retained_delivery_cache", module._RetainedDeliveryCache())
     assert [record.stage_work_id for record in fixture.work.ready_window()] == [assignment.stage_work_id]
     fixture.store.reserve(assignment, **arguments)
     assert fixture.work.ready_window() == ()
-    module._cached_retained_delivery.cache_clear()
+    assert fixture.store.read(assignment.assignment_id).delivery is arguments["delivery"]
+    monkeypatch.setattr(module, "_retained_delivery_cache", module._RetainedDeliveryCache())
     original = module.SlurmStageDelivery.from_dict
     validations = []
 
@@ -56,8 +60,7 @@ def test_repeated_delivery_reads_preserve_live_state_and_revalidate_changed_byte
     assert len(validations) == 3
 
 
-@pytest.mark.parametrize(("padding", "cached"), [(450 * 1024, True), (1024 * 1024, False)])
-def test_large_retained_delivery_reuses_validation_within_budget(tmp_path, padding, cached):
+def test_retained_delivery_cache_applies_total_byte_budget(tmp_path):
     from tests.unit.loom.queue.test_slurm_admission import ReservationFixture
 
     from loom.queue import slurm_ready_stage as module
@@ -65,11 +68,56 @@ def test_large_retained_delivery_reuses_validation_within_budget(tmp_path, paddi
     fixture = ReservationFixture(tmp_path)
     _, arguments = fixture.candidate("large-delivery", 0)
     delivery = arguments["delivery"]
-    encoded = json.dumps(delivery.to_dict()) + " " * padding
-    first = module._retained_delivery(encoded)
-    second = module._retained_delivery(encoded)
+    encoded = json.dumps(delivery.to_dict()) + " " * (1280 * 1024)
+    size = len(encoded.encode("utf-8"))
+    cache = module._RetainedDeliveryCache(max_encoded_bytes=size * 2 + 3)
+    first = cache.read(encoded)
+    second = cache.read(encoded + " ")
     assert first == second == delivery
-    assert (first is second) == cached
+    assert cache.read(encoded) is first
+    cache.read(encoded + "  ")
+    assert cache.read(encoded) is first
+    assert cache.read(encoded + " ") is not second
+    oversized = encoded + " " * (size + 4)
+    assert cache.read(oversized) is not cache.read(oversized)
+
+
+def test_concurrent_registration_reads_share_one_delivery_validation(tmp_path, monkeypatch):
+    from tests.unit.loom.queue.test_slurm_admission import ReservationFixture
+
+    from loom.queue import slurm_ready_stage as module
+
+    fixture = ReservationFixture(tmp_path)
+    _, arguments = fixture.candidate("concurrent-delivery-cache", 0)
+    encoded = json.dumps(arguments["delivery"].to_dict()) + " " * (1280 * 1024)
+    cache = module._RetainedDeliveryCache()
+    started, waiting, finish = Event(), Event(), Event()
+    decode = module._decode_retained_delivery
+    calls = []
+
+    class ObservedFuture(Future[module.SlurmStageDelivery]):
+        def result(self, timeout: float | None = None) -> module.SlurmStageDelivery:
+            waiting.set()
+            return super().result(timeout)
+
+    def validate(value):
+        calls.append(value)
+        started.set()
+        assert finish.wait(5)
+        return decode(value)
+
+    monkeypatch.setattr(module, "Future", ObservedFuture)
+    monkeypatch.setattr(module, "_decode_retained_delivery", validate)
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        first = workers.submit(cache.read, encoded)
+        try:
+            assert started.wait(5)
+            replay = workers.submit(cache.read, encoded)
+            assert waiting.wait(5)
+        finally:
+            finish.set()
+        assert first.result() is replay.result()
+    assert calls == [encoded]
 
 
 @pytest.mark.parametrize("version", [3, 4, 5, 6])

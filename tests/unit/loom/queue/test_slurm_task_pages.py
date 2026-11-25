@@ -1,6 +1,9 @@
 """Slurm control pages honor encoded bytes and never skip an undelivered task."""
 
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 import json
+from threading import Event, RLock
 from typing import Any, cast
 from types import SimpleNamespace
 
@@ -9,6 +12,7 @@ import pytest
 from loom.queue.errors import QueueServiceError
 from loom.queue.local_daemon_execution import LocalDaemonExecution
 from loom.queue._agent_session_codec import _MAX_BODY_BYTES, _decode
+from loom.queue import agent_sessions
 
 
 def owner_for(sizes, *, withheld=()):
@@ -77,3 +81,51 @@ def test_withheld_recovery_page_still_advances_scan_without_losing_later_work():
     first = page(owner)
     assert first == {"tasks": [], "next_cursor": "assignment-031"}
     assert len(page(owner, first["next_cursor"])["tasks"]) == 2
+
+
+@pytest.mark.parametrize("reload", [False, True])
+def test_slow_task_page_yields_to_evidence_and_discards_stale_observations(monkeypatch, reload):
+    entered, finish = Event(), Event()
+    lock = RLock()
+    page = {"tasks": [{"assignment": "exact-assignment"}], "next_cursor": None}
+
+    def slow_page(agent_id, root_id, *, cursor):
+        assert (agent_id, root_id, cursor) == ("agent", "root", None)
+        entered.set()
+        assert finish.wait(5)
+        return page
+
+    def acknowledge(agent_id, root_id, evidence, *, _defer_output):
+        assert (agent_id, root_id, evidence) == ("agent", "root", {"sequence": 1})
+        assert not _defer_output
+        return {"sequence": 1}
+
+    session = SimpleNamespace(
+        agent_id="agent", agent_root_id="root", state=agent_sessions.AgentSessionState.ACTIVE,
+        policy_revision="policy", capabilities={
+            agent_sessions.SLURM_SUBMISSION_CAPABILITY, agent_sessions.SLURM_PENDING_EFFECTS_CAPABILITY,
+        },
+    )
+    connection = SimpleNamespace(execute=lambda *_: SimpleNamespace(fetchone=lambda: None))
+    daemon: Any = SimpleNamespace(
+        _cycle_lock=lock, _state_guard=lambda: lock, _connection=lambda: nullcontext(connection),
+        _epoch="epoch", _scheduling_epoch="before", _require_started=lambda: "owner",
+        _execution=SimpleNamespace(slurm_agent_task_page=slow_page, acknowledge_slurm_pending=acknowledge),
+    )
+    monkeypatch.setattr(agent_sessions, "_session_from_row", lambda *_, **__: session)
+    rule = SimpleNamespace(principal_id="principal", agent_id="agent")
+    service = agent_sessions.AgentSessionService(daemon, cast(Any, None))
+    monkeypatch.setattr(service, "_authorize", lambda _: (rule, "policy"))
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        observation = workers.submit(service.slurm_work, "session", "epoch")
+        try:
+            assert entered.wait(3)
+            receipt = workers.submit(service.slurm_work, "session", "epoch", {"sequence": 1})
+            assert receipt.result(timeout=2) == {"sequence": 1}
+            if reload:
+                with lock:
+                    daemon._scheduling_epoch = "after"
+        finally:
+            finish.set()
+        expected = {"tasks": [], "next_cursor": None} if reload else page
+        assert observation.result(timeout=3) == expected

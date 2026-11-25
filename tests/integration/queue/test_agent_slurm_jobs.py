@@ -202,11 +202,14 @@ def test_outbound_service_settles_slurm_while_drained(
     monkeypatch.setattr(deployment, "_OUTBOUND_POLL_WAIT_MS", 100)
     drained_progress = Event()
     retries = []
+    resident_polls = []
     original_steps = deployment._steps
     from loom.queue import agent_session_transport as transport_module
     original_dispatch = transport_module._dispatch
 
     def observed_dispatch(view, operation, payload):
+        if operation == "poll":
+            resident_polls.append(operation)
         try:
             return original_dispatch(view, operation, payload)
         except QueueConflictError as error:
@@ -467,6 +470,7 @@ def test_outbound_service_settles_slurm_while_drained(
         daemon.stop()
         assert not thread.is_alive()
         assert not failures
+        assert not resident_polls, "An external-only agent must not start resident work polls"
         # This fixture owns only the manager thread; the scheduler is simulated
         # and a SLURM-only agent must never start a resident supervisor.
         assert not (tmp_path / "agent" / "supervisor").exists()

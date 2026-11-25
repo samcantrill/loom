@@ -2795,7 +2795,7 @@ def test_slow_shared_publication_allows_unrelated_gpu_dispatch_and_cancellation(
         assert token.validates(execution, record, "fence-1")
         return publication.accept_publication(token.prepared)
 
-    service: Any = SimpleNamespace(_daemon=daemon, _slurm_work_locked=locked)
+    service: Any = SimpleNamespace(_daemon=daemon, _slurm_work_for_session=locked)
     evidence = {"result_operation": "commit", "assignment_id": workspace.root.name}
     try:
         with ThreadPoolExecutor(max_workers=2) as workers:
