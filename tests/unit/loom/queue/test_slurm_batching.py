@@ -76,6 +76,47 @@ def _query_responses(monkeypatch, runner, response):
     monkeypatch.setattr(runner, "discover_named_operations", query)
 
 
+@pytest.mark.parametrize("release_field", ["release_requested", "compute_release_requested"])
+def test_release_refreshes_missing_accounting_identity(tmp_path, monkeypatch, release_field):
+    from loom.pipeline.executors.slurm.ready_stage import SlurmContainmentReceipt
+    import loom.queue._agent_slurm as module
+
+    owner, clock, runner, profile = _batch_owner(tmp_path, monkeypatch)
+    task = _task(profile)
+    seen = []
+    def acknowledge(value):
+        seen.append(value)
+        return _ack(value)
+
+    owner.step_cycle([task], acknowledge)
+    assert owner.journal.read("operation-1").accounting_identity is None
+    task.update({release_field: True, "containment_request": {"accounting_identity": None}})
+    monkeypatch.setattr(module, "resolve_slurm_containment", lambda _profile, proof: (
+        SlurmContainmentReceipt("CONTAINED", "proof", "1", proof)
+        if proof.get("accounting_identity") else SlurmContainmentReceipt("UNKNOWN")
+    ))
+    # Reused job numbers cannot release this assignment.
+    _query_responses(monkeypatch, runner, lambda _selection: _line(1).replace("17|", "999|", 1))
+    clock[0] = 30
+    owner.step_cycle([task], acknowledge, allow_submission=False)
+    assert owner.journal.read("operation-1").accounting_identity is None
+    assert owner.has_retained_work()
+
+    _query_responses(monkeypatch, runner, lambda _selection: _line(1).replace("RUNNING", "COMPLETED"))
+    clock[0] = 120
+    owner.step_cycle([task], acknowledge, allow_submission=False)
+    identity = seen[-1]["submission"]["accounting_identity"]
+    assert identity["sluid"] == "s1" and identity["job_id"] == "17"
+    # The coordinator constructs the next containment request from published evidence.
+    task["containment_request"] = {"accounting_identity": identity}
+    clock[0] = 500
+    owner.step_cycle([task], acknowledge, allow_submission=False)
+    assert seen[-1]["provider_released"]
+    drive_until(lambda: owner.replay_pending(acknowledge), lambda: not owner.has_retained_work())
+    assert _queries(runner) == 3
+    assert sum(command == "sbatch" for command, _argv in runner.calls) == 1
+
+
 @pytest.mark.parametrize("cancel_in_batch", [False, True], ids=["other-job", "same-job"])
 def test_blocked_accounting_batch_allows_other_assignment_submission_and_cancel(tmp_path, monkeypatch, cancel_in_batch):
     from threading import Event

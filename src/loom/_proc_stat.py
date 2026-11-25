@@ -9,6 +9,9 @@ from pathlib import Path
 class ProcessStat:
     state: str
     start_ticks: str
+    parent: int
+    group: int
+    session: int
 
 
 def parse_process_stat(raw: bytes) -> ProcessStat:
@@ -17,7 +20,10 @@ def parse_process_stat(raw: bytes) -> ProcessStat:
     fields = tail.split()
     if not separator or b"(" not in prefix or len(fields) < 20:
         raise ValueError("incomplete Linux process stat record")
-    return ProcessStat(fields[0].decode("ascii"), fields[19].decode("ascii"))
+    return ProcessStat(
+        state=fields[0].decode("ascii"), start_ticks=fields[19].decode("ascii"),
+        parent=int(fields[1]), group=int(fields[2]), session=int(fields[3]),
+    )
 
 
 def read_process_stat(pid: int) -> ProcessStat:

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import fcntl
 import json
 from loom._pidfd import open_pidfd, send_pidfd_signal
+from loom._proc_stat import read_process_stat
 import os
 from pathlib import Path
 import select
@@ -30,12 +31,11 @@ class ProcessIdentity:
 
 def _facts(pid: int) -> dict:
     root = Path(f"/proc/{pid}")
-    raw = (root / "stat").read_text()
-    values = raw[raw.rindex(")") + 2:].split()
-    status = dict(line.split(":", 1) for line in (root / "status").read_text().splitlines())
+    stat = read_process_stat(pid)
+    status = dict(line.split(":", 1) for line in (root / "status").read_text(errors="surrogateescape").splitlines())
     return {
-        "pid": pid, "start_ticks": int(values[19]), "state": values[0],
-        "parent": int(values[1]), "group": int(values[2]), "session": int(values[3]),
+        "pid": pid, "start_ticks": int(stat.start_ticks), "state": stat.state,
+        "parent": stat.parent, "group": stat.group, "session": stat.session,
         "uid": tuple(map(int, status["Uid"].split())),
         "namespace_pids": tuple(map(int, status["NSpid"].split())),
     }
@@ -77,7 +77,7 @@ class _PinnedProcess:
         while True:
             self.check()
             tasks = tuple(Path(f"/proc/{self.identity.pid}/task").glob("*/status"))
-            if tasks and all(dict(line.split(":", 1) for line in p.read_text().splitlines())["State"].strip().startswith("T") for p in tasks):
+            if tasks and all(dict(line.split(":", 1) for line in p.read_text(errors="surrogateescape").splitlines())["State"].strip().startswith("T") for p in tasks):
                 return
             if monotonic() >= deadline:
                 raise QueueConflictError("namespace recovery stop observation incomplete")
