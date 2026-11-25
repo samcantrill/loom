@@ -34,7 +34,7 @@ from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from ._validated_context_cache import ValidatedContextCache
 from ._phase_timing import phase
 from ._slurm_task_page import TaskFacts, read_recoveries, read_task_page
-from threading import Event, Lock
+from threading import Lock
 from time import monotonic
 from types import MappingProxyType
 from typing import Any, cast
@@ -86,6 +86,8 @@ from loom.queue._managed_local import (
     _compose_agent_resource_providers,
     _persist_managed_result,
     _release_revision,
+    _prepare_local_workspace,
+    _run_reserved_local_assignment,
     _require_coordinator_assignment_schema,
     run_managed_local_assignment,
 )
@@ -193,6 +195,7 @@ from .local_daemon import (
     SlurmRecoveryTarget,
     _default_scheduling_components,
 )
+from ._context_preparation import PreparedAdmissionContext
 from ._coordinator_transactions import sqlite_busy
 from .local_daemon_runtime import load_managed_local_runtime_record
 from ._agent_slurm import AgentSlurmJobs, SlurmSubmissionProjection
@@ -1481,6 +1484,8 @@ class LocalDaemonExecution:
         # executing.  These tasks are deliberately keyed by assignment ID:
         # assignment identity, rather than admission identity, is the durable
         # launch/result boundary.
+        self._owner_check_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="loom-owner-check")
+        self._pending_owner_check: tuple[tuple[str | None, str | None], Future[None]] | None = None
         self._local_assignment_workers = ThreadPoolExecutor(
             max_workers=max(2, config.cpu_capacity),
             thread_name_prefix="loom-local-assignment",
@@ -1527,6 +1532,8 @@ class LocalDaemonExecution:
     def close(self) -> None:
         """Stop only assignment observers after their durable owners settle."""
 
+        self._owner_check_worker.shutdown(wait=True, cancel_futures=True)
+        self._pending_owner_check = None
         self._input_validations.close()
         self._ready_preparations.close()
         if self._slurm_agent is not None:
@@ -2100,6 +2107,23 @@ class LocalDaemonExecution:
                 "retained daemon owner state is unavailable"
             ) from None
 
+    def owner_stores_ready(self, epochs: tuple[str | None, str | None]) -> bool:
+        """Consume one checked generation or start one background validation."""
+        pending = self._pending_owner_check
+        if pending is not None:
+            prior_epochs, future = pending
+            if not future.done():
+                return False
+            self._pending_owner_check = None
+            if epochs == prior_epochs:
+                future.result()
+                return True
+        daemon = self._daemon_owner()
+        check = self._owner_check_worker.submit(self.open_owner_stores)
+        self._pending_owner_check = epochs, check
+        check.add_done_callback(lambda _: daemon._wake.set())
+        return False
+
     def load_context(self, admission: LocalDaemonAdmission) -> ManagedLocalIntent:
         """Read and validate inputs without binding or mutating execution owners."""
         from ._phase_timing import phase
@@ -2124,6 +2148,26 @@ class LocalDaemonExecution:
         """Bind validated inputs through the retained authority operation identity."""
         self.open_owner_stores()
         intent = self.load_context(admission) if prepared_intent is None else prepared_intent
+        return self._bind_admission_context(admission, intent)
+
+    def prepare_admission_context(
+        self, admission: LocalDaemonAdmission, epochs: tuple[str | None, str | None],
+    ) -> PreparedAdmissionContext:
+        """Load and bind one immutable admission without occupying the scheduler."""
+        daemon = self._daemon_owner()
+        lifetime = daemon._publication_guards
+        intent = self.load_context(admission)
+        self.open_owner_stores()
+        with lifetime.hold("admission-bind-" + admission.authority_operation_id):
+            with daemon._state_guard():
+                if (daemon._execution is not self or (daemon._epoch, daemon._scheduling_epoch) != epochs
+                    or daemon._stop.is_set()):
+                    raise QueueConflictError("admission owner changed during preparation")
+            return self._bind_admission_context(admission, intent)
+
+    def _bind_admission_context(
+        self, admission: LocalDaemonAdmission, intent: ManagedLocalIntent,
+    ) -> PreparedAdmissionContext:
         authority = self._authority_store(admission.run_uri)
         receipt = authority.bind_coordinator_admission(
             admission.run_uri,
@@ -2209,10 +2253,10 @@ class LocalDaemonExecution:
 
     def reconcile_admission(
         self, admission: LocalDaemonAdmission,
-        *, prepared_intent: ManagedLocalIntent | None = None,
+        *, prepared_intent: ManagedLocalIntent | None = None, prepared_context: PreparedAdmissionContext | None = None,
     ) -> LocalDaemonExecutionOutcome:
         """Reconcile one run into durable ready work without selecting capacity."""
-        return _run_progress.reconcile_admission(self, admission, prepared_intent=prepared_intent)
+        return _run_progress.reconcile_admission(self, admission, prepared_intent=prepared_intent, prepared_context=prepared_context)
 
 
     def _settled_terminal_outcome(
@@ -6343,7 +6387,9 @@ class LocalDaemonExecution:
             return True
         if self._attempt_cancel_requested(record.run_uri, record.attempt_id):
             return False
-        accepted = Event()
+        from functools import partial
+        from loom.fingerprints import hash_mapping
+
         journal = self.journal
         supervisor = self.supervisor
         agent_root = self.config.agent_root
@@ -6353,74 +6399,69 @@ class LocalDaemonExecution:
         if agent_root is None or launch_profile is None:
             raise QueueServiceError("local assignment binding is unavailable")
 
-        def started() -> None:
-            execution_started()
-            accepted.set()
+        # The request phase already owns the exact worker inputs. Preserve the
+        # staged assignment across observation-only projection refreshes, but
+        # a new offer, policy, claim, or epoch requires its own preparation.
+        workspace_identity = hash_mapping({
+            "epochs": list(epochs) if epochs is not None else None,
+            "decision": {key: value for key, value in decision_receipt.items()
+                         if key not in {"stage_work_revision", "as_of"}},
+            "claims": [claim.fingerprint for claim in claims],
+        })
+        stage_key = (record.run_uri, record.stage_name)
+        prepared, _reason = self._ready_preparations.poll(
+            stage_key, workspace_identity, partial(
+                _prepare_local_workspace, assignment=assignment, worker_request=worker_request,
+                claims=claims, providers=self.providers, journal=journal, run_store=self.run_store,
+                decision_receipt=dict(decision_receipt), agent_root=agent_root,
+                resident_launch_profile=launch_profile, durable_files=self.config.durable_files,
+                embedded_recovery=self._embedded_recovery,
+            ), phase="local-workspace",
+        )
+        if prepared is None:
+            return False
 
-        @contextmanager
-        def reservation_guard() -> Iterator[None]:
-            daemon = self._daemon_owner()
-            current = self.stage_work_store.find_stage_work(record.stage_work_id)
-            if (
-                current is None
-                or replace(
-                    current,
-                    authority_revision=record.authority_revision,
-                    projection_revision=record.projection_revision,
-                    scheduling_diagnostics=record.scheduling_diagnostics,
-                ) != record
-                or current.scheduling_state is not SchedulingProjectionState.READY
-            ):
-                raise CancelledError("local preparation superseded before reservation")
-            # Projection refreshes (including another stage's authority
-            # progress) do not change this decision's inputs. Rebind only
-            # its CAS revision after comparing all stage scheduling facts.
-            # Reservation still checks current capacity/offer ownership.
-            decision_receipt["stage_work_revision"] = current.projection_revision
-            yield
-            daemon._activate_admission(admission.admission_id)
+        # Only the scheduling owner acquires capacity for a freshly prepared
+        # workspace. The decision CAS checks the current projection and the
+        # transaction checks cancellation and reload on the committing owner.
+        assignment = prepared.assignment
+        assignment_id = assignment.assignment_id
+        daemon = self._daemon_owner()
+        try:
+            self.coordinator.reserve(
+                assignment, claims, max_parallel_stages=intent.max_parallel_stages,
+                decision_receipt=decision_receipt,
+                _reservation_transaction=lambda: self._reservation_transaction(record, epochs),
+            )
+        except (ManagedLocalError, CancelledError):
+            raise
+        except Exception:
+            # An execution commit may have succeeded. The recovery owner
+            # reads the exact assignment before permitting another attempt.
+            self._local_preparing[record.stage_work_id] = assignment_id
+            self._pending_local_assignment_reconciliation[assignment_id] = record.run_uri
+            self._local_assignment_retries.setdefault(assignment_id, _RecoveryRetry())
             daemon._wake.set()
+            raise
 
         def observe_and_finalize() -> None:
-            run_managed_local_assignment(
-                coordinator=self.coordinator,
-                authority=authority,
-                journal=journal,
-                assignment=assignment,
-                worker_request=worker_request,
-                claims=claims,
-                providers=self.providers,
-                run_store=self.run_store,
-                max_parallel_stages=intent.max_parallel_stages,
-                decision_receipt=decision_receipt,
-                agent_root=agent_root,
-                supervisor=supervisor,
-                resident_launch_profile=launch_profile,
-                embedded_recovery=self._embedded_recovery,
+            _run_reserved_local_assignment(
+                prepared, coordinator=self.coordinator, authority=authority, journal=journal,
+                providers=self.providers, run_store=self.run_store, supervisor=supervisor,
+                resident_launch_profile=launch_profile, embedded_recovery=self._embedded_recovery,
                 cancellation_requested=lambda: self._install_cancellation_if_requested(
                     admission, authority, intent.plan.stage_order, attempt_id=assignment.attempt_id
                 ),
-                suspend_requested=(
-                    None if self.daemon is None else self.daemon._stop.is_set
-                ),
-                execution_started=started, durable_files=self.config.durable_files,
-                reservation_guard=reservation_guard,
-                _reservation_transaction=lambda: self._reservation_transaction(record, epochs))
+                suspend_requested=daemon._stop.is_set, execution_started=execution_started,
+            )
 
-        prior = self._local_assignment_futures.get(assignment.assignment_id)
-        if prior is None:
-            prior = self._local_assignment_workers.submit(observe_and_finalize)
-            daemon = self.daemon
-            if daemon is not None:
-                prior.add_done_callback(lambda _future: daemon._wake.set())
-            self._local_assignment_futures[assignment.assignment_id] = prior
-            self._local_preparing[record.stage_work_id] = assignment.assignment_id
-        # The saga may still be inspecting inputs. Its guarded reservation is
-        # the only launch authorization; do not hold scheduling while waiting.
-        if accepted.is_set():
-            self._ready_preparations.discard((record.run_uri, record.stage_name))
-            return True
-        return False
+        future = self._local_assignment_workers.submit(observe_and_finalize)
+        self._local_assignment_futures[assignment_id] = future
+        self._local_preparing[record.stage_work_id] = assignment_id
+        future.add_done_callback(lambda _: daemon._wake.set())
+        self._ready_preparations.discard(stage_key)
+        daemon._activate_admission(admission.admission_id)
+        return True
 
     def _remote_delivery_retained(self, assignment_id: str) -> bool:
         with self.config.connect_database(self.config.control_database) as conn:

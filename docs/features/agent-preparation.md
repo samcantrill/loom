@@ -1819,6 +1819,16 @@ from GPU dispatch opportunities. The current implementation still reads active
 admission metadata for the global eligibility view; the bound applies to heavy
 run reconciliation, not total metadata cardinality.
 
+Background owner-store validation and admission binding use bounded workers.
+Explicit reconciliation still reports an unavailable owner. Each reservation
+rechecks the execution-store identity, scheduling epoch and cancellation at
+its own transaction boundary. Embedded input staging can complete on multiple
+workers. The scheduling owner selects among eligible completed workspaces in
+priority order and commits the exact claim before offering that capacity again.
+Binding, grant and launch continue with the committed assignment. A lost commit
+reply recovers its original assignment from the execution store and staged
+workspace. A pending workspace holds no CPU or GPU capacity.
+
 Slow coordinator cycles (at least one second) emit bounded local phase timings
 to the existing service stderr log, including admission reconciliation. The
 existing diagnostic collector caps its span list; no remote reporting is added.

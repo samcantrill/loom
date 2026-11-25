@@ -9,15 +9,20 @@ from typing import TYPE_CHECKING
 from time import monotonic
 
 if TYPE_CHECKING:
+    from ._coordinator_run_authority import _ScopedCoordinatorAuthority
     from .local_daemon import LocalDaemonAdmission
     from .local_daemon_execution import ManagedLocalIntent
+
+
+type PreparedAdmissionContext = tuple["ManagedLocalIntent", "_ScopedCoordinatorAuthority"]
+type ContextLoader = Callable[["LocalDaemonAdmission", tuple[str | None, str | None]], PreparedAdmissionContext]
 
 
 @dataclass(frozen=True)
 class PendingContext:
     admission: LocalDaemonAdmission
     epochs: tuple[str | None, str | None]
-    future: Future[ManagedLocalIntent]
+    future: Future[PreparedAdmissionContext]
     for_dispatch: bool
 
 
@@ -54,7 +59,7 @@ class ContextPreparations:
 
     def try_submit(
         self, admission: LocalDaemonAdmission, epochs: tuple[str | None, str | None],
-        load: Callable[[LocalDaemonAdmission], ManagedLocalIntent],
+        load: ContextLoader,
         *, for_dispatch: bool = False,
     ) -> bool:
         """Account for one admission, deferring it only when both slots are occupied."""
@@ -71,7 +76,7 @@ class ContextPreparations:
         # available for admissions that still need their initial reconciliation.
         if for_dispatch and any(item.for_dispatch for item in self._pending.values()):
             return False
-        future = self._workers.submit(copy_context().run, _load_context, load, admission)
+        future = self._workers.submit(copy_context().run, _load_context, load, admission, epochs)
         self._pending[identity] = PendingContext(admission, epochs, future, for_dispatch)
         future.add_done_callback(lambda _future: self._wake())
         return True
@@ -101,10 +106,10 @@ class ContextPreparations:
 
 
 def _load_context(
-    load: Callable[[LocalDaemonAdmission], ManagedLocalIntent],
-    admission: LocalDaemonAdmission,
-) -> ManagedLocalIntent:
+    load: ContextLoader,
+    admission: LocalDaemonAdmission, epochs: tuple[str | None, str | None],
+) -> PreparedAdmissionContext:
     from ._phase_timing import reported_phases
 
     with reported_phases("context_preparation", operation_id=admission.authority_operation_id):
-        return load(admission)
+        return load(admission, epochs)

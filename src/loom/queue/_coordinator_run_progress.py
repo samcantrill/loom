@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from loom.pipeline.orchestration import ManagedExecutionRequirement, SQLiteStageWorkStore, StageWorkRecord
     from loom.pipeline.planning import AttemptReadiness, StagePlan
     from loom.pipeline.stores.read_models import BackendRevision
+    from ._context_preparation import PreparedAdmissionContext
     from ._coordinator_run_authority import _ScopedCoordinatorAuthority
     from .local_daemon import LocalDaemonAdmission
     from .local_daemon_execution import LocalDaemonExecution, ManagedLocalIntent
@@ -48,13 +49,14 @@ def _dispatch_offering(self, record, phase):
 
 def reconcile_admission(
     self: LocalDaemonExecution, admission: LocalDaemonAdmission,
-    *, prepared_intent: ManagedLocalIntent | None = None,
+    *, prepared_intent: ManagedLocalIntent | None = None, prepared_context: PreparedAdmissionContext | None = None,
 ) -> LocalDaemonExecutionOutcome:
     """Reconcile one run into durable ready work without selecting capacity."""
 
     if self.daemon is not None:
         self._cycle_context_epochs.setdefault(admission.admission_id, (self.daemon._epoch, self.daemon._scheduling_epoch))
-    intent, scoped_authority = self._admission_context(admission, prepared_intent=prepared_intent)
+    intent, scoped_authority = (self._admission_context(admission, prepared_intent=prepared_intent)
+                               if prepared_context is None else prepared_context)
     self._cycle_contexts[admission.admission_id] = (intent, scoped_authority)
     if self.daemon is None:
         outcome = _reconcile_admission(self, admission, intent, scoped_authority)
@@ -339,7 +341,7 @@ def _schedule_window(
         for identity in ready_admissions:
             admission = admissions.get(identity)
             if admission is not None and self._cycle_context_epochs.get(identity) != epochs:
-                if not daemon._contexts.try_submit(admission, epochs, self.load_context, for_dispatch=True):
+                if not daemon._contexts.try_submit(admission, epochs, self.prepare_admission_context, for_dispatch=True):
                     break
         admissions = {key: value for key, value in admissions.items()
                       if self._cycle_context_epochs.get(key) == epochs}

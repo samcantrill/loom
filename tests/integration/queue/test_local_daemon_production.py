@@ -1062,7 +1062,7 @@ def test_daemon_reconciles_cancelling_and_wait_does_not_treat_it_as_terminal(
     def reconcile_admission(
         _self: LocalDaemonExecution,
         admission: LocalDaemonAdmission,
-        *, prepared_intent=None,
+        *, prepared_context=None,
     ) -> LocalDaemonExecutionOutcome:
         if admission.state is LocalDaemonAdmissionState.CANCELLING:
             saw_cancelling.set()
@@ -1790,6 +1790,70 @@ def test_daemon_global_priority_preempts_earlier_lower_priority_admission(
         daemon.stop()
 
 
+def test_one_ready_slot_is_awarded_in_priority_order_after_both_workspaces_finish(tmp_path, monkeypatch):
+    from threading import current_thread
+    from loom.queue import local_daemon_execution as execution_module
+
+    root = tmp_path / "runs"
+    uris = {name: _persist_sleep_run(root, run_name=name + "-run", stage_name=name)
+            for name in ("low", "high")}
+    config = LocalDaemonConfig(
+        coordinator_root=tmp_path / "coordinator", agent_root=tmp_path / "agent",
+        run_store_root=root, resident_worker_launch_profile=_launch_profile(), cpu_capacity=1,
+        admission_priority_resolver=lambda uri: 10 if uri == uris["high"] else 0,
+    )
+    staged = {name: Event() for name in uris}
+    release = Event()
+    original = execution_module._prepare_local_workspace
+
+    def hold_staged(**kwargs):
+        workspace = original(**kwargs)
+        staged[workspace.assignment.stage_name].set()
+        assert release.wait(20)
+        return workspace
+
+    monkeypatch.setattr(execution_module, "_prepare_local_workspace", hold_staged)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+        execution = daemon._execution
+        assert execution is not None
+        reserve = execution.coordinator.reserve
+        committed = []
+
+        def lose_first_reply(assignment, *args, **kwargs):
+            receipt = reserve(assignment, *args, **kwargs)
+            if assignment.assignment_id not in {item[0] for item in committed}:
+                committed.append((assignment.assignment_id, assignment.stage_name, current_thread()))
+                if len(committed) == 1:
+                    raise OSError("lost the execution commit reply")
+            return receipt
+
+        monkeypatch.setattr(execution.coordinator, "reserve", lose_first_reply)
+        with daemon._reconcile_guard:
+            for name, uri in uris.items():
+                client.submit(LocalDaemonAdmissionRequest(name, uri))
+        assert all(event.wait(15) for event in staged.values())
+        with daemon._reconcile_guard:
+            assert not committed
+            futures = [execution._ready_preparations._pending[uri, name].phases["local-workspace"].future
+                       for name, uri in uris.items()]
+            release.set()
+            for future in futures:
+                future.result(timeout=5)
+        for name in ("high", "low"):
+            assert client.wait(name, timeout_seconds=25).state is LocalDaemonAdmissionState.SUCCEEDED
+        assert [(name, owner) for _, name, owner in committed] == [("high", daemon._thread), ("low", daemon._thread)]
+        with sqlite3.connect(config.execution_database) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM coordinator_assignments WHERE state = 'released'").fetchone() == (2,)
+        _wait_for_supervisor_launch_count(config, expected=2)
+    finally:
+        release.set()
+        daemon.stop()
+
+
 def test_admission_recovery_backoff_is_scoped_and_owner_progress_wakes_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1864,6 +1928,41 @@ def test_admission_recovery_backoff_is_scoped_and_owner_progress_wakes_it(
         assert daemon._admission(unhealthy.admission_id).state is LocalDaemonAdmissionState.BLOCKED
         assert unhealthy_uri not in daemon._admission_retries
     finally:
+        daemon.stop()
+
+
+def test_a_slow_authority_admission_bind_allows_an_independent_run_to_finish(tmp_path, monkeypatch):
+    run_root = tmp_path / "runs"
+    slow = _persist_sleep_run(run_root, run_name="binding", stage_name="blocked", seconds=0.1)
+    peer = _persist_sleep_run(run_root, run_name="peer", stage_name="independent", seconds=0.1)
+    config = _daemon_config(tmp_path)
+    entered, proceed = Event(), Event()
+    bind = SQLitePerRunAuthorityStore.bind_coordinator_admission
+
+    def delayed(store, uri, request):
+        if uri == slow:
+            entered.set()
+            assert proceed.wait(40)
+        return bind(store, uri, request)
+
+    monkeypatch.setattr(SQLitePerRunAuthorityStore, "bind_coordinator_admission", delayed)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        client = daemon.client_view(LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT))
+        client.submit(LocalDaemonAdmissionRequest("blocked-bind", slow))
+        assert entered.wait(10)
+        client.submit(LocalDaemonAdmissionRequest("healthy-peer", peer))
+        assert client.wait("healthy-peer", timeout_seconds=25).state is LocalDaemonAdmissionState.SUCCEEDED
+        assert not proceed.is_set()
+        assert client.cancel("blocked-bind").cancellation_operation_id
+        proceed.set()
+        assert client.wait("blocked-bind", timeout_seconds=20).state is LocalDaemonAdmissionState.CANCELLED
+        with sqlite3.connect(config.execution_database) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM coordinator_assignments WHERE run_uri=?", (slow,)).fetchone() == (0,)
+    finally:
+        proceed.set()
         daemon.stop()
 
 
@@ -3904,7 +4003,9 @@ def test_blocked_resident_input_inspection_allows_peer_dispatch_and_cancellation
     second_uri = _persist_sleep_run(run_root, run_name="peer-input", stage_name="peer")
     config = LocalDaemonConfig(
         coordinator_root=tmp_path / "coordinator", agent_root=tmp_path / "agent",
-        run_store_root=run_root, resident_worker_launch_profile=_launch_profile(), cpu_capacity=2,
+        run_store_root=run_root, resident_worker_launch_profile=_launch_profile(),
+        cpu_capacity=2 if cancel_inspection else 1,
+        admission_priority_resolver=lambda uri: 10 if uri == first_uri else 0,
     )
     entered, release = Event(), Event()
     original = _ResidentAssignmentWorkspace.persist_request

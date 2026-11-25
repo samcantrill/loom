@@ -3518,36 +3518,27 @@ def grant_and_start_managed_assignment(
     return fence
 
 
-def run_managed_local_assignment(
-    *,
-    coordinator: SQLiteCoordinatorAssignments,
-    authority: PreparedAttemptExecutionAuthority,
-    journal: SQLiteAgentJournal,
-    assignment: ManagedAssignment,
-    worker_request: StageWorkerRequest,
-    claims: Sequence[ResourceClaim],
-    providers: Mapping[str, AgentResourceProvider],
-    run_store: LocalRunStore,
-    max_parallel_stages: int | None,
-    decision_receipt: Mapping[str, PlainData],
-    agent_root: Path,
-    supervisor: AgentProcessSupervisorClient,
+@dataclass(frozen=True)
+class _PreparedLocalWorkspace:
+    assignment: ManagedAssignment
+    worker_request: StageWorkerRequest
+    commands: tuple[ClaimCommand, ...]
+    workspace: _ResidentAssignmentWorkspace
+    delivered: _ResidentAssignmentBundle
+    predecessor: str | None
+    continuing: bool
+
+
+def _prepare_local_workspace(
+    *, assignment: ManagedAssignment, worker_request: StageWorkerRequest,
+    claims: Sequence[ResourceClaim], providers: Mapping[str, AgentResourceProvider],
+    journal: SQLiteAgentJournal, run_store: LocalRunStore,
+    decision_receipt: Mapping[str, PlainData], agent_root: Path,
     resident_launch_profile: ResidentWorkerLaunchProfile,
-    durable_files: Literal["best_effort", "strict"] = "best_effort",
-    cancellation_requested: Callable[[], bool] | None = None,
-    suspend_requested: Callable[[], bool] | None = None,
-    execution_started: Callable[[], None] | None = None,
-    reservation_guard: Callable[[], AbstractContextManager[None]] | None = None,
-    _reservation_transaction: Callable[[], AbstractContextManager[sqlite3.Connection]] | None = None,
-    embedded_recovery: EmbeddedRecovery | None = None,
-) -> ManagedExecutionReceipt:
-    """Run one exact local assignment through the durable Phase 2 saga.
-
-    The coordinator, authority, and journal remain separate transaction owners.
-    Each cross-owner fact is replayable, while this bounded composition drives
-    them synchronously for local tests and later command facades.
-    """
-
+    durable_files: Literal["best_effort", "strict"],
+    embedded_recovery: EmbeddedRecovery | None,
+) -> _PreparedLocalWorkspace:
+    """Stage the exact restartable workspace before acquiring coordinator capacity."""
     _require_worker_assignment_match(assignment, worker_request)
     predecessor = worker_request.metadata.get("managed_output_predecessor")
     if predecessor is not None and (
@@ -3741,6 +3732,46 @@ def run_managed_local_assignment(
     elif workspace_state not in {"GRANTED", "STARTED", "RESULT"}:
         raise ManagedLocalError("resident workspace state is not replayable")
 
+    return _PreparedLocalWorkspace(assignment, worker_request, commands, workspace, delivered, predecessor, continuing)
+
+
+def run_managed_local_assignment(
+    *,
+    coordinator: SQLiteCoordinatorAssignments,
+    authority: PreparedAttemptExecutionAuthority,
+    journal: SQLiteAgentJournal,
+    assignment: ManagedAssignment,
+    worker_request: StageWorkerRequest,
+    claims: Sequence[ResourceClaim],
+    providers: Mapping[str, AgentResourceProvider],
+    run_store: LocalRunStore,
+    max_parallel_stages: int | None,
+    decision_receipt: Mapping[str, PlainData],
+    agent_root: Path,
+    supervisor: AgentProcessSupervisorClient,
+    resident_launch_profile: ResidentWorkerLaunchProfile,
+    durable_files: Literal["best_effort", "strict"] = "best_effort",
+    cancellation_requested: Callable[[], bool] | None = None,
+    suspend_requested: Callable[[], bool] | None = None,
+    execution_started: Callable[[], None] | None = None,
+    reservation_guard: Callable[[], AbstractContextManager[None]] | None = None,
+    _reservation_transaction: Callable[[], AbstractContextManager[sqlite3.Connection]] | None = None,
+    embedded_recovery: EmbeddedRecovery | None = None,
+) -> ManagedExecutionReceipt:
+    """Run one exact local assignment through the durable Phase 2 saga.
+
+    The coordinator, authority, and journal remain separate transaction owners.
+    Each cross-owner fact is replayable, while this bounded composition drives
+    them synchronously for local tests and later command facades.
+    """
+
+    prepared = _prepare_local_workspace(
+        assignment=assignment, worker_request=worker_request, claims=claims,
+        providers=providers, journal=journal, run_store=run_store,
+        decision_receipt=decision_receipt, agent_root=agent_root,
+        resident_launch_profile=resident_launch_profile, durable_files=durable_files,
+        embedded_recovery=embedded_recovery,
+    )
     # The assignment-local bundle and exact bytes precede the logical reserve.
     # A crash after reserve can therefore reconstruct claims and launch identity
     # without serializing the coordinator run URI into the child workspace.
@@ -3752,6 +3783,31 @@ def run_managed_local_assignment(
             decision_receipt=decision_receipt,
             _reservation_transaction=_reservation_transaction,
         )
+    return _run_reserved_local_assignment(
+        prepared, coordinator=coordinator, authority=authority, journal=journal,
+        providers=providers, run_store=run_store, supervisor=supervisor,
+        resident_launch_profile=resident_launch_profile, cancellation_requested=cancellation_requested,
+        suspend_requested=suspend_requested, execution_started=execution_started, embedded_recovery=embedded_recovery,
+    )
+
+
+def _run_reserved_local_assignment(
+    staged: _PreparedLocalWorkspace, *, coordinator: SQLiteCoordinatorAssignments,
+    authority: PreparedAttemptExecutionAuthority, journal: SQLiteAgentJournal,
+    providers: Mapping[str, AgentResourceProvider], run_store: LocalRunStore,
+    supervisor: AgentProcessSupervisorClient, resident_launch_profile: ResidentWorkerLaunchProfile,
+    cancellation_requested: Callable[[], bool] | None,
+    suspend_requested: Callable[[], bool] | None, execution_started: Callable[[], None] | None,
+    embedded_recovery: EmbeddedRecovery | None,
+) -> ManagedExecutionReceipt:
+    """Drive the authority, journal and supervisor for the durable reservation."""
+    assignment = staged.assignment
+    worker_request = staged.worker_request
+    commands = staged.commands
+    workspace = staged.workspace
+    delivered = staged.delivered
+    predecessor = staged.predecessor
+    continuing = staged.continuing
     authority.bind_prepared_attempt(
         assignment.run_uri,
         assignment_id=assignment.assignment_id,

@@ -36,7 +36,7 @@ from pathlib import Path
 import shutil
 import sqlite3
 import stat
-from threading import Event, RLock, Thread
+from threading import Event, RLock, Thread, current_thread
 import time
 from typing import TYPE_CHECKING, Any, Iterator, Literal, cast
 from uuid import uuid4
@@ -2764,11 +2764,23 @@ class LocalDaemon:
         from ._phase_timing import reported_phases
 
         with reported_phases("coordinator.reconcile_cycle"):
+            checked = None
+            if current_thread() is not self._thread:
+                # An explicit caller observes owner loss synchronously. Its
+                # filesystem wait need not own the background scheduling turn.
+                with self._state_guard():
+                    self._require_started()
+                    owner = self._execution
+                    epochs = (self._epoch, self._scheduling_epoch)
+                if owner is None:
+                    raise QueueServiceError("local daemon execution is absent")
+                owner.open_owner_stores()
+                checked = (owner, epochs)
             with self._reconcile_guard:
-                return self._reconcile_once()
+                return self._reconcile_once(checked)
 
 
-    def _reconcile_once(self) -> tuple[LocalDaemonAdmission, ...]:
+    def _reconcile_once(self, checked=None) -> tuple[LocalDaemonAdmission, ...]:
         self._require_started()
         self._preparations.reconcile()
         with self._state_guard():
@@ -2780,7 +2792,9 @@ class LocalDaemon:
             execution = self._execution
         if execution is None:
             raise QueueServiceError("local daemon execution is absent")
-        execution.open_owner_stores()
+        epochs = (self._epoch, self._scheduling_epoch)
+        if checked != (execution, epochs) and not execution.owner_stores_ready(epochs):
+            return ()
         self._resume_pending_admission_retries(execution)
         self._resume_pending_recoveries(execution)
         execution.begin_cycle()
@@ -2846,9 +2860,9 @@ class LocalDaemon:
             if retry is not None and not retry.ready(progress):
                 continue
             try:
-                intent = preparation.future.result()  # completed() only returns done futures
+                context = preparation.future.result()  # completed() only returns done futures
                 execution._cycle_context_epochs[admission.admission_id] = preparation.epochs
-                outcome = execution.reconcile_admission(admission, prepared_intent=intent)
+                outcome = execution.reconcile_admission(admission, prepared_context=context)
             except QueueConflictError:
                 bulk.discard(("run", admission.run_uri))
                 bulk.discard(("dispatch", admission.run_uri))
@@ -2955,7 +2969,7 @@ class LocalDaemon:
             retry = self._admission_retries.get(admission.run_uri)
             if retry is not None and not retry.ready((admission.revision, epochs[1])):
                 return True
-            return self._contexts.try_submit(admission, epochs, execution.load_context)
+            return self._contexts.try_submit(admission, epochs, execution.prepare_admission_context)
 
         visited = self._admission_scan.take(admissions, visit)
         if self._admission_scan.high_water is not None and self._contexts.has_capacity():

@@ -2286,6 +2286,38 @@ def test_start_rejects_current_schema_owner_substitution(
         LocalDaemon(config).start()
 
 
+def test_paused_background_owner_validation_releases_the_reconciliation_turn(tmp_path, monkeypatch):
+    from threading import current_thread
+    from loom.queue.local_daemon_execution import LocalDaemonExecution
+
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    entered, release = Event(), Event()
+    calls = []
+    original = LocalDaemonExecution.open_owner_stores
+
+    def held(execution):
+        if current_thread().name.startswith("loom-owner-check"):
+            calls.append(execution)
+            entered.set()
+            assert release.wait(10)
+        return original(execution)
+
+    monkeypatch.setattr(LocalDaemonExecution, "open_owner_stores", held)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        assert entered.wait(3)
+        with ThreadPoolExecutor(max_workers=1) as workers:
+            assert workers.submit(daemon.reconcile_once).result(timeout=2) == ()
+            daemon._wake.set()
+            assert workers.submit(daemon.reconcile_once).result(timeout=2) == ()
+            assert len(calls) == 1
+    finally:
+        release.set()
+        daemon.stop()
+
+
 def test_owner_store_validation_is_once_per_operation_not_cached_across_operations(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
