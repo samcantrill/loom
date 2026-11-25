@@ -1,4 +1,4 @@
-"""Bounded disposable byte proofs; reconciliation alone applies completions."""
+"""Bounded producer byte proofs and their exact completion transactions."""
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
@@ -26,13 +26,15 @@ class ResultVerifications:
     def __init__(self, wake: Callable[[], None]) -> None:
         self.bulk = BulkOperations(wake)
         self._pending: dict[str, PendingResult] = {}
+        self._applying: dict[str, Future[None]] = {}
         self._closed = False
 
     def submit(self, claim: Mapping[str, Any], epochs: tuple[str | None, str | None],
                result: Mapping[str, PlainData], outputs: Mapping[str, ArtifactRef],
                verify: Callable[[Mapping[str, ArtifactRef]], None]) -> None:
         identity = claim["claim_id"]
-        if self._closed or identity in self._pending or len(self._pending) >= 2:
+        if (self._closed or identity in self._pending or identity in self._applying
+                or len(self._pending) + len(self._applying) >= 2):
             return
         future = self.bulk.submit(
             identity, "action_result_byte_verification", verify, dict(outputs)
@@ -46,6 +48,21 @@ class ResultVerifications:
         for item in completed:
             del self._pending[item.claim["claim_id"]]
         return completed
+
+    def advance(self, apply: Callable[[PendingResult], None]) -> None:
+        """Offer completed proofs without waiting for final authority or commit."""
+        for identity, future in tuple(self._applying.items()):
+            if future.done():
+                del self._applying[identity]
+                future.result()
+        for identity, proof in tuple(self._pending.items()):
+            if not proof.future.done():
+                continue
+            with self.bulk.offering(("producer-proof", identity)):
+                future = self.bulk.submit(identity, "action_result_completion", apply, proof)
+            if future is not None:
+                self._applying[identity] = future
+                del self._pending[identity]
 
     def running(self) -> bool:
         return self.bulk.running()

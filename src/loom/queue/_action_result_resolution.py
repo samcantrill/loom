@@ -41,6 +41,7 @@ from loom.serialization import PlainData
 
 from ._action_results import ActionResults
 from ._run_observations import ObservationSteps
+from ._result_verification import PendingResult
 from ._phase_timing import PhaseTimings, phase
 from ._preparation_operations import _PendingActionVerification
 from .errors import QueueConflictError
@@ -683,26 +684,33 @@ class ActionResultResolution:
         return False
 
     def complete_verifications(self) -> None:
-        for completed in self.daemon._result_verifications.completed():
-            with phase("action_result_completion_apply",
-                       operation_id=str(completed.claim["claim_id"])):
-                claim, result = completed.claim, completed.result
-                if completed.epochs != (self.daemon._epoch, self.daemon._scheduling_epoch):
-                    continue
-                current = self.store.claim(claim["claim_id"])
-                keys = ("revision", "owner_run_uri", "owner_node", "attempt_id", "assignment_id", "fencing_token")
-                if any(current[key] != claim[key] for key in keys):
-                    continue
-                try:
-                    completed.future.result()
-                    self._checked_result_outputs(current, result)
-                except (ArtifactStoreError, OSError, QueueConflictError):
-                    self.store.fail(claim["claim_id"], {"code": "candidate_unavailable", "original_result": result},
-                                    expected_revision=claim["revision"])
-                    continue
-                self.store.publish(claim["claim_id"], result=result,
-                                   expected_revision=claim["revision"], attempt_id=claim["attempt_id"],
-                                   assignment_id=claim["assignment_id"], fencing_token=claim["fencing_token"])
+        self.daemon._result_verifications.advance(self._apply_verified_producer)
+
+    def _apply_verified_producer(self, completed: PendingResult) -> None:
+        from ._coordinator_transactions import short_write
+
+        claim, result = completed.claim, completed.result
+        def current_owner():
+            return (self.daemon._execution is self.execution and not self.daemon._stop.is_set()
+                    and completed.epochs == (self.daemon._epoch, self.daemon._scheduling_epoch))
+
+        with phase("action_result_completion_apply", operation_id=str(claim["claim_id"])):
+            if not current_owner() or self.store.claim(claim["claim_id"])["revision"] != claim["revision"]:
+                return
+            try:
+                completed.future.result()
+                self._checked_result_outputs(claim, result)
+                failure = None
+            except (ArtifactStoreError, OSError, QueueConflictError):
+                failure = {"code": "candidate_unavailable", "original_result": result}
+
+            def commit(conn):
+                # Reload, shutdown, demand detachment, or retry can win during
+                # verification. No filesystem or authority read runs in this guard.
+                if current_owner():
+                    self.store.settle_verified_in(conn, claim, result, failure)
+
+            short_write(self.daemon, commit)
 
     def _checked_result_outputs(
         self, claim: Mapping[str, Any], result: Mapping[str, PlainData],

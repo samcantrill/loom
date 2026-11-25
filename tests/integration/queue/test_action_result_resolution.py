@@ -52,6 +52,44 @@ def test_producer_reconciliation_opens_authority_once_per_pass(tmp_path, monkeyp
         daemon.stop()
 
 
+def test_peer_run_finishes_while_final_producer_proof_is_blocked(tmp_path, monkeypatch):
+    from threading import Event
+
+    service = _text_service(tmp_path, qualify_actions=True)
+    LocalDaemon.initialize_deployment(service.daemon)
+    daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
+    daemon.start()
+    entered, release = Event(), Event()
+    try:
+        assert daemon._execution is not None
+        resolver = daemon._execution._action_resolution
+        assert resolver is not None
+        original = resolver._checked_result_outputs
+
+        def hold(claim, result, **kwargs):
+            # Production's final source check follows successful byte verification.
+            if not kwargs and claim["owner_node"] == "author" and not entered.is_set():
+                entered.set()
+                assert release.wait(100)
+            return original(claim, result, **kwargs)
+
+        monkeypatch.setattr(resolver, "_checked_result_outputs", hold)
+        first = _start(daemon, "blocked-producer")
+        assert entered.wait(40)
+        path = tmp_path / "projects" / "pipeline.yaml"
+        config = json.loads(path.read_text())
+        config["pipeline"]["stages"][0]["config"]["value"] = "independent source"
+        path.write_text(json.dumps(config))
+        peer = _start(daemon, "peer-producer")
+        assert daemon._wait(peer["queue_item_id"], timeout_seconds=50).state.value == "SUCCEEDED"
+        assert not release.is_set()
+        release.set()
+        assert daemon._wait(first["queue_item_id"], timeout_seconds=40).state.value == "SUCCEEDED"
+    finally:
+        release.set()
+        daemon.stop()
+
+
 def test_native_fresh_generation_replay_and_default_target_are_distinct(tmp_path):
     service = _text_service(tmp_path, qualify_actions=True)
     LocalDaemon.initialize_deployment(service.daemon)

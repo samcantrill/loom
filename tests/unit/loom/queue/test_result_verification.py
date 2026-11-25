@@ -143,7 +143,7 @@ def test_terminal_admission_waits_for_its_unsettled_action_claim(tmp_path, cance
 
 
 @pytest.mark.parametrize(
-    "change", ["none", "cancel", "shared_cancel", "epoch", "scheduling_epoch", "authority", "retry", "corrupt"]
+    "change", ["none", "cancel", "shared_cancel", "epoch", "scheduling_epoch", "authority", "retry", "corrupt", "final_cancel", "final_epoch"]
 )
 def test_delayed_proof_rechecks_demand_epochs_and_authority(tmp_path, monkeypatch, change):
     from types import SimpleNamespace
@@ -163,15 +163,27 @@ def test_delayed_proof_rechecks_demand_epochs_and_authority(tmp_path, monkeypatc
     captured = store.claim(identity)
     entered, release, woke = Event(), Event(), Event()
     pool = ResultVerifications(woke.set)
+    from threading import RLock
+    from loom.queue import _phase_timing
+
+    guard = RLock()
     daemon = SimpleNamespace(
-        _result_verifications=pool, _epoch="epoch", _scheduling_epoch="schedule"
+        _result_verifications=pool, _epoch="epoch", _scheduling_epoch="schedule",
+        _connection=store.connection, _state_guard=lambda: guard, _stop=Event(), _execution=object(),
     )
     resolver = object.__new__(ActionResultResolution)
-    resolver.daemon, resolver.store = daemon, store
+    resolver.daemon, resolver.store, resolver.execution = daemon, store, daemon._execution
+    diagnostics = []
+    monkeypatch.setenv("LOOM_QUALIFICATION_TIMINGS", "all")
+    monkeypatch.setattr(_phase_timing, "log_phases", diagnostics.append)
     checked = []
 
     def check_authority(claim, result):
         checked.append(claim["claim_id"])
+        if change == "final_cancel":
+            store.detach_graph("run-a", "cancel-a")
+        elif change == "final_epoch":
+            daemon._scheduling_epoch = "successor"
         if change == "authority":
             raise QueueConflictError("action candidate original authority changed")
         return {}
@@ -207,13 +219,10 @@ def test_delayed_proof_rechecks_demand_epochs_and_authority(tmp_path, monkeypatc
             )
         release.set()
         assert woke.wait(timeout=10)
-        diagnostics = []
-        with observe_phases(diagnostics.append):
-            resolver.complete_verifications()
-        assert len(diagnostics) == 1
-        assert diagnostics[0]["operation_id"] == identity
-        completion, = diagnostics[0]["spans"]
-        assert completion["action"] == "action_result_completion_apply"
+        resolver.complete_verifications()
+        pool._applying[identity].result(timeout=10)
+        completion, = [span for item in diagnostics if item["operation_id"] == identity
+                       for span in item["spans"] if span["action"] == "action_result_completion_apply"]
         assert completion["outcome"] == "complete"
         assert completion["elapsed_nanoseconds"] >= 0
         current = store.claim(identity)
@@ -227,12 +236,13 @@ def test_delayed_proof_rechecks_demand_epochs_and_authority(tmp_path, monkeypatc
                 "cancel": "settling", "epoch": "owned",
                 "scheduling_epoch": "owned", "authority": "failed",
                 "retry": "owned", "corrupt": "failed",
+                "final_epoch": "owned", "final_cancel": "settling",
             }[change]
-            assert checked == ([identity] if change == "authority" else [])
+            assert checked == ([identity] if change in {"authority", "final_cancel", "final_epoch"} else [])
         # Completion consumption cannot publish a second time.
-        with observe_phases(diagnostics.append):
-            resolver.complete_verifications()
-        assert len(diagnostics) == 1
+        observed = len(diagnostics)
+        resolver.complete_verifications()
+        assert len(diagnostics) == observed
         assert store.claim(identity) == current
     finally:
         release.set()
