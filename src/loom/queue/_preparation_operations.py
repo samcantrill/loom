@@ -64,6 +64,10 @@ if TYPE_CHECKING:
     )
 
 
+type _OperationReceipt = tuple[LocalDaemonOperation, bool]
+type _SelectedInputs = Callable[[], dict[str, PlainData]]
+
+
 PREPARATION_RUN_PREFIX = "loom-preparation-"
 _MAX_RESULT_BYTES = 64 * 1024
 _TERMINAL = frozenset({"applied", "failed", "cancelled", "conflict"})
@@ -397,10 +401,13 @@ class CoordinatorPreparations:
 
     @property
     def available(self) -> bool:
-        if self.callbacks is None or not self.daemon.config.preparation_enabled:
+        return self._available(self.daemon.config)
+
+    def _available(self, config: LocalDaemonConfig) -> bool:
+        if self.callbacks is None or not config.preparation_enabled:
             return False
         try:
-            self.callbacks.validate_config(self.daemon.config)
+            self.callbacks.validate_config(config)
         except QueueServiceError:
             return False
         return True
@@ -559,6 +566,56 @@ class CoordinatorPreparations:
                 code = "unsupported"
             raise PreparationNotAccepted(code, str(exc)) from exc
 
+    def _write_public_operation(
+        self, operation_id: str,
+        apply: Callable[[sqlite3.Connection, _SelectedInputs | None], _OperationReceipt | None],
+        *, select: Callable[[LocalDaemonConfig], dict[str, PlainData]] | None = None,
+        before_begin: Callable[[], None] | None = None,
+        committed: Callable[[_OperationReceipt | None], None] | None = None,
+        conflict: str,
+    ) -> _OperationReceipt:
+        """Resolve external facts for a new receipt; a retained receipt takes precedence."""
+        daemon = self.daemon
+        sampled = None
+        queried = None
+        config = daemon.config
+        failure: Exception | None = None
+        selected: dict[str, PlainData] = {}
+        policy = config.sqlite_policy
+        deadline = monotonic() + (policy.busy_timeout_ms / 1000 if policy is not None else 30)
+
+        def inputs():
+            if failure is not None:
+                raise failure
+            return selected
+
+        def attempt(conn):
+            nonlocal queried, config
+            config = daemon.config
+            execution = daemon._execution
+            queried = (execution, id(config), daemon._epoch, daemon._scheduling_epoch,
+                       None if execution is None else execution.slurm_operation_revision)
+            return apply(conn, inputs if sampled == queried else None)
+
+        while True:
+            receipt = short_write(daemon, attempt, before_begin=before_begin, committed=committed)
+            if receipt is not None:
+                return receipt
+            if sampled is not None and monotonic() >= deadline:
+                raise QueueServiceError("operation ownership changed during preparation; retry")
+            sampled = queried
+            assert sampled is not None
+            execution = sampled[0]
+            failure = None
+            try:
+                if execution is not None and execution.slurm_assignments.has_operation(operation_id):
+                    raise QueueConflictError(conflict)
+                selected = select(config) if select is not None else {}
+            except Exception as exc:
+                # A matching request may have committed during this read.
+                # Apply the failure only to a still-new, current request.
+                failure = exc
+
     def _accept(
         self,
         request: PrepareRunRequest,
@@ -589,26 +646,12 @@ class CoordinatorPreparations:
         if run_mode == "reconcile":
             intent = hashlib.sha256(stable_json_bytes([intent, run_mode, retry_policy])).hexdigest()
 
-        def accept(conn: sqlite3.Connection) -> tuple[LocalDaemonOperation, bool]:
-            coordinator_id = self.daemon._require_started()
-            row = conn.execute(
-                "SELECT * FROM preparation_operations WHERE operation_id = ?",
-                (request.operation_id,),
-            ).fetchone()
-            if row is not None:
-                if (
-                    row["kind"] != kind
-                    or row["principal_id"] != principal_id
-                    or row["intent_digest"] != intent
-                ):
-                    raise QueueConflictError("preparation operation intent conflicts")
-                conn.execute("DELETE FROM daemon_metadata WHERE key = ?", ("startup-attachment:" + request.operation_id,))
-                return self._projection(row), False
-            if not self.available or self.callbacks is None:
+        def select(config: LocalDaemonConfig):
+            if not self._available(config):
                 raise QueueServiceError("preparation is unsupported")
             if request.run_name is not None and request.run_name.startswith(PREPARATION_RUN_PREFIX):
                 raise QueueServiceError("preparation target uses a reserved child name")
-            policy = self.daemon.config.preparation_policy
+            policy = config.preparation_policy
             assert policy is not None
             selected = policy.select(request)
             if request.staging_continuation_stages:
@@ -631,28 +674,42 @@ class CoordinatorPreparations:
                     raise QueueServiceError("reconciliation requires installed project capability v3")
                 selected["reconciliation"] = {"retry_policy": retry_policy, "publication_owner": None,
                     "candidate": None, "failed_revision": None, "verification_generation": 0}
-            selected["run_store_root"] = str(self.daemon.config.run_store_root)
-            selected["scheduling"] = scheduling_snapshot(self.daemon.config)
+            selected["run_store_root"] = str(config.run_store_root)
+            selected["scheduling"] = scheduling_snapshot(config)
             from loom.pipeline.stores.coordinator_authority import (
                 coordinator_authority_identity,
             )
 
             selected["authority"] = coordinator_authority_identity(
-                self.daemon.config.coordinator_authority_factory
+                config.coordinator_authority_factory
             )
             selected["slurm_profiles"] = [
-                item.descriptor.to_dict() for item in self.daemon.config.slurm_profiles
+                item.descriptor.to_dict() for item in config.slurm_profiles
             ]
             selected["remote_profiles"] = [
-                item.to_dict() for item in self.daemon.config.remote_profiles
+                item.to_dict() for item in config.remote_profiles
             ] if request.execution is None else []
+            return selected
+
+        def accept(conn: sqlite3.Connection, inputs):
+            coordinator_id = self.daemon._require_started()
+            row = conn.execute(
+                "SELECT * FROM preparation_operations WHERE operation_id = ?",
+                (request.operation_id,),
+            ).fetchone()
+            if row is not None:
+                if (
+                    row["kind"] != kind
+                    or row["principal_id"] != principal_id
+                    or row["intent_digest"] != intent
+                ):
+                    raise QueueConflictError("preparation operation intent conflicts")
+                conn.execute("DELETE FROM daemon_metadata WHERE key = ?", ("startup-attachment:" + request.operation_id,))
+                return self._projection(row), False
+            if inputs is None:
+                return None
+            selected = dict(inputs())
             if _operation_projection(conn, request.operation_id) is not None:
-                raise QueueConflictError("managed operation identity is ambiguous")
-            execution = self.daemon._execution
-            if (
-                execution is not None
-                and execution.operation_projection(request.operation_id) is not None
-            ):
                 raise QueueConflictError("managed operation identity is ambiguous")
             if (
                 conn.execute(
@@ -748,13 +805,13 @@ class CoordinatorPreparations:
             conn.execute("DELETE FROM daemon_metadata WHERE key = ?", ("startup-attachment:" + request.operation_id,))
             return operation, True
 
-        def committed(result: tuple[LocalDaemonOperation, bool]) -> None:
-            if result[1]:
+        def committed(result: tuple[LocalDaemonOperation, bool] | None) -> None:
+            if result is not None and result[1]:
                 self.daemon._scheduling_reference_revision += 1
 
-        operation, created = short_write(
-            self.daemon, accept, before_begin=self.daemon._lifetime.require_accepting,
-            committed=committed,
+        operation, created = self._write_public_operation(
+            request.operation_id, accept, select=select, before_begin=self.daemon._lifetime.require_accepting,
+            committed=committed, conflict="managed operation identity is ambiguous",
         )
         if created:
             self.daemon._wake.set()
@@ -2028,8 +2085,8 @@ class CoordinatorPreparations:
         from .local_daemon import _operation_projection
 
         cancel_id = _cancel_id(operation_id)
-        with self.daemon._state_guard(), self.daemon._connection() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+
+        def cancel(conn, inputs):
             row = conn.execute(
                 "SELECT * FROM preparation_operations WHERE operation_id = ?",
                 (operation_id,),
@@ -2043,12 +2100,12 @@ class CoordinatorPreparations:
                 (cancel_id,),
             ).fetchone()
             if old is not None:
-                return self._projection(old)
+                return self._projection(old), False
             self.daemon._lifetime.require_accepting()
-            if _operation_projection(conn, cancel_id) is not None or (
-                self.daemon._execution is not None
-                and self.daemon._execution.operation_projection(cancel_id) is not None
-            ):
+            if inputs is None:
+                return None
+            inputs()
+            if _operation_projection(conn, cancel_id) is not None:
                 raise QueueConflictError("cancellation operation identity is ambiguous")
             result = _mapping(json.loads(str(row["result_json"])))
             superseded = _mapping(json.loads(row["selected_json"])).get("reconciliation", {})
@@ -2062,8 +2119,7 @@ class CoordinatorPreparations:
                 })
                 write_status(conn, "operation", "INSERT INTO preparation_cancellations VALUES (?, ?, 'applied', NULL, ?)",
                              (cancel_id, operation_id, _json(operation.result)))
-                conn.commit()
-                return operation
+                return operation, True
             # Acceptance and demand detachment share one transaction. A restart
             # must not resume a producer using a cancellation that only exists
             # in the public operation table.
@@ -2109,8 +2165,13 @@ class CoordinatorPreparations:
                 "INSERT INTO preparation_cancellations VALUES (?, ?, 'pending', NULL, ?)",
                 (cancel_id, operation_id, _json(operation.result)),
             )
-            conn.commit()
-        self.daemon._wake.set()
+            return operation, True
+
+        operation, created = self._write_public_operation(
+            cancel_id, cancel, conflict="cancellation operation identity is ambiguous",
+        )
+        if created:
+            self.daemon._wake.set()
         return operation
 
     @staticmethod

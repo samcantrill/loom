@@ -1244,6 +1244,13 @@ class SQLiteSlurmStageAssignments:
                 raise QueueConflictError("SLURM operation is not retained")
             return self._record(row)
 
+    def has_operation(self, operation_id: str) -> bool:
+        """Check public identity ownership without reading the job or its evidence."""
+        with _connect(self.path, sqlite_policy=self._sqlite_policy, require_existing=True) as conn:
+            return conn.execute(
+                f"SELECT 1 FROM {_ASSIGNMENT_TABLE} WHERE operation_id = ?", (operation_id,),
+            ).fetchone() is not None
+
     def find_operation(self, operation_id: str) -> SlurmStageRecord | None:
         """Return one exact retained operation without weakening store failures."""
 

@@ -1399,6 +1399,7 @@ class LocalDaemonExecution:
             config.execution_database, _allow_initialize=False,
             sqlite_policy=config.sqlite_policy, schema_version=config.slurm_schema_version,
         )
+        self.slurm_operation_revision = 0
         self.slurm_assignments = SQLiteSlurmStageAssignments(
             config.execution_database,
             config.slurm_transfer_root,
@@ -4205,7 +4206,9 @@ class LocalDaemonExecution:
                 issuer_epoch=self.coordinator_epoch,
                 max_parallel_stages=intent.max_parallel_stages,
                 max_profile_outstanding=profile.max_outstanding,
-                reservation_guard=lambda: self._reservation_guard(admission.admission_id, record, epochs),
+                reservation_guard=lambda: self._reservation_guard(
+                    admission.admission_id, record, epochs, slurm_operation_id=assignment.operation_id,
+                ),
                 requested_gpu_count=_slurm_requested_gpu_count(record.placement.resource_request),
                 max_reserved_gpus=(
                     None if self.config.slurm_admission is None
@@ -5792,7 +5795,7 @@ class LocalDaemonExecution:
     def _reservation_guard(
         self, admission_id: str, record: StageWorkRecord,
         epochs: tuple[str | None, str | None] | None,
-        target: _RemoteCandidateTarget | None = None,
+        target: _RemoteCandidateTarget | None = None, *, slurm_operation_id: str | None = None,
     ) -> Iterator[None]:
         """Pin current scheduling and cancellation only during durable reserve.
 
@@ -5807,6 +5810,16 @@ class LocalDaemonExecution:
                 or epochs != (daemon._epoch, daemon._scheduling_epoch)
                 or action_attempt_cancelled(conn, record.run_uri, record.attempt_id)):
                 raise ManagedLocalError("assignment preparation is no longer authorized")
+            if slurm_operation_id is not None:
+                # The same state guard orders a public preparation's final
+                # identity check with the execution owner's reservation.
+                if conn.execute(
+                    "SELECT 1 FROM preparation_operations WHERE operation_id=? UNION ALL "
+                    "SELECT 1 FROM preparation_cancellations WHERE operation_id=? LIMIT 1",
+                    (slurm_operation_id, slurm_operation_id),
+                ).fetchone() is not None:
+                    raise QueueConflictError("SLURM operation identity is owned by a preparation")
+                self.slurm_operation_revision += 1
             if target is not None:
                 current = conn.execute(
                     "SELECT o.offer_id, o.expires_at, s.availability_revision, r.observed_claim_ids_json "

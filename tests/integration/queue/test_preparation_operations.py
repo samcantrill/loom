@@ -1847,6 +1847,124 @@ def test_child_failure_or_inconsistent_evidence_never_publishes(
         daemon.stop()
 
 
+def test_preparation_rechecks_slurm_identity_after_an_off_guard_read(tmp_path, monkeypatch):
+    from loom.queue.errors import QueueConflictError
+    from tests.unit.loom.queue.test_slurm_admission import ReservationFixture
+
+    service = _service(tmp_path)
+    monkeypatch.setattr(LocalDaemon, "_serve", lambda self: self._stop.wait())
+    LocalDaemon.initialize_deployment(service.daemon)
+    daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
+    daemon.start()
+    sampled, resume = Event(), Event()
+    try:
+        execution = daemon._execution
+        fixture_root = tmp_path / "reservation"
+        fixture_root.mkdir()
+        fixture = ReservationFixture(fixture_root)
+        fixture.work = execution.stage_work_store
+        assignment, args = fixture.candidate("competing-stage", 0)
+        store = execution.slurm_assignments
+        query = store.has_operation
+        observations = []
+
+        def pause(identity):
+            value = query(identity)
+            if identity == assignment.operation_id:
+                observations.append(value)
+                if len(observations) == 1:
+                    sampled.set()
+                    assert resume.wait(10)
+            return value
+
+        monkeypatch.setattr(store, "has_operation", pause)
+        def reserve(candidate, options):
+            record = fixture.work.find_stage_work(candidate.stage_work_id)
+            with execution._reservation_guard(
+                record.admission_id, record, (daemon._epoch, daemon._scheduling_epoch),
+                slurm_operation_id=candidate.operation_id,
+            ):
+                store.reserve(candidate, **{**options, "max_reserved_gpus": None})
+
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            pending = workers.submit(
+                daemon.prepare_run, replace(_request(), operation_id=assignment.operation_id), principal_id="caller",
+            )
+            try:
+                assert sampled.wait(5)
+                workers.submit(reserve, assignment, args).result(timeout=4)
+            finally:
+                resume.set()
+            with pytest.raises(QueueConflictError, match="identity is ambiguous"):
+                pending.result(timeout=5)
+        assert observations == [False, True]
+        with daemon._connection() as conn:
+            assert not conn.execute("SELECT 1 FROM preparation_operations WHERE operation_id=?",
+                                    (assignment.operation_id,)).fetchone()
+        next_assignment, options = fixture.candidate("public-first", 0)
+        daemon.prepare_run(replace(_request(), operation_id=next_assignment.operation_id), principal_id="caller")
+        with pytest.raises(QueueConflictError, match="owned by a preparation"):
+            reserve(next_assignment, options)
+        assert not query(next_assignment.operation_id)
+    finally:
+        resume.set()
+        daemon.stop()
+
+
+def test_run_cancellation_yields_to_peer_reads_and_replays_without_external_probe(tmp_path, monkeypatch):
+    from loom.queue import _coordinator_transactions
+
+    service = _service(tmp_path)
+    monkeypatch.setattr(LocalDaemon, "_serve", lambda self: self._stop.wait())
+    LocalDaemon.initialize_deployment(service.daemon)
+    daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
+    daemon.start()
+    retry, contended = Event(), Event()
+    sampled, resume = Event(), Event()
+    try:
+        accepted = daemon.start_run(RunRequest(_request(), "target"), principal_id="caller")
+        original = daemon._execution.slurm_assignments.has_operation
+        probed = []
+
+        def lookup(identity):
+            value = original(identity)
+            probed.append(identity)
+            sampled.set()
+            assert resume.wait(8)
+            return value
+
+        def wait_to_retry(_seconds):
+            contended.set()
+            assert retry.wait(8)
+
+        monkeypatch.setattr(daemon._execution.slurm_assignments, "has_operation", lookup)
+        monkeypatch.setattr(_coordinator_transactions, "sleep", wait_to_retry)
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            try:
+                with daemon._connection() as writer:
+                    writer.execute("BEGIN IMMEDIATE")
+                    pending = workers.submit(daemon.cancel_run_operation, accepted.operation_id, principal_id="caller")
+                    assert contended.wait(4)
+                    assert workers.submit(daemon.operation, accepted.operation_id).result(timeout=3).state == "pending"
+                    writer.rollback()
+                retry.set()
+                assert sampled.wait(4)
+                assert workers.submit(daemon.operation, accepted.operation_id).result(timeout=3).state == "pending"
+            finally:
+                resume.set()
+                retry.set()
+            receipt = pending.result(timeout=5)
+        assert receipt.state == "pending"
+        assert daemon.cancel_run_operation(accepted.operation_id, principal_id="caller") == receipt
+        assert probed == [receipt.operation_id]
+        with daemon._connection() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM preparation_cancellations").fetchone()[0] == 1
+    finally:
+        resume.set()
+        retry.set()
+        daemon.stop()
+
+
 def test_preparation_rejects_other_operation_ids_and_public_child_submission(
     tmp_path: Path,
 ) -> None:
