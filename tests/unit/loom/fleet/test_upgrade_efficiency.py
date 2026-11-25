@@ -447,3 +447,56 @@ def test_upgrade_finishes_other_observations_after_one_check_error(tmp_path, mon
     with pytest.raises(OSError, match="temporary observation"):
         upgrades._run_checks(operation)
     assert read(tmp_path / (identities["storage"] + "-result.json"))["outcome"] == "passed"
+
+
+def test_check_watcher_detaches_while_storage_owns_worker_and_resumes_same_ids(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    operation = SimpleNamespace(
+        directory=tmp_path, inventory=object(), observation=None,
+        intent={"operation_id": "upgrade", "timeout_seconds": 0.8,
+                "agents": {"agent": {}}, "declarations": {"agent": {"resident_profiles": [{}]}}},
+        maintenance=lambda *args: None, settled=lambda: None,
+    )
+    ids, submitted, storage_calls = {}, [], []
+    entered, release, finished = Event(), Event(), Event()
+
+    def prepare(op, name, kind, identity):
+        ids[kind] = identity
+        return {"operation_id": identity, "authorization": {}}
+
+    def check(inventory, *, operation_id, timeout_seconds, _dispatch_only, _wait):
+        if _dispatch_only:
+            submitted.append(operation_id)
+            return {"outcome": "waiting", "checks": {"probe": {
+                "operation_id": operation_id, "outcome": "waiting", "disposition": "accepted",
+            }}}
+        if operation_id == ids["storage"]:
+            storage_calls.append(operation_id)
+            entered.set()
+            assert release.wait(8)
+            finished.set()
+        return {"outcome": "passed"}
+
+    monkeypatch.setattr(upgrades, "_prepare_attempt", prepare)
+    monkeypatch.setattr(upgrades, "self_test", check)
+    with ThreadPoolExecutor(max_workers=1) as caller:
+        try:
+            first = caller.submit(upgrades._run_checks, operation)
+            assert entered.wait(3)
+            with pytest.raises(upgrades._Waiting):
+                first.result(timeout=3)
+            assert not finished.is_set()
+            assert read(tmp_path / (ids["cpu"] + "-result.json"))["outcome"] == "passed"
+            assert operation.check_observations[ids["storage"]]["operation_id"] == ids["storage"]
+            with pytest.raises(upgrades._Waiting):
+                caller.submit(upgrades._run_checks, operation).result(timeout=3)
+            assert storage_calls == [ids["storage"]]
+            assert set(submitted) == set(ids.values()) and len(submitted) == 2
+        finally:
+            release.set()
+        assert finished.wait(3)
+        upgrades._run_checks(operation)
+    assert all(row["outcome"] == "passed" for row in operation.check_observations.values())
+    assert len(submitted) == 2

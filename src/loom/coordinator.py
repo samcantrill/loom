@@ -373,9 +373,9 @@ class CoordinatorClient(NativeCoordinatorClient):
         from loom._artifact_fetch import fetch_artifacts
         return fetch_artifacts(self, selections, destination, scope=scope, expected_coordinator_id=expected_coordinator_id, deadline=deadline)
 
-    def select_outputs(self, selection: OutputSelection, *, expected_coordinator_id: str | None = None) -> QueryPage:
+    def select_outputs(self, selection: OutputSelection, *, expected_coordinator_id: str | None = None, deadline: float | None = None) -> QueryPage:
         """Select exact published metadata, preserving reuse and per-selector outcomes."""
-        return cast(QueryPage, self._native_call("select_outputs", {"selection": selection.to_dict()}, expected_coordinator_id))
+        return cast(QueryPage, self._native_call("select_outputs", {"selection": selection.to_dict()}, expected_coordinator_id, deadline=deadline))
 
     def list_output_commits(self, selection: OutputSelection, *, expected_coordinator_id: str | None = None) -> QueryPage:
         """Page retained commits with their matching output facts and associations."""
@@ -522,13 +522,13 @@ class CoordinatorOperatorClient(NativeCoordinatorClient):
                 "unknown" if retained is None else "retained", "unavailable",
                 {} if retained is None else {**retained.value, "retained_observed_at": retained.observed_at}, exc.code)
 
-    def observe_agent(self, agent_id: str) -> OperatorObservation:
+    def observe_agent(self, agent_id: str, *, deadline: float | None = None) -> OperatorObservation:
         """Observe one agent without interpreting stale capacity as available."""
-        return self._native_call("operator_agent", {"agent_id": agent_id})
+        return self._native_call("operator_agent", {"agent_id": agent_id}, deadline=deadline)
 
-    def observe_assignment(self, assignment_id: str) -> OperatorObservation:
+    def observe_assignment(self, assignment_id: str, *, deadline: float | None = None) -> OperatorObservation:
         """Observe one assignment; local claims remain independently sourced."""
-        return self._native_call("operator_assignment", {"assignment_id": assignment_id})
+        return self._native_call("operator_assignment", {"assignment_id": assignment_id}, deadline=deadline)
 
     def control_agent(self, control: AgentControl, *, expected_coordinator_id: str | None = None, condition: Mapping[str, PlainData] | None = None) -> Mapping[str, PlainData]:
         """Commit/replay a native control with optional predecessor ownership.

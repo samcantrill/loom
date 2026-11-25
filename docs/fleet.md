@@ -835,9 +835,13 @@ eligible hosts from progressing, and failed attempts still require explicit retr
 Exact check-retry replay recognizes the retained successor after completion even
 when ordinary admission has already reopened.
 
-Upgrade continuations observe checks without waiting for each run to finish;
-each observation has a bounded transport budget. Standalone self-tests retain
-their waiting behavior. A failed check can therefore be reported while another
+During check dispatch and observation, the controller publishes completed
+results as they arrive. Each native check retains its operation ID and reports
+whether submission is pending, uncertain, accepted, or rejected. An observer
+can detach with an active download. That worker continues to occupy its slot
+until it exits. A continuation can attach to the same check. Standalone
+self-tests use their caller's deadline for native requests and can return the
+last known check state when another observer holds the receipt lock. A failed check can therefore be reported while another
 already-dispatched check is still running. Retry and repair still require native
 settlement, and explicit deferral preserves every dispatched attempt's history.
 

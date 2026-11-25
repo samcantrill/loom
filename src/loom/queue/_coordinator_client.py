@@ -331,13 +331,14 @@ class NativeCoordinatorClient:
         )
 
     def admission(
-        self, admission_id: str, *, expected_coordinator_id: str | None = None
+        self, admission_id: str, *, expected_coordinator_id: str | None = None,
+        deadline: float | None = None,
     ) -> LocalDaemonAdmissionDetail:
         """Read one admission and its non-atomic owner evidence."""
         return cast(
             LocalDaemonAdmissionDetail,
             self._native_call(
-                "admission", {"admission_id": admission_id}, expected_coordinator_id
+                "admission", {"admission_id": admission_id}, expected_coordinator_id, deadline=deadline
             ),
         )
 
@@ -379,13 +380,14 @@ class NativeCoordinatorClient:
         )
 
     def operation(
-        self, operation_id: str, *, expected_coordinator_id: str | None = None
+        self, operation_id: str, *, expected_coordinator_id: str | None = None,
+        deadline: float | None = None,
     ) -> LocalDaemonOperation:
         """Read an operation; an observed failed operation is a successful read."""
         return cast(
             LocalDaemonOperation,
             self._native_call(
-                "operation", {"operation_id": operation_id}, expected_coordinator_id
+                "operation", {"operation_id": operation_id}, expected_coordinator_id, deadline=deadline
             ),
         )
 
@@ -426,7 +428,8 @@ class NativeCoordinatorClient:
         )
 
     def start_run(
-        self, request: RunRequest, *, expected_coordinator_id: str | None = None
+        self, request: RunRequest, *, expected_coordinator_id: str | None = None,
+        deadline: float | None = None,
     ) -> LocalDaemonOperation:
         """Durably accept preparation plus admission; returning detaches observation.
 
@@ -439,7 +442,7 @@ class NativeCoordinatorClient:
         if not isinstance(request, RunRequest):
             raise control_error("invalid_request", "start_run", {})
         return cast(LocalDaemonOperation, self._native_call(
-            "start_run", {"request": request.to_dict()}, expected_coordinator_id
+            "start_run", {"request": request.to_dict()}, expected_coordinator_id, deadline=deadline
         ))
 
     def cancel_run_operation(

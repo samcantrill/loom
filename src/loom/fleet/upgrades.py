@@ -6,8 +6,6 @@ capacity, settlement and policy decision comes from a fresh native observation.
 
 from __future__ import annotations
 
-from concurrent.futures import as_completed, ThreadPoolExecutor
-from contextvars import copy_context
 from dataclasses import replace
 import fcntl
 import hashlib
@@ -23,6 +21,7 @@ from loom.fleet.configuration import protected_directory, _environment_files
 from loom.fleet._host import atomic, read, digest
 from loom.fleet import ssh_operations as sshops
 from loom.fleet._upgrade_progress import Observation, ProgressSink, phase, reason
+from loom.fleet._check_workers import completed_steps
 from loom.fleet._timing import bind_directory, measure, recording, timed
 from loom.fleet.releases import verify_release
 from loom.fleet.self_tests import self_test, _check_input_locations
@@ -947,54 +946,77 @@ def _run_checks(operation):
         operation.settled()
         return
     deadline = time.monotonic() + operation.intent["timeout_seconds"]
-
-    def advance(identity, *, dispatch) -> dict[str, Any]:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return {"outcome": "waiting", "code": "deadline_exceeded"}
-        return self_test(
-            operation.inventory, operation_id=identity,
-            timeout_seconds=remaining, _dispatch_only=dispatch, _wait=False,
-        )
-
-    # Each self-test owns a distinct receipt lock and its own clients. Only this
-    # thread owns the upgrade's shared attempt inventory and result publication.
-    with ThreadPoolExecutor(max_workers=min(3, len(active))) as workers:
-        dispatched = [workers.submit(copy_context().run, advance, identity, dispatch=True)
-                      for identity in active]
-        dispatch_errors = []
-        for future in dispatched:
-            try:
-                future.result()
-            except Exception as exc:
-                dispatch_errors.append(exc)
-        if dispatch_errors:
-            raise dispatch_errors[0]
-        observed = {
-            workers.submit(copy_context().run, advance, identity, dispatch=False): identity
-            for identity in active
+    inventory = operation.inventory
+    records = {row[-1]["operation_id"]: row[-1] for row in attempts.values()}
+    for identity in active:
+        record = records[identity]
+        operation.check_observations[identity] = record.get("last_observation") or {
+            "outcome": "waiting", "operation_id": identity,
+            "checks": record.get("dispatch_checks", {}),
         }
-        failures, waiting, errors = [], [], []
-        for future in as_completed(observed):
-            identity = observed[future]
-            try:
-                result = future.result()
-            except Exception as exc:
-                errors.append(exc)
-                continue
-            atomic(operation.directory / (identity + "-result.json"), result)
-            operation.check_observations[identity] = {
-                "outcome": result["outcome"],
-                "checks": {
-                    name: {key: row.get(key) for key in ("operation_id", "outcome", "code")}
-                    for name, row in result.get("checks", {}).items()
-                    if row["outcome"] != "not_requested"
-                },
-            }
-            if result["outcome"] in {"failed", "unsupported"}:
-                failures.append((identity, result["outcome"]))
-            elif result["outcome"] != "passed":
-                waiting.append(identity)
+
+    def advance(identity, dispatch, step_end) -> dict[str, Any]:
+        remaining = step_end - time.monotonic()
+        if remaining <= 0:
+            return {"operation_id": identity, "outcome": "waiting", "code": "deadline_exceeded"}
+        return self_test(inventory, operation_id=identity, timeout_seconds=remaining,
+                         _dispatch_only=dispatch, _wait=False)
+
+    def save_attempts():
+        atomic(operation.directory / "checks.json", attempts)
+
+    def steps(selected, dispatch):
+        return completed_steps(operation.directory, records, selected, dispatch=dispatch,
+                               deadline=deadline, advance=advance, started=save_attempts)
+
+    errors = []
+    # Dispatch gets the first opportunity for every selected slot. Accepted and
+    # rejected receipts belong to an immutable attempt, and survive detachment.
+    dispatch = [key for key in active if not records[key].get("dispatch_settled")]
+    dispatched = set()
+    for identity, future in steps(dispatch, True):
+        try:
+            dispatch_result = future.result()
+        except Exception as exc:
+            errors.append(exc)
+            continue
+        dispatched.add(identity)
+        rows = dispatch_result.get("checks", {})
+        records[identity]["dispatch_checks"] = rows
+        records[identity]["dispatch_settled"] = bool(rows) and all(
+            row.get("disposition") in {"accepted", "rejected"} for row in rows.values()
+        )
+        if not records[identity].get("last_observation"):
+            operation.check_observations[identity]["checks"] = rows
+        save_attempts()
+    if errors:
+        raise errors[0]
+    if set(dispatch) - dispatched:
+        raise _Waiting("check dispatch pending: " + ", ".join(sorted(set(dispatch) - dispatched)))
+
+    failures, waiting = [], set(active)
+    for identity, future in steps(active, False):
+        try:
+            result = future.result()
+        except Exception as exc:
+            errors.append(exc)
+            continue
+        atomic(operation.directory / (identity + "-result.json"), result)
+        observation = {
+            "operation_id": identity, "outcome": result["outcome"],
+            "checks": {
+                name: {key: row.get(key) for key in ("operation_id", "outcome", "code", "transfer") if key in row}
+                for name, row in result.get("checks", {}).items()
+                if row["outcome"] != "not_requested"
+            },
+        }
+        records[identity]["last_observation"] = observation
+        operation.check_observations[identity] = observation
+        save_attempts()
+        if result["outcome"] in {"failed", "unsupported"}:
+            failures.append((identity, result["outcome"]))
+        elif result["outcome"] == "passed":
+            waiting.discard(identity)
     if failures:
         reason(operation, "check_failed" if any(outcome == "failed" for _, outcome in failures)
                else "native_refusal")
@@ -1005,7 +1027,7 @@ def _run_checks(operation):
     if errors:
         raise errors[0]
     if waiting:
-        raise _Waiting("checks pending: " + ", ".join(waiting))
+        raise _Waiting("checks pending: " + ", ".join(sorted(waiting)))
     operation.settled()
 
 

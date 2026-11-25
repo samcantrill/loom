@@ -1004,9 +1004,9 @@ def test_submitted_add_host_retains_execution_identity_and_scoped_access(submitt
         path.write_bytes(original)
     dispatch = self_tests._dispatch_check
     dispatched_id = None
-    def lost_check(client, directory, intent, kind):
+    def lost_check(client, directory, intent, kind, deadline, **kwargs):
         nonlocal dispatched_id
-        value = dispatch(client, directory, intent, kind)
+        value = dispatch(client, directory, intent, kind, deadline, **kwargs)
         if dispatched_id is None:
             dispatched_id = intent["operation_id"]
             raise operations.SshUnavailable("lost check dispatch reply")

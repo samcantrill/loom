@@ -100,7 +100,7 @@ def test_check_replays_only_its_missing_start_operation(tmp_path, monkeypatch, o
     def observe(*args, **kwargs):
         raise missing
 
-    client: Any = SimpleNamespace(observe_run=observe, start_run=sent.append)
+    client: Any = SimpleNamespace(observe_run=observe, start_run=lambda request, **options: sent.append(request))
     operator: Any = None
     intent = {"requests": {"cpu": {}}}
     if replay:

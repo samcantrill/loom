@@ -480,7 +480,7 @@ def test_nonexclusive_gpu_does_not_dispatch_or_wait_for_scheduler(tmp_path, monk
         monkeypatch.setattr(client, "from_connection_file", lambda *a, **kw: nullcontext())
     monkeypatch.setattr(
         checks_module, "_dispatch_check",
-        lambda client, directory, intent, check: dispatched.append(check),
+        lambda client, directory, intent, check, deadline, **kwargs: dispatched.append(check),
     )
 
     def observe(client, operator, directory, intent, check, deadline, **kwargs):
@@ -490,7 +490,7 @@ def test_nonexclusive_gpu_does_not_dispatch_or_wait_for_scheduler(tmp_path, monk
     monkeypatch.setattr(checks_module, "_observe_check", observe)
     monkeypatch.setattr(
         ssh_operations, "ssh",
-        lambda host, request: {
+        lambda host, request, **kwargs: {
             "outcome": "passed", "mode": "nonexclusive",
             "exclusive_scheduling": "not_tested", "contained": True,
         },
@@ -554,16 +554,16 @@ def test_storage_deadline_does_not_prevent_gpu_dispatch(tmp_path, monkeypatch):
 
     assignment = {"stage_name": "probe", "terminal_acknowledged": True}
     client = SimpleNamespace(
-        start_run=lambda request: accepted.append(request.preparation.operation_id),
+        start_run=lambda request, **kwargs: accepted.append(request.preparation.operation_id),
         observe_run=observe_run,
-        admission=lambda identity: SimpleNamespace(
+        admission=lambda identity, **kwargs: SimpleNamespace(
             owners={"assignment": {"assignments": [{"assignment_id": identity}]}}
         ),
-        observe_assignment=lambda identity: SimpleNamespace(
+        observe_assignment=lambda identity, **kwargs: SimpleNamespace(
             availability="available", value=assignment, to_dict=lambda: {"value": assignment}
         ),
-        observe_agent=lambda identity: SimpleNamespace(value={}, to_dict=lambda: {}),
-        select_outputs=lambda selection: SimpleNamespace(
+        observe_agent=lambda identity, **kwargs: SimpleNamespace(value={}, to_dict=lambda: {}),
+        select_outputs=lambda selection, **kwargs: SimpleNamespace(
             items=[{"locator": {"run_uri": "file:///run/" + current[0]}, "artifact": {"metadata": {"loom.shared_publication": {}}}}],
             next_cursor=None,
         ),
@@ -721,7 +721,7 @@ def test_interrupted_dispatch_retains_replay_refusal_after_admission_reopens(
     inventory, deployment, daemon, _ = fleet
     original = CoordinatorClient.start_run
 
-    def interrupt_before_acceptance(client, request):
+    def interrupt_before_acceptance(client, request, **kwargs):
         raise KeyboardInterrupt
 
     monkeypatch.setattr(CoordinatorClient, "start_run", interrupt_before_acceptance)
@@ -1207,3 +1207,16 @@ def test_storage_check_resumes_ranges_and_recovers_published_verification(fleet,
         queue_item = final["checks"]["storage"]["native"]["admission"]["queue_item_id"]
         assert db.execute("SELECT COUNT(*) FROM managed_admissions WHERE queue_item_id=?",
                           (queue_item,)).fetchone() == (1,)
+
+
+def test_busy_receipt_owner_returns_retained_ids_without_dispatch(tmp_path):
+    import fcntl
+    inventory, directory, intent, _ = retained_checks(tmp_path, "busy-check")
+    with (directory / "owner.lock").open("a") as owner:
+        fcntl.flock(owner, fcntl.LOCK_EX)
+        result = self_test(inventory, operation_id="busy-check", timeout_seconds=0.05)
+    assert result["outcome"] == "waiting" and result["code"] == "check_owner_busy"
+    assert {kind: row["operation_id"] for kind, row in result["checks"].items()} == {
+        kind: request["preparation"]["operation_id"] for kind, request in intent["requests"].items()
+    }
+    assert not list(directory.glob("*.dispatch.json"))

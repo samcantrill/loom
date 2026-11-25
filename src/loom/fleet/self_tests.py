@@ -167,11 +167,15 @@ def verify_check(
 
 @timed("check_dispatch")
 def _submit_check(
-    client: CoordinatorClient, directory: Path, check: str, request: RunRequest
+    client: CoordinatorClient, directory: Path, check: str, request: RunRequest, deadline: float
 ) -> dict[str, Any] | None:
     try:
-        client.start_run(request)
+        client.start_run(request, deadline=deadline)
     except CoordinatorClientError as exc:
+        if exc.mutation_outcome == "not_applied" and exc.code in {
+            "unavailable", "timeout", "deadline_exceeded", "capacity_exhausted",
+        }:
+            return _waiting("dispatch_pending", native_error=exc.to_dict())
         if exc.mutation_outcome == "not_applied":
             _publish(directory / (check + ".rejected.json"), exc.to_dict())
             return {
@@ -180,6 +184,7 @@ def _submit_check(
                 "native_error": exc.to_dict(),
             }
         return _waiting("submission_uncertain", native_error=exc.to_dict())
+    _publish(directory / (check + ".accepted.json"), {"operation_id": request.preparation.operation_id})
     return None
 
 
@@ -188,21 +193,36 @@ def _dispatch_check(
     directory: Path,
     intent: Mapping[str, Any],
     check: str,
+    deadline: float, *, reconcile: bool,
 ) -> dict[str, Any] | None:
     request = RunRequest.from_dict(intent["requests"][check])
     identity = request.preparation.operation_id
     marker = directory / (check + ".dispatch.json")
+    receipt = {"operation_id": identity}
     if not marker.exists():
-        _publish(marker, {"operation_id": identity})
-        submitted = _submit_check(client, directory, check, request)
-        if submitted is not None:
-            return submitted
-    elif _read(marker) != {"operation_id": identity}:
+        _publish(marker, receipt)
+        return _submit_check(client, directory, check, request, deadline)
+    if _read(marker) != receipt:
         raise QueueConfigError("dispatch marker conflicts with immutable intent")
     rejected = directory / (check + ".rejected.json")
     if rejected.exists():
         error = _read(rejected)
         return {"outcome": "failed", "code": error["code"], "native_error": error}
+    accepted = directory / (check + ".accepted.json")
+    if accepted.exists():
+        if _read(accepted) != receipt:
+            raise QueueConfigError("acceptance receipt conflicts with immutable intent")
+    elif reconcile:
+        try:
+            operation = client.operation(identity, deadline=deadline)
+        except CoordinatorClientError as exc:
+            if (exc.code == "not_found" and exc.operation == "operation"
+                    and exc.ids.get("operation_id") == identity):
+                return _submit_check(client, directory, check, request, deadline)
+            return _waiting("submission_uncertain", native_error=exc.to_dict())
+        if operation.operation_id != identity or operation.kind != "run":
+            raise QueueConfigError("native operation conflicts with check intent")
+        _publish(accepted, receipt)
     return None
 
 
@@ -271,9 +291,10 @@ def _observe_check(
             exc.code == "not_found"
             and exc.operation == "operation"
             and exc.ids.get("operation_id") == identity
+            and not (directory / (check + ".accepted.json")).exists()
         ):
             # The native API owns exact replay: no new ID, source or retry policy.
-            return _submit_check(client, directory, check, request) or _waiting(
+            return _submit_check(client, directory, check, request, deadline) or _waiting(
                 "exact_request_replayed"
             )
         raise
@@ -288,14 +309,14 @@ def _observe_check(
     if observed.admission is None or observed.admission.state.value != "SUCCEEDED":
         code, explanation = _pending_observation(observed)
         return _waiting(code, explanation=explanation, **facts)
-    detail = observed.detail or client.admission(observed.admission.admission_id)
+    detail = observed.detail or client.admission(observed.admission.admission_id, deadline=deadline)
     assignments = (
         cast(dict[str, Any], thaw_plain_data(detail.owners))
         .get("assignment", {})
         .get("assignments", [])
     )
     candidates = [
-        operator.observe_assignment(row["assignment_id"]) for row in assignments
+        operator.observe_assignment(row["assignment_id"], deadline=deadline) for row in assignments
     ]
     matches = [
         row
@@ -307,14 +328,14 @@ def _observe_check(
     if len(matches) != 1:
         return _waiting("assignment_evidence_unavailable", **facts)
     assignment = cast(dict[str, Any], thaw_plain_data(matches[0].value))
-    agent_observation = operator.observe_agent(intent["agent_id"])
+    agent_observation = operator.observe_agent(intent["agent_id"], deadline=deadline)
     facts.update(assignment=matches[0].to_dict(), agent=agent_observation.to_dict())
     selected = client.select_outputs(
         OutputSelection(
             run_uris=(observed.admission.run_uri,),
             stage_names=("probe",),
             output_name="report",
-        )
+        ), deadline=deadline
     )
     if len(selected.items) != 1 or selected.next_cursor is not None:
         return _waiting("output_unavailable", **facts)
@@ -413,9 +434,10 @@ def self_test(
     Container preparation aliases require explicit ``execution``. Its immutable
     image, interpreter and interface are retained in each request for replay.
     """
-    environments = _environment_files(inventory, env_file)
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise QueueConfigError("timeout must be positive and finite")
+    deadline = time.monotonic() + timeout_seconds
+    environments = _environment_files(inventory, env_file)
     if (
         not checks
         or len(set(checks)) != len(checks)
@@ -479,7 +501,7 @@ def self_test(
         with CoordinatorOperatorClient.from_connection_file(
             operator_connection
         ) as operator:
-            observed = operator.observe_agent(str(agent_id))
+            observed = operator.observe_agent(str(agent_id), deadline=deadline)
         if observed.availability != "available" or observed.freshness != "current":
             raise QueueConfigError("selected agent/profile observation is unavailable")
         agent = cast(dict[str, Any], thaw_plain_data(observed.value))
@@ -546,7 +568,22 @@ def self_test(
     protected_directory(directory)
     with (directory / "owner.lock").open("a") as lock:
         os.chmod(directory / "owner.lock", 0o600)
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        # An observation can attach while another process owns a long check
+        # step. It must not reserve a fleet worker waiting for the receipt lock.
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            if _prepare_id is not None:
+                raise QueueConfigError("check preparation already has an owner")
+            retained = _read(directory / "intent.json") if continuing else intent
+            last = directory / "result.json"
+            rows = _read(last).get("checks", {}) if last.exists() else {}
+            return _waiting("check_owner_busy", schema_version=1, operation_id=operation_id,
+                            agent_id=retained["agent_id"], ready=False, scope="requested_checks_only",
+                            checks={name: rows.get(name) or _waiting(
+                                "check_owner_busy", operation_id=request["preparation"]["operation_id"]
+                            ) for name, request in retained["requests"].items()},
+                            next="Continue this check operation to refresh its receipts.")
         if not continuing:
             _publish(directory / "intent.json", intent)
         intent = _read(directory / "intent.json")
@@ -557,7 +594,6 @@ def self_test(
             if (directory / "result.json").exists()
             else {}
         )
-        deadline = time.monotonic() + timeout_seconds
         results: dict[str, Any] = {
             check: {"outcome": "not_requested"} for check in ("cpu", "storage", "gpu")
         }
@@ -581,23 +617,44 @@ def self_test(
                     continue
                 if time.monotonic() >= deadline:
                     break
-                dispatched = _dispatch_check(client, directory, intent, check)
+                dispatched = _dispatch_check(client, directory, intent, check, deadline, reconcile=_dispatch_only)
                 if dispatched is not None:
                     dispatch_results[check] = dispatched
             if _dispatch_only:
                 # Upgrade orchestration dispatches every independent slot before
                 # any result download. Do not overwrite retained verification.
-                return {"outcome": "waiting", "code": "checks_dispatched"}
+                rows = {}
+                for name, raw in intent["requests"].items():
+                    identity = raw["preparation"]["operation_id"]
+                    row = dispatch_results.get(name) or previous_results.get(name)
+                    if row is None:
+                        accepted = (directory / (name + ".accepted.json")).is_file()
+                        row = _waiting("dispatch_accepted" if accepted else "dispatch_pending")
+                    disposition = "pending"
+                    if (directory / (name + ".accepted.json")).exists():
+                        disposition = "accepted"
+                    elif (directory / (name + ".rejected.json")).exists():
+                        disposition = "rejected"
+                    elif (directory / (name + ".dispatch.json")).exists() and row.get("code") != "dispatch_pending":
+                        disposition = "uncertain"
+                    rows[name] = {
+                        "operation_id": identity, "disposition": disposition,
+                        **{key: row[key] for key in ("outcome", "code") if key in row},
+                    }
+                return _waiting("check_dispatch", operation_id=operation_id, checks=rows)
             # Observe CPU/storage before GPU capacity waiting can exhaust the deadline.
             # Serialized intent key order is not execution order.
             for check in ("cpu", "storage", "gpu"):
                 if check not in intent["requests"]:
                     continue
                 if check == "gpu" and "gpu_capability" in intent:
-                    from loom.fleet.ssh_operations import ssh
+                    from loom.fleet.ssh_operations import SshUnavailable, ssh
 
                     request = intent["gpu_capability"]
-                    results[check] = ssh(request["host"], request)
+                    try:
+                        results[check] = ssh(request["host"], request, deadline=deadline)
+                    except SshUnavailable as error:
+                        results[check] = _waiting("gpu_capability_pending", reason=str(error))
                     continue
                 request = intent["requests"][check]
                 if previous_results.get(check, {}).get("outcome") == "failed":

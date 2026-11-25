@@ -46,21 +46,24 @@ class SshStarting(SshUnavailable):
     fleet_pending = True
 
 
-def ssh(host, request):
+def ssh(host, request, *, deadline=None):
     """Send a bounded structured request using the user's existing SSH policy."""
     # The classified span is nested in the aggregate; never add their durations.
     with measure("host_rpc", host=host):
         with measure("rpc_" + request.get("action", "unknown"), host=host):
-            return _ssh(host, request)
+            return _ssh(host, request, deadline=deadline) if deadline is not None else _ssh(host, request)
 
 
-def _ssh(host, request):
+def _ssh(host, request, *, deadline=None):
     if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", host) is None:
         raise QueueConfigError("select a plain configured SSH alias, never SSH options")
     program = Path(__file__).with_name("_ssh_bootstrap.py").read_text()
     encoded = json.dumps(request, sort_keys=True).encode()
     if len(encoded) > 128 * 1024 * 1024:
         raise QueueConfigError("selected bundle exceeds the fixed host request limit")
+    budget = 300 if deadline is None else min(300, deadline - time.monotonic())
+    if budget <= 0:
+        raise SshUnavailable("SSH observation deadline expired")
     try:
         result = subprocess.run(
             [
@@ -75,7 +78,7 @@ def _ssh(host, request):
             ],
             input=encoded,
             capture_output=True,
-            timeout=300,
+            timeout=budget,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise SshUnavailable("SSH unavailable; retain this operation") from exc
