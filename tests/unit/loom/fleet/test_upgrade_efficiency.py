@@ -620,3 +620,52 @@ def test_uncertain_grant_fences_next_revision_and_reconciles_live_owner(tmp_path
     check_gate.checks[lost[0]] = binding
     upgrades._run_checks(op)
     assert set(dispatch) == set(check_gate.checks) and len(dispatch) == 2
+
+
+def test_gate_grant_can_outlast_one_of_twenty_four_preparation_slices(tmp_path, monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(upgrades, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    grants = {}
+    def gate(**kwargs):
+        return {"revision": len(grants), "checks": dict(grants)}
+    def authorize(key, action, authorization, *, deadline, revision):
+        clock[0] += 1.6  # Protected inventory and release recheck before the RPC.
+        if clock[0] >= deadline:
+            raise upgrades._Waiting("grant budget elapsed")
+        assert revision == len(grants)
+        identity = key.removeprefix("authorize-")
+        assert identity not in grants
+        grants[identity] = authorization
+        return {"gate": gate()}
+    def prepare(op, name, check, identity, *, deadline, revision):
+        return {"operation_id": identity, "authorization": {"identity": identity}}
+    monkeypatch.setattr(upgrades, "_prepare_attempt", prepare)
+    op = SimpleNamespace(directory=tmp_path, gate=gate, maintenance=authorize)
+    slots = {str(i): (str(i), str(i), "cpu") for i in range(24)}
+    attempts = {}
+    first, _ = upgrades._authorize_check_slots(op, slots, attempts, 60.0, lambda: None)
+    assert 0 < len(first) < 24
+    second, errors = upgrades._authorize_check_slots(op, slots, attempts, clock[0] + 60, lambda: None)
+    assert not errors and set(second) == set(slots) == set(grants)
+
+
+def test_outstanding_gpu_probe_gets_budget_before_eleven_retained_profiles(tmp_path, monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(upgrades, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    names = [str(n) for n in range(12)]
+    op = SimpleNamespace(receipts=tmp_path)
+    for name in names:
+        key = tmp_path / (name + "-gpu-capability")
+        key.mkdir()
+        (key / "receipt.json").write_text("{}")
+    # A failed predecessor with a selected successor still needs a physical turn.
+    upgrades.atomic(tmp_path / "11-gpu-capability" / "successors.json", [{"step_key": "11-retry"}])
+    observed = []
+    def probe(op, name, declaration, deadline):
+        if name == "11":
+            clock[0] += 5.0
+            assert clock[0] < deadline
+        observed.append(name)
+    monkeypatch.setattr(upgrades, "_gpu_capability", probe)
+    assert not upgrades._observe_gpu_checks(op, dict.fromkeys(names), names, 60)
+    assert observed == ["11", *names[:-1]]

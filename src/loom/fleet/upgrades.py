@@ -928,6 +928,29 @@ def _gpu_capability(operation, name, declaration, deadline):
         raise QueueConflictError("GPU capability failed: " + str(result))
 
 
+def _observe_gpu_checks(operation, declarations, names, deadline):
+    # Retained successes still get their live profile and request checked.
+    # Only outstanding probes need a share of the physical SSH budget.
+    pending, retained = [], []
+    for name in names:
+        successors = _gpu_check_successors(operation, name)
+        key = successors[-1]["step_key"] if successors else name + "-gpu-capability"
+        receipt = operation.receipts / key / "receipt.json"
+        (retained if receipt.is_file() else pending).append(name)
+    errors = []
+    for group in (pending, retained):
+        for index, name in enumerate(group):
+            now = time.monotonic()
+            if now >= deadline:
+                return errors
+            step_end = now + (deadline - now) / (1 + len(group) - index)
+            try:
+                _gpu_capability(operation, name, declarations[name], step_end)
+            except (sshops.SshUnavailable, _Waiting, CoordinatorClientError, QueueConflictError) as exc:
+                errors.append(exc)
+    return errors
+
+
 def _authorize_check_slots(operation, slots, attempts, deadline, save_attempts):
     active, errors = [], []
     if not slots:
@@ -966,9 +989,13 @@ def _authorize_check_slots(operation, slots, attempts, deadline, save_attempts):
             if grant is None:
                 # An uncertain or lost grant reply fences later writes to
                 # this gate revision. Already confirmed grants can proceed.
+                # This mutation serializes all grants at one gate revision.
+                # Rechecking protected inputs is part of the mutation. Give it
+                # the remaining grant-phase budget; a per-host preparation
+                # slice can already have expired before the RPC can start.
                 grant_uncertain = True
                 result = operation.maintenance("authorize-" + identity, "authorize",
-                    authorization, deadline=step_end, revision=gate["revision"])
+                    authorization, deadline=setup_end, revision=gate["revision"])
                 if (result["gate"]["revision"] <= gate["revision"]
                         or result["gate"]["checks"].get(identity) != authorization):
                     raise QueueConflictError("maintenance check grant changed: " + identity)
@@ -1062,15 +1089,7 @@ def _run_checks(operation):
     # The native dispatch pass has run. Bound direct GPU reads and the
     # receipt lookup/replay by the same deadline, leaving time for native
     # observations even if a capability host uses its entire share.
-    for index, name in enumerate(capabilities):
-        now = time.monotonic()
-        if now >= deadline:
-            break
-        step_end = now + (deadline - now) / (1 + len(capabilities) - index)
-        try:
-            _gpu_capability(operation, name, declarations[name], step_end)
-        except (sshops.SshUnavailable, _Waiting, CoordinatorClientError, QueueConflictError) as exc:
-            errors.append(exc)
+    errors.extend(_observe_gpu_checks(operation, declarations, capabilities, deadline))
 
     first_pass = all(records[key].get("dispatch_turns") for key in dispatch)
     eligible = [key for key in active if first_pass and (key not in dispatch or key in dispatched)]
