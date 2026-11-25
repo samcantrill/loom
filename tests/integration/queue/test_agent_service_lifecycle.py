@@ -56,7 +56,7 @@ from loom.queue.deployment import (
     OutboundAgentRegistrationConfig,
     run_outbound_agent_service,
 )
-from tests.integration.queue.test_agent_session_transport import (
+from tests.support.agent_sessions import (
     _prepare_remote_sleep_run,
     _fresh_remote_agent_root,
 )

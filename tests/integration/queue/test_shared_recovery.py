@@ -34,7 +34,7 @@ from loom.queue.shared_execution import SHARED_EXECUTION_CAPABILITY
 from loom.pipeline.stores import LocalRunStore, LocalArtifactStore
 from loom.pipeline.execution.models import StageWorkerResult
 from tests.support.mutual_tls import mutual_tls_credentials, certificate_fingerprint
-from tests.integration.queue.test_agent_session_transport import _execute_available_assignment
+from tests.support.agent_sessions import _execute_available_assignment
 from tests.integration.queue.test_preparation_operations import (
     _service,
     _request,

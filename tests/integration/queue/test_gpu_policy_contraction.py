@@ -15,7 +15,7 @@ from loom.queue.agent_sessions import AgentControl, AgentControlKind, AgentOffer
 from loom.queue.deployment import load_coordinator_service_config
 from loom.queue.errors import QueueConflictError
 from loom.queue.local_daemon import CoordinatorSchedulingReload, LocalDaemonPrincipal, LocalDaemonRole
-from tests.integration.queue.test_agent_session_transport import _policy, _request, _provider_descriptors
+from tests.support.agent_sessions import _policy, _request, _provider_descriptors
 from tests.integration.queue.test_maintenance_admission import change, operator, owner as maintenance_owner  # noqa: F401
 
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]

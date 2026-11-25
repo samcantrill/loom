@@ -28,6 +28,7 @@ from loom.queue._remote_stage_execution import (
     REMOTE_EXECUTION_CAPABILITY,
     ResidentProfileDescriptor,
 )
+from loom.queue._agent_session_replacement import _build_replacement_projection
 from loom.queue.agent_sessions import (
     AgentOffer,
     AgentOfferRenewal,
@@ -48,7 +49,6 @@ from loom.queue.agent_sessions import (
     ScopedAuthorizer,
     TransportPrincipalPolicy,
     _REPLACEMENT_ASSIGNMENT_REFERENCE_CLASSES,
-    _build_replacement_projection,
     initialize_agent_session_schema,
 )
 from loom.queue.errors import QueueConflictError, QueueServiceError, QueueStorageError

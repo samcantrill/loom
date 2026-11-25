@@ -55,7 +55,7 @@ from loom.queue.local_daemon import (
     ManagedRecoveryTarget,
     RecoverUnknownAssignment,
 )
-from tests.integration.queue.test_agent_session_transport import (
+from tests.support.agent_sessions import (
     _credentials,
     _fingerprint,
     _fresh_remote_agent_root,

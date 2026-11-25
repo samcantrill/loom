@@ -310,7 +310,7 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, s
                     payload_path.unlink()
                 if scenario in {"unresolved_restart", "started_restart", "completed_input_unavailable"}:
                     import multiprocessing
-                    from tests.integration.queue.test_agent_session_transport import _reconcile_remote_agent_application
+                    from tests.support.agent_sessions import _reconcile_remote_agent_application
                     remote.close()
                     context = multiprocessing.get_context("spawn")
                     events = context.Queue()

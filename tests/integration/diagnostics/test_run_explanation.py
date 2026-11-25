@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from typing import cast, Any
 
 from tests.integration.queue.test_operator_observations import owner as owner
-from tests.integration.queue.test_agent_session_transport import (
+from tests.support.agent_sessions import (
     native_control_endpoint as native_control_endpoint,
 )
 import io

@@ -71,7 +71,7 @@ from loom.queue.deployment import (
 )
 from tests.support.mutual_tls import certificate_fingerprint, mutual_tls_credentials
 from tests.support.stage29_composition import ResidentProviderFactory
-from .test_agent_session_transport import (
+from tests.support.agent_sessions import (
     _prepare_remote_producer_run,
     _prepare_remote_sleep_run,
     _prepare_gpu_environment_run,

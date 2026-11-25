@@ -33,7 +33,7 @@ from loom.queue.agent_session_transport import (
     AgentTlsServerConfig,
 )
 from loom.queue.operations import inspect_native_service, probe_upgrade_compatibility
-from tests.integration.queue.test_agent_session_transport import (
+from tests.support.agent_sessions import (
     _policy,
     _request,
     _provider_descriptors,
@@ -481,9 +481,7 @@ def test_operator_cli_and_old_peer_capability_refusal(owner, monkeypatch, capsys
 
 @pytest.mark.parametrize("remote", [False, True])
 def test_actual_claim_and_release_observations(tmp_path, monkeypatch, remote):
-    from tests.integration.queue.test_agent_session_transport import (
-        test_external_gpu_occupancy_drives_real_local_and_remote_admission as exercise,
-    )
+    from tests.support.agent_gpu_occupancy import exercise_gpu_occupancy as exercise
 
     exercise(tmp_path, monkeypatch, remote)
 

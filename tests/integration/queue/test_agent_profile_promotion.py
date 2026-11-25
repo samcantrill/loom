@@ -453,7 +453,7 @@ def test_another_agent_promotion_requires_global_control_settlement(tmp_path):
     from loom.queue import LocalDaemon, LocalDaemonConfig
     from loom.queue.local_daemon import LocalDaemonPrincipal, LocalDaemonRole
     from loom.queue.agent_sessions import AgentControlEffect, AgentPolicyConfig, LocalOwnerOperatorPolicy
-    from tests.integration.queue.test_agent_session_transport import _policy, _request
+    from tests.support.agent_sessions import _policy, _request
 
     policies = tuple(replace(_policy().agents[0], agent_id=name,
                              principal_id=name, credential_id=name) for name in ("agent-a", "agent-b"))

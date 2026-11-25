@@ -13,7 +13,7 @@ from loom.queue.agent_sessions import AgentControlKind, LocalOwnerOperatorPolicy
 from loom.queue.deployment import load_outbound_agent_service_config, read_agent_spec
 from loom.queue.errors import QueueConflictError, QueueError
 from tests.integration.queue.test_agent_profile_promotion import request, close
-from tests.integration.queue.test_agent_session_transport import native_control_endpoint, _request  # noqa: F401
+from tests.support.agent_sessions import native_control_endpoint, _request  # noqa: F401
 from tests.integration.queue.test_maintenance_admission import change, operator
 from tests.unit.loom.queue.test_deployment import _agent_config, _write_protected
 from tests.unit.loom.queue.test_submitted_container_policy import _submitted

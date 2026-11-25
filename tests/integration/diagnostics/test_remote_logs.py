@@ -22,7 +22,7 @@ from loom.queue.local_daemon import (
     LocalDaemonOperation,
 )
 from tests.integration.config.test_cli_run_observation import _owner, _run, _counts
-from tests.integration.queue.test_agent_session_transport import (
+from tests.support.agent_sessions import (
     native_control_endpoint as native_control_endpoint,
 )
 
