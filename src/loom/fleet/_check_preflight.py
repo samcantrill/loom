@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from pathlib import Path
 from typing import cast
 
 from loom.serialization import PlainData
@@ -86,6 +87,7 @@ def prepare(request):
     with _candidate_config(request, request["candidate_declaration"]) as temporary:
         service = load_outbound_agent_service_config(temporary, env_file=environment(request))
     results = {}
+    slurm_images = set()
     for check, raw in request["bindings"].items():
         binding = PreparationChildInput.from_dict(raw)
         if binding.execution is None:
@@ -100,6 +102,33 @@ def prepare(request):
             policies = [p for p in service.client.container_policies
                         if p.capability == binding.container_capability
                         or (binding.container_capability is not None and p.capability.permits(binding.container_capability))]
+            if request.get("slurm_profile"):
+                from loom.queue._submitted_container_policy import SubmittedContainerPolicy
+
+                for profile in service.client.slurm_profiles:
+                    if profile.profile_id != request.get("slurm_profile") or profile.submitted_container_policy is None:
+                        continue
+                    policy = SubmittedContainerPolicy.from_dict(profile.submitted_container_policy)
+                    if binding.container_capability is not None and policy.capability.permits(binding.container_capability):
+                        # Installation and image binding are checked locally; the authorized
+                        # preparation and workload probes below run in real allocations.
+                        from loom.queue.submitted_execution import verify_submitted_image
+
+                        image = binding.execution.image
+                        root = cast(Mapping, policy.shared_roots[str(image.location["root_id"])])
+                        image_key = (image.sha256, root["host_path"], image.location["path"])
+                        if image_key not in slurm_images:
+                            path = verify_submitted_image(image, policy.shared_roots)
+                            if path.parent == Path(root["host_path"]):
+                                raise QueueConflictError("candidate Slurm image requires a published directory")
+                            slurm_images.add(image_key)
+                        results[check] = {"slurm_profile": profile.profile_id,
+                                          "fingerprint": profile.configuration_fingerprint,
+                                          "image_sha256": binding.execution.image.sha256}
+                        break
+                if check not in results:
+                    raise QueueConflictError("candidate Slurm check profile or image policy differs")
+                continue
             if len(policies) != 1:
                 raise QueueConflictError("candidate check container policy is unavailable or ambiguous")
             # The bounded probe creates its own workspace; this path supplies

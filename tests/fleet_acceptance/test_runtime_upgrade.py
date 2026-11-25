@@ -57,6 +57,8 @@ def selected_case(name):
         "report",
         "timeout_seconds",
     }
+    if name == "slurm-held-interruption":
+        required.update({"maintenance_id", "check_execution"})
     if set(value) - (required | {"env_file"}) or required - set(value):
         pytest.fail("incomplete or unknown installed upgrade selection fields")
     for key in (
@@ -66,6 +68,7 @@ def selected_case(name):
         "operator_connection",
         "report",
         "env_file",
+        "check_execution",
     ):
         if key in value:
             value[key] = (source.parent / value[key]).resolve()
@@ -91,13 +94,14 @@ def _invoke(args, log):
     )
 
 
-@pytest.mark.parametrize("case", ["upgrade", "interruption"])
+@pytest.mark.parametrize("case", ["upgrade", "interruption", "slurm-held-interruption"])
 def test_installed_runtime_upgrade(case):
     selected = selected_case(case)
     inventory = load_inventory(selected["fleet"])
+    slurm = case == "slurm-held-interruption"
     assert (
         len(inventory.hosts) == 2
-        and len({entry.host for entry in inventory.hosts}) == 2
+        and (slurm or len({entry.host for entry in inventory.hosts}) == 2)
     )
     options = {
         key: selected[key] for key in ("runtime_release", "deployment", "config")
@@ -105,6 +109,10 @@ def test_installed_runtime_upgrade(case):
     options.update(
         connection=selected["operator_connection"], env_file=selected.get("env_file")
     )
+    if slurm:
+        from loom.cli.fleet import _execution
+
+        options.update(maintenance_id=selected["maintenance_id"], check_execution=_execution(selected["check_execution"]))
     before = preview(inventory, **options)
     assert {
         name: row["expected_root_id"] for name, row in before["hosts"].items()
@@ -113,7 +121,13 @@ def test_installed_runtime_upgrade(case):
         name: row["source_release"]["descriptor_sha256"]
         for name, row in before["hosts"].items()
     } == selected["source_releases"]
-    assert before["gate"]["state"] == "open"
+    if slurm:
+        assert before["gate"]["maintenance_id"] == selected["maintenance_id"]
+        assert before["gate"]["state"] == "closed" and before["gate"]["settled"] and not before["gate"]["checks"]
+        assert set(before["slurm"]) == set(before["hosts"])
+        assert all(row["status"] == "settled" and row["profiles"] for row in before["slurm"].values())
+    else:
+        assert before["gate"]["state"] == "open"
     report = selected["report"]
     protected_directory(report.parent)
     atomic(
@@ -144,6 +158,8 @@ def test_installed_runtime_upgrade(case):
         "--timeout",
         "30",
     ]
+    if slurm:
+        initial += ["--maintenance-id", selected["maintenance_id"], "--check-execution", str(selected["check_execution"])]
     if selected.get("env_file"):
         initial += ["--env-file", str(selected["env_file"])]
     deadline = time.monotonic() + selected["timeout_seconds"]
@@ -156,11 +172,13 @@ def test_installed_runtime_upgrade(case):
                 selected["operator_connection"]
             ) as operator:
                 while time.monotonic() < deadline:
-                    if case == "interruption" and not interrupted:
+                    if (case == "interruption" or slurm) and not interrupted:
                         gate = dict(operator.observe_maintenance())
                         if (
                             gate["state"] == "closed"
-                            and gate["maintenance_id"] == selected["operation_id"]
+                            and gate["maintenance_id"] == selected.get("maintenance_id", selected["operation_id"])
+                            and (not slurm or (inventory.path.parent / "operations" / selected["operation_id"] / "irreversible.json").exists())
+                            and process.poll() is None
                         ):
                             gate_evidence = gate
                             os.killpg(process.pid, signal.SIGTERM)
@@ -195,11 +213,14 @@ def test_installed_runtime_upgrade(case):
                     pytest.fail(
                         "installed upgrade deadline; preserve exact operation/native owners"
                     )
-                assert case != "interruption" or interrupted
+                assert case == "upgrade" or interrupted
                 gate = dict(operator.observe_maintenance())
                 assert (
-                    gate["state"] == "open" and gate["checks"] == {} and gate["settled"]
+                    gate["state"] == ("closed" if slurm else "open") and gate["checks"] == {} and gate["settled"]
                 )
+                if slurm:
+                    assert gate["maintenance_id"] == selected["maintenance_id"]
+                    assert gate["intent_digest"] == before["gate"]["intent_digest"]
                 after = preview(inventory, **options)
                 assert {
                     name: row["expected_root_id"]
@@ -210,6 +231,22 @@ def test_installed_runtime_upgrade(case):
                     == before["release"]["descriptor_sha256"]
                     for row in after["hosts"].values()
                 )
+                if slurm:
+                    assert set(result["retirement"]) == set(after["hosts"])
+                    for retirement in result["retirement"].values():
+                        if retirement["outcome"] == "retained":
+                            # Protected same-user processes (e.g. ssh-agent) can
+                            # legitimately deny /proc inspection on a login node.
+                            assert retirement["reasons"] == ["process_reference_or_unavailable"]
+                            assert retirement["processes"] and all(
+                                item.endswith(":unknown") for item in retirement["processes"]
+                            )
+                            assert retirement["restore_descriptor"] and retirement["removal_condition"]
+                        else:
+                            assert retirement["outcome"] == "retired"
+                    for name, row in after["hosts"].items():
+                        assert after["slurm"][name]["status"] == "settled"
+                        assert row["native_owner"]["revision"] != before["hosts"][name]["native_owner"]["revision"]
                 settlement = {}
                 for name, row in after["hosts"].items():
                     fact = ssh(
@@ -240,7 +277,11 @@ def test_installed_runtime_upgrade(case):
                     assert check["outcome"] == "passed"
                     check_evidence[attempt["operation_id"]] = check
                     for fact in check["checks"].values():
-                        if fact["outcome"] != "not_requested":
+                        if slurm and fact["outcome"] != "not_requested":
+                            assignment = fact["slurm_assignment"]
+                            assert assignment["state"] == "released" and assignment["job_id"] and assignment["cluster"]
+                            assert assignment["loom_result_status"] == "SUCCEEDED"
+                        elif fact["outcome"] != "not_requested":
                             assert (
                                 fact["assignment"]["value"]["released"]
                                 and fact["assignment"]["value"]["terminal_acknowledged"]

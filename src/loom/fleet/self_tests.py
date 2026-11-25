@@ -310,26 +310,31 @@ def _observe_check(
         code, explanation = _pending_observation(observed)
         return _waiting(code, explanation=explanation, **facts)
     detail = observed.detail or client.admission(observed.admission.admission_id, deadline=deadline)
-    assignments = (
-        cast(dict[str, Any], thaw_plain_data(detail.owners))
-        .get("assignment", {})
-        .get("assignments", [])
-    )
-    candidates = [
-        operator.observe_assignment(row["assignment_id"], deadline=deadline) for row in assignments
-    ]
-    matches = [
-        row
-        for row in candidates
-        if row.availability == "available"
-        and row.value.get("stage_name") == "probe"
-        and row.value.get("terminal_acknowledged")
-    ]
-    if len(matches) != 1:
-        return _waiting("assignment_evidence_unavailable", **facts)
-    assignment = cast(dict[str, Any], thaw_plain_data(matches[0].value))
+    owners = cast(dict[str, Any], thaw_plain_data(detail.owners))
+    if "slurm_profile" in intent:
+        owner = owners.get("slurm", {})
+        rows = owner.get("assignments", ())
+        if owner.get("availability") != "available" or len(rows) != 1:
+            return _waiting("slurm_assignment_evidence_unavailable", **facts)
+        assignment = rows[0]
+        if (assignment["agent_id"] != intent["agent_id"] or assignment["agent_root_id"] != intent["agent_root_id"]
+                or assignment["profile_id"] != intent["slurm_profile"]["profile_id"]):
+            return {"outcome": "failed", "code": "slurm_check_identity_mismatch", **facts}
+        if (assignment["state"] != "released" or not assignment["job_id"]
+                or not assignment["fence_bound"] or assignment["loom_result_status"] != "SUCCEEDED"):
+            return _waiting("slurm_release_pending", slurm_assignment=assignment, **facts)
+        facts["slurm_assignment"] = assignment
+    else:
+        assignments = owners.get("assignment", {}).get("assignments", [])
+        candidates = [operator.observe_assignment(row["assignment_id"], deadline=deadline) for row in assignments]
+        matches = [row for row in candidates if row.availability == "available"
+                   and row.value.get("stage_name") == "probe" and row.value.get("terminal_acknowledged")]
+        if len(matches) != 1:
+            return _waiting("assignment_evidence_unavailable", **facts)
+        assignment = cast(dict[str, Any], thaw_plain_data(matches[0].value))
+        facts["assignment"] = matches[0].to_dict()
     agent_observation = operator.observe_agent(intent["agent_id"], deadline=deadline)
-    facts.update(assignment=matches[0].to_dict(), agent=agent_observation.to_dict())
+    facts["agent"] = agent_observation.to_dict()
     selected = client.select_outputs(
         OutputSelection(
             run_uris=(observed.admission.run_uri,),
@@ -347,6 +352,13 @@ def _observe_check(
         return {**facts, **publication}
     facts.update(publication)
     report = publication["report"]
+    if "slurm_profile" in intent:
+        valid = (report.get("run_uri") == "loom-slurm:" + assignment["assignment_id"]
+                 and report.get("stage_name") == "probe" and report.get("check") == check
+                 and report.get("synthetic") is True and report.get("outcome") == "passed"
+                 and (check == "storage" or check == "cpu" and report.get("result") == 49995000))
+        return {**facts, "outcome": "passed" if valid else "failed",
+                "code": "check_complete" if valid else "slurm_probe_result_mismatch"}
     profile = intent["profile"]
     if request.preparation.execution is not None and request.preparation.execution.worker_contract == SELECTED_INPUT_WORKER_CONTRACT:
         from loom.queue.shared_execution import stage_scope
@@ -506,13 +518,25 @@ def self_test(
         if observed.availability != "available" or observed.freshness != "current":
             raise QueueConfigError("selected agent/profile observation is unavailable")
         agent = cast(dict[str, Any], thaw_plain_data(observed.value))
-        profile = _preparation_check_profile(policy, agent, execution)
+        route = policy.get("execution_route")
+        slurm_profile = None
+        if route:
+            rules = cast(Mapping[str, Any], role["agent_policy"])["agents"]
+            matches = [(r["agent_id"], fp) for r in rules for pid, fp in r.get("external_slurm_profiles", ())
+                       if pid == route["profile"]]
+            if len(matches) != 1 or matches[0][0] != agent_id:
+                raise QueueConfigError("Slurm qualification requires a unique authorized submit agent for this profile")
+            slurm_profile = {"profile_id": route["profile"], "fingerprint": matches[0][1]}
+            source = {"offer": {"container_execution_capabilities": role.get("container_capabilities")}}
+        else:
+            source = agent
+        profile = _preparation_check_profile(policy, source, execution)
         if "gpu" in checks and not (agent.get("offer") or {}).get("gpu_devices"):
             raise QueueConfigError("GPU check requires a declared GPU profile")
         requests = {}
         for check in checks:
             identity = operation_id if _prepare_id is not None else operation_id + "-" + check
-            composition = probe_configuration(check, str(agent_id))
+            composition = probe_configuration(check, str(agent_id), slurm_profile=route["profile"] if route else None)
             requests[check] = RunRequest(
                 PrepareRunRequest(
                     identity,
@@ -541,6 +565,7 @@ def self_test(
             "session_id": agent["session_id"],
             "agent_root_id": agent["agent_root_id"],
             "profile": profile,
+            **({"slurm_profile": slurm_profile} if slurm_profile else {}),
             "requests": requests,
         }
         if "gpu" in checks and inventory.gpu_qualification == "nonexclusive":

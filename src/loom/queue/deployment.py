@@ -2984,7 +2984,15 @@ def service_replacement_guard(
             elif (_has_retained_agent_work(journal, execution, slurm)
                     or journal.recovery_poll(_OUTBOUND_POLL_WAIT_MS) is not None):
                 raise QueueConflictError("replacement requires settled agent work and poll outcomes")
-            with retained_supervisor_guard(spec.agent_root, agent_id=journal.root_id):
+            from .service_upgrade import replacement_requires_supervisor
+
+            if (spec.declarations["resident_profiles"] or spec.declarations.get("container_policies")
+                    or replacement_requires_supervisor(spec.agent_root)):
+                with retained_supervisor_guard(spec.agent_root, agent_id=journal.root_id):
+                    yield
+            else:
+                # The agent journal lock already owns this stopped Slurm-only
+                # role; its declared scheduler store was opened and checked above.
                 yield
         finally:
             journal.close()

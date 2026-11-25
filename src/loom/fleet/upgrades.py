@@ -213,7 +213,7 @@ def preview(
         raise QueueConfigError("upgrade requires a runtime or workload target")
     target = verify_release(Path(runtime_release), previous=inventory.runtime_release)
     selected = _checks(inventory, deployment, connection, config, check_execution)
-    rows, declarations = sshops._selection(inventory, None, env_file)
+    rows, declarations = sshops._selection(inventory, None, env_file, runtime_upgrade=True)
     if len(rows) < 2:
         raise QueueConfigError(
             "upgrade requires one pure coordinator and separate agents"
@@ -264,7 +264,11 @@ def preview(
         raise QueueConfigError(
             "upgrade operator requires declared maintenance, drain and resume authority"
         )
-    observations = sshops._ssh_many({name: (row["host"], {**row, "action": "inspect", "release": target})
+    slurm_roles = [name for name, declaration in declarations.items() if declaration.get("slurm_profiles")]
+    if slurm_roles and recover_retained_results:
+        raise QueueConfigError("Slurm runtime replacement requires full native and scheduler settlement")
+    observations = sshops._ssh_many({name: (row["host"], {**row, "action": "inspect", "release": target,
+                                                         "inspect_slurm": name in slurm_roles})
                                      for name, row in rows.items()})
     for name, row in rows.items():
         observed = observations[name]
@@ -311,6 +315,7 @@ def preview(
         "hold_admission": hold_admission,
         "maintenance_binding": binding,
         "fleet": inventory.name,
+        **({"slurm": {name: observations[name]["slurm"] for name in slurm_roles}} if slurm_roles else {}),
         "release": target,
         "source": source,
         "gate": gate,
@@ -506,6 +511,7 @@ class _Upgrade(sshops._Operation):
                 "action": action,
                 "release": self.intent["release"],
                 "expected_declaration": digest(self.accepted_declaration(name)),
+                **_slurm_binding(self, name),
                 **values,
             },
         )
@@ -763,8 +769,11 @@ def _check_profile(declarations, name, deployment, execution=None):
     policies = declarations["coordinator"]["preparation"]["profiles"]
     if execution is not None:
         ids = {p["policy_id"] for p in declaration.get("container_policies", ())}
+        routes = {p.get("profile_id"): (p.get("submitted_container_policy") or {}).get("policy_id")
+                  for p in declaration.get("slurm_profiles", ())}
         matches = [key for key, value in policies.items()
-                   if value.get("container_policy_id") in ids]
+                   if (value.get("container_policy_id") == routes.get(value["execution_route"]["profile"])
+                       if value.get("execution_route") else value.get("container_policy_id") in ids)]
     else:
         ids = {p["descriptor"]["profile_id"] for p in declaration["resident_profiles"]}
         matches = [key for key, value in policies.items()
@@ -800,6 +809,7 @@ def _preflight_checks(operation):
     deferred = _deferred_checks(operation).get("agents", ())
     def preflight(name):
         chosen = _check_profile(declarations, name, deployment, _check_execution(selection))
+        route = declarations["coordinator"]["preparation"]["profiles"][chosen].get("execution_route", {})
         requests = {}
         for check in _check_kinds(operation, name, declarations[name]):
             if check == "gpu" and operation.intent.get("gpu_qualification") == "nonexclusive":
@@ -811,7 +821,7 @@ def _preflight_checks(operation):
                 execution=_check_execution(selection),
                 input_locations=_check_input_locations(_check_execution(selection)),
                 overrides=tuple(key + "=" + json.dumps(value)
-                                for key, value in probe_configuration(check, name).items()),
+                                for key, value in probe_configuration(check, name, slurm_profile=route.get("profile")).items()),
             ).to_dict()
         captured = yield from operation.call_steps(
             "coordinator", "upgrade-check-capture", agent_id=name,
@@ -822,6 +832,7 @@ def _preflight_checks(operation):
             "agent_id": name,
             "expected_root_id": operation.intent["hosts"][name]["expected_root_id"],
             "candidate_declaration": declarations[name], "bindings": captured["bindings"],
+            **({"slurm_profile": route["profile"]} if route else {}),
         }))
 
     flows = {name: preflight(name) for name in operation.intent["agents"] if name not in deferred}
@@ -906,6 +917,13 @@ def _prepare_attempt(operation, name, check, identity, previous=None, *, deadlin
             {key: ResourceEntry.from_dict(value) for key, value in entries.items()}
         ).to_dict()
 
+    preparation_resources = resources("cpu")
+    if "slurm_profile" in intent:
+        alias = intent["requests"][check]["preparation"]["preparation_profile"]
+        options = declaration["preparation"]["profiles"][alias].get("runtime_options", {})
+        override = options.get("stage_options", {}).get("prepare", {}).get("resources")
+        if override is not None:
+            preparation_resources = ResourceRequest.from_dict(override).to_dict()
     return {
         "maintenance_id": binding["operation_id"],
         "target_intent_digest": binding["target_intent_digest"],
@@ -921,9 +939,10 @@ def _prepare_attempt(operation, name, check, identity, previous=None, *, deadlin
             "pool": "default",
             "profile": intent["profile"],
             "resources": resources(check),
-            "preparation_resources": resources("cpu"),
+            "preparation_resources": preparation_resources,
             "max_stages": 1,
             "previous_check_id": previous,
+            **({"slurm_profile": intent["slurm_profile"]} if "slurm_profile" in intent else {}),
         },
     }
 
@@ -1221,7 +1240,58 @@ def _release_publication_hold(operation):
     atomic(path, {**receipt, "publication_released": True})
 
 
+def _slurm_binding(operation, name):
+    profiles = operation.intent.get("slurm_profiles", {}).get(name)
+    return {"slurm_profiles": profiles} if profiles else {}
+
+
+def _slurm_handoff(operation):
+    from ._slurm_retirement import recovery_consumers
+
+    if not operation.intent.get("slurm_roles"):
+        return {}
+    record = operation.directory / "release-retirement.json"
+    if record.exists():
+        return read(record)
+    operation.gate()
+    operation.settled()
+    checks = set(operation.gate()["checks"])
+    authorized = {attempt["operation_id"] for history in _attempts(operation).values() for attempt in history}
+    if checks - authorized:
+        raise QueueConflictError("maintenance gate contains a check outside this upgrade")
+    for identity in sorted(checks):
+        operation.maintenance("revoke-" + identity, "revoke", identity)
+    from ._slurm_upgrade import _strings
+
+    # An idle resident worker or a peer Slurm helper can still launch from the
+    # source release. Bind every role's authored paths before any host retires.
+    paths = {path for name in operation.intent["hosts"]
+             for path in _strings(operation.accepted_declaration(name)) if Path(path).is_absolute()}
+    unattributed_jobs = []
+    for name, fact in operation.host_observations(operation.intent["slurm_roles"], "upgrade-settlement",
+                                                  include_pending_poll=False):
+        if fact["availability"] != "available" or not fact["value"].get("settled"):
+            raise _Waiting("Slurm settlement pending before retirement: " + name, "settlement_pending")
+        slurm = fact["value"]["slurm"]
+        paths.update(path for profile in slurm["profiles"] for path in profile["paths"])
+        unattributed_jobs.extend(slurm["other_jobs"])
+    consumers = recovery_consumers(operation)
+    facts = operation.call_many([
+        (name, "upgrade-retire-environment", {
+            "source_release": row["source_release"], "expected_root_id": row["expected_root_id"],
+            "source_descriptor_name": operation.intent["slurm_source_descriptor_name"],
+            "recovery_consumers": consumers, "role_paths": sorted(paths),
+            "unattributed_jobs": unattributed_jobs, "deferred_agents": _deferred_checks(operation).get("agents", []),
+            **_slurm_binding(operation, name),
+        }) for name, row in operation.intent["hosts"].items()
+    ])
+    atomic(record, facts)
+    return facts
+
+
 def _restore(operation, *, abort=False):
+    if not abort and operation.intent.get("slurm_roles"):
+        _slurm_handoff(operation)
     if not abort and operation.intent["kind"].endswith("-publication"):
         receipt = read(operation.directory / "restoring.json")
         if receipt.get("intent_digest") != digest(operation.intent):
@@ -1384,6 +1454,7 @@ def _continue(operation):
             required_capabilities=list(REQUIRED_CAPABILITIES),
             images=read(operation.directory / (name + "-candidate.json"))["images"],
             **recovery_options,
+            **_slurm_binding(operation, name),
         )
 
     def replacement_arguments(name):
@@ -1396,6 +1467,7 @@ def _continue(operation):
             required_capabilities=list(REQUIRED_CAPABILITIES),
             images=read(operation.directory / (name + "-candidate.json"))["images"],
             **recovery_options,
+            **_slurm_binding(operation, name),
         )
     operation.call_many([
         (name, "upgrade-stop", stop_arguments(name))
@@ -1438,6 +1510,7 @@ def _complete_runtime(operation):
         "release": operation.intent["release"],
         "checks": _attempts(operation),
         **_qualification_result(operation),
+        **({"retirement": _slurm_handoff(operation)} if operation.intent.get("slurm_roles") else {}),
         "deployment": _check_selection(operation)["deployment"],
         "operator_connection": operation.intent["check_selection"][
             "operator_connection"
@@ -1631,6 +1704,21 @@ def _upgrade(
                 "env_file": None if env_file is None else str(Path(env_file).resolve()),
                 "timeout_seconds": timeout_seconds,
             }
+            if plan.get("slurm"):
+                if _check_execution(plan["checks"]) is None:
+                    raise QueueConfigError("Slurm qualification requires an exact submitted --check-execution image")
+                for name in plan["slurm"]:
+                    if name == "coordinator":
+                        continue
+                    selection = load_deployment(plan["checks"]["deployment"])
+                    chosen = _check_profile(plan["declarations"], name, selection, _check_execution(plan["checks"]))
+                    if not plan["declarations"]["coordinator"]["preparation"]["profiles"][chosen].get("execution_route"):
+                        raise QueueConfigError("Slurm qualification requires a Slurm preparation and workload route")
+                intent["slurm_roles"] = list(plan["slurm"])
+                intent["slurm_source_descriptor_name"] = inventory.runtime_release.name
+                intent["slurm_profiles"] = {name: evidence["profiles"] for name, evidence in plan["slurm"].items()}
+                if any(evidence["status"] == "unavailable" for evidence in plan["slurm"].values()):
+                    raise QueueConflictError("Slurm preview evidence unavailable; restore scheduler and journal visibility")
             if workload_profile is not None or retire_configuration or add_container_policies or increase_publication_budgets:
                 from .workload_upgrades import bind_intent
                 intent = bind_intent(intent, plan, directory)

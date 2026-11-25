@@ -136,6 +136,7 @@ def main():
     if request["action"] == "inspect":
         installed = json.loads(active.read_text()) if active.exists() else None
         native_owner = None
+        slurm = None
         bound_root = False
         for intent_path in (admin / "operations").glob("*/intent.json"):
             if (
@@ -165,6 +166,10 @@ def main():
                 check=True,
             )
             native_owner = json.loads(result.stdout)
+            if request.get("inspect_slurm"):
+                receipt = subprocess.run([str(installed_python), "-B", "-c", sys.argv[1]],
+                                         input=json.dumps(request), capture_output=True, text=True, check=True)
+                slurm = json.loads(receipt.stdout)
         return {
             "root_exists": root.exists(),
             "bound_root": bound_root,
@@ -176,6 +181,7 @@ def main():
                 else "tmux" if installed is not None and root.exists() else None
             ),
             "native_owner": native_owner,
+            **({"slurm": slurm} if request.get("inspect_slurm") else {}),
             "local_storage": True,
             "boot_start": manager == "systemd-user",
             "credentials_complete": all(
