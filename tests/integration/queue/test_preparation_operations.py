@@ -2059,6 +2059,54 @@ def test_partial_target_is_preserved_as_a_publication_conflict(tmp_path: Path) -
         daemon.stop()
 
 
+def test_peer_finishes_while_cancelled_child_authority_read_is_held(tmp_path, monkeypatch):
+    from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+
+    service = _service(tmp_path)
+    entered, release, returned = Event(), Event(), Event()
+    original = SQLitePerRunAuthorityStore.read_revision_status
+    held_uri = []
+
+    def hold_first_child_read(store, uri):
+        observed = original(store, uri)
+        if not held_uri and "loom-preparation-" in uri:
+            held_uri.append(uri)
+            entered.set()
+            assert release.wait(90)
+            returned.set()
+        return observed
+
+    monkeypatch.setattr(SQLitePerRunAuthorityStore, "read_revision_status", hold_first_child_read)
+    LocalDaemon.initialize_deployment(service.daemon)
+    daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
+    daemon.start()
+    try:
+        daemon.prepare_run(_request(), principal_id="caller")
+        assert entered.wait(30), daemon.operation("prepare-1")
+        peer = replace(_request(), operation_id="prepare-peer", run_name="peer")
+        daemon.start_run(RunRequest(peer, "execute-peer"), principal_id="caller")
+        completed = daemon.wait_operation("prepare-peer", timeout=40).operation
+        assert completed.state == "applied", completed
+        admission = daemon._wait("execute-peer", timeout_seconds=30)
+        assert admission.state.value == "SUCCEEDED", admission
+        store = LocalRunStore(service.daemon.run_store_root)
+        worker = StageWorkerResult.from_dict(store.read_stage_worker_result(admission.run_uri, "produce", attempt=1))
+        assert LocalArtifactStore(store.local_artifact_root(admission.run_uri)).load(worker.outputs["data"]) == {"value": 41}
+
+        daemon.cancel_preparation("prepare-1", principal_id="caller")
+        cancelled = daemon.wait_operation("prepare-1", timeout=10).operation
+        assert cancelled.state == "cancelled", cancelled
+        assert not returned.is_set()
+        release.set()
+        assert returned.wait(5)
+        daemon.reconcile_once()
+        assert daemon.operation("prepare-1") == cancelled
+        assert not (service.daemon.run_store_root / "target-1").exists()
+    finally:
+        release.set()
+        daemon.stop()
+
+
 def test_validated_reports_survive_publication_capacity_wait(tmp_path, monkeypatch):
     from collections import Counter
 
@@ -2076,8 +2124,10 @@ def test_validated_reports_survive_publication_capacity_wait(tmp_path, monkeypat
             return super().read_report(config, admission, request, binding)
 
         def publish_target(self, config, request, report):
+            # Contention for the renderer can defer an attempt before any target write.
+            receipt = super().publish_target(config, request, report)
             publications[request.operation_id] += 1
-            return super().publish_target(config, request, report)
+            return receipt
 
     LocalDaemon.initialize_deployment(service.daemon)
     daemon = LocalDaemon(service.daemon, preparation=CountedPreparation(service))

@@ -281,3 +281,45 @@ def test_cached_input_read_failure_keeps_original_loader_diagnostic(tmp_path, mo
     monkeypatch.setattr(LocalRunStore, "_read_document_bytes", read)
     with pytest.raises(QueueServiceError, match="managed composition reference is missing or changed"):
         load_managed_local_intent(config, uri, cache=cache)
+
+def test_owned_bulk_continuation_advances_with_both_context_readers_occupied():
+    from threading import Barrier, Event
+
+    from loom.queue._context_preparation import ContextPreparations, PreparedAdmissionContext
+    from loom.queue.local_daemon import LocalDaemonAdmission, LocalDaemonAdmissionState
+
+    occupied = Barrier(3)
+    release = Event()
+    contexts = ContextPreparations(lambda: None)
+    epochs = ("coordinator", "policy")
+    admission = LocalDaemonAdmission(
+        "continued", "continued", "coordinator", "run-uri", "digest", "managed-stage",
+        LocalDaemonAdmissionState.WAITING, "2026-01-01T00:00:00Z", "bind",
+    )
+    checked = cast(PreparedAdmissionContext, (object(), object()))
+
+    def load(current, _epochs):
+        assert current != admission, "continuation reopened retained inputs"
+        occupied.wait(timeout=10)
+        assert release.wait(timeout=10)
+        return checked
+
+    try:
+        others = [replace(admission, admission_id=name, run_uri=name) for name in ("a", "b")]
+        for other in others:
+            assert contexts.try_submit(other, epochs, load)
+        occupied.wait(timeout=10)
+        assert not contexts.has_capacity()
+        assert contexts.try_submit(admission, epochs, load, resume=True, continuation=checked)
+        assert [item.result() for item in contexts.completed()] == [checked]
+        # Owner progress invalidates a still-running proof without releasing its
+        # reader. Only the unaffected admission may consume its result.
+        contexts.begin_cycle(invalidated=["a"])
+        assert not contexts.has_capacity()
+        release.set()
+        for pending in tuple(contexts._pending.values()):
+            pending.future.result(timeout=10)
+        assert [item.admission for item in contexts.completed()] == [others[1]]
+    finally:
+        release.set()
+        contexts.close()

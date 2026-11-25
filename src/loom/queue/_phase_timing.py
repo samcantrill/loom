@@ -6,14 +6,14 @@ from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
-import json
 from itertools import count
 import os
-import sys
 from time import monotonic
 from typing import Any, cast
 
 from loom.serialization import PlainData
+
+from ._phase_diagnostics import diagnostics
 
 
 _observer: ContextVar[Callable[[dict[str, PlainData]], None] | None] = ContextVar(
@@ -33,8 +33,8 @@ def observe_phases(observer: Callable[[dict[str, PlainData]], None]) -> Iterator
 
 
 def log_phases(value: dict[str, PlainData]) -> None:
-    """Write opted-in service diagnostics to its existing stderr log."""
-    sys.stderr.write(json.dumps({"diagnostic": "loom.phase_timings", **value}) + "\n")
+    """Offer a bounded record to the process-local stderr writer."""
+    diagnostics.submit(value, qualification=qualification_timings())
 
 
 def request_identity(value: Mapping[str, object]) -> str | None:
@@ -64,7 +64,9 @@ def qualification_timings() -> bool:
 
 
 @contextmanager
-def phase(action: str, *, operation_id: str | None = None) -> Iterator[dict[str, PlainData]]:
+def phase(
+    action: str, *, operation_id: str | None = None, pending: tuple[type[Exception], ...] = (),
+) -> Iterator[dict[str, PlainData]]:
     """Record one boundary through the current diagnostic observer, if any.
 
     Callers may add bounded scalar evidence such as publication identity and
@@ -75,7 +77,7 @@ def phase(action: str, *, operation_id: str | None = None) -> Iterator[dict[str,
     timing = PhaseTimings()
     attributes: dict[str, PlainData] = {}
     try:
-        with timing.measure(action):
+        with timing.measure(action, pending=pending):
             yield attributes
     finally:
         try:
@@ -98,16 +100,21 @@ class PhaseTimings:
 
     def __init__(self) -> None:
         self.spans: list[PlainData] = []
+        self.idle_seconds = 0.0
+        self.failed = False
         self.dropped = 0
         self.related: dict[str, PlainData] = {}
 
     @contextmanager
-    def measure(self, action: str) -> Iterator[None]:
+    def measure(self, action: str, *, pending: tuple[type[Exception], ...] = ()) -> Iterator[None]:
         started_at = datetime.now(timezone.utc).isoformat()
         start = monotonic()
         outcome = "complete"
         try:
             yield
+        except pending:
+            outcome = "pending"
+            raise
         except BaseException:
             outcome = "error"
             raise
@@ -165,13 +172,36 @@ def state_lock(lock: Any) -> Iterator[None]:
 
 
 _operation_samples = count()
+_current: ContextVar[PhaseTimings | None] = ContextVar("queue_reported_timings", default=None)
+
+
+@contextmanager
+def idle_wait() -> Iterator[None]:
+    """Exclude only the time spent waiting for a change notification."""
+    timings = _current.get()
+    if timings is None:
+        yield
+        return
+    before = monotonic()
+    try:
+        yield
+    finally:
+        timings.idle_seconds += monotonic() - before
+
+
+def received_idle_duration(header: str | None, elapsed: float) -> None:
+    """Use an optional peer measurement, bounded by local time awaiting headers."""
+    timings = _current.get()
+    if timings is not None and header and len(header) <= 20 and header.isascii() and header.isdecimal():
+        timings.idle_seconds += min(int(header) / 1_000_000_000, elapsed)
 
 
 @contextmanager
 def reported_phases(
     action: str, *, operation_id: str | None = None, started_monotonic: float | None = None,
+    pending: tuple[type[Exception], ...] = (),
 ) -> Iterator[PhaseTimings]:
-    """Report slow operations and one in 64 ordinary operations after completion.
+    """Report failures, slow active work and one in 64 ordinary operations.
 
     Each asynchronous owner installs its own collector; it never appends to a
     request or reconciliation collector after that parent operation has returned.
@@ -180,20 +210,35 @@ def reported_phases(
     """
     timings = PhaseTimings()
     start = monotonic() if started_monotonic is None else started_monotonic
+    token = _current.set(timings)
+    outcome = "complete"
     try:
-        with observe_phases(timings.observe), phase(action, operation_id=operation_id):
+        with observe_phases(timings.observe), phase(action, operation_id=operation_id, pending=pending):
             yield timings
+    except pending:
+        outcome = "pending"
+        raise
+    except BaseException:
+        timings.failed = True
+        raise
     finally:
-        if (qualification_timings()
-            or monotonic() - start >= 1.0 or next(_operation_samples) % 64 == 0):
+        _current.reset(token)
+        active = max(0.0, monotonic() - start - timings.idle_seconds)
+        if (qualification_timings() or timings.failed
+            or active >= 1.0 or next(_operation_samples) % 64 == 0):
             try:
-                log_phases({**timings.payload(), "operation_id": operation_id})
+                log_phases({
+                    **timings.payload(), "operation_id": operation_id,
+                    "active_nanoseconds": round(active * 1_000_000_000),
+                    "idle_nanoseconds": round(timings.idle_seconds * 1_000_000_000),
+                    "outcome": "error" if timings.failed else outcome,
+                })
             except Exception:
                 pass
 
 
 @contextmanager
-def request_phases() -> Iterator[None]:
-    """Report bounded HTTP dispatch diagnostics after the handler returns."""
-    with reported_phases("request_dispatch"):
-        yield
+def request_phases() -> Iterator[PhaseTimings]:
+    """Report bounded HTTP dispatch diagnostics after response delivery."""
+    with reported_phases("request_dispatch") as timings:
+        yield timings

@@ -42,6 +42,23 @@ a context-preparation opportunity before the admission scan takes the freed
 slot, but unfinished preparation does not prevent an independently runnable peer
 from launching.
 
+A run reconciliation, a requested dispatch observation, and in-flight bulk or
+stage preparation can carry their validated inputs and scoped run authority across turns
+for the same admission revision and coordinator and scheduling epochs.
+Completing the work or superseding its owner ends that reuse. The next
+independent operation rereads the exact retained files, including optional
+inputs, before reusing a decoded context. These filesystem inputs have no
+owner-enforced immutable generation. Restart reconstructs the context and
+binding from durable input and admission records. A completed embedded assignment
+or successful replay also identifies the exact run to reconcile, so subsequent
+stages and terminal status can advance before the periodic scan.
+
+Each scheduling turn still verifies its live SQLite owners. After read-only
+SLURM admission, the coordinator checks stage work, native assignments, the
+submission projection, owner binding and status revisions in one execution
+database snapshot. The embedded agent journal has its own snapshot and binding.
+Missing owner state fails the check before dispatch.
+
 Completed input-directory inspection is another stage-owned prerequisite. Its
 separate execution pool has two workers/eight outstanding scans and at most 32
 unconsumed owners. Completion frees execution capacity, while the prepared stage

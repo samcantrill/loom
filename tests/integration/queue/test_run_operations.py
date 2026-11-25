@@ -604,13 +604,16 @@ def test_cancel_control_survives_restart_before_settlement(tmp_path, admitted):
         recovered.stop()
 
 
+@pytest.mark.parametrize("resume_owner", (False, True))
 def test_pending_cancellations_do_not_starve_a_settled_control_after_first_page(
-    tmp_path,
+    tmp_path, monkeypatch, resume_owner,
 ):
+    from time import monotonic, sleep
+
     service = _service(tmp_path)
+    monkeypatch.setattr(LocalDaemon, "_serve", lambda self: self._stop.wait())
     LocalDaemon.initialize_deployment(service.daemon)
     daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
-    daemon._preparations._reconcile_lock.acquire()
     daemon.start()
     controls = []
     try:
@@ -629,11 +632,16 @@ def test_pending_cancellations_do_not_starve_a_settled_control_after_first_page(
             )
         # Run the native suppression step for the tail while predecessors still
         # await their own preparation settlement. No retained state is forged.
-        daemon._preparations._advance(daemon._preparations._read("run-32"))
+        deadline = monotonic() + 10
+        while daemon.operation("run-32").state == "pending" and monotonic() < deadline:
+            daemon._preparations._advance(daemon._preparations._read("run-32"))
+            sleep(0.01)
         assert daemon.operation("run-32").state == "cancelled"
-        daemon._preparations._reconcile_cancellations()
-        assert daemon.operation(controls[-1].operation_id).state == "pending"
-        daemon._preparations._reconcile_cancellations()
+        priorities = (("cancel", controls[-1].operation_id),) if resume_owner else ()
+        daemon._preparations._reconcile_cancellations(priorities)
+        if not resume_owner:
+            assert daemon.operation(controls[-1].operation_id).state == "pending"
+            daemon._preparations._reconcile_cancellations()
         assert daemon.operation(controls[-1].operation_id).state == "applied"
         assert all(
             daemon.operation(control.operation_id).state == "pending"
@@ -641,7 +649,6 @@ def test_pending_cancellations_do_not_starve_a_settled_control_after_first_page(
         )
     finally:
         daemon.stop()
-        daemon._preparations._reconcile_lock.release()
 
 
 def test_publication_budget_refusal_still_allows_bounded_cancellation(tmp_path):

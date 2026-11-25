@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -15,8 +16,18 @@ from .errors import QueueConflictError
 from .local_daemon import LocalDaemonAdmissionState, RecoverUnknownAssignment, SlurmRecoveryTarget
 
 if TYPE_CHECKING:
+    from loom.serialization import PlainData
+    from loom.pipeline.stores.read_models import AuthoritativeRunSnapshot
     from .local_daemon_execution import LocalDaemonExecution
     from .slurm_ready_stage import SlurmStageRecord
+
+
+type ObserveRetrySnapshot = Callable[
+    [tuple[str, ...], Callable[[], AuthoritativeRunSnapshot]], AuthoritativeRunSnapshot
+]
+
+
+type AdmitRetryRecovery = Callable[[RecoverUnknownAssignment], Mapping[str, PlainData]]
 
 
 PROVIDER_RECOVERY_PREFIX = "slurm-provider-close-"
@@ -44,6 +55,8 @@ def _terminal_state(observed, record: SlurmStageRecord) -> str | None:
 
 def reconcile(
     execution: LocalDaemonExecution, run_uri: str, *, accepted_at: str | None = None,
+    observe_snapshot: ObserveRetrySnapshot | None = None,
+    admit_recovery: AdmitRetryRecovery | None = None,
 ) -> ContinuationPending | ContinuationConflict | None:
     from .local_daemon import _RecoveryNotAccepted
 
@@ -52,7 +65,16 @@ def reconcile(
     if not history:
         return None
     admission = daemon.admission_for_run_uri(run_uri)
-    snapshot = execution._authority_store(run_uri).open_run(run_uri)
+    def read_snapshot() -> AuthoritativeRunSnapshot:
+        return execution._authority_store(run_uri).open_run(run_uri)
+
+    if observe_snapshot is None:
+        snapshot = read_snapshot()
+    else:
+        # A new allocation can add a stage or attempt absent from a pending
+        # snapshot. Revisit its current history before making recovery decisions.
+        assignments = tuple(record.assignment.assignment_id for record, _ in history)
+        snapshot = observe_snapshot(assignments, read_snapshot)
     stages = {stage.stage_name: stage for stage in snapshot.stages}
     waiting = None
     for record, evidence in history:
@@ -144,7 +166,10 @@ def reconcile(
             consider_retry=False, reason=reason(state),
         )
         try:
-            result = daemon._admit_guarded_recovery(request, f"coordinator:{execution.coordinator_id}")
+            if admit_recovery is None:
+                result = daemon._admit_guarded_recovery(request, f"coordinator:{execution.coordinator_id}")
+            else:
+                result = admit_recovery(request)
         except _RecoveryNotAccepted:
             # A worker report, independent recovery, or a changed revision can
             # win after the snapshot. Re-read all owners on the next cycle.

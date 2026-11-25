@@ -35,6 +35,8 @@ class _Pending:
 class _StagePreparation:
     identity: str
     resource_class: Literal["cpu", "gpu"] | None = None
+    work_id: str | None = None
+    speculative: bool = False
     phases: dict[str, _Pending] = field(default_factory=dict)
     retiring: bool = False
 
@@ -52,19 +54,42 @@ class ReadyPreparationPool:
     dispatch, cancellation or supersession; evicting them can livelock dispatch.
     """
 
-    def __init__(self, wake: Callable[[], None], *, max_active_stages: int = 32, max_workers: int = 2):
+    def __init__(self, wake: Callable[[], None], *, max_active_stages: int = 32, max_workers: int = 2,
+                 on_ready: Callable[[str], None] | None = None):
         if max_active_stages < 1:
             raise ValueError("max_active_stages must be positive")
         self._workers = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="loom-ready-inputs")
         self._pending: dict[tuple[str, str], _StagePreparation] = {}
         self._capacity = max_active_stages
+        self._on_ready = on_ready
         self._wake = wake
         self._closed = False
+
+    def can_anticipate(self, key: tuple[str, str]) -> bool:
+        """Leave worker and retained-stage capacity for current placement demand."""
+        return (key not in self._pending and len(self._pending) < self._capacity - 1
+                and not any(item.speculative for item in self._pending.values()))
+
+    def request_for_descriptors(
+        self, key: tuple[str, str], work_id: str,
+    ) -> tuple[bool, StageWorkerRequest | None]:
+        """Return one demanded request when its descriptor phase can begin."""
+        stage = self._pending.get(key)
+        if stage is None or stage.retiring or stage.work_id != work_id:
+            return False, None
+        pending = stage.phases.get("request")
+        if stage.speculative or pending is None or "input-descriptors" in stage.phases:
+            return True, None
+        request = pending.future
+        if not request.done() or request.cancelled() or request.exception() is not None:
+            return True, None
+        return True, request.result()
 
     def poll(
         self, key: tuple[str, str], identity: str,
         prepare: Callable[[], Any], *, phase: str = "request",
         resource_class: Literal["cpu", "gpu"] | None = None,
+        work_id: str | None = None, speculative: bool = False,
     ) -> tuple[Any | None, str | None]:
         if self._closed:
             return None, "stage_preparation_cancelled"
@@ -76,6 +101,8 @@ class ReadyPreparationPool:
             if key in self._pending:
                 return None, "stage_preparation_superseded"
             stage = None
+        if stage is not None and phase == "request" and not speculative:
+            stage.speculative = False
         if stage is None:
             if phase != "request":
                 return None, "stage_preparation_pending"
@@ -87,7 +114,7 @@ class ReadyPreparationPool:
                 # GPU prerequisites cannot otherwise be evicted while their
                 # allocation budget is full. This bounds preparation, not jobs.
                 return None, "stage_preparation_capacity"
-            stage = _StagePreparation(identity, resource_class)
+            stage = _StagePreparation(identity, resource_class, work_id, speculative)
             self._pending[key] = stage
         pending = stage.phases.get(phase)
         if pending is not None and pending.identity != identity:
@@ -99,7 +126,11 @@ class ReadyPreparationPool:
             future = self._workers.submit(copy_context().run, prepare)
             pending = _Pending(identity, future)
             stage.phases[phase] = pending
-            future.add_done_callback(lambda _: self._wake())
+            notify = self._on_ready
+            if stage.work_id is None or notify is None:
+                future.add_done_callback(lambda _: self._wake())
+            else:
+                future.add_done_callback(lambda _, owner=stage.work_id: notify(owner))
         if not pending.future.done():
             return None, "stage_preparation_pending"
         try:

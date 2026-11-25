@@ -103,6 +103,9 @@ def test_large_unknown_registration_is_not_treated_as_a_delivery(tmp_path):
 class _Response(io.BytesIO):
     status = 200
 
+    def getheader(self, name):
+        return None
+
 
 class _Connection:
     def __init__(self, value):

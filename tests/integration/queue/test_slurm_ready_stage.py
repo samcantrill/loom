@@ -498,6 +498,7 @@ def _exercise_mixed_route_run(
     late_terminal_result: bool = False,
     provider_retry_state: str | None = None,
     provider_retry_winner: str | None = None,
+    held_retry_boundary: str | None = None,
     prestart_failure: bool = False,
     bootstrap_failure: str | None = None,
     replayable_start: bool = False,
@@ -568,9 +569,27 @@ def _exercise_mixed_route_run(
         "_compare_and_set",
         crash_after_submission_intent,
     )
+    preparation = None
+    if held_retry_boundary:
+        from loom.preparation import CoordinatorPreparation
+        from tests.integration.queue.test_reconciled_runs import _reconciled_service
+
+        preparation = CoordinatorPreparation(_reconciled_service(tmp_path))
+
+    def preparation_config(config):
+        if preparation is None:
+            return config
+        native = preparation.service.daemon
+        return replace(config, preparation_policy=native.preparation_policy,
+                       coordinator_authority_factory=native.coordinator_authority_factory,
+                       resident_worker_launch_profile=native.resident_worker_launch_profile,
+                       resident_preparation_ready=native.resident_preparation_ready,
+                       machine_id=native.machine_id)
+
     run_root = tmp_path / "runs"
     run_store = LocalRunStore(run_root)
-    run_uri = path_to_run_uri(run_root / "mixed-run")
+    target_name = "science-" + "a" * 64 if held_retry_boundary else "mixed-run"
+    run_uri = path_to_run_uri(run_root / target_name)
     run_store.create_run(run_uri)
     pipeline_config = {
         "name": "mixed-route",
@@ -642,12 +661,21 @@ def _exercise_mixed_route_run(
         "resolved",
         json_dumps_pretty({"pipeline": pipeline_config}),
     )
+    requirements = _execution_requirements(pipeline)
+    if preparation is not None:
+        launch = preparation.service.daemon.resident_worker_launch_profile
+        assert launch is not None
+        identity = ResidentProfileDescriptor.from_dict(launch.descriptor)
+        for name in ("preprocess", "evaluate"):
+            requirements[name] = ExecutionRequirement(
+                identity.project_fingerprint, identity.environment_fingerprint, identity.executor_fingerprint,
+            )
     prepare_managed_local_runtime_record(
         store=run_store,
         run_uri=run_uri,
         plan=plan,
         pipeline=pipeline,
-        execution_requirements=_execution_requirements(pipeline),
+        execution_requirements=requirements,
         slurm_profiles=(profile,),
         options={"run_uri": run_uri, "executor": "local", "reliability": retry} if retry else None,
     )
@@ -681,8 +709,9 @@ def _exercise_mixed_route_run(
         slurm_profiles=(profile,),
         poll_interval_seconds=0.05,
     )
+    config = preparation_config(config)
     LocalDaemon.initialize(config)
-    daemon = LocalDaemon(config, clock=clock)
+    daemon = LocalDaemon(config, clock=clock, preparation=preparation)
     daemon.start()
     try:
         original_sbatch = runner.sbatch
@@ -739,7 +768,7 @@ def _exercise_mixed_route_run(
         client = daemon.client_view(
             LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
         )
-        client.submit(LocalDaemonAdmissionRequest("mixed-route", run_uri))
+        client.submit(LocalDaemonAdmissionRequest(target_name if held_retry_boundary else "mixed-route", run_uri))
         execution = daemon._execution
         assert execution is not None
         deadline = time.monotonic() + 45
@@ -803,7 +832,8 @@ def _exercise_mixed_route_run(
             slurm_profiles=(profile,),
             poll_interval_seconds=0.05,
         )
-        daemon = LocalDaemon(reopened_config, clock=clock)
+        reopened_config = preparation_config(reopened_config)
+        daemon = LocalDaemon(reopened_config, clock=clock, preparation=preparation)
         daemon.start()
         client = daemon.client_view(
             LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
@@ -1188,6 +1218,13 @@ def _exercise_mixed_route_run(
             from loom.queue import _agent_slurm
             from loom.queue._continuation import ContinuationPending
             from loom.queue._slurm_retry import PROVIDER_RECOVERY_PREFIX, reconcile
+
+            if held_retry_boundary:
+                history_state[0] = provider_retry_state
+                _agent_observation(execution, record.assignment.operation_id, expected_job_id="1200",
+                                   scheduler_state=provider_retry_state, scheduler_source="sacct", observed_at=clock())
+                _exercise_slow_retry_validation(daemon, client, run_uri, monkeypatch, held_retry_boundary)
+                return
 
             with daemon._cycle_lock:
                 assert reconcile(execution, run_uri) == ContinuationPending("waiting_for_slurm_termination_evidence")
@@ -1962,6 +1999,100 @@ def test_slurm_guarded_recovery_closes_then_releases_from_exact_helper(
 @pytest.mark.parametrize("state", ["TIMEOUT", "PREEMPTED", "NODE_FAIL", "OUT_OF_MEMORY", "CANCELLED"])
 def test_retry_reconciles_contained_slurm_outcome_and_waits_for_release(tmp_path, monkeypatch, state):
     _exercise_mixed_route_run(tmp_path, monkeypatch, provider_retry_state=state, accounting_history=True)
+
+
+def _exercise_slow_retry_validation(daemon, client, run_uri, monkeypatch, boundary):
+    from threading import Event, local
+    from loom.queue.local_daemon_execution import LocalDaemonExecution
+    from loom.coordinator import RunRequest
+    from tests.integration.queue.test_preparation_operations import _request
+    from tests.integration.queue.test_reconciled_runs import _reconciled_request
+
+    entered, release, finished = Event(), Event(), Event()
+    validating = local()
+    recovery_ids = []
+    admit = LocalDaemon._admit_guarded_recovery
+    validate = LocalDaemonExecution.validate_recovery_admission
+    open_run = SQLitePerRunAuthorityStore.open_run
+
+    def during_validation(execution, request):
+        validating.request = request
+        try:
+            return validate(execution, request)
+        finally:
+            del validating.request
+
+    def hold_read(store, uri):
+        snapshot = open_run(store, uri)
+        if uri == run_uri and getattr(validating, "request", None) and not entered.is_set():
+            recovery_ids.append(validating.request.recovery_id)
+            entered.set()
+            assert release.wait(90)
+        return snapshot
+
+    def until_acknowledged(owner, request, principal_id, **options):
+        try:
+            return admit(owner, request, principal_id, **options)
+        finally:
+            if recovery_ids and request.recovery_id == recovery_ids[0]:
+                finished.set()
+
+    monkeypatch.setattr(LocalDaemon, "_admit_guarded_recovery", until_acknowledged)
+    monkeypatch.setattr(LocalDaemonExecution, "validate_recovery_admission", during_validation)
+    monkeypatch.setattr(SQLitePerRunAuthorityStore, "open_run", hold_read)
+    requested = _reconciled_request("held-slurm-retry", retry=True)
+    try:
+        accepted = daemon.start_run(requested, principal_id="caller")
+        assert entered.wait(45), daemon.operation(accepted.operation_id)
+        peer = replace(_request(), operation_id="prepare-recovery-peer", run_name="recovery-peer")
+        daemon.start_run(RunRequest(peer, "execute-recovery-peer"), principal_id="caller")
+        assert daemon.wait_operation(peer.operation_id, timeout=35).operation.state == "applied"
+        assert client.wait("execute-recovery-peer", timeout_seconds=20).state is LocalDaemonAdmissionState.SUCCEEDED
+        assert not finished.is_set()
+        if boundary == "cancel":
+            control = daemon.cancel_run_operation(accepted.operation_id, principal_id="caller")
+            cancelled = daemon.wait_operation(accepted.operation_id, timeout=15).operation
+            assert cancelled.state == "cancelled"
+            release.set()
+            assert finished.wait(5)
+            assert daemon.wait_operation(control.operation_id, timeout=15).operation.state == "applied"
+            assert daemon.start_run(requested, principal_id="caller") == cancelled
+            with daemon._connection() as conn:
+                assert not conn.execute("SELECT recovery_id FROM recovery_operations").fetchall()
+            return
+
+        resume = LocalDaemon._resume_recovery
+        with monkeypatch.context() as held_after_commit:
+            held_after_commit.setattr(LocalDaemon, "_resume_recovery", lambda owner, execution, request, row:
+                                      False if request.recovery_id == recovery_ids[0] else resume(owner, execution, request, row))
+            release.set()
+            deadline = time.monotonic() + 45
+            while time.monotonic() < deadline:
+                with daemon._connection() as conn:
+                    rows = conn.execute("SELECT recovery_id, state FROM recovery_operations").fetchall()
+                if rows:
+                    break
+                time.sleep(.02)
+            assert [tuple(row) for row in rows] == [(recovery_ids[0], "pending")]
+            daemon.stop()
+        daemon.start()
+        assert daemon.start_run(requested, principal_id="caller").operation_id == accepted.operation_id
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            with daemon._connection() as conn:
+                rows = conn.execute("SELECT recovery_id, state FROM recovery_operations").fetchall()
+            if [tuple(row) for row in rows] == [(recovery_ids[0], "closed")]:
+                break
+            time.sleep(.02)
+        assert [tuple(row) for row in rows] == [(recovery_ids[0], "closed")]
+    finally:
+        release.set()
+
+
+@pytest.mark.parametrize("boundary", ("cancel", "restart"))
+def test_preparation_slurm_recovery_validation_allows_peer_and_preserves_claim(tmp_path, monkeypatch, boundary):
+    _exercise_mixed_route_run(tmp_path, monkeypatch, provider_retry_state="TIMEOUT",
+                              accounting_history=True, held_retry_boundary=boundary)
 
 
 @pytest.mark.parametrize("winner", ["worker", "cancellation"])

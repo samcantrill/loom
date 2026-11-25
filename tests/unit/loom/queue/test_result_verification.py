@@ -483,3 +483,25 @@ def test_bulk_timing_separates_original_capacity_wait_from_worker_execution(monk
     finally:
         release.set()
         pool.close()
+
+
+def test_bulk_backlog_retains_one_window_of_fifo_positions():
+    from loom.queue._bulk_operations import BulkOperations
+
+    pool = BulkOperations(lambda: None)
+    release = Event()
+    try:
+        for name in ("a", "b"):
+            assert pool.submit(name, "occupied", release.wait, 10) is not None
+        for index in range(257):
+            with pool.offering(("preparation", str(index))):
+                assert pool.submit(str(index), "read", lambda: None) is None
+        assert len(pool.scopes(("preparation",))) == 256
+        assert ("preparation", "256") not in pool.scopes(("preparation",))
+        pool.discard(("preparation", "0"))
+        with pool.offering(("preparation", "256")):
+            assert pool.submit("256", "read", lambda: None) is None
+        assert ("preparation", "256") in pool.scopes(("preparation",))
+    finally:
+        release.set()
+        pool.close()

@@ -503,6 +503,17 @@ class SQLitePerRunAuthorityStore:
     def open_run(self, run_uri: str) -> AuthoritativeRunSnapshot:
         return self.snapshot(run_uri)
 
+    def read_revision_status(self, run_uri: str) -> tuple[BackendRevision, RunStatus]:
+        """Observe the current run revision and lifecycle status in one query."""
+        self._bind_run_uri(run_uri)
+        with self._read_connection_for_run(run_uri) as conn:
+            _raise_for_schema(conn)
+            row = _require_row(conn.execute(
+                "SELECT r.sequence, r.token, r.created_at, s.status FROM run_state AS s "
+                "JOIN revisions AS r ON r.sequence = s.updated_revision_sequence WHERE s.id = 1"
+            ).fetchone(), "unknown run or backend revision")
+            return BackendRevision(row["sequence"], row["token"], row["created_at"]), RunStatus(row["status"])
+
     def initialize_run_annotations(self, run_uri: str, context: SubmissionContext,
                                    operation_id: str | None, coordinator_id: str | None) -> RunAnnotations:
         """Initialize once, independently of lifecycle revisions or worker leases."""

@@ -400,7 +400,8 @@ def start(request):
         command = [
             sys.executable,
             "-c",
-            "from loom.cli.main import main; raise SystemExit(main())",
+            "from loom.fleet._service_log import serve; raise SystemExit(serve())",
+            str(admin / "service.log"),
             "queue",
             "daemon-serve" if role(request) == "coordinator" else "agent-serve",
             str(config(request)),
@@ -411,13 +412,7 @@ def start(request):
             command += ["--env-file", str(environment(request))]
         if role(request) == "agent":
             command += ["--expected-coordinator-id", request["coordinator_id"]]
-        shell = (
-            "exec "
-            + shlex.join(command)
-            + " >> "
-            + shlex.quote(str(admin / "service.log"))
-            + " 2>&1"
-        )
+        shell = "exec " + shlex.join(command)
         attempt.dispatch()
         subprocess.run(
             [
