@@ -94,6 +94,30 @@ def _invoke(args, log):
     )
 
 
+def _verify_slurm_retirement(inventory, operation_id, retirements):
+    """Accept deletion or prove each reason for retaining the previous installation."""
+    for name, retirement in retirements.items():
+        if retirement["outcome"] == "retired":
+            continue
+        assert retirement["outcome"] == "retained"
+        assert retirement["restore_descriptor"] and retirement["removal_condition"]
+        reasons = set(retirement["reasons"])
+        assert reasons and reasons <= {"process_reference_or_unavailable", "unattributed_scheduler_jobs"}
+        if "process_reference_or_unavailable" in reasons:
+            assert retirement["processes"] and all(
+                item.removesuffix(":unknown").isdecimal() for item in retirement["processes"]
+            )
+        if "unattributed_scheduler_jobs" in reasons:
+            # A peer can see a shared-path consumer that the
+            # local role's scheduler does not report.
+            request = inventory.path.parent / "operations" / operation_id / "steps" / (
+                name + "-upgrade-retire-environment"
+            ) / "intent.json"
+            jobs = [*retirement["slurm"].get("other_jobs", ()),
+                    *json.loads(request.read_text())["unattributed_jobs"]]
+            assert jobs and all(job["job_id"] and job["cluster"] and job["state"] for job in jobs)
+
+
 @pytest.mark.parametrize("case", ["upgrade", "interruption", "slurm-held-interruption"])
 def test_installed_runtime_upgrade(case):
     selected = selected_case(case)
@@ -234,17 +258,7 @@ def test_installed_runtime_upgrade(case):
                 )
                 if slurm:
                     assert set(result["retirement"]) == set(after["hosts"])
-                    for retirement in result["retirement"].values():
-                        if retirement["outcome"] == "retained":
-                            # Protected same-user processes (e.g. ssh-agent) can
-                            # legitimately deny /proc inspection on a login node.
-                            assert retirement["reasons"] == ["process_reference_or_unavailable"]
-                            assert retirement["processes"] and all(
-                                item.endswith(":unknown") for item in retirement["processes"]
-                            )
-                            assert retirement["restore_descriptor"] and retirement["removal_condition"]
-                        else:
-                            assert retirement["outcome"] == "retired"
+                    _verify_slurm_retirement(inventory, selected["operation_id"], result["retirement"])
                     for name, row in after["hosts"].items():
                         assert after["slurm"][name]["status"] == "settled"
                         assert row["native_owner"]["revision"] != before["hosts"][name]["native_owner"]["revision"]
