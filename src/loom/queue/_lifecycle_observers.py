@@ -88,12 +88,47 @@ class LifecycleObservers:
         self._observations: dict[str, deque[tuple[Any, dict[str, Any], float]]] = {}
         self._deliveries: deque[_Callback] = deque()
         self._worker: ThreadPoolExecutor | None = None
+        self._audit_worker: ThreadPoolExecutor | None = None
+        self._audit: tuple[str, Future[bool]] | None = None
         self._wake: Callable[[], None] | None = None
         self._applying_since: float | None = None
 
     def enable_delivery(self, wake: Callable[[], None]) -> None:
         self._wake = wake
+        self._audit_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="loom-audit")
         self._worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="loom-observer")
+
+    def offer_audit(
+        self, run_uri: str | None = None, *, excluded: frozenset[str] = frozenset(),
+    ) -> Future[bool] | None:
+        """Offer one bounded write batch, or attach to this run's active batch.
+
+        Only the scheduling owner calls this method. A captured snapshot for a
+        run excludes a second audit until its next revision-safe point.
+        """
+        if self._audit_worker is None:
+            return None
+        if self._audit is not None:
+            uri, future = self._audit
+            if not future.done():
+                return future if run_uri == uri else None
+            future.result()
+            self._audit = None
+        with self._lock:
+            candidates = (entry.run_uri for entry in self._deliveries if entry.future.done())
+            def eligible(uri: str) -> bool:
+                return uri not in excluded and (run_uri is None or run_uri == uri)
+            uri = next((uri for uri in candidates if eligible(uri)), None)
+            if uri is None and len(self._deliveries) < 16:
+                uri = next((uri for uri in self._observations if eligible(uri)), None)
+        if uri is None:
+            return None
+        future = self._audit_worker.submit(self.flush_prepared, uri)
+        self._audit = (uri, future)
+        wake = self._wake
+        if wake is not None:
+            future.add_done_callback(lambda _: wake())
+        return future
 
     def backlog(self) -> dict[str, int]:
         with self._lock:
@@ -115,6 +150,10 @@ class LifecycleObservers:
         # submitted callbacks and apply their revision-bearing evidence here.
         if self._worker is None:
             return
+        if self._audit_worker is not None:
+            self._audit_worker.shutdown(wait=True)
+            self._audit_worker = None
+            self._audit = None
         while True:
             self.flush_prepared()
             with self._lock:
@@ -160,7 +199,7 @@ class LifecycleObservers:
         return wrapper(store, self, run_uri)
 
     def flush_prepared(self, run_uri: str | None = None) -> bool:
-        # This method has a single consumer, called between readiness windows.
+        # A single audit worker runs between this run's readiness windows.
         deadline = monotonic() + 0.1
         for _ in range(32):
             selected = None

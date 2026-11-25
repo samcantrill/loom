@@ -30,7 +30,7 @@ def test_blocked_prefix_continues_across_cycles_and_rotates_only_after_dispatch(
     monkeypatch.setattr(progress, "_schedule_window", dispatch)
     owner: Any = SimpleNamespace(
         daemon=None,
-        _launch_lock=Lock(), stage_work_store=Store(), _ready_scan_after=None,
+        _launch_lock=Lock(), _read_ready_window=Store().ready_window, _ready_scan_after=None,
         _last_dispatch_enqueue=7, _ready_scan_boundary=None, _prefer_gpu_dispatch=False,
         _daemon_owner=lambda: SimpleNamespace(
             _wake=SimpleNamespace(set=lambda: wakes.append(True)),
@@ -126,7 +126,7 @@ def test_gpu_opportunities_alternate_with_cpu_and_failed_reservation_falls_back(
     monkeypatch.setattr(progress, "_schedule_window", dispatch)
     owner: Any = SimpleNamespace(
         daemon=None,
-        _launch_lock=Lock(), stage_work_store=Store(), _ready_scan_after=None,
+        _launch_lock=Lock(), _read_ready_window=Store().ready_window, _ready_scan_after=None,
         _ready_scan_boundary=None, _last_dispatch_enqueue=None,
         _prefer_gpu_dispatch=True, _gpu_scan_after=None, _gpu_scan_boundary=None,
         _last_gpu_dispatch_enqueue=None,
@@ -166,7 +166,7 @@ def test_cpu_dispatch_does_not_reset_blocked_gpu_opportunity_scan(monkeypatch):
     monkeypatch.setattr(progress, "_schedule_window", dispatch)
     owner: Any = SimpleNamespace(
         daemon=None,
-        _launch_lock=Lock(), stage_work_store=Store(), _ready_scan_after=None,
+        _launch_lock=Lock(), _read_ready_window=Store().ready_window, _ready_scan_after=None,
         _ready_scan_boundary=None, _last_dispatch_enqueue=None,
         _prefer_gpu_dispatch=True, _gpu_scan_after=None, _gpu_scan_boundary=None,
         _last_gpu_dispatch_enqueue=None,

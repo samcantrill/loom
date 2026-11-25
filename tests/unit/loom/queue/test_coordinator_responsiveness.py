@@ -524,3 +524,50 @@ def test_qualification_timings_retain_every_request_identity(monkeypatch):
     assert [entry["spans"][0]["operation_id"] for entry in captured] == [
         "session:offer:1", "session:offer:2", "session:offer:3",
     ]
+
+def test_waiting_admission_reads_before_a_long_run_takes_its_next_slice():
+    from types import SimpleNamespace
+    from loom.queue._bulk_operations import BulkOperations
+    from loom.queue._run_observations import RunObservationPending, RunObservations
+
+    readers = RunObservations(lambda: None)
+    bulk = BulkOperations(lambda: None)
+    entered = {key: Event() for key in ("held", "long", "new")}
+    release = {key: Event() for key in entered}
+    calls = []
+    admissions = {key: SimpleNamespace(admission_id=key, run_uri=key, revision=1) for key in entered}
+    epochs = ("daemon", "policy")
+
+    def read(key):
+        calls.append(key)
+        entered[key].set()
+        assert release[key].wait(5)
+        return object()
+
+    def steps():
+        yield
+        yield
+        return object()
+
+    def advance(key):
+        with pytest.raises(RunObservationPending):
+            readers.advance(admissions[key], epochs, (None, SimpleNamespace(open_run=read)), steps, bulk)
+
+    try:
+        advance("held")
+        advance("long")
+        assert entered["held"].wait(5) and entered["long"].wait(5)
+        advance("new")
+        assert not entered["new"].is_set()
+        first_read = readers._current["long"].read
+        release["long"].set()
+        first_read.result(timeout=5)
+        assert [job.admission.admission_id for job in readers.completed()] == ["long"]
+        advance("long")
+        assert entered["new"].wait(5)
+        assert calls.count("long") == 1
+    finally:
+        for unblock in release.values():
+            unblock.set()
+        readers.close()
+        bulk.close()

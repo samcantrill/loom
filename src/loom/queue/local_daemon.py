@@ -2795,13 +2795,12 @@ class LocalDaemon:
         self._preparations.reconcile()
         with self._state_guard():
             self._gpu_samples.advance(self._local_resource_providers())
-        if self._event_observers.flush_prepared():
-            self._wake.set()
         time_healthy = self._sample_clock_health(wait_for_writer=False)
         with self._state_guard():
             execution = self._execution
         if execution is None:
             raise QueueServiceError("local daemon execution is absent")
+        self._event_observers.offer_audit(excluded=execution.run_observations.pending_runs())
         epochs = (self._epoch, self._scheduling_epoch)
         if checked != (execution, epochs) and not execution.owner_stores_ready(epochs):
             return ()
@@ -2822,6 +2821,7 @@ class LocalDaemon:
             self._context_invalidations.clear()
         execution.invalidate_dispatch_contexts(invalidated)
         execution.run_observations.invalidate(invalidated, bulk)
+        execution.dispatch_observations.begin_cycle(invalidated, epochs, self.config.poll_interval_seconds)
         self._contexts.begin_cycle(minimum_interval=self.config.poll_interval_seconds, invalidated=invalidated)
         prepared = {item.admission.admission_id: item for item in (
             *self._contexts.completed(), *execution.run_observations.completed(),
@@ -2888,7 +2888,7 @@ class LocalDaemon:
                 }:
                     bulk.discard(("run", admission.run_uri))
                     bulk.discard(("dispatch", admission.run_uri))
-                    self._event_observers.flush_prepared(admission.run_uri)
+                    self._event_observers.offer_audit(admission.run_uri)
                 self._record_admission_health(
                     admission.admission_id,
                     (

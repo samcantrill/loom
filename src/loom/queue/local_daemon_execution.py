@@ -17,7 +17,7 @@ from ._action_results import action_attempt_cancelled, action_attempt_needed, at
 from ._continuation import ContinuationConflict, ContinuationPending
 from ._embedded_recovery import EmbeddedRecovery
 from ._recovery_retry import RecoveryWorkers, _RecoveryRetry
-from ._run_observations import RunObservations, RunSteps, TerminalSteps
+from ._run_observations import DispatchObservations, RunObservations, RunSteps, TerminalSteps
 from ._slurm_admission import SlurmAdmissionDeferred
 from . import _slurm_retry
 
@@ -1372,6 +1372,7 @@ class LocalDaemonExecution:
         self.stage_work_store = SQLiteStageWorkStore(
             config.execution_database, _allow_initialize=False
         , sqlite_policy=config.sqlite_policy)
+        self._read_ready_window = self.stage_work_store._scheduling_window_reader()
         initial_planners = self._scheduling.active_planners()
         configured_providers = tuple(config.agent_resource_providers or ())
         self.providers = (
@@ -1490,7 +1491,8 @@ class LocalDaemonExecution:
         from ._input_validation import InputValidationPool
         from ._ready_preparation import ReadyPreparationPool
         self._ready_preparations = ReadyPreparationPool(lambda: self._daemon_owner()._wake.set())
-        self.run_observations = RunObservations(lambda: self._daemon_owner()._wake.set())
+        self.dispatch_observations = DispatchObservations(lambda: self._daemon_owner()._wake.set())
+        self.run_observations = RunObservations(lambda: self._daemon_owner()._wake.set(), self._event_observers.offer_audit)
         self._input_validations = InputValidationPool(
             lambda: self._daemon_owner()._wake.set(),
         )
@@ -1522,6 +1524,7 @@ class LocalDaemonExecution:
     def close(self) -> None:
         """Stop only assignment observers after their durable owners settle."""
 
+        self.dispatch_observations.close()
         self.run_observations.close()
         self.cancelled_repair_workers.close()
         self.admission_retry_workers.close()

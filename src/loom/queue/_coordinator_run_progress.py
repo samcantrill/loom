@@ -10,12 +10,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
-from loom.pipeline.orchestration import RunOrchestrator, SubmittedContainerRequirement
+from loom.pipeline.orchestration import READY_WINDOW_LIMIT, RunOrchestrator, SubmittedContainerRequirement
 from .submitted_execution import SubmittedContainerCapability
 from loom.pipeline.runtime import ExecutionRouteKind
 from loom.pipeline.status import StageStatus
 from loom.scheduling import PolicyDecisionState
 from ._admission_scan import SchedulingAdmissions
+from ._recovery_retry import _RecoveryRetry
 from ._run_observations import RunObservationPending, RunSteps
 from ._managed_local import ManagedLocalError
 from ._remote_stage_execution import ResidentProfileDescriptor
@@ -26,11 +27,14 @@ from ._phase_timing import phase
 if TYPE_CHECKING:
     from loom.pipeline.orchestration import ManagedExecutionRequirement, SQLiteStageWorkStore, StageWorkRecord
     from loom.pipeline.planning import AttemptReadiness, StagePlan
-    from loom.pipeline.stores.read_models import BackendRevision
+    from loom.pipeline.stores.read_models import AuthoritativeRunSnapshot, BackendRevision
     from ._context_preparation import PreparedAdmissionContext
     from ._coordinator_run_authority import _ScopedCoordinatorAuthority
     from .local_daemon import LocalDaemonAdmission
     from .local_daemon_execution import LocalDaemonExecution, ManagedLocalIntent
+
+
+_STAGES_PER_TURN = 32
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,64 +144,71 @@ def _reconcile_admission_steps(
         store=self.stage_work_store,
         owner_id=self.coordinator_id,
     )
-    _decision_as_of, snapshot_time = self._daemon_owner()._accepted_snapshot()
-    snapshot = yield
-    eligible = {
-        stage.stage_name for stage in snapshot.stages
-        if stage.status is StageStatus.PENDING
-        and (not cancelling or (action_resolver is not None
-             and action_resolver.store.producer_needed(admission.run_uri, stage.stage_name)))
-    }
-    if not cancelling and not self._failure_policy_allows_new_work(intent, snapshot):
-        eligible.clear()
-    self._ready_preparations.retain_run(admission.run_uri, eligible)
-    with phase("coordinator.reconcile_slurm_run"):
-        slurm_in_flight, slurm_diagnostic = self._reconcile_slurm_run(
-            admission.run_uri, scoped_authority
-        )
-    snapshot = yield
-    terminal = None if cancelling else (yield from self._terminal_steps(
-        admission,
-        intent.plan,
-        snapshot,
-        scoped_authority,
-        continue_independent=intent.continue_independent,
-    ))
-    if terminal is not None and not cancelling:
-        return terminal
-    def resolve_ready(stage_plan: StagePlan, readiness: AttemptReadiness, revision: BackendRevision) -> BackendRevision | None:
-        if cancelling:
-            return None if action_resolver is not None and action_resolver.store.producer_needed(admission.run_uri, stage_plan.stage_name) else revision
-        return None if action_resolver is None else action_resolver.resolve(admission, intent, scoped_authority, stage_plan, readiness, revision)
+    order = intent.plan.stage_order
+    # One captured admission context covers one finite READY page. Each
+    # 32-stage slice yields to other admissions for a fresh authority snapshot.
+    for _ in range(READY_WINDOW_LIMIT // _STAGES_PER_TURN):
+        _decision_as_of, snapshot_time = self._daemon_owner()._accepted_snapshot()
+        with phase("coordinator.reconcile_slurm_run"):
+            slurm_in_flight, slurm_diagnostic = self._reconcile_slurm_run(
+                admission.run_uri, scoped_authority
+            )
+        snapshot = yield
+        eligible = {
+            stage.stage_name for stage in snapshot.stages
+            if stage.status is StageStatus.PENDING
+            and (not cancelling or (action_resolver is not None
+                 and action_resolver.store.producer_needed(admission.run_uri, stage.stage_name)))
+        }
+        if not cancelling and not self._failure_policy_allows_new_work(intent, snapshot):
+            eligible.clear()
+        self._ready_preparations.retain_run(admission.run_uri, eligible)
+        terminal = None if cancelling else (yield from self._terminal_steps(
+            admission,
+            intent.plan,
+            snapshot,
+            scoped_authority,
+            continue_independent=intent.continue_independent,
+        ))
+        if terminal is not None and not cancelling:
+            return terminal
+        def resolve_ready(stage_plan: StagePlan, readiness: AttemptReadiness, revision: BackendRevision) -> BackendRevision | None:
+            if cancelling:
+                return None if action_resolver is not None and action_resolver.store.producer_needed(admission.run_uri, stage_plan.stage_name) else revision
+            return None if action_resolver is None else action_resolver.resolve(admission, intent, scoped_authority, stage_plan, readiness, revision)
 
-    with phase("coordinator.orchestrate_ready"):
-        orchestrator.reconcile(
-            admission_id=admission.admission_id,
-            plan=intent.plan,
-            authority_snapshot=snapshot,
-            placements=placements,
-            execution_requirements=intent.execution_requirements,
-            ready_action=resolve_ready,
-            ready_at=snapshot_time,
-            run_priority=admission.run_priority,
-            enqueue_sequence=admission.enqueue_sequence,
-            max_work_items=32,
-            after_stage=self._orchestration_after.get(admission.admission_id),
-            controller_action=None if cancelling else lambda stage_plan, readiness: (
-                self._apply_controller_action(
-                    scoped_authority,
-                    admission.run_uri,
-                    stage_plan,
-                    readiness,
-                    admission=admission,
-                )
-            ),
-        )
-    if orchestrator.next_stage is None:
-        self._orchestration_after.pop(admission.admission_id, None)
-    else:
-        self._orchestration_after[admission.admission_id] = orchestrator.next_stage
-        self._daemon_owner()._wake.set()
+        with phase("coordinator.orchestrate_ready"):
+            orchestrator.reconcile(
+                admission_id=admission.admission_id,
+                plan=intent.plan,
+                authority_snapshot=snapshot,
+                placements=placements,
+                execution_requirements=intent.execution_requirements,
+                ready_action=resolve_ready,
+                ready_at=snapshot_time,
+                run_priority=admission.run_priority,
+                enqueue_sequence=admission.enqueue_sequence,
+                max_work_items=_STAGES_PER_TURN,
+                after_stage=self._orchestration_after.get(admission.admission_id),
+                controller_action=None if cancelling else lambda stage_plan, readiness: (
+                    self._apply_controller_action(
+                        scoped_authority,
+                        admission.run_uri,
+                        stage_plan,
+                        readiness,
+                        admission=admission,
+                    )
+                ),
+            )
+        previous = self._orchestration_after.get(admission.admission_id)
+        if orchestrator.next_stage is None:
+            self._orchestration_after.pop(admission.admission_id, None)
+        else:
+            self._orchestration_after[admission.admission_id] = orchestrator.next_stage
+            self._daemon_owner()._wake.set()
+        if (cancelling or orchestrator.next_stage is None or orchestrator.next_stage == order[-1]
+            or (previous is not None and order.index(orchestrator.next_stage) <= order.index(previous))):
+            break
     with phase("coordinator.reconcile_slurm_run"):
         slurm_in_flight, slurm_diagnostic = self._reconcile_slurm_run(
             admission.run_uri, scoped_authority
@@ -296,7 +307,7 @@ def schedule_once(
             self._prefer_gpu_dispatch = False
             return outcome
     for _ in range(4):
-        page = self.stage_work_store.ready_window(
+        page = self._read_ready_window(
             after=self._ready_scan_after, rotate_after=self._last_dispatch_enqueue,
             ready_through=self._ready_scan_boundary[0],
             enqueue_through=self._ready_scan_boundary[1],
@@ -330,7 +341,7 @@ def _schedule_gpu_opportunity(self, admissions, waiting_outcomes):
     """
     if self._gpu_scan_boundary is None:
         self._gpu_scan_boundary = self._ready_scan_boundary
-    page = self.stage_work_store.ready_window(
+    page = self._read_ready_window(
         after=self._gpu_scan_after, rotate_after=self._last_gpu_dispatch_enqueue,
         ready_through=self._gpu_scan_boundary[0], enqueue_through=self._gpu_scan_boundary[1],
         gpu_heads_only=True,
@@ -351,10 +362,24 @@ def _schedule_window(
     page: tuple[StageWorkRecord, ...], *,
     waiting_outcomes: dict[str, LocalDaemonExecutionOutcome] | None = None,
 ) -> tuple[str, LocalDaemonExecutionOutcome] | None:
+    disabled_routes = set() if self.daemon is None else {
+        identity for identity, profile in self._scheduling.retained_slurm_profiles.items() if not profile.available
+    }
+    dispatchable = {
+        record.admission_id for record in page
+        if record.placement.route.kind is not ExecutionRouteKind.SLURM
+        or (record.placement.route.profile_id, record.placement.route.profile_configuration_fingerprint) not in disabled_routes
+    }
+    if not dispatchable and not any(record.admission_id in (waiting_outcomes or {}) for record in page):
+        # Disabled routes cannot retain dispatch tickets. The only remaining
+        # work here is publishing a newly reconciled admission's waiting reason.
+        if isinstance(admissions, SchedulingAdmissions):
+            admissions.visited_dispatch.update(("dispatch", record.run_uri, record.stage_work_id) for record in page)
+        return None
+
     decision_as_of, snapshot_time = self._daemon_owner()._accepted_snapshot()
-    # One short read connection for the bounded page, rather than opening and
-    # validating the same control database for every candidate. Launch still
-    # rechecks cancellation at its existing authoritative mutation boundary.
+    # Read the page's cancellation preflight over one control connection. The
+    # actual reservation rechecks the current cancellation and offer.
     from ._action_results import action_attempt_cancelled
 
     with self.config.connect_database(self.config.control_database) as conn:
@@ -368,13 +393,15 @@ def _schedule_window(
             ("dispatch", record.run_uri, record.stage_work_id) for record in window
             if record.admission_id in self._cycle_contexts
         )
-    if self.daemon is not None:
+    daemon = self.daemon
+    epochs = (None, None) if daemon is None else (daemon._epoch, daemon._scheduling_epoch)
+    if daemon is not None:
         # READY projections outlive an admission sweep. Revalidate their retained
         # intent through the same bounded context loader before allocating work.
-        daemon = self.daemon
-        epochs = (daemon._epoch, daemon._scheduling_epoch)
         ready_admissions = dict.fromkeys(record.admission_id for record in window)
         for identity in ready_admissions:
+            if identity not in dispatchable:
+                continue
             admission = admissions.get(identity)
             if admission is not None and self._cycle_context_revisions.get(identity) != admission.revision:
                 self.discard_dispatch_context(identity)
@@ -412,6 +439,37 @@ def _schedule_window(
         )
         else None
     )
+    observed: dict[str, AuthoritativeRunSnapshot | None] = {}
+
+    def dispatch_snapshot(
+        admission: LocalDaemonAdmission, authority: _ScopedCoordinatorAuthority, record: StageWorkRecord,
+    ) -> AuthoritativeRunSnapshot | None:
+        if self.daemon is None:
+            return authority.open_run(admission.run_uri)
+        identity = admission.admission_id
+        if identity not in observed:
+            try:
+                observed[identity] = self.dispatch_observations.poll(
+                    admission, epochs, lambda: authority.open_run(admission.run_uri),
+                )
+            except Exception as error:
+                with self.daemon._state_guard():
+                    retry = self.daemon._admission_retries.setdefault(admission.run_uri, _RecoveryRetry())
+                retry.failed(error, operation_id=admission.authority_operation_id, admission_id=identity,
+                             state=(admission.revision, epochs[1]))
+                self.daemon._record_admission_health(identity, "unavailable")
+                observed[identity] = None
+        snapshot = observed[identity]
+        if snapshot is None:
+            exhausted_admissions.add(identity)
+            return None
+        if snapshot.revision.sequence < record.authority_revision.sequence:
+            return None
+        if not any(attempt.attempt_id == record.attempt_id for stage in snapshot.stages
+                   if stage.stage_name == record.stage_name for attempt in stage.attempts):
+            return None
+        return snapshot
+
     excluded_work: set[str] = set()
     attempted_slurm: set[str] = set()
     while True:
@@ -505,7 +563,9 @@ def _schedule_window(
                         LocalDaemonAdmissionState.WAITING, "slurm_route_unavailable_or_unmappable",
                     )
                 continue
-            snapshot = authority.open_run(admission.run_uri)
+            snapshot = dispatch_snapshot(admission, authority, record)
+            if snapshot is None:
+                continue
             if not self._failure_policy_allows_new_work(intent, snapshot):
                 exhausted_admissions.add(record.admission_id)
                 continue
@@ -539,7 +599,10 @@ def _schedule_window(
             excluded_work.add(record.stage_work_id)
             continue
         intent, authority = contexts[record.admission_id]
-        snapshot = authority.open_run(admission.run_uri)
+        snapshot = dispatch_snapshot(admission, authority, record)
+        if snapshot is None:
+            excluded_work.add(record.stage_work_id)
+            continue
         if not self._failure_policy_allows_new_work(intent, snapshot):
             exhausted_admissions.add(record.admission_id)
             continue

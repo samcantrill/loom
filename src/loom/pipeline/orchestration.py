@@ -7,7 +7,7 @@ from loom._sqlite_policy import SQLitePolicy, connect_existing, initialize_datab
 import hashlib
 import json
 import sqlite3
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
@@ -813,6 +813,24 @@ class SQLiteStageWorkStore:
 
     def ready_window(
         self, *, limit: int = READY_WINDOW_LIMIT,
+        after: StageWorkRecord | None = None, rotate_after: int | None = None,
+        ready_through: int | None = None, enqueue_through: int | None = None,
+        gpu_heads_only: bool = False,
+    ) -> tuple[StageWorkRecord, ...]:
+        return self._read_window(
+            _decode_stage_work, limit=limit, after=after, rotate_after=rotate_after,
+            ready_through=ready_through, enqueue_through=enqueue_through, gpu_heads_only=gpu_heads_only,
+        )
+
+    def _scheduling_window_reader(self):
+        """Reuse an exact payload only within the scheduling owner's read-only view."""
+        from functools import lru_cache, partial
+
+        decode = lru_cache(maxsize=2 * READY_WINDOW_LIMIT)(_decode_stage_work)
+        return partial(self._read_window, decode)
+
+    def _read_window(
+        self, decode: Callable[[str], StageWorkRecord], *, limit: int = READY_WINDOW_LIMIT,
         after: StageWorkRecord | None = None,
         rotate_after: int | None = None,
         ready_through: int | None = None,
@@ -858,7 +876,7 @@ class SQLiteStageWorkStore:
                  *(() if after is None else _ready_window_key(after, rotate_after)), limit),
             ).fetchall()
         return tuple(
-            StageWorkRecord.from_dict(_json_loads(cast(str, row["record_json"])))
+            decode(cast(str, row["record_json"]))
             for row in rows
         )
 
@@ -1626,6 +1644,10 @@ def _string_mapping(value: Mapping[str, object], name: str) -> Mapping[str, str]
 
 def _json_dumps(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _decode_stage_work(payload: str) -> StageWorkRecord:
+    return StageWorkRecord.from_dict(_json_loads(payload))
 
 
 def _json_loads(value: str) -> object:

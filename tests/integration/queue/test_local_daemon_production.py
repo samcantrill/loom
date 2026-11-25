@@ -1393,6 +1393,40 @@ def test_paused_run_observation_allows_peer_completion_and_fences_cancelled_run(
         daemon.stop()
 
 
+def test_held_audit_append_allows_peer_to_finish_before_same_run_snapshot(tmp_path, monkeypatch):
+    config = _daemon_config(tmp_path, cpu_capacity=1)
+    held = _persist_sleep_run(tmp_path / "runs", run_name="held-audit", stage_name="held", seconds=0.01)
+    peer = _persist_sleep_run(tmp_path / "runs", run_name="peer-audit", stage_name="peer", seconds=0.01)
+    store = SQLitePerRunAuthorityStore(held)
+    entered, release = Event(), Event()
+    append = store.append_audit_event
+
+    def write(uri, event):
+        entered.set()
+        assert release.wait(30)
+        return append(uri, event)
+
+    monkeypatch.setattr(store, "append_audit_event", write)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+    try:
+        daemon._event_observers.emit(store, held, event_type="run.started", revision=store.open_run(held).revision)
+        assert entered.wait(10)
+        client.submit(LocalDaemonAdmissionRequest("held-audit", held))
+        client.submit(LocalDaemonAdmissionRequest("peer-audit", peer))
+        assert client.wait("peer-audit", timeout_seconds=10).state is LocalDaemonAdmissionState.SUCCEEDED
+        assert _supervisor_launch_count(config) == 1
+        release.set()
+        assert client.wait("held-audit", timeout_seconds=10).state is LocalDaemonAdmissionState.SUCCEEDED
+        assert _supervisor_launch_count(config) == 2
+        assert sum(row.event_type == "run.started" for row in store.list_audit_events(held)) == 1
+    finally:
+        release.set()
+        daemon.stop()
+
+
 def test_reload_discards_captured_run_observation_before_projecting_ready_work(tmp_path, monkeypatch):
     from loom.queue import CoordinatorSchedulingReload
     from loom.queue._coordinator_run_authority import _ScopedCoordinatorAuthority
@@ -1445,6 +1479,67 @@ def test_reload_discards_captured_run_observation_before_projecting_ready_work(t
     finally:
         for signal in release:
             signal.set()
+        daemon.stop()
+
+
+@pytest.mark.parametrize("route", ["managed", "slurm"])
+def test_held_ready_dispatch_read_allows_peer_to_finish_before_cancelled_candidate_returns(tmp_path, monkeypatch, route):
+    from contextvars import ContextVar
+    from loom.queue._coordinator_run_authority import _ScopedCoordinatorAuthority
+
+    config = _daemon_config(tmp_path)
+    runner = None
+    if route == "slurm":
+        from tests.integration.queue.test_slurm_ready_stage import _profile, _persist_rejected_slurm_run
+        from loom.pipeline.executors.slurm.commands import FakeSlurmCommandRunner
+        runner = FakeSlurmCommandRunner()
+        profile = _profile(runner, capability_path=tmp_path / "capability")
+        config = replace(config, slurm_profiles=(profile,))
+        held = _persist_rejected_slurm_run(tmp_path / "runs", profile)
+    else:
+        held = _persist_sleep_run(tmp_path / "runs", run_name="held-dispatch", stage_name="held", seconds=0.01)
+    peer = _persist_sleep_run(tmp_path / "runs", run_name="peer-dispatch", stage_name="peer", seconds=0.01)
+    in_selection = ContextVar("in_selection", default=False)
+    captured, release = Event(), Event()
+    open_run = _ScopedCoordinatorAuthority.open_run
+
+    def observe(authority, uri):
+        snapshot = open_run(authority, uri)
+        if uri == held and in_selection.get():
+            captured.set()
+            assert release.wait(25)
+        return snapshot
+
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        execution = daemon._execution
+        assert execution is not None
+        schedule = execution.schedule_once
+
+        def select(*args, **kwargs):
+            token = in_selection.set(True)
+            try:
+                return schedule(*args, **kwargs)
+            finally:
+                in_selection.reset(token)
+
+        monkeypatch.setattr(_ScopedCoordinatorAuthority, "open_run", observe)
+        monkeypatch.setattr(execution, "schedule_once", select)
+        client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+        client.submit(LocalDaemonAdmissionRequest("held-dispatch", held))
+        assert captured.wait(10)
+        client.submit(LocalDaemonAdmissionRequest("peer-dispatch", peer))
+        assert client.wait("peer-dispatch", timeout_seconds=10).state is LocalDaemonAdmissionState.SUCCEEDED
+        assert client.cancel("held-dispatch").cancellation_operation_id is not None
+        release.set()
+        assert client.wait("held-dispatch", timeout_seconds=10).state is LocalDaemonAdmissionState.CANCELLED
+        assert _supervisor_launch_count(config) == 1
+        if runner is not None:
+            assert not any(call[0] == "sbatch" for call in runner.calls)
+    finally:
+        release.set()
         daemon.stop()
 
 
