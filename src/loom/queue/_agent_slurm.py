@@ -540,6 +540,7 @@ class AgentSlurmJobs:
         recovery_evidence: Mapping[str, PlainData] | None = None,
         terminal_result_probe: Mapping[str, PlainData] | None = None,
         provider_released: bool = False,
+        delivery_sequence: PlainData = None,
     ) -> Mapping[str, PlainData]:
         evidence: dict[str, PlainData] = {
             "schema_version": 1,
@@ -561,6 +562,14 @@ class AgentSlurmJobs:
         evidence = cast(dict[str, PlainData], thaw_plain_data(evidence))
         encoded = _json(evidence)
         with self._connect() as conn:
+            # A fresh fenced task carries current cancellation and release controls.
+            # Reuse only locally applied, byte-identical evidence at its exact sequence.
+            if type(delivery_sequence) is int and conn.execute(
+                "SELECT 1 FROM agent_slurm_operations WHERE operation_id=? AND sequence=? "
+                "AND acknowledged=1 AND evidence_json=?",
+                (assignment.operation_id, delivery_sequence, encoded),
+            ).fetchone():
+                return {"sequence": delivery_sequence}
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 "SELECT sequence, evidence_json, acknowledged FROM agent_slurm_operations WHERE operation_id=?",
@@ -1115,7 +1124,16 @@ class AgentSlurmJobs:
                     )
                 observed = self.observation_policy is not None
         terminal_probe = self._terminal_probe_evidence(task, assignment, transport, last)
-        reply = self._publish(assignment, current, acknowledge, terminal_result_probe=terminal_probe)
+        result_identity = task.get("result_identity")
+        delivery_sequence = None
+        if (isinstance(result_identity, Mapping) and result_identity.get("fence") is not None
+            and current.job_id is not None and task.get("job_id") == current.job_id
+            and task.get("cluster") == current.cluster and not task.get("recovery_request")):
+            delivery_sequence = task.get("expected_sequence")
+        reply = self._publish(
+            assignment, current, acknowledge, terminal_result_probe=terminal_probe,
+            delivery_sequence=delivery_sequence,
+        )
         if task.get("cancel_requested") is True:
             reply = {**reply, "cancel_requested": True}
         if self.observation_policy is not None and task.get("compute_release_requested") is not True:

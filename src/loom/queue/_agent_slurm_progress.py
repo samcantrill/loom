@@ -16,44 +16,64 @@ class SlurmAcknowledgements:
     """Manager-owned finite HTTP attempts; journals remain the replay authority."""
 
     def __init__(self):
-        self._views = OrderedDict()
+        self._binding = None
+        self._outstanding = {}
+        self._delivered = OrderedDict()
+        self._retiring = []
+
+    def _discard(self, keys):
+        for key in keys:
+            view = self._outstanding.pop(key, None)
+            if view is not None and not view.complete:
+                # An HTTP call already in flight still consumes capacity.
+                self._retiring.append(view)
+            self._delivered.pop(key, None)
+
+    def bind(self, binding):
+        identity = binding["session_id"], binding["coordinator_epoch"]
+        if identity != self._binding:
+            self._discard(set(self._outstanding) | set(self._delivered))
+            self._binding = identity
+
+    def forget_results(self, assignment_id, *, keep_commit=False):
+        self._discard([
+            key for key in (*self._outstanding, *self._delivered)
+            if key[0] == assignment_id and key[1] is not None
+            and not (keep_commit and key[1] == "commit")
+        ])
 
     def exchange(self, client, binding, evidence):
-        # A task-page cursor is not part of evidence identity. In particular,
-        # pagination must not turn an exact replay into another HTTP operation.
-        body = {key: value for key, value in binding.items() if key != "cursor"}
-        body["cursor"] = None
-        body["evidence"] = evidence
-        key = json.dumps(body, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        self.bind(binding)
+        body = {**binding, "cursor": None, "evidence": evidence}
+        owner = evidence.get("assignment", {}).get("assignment_id", evidence.get("assignment_id"))
+        key = owner, evidence.get("result_operation"), json.dumps(
+            body, sort_keys=True, separators=(",", ":"), allow_nan=False,
+        )
         now = monotonic()
-        for old, (view, expires) in tuple(self._views.items()):
-            if view.complete and now >= expires:
-                del self._views[old]
-        existing = self._views.get(key)
-        if existing is None:
-            if sum(not view.complete for view, _ in self._views.values()) >= 8:
+        view = self._outstanding.get(key)
+        if view is None:
+            recent = self._delivered.get(key)
+            if recent is not None and now < recent[1]:
+                return recent[0]
+            self._delivered.pop(key, None)
+            self._retiring = [item for item in self._retiring if not item.complete]
+            active = len(self._retiring) + sum(not item.complete for item in self._outstanding.values())
+            if active >= 8 or len(self._outstanding) >= 32:
                 raise SlurmEffectPending(0.05)
-            while len(self._views) >= 32:
-                old = next((item for item, (view, _) in self._views.items() if view.complete), None)
-                if old is None:
-                    raise SlurmEffectPending(0.05)
-                del self._views[old]
-            view = yield _Spawn(_steps(client._call, "slurm_work", body))
-            self._views[key] = view, float("inf")
+            self._outstanding[key] = yield _Spawn(_steps(client._call, "slurm_work", body))
             raise SlurmEffectPending(0.05)
-        view, _ = existing
-        self._views.move_to_end(key)
         if not view.complete:
             raise SlurmEffectPending(0.05)
+        del self._outstanding[key]
         if view.error is not None:
-            del self._views[key]
             raise view.error
         value = view.value
-        if value.get("disposition") == "pending":
-            # A completed receipt for unfinished storage must be polled again.
-            del self._views[key]
-        else:
-            self._views[key] = view, now + 30
+        if value.get("disposition") != "pending":
+            if evidence.get("provider_released"):
+                self._discard([other for other in (*self._outstanding, *self._delivered) if other[0] == owner])
+            self._delivered[key] = value, now + 30
+            if len(self._delivered) > 32:
+                self._delivered.popitem(last=False)
         return value
 
 

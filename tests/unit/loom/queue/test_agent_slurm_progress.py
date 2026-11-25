@@ -313,3 +313,170 @@ def test_slurm_evidence_advances_while_both_bulk_workers_are_blocked(tmp_path, m
         client.close()
     assert not thread.is_alive()
     assert not failures
+
+
+def test_receipt_pressure_preserves_unconsumed_replies_across_pages():
+    from loom.queue._agent_slurm_progress import SlurmAcknowledgements
+
+    receipts = SlurmAcknowledgements()
+    client = SimpleNamespace(_call=lambda *args: None)
+    started, received = [], set()
+    for _ in range(4):
+        for number in range(45):
+            if number in received:
+                continue
+            binding = {"session_id": "s", "coordinator_epoch": "e", "cursor": number // 16}
+            evidence = {"assignment_id": str(number), "sequence": 1}
+            exchange = receipts.exchange(client, binding, evidence)
+            try:
+                next(exchange)
+            except StopIteration as done:
+                assert done.value == {"owner": number}
+                received.add(number)
+            except SlurmEffectPending:
+                continue
+            else:
+                started.append(number)
+                with pytest.raises(SlurmEffectPending):
+                    exchange.send(SimpleNamespace(complete=True, value={"owner": number}, error=None))
+
+    assert received == set(range(45))
+    assert sorted(started) == sorted(received)
+
+
+def test_session_change_and_cancel_retire_only_obsolete_receipts():
+    from loom.queue._agent_slurm_progress import SlurmAcknowledgements
+
+    receipts = SlurmAcknowledgements()
+    client = SimpleNamespace(_call=lambda *args: None)
+    binding = {"session_id": "s", "coordinator_epoch": "e"}
+
+    def spawn(owner, kind):
+        evidence = {"assignment_id": owner, "result_operation": kind}
+        exchange = receipts.exchange(client, binding, evidence)
+        next(exchange)
+        view = SimpleNamespace(complete=False, value={"owner": owner}, error=None)
+        with pytest.raises(SlurmEffectPending):
+            exchange.send(view)
+        return view
+
+    views = [spawn(str(i), "commit") for i in range(8)]
+    receipts.forget_results("0")
+    binding["coordinator_epoch"] = "new"
+    with pytest.raises(SlurmEffectPending):
+        # The previous futures still consume the eight real HTTP slots.
+        spawn("new", "report")
+    views[0].complete = True
+    new = spawn("0", "commit")
+    new.complete = True
+    receipts.forget_results("0", keep_commit=True)
+    with pytest.raises(StopIteration) as done:
+        next(receipts.exchange(client, binding, {"assignment_id": "0", "result_operation": "commit"}))
+    assert done.value.value == {"owner": "0"}
+
+
+def test_paged_agent_publishes_45_shared_results_after_lost_commit_and_restart(tmp_path):
+    from time import monotonic, sleep
+
+    from loom.pipeline.executors.slurm import FakeSlurmCommandRunner
+    from loom.queue import _shared_publication
+    from loom.queue._agent_slurm import AgentSlurmJobs
+    from loom.queue._agent_slurm_progress import SlurmAcknowledgements
+    from loom.queue._slurm_observation import SlurmObservationPolicy
+    from loom.queue._slurm_result_transport import SharedSlurmResult, SlurmRequestUncertain
+    from tests.unit.loom.queue.test_agent_slurm import _profile, _task
+    from tests.unit.loom.queue.test_slurm_ready_stage import _shared_slurm_workspace
+
+    runner = FakeSlurmCommandRunner()
+    profile = _profile(runner, tmp_path, retention_bytes=45 * 65 * 1024**2)
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,), observation_policy=SlurmObservationPolicy(300))
+    tasks, publications, declared, committed = [], {}, {}, {}
+    pending, lost, restarted = False, False, False
+    receipts = SlurmAcknowledgements()
+    client = SimpleNamespace(_call=lambda *args: None)
+    binding = {"session_id": "one", "coordinator_epoch": "epoch", "cursor": None}
+
+    def receive(evidence):
+        nonlocal pending, lost
+        if "sequence" in evidence:
+            return {"sequence": evidence["sequence"]}
+        owner = evidence["assignment_id"]
+        transport, workspace, roots, report = publications[owner]
+        if evidence["result_operation"] == "report":
+            assert evidence["report"] == report.to_dict()
+            declared[owner] = evidence["report"]
+            return {"accepted": True}
+        assert evidence["result_operation"] == "commit", "shared outputs must stay on shared storage"
+        assert declared[owner] == report.to_dict()
+        if not pending:
+            pending = True
+            return {**evidence, "disposition": "pending", "retry_after_seconds": 0.001}
+        outputs = _shared_publication.publish(
+            workspace.delivery(), report, roots, agent_id="agent-1", fence="fence-1",
+        )
+        from loom.io.uris import uri_to_path
+
+        identity = [(ref.uri, uri_to_path(ref.uri).stat().st_ino) for ref in outputs.values()]
+        assert committed.setdefault(owner, identity) == identity
+        if not lost:
+            lost = True
+            raise SlurmRequestUncertain("lost commit reply")
+        return {"acknowledged": True}
+
+    def acknowledge(evidence):
+        exchange = receipts.exchange(client, binding, evidence)
+        try:
+            next(exchange)
+        except StopIteration as done:
+            return done.value
+        view = SimpleNamespace(complete=True, error=None, value=None)
+        try:
+            view.value = receive(evidence)
+        except SlurmRequestUncertain as exc:
+            view.error = exc
+        exchange.send(view)
+
+    try:
+        for index in range(45):
+            task = _task(profile, key=str(index))
+            def seed(evidence):
+                task["expected_sequence"] = evidence["sequence"]
+                return {"sequence": evidence["sequence"]}
+            agent.step(task, seed)
+            assignment = task["assignment"]
+            owner = assignment["assignment_id"]
+            submission = agent.journal.read(assignment["operation_id"])
+            identity = {"assignment": assignment, "fence": "fence-1", "incarnation": "boot"}
+            task.update(job_id=submission.job_id, cluster=submission.cluster, result_identity=identity)
+            root = tmp_path / owner
+            root.mkdir()
+            workspace, publishing_profile, result = _shared_slurm_workspace(root, assignment_id=owner)
+            report = workspace.retain_result(result)
+            transport = SharedSlurmResult(profile.result_storage, owner)
+            transport.publish(identity, report, lambda *_: pytest.fail("unexpected upload"))
+            publications[owner] = transport, workspace, publishing_profile.shared_roots, report
+            if index < 14:
+                declared[owner] = report.to_dict()
+            tasks.append(task)
+        assert sum(call[0] == "sbatch" for call in runner.calls) == 45
+        deadline = monotonic() + 60
+        while any(transport.path.exists() for transport, *_ in publications.values()):
+            assert monotonic() < deadline, (len(declared), len(committed), lost, restarted)
+            for start in range(0, len(tasks), 16):
+                binding["cursor"] = str(start)
+                agent.replay_pending(acknowledge)
+                for task in tasks[start:start + 16]:
+                    agent.step(task, acknowledge, allow_submission=False)
+            if lost and not restarted:
+                agent.close()
+                agent = AgentSlurmJobs(tmp_path, (profile,), observation_policy=SlurmObservationPolicy(300))
+                receipts = SlurmAcknowledgements()
+                binding["session_id"] = "two"
+                restarted = True
+            sleep(0.01)
+        assert pending and lost and restarted
+        assert len(committed) == len(declared) == 45
+        assert sum(call[0] == "sbatch" for call in runner.calls) == 45
+    finally:
+        agent.close()

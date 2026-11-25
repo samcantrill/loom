@@ -2535,6 +2535,9 @@ class LocalDaemonAgentHttpClient:
             "coordinator_epoch": session.coordinator_epoch,
             "cursor": self._slurm_cursor,
         }
+        acknowledgements = getattr(self, "_slurm_acknowledgements", None)
+        if acknowledgements is not None:
+            acknowledgements.bind(binding)
         yield from drive_operation(self, self._slurm_agent.replay_pending, binding)
         from ._slurm_result_transport import SlurmRequestUncertain
         try:
@@ -2551,6 +2554,10 @@ class LocalDaemonAgentHttpClient:
         for task in tasks:
             if not isinstance(task, Mapping):
                 raise QueueServiceError("SLURM task is invalid")
+            if acknowledgements is not None and (task.get("cancel_requested") or task.get("release_requested")):
+                acknowledgements.forget_results(
+                    task["assignment"]["assignment_id"], keep_commit=not task.get("cancel_requested"),
+                )
         if (
             self._slurm_agent.observation_policy is not None
             and self._slurm_agent.observation_policy.max_jobs_per_query is not None
