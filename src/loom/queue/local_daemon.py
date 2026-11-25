@@ -78,7 +78,7 @@ from ._remote_stage_execution import GpuDeviceDescriptor, ResidentProfileDescrip
 from ._preparation_policy import PreparationPolicy
 from .submitted_execution import SubmittedContainerCapability
 from .errors import QueueConflictError, QueueServiceError, QueueStorageError, _AcceptedTimeError
-from ._admission_scan import AdmissionScan, SchedulingAdmissions, ensure_scan_index, ensure_retry_index
+from ._admission_scan import LEGACY_CANCELLED, AdmissionScan, SchedulingAdmissions, ensure_scan_index, ensure_retry_index
 from ._service_signals import _ChangeConnection, _ChangeSignal, _KeyedWaiters, _ServiceSignal, write_status
 from ._recovery_retry import _RecoveryRetry
 from ._run_observations import RunObservation, RunObservationPending
@@ -1744,7 +1744,8 @@ class LocalDaemon:
         self._service_error: str | None = None
         self._admission_retries: dict[str, _RecoveryRetry] = {}
         self._context_invalidations: set[str] = set()
-        self._cancelled_admission_repairs: deque[str] | None = None
+        self._legacy_repair_after: tuple[int, str] | None = (0, "")
+        self._legacy_repair_retries: deque[tuple[float, str]] = deque()
         self._recovery_cursor: str | None = None
         self._recovery_retries: dict[str, _RecoveryRetry] = {}
         self._agent_policy = config.agent_policy
@@ -2142,7 +2143,8 @@ class LocalDaemon:
         self._scheduling_epoch = scheduling_epoch
         self._service_error = None
         self._admission_retries.clear()
-        self._cancelled_admission_repairs = None
+        self._legacy_repair_after = (0, "")
+        self._legacy_repair_retries.clear()
         self._verified_local_owner_subject = verified_local_owner_subject
         self._contexts.close()
         self._gpu_samples.close()
@@ -3083,27 +3085,42 @@ class LocalDaemon:
         _resume_pending_admission_retries(self, execution)
 
     def _repair_cancelled_admissions(self, execution: LocalDaemonExecution) -> None:
-        if self._cancelled_admission_repairs is None:
-            with self._connection() as conn:
-                self._cancelled_admission_repairs = deque(
-                    str(row["admission_id"])
-                    for row in conn.execute(
-                        "SELECT admission_id FROM managed_admissions "
-                        "WHERE state = ? AND cancellation_operation_id IS NULL "
-                        "ORDER BY enqueue_sequence, admission_id",
-                        (LocalDaemonAdmissionState.CANCELLED.value,),
-                    )
-                )
-        pending = self._cancelled_admission_repairs
-        for _ in range(min(16, len(pending))):
-            admission_id = pending.popleft()
+        from functools import partial
+
+        workers = execution.cancelled_repair_workers
+        now = time.monotonic()
+        epochs = (self._epoch, self._scheduling_epoch)
+        for identity, _, _, result in workers.completed(0):
             try:
-                execution.repair_cancelled_admission(self._admission(admission_id))
+                result.result()
             except Exception:
-                self._record_admission_health(admission_id, "unavailable")
-                pending.append(admission_id)
+                self._record_admission_health(identity, "unavailable")
+                self._legacy_repair_retries.append((now + self.config.poll_interval_seconds, identity))
             else:
-                self._record_admission_health(admission_id, "healthy")
+                self._record_admission_health(identity, "healthy")
+
+        def offer(identity: str) -> None:
+            workers.submit(identity, identity, epochs, partial(execution.repair_cancelled_admission, identity, epochs))
+
+        if self._legacy_repair_retries and self._legacy_repair_retries[0][0] <= now and not workers.full():
+            _, identity = self._legacy_repair_retries.popleft()
+            offer(identity)
+        if self._legacy_repair_after is None or workers.full():
+            return
+        with self._connection() as conn:
+            rows = conn.execute(
+                f"SELECT enqueue_sequence, admission_id FROM managed_admissions WHERE {LEGACY_CANCELLED} "
+                "AND (enqueue_sequence, admission_id) > (?, ?) ORDER BY enqueue_sequence, admission_id LIMIT 2",
+                self._legacy_repair_after,
+            ).fetchall()
+        for row in rows:
+            if workers.full():
+                return
+            identity = str(row["admission_id"])
+            offer(identity)
+            self._legacy_repair_after = int(row["enqueue_sequence"]), identity
+        if len(rows) < 2:
+            self._legacy_repair_after = None
 
     def _cancel(
         self,
@@ -5260,6 +5277,8 @@ def _request_admission_cancellation(
         and repair_revision == admission.revision
         and admission.cancellation_operation_id is None
     )
+    if repair_revision is not None and not repairing_cancelled:
+        return admission
     if not repairing_cancelled and admission.state in {
         LocalDaemonAdmissionState.SUCCEEDED,
         LocalDaemonAdmissionState.FAILED,

@@ -80,22 +80,28 @@ def test_scan_resumes_at_first_admission_refused_for_capacity():
 
 def test_retained_database_seeks_past_deleted_cursor_and_limits_materialized_rows():
     import sqlite3
-    from loom.queue._admission_scan import ensure_scan_index
+    from loom.queue._admission_scan import LEGACY_CANCELLED, ensure_scan_index
 
     with sqlite3.connect(":memory:") as conn:
         conn.row_factory = sqlite3.Row
         conn.execute("CREATE TABLE managed_admissions (admission_id TEXT PRIMARY KEY, "
-                     "enqueue_sequence INTEGER UNIQUE, run_priority INTEGER, state TEXT)")
-        conn.executemany("INSERT INTO managed_admissions VALUES (?, ?, ?, ?)", (
+                     "enqueue_sequence INTEGER UNIQUE, run_priority INTEGER, state TEXT, cancellation_operation_id TEXT)")
+        conn.executemany("INSERT INTO managed_admissions VALUES (?, ?, ?, ?, NULL)", (
             (str(index), index, 5 if index < 8000 else 0, "ACTIVE" if index < 8034 else "SUCCEEDED")
             for index in range(12000)
         ))
         ensure_scan_index(conn)
+        plan = conn.execute(
+            f"EXPLAIN QUERY PLAN SELECT admission_id FROM managed_admissions WHERE {LEGACY_CANCELLED} "
+            "AND (enqueue_sequence, admission_id) > (?, ?) ORDER BY enqueue_sequence, admission_id LIMIT 2",
+            (100, "100"),
+        ).fetchall()
+        assert any("SEARCH" in item["detail"] and "legacy_cancelled_admissions" in item["detail"] for item in plan)
         scan = AdmissionScan()
         assert len(scan.page(conn, 11999)) == 33
         scan.after = (-5, 7969, "7969")
         conn.execute("DELETE FROM managed_admissions WHERE enqueue_sequence=7969")
-        conn.execute("INSERT INTO managed_admissions VALUES ('late', 12000, 10, 'ACTIVE')")
+        conn.execute("INSERT INTO managed_admissions VALUES ('late', 12000, 10, 'ACTIVE', NULL)")
         steps = []
         conn.set_progress_handler(lambda: (steps.append(None), 0)[1], 100)
         page = scan.page(conn, 12000)

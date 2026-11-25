@@ -1464,6 +1464,7 @@ class LocalDaemonExecution:
         # executing.  These tasks are deliberately keyed by assignment ID:
         # assignment identity, rather than admission identity, is the durable
         # launch/result boundary.
+        self.cancelled_repair_workers = RecoveryWorkers(lambda: self._daemon_owner()._wake.set(), "loom-cancellation-repair")
         self.recovery_workers = RecoveryWorkers(lambda: self._daemon_owner()._wake.set(), "loom-recovery")
         self.admission_retry_workers = RecoveryWorkers(lambda: self._daemon_owner()._wake.set(), "loom-admission-retry")
         self._offer_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="loom-local-offer")
@@ -1522,6 +1523,7 @@ class LocalDaemonExecution:
         """Stop only assignment observers after their durable owners settle."""
 
         self.run_observations.close()
+        self.cancelled_repair_workers.close()
         self.admission_retry_workers.close()
         self.recovery_workers.close()
         self._offer_worker.shutdown(wait=True, cancel_futures=True)
@@ -5057,23 +5059,28 @@ class LocalDaemonExecution:
             return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.SUCCEEDED)
         return None
 
-    def repair_cancelled_admission(self, admission: LocalDaemonAdmission) -> None:
+    def repair_cancelled_admission(self, identity: str, epochs: tuple[str | None, str | None]) -> bool:
         """Reconcile legacy stage cancellation that never finalized its run."""
 
+        daemon = self._daemon_owner()
+        admission = daemon._admission(identity)
         if (
             admission.state is not LocalDaemonAdmissionState.CANCELLED
             or admission.cancellation_operation_id is not None
         ):
-            return
-        intent, authority = self._admission_context(admission)
+            return True
+        intent, authority = self.prepare_admission_context(admission, epochs)
         snapshot = authority.open_run(admission.run_uri)
+        with daemon._state_guard():
+            if epochs != (daemon._epoch, daemon._scheduling_epoch) or daemon._stop.is_set():
+                raise CancelledError("legacy admission repair superseded")
         if snapshot.status in {
             RunStatus.SUCCEEDED,
             RunStatus.FAILED,
             RunStatus.INTERRUPTED,
             RunStatus.CANCELLED,
         }:
-            return
+            return True
         run_stages = {
             stage.stage_name
             for stage in intent.plan.stage_plans
@@ -5083,11 +5090,20 @@ class LocalDaemonExecution:
             stage.stage_name in run_stages and stage.status is StageStatus.CANCELLED
             for stage in snapshot.stages
         ):
-            self._daemon_owner()._cancel(
-                admission.queue_item_id,
-                principal_id=f"coordinator:{self.coordinator_id}",
-                repair_revision=admission.revision,
-            )
+            from ._coordinator_transactions import short_write
+            from .local_daemon import _request_admission_cancellation
+
+            def repair(conn: sqlite3.Connection) -> None:
+                if epochs != (daemon._epoch, daemon._scheduling_epoch) or daemon._stop.is_set():
+                    raise CancelledError("legacy admission repair superseded")
+                _request_admission_cancellation(
+                    conn, admission.queue_item_id, principal_id=f"coordinator:{self.coordinator_id}",
+                    repair_revision=admission.revision,
+                )
+
+            short_write(daemon, repair)
+            daemon._wake.set()
+        return True
 
     def _recovery_failure_is_settling(self, stage: object) -> bool:
         reason = getattr(stage, "reason", None)

@@ -10,6 +10,7 @@ if TYPE_CHECKING:
 
 
 _ACTIVE = "state NOT IN ('SUCCEEDED','FAILED','CANCELLED','BLOCKED')"
+LEGACY_CANCELLED = "state = 'CANCELLED' AND cancellation_operation_id IS NULL"
 _PRIORITY_ORDER = "run_priority DESC, enqueue_sequence, admission_id"
 _PAGE_SIZE = 32
 
@@ -24,6 +25,8 @@ def ensure_retry_index(conn: sqlite3.Connection) -> None:
 
 
 def ensure_scan_index(conn: sqlite3.Connection) -> None:
+    conn.execute(f"CREATE INDEX IF NOT EXISTS legacy_cancelled_admissions "
+                 f"ON managed_admissions(enqueue_sequence, admission_id) WHERE {LEGACY_CANCELLED}")
     conn.execute(f"CREATE INDEX IF NOT EXISTS managed_admissions_active_order "
                  f"ON managed_admissions ({_PRIORITY_ORDER}) WHERE {_ACTIVE}")
 

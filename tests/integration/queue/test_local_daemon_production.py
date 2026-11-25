@@ -3537,9 +3537,31 @@ def test_stage_cancellation_finalizes_run_and_repairs_legacy_admissions_on_resta
         finally:
             daemon.stop()
 
+    from loom.queue._coordinator_run_authority import _ScopedCoordinatorAuthority
+
+    captured, release = Event(), Event()
+    if legacy_projection:
+        open_run = _ScopedCoordinatorAuthority.open_run
+
+        def pause_legacy_read(scoped, uri):
+            result = open_run(scoped, uri)
+            if uri == run_uri:
+                captured.set()
+                assert release.wait(25)
+            return result
+
+        monkeypatch.setattr(_ScopedCoordinatorAuthority, "open_run", pause_legacy_read)
     replacement = LocalDaemon(config)
     replacement.start()
     try:
+        if legacy_projection:
+            assert captured.wait(10)
+            peer = _persist_sleep_run(tmp_path / "runs", run_name="legacy-peer", stage_name="peer", seconds=0.01)
+            client = replacement.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+            client.submit(LocalDaemonAdmissionRequest("legacy-peer", peer))
+            assert client.wait("legacy-peer", timeout_seconds=10).state is LocalDaemonAdmissionState.SUCCEEDED
+            assert authority.open_run(run_uri).status is RunStatus.RUNNING
+            release.set()
         deadline = time.monotonic() + 10
         while authority.open_run(run_uri).status is not RunStatus.CANCELLED:
             assert time.monotonic() < deadline
@@ -3563,6 +3585,7 @@ def test_stage_cancellation_finalizes_run_and_repairs_legacy_admissions_on_resta
             == ()
         )
     finally:
+        release.set()
         replacement.stop()
 
 
