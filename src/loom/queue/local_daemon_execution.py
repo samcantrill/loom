@@ -202,6 +202,7 @@ from .local_daemon_runtime import load_managed_local_runtime_record
 from ._agent_slurm import AgentSlurmJobs, SlurmSubmissionProjection
 from .slurm_ready_stage import (
     SQLiteSlurmStageAssignments,
+    SlurmAgentTaskRecord,
     SlurmStageAssignment,
     SlurmStageDelivery,
     SlurmStageRecord,
@@ -2315,7 +2316,7 @@ class LocalDaemonExecution:
             return read_recoveries(conn, assignment_ids)
 
     def _slurm_task(
-        self, record: SlurmStageRecord, facts: TaskFacts | None = None,
+        self, record: SlurmStageRecord | SlurmAgentTaskRecord, facts: TaskFacts | None = None,
         submission: SlurmReadyStageSubmission | None = None,
     ) -> dict[str, PlainData]:
         profile = self._slurm_profile(
@@ -2352,11 +2353,7 @@ class LocalDaemonExecution:
             "cancel_requested": facts.cancelled,
             "job_id": record.job_id,
             "cluster": record.cluster,
-            "compute_release_requested": (
-                record.publication_requested_at is not None
-                and record.publication_completed_at is None
-                and record.compute_released_at is None
-            ),
+            "compute_release_requested": record.compute_release_requested,
             "release_requested": record.state
             in {"terminal", "logical_released", "rejected"},
             "containment_request": {
@@ -2505,7 +2502,7 @@ class LocalDaemonExecution:
             not future.done() for _, future in self._slurm_chunk_futures.values()
         )
 
-    def slurm_result_identity(self, record: SlurmStageRecord) -> dict[str, PlainData]:
+    def slurm_result_identity(self, record: SlurmStageRecord | SlurmAgentTaskRecord) -> dict[str, PlainData]:
         return {
             "coordinator_id": self.coordinator_id,
             "assignment": record.assignment.to_dict(),
@@ -2553,7 +2550,12 @@ class LocalDaemonExecution:
         if evidence["provider_released"] is True and evidence["release"] is None:
             raise QueueConflictError("SLURM provider release requires containment")
         assignment = SlurmStageAssignment.from_dict(evidence.get("assignment"))
-        record = self.slurm_assignments.read(assignment.assignment_id)
+        release = evidence.get("release")
+        record = (
+            self.slurm_assignments.read_agent_task(assignment.assignment_id)
+            if release is None
+            else self.slurm_assignments.read(assignment.assignment_id)
+        )
         if record.assignment != assignment or (
             assignment.agent_id,
             assignment.agent_root_id,
@@ -2576,8 +2578,8 @@ class LocalDaemonExecution:
         sequence = evidence.get("sequence")
         if isinstance(sequence, bool) or not isinstance(sequence, int):
             raise QueueServiceError("SLURM evidence sequence is invalid")
-        release = evidence.get("release")
         if isinstance(release, Mapping):
+            assert isinstance(record, SlurmStageRecord)
             if self._recovery_retains_assignment(assignment.assignment_id):
                 raise QueueConflictError(
                     "ordinary SLURM release is frozen by guarded recovery"
@@ -2642,7 +2644,6 @@ class LocalDaemonExecution:
                 job_id=submission.job_id,
                 cluster=submission.cluster,
             )
-        release = evidence.get("release")
         if isinstance(release, Mapping):
             record = self.slurm_assignments.read(assignment.assignment_id)
             if (record.publication_requested_at is not None and record.publication_completed_at is None and record.publication_cancelled_at is None
@@ -3092,19 +3093,19 @@ class LocalDaemonExecution:
             in_flight = True
         return in_flight, diagnostic
 
-    def _terminal_accounting_identity(self, record: SlurmStageRecord) -> dict[str, PlainData] | None:
+    def _terminal_accounting_identity(self, record: SlurmStageRecord | SlurmAgentTaskRecord) -> dict[str, PlainData] | None:
         if not self._terminal_identity_candidate(record):
             return None
         return self._terminal_identity_from_submission(record, self.slurm_submissions.find(record.assignment.operation_id))
 
     @staticmethod
-    def _terminal_identity_candidate(record: SlurmStageRecord) -> bool:
-        return (record.report is None and record.state in {"granted", "running", "unknown"}
+    def _terminal_identity_candidate(record: SlurmStageRecord | SlurmAgentTaskRecord) -> bool:
+        return (not record.report_present and record.state in {"granted", "running", "unknown"}
                 and record.start_consumed and record.fence is not None and record.bootstrap_incarnation is not None
                 and record.cluster is not None)
 
     def _terminal_identity_from_submission(
-        self, record: SlurmStageRecord, submission: SlurmReadyStageSubmission | None,
+        self, record: SlurmStageRecord | SlurmAgentTaskRecord, submission: SlurmReadyStageSubmission | None,
     ) -> dict[str, PlainData] | None:
         if (submission is None or submission.scheduler_source != "sacct"
             or submission.scheduler_state not in {"TIMEOUT", "FAILED", "CANCELLED", "COMPLETED"}
@@ -3129,7 +3130,7 @@ class LocalDaemonExecution:
         ))
         return state.get("accepted_time_high_water") if state.get("accepted_time_health") == "healthy" else None
 
-    def _terminal_probe_due(self, record: SlurmStageRecord, now: str | None) -> bool:
+    def _terminal_probe_due(self, record: SlurmStageRecord | SlurmAgentTaskRecord, now: str | None) -> bool:
         policy = self.config.slurm_terminal_recovery
         observation = record.terminal_observation
         return bool(policy is not None and policy.enabled and observation is not None and now is not None
@@ -3137,7 +3138,7 @@ class LocalDaemonExecution:
                     >= policy.terminal_result_grace_seconds)
 
     def _terminal_probe_from_submission(
-        self, record: SlurmStageRecord, submission: SlurmReadyStageSubmission | None,
+        self, record: SlurmStageRecord | SlurmAgentTaskRecord, submission: SlurmReadyStageSubmission | None,
     ) -> dict[str, PlainData] | None:
         from ._slurm_terminal_recovery import probe_request
 
@@ -3147,7 +3148,7 @@ class LocalDaemonExecution:
             return None
         return probe_request(observation)
 
-    def _terminal_result_probe(self, record: SlurmStageRecord) -> dict[str, PlainData] | None:
+    def _terminal_result_probe(self, record: SlurmStageRecord | SlurmAgentTaskRecord) -> dict[str, PlainData] | None:
         if record.terminal_observation is None or not self._terminal_probe_due(record, self._terminal_accepted_time()):
             return None
         return self._terminal_probe_from_submission(record, self.slurm_submissions.find(record.assignment.operation_id))
@@ -3951,7 +3952,7 @@ class LocalDaemonExecution:
     def _slurm_recovery_proof(
         self,
         request: RecoverUnknownAssignment,
-        record: SlurmStageRecord,
+        record: SlurmStageRecord | SlurmAgentTaskRecord,
         profile: SlurmReadyStageProfile, *, history: dict[str, PlainData] | None = None,
     ) -> dict[str, PlainData]:
         helper = profile.containment_helper

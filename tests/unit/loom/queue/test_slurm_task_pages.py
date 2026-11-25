@@ -1,8 +1,10 @@
 """Slurm control pages honor encoded bytes and never skip an undelivered task."""
 
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager, nullcontext
 import json
 import sqlite3
-from contextlib import contextmanager
+from threading import Event, RLock
 from typing import Any, cast
 from types import SimpleNamespace
 
@@ -13,6 +15,7 @@ from loom.queue.local_daemon import _ensure_recovery_assignment_index
 from loom.queue.local_daemon_execution import LocalDaemonExecution
 from loom.queue._slurm_task_page import pack_page
 from loom.queue._agent_session_codec import _MAX_BODY_BYTES, _decode
+from loom.queue import agent_sessions
 
 
 def owner_for(sizes, *, withheld=()):
@@ -125,9 +128,7 @@ def test_recovery_lookup_reads_one_indexed_page(tmp_path, page_size):
 
 @pytest.mark.parametrize("change", ["recovery", "sequence", "unrelated"])
 def test_agent_renews_during_packing_and_reply_uses_current_page(tmp_path, monkeypatch, change):
-    from concurrent.futures import ThreadPoolExecutor
     from dataclasses import replace
-    from threading import Event
 
     from loom.queue import LocalDaemon, LocalDaemonPrincipal, LocalDaemonRole
     from loom.queue.local_daemon import RecoverUnknownAssignment, SlurmRecoveryTarget
@@ -179,6 +180,11 @@ def test_agent_renews_during_packing_and_reply_uses_current_page(tmp_path, monke
         assignment = replace(assignment, agent_id=session.agent_id, agent_root_id=session.agent_root_id)
         store = execution.slurm_assignments
         store.reserve(assignment, **{**args, "max_reserved_gpus": None})
+
+        def reject_full_record(_row):
+            pytest.fail("agent task observation decoded a complete worker record")
+
+        monkeypatch.setattr(store, "_record", reject_full_record)
         paused, resume = Event(), Event()
         attempts = []
         original = _slurm_task_page.pack_page
@@ -224,3 +230,51 @@ def test_agent_renews_during_packing_and_reply_uses_current_page(tmp_path, monke
             assert result["tasks"][0]["expected_sequence"] == (1 if change == "sequence" else 0)
     finally:
         daemon.stop()
+
+
+@pytest.mark.parametrize("reload", [False, True])
+def test_slow_task_page_yields_to_evidence_and_discards_stale_observations(monkeypatch, reload):
+    entered, finish = Event(), Event()
+    lock = RLock()
+    page = {"tasks": [{"assignment": "exact-assignment"}], "next_cursor": None}
+
+    def slow_page(agent_id, root_id, *, cursor):
+        assert (agent_id, root_id, cursor) == ("agent", "root", None)
+        entered.set()
+        assert finish.wait(5)
+        return page
+
+    def acknowledge(agent_id, root_id, evidence, *, _defer_output):
+        assert (agent_id, root_id, evidence) == ("agent", "root", {"sequence": 1})
+        assert not _defer_output
+        return {"sequence": 1}
+
+    session = SimpleNamespace(
+        agent_id="agent", agent_root_id="root", state=agent_sessions.AgentSessionState.ACTIVE,
+        policy_revision="policy", capabilities={
+            agent_sessions.SLURM_SUBMISSION_CAPABILITY, agent_sessions.SLURM_PENDING_EFFECTS_CAPABILITY,
+        },
+    )
+    connection = SimpleNamespace(execute=lambda *_: SimpleNamespace(fetchone=lambda: None))
+    daemon: Any = SimpleNamespace(
+        _cycle_lock=lock, _state_guard=lambda: lock, _connection=lambda: nullcontext(connection),
+        _epoch="epoch", _scheduling_epoch="before", _require_started=lambda: "owner",
+        _execution=SimpleNamespace(slurm_agent_task_page=slow_page, acknowledge_slurm_pending=acknowledge),
+    )
+    monkeypatch.setattr(agent_sessions, "_session_from_row", lambda *_, **__: session)
+    rule = SimpleNamespace(principal_id="principal", agent_id="agent")
+    service = agent_sessions.AgentSessionService(daemon, cast(Any, None))
+    monkeypatch.setattr(service, "_authorize", lambda _: (rule, "policy"))
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        observation = workers.submit(service.slurm_work, "session", "epoch")
+        try:
+            assert entered.wait(3)
+            receipt = workers.submit(service.slurm_work, "session", "epoch", {"sequence": 1})
+            assert receipt.result(timeout=2) == {"sequence": 1}
+            if reload:
+                with lock:
+                    daemon._scheduling_epoch = "after"
+        finally:
+            finish.set()
+        expected = {"tasks": [], "next_cursor": None} if reload else page
+        assert observation.result(timeout=3) == expected

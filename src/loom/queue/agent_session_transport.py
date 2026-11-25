@@ -277,6 +277,7 @@ class AgentTlsClientConfig:
     transport_policy: AgentTransportPolicy | None = None
     slurm_submit_interval_seconds: float | None = None
     slurm_observation_policy: SlurmObservationPolicy | None = None
+    _transport_reload_fingerprint: str | None = None
 
     @property
     def sqlite_policy(self) -> SQLitePolicy | None:
@@ -1673,9 +1674,11 @@ class LocalDaemonAgentHttpClient:
             )
         if retained_work is None:
             retained_work = self._has_retained_agent_work()
-        if retained_work and _agent_active_fingerprint(
-            replacement
-        ) != _agent_active_fingerprint(self._config):
+        if (
+            retained_work
+            and _agent_active_fingerprint(replacement) != _agent_active_fingerprint(self._config)
+            and not self._slurm_transport_only_reload(replacement)
+        ):
             raise QueueConflictError(
                 "agent reload cannot replace active configuration with retained work"
             )
@@ -1691,6 +1694,16 @@ class LocalDaemonAgentHttpClient:
                     raise QueueConflictError(
                         "agent reload reuses a live profile identity for changed bindings"
                     )
+
+    def _slurm_transport_only_reload(self, replacement: AgentTlsClientConfig) -> bool:
+        current = self._config
+        return (
+            current._transport_reload_fingerprint is not None
+            and current._transport_reload_fingerprint == replacement._transport_reload_fingerprint
+            and current.transport_policy != replacement.transport_policy
+            and tuple(profile.configuration_fingerprint for profile in current.slurm_profiles)
+            == tuple(profile.configuration_fingerprint for profile in replacement.slurm_profiles)
+        )
 
     def _has_retained_agent_work(self) -> bool:
         return _has_retained_agent_work(
@@ -1948,7 +1961,8 @@ class LocalDaemonAgentHttpClient:
             self._received_cancellations.add(assignment_id)
             self._machine_stop_requested.add(assignment_id)
 
-        if supervisor is None:
+        execution = self._execution_journal
+        if supervisor is None or execution is None:
             return False
 
         def stop(session_id: str, assignment_id: str):
@@ -1980,7 +1994,7 @@ class LocalDaemonAgentHttpClient:
                 if receipt.state is not SupervisorLaunchState.CONTAINED:
                     return False
                 # The execution view may have independently finished and released.
-                if self._execution_journal.find_state(assignment_id) is not AssignmentState.RELEASED:
+                if execution.find_state(assignment_id) is not AssignmentState.RELEASED:
                     self._record_contained_cancellation(self._assignment_workspace(assignment_id))
                 return True
             except _ManagedApplicationSuspended:

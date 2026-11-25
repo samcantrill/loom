@@ -107,6 +107,40 @@ def test_blocked_scheduler_preserves_control_and_acknowledgement_owner(acknowled
         assert results == [{"acknowledged": 1}]
 
 
+
+def test_slurm_only_offer_can_renew_after_successful_startup_recovery():
+    from loom.queue._agent_progress import _Gate
+
+    startup_pending = True
+    client: Any = SimpleNamespace(
+        _service_progress=True,
+        _service_recovery_admission=True,
+        _restart_with_retained_work=True,
+        _mutation_gate=_Gate(),
+        _drained=False,
+        _suspend_requested=None,
+        _epoch_reconciliation_pending=False,
+        _slurm_recovery_pending=lambda: startup_pending,
+        _config=SimpleNamespace(resident_profiles=(), container_policies=()),
+        _journal=None,
+        _execution_journal=None,
+    )
+    assess = LocalDaemonAgentHttpClient._qualify_service_admission
+    assert not assess(client)
+    assert client._restart_with_retained_work
+
+    startup_pending = False
+    assert assess(client)
+    assert not client._restart_with_retained_work
+    assert not client._service_recovery_admission
+
+    # A later acknowledgement is assignment-owned, even on an agent that
+    # previously started with a journal containing unreconciled work.
+    startup_pending = True
+    assert assess(client)
+    assert not client._restart_with_retained_work
+
+
 def test_slurm_request_capacity_does_not_consume_control_or_poll_slots():
     from threading import BoundedSemaphore
     from loom.queue.agent_session_transport import _MutualTlsHttpServer, _SlurmWorkCapacityError

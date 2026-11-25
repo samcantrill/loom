@@ -3395,3 +3395,38 @@ def test_outbound_transport_budgets_are_read_without_probes_and_bind_policy(tmp_
     service = load_outbound_agent_service_config(source)
     assert service.client.transport_policy is not None
     assert service.client.transport_policy.to_dict() == payload["transport_policy"]
+
+
+def test_retained_slurm_jobs_allow_only_a_transport_timing_reload(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from typing import Any
+
+    from loom.pipeline.executors.slurm import FakeSlurmCommandRunner
+    from loom.queue import deployment
+    from tests.integration.queue.test_slurm_ready_stage import _profile
+
+    source = _agent_config(tmp_path)
+    payload = json.loads(source.read_text())
+    payload["resident_profiles"] = []
+    payload["slurm_profiles"] = [{"_target_": "tests.integration.queue.test_slurm_ready_stage._profile"}]
+    profile = _profile(FakeSlurmCommandRunner(), capability_path=tmp_path / "job-capability")
+    monkeypatch.setattr(deployment, "_slurm_profile_composition", lambda _: (profile,))
+
+    _write_protected(source, payload)
+    previous = load_outbound_agent_service_config(source).client
+    owner: Any = SimpleNamespace(_config=previous, _slurm_agent=object(), _profiles={}, _retained_profiles={})
+    owner._slurm_transport_only_reload = lambda replacement: LocalDaemonAgentHttpClient._slurm_transport_only_reload(owner, replacement)
+
+    payload["transport_policy"] = {"connect_timeout_seconds": 10, "response_timeout_seconds": 60}
+    _write_protected(source, payload)
+    selected = load_outbound_agent_service_config(source).client
+    assert selected.active_configuration_fingerprint != previous.active_configuration_fingerprint
+    LocalDaemonAgentHttpClient._validate_reload_config(owner, selected, retained_work=True)
+
+    # Reconnect and registration values live outside AgentTlsClientConfig and
+    # must still invalidate the proof that only the request timeout changed.
+    payload["reconnect_seconds"] = 1
+    _write_protected(source, payload)
+    changed = load_outbound_agent_service_config(source).client
+    with pytest.raises(QueueConflictError, match="retained work"):
+        LocalDaemonAgentHttpClient._validate_reload_config(owner, changed, retained_work=True)

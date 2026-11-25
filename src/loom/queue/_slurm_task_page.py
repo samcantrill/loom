@@ -20,7 +20,7 @@ from .errors import QueueServiceError
 
 if TYPE_CHECKING:
     from .local_daemon_execution import LocalDaemonExecution
-    from .slurm_ready_stage import SlurmStageRecord
+    from .slurm_ready_stage import SlurmAgentTaskRecord
 
 
 def read_recoveries(conn: sqlite3.Connection, ids: tuple[str, ...]) -> dict[str, list[tuple[str, str, bool]]]:
@@ -47,7 +47,7 @@ class TaskFacts:
 
 
 def control_facts(
-    owner: LocalDaemonExecution, conn: sqlite3.Connection, records: Sequence[SlurmStageRecord],
+    owner: LocalDaemonExecution, conn: sqlite3.Connection, records: Sequence[SlurmAgentTaskRecord],
 ) -> dict[str, TaskFacts]:
     recoveries = read_recoveries(conn, tuple(row.assignment.assignment_id for row in records))
     now = None
@@ -141,7 +141,7 @@ def _read_page_attempt(
 
     page = pack_page([row.assignment_id for row in source], cursor, task_at)
     # Pin both final read snapshots at the coordinator's decision point.
-    # Copying/decoding deliveries and encoding the wire page are already done.
+    # The projected task facts have already been read and the wire page encoded.
     try:
         with owner._daemon_owner()._state_guard():
             execution.execute("BEGIN")

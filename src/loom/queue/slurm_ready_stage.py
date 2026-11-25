@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from loom._sqlite_policy import SQLitePolicy, connect_existing, initialize_database
 
+from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import Future
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass, replace
 import base64
@@ -12,12 +14,12 @@ import fcntl
 import os
 import stat
 from datetime import datetime, timezone
-from functools import lru_cache
 import hashlib
 import hmac
 import json
 from pathlib import Path
 import sqlite3
+from threading import Lock
 from typing import TYPE_CHECKING, Any, Iterator, Literal, cast
 
 from loom._sqlite_inspection import inspect_sqlite_database
@@ -485,6 +487,18 @@ class SlurmStageRecord:
     terminal_observation: Mapping[str, PlainData] | None = None
     agent_sequence: int = 0
 
+    @property
+    def report_present(self) -> bool:
+        return self.report is not None
+
+    @property
+    def compute_release_requested(self) -> bool:
+        return (
+            self.publication_requested_at is not None
+            and self.publication_completed_at is None
+            and self.compute_released_at is None
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class _TaskPageSource:
@@ -506,6 +520,25 @@ def ensure_slurm_page_index(conn: sqlite3.Connection) -> None:
         "(json_extract(identity_json, '$.agent_id'), json_extract(identity_json, '$.agent_root_id'), assignment_id) "
         "WHERE state != 'released'"
     )
+
+
+@dataclass(frozen=True, slots=True)
+class SlurmAgentTaskRecord:
+    """Scheduler-facing assignment facts independent of worker payload bytes."""
+
+    assignment: SlurmStageAssignment
+    request: Mapping[str, PlainData]
+    state: str
+    job_id: str | None
+    cluster: str | None
+    bootstrap_incarnation: str | None
+    fence: str | None
+    process_execution_id: str | None
+    report_present: bool
+    start_consumed: bool
+    agent_sequence: int
+    compute_release_requested: bool
+    terminal_observation: Mapping[str, PlainData] | None
 
 
 class SQLiteSlurmStageAssignments:
@@ -778,6 +811,7 @@ class SQLiteSlurmStageAssignments:
                 "UPDATE stage_work SET scheduling_state = ?, record_json = ? WHERE stage_work_id = ?",
                 (decided.scheduling_state.value, _json(decided.to_dict()), assignment.stage_work_id),
             )
+        _retained_delivery_cache.remember_validated(delivery_json, delivery)
         return "reserved"
 
     def consume_start(self, assignment_id: str, *, request_id: str | None = None) -> bool:
@@ -1133,24 +1167,26 @@ class SQLiteSlurmStageAssignments:
                 and str(row["bootstrap_incarnation"]) != incarnation
             ):
                 raise QueueConflictError("SLURM bootstrap incarnation conflicts")
-            if bool(row["capability_consumed"]):
-                # The same verifier/handle/incarnation is a response-loss replay;
-                # all changed bindings above have already failed without mutation.
-                return self._record(row)
-            if self.schema_version >= 4 and row["capability_delivery_kind"] == "user_private_file_v1":
-                if accepted_time is None:
-                    raise QueueServiceError("trusted-user first registration requires coordinator accepted time")
-                try:
-                    expired = parse_timestamp(accepted_time) >= parse_timestamp(row["capability_expires_at"])
-                except (TypeError, ValueError) as exc:
-                    raise QueueServiceError("SLURM capability time evidence is invalid") from exc
-                if expired:
-                    raise QueueConflictError("SLURM capability first use has expired")
-            conn.execute(
-                f"UPDATE {_ASSIGNMENT_TABLE} SET job_id = ?, cluster = ?, "
-                "bootstrap_incarnation = ?, capability_consumed = 1 WHERE assignment_id = ?",
-                (job_id, cluster, incarnation, assignment.assignment_id),
-            )
+            replay = bool(row["capability_consumed"])
+            if not replay:
+                if self.schema_version >= 4 and row["capability_delivery_kind"] == "user_private_file_v1":
+                    if accepted_time is None:
+                        raise QueueServiceError("trusted-user first registration requires coordinator accepted time")
+                    try:
+                        expired = parse_timestamp(accepted_time) >= parse_timestamp(row["capability_expires_at"])
+                    except (TypeError, ValueError) as exc:
+                        raise QueueServiceError("SLURM capability time evidence is invalid") from exc
+                    if expired:
+                        raise QueueConflictError("SLURM capability first use has expired")
+                conn.execute(
+                    f"UPDATE {_ASSIGNMENT_TABLE} SET job_id = ?, cluster = ?, "
+                    "bootstrap_incarnation = ?, capability_consumed = 1 WHERE assignment_id = ?",
+                    (job_id, cluster, incarnation, assignment.assignment_id),
+                )
+        if replay:
+            # The exact verifier/handle/incarnation replays the retained row.
+            # Materialize its delivery after the write transaction ends.
+            return self._record(row)
         return self.read(assignment.assignment_id)
 
     def mark_input_ready(self, assignment_id: str, incarnation: str) -> bool:
@@ -1325,22 +1361,68 @@ class SQLiteSlurmStageAssignments:
 
     def agent_page(
         self, agent_id: str, agent_root_id: str, *, after: str | None = None, limit: int = 33,
-    ) -> tuple[SlurmStageRecord, ...]:
-        """Bound materialization to one agent's keyset page, including lookahead."""
+    ) -> tuple[SlurmAgentTaskRecord, ...]:
+        """Read a bounded scheduler page without materializing worker deliveries."""
         if type(limit) is not int or not 1 <= limit <= 33:
             raise QueueServiceError("SLURM task page limit is invalid")
         with _connect(self.path, sqlite_policy=self._sqlite_policy, require_existing=True) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
-                f"SELECT a.* FROM {_ASSIGNMENT_TABLE} a " + _AGENT_PAGE_FILTER,
+                f"SELECT {self._agent_task_columns()} FROM {_ASSIGNMENT_TABLE} a " + _AGENT_PAGE_FILTER,
                 (agent_id, agent_root_id, after or "", limit),
             ).fetchall()
-            return tuple(self._record(row) for row in rows)
+        return tuple(self._agent_task_record(row) for row in rows)
+
+    def read_agent_task(self, assignment_id: str) -> SlurmAgentTaskRecord:
+        """Read exact scheduler facts for evidence that does not release storage."""
+        with _connect(self.path, sqlite_policy=self._sqlite_policy, require_existing=True) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                f"SELECT {self._agent_task_columns()} FROM {_ASSIGNMENT_TABLE} a WHERE a.assignment_id = ?",
+                (assignment_id,),
+            ).fetchone()
+        if row is None:
+            raise QueueConflictError("SLURM assignment is not retained")
+        return self._agent_task_record(row)
+
+    def _agent_task_columns(self) -> str:
+        compute_release = (
+            "(a.publication_requested_at IS NOT NULL AND a.publication_completed_at IS NULL "
+            "AND a.compute_released_at IS NULL)"
+            if self.schema_version >= 5 else "0"
+        )
+        terminal = "a.terminal_observation_json" if self.schema_version >= 7 else "NULL"
+        return (
+            "a.identity_json, a.request_json, a.state, a.job_id, a.cluster, a.bootstrap_incarnation, "
+            "a.fence, a.process_execution_id, a.report_json IS NOT NULL AS report_present, "
+            f"a.start_consumed, a.agent_sequence, {compute_release} AS compute_release_requested, "
+            f"{terminal} AS terminal_observation"
+        )
+
+    @staticmethod
+    def _agent_task_record(row: sqlite3.Row) -> SlurmAgentTaskRecord:
+        return SlurmAgentTaskRecord(
+            assignment=SlurmStageAssignment.from_dict(json.loads(row["identity_json"])),
+            request=json.loads(row["request_json"]),
+            state=row["state"],
+            job_id=row["job_id"],
+            cluster=row["cluster"],
+            bootstrap_incarnation=row["bootstrap_incarnation"],
+            fence=row["fence"],
+            process_execution_id=row["process_execution_id"],
+            report_present=bool(row["report_present"]),
+            start_consumed=bool(row["start_consumed"]),
+            agent_sequence=int(row["agent_sequence"]),
+            compute_release_requested=bool(row["compute_release_requested"]),
+            terminal_observation=(
+                json.loads(row["terminal_observation"]) if row["terminal_observation"] is not None else None
+            ),
+        )
 
     def task_page_source(
         self, conn: sqlite3.Connection, agent_id: str, root_id: str, after: str | None,
         *, include_records: bool,
-    ) -> tuple[tuple[_TaskPageSource, ...], tuple[SlurmStageRecord, ...]]:
+    ) -> tuple[tuple[_TaskPageSource, ...], tuple[SlurmAgentTaskRecord, ...]]:
         """Capture mutable task inputs and, on the initial read, the immutable deliveries."""
         columns = [
             "a.assignment_id", "a.state", "a.agent_sequence", "a.job_id", "a.cluster",
@@ -1354,7 +1436,7 @@ class SQLiteSlurmStageAssignments:
         columns.append("s.value_json")
         projection = ", ".join(columns)
         if include_records:
-            projection += ", a.*"
+            projection += ", " + self._agent_task_columns()
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             f"SELECT {projection} FROM {_ASSIGNMENT_TABLE} a "
@@ -1363,7 +1445,7 @@ class SQLiteSlurmStageAssignments:
             (agent_id, root_id, after or "", 33),
         ).fetchall()
         sources = tuple(_TaskPageSource(row[0], row[1:len(columns) - 1], row[len(columns) - 1]) for row in rows)
-        records = tuple(self._record(row) for row in rows[:32]) if include_records else ()
+        records = tuple(self._agent_task_record(row) for row in rows[:32]) if include_records else ()
         return sources, records
 
     def read_input_chunk(
@@ -1868,21 +1950,67 @@ def _decode_retained_delivery(encoded: str) -> SlurmStageDelivery:
     return SlurmStageDelivery.from_dict(json.loads(encoded))
 
 
-_cached_retained_delivery = lru_cache(maxsize=112)(_decode_retained_delivery)
-_cached_large_delivery = lru_cache(maxsize=4)(_decode_retained_delivery)
+class _RetainedDeliveryCache:
+    """Share validation by exact immutable bytes, with a retained source-byte budget."""
+
+    def __init__(self, *, max_encoded_bytes: int = 32 * 1024 * 1024, max_entries: int = 128):
+        self._max_encoded_bytes = max_encoded_bytes
+        self._max_entries = max_entries
+        self._encoded_bytes = 0
+        self._entries: OrderedDict[str, tuple[int, SlurmStageDelivery]] = OrderedDict()
+        self._inflight: dict[str, Future[SlurmStageDelivery]] = {}
+        self._lock = Lock()
+
+    def _remember(self, encoded: str, size: int, delivery: SlurmStageDelivery) -> None:
+        if size > self._max_encoded_bytes:
+            return
+        self._entries[encoded] = (size, delivery)
+        self._encoded_bytes += size
+        while self._encoded_bytes > self._max_encoded_bytes or len(self._entries) > self._max_entries:
+            _, (evicted_size, _) = self._entries.popitem(last=False)
+            self._encoded_bytes -= evicted_size
+
+    def remember_validated(self, encoded: str, delivery: SlurmStageDelivery) -> None:
+        # Reservation has already validated and committed this exact encoding.
+        size = len(encoded.encode("utf-8"))
+        with self._lock:
+            if encoded not in self._entries and encoded not in self._inflight:
+                self._remember(encoded, size, delivery)
+
+    def read(self, encoded: str) -> SlurmStageDelivery:
+        with self._lock:
+            cached = self._entries.get(encoded)
+            if cached is not None:
+                self._entries.move_to_end(encoded)
+                return cached[1]
+            pending = self._inflight.get(encoded)
+            decode = pending is None
+            if pending is None:
+                pending = self._inflight[encoded] = Future()
+        if not decode:
+            return pending.result()
+
+        try:
+            size = len(encoded.encode("utf-8"))
+            delivery = _decode_retained_delivery(encoded)
+        except BaseException as error:
+            with self._lock:
+                del self._inflight[encoded]
+                pending.set_exception(error)
+            raise
+
+        with self._lock:
+            self._remember(encoded, size, delivery)
+            del self._inflight[encoded]
+            pending.set_result(delivery)
+        return delivery
+
+
+_retained_delivery_cache = _RetainedDeliveryCache()
 
 
 def _retained_delivery(encoded: str) -> SlurmStageDelivery:
-    # Delivery and nested values are immutable. Key by the complete bytes read
-    # from SQLite, never by assignment ID or a mutable record revision. Only
-    # successful validation is cached; live state and release proofs are not.
-    # Bound retained source documents to 32 MiB, excluding decoded-object overhead.
-    size = len(encoded.encode("utf-8"))
-    if size <= 256 * 1024:
-        return _cached_retained_delivery(encoded)
-    if size <= 1024 * 1024:
-        return _cached_large_delivery(encoded)
-    return _decode_retained_delivery(encoded)
+    return _retained_delivery_cache.read(encoded)
 
 
 class SlurmBootstrapWorkspace:

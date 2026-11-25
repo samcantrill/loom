@@ -802,6 +802,15 @@ def qualify_agent_spec(
         )
         if not callable(provider_factory):
             raise QueueConfigError("remote provider factory target is invalid")
+    # A Slurm-only agent can adjust transport timing with an occupied outbox.
+    # Bind every other authored field, including those outside the TLS client.
+    transport_reload_fingerprint = None
+    if payload.get("slurm_profiles") and not (profiles or policies or provider_factory):
+        transport_reload_fingerprint = _canonical_fingerprint({
+            key: thaw_plain_data(value)
+            for key, value in spec.declarations.items()
+            if key != "transport_policy"
+        })
     client = AgentTlsClientConfig(
         slurm_submit_interval_seconds=submit_interval(payload.get("slurm_submit_interval_seconds")),
         slurm_observation_policy=parse_slurm_observation_policy(payload.get("slurm_observation_policy")),
@@ -824,6 +833,7 @@ def qualify_agent_spec(
         deployment_configuration_fingerprint=fingerprint,
         active_configuration_fingerprint=active_fingerprint,
         declaration_digest=spec.declaration_digest,
+        _transport_reload_fingerprint=transport_reload_fingerprint,
     )
     return OutboundAgentServiceConfig(
         client,
@@ -1264,6 +1274,14 @@ def _outbound_service_steps(
                         raise QueueServiceError("agent session ended without retirement")
                 if client._drained or client._restart_with_retained_work or len(journal.unresolved_assignment_references()) >= active.client.max_concurrent_assignments:
                     yield from _delay(0.05)
+                    continue
+                if active.client.slurm_profiles and not (
+                    active.client.resident_profiles or active.client.container_policies
+                ):
+                    # External scheduler work has its own transport and cannot
+                    # receive a resident assignment. A stranded resident poll
+                    # would otherwise prevent this owner's next offer refresh.
+                    yield from _delay(0.25)
                     continue
                 if refreshing or monotonic() >= client._next_resource_maintenance:
                     # Observe changed capacity before opening the next poll.

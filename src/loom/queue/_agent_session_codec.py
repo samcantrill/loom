@@ -25,9 +25,10 @@ from ._remote_stage_execution import (
 _MAX_BODY_BYTES = 65_536
 _MAX_BATCH_EVENTS = 32
 
-# Ordered scientific configurations include compact retry verification inputs.
-# Only typed Slurm registration replies admit this semantic payload budget.
-_MAX_SLURM_REGISTRATION_BYTES = 1_048_576
+# A retained multi-target retry embeds its composed verification candidate.
+# Its delivery alone can exceed 1 MiB. Only typed Slurm bootstrap registration
+# replies admit this budget; the non-semantic envelope keeps the control limit.
+_MAX_SLURM_REGISTRATION_BYTES = 8 * 1024 * 1024
 
 _MAX_QUERY_RESPONSE_BYTES = 1_048_576
 

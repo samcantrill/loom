@@ -437,28 +437,33 @@ class AgentSlurmJobs:
         else:
             profile.job_private_file_provider.revoke(capability)
 
-    def _probe_terminal_result(
+    def _terminal_probe_evidence(
         self, task: Mapping[str, PlainData], assignment: SlurmStageAssignment,
-        current: SlurmReadyStageSubmission, transport: SharedSlurmResult,
-        acknowledge: Callable[[Mapping[str, PlainData]], Mapping[str, PlainData]],
-    ) -> None:
-        """One bounded IO probe; pending inspection does not gate observation."""
+        transport: SharedSlurmResult, previous: Mapping[str, PlainData] | None,
+    ) -> Mapping[str, PlainData] | None:
+        """Attach a probe to the scheduler receipt without replacing it on replay."""
         probe = task.get("terminal_result_probe")
-        if (isinstance(probe, Mapping) and isinstance(task.get("result_identity"), Mapping)
-            and monotonic() >= self._retry_at.get(("terminal-probe", assignment.operation_id), 0)):
-            result_identity = cast(Mapping[str, PlainData], task["result_identity"])
-            try:
-                state = self._storage.poll(
-                    assignment.assignment_id, "terminal-probe",
-                    lambda: transport.probe_terminal_result(assignment.to_dict(), result_identity),
-                )
-            except SlurmEffectPending:
-                return
-            self._publish(
-                assignment, current, acknowledge,
-                terminal_result_probe={"request": dict(probe), "state": state},
+        identity = task.get("result_identity")
+        if not isinstance(probe, Mapping) or not isinstance(identity, Mapping):
+            return None
+        request = thaw_plain_data(probe)
+        retained = None
+        if previous is not None:
+            candidate = previous.get("terminal_result_probe")
+            if isinstance(candidate, Mapping) and candidate.get("request") == request:
+                retained = candidate
+        key = ("terminal-probe", assignment.operation_id)
+        if monotonic() < self._retry_at.get(key, 0):
+            return retained
+        try:
+            state = self._storage.poll(
+                assignment.assignment_id, "terminal-probe",
+                lambda: transport.probe_terminal_result(assignment.to_dict(), identity),
             )
-            self._retry_at[("terminal-probe", assignment.operation_id)] = monotonic() + 5
+        except SlurmEffectPending:
+            return retained
+        self._retry_at[key] = monotonic() + 5
+        return {"request": request, "state": state}
 
     @staticmethod
     def initialize(root: Path, *, sqlite_policy: SQLitePolicy | None = None) -> None:
@@ -614,7 +619,7 @@ class AgentSlurmJobs:
             self._batch_order.pop(assignment.operation_id, None)
             self._containment_order.pop(assignment.operation_id, None)
             self._containment_diagnostics.pop(assignment.operation_id, None)
-            for kind in ("observation", "cancel", "containment"):
+            for kind in ("observation", "cancel", "containment", "terminal-probe"):
                 self._retry_at.pop((kind, assignment.operation_id), None)
                 self._retry_failures.pop((kind, assignment.operation_id), None)
         return response
@@ -803,6 +808,7 @@ class AgentSlurmJobs:
             if (released is None or released[0] or not released[1] or operation in busy
                 or task.get("release_requested") is True or task.get("compute_release_requested") is True
                 or task.get("cancel_requested") is True or task.get("recovery_request") is not None
+                or task.get("terminal_result_probe") is not None
                 or self._commands.contains(operation) or not self._retry_due("observation", operation)):
                 continue
             current = self.journal.find(operation)
@@ -1116,10 +1122,10 @@ class AgentSlurmJobs:
                         },
                     )
                 observed = self.observation_policy is not None
-        reply = self._publish(assignment, current, acknowledge)
+        terminal_probe = self._terminal_probe_evidence(task, assignment, transport, last)
+        reply = self._publish(assignment, current, acknowledge, terminal_result_probe=terminal_probe)
         if task.get("cancel_requested") is True:
             reply = {**reply, "cancel_requested": True}
-        self._probe_terminal_result(task, assignment, current, transport, acknowledge)
         if self.observation_policy is not None and task.get("compute_release_requested") is not True:
             self._deliver_result(task, reply, transport, acknowledge)
         if _delivery_only:
@@ -1153,7 +1159,8 @@ class AgentSlurmJobs:
                     self._retry_completed("cancel", request.operation_id, profile, failed=not current.cancel_requested)
                 if self.observation_policy is not None and profile.accounting_history is not None:
                     observed = True  # Cancellation performs its own fresh identity observation.
-            if not observed and (self.observation_policy is None or observation_due):
+            if (not observed and task.get("terminal_result_probe") is None
+                and (self.observation_policy is None or observation_due)):
                 def observe():
                     value = yield from self.journal._observe_steps(request.operation_id, profile)
                     self._observation_completed(value, profile)
@@ -1166,7 +1173,7 @@ class AgentSlurmJobs:
                     current = self.journal.observe(request.operation_id, profile)
                     self._observation_completed(current, profile)
             if self.observation_policy is None or current != published:
-                updated = self._publish(assignment, current, acknowledge)
+                updated = self._publish(assignment, current, acknowledge, terminal_result_probe=terminal_probe)
                 if self.observation_policy is not None:
                     reply = updated
         if self.observation_policy is None and task.get("compute_release_requested") is not True:

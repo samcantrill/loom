@@ -12,6 +12,7 @@ from loom.pipeline.executors.slurm.ready_stage import ReadyStageState
 from loom.queue._agent_slurm import AgentSlurmJobs
 from loom.queue.errors import QueueConflictError
 from loom.queue.slurm_ready_stage import SlurmStageAssignment
+from loom.serialization import PlainData
 from tests.unit.loom.pipeline.executors.slurm.test_ready_stage import (
     _profile as _base_profile,
     _request,
@@ -112,6 +113,57 @@ def test_expected_agent_operation_cannot_be_reconstructed(tmp_path: Path):
     with pytest.raises(QueueConflictError, match="missing"):
         agent.step({**_task(profile), "expected_sequence": 2}, lambda value: {})
     assert not cast(FakeSlurmCommandRunner, profile.runner).calls
+
+
+@pytest.mark.parametrize("resume", [False, True])
+def test_terminal_probe_replay_keeps_one_receipt_and_relays_available_result(tmp_path, monkeypatch, resume):
+    from loom.queue._slurm_observation import SlurmObservationPolicy
+    from loom.queue._slurm_result_transport import SlurmEffectPending
+
+    profile = _profile(FakeSlurmCommandRunner(), tmp_path)
+    AgentSlurmJobs.initialize(tmp_path)
+    agent = AgentSlurmJobs(tmp_path, (profile,), observation_policy=SlurmObservationPolicy(300))
+    task = _task(profile)
+    baseline = []
+
+    def applied(value):
+        baseline.append(value["sequence"])
+        return {"sequence": value["sequence"], "cancel_requested": False}
+
+    agent.step(task, applied)
+    assignment = SlurmStageAssignment.from_dict(task["assignment"])
+    probe: dict[str, PlainData] = {"assignment_id": assignment.assignment_id, "scheduler_state": "COMPLETED"}
+    task.update(terminal_result_probe=probe, result_identity={"fence": "fence-1"})
+    if resume:
+        # Simulate the outbox left by an earlier process which already reported
+        # that an exact terminal result exists.
+        agent._publish(assignment, agent.journal.read(assignment.operation_id), applied,
+                       terminal_result_probe={"request": probe, "state": "available"})
+        agent.close()
+        agent = AgentSlurmJobs(tmp_path, (profile,), observation_policy=SlurmObservationPolicy(300))
+
+    delivered, receipts = [], []
+    monkeypatch.setattr(agent._storage, "poll", lambda *_: "available")
+    monkeypatch.setattr(agent, "_deliver_result", lambda task, *_: delivered.append(task["result_identity"]))
+    last_sequence = max(baseline)
+
+    def acknowledge(value):
+        identity = value["sequence"]
+        if identity > last_sequence and not any(receipt["sequence"] == identity for receipt in receipts):
+            receipts.append(value)
+            raise SlurmEffectPending(0.05)
+        receipts.append(value)
+        return {"sequence": identity, "cancel_requested": False}
+
+    try:
+        for _ in range(5):
+            agent.replay_pending(acknowledge)
+            agent._step(task, acknowledge, allow_submission=False, _defer_observation=True, _delivery_only=True)
+        assert delivered and all(row == {"fence": "fence-1"} for row in delivered)
+        assert {row["sequence"] for row in receipts} == {last_sequence if resume else last_sequence + 1}
+        assert all(row["terminal_result_probe"] == {"request": probe, "state": "available"} for row in receipts)
+    finally:
+        agent.close()
 
 
 def test_suppressed_call_releases_only_after_authority_acknowledges(tmp_path: Path):
