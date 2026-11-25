@@ -23,7 +23,7 @@ from . import _slurm_retry
 from .shared_execution import SHARED_EXECUTION_CAPABILITY, STAGING_CONTINUATION_CAPABILITY, attributes as shared_attributes, qualifications
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import hashlib
@@ -86,6 +86,7 @@ from loom.queue._managed_local import (
     _compose_agent_resource_providers,
     _persist_managed_result,
     _release_revision,
+    _require_coordinator_assignment_schema,
     run_managed_local_assignment,
 )
 from loom.pipeline.orchestration import (
@@ -192,6 +193,7 @@ from .local_daemon import (
     SlurmRecoveryTarget,
     _default_scheduling_components,
 )
+from ._coordinator_transactions import sqlite_busy
 from .local_daemon_runtime import load_managed_local_runtime_record
 from ._agent_slurm import AgentSlurmJobs, SlurmSubmissionProjection
 from .slurm_ready_stage import (
@@ -199,10 +201,15 @@ from .slurm_ready_stage import (
     SlurmStageAssignment,
     SlurmStageDelivery,
     SlurmStageRecord,
+    _require_schema as _require_slurm_assignment_schema,
 )
 
 
 _SLURM_STORAGE_LIMIT = 32
+
+
+class _ReservationBusy(ManagedLocalError):
+    """A reader or writer prevented this scheduling turn from committing."""
 
 
 class _SlurmPublicationRequired(Exception):
@@ -885,7 +892,7 @@ def _verify_owner_store_binding(
     conn: sqlite3.Connection, *, role: str, stable_id: str
 ) -> None:
     rows = tuple(
-        conn.execute("SELECT role, stable_id FROM local_daemon_owner_identity")
+        tuple(row) for row in conn.execute("SELECT role, stable_id FROM local_daemon_owner_identity")
     )
     if rows != ((role, stable_id),):
         raise sqlite3.DatabaseError("retained daemon owner identity is invalid")
@@ -4214,8 +4221,8 @@ class LocalDaemonExecution:
                 issuer_epoch=self.coordinator_epoch,
                 max_parallel_stages=intent.max_parallel_stages,
                 max_profile_outstanding=profile.max_outstanding,
-                reservation_guard=lambda: self._reservation_guard(
-                    admission.admission_id, record, epochs, slurm_operation_id=assignment.operation_id,
+                _reservation_transaction=lambda: self._reservation_transaction(
+                    record, epochs, slurm_operation_id=assignment.operation_id,
                 ),
                 requested_gpu_count=_slurm_requested_gpu_count(record.placement.resource_request),
                 max_reserved_gpus=(
@@ -4236,6 +4243,8 @@ class LocalDaemonExecution:
             self._ready_preparations.discard((record.run_uri, record.stage_name))
             self._drive_local_slurm(self.slurm_assignments.read(assignment_id))
             submission = self.slurm_submissions.find(operation_id)
+        except _ReservationBusy:
+            return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.WAITING, "reservation_store_busy")
         except SlurmAdmissionDeferred as exc:
             return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.WAITING, exc.code)
         except SlurmResourceMappingError:
@@ -5815,60 +5824,100 @@ class LocalDaemonExecution:
         return True
 
     @contextmanager
-    def _reservation_guard(
-        self, admission_id: str, record: StageWorkRecord,
-        epochs: tuple[str | None, str | None] | None,
+    def _reservation_transaction(
+        self, record: StageWorkRecord, epochs: tuple[str | None, str | None] | None,
         target: _RemoteCandidateTarget | None = None, *, slurm_operation_id: str | None = None,
-    ) -> Iterator[None]:
-        """Pin current scheduling and cancellation only during durable reserve.
+    ) -> Iterator[sqlite3.Connection]:
+        """Stage the exact reservation while cancellation and reload are fenced.
 
-        Assignment preparation and external authority effects precede/follow
-        this boundary. The control write transaction linearizes cancellation;
-        the launch guard excludes replacement inventory and configuration swap.
+        Commit the control clock first. The execution commit is the only point
+        that acquires a claim. SQLite busy at either commit leaves that claim
+        unacquired, and the reconciliation owner can yield to a later turn.
         """
         daemon = self._daemon_owner()
-        with self.scheduling_reload_guard(), daemon._state_guard(), daemon._connection() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            if (daemon._execution is not self
-                or epochs != (daemon._epoch, daemon._scheduling_epoch)
-                or action_attempt_cancelled(conn, record.run_uri, record.attempt_id)):
-                raise ManagedLocalError("assignment preparation is no longer authorized")
-            if slurm_operation_id is not None:
-                # The same state guard orders a public preparation's final
-                # identity check with the execution owner's reservation.
-                if conn.execute(
-                    "SELECT 1 FROM preparation_operations WHERE operation_id=? UNION ALL "
-                    "SELECT 1 FROM preparation_cancellations WHERE operation_id=? LIMIT 1",
-                    (slurm_operation_id, slurm_operation_id),
-                ).fetchone() is not None:
-                    raise QueueConflictError("SLURM operation identity is owned by a preparation")
-                self.slurm_operation_revision += 1
-            if target is not None:
-                current = conn.execute(
-                    "SELECT o.offer_id, o.expires_at, s.availability_revision, r.observed_claim_ids_json "
-                    "FROM agent_offers o JOIN agent_sessions s USING(session_id) "
-                    "LEFT JOIN session_replacements r ON r.successor_session_id = s.session_id AND r.readiness = 'ready' "
-                    "WHERE o.session_id = ? AND o.current = 1 AND s.state = 'ACTIVE' "
-                    "AND o.coordinator_epoch = ? AND s.coordinator_epoch = ?",
-                    (target.session_id, daemon._epoch, daemon._epoch),
-                ).fetchone()
-                if (current is None or str(current["expires_at"]) < daemon._accepted_time(conn)
-                    or current["availability_revision"] != target.availability_revision):
-                    raise ManagedLocalError("assignment offer changed during preparation")
-                offer_id, availability_revision = str(current["offer_id"]), str(current["availability_revision"])
-                if current["observed_claim_ids_json"] is not None:
-                    offer_id, availability_revision = _replacement_scheduling_identities(
-                        offer_id=offer_id, availability_revision=availability_revision,
-                        withheld_claim_ids=tuple(sorted(json.loads(current["observed_claim_ids_json"]))),
-                    )
-                if (offer_id, availability_revision) != (target.offer_id, target.scheduling_availability_revision):
-                    raise ManagedLocalError("assignment capacity projection changed during preparation")
-            # A second owner can commit a reservation before this control
-            # transaction returns. Invalidate outstanding physical-owner reads.
-            daemon._scheduling_reference_revision += 1
-            with phase("scheduling_commit"):
-                yield
-            conn.commit()
+        try:
+            with daemon._connection() as control, closing(_connect_existing_sqlite(
+                self.config.execution_database, sqlite_policy=self.config.sqlite_policy,
+            )) as execution:
+                control.execute("PRAGMA busy_timeout = 0")
+                execution.execute("PRAGMA busy_timeout = 0")
+                execution.row_factory = sqlite3.Row
+                schema = execution.execute("PRAGMA schema_version").fetchone()[0]
+                if slurm_operation_id is None:
+                    _require_coordinator_assignment_schema(execution)
+                else:
+                    _require_slurm_assignment_schema(execution, expected_version=self.slurm_assignments.schema_version)
+                with self.scheduling_reload_guard(), daemon._state_guard():
+                    committing_claim = False
+                    try:
+                        control.execute("BEGIN IMMEDIATE")
+                        self._require_reservation_authority(control, record, epochs, target, slurm_operation_id)
+                        execution.execute("BEGIN IMMEDIATE")
+                        _verify_owner_store_binding(execution, role="coordinator", stable_id=self.coordinator_id)
+                        if execution.execute("PRAGMA schema_version").fetchone()[0] != schema:
+                            raise ManagedLocalError("execution schema changed during reservation")
+                        with phase("scheduling_commit"):
+                            yield execution
+                            control.commit()
+                            committing_claim = True
+                            execution.commit()
+                    except BaseException as exc:
+                        execution.rollback()
+                        control.rollback()
+                        if sqlite_busy(exc):
+                            committing_claim = False
+                        raise
+                    finally:
+                        # Unknown execution-commit failures can already own the
+                        # claim. Invalidate a prior absence observation as well.
+                        if committing_claim:
+                            daemon._scheduling_reference_revision += 1
+                            if slurm_operation_id is not None:
+                                self.slurm_operation_revision += 1
+        except sqlite3.OperationalError as exc:
+            if not sqlite_busy(exc):
+                raise
+            raise _ReservationBusy("reservation store is busy") from exc
+
+    def _require_reservation_authority(
+        self, conn: sqlite3.Connection, record: StageWorkRecord,
+        epochs: tuple[str | None, str | None] | None, target: _RemoteCandidateTarget | None,
+        slurm_operation_id: str | None,
+    ) -> None:
+        daemon = self._daemon_owner()
+        if (daemon._stop.is_set() or daemon._execution is not self
+            or epochs != (daemon._epoch, daemon._scheduling_epoch)
+            or action_attempt_cancelled(conn, record.run_uri, record.attempt_id)):
+            raise ManagedLocalError("assignment preparation is no longer authorized")
+        if slurm_operation_id is not None:
+            # The same state guard orders a public preparation's final
+            # identity check with the execution owner's reservation.
+            if conn.execute(
+                "SELECT 1 FROM preparation_operations WHERE operation_id=? UNION ALL "
+                "SELECT 1 FROM preparation_cancellations WHERE operation_id=? LIMIT 1",
+                (slurm_operation_id, slurm_operation_id),
+            ).fetchone() is not None:
+                raise QueueConflictError("SLURM operation identity is owned by a preparation")
+        if target is not None:
+            current = conn.execute(
+                "SELECT o.offer_id, o.expires_at, s.availability_revision, r.observed_claim_ids_json "
+                "FROM agent_offers o JOIN agent_sessions s USING(session_id) "
+                "LEFT JOIN session_replacements r ON r.successor_session_id = s.session_id AND r.readiness = 'ready' "
+                "WHERE o.session_id = ? AND o.current = 1 AND s.state = 'ACTIVE' "
+                "AND o.coordinator_epoch = ? AND s.coordinator_epoch = ?",
+                (target.session_id, daemon._epoch, daemon._epoch),
+            ).fetchone()
+            if (current is None or str(current["expires_at"]) < daemon._accepted_time(conn)
+                or current["availability_revision"] != target.availability_revision):
+                raise ManagedLocalError("assignment offer changed during preparation")
+            offer_id, availability_revision = str(current["offer_id"]), str(current["availability_revision"])
+            if current["observed_claim_ids_json"] is not None:
+                offer_id, availability_revision = _replacement_scheduling_identities(
+                    offer_id=offer_id, availability_revision=availability_revision,
+                    withheld_claim_ids=tuple(sorted(json.loads(current["observed_claim_ids_json"]))),
+                )
+            if (offer_id, availability_revision) != (target.offer_id, target.scheduling_availability_revision):
+                raise ManagedLocalError("assignment capacity projection changed during preparation")
 
     def _worker_preparation_token(self, record, intent, snapshot) -> tuple[object, ...]:
         daemon = self._daemon_owner()
@@ -6248,13 +6297,13 @@ class LocalDaemonExecution:
                 return False
             if self._attempt_cancel_requested(record.run_uri, record.attempt_id):
                 return False
-            with self._reservation_guard(admission.admission_id, record, epochs, remote_target):
-                self.coordinator.reserve(
-                    assignment,
-                    claims,
-                    max_parallel_stages=intent.max_parallel_stages,
-                    decision_receipt=decision_receipt,
-                )
+            self.coordinator.reserve(
+                assignment,
+                claims,
+                max_parallel_stages=intent.max_parallel_stages,
+                decision_receipt=decision_receipt,
+                _reservation_transaction=lambda: self._reservation_transaction(record, epochs, remote_target),
+            )
             authority.bind_prepared_attempt(
                 assignment.run_uri,
                 assignment_id=assignment.assignment_id,
@@ -6308,34 +6357,27 @@ class LocalDaemonExecution:
             execution_started()
             accepted.set()
 
-        captured_scheduling_epoch = self.scheduling_epoch
-
         @contextmanager
         def reservation_guard() -> Iterator[None]:
             daemon = self._daemon_owner()
-            with daemon._cycle_lock:
-                current = self.stage_work_store.find_stage_work(record.stage_work_id)
-                if (
-                    daemon._stop.is_set()
-                    or self.scheduling_epoch != captured_scheduling_epoch
-                    or current is None
-                    or replace(
-                        current,
-                        authority_revision=record.authority_revision,
-                        projection_revision=record.projection_revision,
-                        scheduling_diagnostics=record.scheduling_diagnostics,
-                    ) != record
-                    or current.scheduling_state is not SchedulingProjectionState.READY
-                    or self._attempt_cancel_requested(record.run_uri, assignment.attempt_id)
-                ):
-                    raise CancelledError("local preparation superseded before reservation")
-                # Projection refreshes (including another stage's authority
-                # progress) do not change this decision's inputs. Rebind only
-                # its CAS revision after comparing all stage scheduling facts.
-                # Reservation still checks current capacity/offer ownership.
-                decision_receipt["stage_work_revision"] = current.projection_revision
-                daemon._scheduling_reference_revision += 1
-                yield
+            current = self.stage_work_store.find_stage_work(record.stage_work_id)
+            if (
+                current is None
+                or replace(
+                    current,
+                    authority_revision=record.authority_revision,
+                    projection_revision=record.projection_revision,
+                    scheduling_diagnostics=record.scheduling_diagnostics,
+                ) != record
+                or current.scheduling_state is not SchedulingProjectionState.READY
+            ):
+                raise CancelledError("local preparation superseded before reservation")
+            # Projection refreshes (including another stage's authority
+            # progress) do not change this decision's inputs. Rebind only
+            # its CAS revision after comparing all stage scheduling facts.
+            # Reservation still checks current capacity/offer ownership.
+            decision_receipt["stage_work_revision"] = current.projection_revision
+            yield
             daemon._activate_admission(admission.admission_id)
             daemon._wake.set()
 
@@ -6362,7 +6404,8 @@ class LocalDaemonExecution:
                     None if self.daemon is None else self.daemon._stop.is_set
                 ),
                 execution_started=started, durable_files=self.config.durable_files,
-                reservation_guard=reservation_guard)
+                reservation_guard=reservation_guard,
+                _reservation_transaction=lambda: self._reservation_transaction(record, epochs))
 
         prior = self._local_assignment_futures.get(assignment.assignment_id)
         if prior is None:

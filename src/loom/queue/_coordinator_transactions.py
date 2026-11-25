@@ -16,6 +16,11 @@ if TYPE_CHECKING:
 _T = TypeVar("_T")
 
 
+def sqlite_busy(error: BaseException) -> bool:
+    """Recognize ordinary and extended SQLite busy results from a writer."""
+    return isinstance(error, sqlite3.OperationalError) and (getattr(error, "sqlite_errorcode", 0) & 255) == sqlite3.SQLITE_BUSY
+
+
 def short_write(
     daemon: LocalDaemon,
     apply: Callable[[sqlite3.Connection], _T],
@@ -42,8 +47,7 @@ def short_write(
                 except BaseException as exc:
                     conn.rollback()
                     if (
-                        not isinstance(exc, sqlite3.OperationalError)
-                        or (getattr(exc, "sqlite_errorcode", 0) & 255) != sqlite3.SQLITE_BUSY
+                        not sqlite_busy(exc)
                         or not wait_for_writer
                         or monotonic() >= deadline
                     ):

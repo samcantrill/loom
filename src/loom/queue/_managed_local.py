@@ -2389,6 +2389,7 @@ class SQLiteCoordinatorAssignments:
         *,
         max_parallel_stages: int | None,
         decision_receipt: Mapping[str, PlainData],
+        _reservation_transaction: Callable[[], AbstractContextManager[sqlite3.Connection]] | None = None,
     ) -> str:
         if max_parallel_stages is not None and (
             type(max_parallel_stages) is not int or max_parallel_stages < 1
@@ -2408,7 +2409,7 @@ class SQLiteCoordinatorAssignments:
                 requested.get(atom.key, Fraction(0)) + atom.amount.fraction
             )
         identity = _json(_assignment_dict(assignment))
-        with self._transaction() as conn:
+        with (_reservation_transaction or self._transaction)() as conn:
             current = conn.execute(
                 "SELECT identity_json, receipt_json, state "
                 "FROM coordinator_assignments WHERE assignment_id = ?",
@@ -3537,6 +3538,7 @@ def run_managed_local_assignment(
     suspend_requested: Callable[[], bool] | None = None,
     execution_started: Callable[[], None] | None = None,
     reservation_guard: Callable[[], AbstractContextManager[None]] | None = None,
+    _reservation_transaction: Callable[[], AbstractContextManager[sqlite3.Connection]] | None = None,
     embedded_recovery: EmbeddedRecovery | None = None,
 ) -> ManagedExecutionReceipt:
     """Run one exact local assignment through the durable Phase 2 saga.
@@ -3748,6 +3750,7 @@ def run_managed_local_assignment(
             claims,
             max_parallel_stages=max_parallel_stages,
             decision_receipt=decision_receipt,
+            _reservation_transaction=_reservation_transaction,
         )
     authority.bind_prepared_attempt(
         assignment.run_uri,

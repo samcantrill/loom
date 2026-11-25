@@ -1880,11 +1880,10 @@ def test_preparation_rechecks_slurm_identity_after_an_off_guard_read(tmp_path, m
         monkeypatch.setattr(store, "has_operation", pause)
         def reserve(candidate, options):
             record = fixture.work.find_stage_work(candidate.stage_work_id)
-            with execution._reservation_guard(
-                record.admission_id, record, (daemon._epoch, daemon._scheduling_epoch),
-                slurm_operation_id=candidate.operation_id,
-            ):
-                store.reserve(candidate, **{**options, "max_reserved_gpus": None})
+            store.reserve(candidate, **{**options, "max_reserved_gpus": None},
+                          _reservation_transaction=lambda: execution._reservation_transaction(
+                              record, (daemon._epoch, daemon._scheduling_epoch), slurm_operation_id=candidate.operation_id,
+                          ))
 
         with ThreadPoolExecutor(max_workers=2) as workers:
             pending = workers.submit(

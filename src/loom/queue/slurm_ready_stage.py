@@ -603,6 +603,7 @@ class SQLiteSlurmStageAssignments:
         requested_gpu_count: int | None = None,
         max_reserved_gpus: int | None = None,
         reservation_guard: Callable[[], AbstractContextManager[None]] | None = None,
+        _reservation_transaction: Callable[[], AbstractContextManager[sqlite3.Connection]] | None = None,
     ) -> str:
         if not isinstance(assignment, SlurmStageAssignment):
             raise QueueServiceError("SLURM assignment is invalid")
@@ -642,7 +643,8 @@ class SQLiteSlurmStageAssignments:
             sort_keys=True,
             separators=(",", ":"),
         )
-        with (reservation_guard() if reservation_guard is not None else nullcontext()), self._transaction() as conn:
+        transaction = _reservation_transaction or self._transaction
+        with (reservation_guard() if reservation_guard is not None else nullcontext()), transaction() as conn:
             existing = conn.execute(
                 f"SELECT * FROM {_ASSIGNMENT_TABLE} WHERE assignment_id = ?",
                 (assignment.assignment_id,),

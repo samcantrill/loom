@@ -404,6 +404,102 @@ def test_registration_releases_state_guard_while_writer_is_busy(tmp_path, monkey
         daemon.stop()
 
 
+@pytest.mark.parametrize(("store", "transaction"), [
+    ("control", "BEGIN IMMEDIATE"), ("control", "BEGIN"),
+    ("execution", "BEGIN IMMEDIATE"), ("execution", "BEGIN"),
+    ("replacement", None), ("lost_commit_reply", None),
+])
+def test_native_reservation_leaves_no_claim_on_busy_or_store_substitution(
+    waiting_owner, tmp_path, monkeypatch, store, transaction,
+):
+    import os
+    import shutil
+    import sqlite3
+
+    from loom.queue.local_daemon_execution import _RemoteCandidateTarget, _ReservationBusy
+    from tests.unit.loom.queue import test_managed_local as managed
+
+    daemon, session, _, _, _ = waiting_owner
+    execution = daemon._execution
+    with daemon._connection() as conn:
+        offer_id = conn.execute("SELECT offer_id FROM agent_offers WHERE current=1").fetchone()[0]
+    _, command = managed._provider()
+    assignment = replace(command.assignment, session_id=session.session_id, agent_id=session.agent_id, offer_id=offer_id)
+    atom = replace(command.claim.atoms[0], local_capacity_key=f"{session.agent_id}:cpu")
+    claim = replace(command.claim, atoms=(atom,))
+    path = daemon.config.execution_database
+    managed._seed_stage_work(path, assignment)
+    execution.coordinator.publish_offer(managed._offer(assignment, (atom,)))
+    receipt = managed._decision_receipt(assignment, claim)
+    work = execution.stage_work_store.find_stage_work(assignment.stage_work_id)
+    target = _RemoteCandidateTarget(
+        agent_id=session.agent_id, session_id=session.session_id, offer_id=offer_id,
+        availability_revision=session.availability_revision, scheduling_availability_revision=session.availability_revision,
+        inventory_revision=session.inventory_revision, offer=_offer(session.session_id, session.coordinator_epoch),
+        profile=_profile(tmp_path).descriptor, availability_atoms=(atom,), reflected_claim_ids=(),
+    )
+    epochs = (daemon._epoch, daemon._scheduling_epoch)
+
+    def reserve():
+        return execution.coordinator.reserve(
+            assignment, (claim,), max_parallel_stages=1, decision_receipt=receipt,
+            _reservation_transaction=lambda: execution._reservation_transaction(work, epochs, target),
+        )
+
+    if store == "replacement":
+        execution.open_owner_stores()
+        donor = tmp_path / "substituted.sqlite"
+        shutil.copyfile(path, donor)
+        with sqlite3.connect(donor) as conn:
+            conn.execute("UPDATE local_daemon_owner_identity SET stable_id='different-coordinator'")
+        os.replace(donor, path)
+        with pytest.raises(sqlite3.DatabaseError, match="owner identity"):
+            reserve()
+        with sqlite3.connect(path) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM coordinator_assignments").fetchone() == (0,)
+        return
+
+    revision = daemon._scheduling_reference_revision
+    if store == "lost_commit_reply":
+        from loom.queue import local_daemon_execution
+
+        class LostReply(sqlite3.Connection):
+            def commit(self):
+                super().commit()
+                raise sqlite3.OperationalError("lost reply after execution commit")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(local_daemon_execution, "_connect_existing_sqlite",
+                          lambda path, **kwargs: sqlite3.connect(path.as_uri() + "?mode=rw", uri=True, factory=LostReply))
+            with pytest.raises(sqlite3.OperationalError, match="lost reply"):
+                reserve()
+        assert daemon._scheduling_reference_revision > revision
+        with sqlite3.connect(path) as conn:
+            assert conn.execute("SELECT assignment_id FROM coordinator_assignments").fetchall() == [(assignment.assignment_id,)]
+    else:
+        blocking_path = daemon.config.control_database if store == "control" else path
+        with sqlite3.connect(blocking_path) as blocker, ThreadPoolExecutor() as pool:
+            blocker.execute(transaction)
+            blocker.execute("SELECT COUNT(*) FROM sqlite_schema").fetchone()
+            try:
+                with pytest.raises(_ReservationBusy):
+                    pool.submit(reserve).result(timeout=2)
+                assert pool.submit(_view(daemon).wait_for_controls, session.session_id,
+                                   received_operation_ids=(), wait_timeout_ms=0).result(timeout=2) == {
+                                       "control": None, "assignment_control": None,
+                                   }
+                with sqlite3.connect(path) as conn:
+                    assert conn.execute("SELECT COUNT(*) FROM coordinator_assignments").fetchone() == (0,)
+                    assert conn.execute("SELECT COUNT(*) FROM coordinator_atoms").fetchone() == (0,)
+                assert daemon._scheduling_reference_revision == revision
+            finally:
+                blocker.rollback()
+    assert reserve() == reserve() == "reserved"
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT assignment_id FROM coordinator_assignments").fetchall() == [(assignment.assignment_id,)]
+        assert conn.execute("SELECT capacity_key FROM coordinator_atoms").fetchall() == [(atom.local_capacity_key,)]
+
+
 def test_reconciliation_clock_check_yields_while_sqlite_writer_is_busy(waiting_owner, monkeypatch):
     daemon, session, _, _, _ = waiting_owner
     sample = daemon._sample_clock_health
