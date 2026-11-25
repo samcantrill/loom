@@ -2713,6 +2713,47 @@ def test_gpu_monitoring_follows_execution_owners_across_reload(
         daemon.stop()
 
 
+def test_dispatch_discards_a_provider_observation_from_before_scheduling_reload(tmp_path, monkeypatch):
+    monkeypatch.setattr(LocalDaemon, "_serve", lambda owner: owner._stop.wait())
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config, trusted_scheduling_loader=lambda: config)
+    status = daemon.start()
+    started = [Event(), Event()]
+    release = [Event(), Event()]
+    try:
+        execution = daemon._execution
+        original = execution._inspect_local_offer
+        samples = []
+
+        def observe(*args):
+            sample = original(*args)
+            index = len(samples)
+            samples.append(sample)
+            started[index].set()
+            assert release[index].wait(10)
+            return sample
+
+        monkeypatch.setattr(execution, "_inspect_local_offer", observe)
+        assert execution._candidate_for_dispatch() is None and started[0].wait(5)
+        old = execution._pending_offer[1]
+        operator = daemon.operator_view(LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR))
+        assert operator.reload_scheduling(CoordinatorSchedulingReload("offer-reload", status.scheduling_epoch, "test"))["state"] == "applied"
+        assert execution._candidate_for_dispatch() is None
+        release[0].set()
+        old.result(timeout=5)
+        assert execution._candidate_for_dispatch() is None and started[1].wait(5)
+        current = execution._pending_offer[1]
+        assert execution._candidate_for_dispatch() is None
+        release[1].set()
+        current.result(timeout=5)
+        assert execution._candidate_for_dispatch() is samples[1].candidate
+    finally:
+        for signal in release:
+            signal.set()
+        daemon.stop()
+
+
 def test_coordinator_discards_gpu_sample_from_replaced_provider(tmp_path, monkeypatch):
     from loom.queue import ConfiguredGpuDevice, GpuDeviceDescriptor
     from loom.queue.gpu.occupancy import (

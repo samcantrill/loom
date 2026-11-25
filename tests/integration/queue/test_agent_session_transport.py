@@ -4531,10 +4531,11 @@ def test_two_remote_agents_execute_two_globally_selected_runs(
 
 @pytest.mark.parametrize("scenario", [
     "execution", "cancel-pregrant", "restart-before-coordinator-release",
-    "lost-committed-grant", "cancel-before-bind", "restart-after-committed-bind",
+    "slow-local-observation", "lost-committed-grant", "cancel-before-bind", "restart-after-committed-bind",
 ])
 def test_same_run_local_and_remote_stages_overlap(tmp_path: Path, monkeypatch, scenario: str) -> None:
-    cancel_pregrant = scenario != "execution"
+    slow_offer = scenario == "slow-local-observation"
+    cancel_pregrant = scenario not in {"execution", "slow-local-observation"}
     binding_pause = scenario in {"cancel-before-bind", "restart-after-committed-bind"}
     expects_abort = cancel_pregrant and not binding_pause and scenario != "lost-committed-grant"
     bound_identity = {}
@@ -4574,6 +4575,17 @@ def test_same_run_local_and_remote_stages_overlap(tmp_path: Path, monkeypatch, s
     daemon = LocalDaemon(config)
     grant_entered, allow_grant = Event(), Event()
     abort_entered, allow_abort = Event(), Event()
+    offer_entered, allow_offer = Event(), Event()
+    if slow_offer:
+        observe = AtomResourceProvider.observe
+
+        def pause_provider(provider, request):
+            if request.operation_id.startswith("candidate-observe-") and request.agent_id == config.machine_id:
+                offer_entered.set()
+                assert allow_offer.wait(25)
+            return observe(provider, request)
+
+        monkeypatch.setattr(AtomResourceProvider, "observe", pause_provider)
     if cancel_pregrant:
         from threading import current_thread
         scoped = local_daemon_execution._ScopedCoordinatorAuthority
@@ -4724,9 +4736,19 @@ def test_same_run_local_and_remote_stages_overlap(tmp_path: Path, monkeypatch, s
                             (run_uri,),
                         )
                     }
+                    if slow_offer and offer_entered.is_set() and not allow_offer.is_set():
+                        remote_running = conn.execute(
+                            "SELECT 1 FROM coordinator_assignments WHERE run_uri=? AND agent_id='agent-a' AND state='running'",
+                            (run_uri,),
+                        ).fetchone()
+                        if remote_running is not None:
+                            assert active_agent_ids == {"agent-a"}
+                            allow_offer.set()
                 if active_agent_ids == {"machine-A", "agent-a"}:
                     break
                 sleep(0.01)
+            if slow_offer:
+                assert offer_entered.is_set() and allow_offer.is_set()
             assert active_agent_ids == {"machine-A", "agent-a"}
             if cancel_pregrant:
                 try:
@@ -4814,6 +4836,7 @@ def test_same_run_local_and_remote_stages_overlap(tmp_path: Path, monkeypatch, s
                     "SELECT state FROM coordinator_assignments WHERE run_uri=?", (run_uri,)
                 ).fetchall() == [("released",), ("released",)]
     finally:
+        allow_offer.set()
         allow_grant.set()
         allow_abort.set()
         agent.close()

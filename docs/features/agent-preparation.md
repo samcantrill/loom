@@ -1829,7 +1829,12 @@ workers. The scheduling owner selects among eligible completed workspaces in
 priority order and commits the exact claim before offering that capacity again.
 Binding, grant and launch continue with the committed assignment. A lost commit
 reply recovers its original assignment from the execution store and staged
-workspace. A pending workspace holds no CPU or GPU capacity.
+workspace. A pending workspace holds no CPU or GPU capacity. The coordinator samples its embedded
+providers on a bounded worker and uses the same sample for selection and offer
+publication. A slow local provider leaves remote placements eligible. A new
+local reservation, finished assignment, or scheduling reload invalidates the
+previous capacity generation. Samples older than 30 seconds are withdrawn.
+The provider still checks its physical claim at preparation.
 
 Slow coordinator cycles (at least one second) emit bounded local phase timings
 to the existing service stderr log, including admission reconciliation. The

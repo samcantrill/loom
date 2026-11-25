@@ -55,6 +55,7 @@ def reconcile_admission(
     """Reconcile one run into durable ready work without selecting capacity."""
 
     if self.daemon is not None:
+        self._cycle_context_revisions[admission.admission_id] = admission.revision
         self._cycle_context_epochs.setdefault(admission.admission_id, (self.daemon._epoch, self.daemon._scheduling_epoch))
     intent, scoped_authority = (self._admission_context(admission, prepared_intent=prepared_intent)
                                if prepared_context is None else prepared_context)
@@ -348,6 +349,8 @@ def _schedule_window(
         ready_admissions = dict.fromkeys(record.admission_id for record in window)
         for identity in ready_admissions:
             admission = admissions.get(identity)
+            if admission is not None and self._cycle_context_revisions.get(identity) != admission.revision:
+                self.discard_dispatch_context(identity)
             if admission is not None and self._cycle_context_epochs.get(identity) != epochs:
                 if not daemon._contexts.try_submit(admission, epochs, self.prepare_admission_context, for_dispatch=True):
                     break
@@ -373,8 +376,11 @@ def _schedule_window(
             exhausted_admissions.add(record.admission_id)
     remote_targets = self._remote_candidates()
     local_candidate = (
-        self._candidate()
-        if self.agent_id is not None and self.local_profile_ready
+        self._candidate_for_dispatch()
+        if self.agent_id is not None and self.local_profile_ready and any(
+            record.admission_id in contexts and record.admission_id in admissions
+            and record.placement.route.kind is ExecutionRouteKind.MANAGED_AGENT for record in window
+        )
         else None
     )
     excluded_work: set[str] = set()

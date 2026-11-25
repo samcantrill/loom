@@ -146,6 +146,9 @@ class ReadyPreparationPool:
             stage.phases[phase] = _Pending(identity, completed)
         return value, reason
 
+    def preparing_runs(self) -> set[str]:
+        return {key[0] for key, stage in self._pending.items() if not stage.retiring}
+
     def retain_run(self, run_uri: str, stage_names: set[str]) -> None:
         """Drop preparations no longer eligible in this run's authority snapshot."""
         for key in tuple(self._pending):

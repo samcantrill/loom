@@ -79,6 +79,7 @@ from loom.queue._managed_local import (
     ManagedLocalError,
     ManagedOfferSnapshot,
     ObserveRequest,
+    ObserveResult,
     SQLiteAgentJournal,
     SQLiteCoordinatorAssignments,
     _assignment_from_dict,
@@ -293,6 +294,14 @@ class _SlurmRetentionRequired(Exception):
             and self.evidence == freeze_plain_data(evidence, path="SLURM release evidence")
             and self.roots == freeze_plain_data(execution.config.coordinator_shared_roots, path="SLURM release roots")
         )
+
+
+@dataclass(frozen=True)
+class _LocalCapacityObservation:
+    candidate: Candidate
+    observations: Mapping[str, ObserveResult]
+    descriptors: Mapping[str, SchedulingComponentDescriptor]
+    sampled_at: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -1437,6 +1446,7 @@ class LocalDaemonExecution:
             provider.restore_capacity_holding(command)
         self._launch_lock = Lock()
         self._context_cache: ValidatedContextCache[ManagedLocalIntent] = ValidatedContextCache()
+        self._cycle_context_revisions: dict[str, int] = {}
         self._cycle_context_epochs: dict[str, tuple[str | None, str | None]] = {}
         self.local_profile_ready = True
         self._sync_slurm_agent_references()
@@ -1453,6 +1463,12 @@ class LocalDaemonExecution:
         # executing.  These tasks are deliberately keyed by assignment ID:
         # assignment identity, rather than admission identity, is the durable
         # launch/result boundary.
+        self._offer_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="loom-local-offer")
+        self._local_capacity_generation = 0
+        self._pending_offer: tuple[tuple[str | None, str | None, int], Future[_LocalCapacityObservation]] | None = None
+        self._cycle_local_offer: _LocalCapacityObservation | None = None
+        self._observed_offer_epochs: tuple[str | None, str | None, int] | None = None
+        self._offer_retry = _RecoveryRetry()
         self._owner_check_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="loom-owner-check")
         self._pending_owner_check: tuple[tuple[str | None, str | None], Future[None]] | None = None
         self._local_assignment_workers = ThreadPoolExecutor(
@@ -1501,6 +1517,9 @@ class LocalDaemonExecution:
     def close(self) -> None:
         """Stop only assignment observers after their durable owners settle."""
 
+        self._offer_worker.shutdown(wait=True, cancel_futures=True)
+        self._pending_offer = None
+        self._cycle_local_offer = None
         self._owner_check_worker.shutdown(wait=True, cancel_futures=True)
         self._pending_owner_check = None
         self._input_validations.close()
@@ -1518,6 +1537,7 @@ class LocalDaemonExecution:
         self._local_assignment_retries.clear()
         self._cycle_contexts.clear()
         self._cycle_context_epochs.clear()
+        self._cycle_context_revisions.clear()
 
     def shutdown_clean(self) -> None:
         """Use all local authoritative owners before retiring the supervisor."""
@@ -1626,6 +1646,7 @@ class LocalDaemonExecution:
             if not future.done():
                 continue
             self._local_assignment_futures.pop(assignment_id, None)
+            self._local_capacity_generation += 1
             self._pregrant_aborts.discard(assignment_id)
             for work_id, pending_id in tuple(self._local_preparing.items()):
                 if pending_id == assignment_id:
@@ -1688,8 +1709,23 @@ class LocalDaemonExecution:
 
                 future.add_done_callback(wake_daemon)
             self._local_assignment_futures[assignment_id] = future
-        self._cycle_contexts.clear()
-        self._cycle_context_epochs.clear()
+        # A worker may finish staging in a turn when a different admission's
+        # context loader completes. Keep authority for in-progress inputs
+        # available to the common selector until its revision is superseded.
+        preparing = self._ready_preparations.preparing_runs()
+        for identity, (intent, _) in tuple(self._cycle_contexts.items()):
+            if intent.plan.run_uri not in preparing:
+                self.discard_dispatch_context(identity)
+
+    def discard_dispatch_context(self, identity: str) -> None:
+        self._cycle_contexts.pop(identity, None)
+        self._cycle_context_epochs.pop(identity, None)
+        self._cycle_context_revisions.pop(identity, None)
+
+    def invalidate_dispatch_contexts(self, run_uris: set[str]) -> None:
+        for identity, (intent, _) in tuple(self._cycle_contexts.items()):
+            if intent.plan.run_uri in run_uris:
+                self.discard_dispatch_context(identity)
 
     def next_local_retry_at(self, now: float) -> float | None:
         """Wake for a pending replay without rescheduling its running observer."""
@@ -5360,21 +5396,60 @@ class LocalDaemonExecution:
         return settling
 
     def _candidate(self) -> Candidate:
+        """Read a synchronous candidate for explicit local inspection."""
+        return self._inspect_local_offer(self.providers, self.local_capacity, self.config).candidate
+
+    def _candidate_for_dispatch(self) -> Candidate | None:
+        daemon = self._daemon_owner()
+        epochs = (daemon._epoch, daemon._scheduling_epoch, self._local_capacity_generation)
+        now = monotonic()
+        observation = self._cycle_local_offer
+        if self._observed_offer_epochs != epochs or (observation is not None and now - observation.sampled_at >= 30):
+            self._cycle_local_offer = observation = None
+        pending = self._pending_offer
+        if pending is not None and pending[1].done():
+            submitted_epochs, completed = pending
+            self._pending_offer = None
+            if submitted_epochs == epochs:
+                try:
+                    sampled = completed.result()
+                except Exception as error:
+                    self._offer_retry.failed(error, operation_id="local-capacity-observation", state=epochs)
+                    self._cycle_local_offer = observation = None
+                else:
+                    self._offer_retry = _RecoveryRetry()
+                    if now - sampled.sampled_at < 30:
+                        self._cycle_local_offer = observation = sampled
+                        self._observed_offer_epochs = epochs
+        refresh_due = observation is None or now - observation.sampled_at >= self.config.poll_interval_seconds
+        if self._pending_offer is None and refresh_due and self._offer_retry.ready(epochs):
+            future = self._offer_worker.submit(self._inspect_local_offer, self.providers, self.local_capacity, self.config)
+            self._pending_offer = epochs, future
+            future.add_done_callback(lambda _: daemon._wake.set())
+        return observation.candidate if observation is not None else None
+
+    def _inspect_local_offer(
+        self, providers: Mapping[str, AgentResourceProvider], capacity: tuple[CapacityAtom, ...],
+        config: LocalDaemonConfig,
+    ) -> _LocalCapacityObservation:
         from .preparation import (
             PREPARATION_INPUT_CAPABILITY,
             PREPARATION_STAGED_INPUT_CAPABILITY,
         )
 
+        sampled_at = monotonic()
         inventory: dict[str, ResourceInventoryEnvelope] = {}
         availability: dict[str, ResourceAvailabilityEnvelope] = {}
-        for kind, provider in self.providers.items():
+        observations: dict[str, ObserveResult] = {}
+        for kind, provider in providers.items():
             observed = provider.observe(
                 ObserveRequest(
-                    self.config.machine_id,
+                    config.machine_id,
                     self.coordinator_epoch,
                     f"candidate-observe-{kind}-{utc_timestamp()}",
                 )
             )
+            observations[kind] = observed
             data: Mapping[str, PlainData] = {}
             if kind == "gpu":
                 data = cast(
@@ -5383,34 +5458,34 @@ class LocalDaemonExecution:
                         "devices": [
                             device.descriptor.to_dict(
                                 device_id=(
-                                    f"{self.config.machine_id}:"
+                                    f"{config.machine_id}:"
                                     f"{device.descriptor.device_id}"
                                 )
                             )
-                            for device in self.config.gpu_devices
+                            for device in config.gpu_devices
                         ]
                     },
                 )
             inventory[kind] = ResourceInventoryEnvelope(
-                self.config.machine_id,
+                config.machine_id,
                 kind,
                 observed.availability_revision,
                 data=data,
                 atoms=tuple(
                     atom
-                    for atom in self.local_capacity
+                    for atom in capacity
                     if atom.owner_resource_kind == kind
                 ),
             )
             availability[kind] = ResourceAvailabilityEnvelope(
-                self.config.machine_id,
+                config.machine_id,
                 kind,
                 observed.availability_revision,
                 data=data,
                 atoms=observed.atoms,
             )
-        profile = self.config.resident_worker_launch_profile
-        with sqlite3.connect(self.config.execution_database) as conn:
+        profile = config.resident_worker_launch_profile
+        with sqlite3.connect(config.execution_database) as conn:
             outstanding = conn.execute(
                 "SELECT COUNT(*) FROM coordinator_assignments "
                 "WHERE agent_id=? AND state!='released'",
@@ -5432,20 +5507,22 @@ class LocalDaemonExecution:
             attributes["resident_profile_fingerprint"] = (
                 ResidentProfileDescriptor.from_dict(profile.descriptor).fingerprint
             )
-            if self.config.resident_preparation_ready:
+            if config.resident_preparation_ready:
                 attributes["preparation_input_capability"] = (
                     PREPARATION_INPUT_CAPABILITY
                 )
-            if self.config.resident_preparation_staged_ready:
+            if config.resident_preparation_staged_ready:
                 attributes["preparation_staged_capability"] = (
                     PREPARATION_STAGED_INPUT_CAPABILITY
                 )
-        return Candidate(
-            self.config.machine_id,
+        candidate = Candidate(
+            config.machine_id,
             inventory,
             availability,
             attributes=attributes,
         )
+        descriptors = {kind: provider.descriptor for kind, provider in providers.items()}
+        return _LocalCapacityObservation(candidate, observations, descriptors, sampled_at)
 
     def preparation_scheduling_components(
         self, snapshot: Mapping[str, PlainData]
@@ -5982,16 +6059,10 @@ class LocalDaemonExecution:
         )
         decision_planners = self._scheduling.planners_for_record(record)
         if remote_target is None:
-            observations = {
-                kind: provider.observe(
-                    ObserveRequest(
-                        self.config.machine_id,
-                        self.coordinator_epoch,
-                        f"offer-observe-{assignment_id}-{kind}",
-                    )
-                )
-                for kind, provider in self.providers.items()
-            }
+            observation = self._cycle_local_offer
+            if observation is None:
+                return False
+            observations = observation.observations
             availability_revision = (
                 "local-"
                 + hashlib.sha256(
@@ -6001,9 +6072,7 @@ class LocalDaemonExecution:
                     ).encode()
                 ).hexdigest()
             )
-            provider_descriptors = {
-                kind: provider.descriptor for kind, provider in self.providers.items()
-            }
+            provider_descriptors = observation.descriptors
             offer_snapshot = ManagedOfferSnapshot(
                 agent_id=self.config.machine_id,
                 session_id=self.coordinator_epoch,
@@ -6281,6 +6350,8 @@ class LocalDaemonExecution:
                 suspend_requested=daemon._stop.is_set, execution_started=execution_started,
             )
 
+        self._local_capacity_generation += 1
+        self._cycle_local_offer = None
         future = self._local_assignment_workers.submit(observe_and_finalize)
         self._local_assignment_futures[assignment_id] = future
         self._local_preparing[record.stage_work_id] = assignment_id

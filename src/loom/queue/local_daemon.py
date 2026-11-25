@@ -2810,8 +2810,9 @@ class LocalDaemon:
         bulk = self._result_verifications.bulk
         with self._state_guard():
             epochs = (self._epoch, self._scheduling_epoch)
-            invalidated = tuple(self._context_invalidations)
+            invalidated = set(self._context_invalidations)
             self._context_invalidations.clear()
+        execution.invalidate_dispatch_contexts(invalidated)
         self._contexts.begin_cycle(minimum_interval=self.config.poll_interval_seconds, invalidated=invalidated)
         prepared = {item.admission.admission_id: item for item in self._contexts.completed()}
         schedulable = SchedulingAdmissions(enqueue_through, self._lookup_schedulable_admissions)
