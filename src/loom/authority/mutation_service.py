@@ -143,6 +143,7 @@ class AuthorityMutationOperation(StrEnum):
     BIND_PREPARED_ATTEMPT = "bind_prepared_attempt"
     FAIL_PREPARED_ATTEMPT = "fail_prepared_attempt"
     UNBIND_PREPARED_ATTEMPT = "unbind_prepared_attempt"
+    READ_PREPARED_BINDING = "read_prepared_binding"
     GRANT_PREPARED_ATTEMPT = "grant_prepared_attempt"
     CONFIRM_EXECUTION_STARTED = "confirm_execution_started"
     RECORD_MANAGED_TERMINAL = "record_managed_terminal"
@@ -198,6 +199,7 @@ _COORDINATOR_EXECUTION_MUTATIONS = frozenset(
         AuthorityMutationOperation.BIND_PREPARED_ATTEMPT,
         AuthorityMutationOperation.FAIL_PREPARED_ATTEMPT,
         AuthorityMutationOperation.UNBIND_PREPARED_ATTEMPT,
+        AuthorityMutationOperation.READ_PREPARED_BINDING,
         AuthorityMutationOperation.GRANT_PREPARED_ATTEMPT,
         AuthorityMutationOperation.CONFIRM_EXECUTION_STARTED,
         AuthorityMutationOperation.RECORD_MANAGED_TERMINAL,
@@ -696,6 +698,14 @@ class AuthorityMutationService:
                 return _result(service_generation=self._service_generation, body={"failed": failed})
             case AuthorityMutationOperation.UNBIND_PREPARED_ATTEMPT:
                 return self._unbind_prepared_attempt(request)
+            case AuthorityMutationOperation.READ_PREPARED_BINDING:
+                observation = self._repository.read_prepared_binding(
+                    _required_run_uri(request),
+                    assignment_id=_required_body_string(request, "assignment_id"),
+                    attempt_id=_required_body_string(request, "attempt_id"),
+                )
+                return _result(service_generation=self._service_generation,
+                               body={"observation": observation.to_dict()})
             case AuthorityMutationOperation.GRANT_PREPARED_ATTEMPT:
                 return self._grant_prepared_attempt(request)
             case AuthorityMutationOperation.CONFIRM_EXECUTION_STARTED:

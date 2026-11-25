@@ -44,6 +44,8 @@ from .schema_policy import (
 )
 
 
+# An additive fencing capability detail keeps older readers of /ready compatible.
+PREPARED_BINDING_READ_CAPABILITY = "read_prepared_binding"
 AUTHORITY_PROTOCOL_VERSION = 2
 
 

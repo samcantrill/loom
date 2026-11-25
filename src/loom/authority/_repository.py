@@ -36,6 +36,7 @@ from loom.pipeline.transition_policy import (
     ensure_stage_transition,
     run_transition_timestamps,
 )
+from loom.pipeline.stores._prepared_binding import Settlement, decide_settlement, observe_binding
 from loom.pipeline.stores.authority import (
     ActionProducerBinding,
     AttemptAllocation,
@@ -47,6 +48,7 @@ from loom.pipeline.stores.authority import (
     OutputCommit,
     PreparedAttemptReceipt,
     PreparedAttemptRequest,
+    PreparedBindingObservation,
     StatusTransition,
 )
 from loom.pipeline.stores.coordination import (
@@ -1615,6 +1617,17 @@ class AuthorityRepository:
         """Settle only the exact still-bound attempt. A grant that already won is preserved."""
         return self._unbind_prepared_attempt(run_uri, assignment_id, attempt_id, reason)
 
+    def read_prepared_binding(
+        self, run_uri: str, *, assignment_id: str, attempt_id: str
+    ) -> PreparedBindingObservation:
+        run_uri = _non_empty(run_uri, "run_uri")
+        _non_empty(assignment_id, "assignment_id")
+        _non_empty(attempt_id, "attempt_id")
+        with self._read_connection() as conn:
+            _require_run_row(conn, run_uri)
+            row = _prepared_binding_row(conn, run_uri, assignment_id, attempt_id)
+            return observe_binding(row, assignment_id, attempt_id, error=AuthorityRepositoryError)
+
     def _unbind_prepared_attempt(
         self, run_uri: str, assignment_id: str, attempt_id: str, reason: LifecycleReason | None,
     ) -> bool:
@@ -1623,62 +1636,33 @@ class AuthorityRepository:
         attempt_id = _non_empty(attempt_id, "attempt_id")
         with self.transaction() as conn:
             _require_run_row(conn, run_uri)
-            receipt = conn.execute(
-                "SELECT attempt_id FROM managed_attempt_unbind_receipts "
-                "WHERE run_uri = ? AND assignment_id = ?",
-                (run_uri, assignment_id),
-            ).fetchone()
-            if receipt is not None:
-                if receipt["attempt_id"] != attempt_id:
-                    raise AuthorityRepositoryError("assignment unbind conflicts")
-                if reason is None:
-                    return True
-                attempt = conn.execute(
-                    "SELECT status, reason_json FROM stage_attempts WHERE run_uri = ? AND attempt_id = ?",
-                    (run_uri, attempt_id),
-                ).fetchone()
-                return (attempt is not None and attempt["status"] == StageStatus.FAILED.value
-                        and attempt["reason_json"] == _json_dumps(reason.to_dict()))
-            row = conn.execute(
-                "SELECT attempt_id, state FROM managed_attempt_bindings "
-                "WHERE run_uri = ? AND assignment_id = ?",
-                (run_uri, assignment_id),
-            ).fetchone()
-            if (reason is not None and row is not None and row["attempt_id"] == attempt_id
-                and row["state"] in {"granted", "running", "terminal"}):
-                return False
-            if row is None:
-                if reason is not None:
-                    return False
-                # A reservation can outlive a lost bind reply. An effective
-                # cancellation fences a never-bound prepared attempt as well.
-                prepared = conn.execute(
+            row = _prepared_binding_row(conn, run_uri, assignment_id, attempt_id)
+            prepared_without_owner = (
+                reason is None and row["owner"] is None
+                and row["bound_attempt"] is None and row["receipt_attempt"] is None
+                and conn.execute(
                     "SELECT 1 FROM prepared_attempt_receipts WHERE run_uri = ? AND attempt_id = ?",
                     (run_uri, attempt_id),
-                ).fetchone()
-                other = conn.execute(
-                    "SELECT 1 FROM managed_attempt_bindings WHERE run_uri = ? AND attempt_id = ?",
-                    (run_uri, attempt_id),
-                ).fetchone()
-                if prepared is None or other is not None or not _repository_cancellation_covers(conn, run_uri, attempt_id):
-                    raise AuthorityRepositoryError("only the same ungranted binding may unbind")
-            elif row["attempt_id"] != attempt_id or row["state"] != "bound":
-                raise AuthorityRepositoryError("only the same ungranted binding may unbind")
-            if reason is not None:
-                _require_no_repository_cancellation_epoch(conn, run_uri, attempt_id=attempt_id)
-                attempt = conn.execute(
-                    "SELECT stage_name, status FROM stage_attempts WHERE run_uri = ? AND attempt_id = ?",
-                    (run_uri, attempt_id),
-                ).fetchone()
-                if attempt is None or attempt["status"] != StageStatus.PENDING.value:
-                    raise AuthorityRepositoryError("unstarted failure requires the bound pending attempt")
+                ).fetchone() is not None
+            )
+            decision = decide_settlement(
+                row, assignment_id, attempt_id, reason,
+                prepared_without_owner=prepared_without_owner,
+                cancelled=_repository_cancellation_covers(conn, run_uri, attempt_id), error=AuthorityRepositoryError,
+            )
+            if decision is Settlement.ACCEPT_REPLAY:
+                return True
+            if decision is Settlement.DECLINE:
+                return False
+            if decision is Settlement.FAIL:
+                assert reason is not None
                 revision = self._next_revision(conn)
                 conn.execute(
                     "UPDATE stage_attempts SET status = ?, revision_sequence = ?, reason_json = ? "
                     "WHERE run_uri = ? AND attempt_id = ?",
                     (StageStatus.FAILED.value, revision.sequence, _json_dumps(reason.to_dict()), run_uri, attempt_id),
                 )
-                _upsert_stage(conn, run_uri=run_uri, stage_name=attempt["stage_name"], status=StageStatus.FAILED,
+                _upsert_stage(conn, run_uri=run_uri, stage_name=row["stage_name"], status=StageStatus.FAILED,
                               revision=revision, reason=reason)
                 _touch_run(conn, run_uri=run_uri, revision=revision)
             conn.execute(
@@ -1686,6 +1670,16 @@ class AuthorityRepository:
                 "(run_uri, assignment_id, attempt_id) VALUES (?, ?, ?)",
                 (run_uri, assignment_id, attempt_id),
             )
+            if reason is not None and reason.detail.get("assignment_id") != assignment_id:
+                # An opaque failure reason cannot identify its owner if another
+                # assignment previously declined this attempt. Preserve the exact
+                # terminal owner as well as the ordinary unbind replay receipt.
+                conn.execute(
+                    "UPDATE managed_attempt_bindings SET state = 'terminal', terminal_status = 'FAILED' "
+                    "WHERE run_uri = ? AND assignment_id = ?",
+                    (run_uri, assignment_id),
+                )
+                return True
             conn.execute(
                 "DELETE FROM managed_attempt_bindings "
                 "WHERE run_uri = ? AND assignment_id = ?",
@@ -1705,7 +1699,8 @@ class AuthorityRepository:
                 "WHERE run_uri = ? AND assignment_id = ?",
                 (run_uri, assignment_id),
             ).fetchone()
-            if row is None or row["attempt_id"] != attempt_id:
+            if (row is None or row["attempt_id"] != attempt_id
+                    or (row["state"] == "terminal" and row["fence"] is None)):
                 raise AuthorityRepositoryError(
                     "prepared attempt is not bound to assignment"
                 )
@@ -5986,6 +5981,34 @@ def _audit_event_from_row(row: sqlite3.Row) -> PipelineEventRecord:
     if row["event_json"] is None:
         raise AuthorityRepositoryError("stored audit event requires current event_json")
     return PipelineEventRecord.from_dict(_json_loads(cast(str, row["event_json"])))
+
+
+def _prepared_binding_row(
+    conn: sqlite3.Connection, run_uri: str, assignment_id: str, attempt_id: str,
+) -> sqlite3.Row:
+    return conn.execute(
+        """
+        SELECT binding.attempt_id AS bound_attempt, binding.state AS binding_state, binding.fence,
+               receipt.attempt_id AS receipt_attempt, attempt.status AS attempt_status,
+               attempt.reason_json, attempt.stage_name, owner.assignment_id AS owner,
+               CASE WHEN receipt.attempt_id IS NOT NULL AND owner.assignment_id IS NULL
+                      AND attempt.status = 'FAILED'
+                      AND json_extract(attempt.reason_json, '$.detail.assignment_id') IS NULL THEN EXISTS (
+                    SELECT 1 FROM managed_attempt_unbind_receipts AS other
+                    WHERE other.attempt_id = :attempt_id AND other.assignment_id != :assignment_id AND other.run_uri = :run_uri
+               ) END AS other_receipt
+        FROM (SELECT 1)
+        LEFT JOIN managed_attempt_bindings AS binding
+            ON binding.assignment_id = :assignment_id AND binding.run_uri = :run_uri
+        LEFT JOIN managed_attempt_unbind_receipts AS receipt
+            ON receipt.assignment_id = :assignment_id AND receipt.run_uri = :run_uri
+        LEFT JOIN stage_attempts AS attempt
+            ON attempt.attempt_id = :attempt_id AND attempt.run_uri = :run_uri
+        LEFT JOIN managed_attempt_bindings AS owner
+            ON owner.attempt_id = :attempt_id AND owner.run_uri = :run_uri
+        """,
+        {"run_uri": run_uri, "assignment_id": assignment_id, "attempt_id": attempt_id},
+    ).fetchone()
 
 
 def _repository_cancellation_covers(conn: sqlite3.Connection, run_uri: str, attempt_id: str | None) -> bool:

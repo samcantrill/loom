@@ -32,6 +32,7 @@ from loom.pipeline.stores.authority import (
     CancellationEpochRequest,
     CoordinatorAdmissionRequest,
     PreparedAttemptRequest,
+    PreparedBindingState,
 )
 from loom.pipeline.stores.coordinator_authority import (
     AuthenticatedCoordinatorAuthorityError,
@@ -50,6 +51,7 @@ from loom.authority.services import (
     AUTHORITY_PEER_CERTIFICATE_FINGERPRINT_STATE_KEY,
 )
 from loom.pipeline.stores.read_models import (
+    LifecycleReason,
     ReliabilityPolicyFact,
     ReliabilityPolicyScope,
 )
@@ -362,6 +364,11 @@ def test_live_mutual_tls_authority_rejects_a_different_same_ca_peer(
             ),
         )
         assert allowed.open_run(RUN_URI).run_uri == RUN_URI
+        prepared = allowed.ensure_prepared_attempt(RUN_URI, _prepared_request(allowed.open_run(RUN_URI).revision))
+        binding = {"assignment_id": "same-assignment", "attempt_id": prepared.attempt.attempt_id}
+        allowed.bind_prepared_attempt(RUN_URI, **binding)
+        granted = allowed.grant_prepared_attempt(RUN_URI, **binding)
+        assert allowed.read_prepared_binding(RUN_URI, **binding).fence == granted
 
         other_factory = https_coordinator_authority_factory(
             endpoint,
@@ -385,6 +392,7 @@ def test_live_mutual_tls_authority_rejects_a_different_same_ca_peer(
             ),
         )
         assert other.open_run(other_run_uri).run_uri == other_run_uri
+        assert other.read_prepared_binding(other_run_uri, **binding).state is PreparedBindingState.ABSENT
         for authority, foreign_run in (
             (allowed_factory(other_run_uri), other_run_uri),
             (other_factory(RUN_URI), RUN_URI),
@@ -394,6 +402,8 @@ def test_live_mutual_tls_authority_rejects_a_different_same_ca_peer(
                 match="principal conflicts",
             ):
                 authority.open_run(foreign_run)
+            with pytest.raises(AuthenticatedCoordinatorAuthorityError, match="principal conflicts"):
+                authority.read_prepared_binding(foreign_run, **binding)
         with pytest.raises(
             AuthenticatedCoordinatorAuthorityError,
             match="principal conflicts",
@@ -423,7 +433,7 @@ def test_live_mutual_tls_authority_rejects_a_different_same_ca_peer(
             AuthenticatedCoordinatorAuthorityError,
             match="authority service is unavailable",
         ) as denied:
-            denied_factory(RUN_URI).open_run(RUN_URI)
+            denied_factory(RUN_URI).read_prepared_binding(RUN_URI, **binding)
         assert denied.value.code == "authority_client_unavailable"
 
         context = ssl.create_default_context(
@@ -749,27 +759,229 @@ def test_annotation_routes_refuse_retired_import_fields_without_effects(tmp_path
     assert authority.open_run(RUN_URI).to_dict() == before
 
 
+@pytest.mark.parametrize("backend", ["embedded", "authenticated"])
 @pytest.mark.parametrize("grant_first", [False, True])
-def test_unstarted_failure_receipt_arbitrates_against_grant(tmp_path, grant_first):
-    from loom.pipeline.stores.read_models import LifecycleReason
+def test_unstarted_failure_receipt_arbitrates_against_grant(
+    tmp_path, backend, grant_first
+):
+    from tests.integration.authority.test_action_result_binding import _consumer
 
-    repository, authority = _authority(tmp_path)
-    revision = repository.admit_run(RUN_URI)
-    authority.bind_coordinator_admission(RUN_URI, CoordinatorAdmissionRequest(
-        operation_id="admit-1", coordinator_id="coordinator-1", run_uri=RUN_URI, intent_digest="intent-1",
-    ))
-    prepared = authority.ensure_prepared_attempt(RUN_URI, _prepared_request(revision))
+    uri, authority, _, _ = _consumer(tmp_path, backend)
+    prepared = authority.ensure_prepared_attempt(
+        uri, _prepared_request(authority.open_run(uri).revision)
+    )
     binding = dict(assignment_id="assignment-1", attempt_id=prepared.attempt.attempt_id)
-    authority.bind_prepared_attempt(RUN_URI, **binding)
-    reason = LifecycleReason(code="worker.slurm_bootstrap_failed", detail={"job_id": "1200"})
+    before = authority.open_run(uri)
+    assert (
+        authority.read_prepared_binding(uri, **binding).state
+        is PreparedBindingState.ABSENT
+    )
+    # The same prepared attempt can be offered again after a declined assignment.
+    declined = {**binding, "assignment_id": "declined"}
+    authority.bind_prepared_attempt(uri, **declined)
+    authority.unbind_prepared_attempt(uri, **declined)
+    authority.bind_prepared_attempt(uri, **binding)
+    assert (
+        authority.read_prepared_binding(uri, **binding).state
+        is PreparedBindingState.BOUND
+    )
+    assert authority.open_run(uri) == before
+    reason = LifecycleReason(
+        code="worker.slurm_bootstrap_failed", detail={"job_id": "1200"}
+    )
+    with pytest.raises(ValueError, match="conflicts") as err:
+        authority.read_prepared_binding(
+            uri, assignment_id="assignment-1", attempt_id="another"
+        )
+    if backend == "authenticated":
+        from loom.pipeline.stores.authority_protocol import (
+            AuthorityProtocolErrorCategory,
+        )
+
+        assert isinstance(err.value, AuthenticatedCoordinatorAuthorityError)
+        assert err.value.category is AuthorityProtocolErrorCategory.CONFLICT
     if grant_first:
-        fence = authority.grant_prepared_attempt(RUN_URI, **binding)
-        assert not authority.fail_prepared_attempt(RUN_URI, **binding, reason=reason)
-        assert authority.grant_prepared_attempt(RUN_URI, **binding) == fence
+        fence = authority.grant_prepared_attempt(uri, **binding)
+        granted = authority.open_run(uri)
+        assert authority.read_prepared_binding(uri, **binding).fence == fence
+        assert not authority.fail_prepared_attempt(uri, **binding, reason=reason)
+        assert authority.grant_prepared_attempt(uri, **binding) == fence
+        assert authority.open_run(uri) == granted
+        authority.confirm_execution_started(uri, fence=fence)
+        assert authority.read_prepared_binding(uri, **binding).fence == fence
+        authority.record_managed_attempt_terminal(
+            uri, fence=fence, status=StageStatus.FAILED, reason=reason
+        )
+        assert authority.read_prepared_binding(uri, **binding).fence == fence
     else:
-        assert authority.fail_prepared_attempt(RUN_URI, **binding, reason=reason)
-        before = authority.open_run(RUN_URI)
-        assert authority.fail_prepared_attempt(RUN_URI, **binding, reason=reason)
-        assert authority.open_run(RUN_URI) == before
-        assert before.stages[0].attempts[0].reason == reason
-        assert before.stages[0].status is StageStatus.FAILED
+        assert authority.fail_prepared_attempt(uri, **binding, reason=reason)
+        failed = authority.open_run(uri)
+        observation = authority.read_prepared_binding(uri, **binding)
+        assert (
+            observation.state is PreparedBindingState.FAILED
+            and observation.reason == reason
+        )
+        assert authority.fail_prepared_attempt(uri, **binding, reason=reason)
+        assert not authority.fail_prepared_attempt(
+            uri, **binding, reason=replace(reason, detail={"job_id": "2"})
+        )
+        with pytest.raises(ValueError, match="conflicts"):
+            authority.fail_prepared_attempt(
+                uri, assignment_id="assignment-1", attempt_id="another", reason=reason
+            )
+        authority.unbind_prepared_attempt(uri, **binding)
+        with pytest.raises(ValueError, match="not bound"):
+            authority.grant_prepared_attempt(uri, **binding)
+        assert authority.open_run(uri) == failed
+    assert (
+        authority.read_prepared_binding(uri, **declined).state
+        is PreparedBindingState.UNBOUND
+    )
+    assert not authority.fail_prepared_attempt(uri, **declined, reason=reason)
+
+
+def test_https_qualification_requires_binding_reads_only_for_slurm(
+    tmp_path, monkeypatch
+):
+    from loom.pipeline.stores import coordinator_authority
+    from loom.queue.deployment import load_coordinator_service_config
+    from loom.queue.errors import QueueConfigError
+    from tests.unit.loom.queue.test_deployment import (
+        _coordinator_config,
+        _write_protected,
+    )
+    from loom.pipeline.stores.authority_protocol import AuthorityProtocolReadiness
+    from loom.pipeline.stores.capabilities import (
+        BackendCapability,
+        BackendCapabilityRecord,
+        BackendCapabilitySet,
+        CapabilityScope,
+    )
+
+    # The prior version already advertised fencing support, without the receipt operation.
+    previous = AuthorityProtocolReadiness(
+        workspace_id="workspace-a",
+        service_generation="service-1",
+        capabilities=BackendCapabilitySet(
+            "service",
+            (
+                BackendCapabilityRecord(
+                    BackendCapability.FENCING_TOKENS, CapabilityScope.PER_RUN
+                ),
+            ),
+        ),
+    )
+
+    class PreviousService:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get(self, url, timeout):
+            assert url == "https://authority.test/ready"
+            return previous.to_dict()
+
+    monkeypatch.setattr(
+        coordinator_authority, "_MutualTlsJsonTransport", PreviousService
+    )
+    pem = tmp_path / "credential"
+    pem.touch()
+    source = _coordinator_config(tmp_path)
+    payload = json.loads(source.read_text())
+    payload["authority"] = {
+        "kind": "https",
+        "url": "https://authority.test",
+        "service_id": "svc",
+        "workspace_id": "workspace-a",
+        "tls": {"ca": str(pem), "certificate": str(pem), "private_key": str(pem)},
+    }
+    resident = load_coordinator_service_config(_write_protected(source, payload))
+    assert resident.daemon.coordinator_authority_factory is not None
+
+    payload["slurm_profiles"] = [
+        {
+            "_target_": "tests.integration.queue.test_slurm_ready_stage._profile",
+            "runner": {
+                "_target_": "loom.pipeline.executors.slurm.FakeSlurmCommandRunner"
+            },
+        }
+    ]
+    with pytest.raises(QueueConfigError, match="upgrade the authority service"):
+        load_coordinator_service_config(_write_protected(source, payload))
+
+
+@pytest.mark.parametrize("backend", ["embedded", "authenticated"])
+def test_accounting_failure_recovers_from_existing_unbind_and_attempt_rows(
+    tmp_path, backend
+):
+    import sqlite3
+    from tests.integration.authority.test_action_result_binding import _consumer
+
+    uri, authority, database, _ = _consumer(tmp_path, backend)
+    prepared = authority.ensure_prepared_attempt(
+        uri, _prepared_request(authority.open_run(uri).revision)
+    )
+    attempt = prepared.attempt.attempt_id
+    declined = dict(assignment_id="declined", attempt_id=attempt)
+    ended = dict(assignment_id="job-owner", attempt_id=attempt)
+    authority.bind_prepared_attempt(uri, **declined)
+    authority.unbind_prepared_attempt(uri, **declined)
+    authority.bind_prepared_attempt(uri, **ended)
+    reason = LifecycleReason(
+        code="worker.slurm_bootstrap_failed",
+        detail={"assignment_id": "job-owner", "scheduler_state": "FAILED"},
+    )
+    assert authority.fail_prepared_attempt(uri, **ended, reason=reason)
+    # Keep the durable representation read by already-installed authority backends.
+    with sqlite3.connect(database) as conn:
+        assert (
+            conn.execute(
+                "SELECT assignment_id FROM managed_attempt_bindings"
+            ).fetchall()
+            == []
+        )
+        assert set(
+            conn.execute(
+                "SELECT assignment_id, attempt_id FROM managed_attempt_unbind_receipts"
+            )
+        ) == {
+            ("declined", attempt),
+            ("job-owner", attempt),
+        }
+    assert authority.read_prepared_binding(uri, **ended).reason == reason
+    assert (
+        authority.read_prepared_binding(uri, **declined).state
+        is PreparedBindingState.UNBOUND
+    )
+    assert authority.fail_prepared_attempt(uri, **ended, reason=reason)
+    assert not authority.fail_prepared_attempt(uri, **declined, reason=reason)
+
+
+@pytest.mark.parametrize("backend", ["embedded", "authenticated"])
+def test_ambiguous_legacy_failure_preserves_plain_unbind_replay(tmp_path, backend):
+    import sqlite3
+    from tests.integration.authority.test_action_result_binding import _consumer
+
+    uri, authority, database, _ = _consumer(tmp_path, backend)
+    prepared = authority.ensure_prepared_attempt(
+        uri, _prepared_request(authority.open_run(uri).revision)
+    )
+    attempt = prepared.attempt.attempt_id
+    declined = dict(assignment_id="declined", attempt_id=attempt)
+    ended = dict(assignment_id="ended", attempt_id=attempt)
+    authority.bind_prepared_attempt(uri, **declined)
+    authority.unbind_prepared_attempt(uri, **declined)
+    authority.bind_prepared_attempt(uri, **ended)
+    reason = LifecycleReason(code="custom.pre_start_failure")
+    assert authority.fail_prepared_attempt(uri, **ended, reason=reason)
+    # Earlier authority releases deleted the binding for every failure, including
+    # opaque custom reasons. Both remaining tombstones then look identical.
+    with sqlite3.connect(database) as conn:
+        conn.execute(
+            "DELETE FROM managed_attempt_bindings WHERE assignment_id = 'ended'"
+        )
+    for binding in (declined, ended):
+        authority.unbind_prepared_attempt(uri, **binding)
+        with pytest.raises(ValueError, match="ambiguous assignment receipts"):
+            authority.read_prepared_binding(uri, **binding)
+        with pytest.raises(ValueError, match="ambiguous assignment receipts"):
+            authority.fail_prepared_attempt(uri, **binding, reason=reason)

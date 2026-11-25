@@ -7,6 +7,7 @@ from loom.pipeline.stores.authority import (
     ActionProducerBinding,
     CancellationEpochRequest,
     PreparedAttemptRequest,
+    PreparedBindingState,
 )
 from loom.pipeline.stores.read_models import LifecycleReason
 from tests.integration.authority.test_action_result_binding import _consumer
@@ -100,6 +101,8 @@ def test_cancellation_settles_a_reserved_attempt_without_a_bind_reply(tmp_path, 
             authority.unbind_prepared_attempt(uri, assignment_id=assignment, attempt_id=rejected)
     authority.unbind_prepared_attempt(uri, assignment_id="reserved", attempt_id=attempt)
     authority.unbind_prepared_attempt(uri, assignment_id="reserved", attempt_id=attempt)
+    settled = authority.read_prepared_binding(uri, assignment_id="reserved", attempt_id=attempt)
+    assert settled.state is PreparedBindingState.UNBOUND and settled.reason is None
     authority.bind_prepared_attempt(uri, assignment_id="reserved", attempt_id=attempt)
     with pytest.raises(ValueError, match="not bound"):
         authority.grant_prepared_attempt(uri, assignment_id="reserved", attempt_id=attempt)
