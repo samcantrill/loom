@@ -1607,6 +1607,17 @@ class AuthorityRepository:
     def unbind_prepared_attempt(
         self, run_uri: str, *, assignment_id: str, attempt_id: str
     ) -> None:
+        self._unbind_prepared_attempt(run_uri, assignment_id, attempt_id, None)
+
+    def fail_prepared_attempt(
+        self, run_uri: str, *, assignment_id: str, attempt_id: str, reason: LifecycleReason,
+    ) -> bool:
+        """Settle only the exact still-bound attempt. A grant that already won is preserved."""
+        return self._unbind_prepared_attempt(run_uri, assignment_id, attempt_id, reason)
+
+    def _unbind_prepared_attempt(
+        self, run_uri: str, assignment_id: str, attempt_id: str, reason: LifecycleReason | None,
+    ) -> bool:
         run_uri = _non_empty(run_uri, "run_uri")
         assignment_id = _non_empty(assignment_id, "assignment_id")
         attempt_id = _non_empty(attempt_id, "attempt_id")
@@ -1620,13 +1631,25 @@ class AuthorityRepository:
             if receipt is not None:
                 if receipt["attempt_id"] != attempt_id:
                     raise AuthorityRepositoryError("assignment unbind conflicts")
-                return
+                if reason is None:
+                    return True
+                attempt = conn.execute(
+                    "SELECT status, reason_json FROM stage_attempts WHERE run_uri = ? AND attempt_id = ?",
+                    (run_uri, attempt_id),
+                ).fetchone()
+                return (attempt is not None and attempt["status"] == StageStatus.FAILED.value
+                        and attempt["reason_json"] == _json_dumps(reason.to_dict()))
             row = conn.execute(
                 "SELECT attempt_id, state FROM managed_attempt_bindings "
                 "WHERE run_uri = ? AND assignment_id = ?",
                 (run_uri, assignment_id),
             ).fetchone()
+            if (reason is not None and row is not None and row["attempt_id"] == attempt_id
+                and row["state"] in {"granted", "running", "terminal"}):
+                return False
             if row is None:
+                if reason is not None:
+                    return False
                 # A reservation can outlive a lost bind reply. An effective
                 # cancellation fences a never-bound prepared attempt as well.
                 prepared = conn.execute(
@@ -1641,6 +1664,23 @@ class AuthorityRepository:
                     raise AuthorityRepositoryError("only the same ungranted binding may unbind")
             elif row["attempt_id"] != attempt_id or row["state"] != "bound":
                 raise AuthorityRepositoryError("only the same ungranted binding may unbind")
+            if reason is not None:
+                _require_no_repository_cancellation_epoch(conn, run_uri, attempt_id=attempt_id)
+                attempt = conn.execute(
+                    "SELECT stage_name, status FROM stage_attempts WHERE run_uri = ? AND attempt_id = ?",
+                    (run_uri, attempt_id),
+                ).fetchone()
+                if attempt is None or attempt["status"] != StageStatus.PENDING.value:
+                    raise AuthorityRepositoryError("unstarted failure requires the bound pending attempt")
+                revision = self._next_revision(conn)
+                conn.execute(
+                    "UPDATE stage_attempts SET status = ?, revision_sequence = ?, reason_json = ? "
+                    "WHERE run_uri = ? AND attempt_id = ?",
+                    (StageStatus.FAILED.value, revision.sequence, _json_dumps(reason.to_dict()), run_uri, attempt_id),
+                )
+                _upsert_stage(conn, run_uri=run_uri, stage_name=attempt["stage_name"], status=StageStatus.FAILED,
+                              revision=revision, reason=reason)
+                _touch_run(conn, run_uri=run_uri, revision=revision)
             conn.execute(
                 "INSERT INTO managed_attempt_unbind_receipts "
                 "(run_uri, assignment_id, attempt_id) VALUES (?, ?, ?)",
@@ -1651,6 +1691,7 @@ class AuthorityRepository:
                 "WHERE run_uri = ? AND assignment_id = ?",
                 (run_uri, assignment_id),
             )
+            return True
 
     def grant_prepared_attempt(
         self, run_uri: str, *, assignment_id: str, attempt_id: str

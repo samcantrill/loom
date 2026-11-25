@@ -2746,6 +2746,11 @@ class LocalDaemonExecution:
                             raise retention
                         retention.retain()
                         retention.commit()
+                if (record.state != "released" and record.terminal_observation is not None
+                    and record.terminal_observation.get("phase") == "bootstrap"):
+                    # The provider has confirmed physical containment and revoked the
+                    # capability. An interrupted retry decision replays on this receipt.
+                    self._record_bootstrap_retry(record)
                 self.slurm_assignments.release(assignment.assignment_id)
                 with self.config.connect_database(self.config.control_database) as conn:
                     conn.execute(
@@ -3050,6 +3055,11 @@ class LocalDaemonExecution:
             if self._recovery_retains_assignment(assignment_id):
                 diagnostic = diagnostic or "slurm_guarded_recovery_pending"
                 continue
+            if record.state == "accepted" and self._claim_failed_slurm_bootstrap(record, authority):
+                record = self.slurm_assignments.read(assignment_id)
+            if record.state == "bootstrap_failed":
+                self.slurm_assignments.advance(assignment_id, expected="bootstrap_failed", next_state="terminal")
+                record = self.slurm_assignments.read(assignment_id)
             if record.state in {"granted", "running"} and record.report is not None and record.fence is not None:
                 snapshot = yield
                 if self.slurm_assignments.read(assignment_id) != record or self._recovery_retains_assignment(assignment_id):
@@ -3092,6 +3102,79 @@ class LocalDaemonExecution:
             diagnostic = diagnostic or terminal_diagnostic
             in_flight = True
         return in_flight, diagnostic
+
+    def _claim_failed_slurm_bootstrap(
+        self, record: SlurmStageRecord, authority: _ScopedCoordinatorAuthority,
+    ) -> bool:
+        from loom.pipeline.executors.slurm.history import operation_job_name
+
+        policy = self.config.slurm_terminal_recovery
+        if (policy is None or not policy.enabled or record.bootstrap_incarnation is None
+            or record.fence is not None or record.start_consumed or record.process_execution_id is not None
+            or record.report_present):
+            return False
+        assignment = record.assignment
+        submission = self.slurm_submissions.find(assignment.operation_id)
+        if (submission is None or submission.scheduler_source != "sacct"
+            or submission.scheduler_state not in {"FAILED", "TIMEOUT", "CANCELLED"}
+            or submission.accounting_identity is None):
+            return False
+        physical = submission.accounting_identity
+        if ((submission.job_id, submission.cluster) != (record.job_id, record.cluster)
+            or (physical.job_id, physical.cluster, physical.job_name) != (
+                record.job_id, record.cluster, operation_job_name(assignment.operation_id))):
+            return False
+        now = self._terminal_accepted_time()
+        if now is None:
+            return False
+        facts: dict[str, PlainData] = {
+            "assignment_id": assignment.assignment_id, "incarnation": record.bootstrap_incarnation,
+            "accounting": physical.to_dict(), "scheduler_state": submission.scheduler_state,
+        }
+        reason = LifecycleReason(code="worker.slurm_bootstrap_failed",
+                                 message="SLURM job ended before its worker was granted execution",
+                                 detail=facts)
+        with self.config.connect_database(self.config.control_database) as conn:
+            # The grant owner takes this same lock. The authority CAS also
+            # arbitrates a grant that survived a crash before local projection.
+            conn.execute("BEGIN IMMEDIATE")
+            fresh = self.slurm_assignments.read(assignment.assignment_id)
+            if (fresh.state != "accepted" or fresh.bootstrap_incarnation != record.bootstrap_incarnation
+                or fresh.job_id != record.job_id or fresh.cluster != record.cluster
+                or fresh.fence is not None or fresh.start_consumed or fresh.process_execution_id is not None
+                or fresh.report_present):
+                return False
+            if action_attempt_cancelled(conn, assignment.run_uri, assignment.attempt_id):
+                snapshot = authority.open_run(assignment.run_uri)
+                if not any(attempt.attempt_id == assignment.attempt_id and attempt.reason == reason
+                           for stage in snapshot.stages if stage.stage_name == assignment.stage_name
+                           for attempt in stage.attempts):
+                    return False
+            if not authority.fail_prepared_attempt(
+                assignment.run_uri, assignment_id=assignment.assignment_id,
+                attempt_id=assignment.attempt_id, reason=reason,
+            ):
+                return False
+            self.slurm_assignments.claim_failed_bootstrap(fresh, facts, now)
+        return True
+
+    def _record_bootstrap_retry(self, record: SlurmStageRecord) -> None:
+        assignment = record.assignment
+        observation = record.terminal_observation
+        assert observation is not None
+        at = str(observation["first_observed_at"])
+        failure = ExecutionFailure(
+            schema_version=EXECUTION_FAILURE_SCHEMA_VERSION, run_uri=assignment.run_uri,
+            stage_name=assignment.stage_name, attempt=assignment.attempt, failed_at=at,
+            executor="slurm-bootstrap", failure_type="executor_infrastructure",
+            message="SLURM job ended before its worker was granted execution",
+            details={"assignment_id": assignment.assignment_id, "job_id": record.job_id},
+        )
+        self._record_terminal_retry(
+            self._authority_store(assignment.run_uri), run_uri=assignment.run_uri,
+            stage_name=assignment.stage_name, attempt=assignment.attempt,
+            status=StageStatus.FAILED, recorded_at=at, failure=failure,
+        )
 
     def _terminal_accounting_identity(self, record: SlurmStageRecord | SlurmAgentTaskRecord) -> dict[str, PlainData] | None:
         if not self._terminal_identity_candidate(record):
@@ -3616,63 +3699,6 @@ class LocalDaemonExecution:
         status: StageStatus,
         recorded_at: str,
     ) -> RetryDecisionRecord:
-        store: RunReliabilityStore = _AuthorityReliabilityStore(authority)
-        run_status = authority.snapshot(request.run_uri).status
-        intent = load_managed_local_intent(
-            self.config,
-            request.run_uri,
-            slurm_profiles=self._scheduling.available_slurm_profiles(),
-        )
-        record_resolved_reliability_policy_fact(
-            store,
-            run_uri=request.run_uri,
-            stage_name=stage_name,
-            attempt=attempt,
-            resolved_runtime=intent.runtime[stage_name],
-            recorded_at=recorded_at,
-        )
-        terminal_state = (
-            StageAttemptTransactionState.FAILED
-            if status is StageStatus.FAILED
-            else StageAttemptTransactionState.CANCELLED
-        )
-        transactions = tuple(
-            item
-            for item in store.list_stage_attempt_transactions(
-                request.run_uri, stage_name=stage_name
-            )
-            if item.attempt == attempt
-            and item.state
-            in {
-                StageAttemptTransactionState.FAILED,
-                StageAttemptTransactionState.CANCELLED,
-            }
-        )
-        if transactions and any(
-            item.state is not terminal_state for item in transactions
-        ):
-            raise QueueConflictError("recovery reliability transition conflicts")
-        if not transactions:
-            record_stage_reliability_transition(
-                store,
-                run_status=run_status, run_uri=request.run_uri,
-                stage_name=stage_name,
-                attempt=attempt,
-                state=terminal_state,
-                stage_status=status,
-                recorded_at=recorded_at,
-            )
-        decisions = tuple(
-            item
-            for item in store.list_retry_decisions(
-                request.run_uri, stage_name=stage_name
-            )
-            if item.status.attempt == attempt
-        )
-        if decisions:
-            if len(decisions) != 1:
-                raise QueueConflictError("recovery retry decision conflicts")
-            return decisions[0]
         failure = (
             None
             if status is StageStatus.CANCELLED
@@ -3689,15 +3715,81 @@ class LocalDaemonExecution:
                 details={"assignment_id": request.assignment_id},
             )
         )
+        return self._record_terminal_retry(
+            authority, run_uri=request.run_uri, stage_name=stage_name, attempt=attempt,
+            status=status, recorded_at=recorded_at, failure=failure,
+        )
+
+    def _record_terminal_retry(
+        self, authority: Any, *, run_uri: str, stage_name: str, attempt: int,
+        status: StageStatus, recorded_at: str, failure: ExecutionFailure | None,
+    ) -> RetryDecisionRecord:
+        store: RunReliabilityStore = _AuthorityReliabilityStore(authority)
+        run_status = authority.open_run(run_uri).status
+        intent = load_managed_local_intent(
+            self.config,
+            run_uri,
+            slurm_profiles=self._scheduling.available_slurm_profiles(),
+        )
+        record_resolved_reliability_policy_fact(
+            store,
+            run_uri=run_uri,
+            stage_name=stage_name,
+            attempt=attempt,
+            resolved_runtime=intent.runtime[stage_name],
+            recorded_at=recorded_at,
+        )
+        terminal_state = (
+            StageAttemptTransactionState.FAILED
+            if status is StageStatus.FAILED
+            else StageAttemptTransactionState.CANCELLED
+        )
+        transactions = tuple(
+            item
+            for item in store.list_stage_attempt_transactions(
+                run_uri, stage_name=stage_name
+            )
+            if item.attempt == attempt
+            and item.state
+            in {
+                StageAttemptTransactionState.FAILED,
+                StageAttemptTransactionState.CANCELLED,
+            }
+        )
+        if transactions and any(
+            item.state is not terminal_state for item in transactions
+        ):
+            raise QueueConflictError("recovery reliability transition conflicts")
+        if not transactions:
+            record_stage_reliability_transition(
+                store,
+                run_status=run_status, run_uri=run_uri,
+                stage_name=stage_name,
+                attempt=attempt,
+                state=terminal_state,
+                stage_status=status,
+                recorded_at=recorded_at,
+            )
+        decisions = tuple(
+            item
+            for item in store.list_retry_decisions(
+                run_uri, stage_name=stage_name
+            )
+            if item.status.attempt == attempt
+        )
+        if decisions:
+            if len(decisions) != 1:
+                raise QueueConflictError("recovery retry decision conflicts")
+            return decisions[0]
         decision = record_retry_decision_for_stage_result(
             store,
-            run_status=run_status, run_uri=request.run_uri,
+            run_status=run_status, run_uri=run_uri,
             stage_name=stage_name,
             attempt=attempt,
             stage_status=status,
             recorded_at=recorded_at,
             policy=_recovery_retry_policy(
-                authority, request.run_uri, stage_name, attempt
+                authority, run_uri, stage_name, attempt
             ),
             failure=failure,
         )
@@ -5147,12 +5239,13 @@ class LocalDaemonExecution:
 
     def _recovery_failure_is_settling(self, stage: object) -> bool:
         reason = getattr(stage, "reason", None)
-        if reason is None or getattr(reason, "code", None) != "operator.recovery_close":
+        code = getattr(reason, "code", None)
+        if code not in {"worker.slurm_bootstrap_failed", "operator.recovery_close"}:
             return False
         detail = getattr(reason, "detail", {})
-        assignment_id = (
-            detail.get("assignment_id") if isinstance(detail, Mapping) else None
-        )
+        assignment_id = detail.get("assignment_id") if isinstance(detail, Mapping) else None
+        if code == "worker.slurm_bootstrap_failed":
+            return isinstance(assignment_id, str) and self.slurm_assignments.read(assignment_id).state != "released"
         daemon = self.daemon
         return (
             isinstance(assignment_id, str)
@@ -6860,10 +6953,15 @@ class LocalDaemonExecution:
         )
         if not record.input_ready:
             raise QueueConflictError("SLURM grant requires durable inputs")
+        if record.fence is None and record.state != "accepted":
+            raise QueueConflictError("SLURM grant requires a live accepted assignment")
         fence = record.fence
         if fence is None:
             with self.config.connect_database(self.config.control_database) as conn:
                 conn.execute("BEGIN IMMEDIATE")
+                current = self.slurm_assignments.read(assignment_id)
+                if current.fence is None and current.state != "accepted":
+                    raise QueueConflictError("SLURM grant requires a live accepted assignment")
                 if action_attempt_cancelled(conn, record.assignment.run_uri, record.assignment.attempt_id):
                     raise QueueConflictError("SLURM assignment run is cancelling")
                 authority = self._remote_authority(record.assignment.run_uri)
@@ -7193,6 +7291,8 @@ class LocalDaemonExecution:
             or record.bootstrap_incarnation != incarnation
         ):
             raise QueueConflictError("SLURM bootstrap authorization conflicts")
+        if record.terminal_observation is not None and record.terminal_observation.get("phase") == "bootstrap":
+            raise QueueConflictError("SLURM bootstrap already failed before execution")
         return record
 
     def _slurm_profile_for_principal(
