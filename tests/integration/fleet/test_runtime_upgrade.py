@@ -568,7 +568,7 @@ def test_upgrade_restoration_preserves_intervening_applied_drain(
         "connection": Path(setup["operator_connection"]),
         "config": selection["config"],
     }
-    original = upgrades._Upgrade.policy
+    original = upgrades._Upgrade.policy_steps
     injected = []
     with CoordinatorOperatorClient.from_connection_file(
         setup["operator_connection"]
@@ -580,14 +580,14 @@ def test_upgrade_restoration_preserves_intervening_applied_drain(
             if boundary == "restore" and key == "worker-restore" and not injected:
                 independent_policy(operator, name, "independent-admin-drain", "drain")
                 injected.append(True)
-            result = original(operation, name, key, kind, predecessor)
+            result = yield from original(operation, name, key, kind, predecessor)
             if boundary == "abort" and key == "worker-drain" and not injected:
                 independent_policy(operator, name, "independent-admin-drain", "drain")
                 injected.append(True)
                 raise upgrades._Waiting("controller interruption after owned drain")
             return result
 
-        monkeypatch.setattr(upgrades._Upgrade, "policy", intervene)
+        monkeypatch.setattr(upgrades._Upgrade, "policy_steps", intervene)
         result = upgrades.upgrade(
             inventory, operation_id="policy-race", apply=True, **options
         )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 import fcntl
 import hashlib
 import json
@@ -801,8 +802,11 @@ def main():
     }:
         raise QueueConflictError("unsupported fixed native host action")
     admin = Path(request["admin"])
-    with (admin / "native.lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    capture = request["action"] == "upgrade-check-capture"
+    with ExitStack() as locks:
+        lock = locks.enter_context((admin / "native.lock").open("a"))
+        shared = capture or request["action"] == "receipt"
+        fcntl.flock(lock, (fcntl.LOCK_SH if shared else fcntl.LOCK_EX) | fcntl.LOCK_NB)
         if request["action"] == "receipt":
             receipt = admin / "operations" / request["request_id"] / "receipt.json"
             if receipt.exists():
@@ -836,6 +840,11 @@ def main():
             return execute(request, False, admin)
         directory = admin / "operations" / request["request_id"]
         protected_directory(directory)
+        if capture:
+            # Different native capture IDs publish independent immutable snapshots.
+            # An identical replay still has a single dispatch and receipt writer.
+            owner_lock = locks.enter_context((directory / "capture.lock").open("a"))
+            fcntl.flock(owner_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         intent_path = directory / "intent.json"
         retained = {key: value for key, value in request.items() if key != "admin"}
         if intent_path.exists():

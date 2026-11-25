@@ -27,6 +27,8 @@ def test_existing_gate_remains_closed_on_restore_and_abort(tmp_path, abort):
         settled=lambda: calls.append("settled"),
         maintenance=lambda *args: calls.append(args),
     )
+    operation.directory = tmp_path
+    operation.deadline = None
     upgrades._restore(operation, abort=abort)
     assert ("revoke-check-1", "revoke", "check-1") in calls
     assert not any(isinstance(call, tuple) and "open" in call for call in calls)
@@ -256,8 +258,10 @@ def test_container_only_preflight_retains_selected_execution(tmp_path, monkeypat
         calls.append((name, action, kwargs))
         return {"bindings": {"cpu": "captured-cpu", "storage": "captured-storage"}}
 
-    operation.call = capture
-    operation.call_many = lambda batch: calls.extend(batch)
+    def call_steps(name, action, **kwargs):
+        return (yield from upgrades.sshops.rpc((name, action), lambda: capture(name, action, **kwargs)))
+    operation.deadline = None
+    operation.call_steps = call_steps
     monkeypatch.setattr(upgrades, "load_deployment", lambda path: deployment)
     upgrades._preflight_checks(operation)
     assert len(calls) == 2

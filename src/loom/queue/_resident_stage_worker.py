@@ -40,7 +40,8 @@ def main(argv: list[str] | None = None) -> int:
         time.sleep(0.01)
     from .shared_execution import assignment_scope, materialize, execution_roots
 
-    retained = workspace.request()
+    timings = PhaseTimings()
+    retained = timings.call("guest_assignment_read", workspace.request)
     shared = assignment_scope(retained.fingerprint)
     if retained.submitted_execution is not None:
         from .submitted_execution import SUPPORTED_WORKER_CONTRACTS
@@ -48,7 +49,6 @@ def main(argv: list[str] | None = None) -> int:
 
         if retained.submitted_execution.worker_contract not in SUPPORTED_WORKER_CONTRACTS:
             raise QueueServiceError("submitted native worker contract is unsupported")
-    timings = PhaseTimings()
     profile = None
     with observe_phases(timings.observe):
         # Validate this worker's namespace once before loading project inputs.

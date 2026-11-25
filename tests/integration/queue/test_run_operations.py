@@ -233,6 +233,51 @@ def test_lost_run_acceptance_detach_reconnect_and_two_stage_settlement(
         daemon.stop()
 
 
+@pytest.mark.parametrize("boundary", ["annotations", "intent"])
+def test_peer_executes_during_admission_continuation_and_cancel_wins(tmp_path, monkeypatch, boundary):
+    from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+    from loom.queue import local_daemon_execution
+
+    service = _two_stage_service(tmp_path)
+    LocalDaemon.initialize_deployment(service.daemon)
+    entered, release = Event(), Event()
+    def hold(uri):
+        if uri.endswith("/held-target"):
+            entered.set()
+            assert release.wait(90)
+
+    if boundary == "annotations":
+        original = SQLitePerRunAuthorityStore.read_run_annotations
+        def annotations(store, uri):
+            hold(uri)
+            return original(store, uri)
+        monkeypatch.setattr(SQLitePerRunAuthorityStore, "read_run_annotations", annotations)
+    else:
+        original = local_daemon_execution.load_managed_local_intent
+        def intent(config, uri, **options):
+            hold(uri)
+            return original(config, uri, **options)
+        monkeypatch.setattr(local_daemon_execution, "load_managed_local_intent", intent)
+    daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
+    daemon.start()
+    try:
+        held = RunRequest(replace(_request(), run_name="held-target"), "held-item")
+        peer = RunRequest(replace(_request(), run_name="peer-target", operation_id="peer"), "peer-item")
+        daemon.start_run(held, principal_id="caller")
+        assert entered.wait(30)
+        daemon.start_run(peer, principal_id="caller")
+        assert daemon.wait_operation("peer", timeout=35).operation.state == "applied"
+        assert daemon._wait("peer-item", timeout_seconds=25).state.value == "SUCCEEDED"
+        daemon.cancel_run_operation(held.preparation.operation_id, principal_id="caller")
+        release.set()
+        assert daemon.wait_operation(held.preparation.operation_id, timeout=25).operation.state == "cancelled"
+        with daemon._connection() as conn:
+            assert conn.execute("SELECT 1 FROM managed_admissions WHERE queue_item_id='held-item'").fetchone() is None
+    finally:
+        release.set()
+        daemon.stop()
+
+
 @pytest.mark.parametrize("boundary", ["published", "retained", "admitted"])
 def test_crash_recovery_never_replans_after_admission(tmp_path, boundary):
     service = _two_stage_service(tmp_path)

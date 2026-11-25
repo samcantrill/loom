@@ -206,6 +206,7 @@ def qualify_shared_worker_inputs(
     agent_id: str | None,
     cancelled: Callable[[], bool] | None = None,
     progress: Callable[[InputValidationProgress], None] | None = None,
+    capture_image=None,
 ) -> None:
     """Validate live shared paths only before a genuinely new execution."""
     from .shared_execution import assignment_scope, assignment_requires_staging_continuation, require_bindings, snapshot_mount
@@ -214,6 +215,7 @@ def qualify_shared_worker_inputs(
     from loom.pipeline.stores.shared_artifacts import binding as shared_binding
 
     continuing = assignment_requires_staging_continuation(assignment.fingerprint)
+    verified_image = None
     if profile.submitted_execution is not None:
         from .submitted_execution import assignment_binding, verify_submitted_image
         from .shared_execution import qualifications
@@ -226,7 +228,9 @@ def qualify_shared_worker_inputs(
         submitted = assignment_binding(assignment.fingerprint)
         if submitted is None or qualifications({alias: dict(root)})[alias] != submitted[1].shared_roots[alias]:
             raise ValueError("submitted image root qualification conflicts")
-        if not continuing:
+        if capture_image is not None:
+            verified_image = capture_image(execution.image, profile.shared_roots)
+        elif not continuing:
             verify_submitted_image(execution.image, profile.shared_roots)
     shared_scope = assignment_scope(assignment.fingerprint)
     if shared_scope is None:
@@ -239,7 +243,8 @@ def qualify_shared_worker_inputs(
 
     # A submitted probe verifies its immutable image before executing in it.
     # Keep one image audit for this launch instead of hashing a large SIF twice.
-    require_staging_continuation_support(profile, assignment.fingerprint)
+    require_staging_continuation_support(profile, assignment.fingerprint, **(
+        {"_verified_image": verified_image} if verified_image is not None else {}))
     if selected(assignment) is not None:
         if agent_id is None:
             raise ValueError("shared output mount requires the assignment machine identity")

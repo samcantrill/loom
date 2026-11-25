@@ -69,7 +69,7 @@ def test_replacement_uses_one_qualified_service_and_its_image_observation(tmp_pa
 
 
 @pytest.mark.parametrize("kind", ["drain", "resume"])
-def test_independent_controls_dispatch_all_agents_but_require_every_ack(kind):
+def test_independent_controls_dispatch_all_agents_but_require_every_ack(kind, tmp_path):
     submitted, verified = [], []
     acknowledged = {"second"}
 
@@ -81,24 +81,32 @@ def test_independent_controls_dispatch_all_agents_but_require_every_ack(kind):
             raise upgrades._Waiting("pending: " + name)
         return key
 
-    operation = SimpleNamespace(policy=policy,
-                                verify_policy=lambda name, identity: verified.append(identity))
+    def policy_steps(name, *args):
+        return (yield from upgrades.sshops.rpc((name, "policy"), policy, name, *args))
+
+    def verify(name, identity):
+        verified.append(identity)
+        yield from ()
+
+    operation = SimpleNamespace(directory=tmp_path, deadline=None, policy_steps=policy_steps, verify_policy_steps=verify)
     requests = [(name, name + "-control", kind, "previous-" + name)
                 for name in ("first", "second", "third")]
-    with pytest.raises(upgrades._Waiting, match="first"):
+    with pytest.raises(upgrades._Waiting, match="pending"):
         upgrades._independent_policies(operation, requests)
-    assert submitted == ["first-control", "second-control", "third-control"]
+    assert set(submitted) == {"first-control", "second-control", "third-control"}
     assert verified == ["second-control"]
     acknowledged.update(("first", "third"))
     upgrades._independent_policies(operation, requests)
     assert len(submitted) == 3
-    assert verified[-3:] == submitted
+    assert set(verified[-3:]) == set(submitted)
 
 
-def test_independent_controls_do_not_hide_predecessor_failure():
+def test_independent_controls_do_not_hide_predecessor_failure(tmp_path):
     def policy(*args):
         raise upgrades.QueueConflictError("agent control predecessor conflicts")
-    operation = SimpleNamespace(policy=policy, verify_policy=lambda *args: pytest.fail("unaccepted"))
+    operation = SimpleNamespace(directory=tmp_path, deadline=None,
+        policy_steps=lambda *args: upgrades.sshops.rpc(("policy",), policy, *args),
+        verify_policy_steps=lambda *args: pytest.fail("unaccepted"))
     with pytest.raises(upgrades.QueueConflictError, match="predecessor"):
         upgrades._independent_policies(operation, [("agent", "control", "resume", "old")])
 
@@ -107,21 +115,13 @@ def test_host_batch_starts_peer_and_retains_success_when_first_host_waits(tmp_pa
     from loom.fleet import ssh_operations
     from loom.fleet._startup import ServiceStarting
 
-    operation: Any = object.__new__(ssh_operations._Operation)
-    operation.intent = {"hosts": {name: {"host": name} for name in ("first", "second")}}
-    operation.accept_update = lambda *args: None
-    ids = []
-    def prepare(name, action, **values):
-        directory = tmp_path / name
-        directory.mkdir(exist_ok=True)
-        request = {"request_id": name + "-original", "action": action}
-        ids.append(request["request_id"])
-        receipt = directory / "receipt.json"
-        return directory, request, read(receipt) if receipt.exists() else None
-    operation._prepare_call = prepare
+    from tests.unit.loom.fleet.test_host_dispatch import operation as fixture_operation
+    operation = fixture_operation(tmp_path, monkeypatch)
     second_started = Event()
     launches = []
     def ssh(host, request):
+        if request["action"] == "receipt":
+            return None
         launches.append(host)
         if host == "first":
             assert second_started.wait(5), "peer was not dispatched independently"
@@ -134,9 +134,9 @@ def test_host_batch_starts_peer_and_retains_success_when_first_host_waits(tmp_pa
         with pytest.raises(ServiceStarting):
             operation.call_many(calls)
     assert launches.count("second") == 1
-    assert ids == ["first-original", "second-original"] * 2
-    assert read(tmp_path / "second" / "receipt.json") == {"outcome": "applied"}
-    assert not (tmp_path / "first" / "receipt.json").exists()
+    assert read(operation.receipts / "second-upgrade-replace/receipt.json") == {"outcome": "applied"}
+    assert not (operation.receipts / "first-upgrade-replace/receipt.json").exists()
+
 
 
 @pytest.mark.parametrize("waiting", ["agent-stop", "coordinator", "agent-start", None])

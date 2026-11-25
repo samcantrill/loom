@@ -197,3 +197,47 @@ def test_saved_submitted_launch_decodes_and_authorizes_without_storage(tmp_path,
     altered = replace(launch.profile, environment={"UNAUTHORIZED": "value"})
     with pytest.raises(AgentProcessSupervisorError, match="identity mismatch"):
         supervisor._validate_launch(replace(launch, profile=altered))
+
+
+def test_physical_command_executes_verified_image_after_source_replacement(tmp_path):
+    from loom.queue._submitted_image_launch import image_for_launch, physical_command
+    from loom.pipeline.executors.apptainer.commands import ApptainerExecCommand
+    policy, execution, _, source = _submitted(tmp_path)
+    original = source.read_bytes()
+    command = ApptainerExecCommand.from_argv(("apptainer", "exec", str(source), "--worker", str(source)),
+        metadata={"worker_command": ["--worker", str(source)]})
+    with image_for_launch(execution.image, policy.shared_roots, "first") as paths:
+        replaced = tmp_path / "replacement.sif"
+        replaced.write_bytes(b"x" * len(original))
+        replaced.chmod(0o444)
+        replaced.replace(source)
+        argv = physical_command(command, paths).argv
+        assert Path(argv[2]).read_bytes() == original and argv[-1] == str(source)
+        with pytest.raises(ValueError, match="image bytes"):
+            with image_for_launch(execution.image, policy.shared_roots, "second"):
+                pytest.fail("replaced source passed verification")
+    assert not Path(argv[2]).exists()
+
+
+def test_concurrent_launches_share_only_the_mounted_image_snapshot(tmp_path, monkeypatch):
+    import os
+    from loom.queue import _submitted_image_launch as physical
+    source_name = os.environ.get("LOOM_TEST_IMMUTABLE_IMAGE")
+    if source_name is None:
+        pytest.skip("requires an image on a mounted kernel snapshot")
+    source = Path(source_name)
+    policy, execution, _, _ = _submitted(tmp_path)
+    root = {**policy.shared_roots["workloads"], "host_path": str(source.parent)}
+    selected = replace(execution.image, location={**execution.image.location, "path": source.name},
+                       size_bytes=source.stat().st_size, sha256=hashlib.sha256(source.read_bytes()).hexdigest())
+    original = physical._copy_verified
+    copies = []
+    def copy(*args):
+        copies.append(True)
+        original(*args)
+    monkeypatch.setattr(physical, "_copy_verified", copy)
+    with physical.image_for_launch(selected, {"workloads": root}, "first") as first:
+        with physical.image_for_launch(selected, {"workloads": root}, "second") as second:
+            assert second == first and copies == [True]
+        assert first[1].exists()
+    assert not first[1].exists()

@@ -3430,3 +3430,35 @@ def test_retained_slurm_jobs_allow_only_a_transport_timing_reload(tmp_path, monk
     changed = load_outbound_agent_service_config(source).client
     with pytest.raises(QueueConflictError, match="retained work"):
         LocalDaemonAgentHttpClient._validate_reload_config(owner, changed, retained_work=True)
+
+
+def test_cached_role_rechecks_include_environment_and_protection(tmp_path, monkeypatch):
+    import weave
+    from loom.queue.deployment import _load_protected_config
+
+    config, included, env = (tmp_path / name for name in ("agent.yaml", "child.yaml", "machine.env"))
+    config.write_text("role:\n  _include_: ./child.yaml\n")
+    included.write_text("name: \x24{oc.env:MACHINE}\n")
+    env.write_text("MACHINE=first\n")
+    for source in (config, included, env):
+        source.chmod(0o600)
+    calls = []
+    original = weave.compose_config
+    def count(*args, **kwargs):
+        calls.append(1)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(weave, "compose_config", count)
+    cache = {}
+    def role():
+        return _load_protected_config(config, env_file=env, cache=cache)[2]["role"]
+
+    assert role() == role() == {"name": "first"}
+    assert len(calls) == 1
+    env.write_text("MACHINE=second\n")
+    assert role() == {"name": "second"}
+    included.write_text("name: changed\n")
+    assert role() == {"name": "changed"}
+    assert len(calls) == 3
+    included.chmod(0o666)
+    with pytest.raises(QueueConfigError, match="owner-protected"):
+        role()

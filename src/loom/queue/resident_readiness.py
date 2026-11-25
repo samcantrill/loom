@@ -168,7 +168,7 @@ print(json.dumps({"capability": "released-output-staging-v1", "available": avail
 
 
 def require_staging_continuation_support(
-    profile: ResidentWorkerLaunchProfile, fingerprint: Mapping[str, PlainData],
+    profile: ResidentWorkerLaunchProfile, fingerprint: Mapping[str, PlainData], *, _verified_image=None,
 ) -> None:
     """Check a selected environment before a new stage launch, never on replay.
 
@@ -181,7 +181,8 @@ def require_staging_continuation_support(
 
     if not assignment_requires_staging_continuation(fingerprint):
         return
-    result = run_resident_probe(profile, _STAGING_CONTINUATION, {}, timeout_seconds=30)
+    result = run_resident_probe(profile, _STAGING_CONTINUATION, {}, timeout_seconds=30, **(
+        {"_verified_image": _verified_image} if _verified_image is not None else {}))
     if result.failure or not result.contained or result.payload != {
         "capability": STAGING_CONTINUATION_CAPABILITY, "available": True,
     }:

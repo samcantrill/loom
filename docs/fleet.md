@@ -417,6 +417,14 @@ loom fleet operation status setup-001 --fleet lab --format json
 loom fleet operation resume setup-001 --fleet lab
 ```
 
+Setup advances prepared agents independently. Certificate receipt precedes
+enrollment, and the controller serializes writes to the coordinator
+declaration. A host with a fresh offer can begin its selected checks while
+another host is waiting. `fleet apply --timeout SECONDS` and
+`fleet operation resume ID --timeout SECONDS` set the observation budget for
+one invocation. The default is 120 seconds. A timeout preserves dispatched
+request IDs and the native checks for continuation.
+
 The issuer path belongs to the **coordinator host**. It explicitly selects its
 protected `ca.crt` and `ca.key`; Fleet never guesses the CA key from a certificate
 path. Only genuinely fresh unbound setup can create new signing material.
@@ -867,8 +875,11 @@ already-dispatched check is still running. Retry and repair still require native
 settlement, and explicit deferral preserves every dispatched attempt's history.
 
 Independent candidate installations, qualification probes, check preparation,
-agent stops and agent replacements use a pool of at most three host transports. All requests are retained
-before dispatch, and the controller alone publishes their receipts. Workload
+agent stops and agent replacements use at most three concurrent host transports.
+Each mutating step retains its intent before dispatch. The controller publishes
+individual receipts in completion order. A completed capture can enable its
+agent's preparation while another capture is outstanding. Physical transports
+remain accounted for until exit, including after an observer times out. Workload
 staging completes across eligible agents before native promotion. The current
 promotion owner requires global control settlement, so each promotion must be
 acknowledged before another is submitted. A pending promotion returns waiting;

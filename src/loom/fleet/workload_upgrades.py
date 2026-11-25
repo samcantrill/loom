@@ -380,14 +380,14 @@ class WorkloadUpgrade(maintenance._Upgrade):
                         ) from None
             raise
 
-    def host_observe(self, name, action, **values):
+    def _observation_request(self, name, action, **values):
         self.recheck_composed()
         row = self.intent["hosts"][name]
         declaration = _load_protected_config(
             Path(row["config"]),
             env_file=None if row["env_file"] is None else Path(row["env_file"]),
         )[2]
-        return sshops.ssh(
+        return (
             row["host"],
             {
                 **row,
@@ -700,8 +700,7 @@ def continue_upgrade(operation):
             for name, agent in intent["agents"].items()
         ])
         operation.settled()
-        for name in intent["agents"]:
-            fact = operation.host_observe(name, "upgrade-settlement")
+        for name, fact in operation.host_observations(intent["agents"], "upgrade-settlement"):
             if fact["availability"] != "available" or not fact["value"].get("settled"):
                 raise maintenance._Waiting("host native settlement: " + name, "settlement_pending")
         atomic(

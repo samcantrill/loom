@@ -45,6 +45,7 @@ def run_resident_probe(
     device_environment: Mapping[str, str] | None = None,
     runtime: Mapping[str, PlainData] | None = None,
     preparation: PreparationChildInput | None = None,
+    _verified_image=None,
 ) -> ResidentProbeResult:
     """Run a fixed Python probe in the worker environment and contain its tree.
 
@@ -82,7 +83,7 @@ def run_resident_probe(
     if profile.container is not None:
         return _container_probe(
             profile, script, request, float(timeout_seconds), device_environment, runtime, preparation,
-            temporary_root,
+            temporary_root, _verified_image,
         )
 
     try:
@@ -287,7 +288,7 @@ def _drain_and_contain(
     )
 
 
-def _container_probe(profile, script, request, timeout_seconds, device_environment, runtime, preparation, temporary_root):
+def _container_probe(profile, script, request, timeout_seconds, device_environment, runtime, preparation, temporary_root, image_paths=None):
     """Use the same daemon evidence owner for installed-environment probes.
 
     Unknown Docker effects retain scratch and evidence for operator recovery; they
@@ -309,11 +310,22 @@ def _container_probe(profile, script, request, timeout_seconds, device_environme
     output = workspace / "probe.json"
     binding = profile.container
     assert binding is not None
-    wrapper = (
-        "import sys, json; from pathlib import Path; "
-        "sys.stdout = Path(sys.argv.pop(1)).open('w'); "
-        "exec(json.loads(sys.argv.pop(1)))"
-    )
+    # The timestamp is diagnostic only. Record it inside the real guest before
+    # evaluating the selected workload so probe runtime is a separate quantity.
+    wrapper = """import json, sys, time
+from pathlib import Path
+output = Path(sys.argv.pop(1))
+sys.stdout = output.open("w")
+try:
+    output.with_suffix(".started").write_text(str(time.monotonic()))
+except OSError:
+    pass
+exec(json.loads(sys.argv.pop(1)))
+"""
+    from contextlib import ExitStack
+    from ._phase_timing import log_phases, observe_phases, phase
+    from ._submitted_image_launch import image_for_launch, physical_command
+    inputs = ExitStack()
     environment = _worker_environment(profile, workspace, (), {})
     environment.update(device_environment or {})
     try:
@@ -332,10 +344,11 @@ def _container_probe(profile, script, request, timeout_seconds, device_environme
             # owner retains/removes this entire scratch tree, including mounts.
             binding = {**binding, "container": replace(container, mounts=tuple(mounts)).to_dict()}
             profile = replace(profile, container=binding, temporary_mounts=())
-        if profile.submitted_execution is not None:
-            from .submitted_execution import verify_submitted_image
-
-            verify_submitted_image(profile.submitted_execution.image, profile.shared_roots)
+        if profile.submitted_execution is not None and image_paths is None:
+            with observe_phases(log_phases):
+                image_paths = inputs.enter_context(image_for_launch(
+                    profile.submitted_execution.image, profile.shared_roots, scratch.name,
+                ))
         command = build_container_worker(
             profile,
             workspace=workspace,
@@ -347,17 +360,25 @@ def _container_probe(profile, script, request, timeout_seconds, device_environme
             worker=(
                 str(binding["python_executable"]),
                 "-c",
-                wrapper,
+                f"exec({wrapper!r})",
                 str(output),
                 json.dumps(script),
                 json.dumps(request, sort_keys=True, separators=(",", ":")),
             ),
         )
+        if image_paths is not None:
+            from loom.pipeline.executors.apptainer.commands import ApptainerExecCommand
+            command = physical_command(cast(ApptainerExecCommand, command), image_paths)
     except (ValueError, OSError, RuntimeResourceError):
+        inputs.close()
         shutil.rmtree(scratch)
         return ResidentProbeResult(
             None, "installed container probe command is invalid", True
         )
+    except BaseException:
+        inputs.close()
+        shutil.rmtree(scratch)
+        raise
     contained = False
     succeeded = False
     try:
@@ -390,13 +411,23 @@ def _container_probe(profile, script, request, timeout_seconds, device_environme
                 SubprocessApptainerExecRunner,
             )
 
-            result = SubprocessApptainerExecRunner().run(
-                cast(ApptainerExecCommand, command), timeout_seconds=timeout_seconds,
-                host_environment={
-                    **os.environ,
-                    **dict.fromkeys(("TMPDIR", "TMP", "TEMP", "APPTAINER_TMPDIR", "SINGULARITY_TMPDIR"), str(scratch)),
-                },
-            )
+            start = monotonic()
+            with observe_phases(log_phases), phase("container_probe_exec", operation_id=scratch.name) as timing:
+                result = SubprocessApptainerExecRunner().run(
+                    cast(ApptainerExecCommand, command), timeout_seconds=timeout_seconds,
+                    host_environment={
+                        **os.environ,
+                        **dict.fromkeys(("TMPDIR", "TMP", "TEMP", "APPTAINER_TMPDIR", "SINGULARITY_TMPDIR"), str(scratch)),
+                    },
+                )
+                try:
+                    stamp = output.with_suffix(".started")
+                    if stamp.is_file() and stamp.stat().st_size <= 64:
+                        elapsed = float(stamp.read_text()) - start
+                        if 0 <= elapsed <= monotonic() - start:
+                            timing["seconds_to_first_guest_work"] = elapsed
+                except (ValueError, OSError):
+                    pass
             # The built-in timeout runner owns the qualified namespace barrier.
             contained = result.error is None
             succeeded = contained and result.returncode == 0 and not result.timed_out
@@ -421,5 +452,6 @@ def _container_probe(profile, script, request, timeout_seconds, device_environme
             True,
         )
     finally:
+        inputs.close()
         if contained:
             shutil.rmtree(scratch)

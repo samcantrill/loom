@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 
 import pytest
 
-from loom.fleet.releases import verify_release
+from loom.fleet.releases import pack_release, verify_release
 from loom.queue.errors import QueueConfigError, QueueConflictError
 from tests.integration.fleet.test_configuration import cli, inventory, snapshot
 
@@ -61,6 +62,20 @@ def test_valid_bundle_verifies_bytes_without_installation(tmp_path):
     assert result["descriptor_sha256"] == digest(path)
     assert result["installed"] is False and result["wheel_count"] == 1
     assert snapshot(tmp_path) == before
+
+
+def test_packing_hashes_sent_bytes_and_refuses_changed_selection(tmp_path):
+    path = bundle(tmp_path)
+    selected = verify_release(path)
+    payload = pack_release(path, selected)
+    for member in payload["files"]:
+        raw = base64.b64decode(member["data"])
+        assert raw == (tmp_path / member["path"]).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == member["sha256"]
+    wheel = next((tmp_path / "wheels").iterdir())
+    wheel.write_bytes(b"changed after release selection")
+    with pytest.raises(QueueConfigError, match="wheel"):
+        pack_release(path, selected)
 
 
 @pytest.mark.parametrize(
@@ -139,3 +154,27 @@ def test_preflight_valid_local_bundle_is_incomplete_not_remote_qualification(tmp
         cli("preflight", "--fleet", path, "--hosts", "gpu01", "--profile", "unknown")[0]
         == 2
     )
+
+
+def test_candidate_install_packs_selected_files_once_for_thirteen_roles(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from loom.fleet import ssh_operations
+
+    path = bundle(tmp_path)
+    selected = verify_release(path)
+    hosts = {str(n): {"host": "host-" + str(n)} for n in range(13)}
+    op = SimpleNamespace(inventory=SimpleNamespace(runtime_release=path),
+                         intent={"hosts": hosts, "release": selected})
+    packs, installs = [], {}
+    def pack(path, expected):
+        packs.append(path)
+        return pack_release(path, expected)
+    def install(host, request):
+        assert request["release"] == selected
+        installs[host] = request["files"]
+        return {"installed": True}
+    monkeypatch.setattr(ssh_operations, "pack_release", pack)
+    monkeypatch.setattr(ssh_operations, "ssh", install)
+    ssh_operations._install_candidates(op)
+    assert packs == [path] and len(installs) == 13
+    assert len({id(files) for files in installs.values()}) == 1

@@ -31,6 +31,7 @@ def submitted_command(
     agent_id: str,
     fence: str,
     allocation_environment: Mapping[str, str],
+    capture_image=None,
 ) -> ApptainerExecCommand:
     """Verify a new launch and project only its allocation and authorized mounts."""
     from ._container_worker import (
@@ -59,7 +60,7 @@ def submitted_command(
     prepare_container_worker_paths(
         profile, workspace=workspace.root, agent_id=agent_id, assignment=request,
     )
-    qualify_shared_worker_inputs(profile, request, agent_id=agent_id)
+    qualify_shared_worker_inputs(profile, request, agent_id=agent_id, capture_image=capture_image)
     workspace.accept_inputs(shared_roots=profile.shared_roots)
     resources = ResourceRequest.from_dict(request.resolved_runtime["resources"])
     # CPU, memory and walltime are delegated to the outer Slurm allocation.
@@ -113,37 +114,48 @@ def run_submitted_stage(
     fence: str,
 ) -> StageWorkerResult:
     """Launch once after the coordinator consumes the job's execution permit."""
-    command = submitted_command(
-        workspace,
-        policy,
-        agent_id=agent_id,
-        fence=fence,
-        allocation_environment=os.environ,
-    )
-    logs = workspace.root / "logs"
-    logs.mkdir(exist_ok=True)
-    # Bootstrap credentials/configuration and inherited container injection
-    # variables never become workload environment. The command owns cleanenv.
-    environment = {
-        key: value
-        for key, value in os.environ.items()
-        if not key.startswith(
-            ("LOOM_", "APPTAINERENV_", "SINGULARITYENV_", "APPTAINER_", "SINGULARITY_")
+    from contextlib import ExitStack
+    from ._phase_timing import observe_phases, log_phases, phase
+    from ._submitted_image_launch import image_for_launch, physical_command
+
+    with ExitStack() as inputs, observe_phases(log_phases):
+        paths = None
+        def capture_image(image, roots):
+            nonlocal paths
+            paths = inputs.enter_context(image_for_launch(image, roots, workspace.root.name))
+            return paths
+        command = submitted_command(
+            workspace,
+            policy,
+            agent_id=agent_id,
+            fence=fence,
+            allocation_environment=os.environ, capture_image=capture_image,
         )
-    }
-    with (
-        (logs / "container-stdout.log").open("ab") as stdout,
-        (logs / "container-stderr.log").open("ab") as stderr,
-    ):
-        completed = subprocess.run(
-            command.argv,
-            cwd=workspace.root,
-            env=environment,
-            stdin=subprocess.DEVNULL,
-            stdout=stdout,
-            stderr=stderr,
-            check=False,
-        )
+        logs = workspace.root / "logs"
+        logs.mkdir(exist_ok=True)
+        # Bootstrap credentials/configuration and inherited container injection
+        # variables never become workload environment. The command owns cleanenv.
+        environment = {
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith(
+                ("LOOM_", "APPTAINERENV_", "SINGULARITYENV_", "APPTAINER_", "SINGULARITY_")
+            )
+        }
+        with (
+            (logs / "container-stdout.log").open("ab") as stdout,
+            (logs / "container-stderr.log").open("ab") as stderr,
+        ):
+            with phase("submitted_slurm_container_exec", operation_id=workspace.root.name):
+                completed = subprocess.run(
+                    physical_command(command, paths).argv,
+                    cwd=workspace.root,
+                    env=environment,
+                    stdin=subprocess.DEVNULL,
+                    stdout=stdout,
+                    stderr=stderr,
+                    check=False,
+                )
     if completed.returncode:
         raise QueueServiceError(
             f"submitted SLURM worker exited with {completed.returncode}"
@@ -166,8 +178,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--workspace", required=True)
     path = Path(parser.parse_args(argv).workspace).resolve()
     workspace = SlurmBootstrapWorkspace(path.parent.parent, path.name)
+    from ._phase_timing import PhaseTimings
+    timings = PhaseTimings()
     profile = workspace.shared_launch_profile()
-    request = workspace.delivery()
+    request = timings.call("guest_assignment_read", workspace.delivery)
     from .submitted_execution import SUPPORTED_WORKER_CONTRACTS
 
     if (
@@ -200,6 +214,7 @@ def main(argv: list[str] | None = None) -> int:
         artifact_root=worker_artifact_root(workspace, container=True),
         shared_roots=roots,
     )
+    result = replace(result, executor_metadata={**result.executor_metadata, "native_timings": timings.payload()})
     atomic_write_json(workspace.root / "worker-result.json", result.to_dict())
     return 0
 

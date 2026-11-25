@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from contextlib import ExitStack
+from collections.abc import Callable, Mapping, Sequence
+from contextlib import AbstractContextManager, ExitStack, nullcontext
 from dataclasses import dataclass
 import fcntl
 import hashlib
@@ -219,6 +219,7 @@ def prepare_managed_run(
     *,
     execution_requirements: Mapping[str, ManagedExecutionRequirement],
     _defer_locked: bool = False,
+    _renderer_slot: Callable[[], AbstractContextManager] = nullcontext,
 ) -> ManagedLocalPreparationReceipt:
     """Prepare one managed run from trusted resolved inputs.
 
@@ -327,7 +328,7 @@ def prepare_managed_run(
 
             if rendered.run_uri != run_uri:
                 raise QueueConflictError("rendered configuration target conflicts")
-            with ProcessPoolExecutor(
+            with _renderer_slot(), ProcessPoolExecutor(
                 max_workers=1, mp_context=get_context("spawn")
             ) as worker:
                 receipt, digests = worker.submit(

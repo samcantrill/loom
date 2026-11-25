@@ -722,6 +722,21 @@ def test_missing_maintenance_capability_refuses_before_dispatch(owner, monkeypat
         server.stop()
 
 
+def test_replay_preserves_historical_gate_after_later_grant_revocation_and_restart(owner):
+    first = RunRequest(_request(), "first-queue")
+    second = RunRequest(replace(_request(), operation_id="second-check", run_name="second-target"), "second-queue")
+    change(owner, "close")
+    original = control(owner, "authorize", check=check_binding(owner, first), operation_id="grant-first")
+    stable_id = owner.status().coordinator_id
+    receipt = operator(owner).maintenance(original, expected_coordinator_id=stable_id)
+    change(owner, "authorize", operation_id="grant-second", check=check_binding(owner, second))
+    change(owner, "revoke", check=first.preparation.operation_id)
+    owner.stop()
+    owner.start()
+    assert set(operator(owner).observe_maintenance()["checks"]) == {second.preparation.operation_id}
+    assert operator(owner).maintenance(original, expected_coordinator_id=stable_id) == receipt
+
+
 def test_maintenance_owner_and_check_identity_remain_immutable_after_revocation(owner):
     request = RunRequest(_request(), "check-queue")
     change(owner, "close")

@@ -6,12 +6,10 @@ own identities. A lost transport reply is waiting, never proof of refusal.
 
 from __future__ import annotations
 
-import base64
-from concurrent.futures import ThreadPoolExecutor
-from contextvars import copy_context
 import fcntl
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 import shlex
@@ -25,7 +23,7 @@ from typing import Any, cast
 from loom.serialization import thaw_plain_data
 
 from loom.fleet.configuration import Inventory, protected_directory, _environment_files
-from loom.fleet.releases import verify_release
+from loom.fleet.releases import pack_release, verify_release
 from loom.queue.deployment import (
     _load_protected_config,
     read_agent_spec,
@@ -34,6 +32,8 @@ from loom.queue.deployment import (
 from loom.queue.errors import QueueConfigError, QueueConflictError
 from loom.coordinator import CoordinatorClientError
 from loom.fleet._host import atomic, read, digest
+from loom._observer_deadline import observer_budget, observer_end
+from loom.fleet._check_workers import host_steps, inline, rpc
 from loom.fleet._timing import ingest, measure
 
 
@@ -61,6 +61,7 @@ def _ssh(host, request, *, deadline=None):
     encoded = json.dumps(request, sort_keys=True).encode()
     if len(encoded) > 128 * 1024 * 1024:
         raise QueueConfigError("selected bundle exceeds the fixed host request limit")
+    deadline = observer_end(deadline)
     budget = 300 if deadline is None else min(300, deadline - time.monotonic())
     if budget <= 0:
         raise SshUnavailable("SSH observation deadline expired")
@@ -90,6 +91,8 @@ def _ssh(host, request, *, deadline=None):
         reply = json.loads(result.stdout)
         ingest(reply.get("timings", []), host=request.get("name", host))
         if reply["ok"] is not True:
+            if reply.get("code") == "BlockingIOError":
+                raise SshUnavailable("host operation has an active writer")
             if reply.get("code") == "ServiceStarting":
                 raise SshStarting(reply["reason"])
             raise QueueConflictError(reply.get("reason", "host operation refused"))
@@ -101,21 +104,26 @@ def _ssh(host, request, *, deadline=None):
 
 
 def _ssh_many(requests):
-    """Dispatch independent transports; their caller alone publishes receipts."""
-    if not requests:
-        return {}
-    results = {}
-    with ThreadPoolExecutor(max_workers=min(3, len(requests))) as workers:
-        pending = {
-            key: workers.submit(copy_context().run, ssh, host, request)
-            for key, (host, request) in requests.items()
-        }
-        for key, future in pending.items():
-            try:
-                results[key] = future.result()
-            except Exception as exc:
-                results[key] = exc
-    return results
+    def observe(name, host, request):
+        try:
+            return (yield from rpc((name,), ssh, host, request))
+        except Exception as exc:
+            return exc
+
+    flows = {name: observe(name, host, request) for name, (host, request) in requests.items()}
+    return host_steps(object(), flows, observer_end(), SshUnavailable)
+
+
+def _install_candidates(operation):
+    release = operation.intent["release"]
+    bundle = _bundle(operation.inventory, release)
+    requests = {
+        name: (row["host"], {**row, "action": "install-candidate", "release": release, **bundle})
+        for name, row in operation.intent["hosts"].items()
+    }
+    for response in _ssh_many(requests).values():
+        if isinstance(response, Exception):
+            raise response
 
 
 def _file_hash(path):
@@ -212,30 +220,28 @@ def plan(inventory: Inventory, *, hosts=None, issuer=None, env_file=None):
     """
     rows, declarations = _selection(inventory, hosts, env_file)
     requested = {"descriptor_sha256": _file_hash(inventory.runtime_release)}
+    def inspect_request(name, row):
+        declaration = declarations[name]
+        credential_role = (
+            declaration["agent_server"] if name == "coordinator" else declaration
+        )
+        fields = (
+            "certificate_path",
+            "private_key_path",
+            "client_ca_path" if name == "coordinator" else "server_ca_path",
+        )
+        credential_paths = [
+            str((Path(row["config"]).parent / credential_role[field]).resolve())
+            for field in fields
+        ]
+        return row["host"], {**row, "action": "inspect", "release": requested,
+                             "credential_paths": credential_paths}
+    observations = _ssh_many({name: inspect_request(name, row) for name, row in rows.items()})
     for name, row in rows.items():
         try:
-            declaration = declarations[name]
-            credential_role = (
-                declaration["agent_server"] if name == "coordinator" else declaration
-            )
-            fields = (
-                "certificate_path",
-                "private_key_path",
-                "client_ca_path" if name == "coordinator" else "server_ca_path",
-            )
-            credential_paths = [
-                str((Path(row["config"]).parent / credential_role[field]).resolve())
-                for field in fields
-            ]
-            observed = ssh(
-                row["host"],
-                {
-                    **row,
-                    "action": "inspect",
-                    "release": requested,
-                    "credential_paths": credential_paths,
-                },
-            )
+            observed = observations[name]
+            if isinstance(observed, Exception):
+                raise observed
             row["observation"] = observed
             if observed.get("service_manager") not in {None, inventory.service_manager}:
                 row["conflict"] = "service backend change requires a fresh installation"
@@ -298,33 +304,8 @@ def _inputs(inventory, rows, env_file):
     return {str(path): _file_hash(path) for path in paths}
 
 
-def _bundle(inventory):
-    import yaml
-
-    value = yaml.safe_load(inventory.runtime_release.read_text())
-    root = inventory.runtime_release.parent
-    paths = [
-        inventory.runtime_release,
-        root / value["requirements"]["path"],
-        root / value["wheelhouse"]["manifest"],
-    ]
-    paths.extend(
-        path
-        for path in (root / value["wheelhouse"]["path"]).rglob("*")
-        if path.is_file()
-    )
-    return {
-        "requirements": value["requirements"]["path"],
-        "wheelhouse": value["wheelhouse"]["path"],
-        "files": [
-            {
-                "path": str(path.relative_to(root)),
-                "sha256": _file_hash(path),
-                "data": base64.b64encode(path.read_bytes()).decode(),
-            }
-            for path in paths
-        ],
-    }
+def _bundle(inventory, selected):
+    return pack_release(inventory.runtime_release, selected)
 
 
 def _directory(inventory, operation_id):
@@ -451,8 +432,11 @@ def operation_evidence(inventory: Inventory, operation_id: str) -> dict[str, Any
 
 
 class _Operation:
-    def __init__(self, inventory, directory, intent):
+    def __init__(self, inventory, directory, intent, *, deadline=None):
+        self.deadline = observer_end(deadline)
+        self._enrolling = False
         self.inventory, self.directory, self.intent = inventory, directory, intent
+        self._role_cache = {}
         self.receipts = directory / "steps"
         protected_directory(self.receipts)
 
@@ -474,7 +458,7 @@ class _Operation:
                 else self.intent["declarations"][name]
             )
             current = _load_protected_config(
-                path,
+                path, cache=self._role_cache,
                 env_file=None if row["env_file"] is None else Path(row["env_file"]),
             )[2]
             if current != expected:
@@ -499,7 +483,8 @@ class _Operation:
         if verify_release(self.inventory.runtime_release) != self.intent["release"]:
             raise QueueConflictError("immutable service bundle changed")
 
-    def _prepare_call(self, name, action, *, _step_key=None, deadline=None, **values):
+    def call_steps(self, name, action, *, _step_key=None, deadline=None, **values):
+        budget = {} if deadline is None else {"deadline": deadline}
         self.recheck_composed()
         key = (
             name
@@ -542,7 +527,7 @@ class _Operation:
             if action != "install":
                 request["expected_declaration"] = digest(
                     _load_protected_config(
-                        Path(row["config"]),
+                        Path(row["config"]), cache=self._role_cache,
                         env_file=None
                         if row["env_file"] is None
                         else Path(row["env_file"]),
@@ -553,11 +538,11 @@ class _Operation:
         if receipt.exists():
             response = read(receipt)
             self.accept_update(name, response, directory)
-            return directory, request, response
+            return response
         pending_inputs = {}
         if (directory / "dispatch.json").exists() and action != "install":
-            response = ssh(row["host"], {**request, "action": "receipt"},
-                           **({"deadline": deadline} if deadline is not None else {}))
+            response = yield from rpc((key, "receipt"), ssh, row["host"],
+                                      {**request, "action": "receipt"}, **budget)
             if response is not None and "pending_publication" in response:
                 candidate = json.dumps(
                     response["pending_publication"]["after"], sort_keys=True
@@ -569,13 +554,26 @@ class _Operation:
             elif response is not None:
                 atomic(receipt, response)
                 self.accept_update(name, response, directory)
-                return directory, request, response
-        self.recheck(pending_inputs)
+                return response
+        try:
+            self.recheck(pending_inputs)
+        except QueueConflictError:
+            if not self._enrolling or name == "coordinator":
+                raise
+            # A colocated enrollment can publish its exact declaration before
+            # its reply reaches this writer. Revalidate after that publication.
+            yield "coordinator"
+            yield None
+            self.recheck(pending_inputs)
         atomic(
             directory / "dispatch.json",
             {"request_id": request["request_id"], "outcome": "unknown"},
         )
-        return directory, request, None
+        try:
+            response = yield from rpc((key, "dispatch"), ssh, row["host"], request, **budget)
+        except (SshUnavailable, QueueConflictError) as exc:
+            response = exc
+        return self._finish_call(name, directory, request, response)
 
     def _finish_call(self, name, directory, request, response):
         if isinstance(response, Exception):
@@ -589,39 +587,11 @@ class _Operation:
         return response
 
     def call(self, name, action, *, deadline=None, **values):
-        budget = {"deadline": deadline} if deadline is not None else {}
-        directory, request, retained = self._prepare_call(name, action, **budget, **values)
-        if retained is not None:
-            return retained
-        try:
-            response = ssh(self.intent["hosts"][name]["host"], request, **budget)
-        except (SshUnavailable, QueueConflictError) as exc:
-            response = exc
-        return self._finish_call(name, directory, request, response)
+        return inline(self.call_steps(name, action, deadline=deadline, **values))
 
     def call_many(self, calls):
-        """Retain all independent host intents before bounded transport dispatch."""
-        prepared, results = {}, {}
-        for name, action, values in calls:
-            directory, request, retained = self._prepare_call(name, action, **values)
-            if retained is not None:
-                results[name] = retained
-            else:
-                prepared[name] = (directory, request)
-        responses = _ssh_many({
-            name: (self.intent["hosts"][name]["host"], request)
-            for name, (_, request) in prepared.items()
-        })
-        errors = []
-        for name, response in responses.items():
-            directory, request = prepared[name]
-            try:
-                results[name] = self._finish_call(name, directory, request, response)
-            except Exception as exc:
-                errors.append(exc)
-        if errors:
-            raise errors[0]
-        return results
+        flows = {name: self.call_steps(name, action, **values) for name, action, values in calls}
+        return host_steps(self.directory, flows, self.deadline, SshUnavailable)
 
     def accept_update(self, name, response, directory):
         self.recheck_composed()
@@ -633,7 +603,7 @@ class _Operation:
         updates = read(updates_path) if updates_path.exists() else {}
         environment = self.intent["hosts"][name]["env_file"]
         current = _load_protected_config(
-            path, env_file=None if environment is None else Path(environment)
+            path, cache=self._role_cache, env_file=None if environment is None else Path(environment)
         )[2]
         if current != response["declaration"]:
             expected = updates.get(str(path), self.intent["inputs"][str(path)])
@@ -647,9 +617,12 @@ class _Operation:
         atomic(marker, {"sha256": updates[str(path)]})
 
     def observe(self, name, **values):
+        return host_steps(self.directory, {name: self.observe_steps(name, **values)},
+                          self.deadline, SshUnavailable)[name]
+
+    def observe_steps(self, name, **values):
         row = self.intent["hosts"][name]
-        return ssh(
-            row["host"],
+        return (yield from rpc((name, "owner"), ssh, row["host"],
             {
                 **{
                     key: row[key]
@@ -665,7 +638,7 @@ class _Operation:
                 "action": "observe",
                 "expected_declaration": digest(
                     _load_protected_config(
-                        Path(row["config"]),
+                        Path(row["config"]), cache=self._role_cache,
                         env_file=None
                         if row["env_file"] is None
                         else Path(row["env_file"]),
@@ -674,7 +647,7 @@ class _Operation:
                 "release": self.intent["release"],
                 **values,
             },
-        )
+        ))
 
 
 def apply(
@@ -686,6 +659,7 @@ def apply(
     env_file=None,
     resume=False,
     check_selection=None,
+    timeout_seconds=120,
 ) -> dict[str, Any]:
     """Apply or continue selected setup; unknown replies retain native IDs.
 
@@ -701,7 +675,9 @@ def apply(
     if (directory / "intent.json").exists() and read(directory / "intent.json").get("kind") is not None:
         raise QueueConflictError("operation is not a current setup intent")
     protected_directory(directory)
-    with (directory / "writer.lock").open("a") as writer:
+    if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+        raise QueueConfigError("timeout must be positive and finite")
+    with observer_budget(timeout_seconds), (directory / "writer.lock").open("a") as writer:
         try:
             fcntl.flock(writer, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
@@ -1068,10 +1044,19 @@ def _continue(operation):
         raise QueueConfigError(
             "setup requires at least one selected separate agent for checks"
         )
+    # Finish an uncertain shared publication before another agent derives a
+    # coordinator request from it. Host and controller can share this file.
+    for directory in sorted(operation.receipts.glob("coordinator-enroll-*")):
+        if (directory / "dispatch.json").exists() and not (directory / "local-input.json").exists():
+            request = read(directory / "intent.json")
+            values = {key: request[key] for key in (
+                "agent_id", "coordinator_id", "registration", "gpu_devices", "profile",
+                "container_capabilities", "grant_operator_access", "certificate", "certificate_fingerprint"
+            ) if key in request}
+            operation.call("coordinator", "enroll", **values)
     hostname = urlsplit(declarations[workers[0]]["url"]).hostname
-    bundle = _bundle(operation.inventory)
-    for name in intent["hosts"]:
-        operation.call(name, "install", **bundle)
+    bundle = _bundle(operation.inventory, intent["release"])
+    operation.call("coordinator", "install", **bundle)
     trust = operation.call(
         "coordinator",
         "prepare",
@@ -1088,10 +1073,15 @@ def _continue(operation):
         tuple[Path, Path], _connections(operation, coordinator_id, trust["ca"])
     )
     identities = {"coordinator": coordinator_id}
-    for name in workers:
-        prepared = operation.call(name, "prepare", declaration=declarations[name])
+    if operation.observe("coordinator")["owner"] != coordinator_id:
+        raise QueueConflictError("retained native identity changed")
+
+    def setup(name):
+        yield from operation.call_steps(name, "install", **bundle)
+        prepared = yield from operation.call_steps(name, "prepare", declaration=declarations[name])
         if prepared["csr"] is not None:
-            signed = operation.call(
+            yield "coordinator"
+            signed = yield from operation.call_steps(
                 "coordinator",
                 "issue",
                 agent_id=name,
@@ -1099,61 +1089,64 @@ def _continue(operation):
                 issuer=intent["issuer"],
                 issuer_fingerprint=trust["issuer_fingerprint"],
             )
+            yield None
             certificate = signed["certificate"]
-            operation.call(name, "receive", certificate=certificate, ca=signed["ca"])
+            yield from operation.call_steps(name, "receive", certificate=certificate, ca=signed["ca"])
         else:
             certificate = prepared["certificate"]
-        initialized = operation.call(name, "initialize")
+        initialized = yield from operation.call_steps(name, "initialize")
         identities[name] = initialized["owner"]
         devices = initialized["gpu_devices"]
-        operation.call(
-            "coordinator",
-            "enroll",
-            agent_id=name,
-            coordinator_id=coordinator_id,
-            registration=declarations[name]["registration"],
-            gpu_devices=devices,
-            profile=initialized["profile"],
-            **({"container_capabilities": initialized["container_capabilities"]}
-               if initialized.get("container_capabilities") else {}),
-            **({"grant_operator_access": intent["check_selection"]["grant_operator_access"]}
-               if intent["check_selection"].get("grant_operator_access") is not None else {}),
-            certificate=certificate,
-            certificate_fingerprint=_fingerprint(certificate),
-        )
-        operation.call(
+        yield "coordinator"
+        operation._enrolling = True
+        try:
+            yield from operation.call_steps(
+                "coordinator",
+                "enroll",
+                agent_id=name,
+                coordinator_id=coordinator_id,
+                registration=declarations[name]["registration"],
+                gpu_devices=devices,
+                profile=initialized["profile"],
+                **({"container_capabilities": initialized["container_capabilities"]}
+                   if initialized.get("container_capabilities") else {}),
+                **({"grant_operator_access": intent["check_selection"]["grant_operator_access"]}
+                   if intent["check_selection"].get("grant_operator_access") is not None else {}),
+                certificate=certificate,
+                certificate_fingerprint=_fingerprint(certificate),
+            )
+        finally:
+            operation._enrolling = False
+        yield None
+        yield from operation.call_steps(
             name,
             "start",
             expected_root_id=identities[name],
             coordinator_id=coordinator_id,
         )
-    operation.recheck()
-    for name, identity in identities.items():
-        fact = operation.observe(name)
-        if fact["owner"] != identity:
+        fact = yield from operation.observe_steps(name)
+        if fact["owner"] != identities[name]:
             raise QueueConflictError("retained native identity changed")
-    from loom.coordinator import CoordinatorOperatorClient
-
-    deadline = time.monotonic() + 30
-    with cast(
-        CoordinatorOperatorClient,
-        CoordinatorOperatorClient.from_connection_file(operator),
-    ) as client:
         while True:
-            if all(client.observe_agent(name).value.get("offer") for name in workers):
+            observation = yield from rpc((name, "offer"), observe_offer, name)
+            if observation.value.get("offer"):
                 break
-            if time.monotonic() >= deadline:
-                return {
-                    "state": "waiting",
-                    "reason": "fresh native resource offers unavailable",
-                    "identities": identities,
-                }
-            time.sleep(0.1)
+            yield time.monotonic() + 0.1
+        while True:
+            result = yield from rpc((name, "self-test"), check, name, bool(devices))
+            if result["outcome"] != "waiting":
+                return result
+            yield time.monotonic() + 0.1
+
+    from loom.coordinator import CoordinatorOperatorClient
     from loom.fleet.self_tests import self_test
     from loom.queue.submitted_execution import SubmittedContainerExecution
 
-    results = {}
-    for name in workers:
+    def observe_offer(name):
+        with CoordinatorOperatorClient.from_connection_file(operator) as client:
+            return client.observe_agent(name, deadline=operation.deadline)
+
+    def check(name, has_gpu):
         child = operation.directory / "checks" / name
         protected_directory(child)
         native_intents = list((child / "checks").glob("*/intent.json"))
@@ -1162,14 +1155,14 @@ def _continue(operation):
         child_inventory = dataclasses.replace(
             operation.inventory, path=child / "fleet.json"
         )
-        has_gpu = bool(
-            read(operation.receipts / (name + "-initialize") / "receipt.json")[
-                "gpu_devices"
-            ]
-        )
-        results[name] = self_test(
+        remaining = operation.deadline - time.monotonic()
+        if remaining <= 0:
+            raise SshUnavailable("setup observation deadline expired")
+        return self_test(
             child_inventory,
             deployment=deployment,
+            _setup_id="check-" + hashlib.sha256((intent["nonce"] + "/" + name).encode()).hexdigest()[:32],
+            _wait=False, timeout_seconds=remaining,
             operator_connection=operator,
             config=intent["check_selection"]["config"],
             agent_id=name,
@@ -1178,6 +1171,9 @@ def _continue(operation):
             execution=SubmittedContainerExecution.from_dict(intent["check_selection"]["execution"])
             if not native_intents and intent["check_selection"].get("execution") is not None else None,
         )
+    results = host_steps(operation.directory, {name: setup(name) for name in workers},
+                         operation.deadline, SshUnavailable)
+    operation.recheck()
     state = (
         "complete"
         if all(result["outcome"] == "passed" for result in results.values())

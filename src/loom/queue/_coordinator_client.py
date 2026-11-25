@@ -137,6 +137,8 @@ class NativeCoordinatorClient:
         negotiate: bool = True,
         waiting: bool = False,
     ) -> Any:
+        from loom._observer_deadline import observer_end
+        deadline = observer_end(deadline)
         bound = time.monotonic() + transport_io.REQUEST_BUDGET_SECONDS
         if deadline is not None:
             bound = min(bound, deadline)
