@@ -485,6 +485,7 @@ class SlurmStageRecord:
     compute_released_at: str | None = None
     start_request_id: str | None = None
     terminal_observation: Mapping[str, PlainData] | None = None
+    agent_sequence: int = 0
 
     @property
     def report_present(self) -> bool:
@@ -497,6 +498,28 @@ class SlurmStageRecord:
             and self.publication_completed_at is None
             and self.compute_released_at is None
         )
+
+
+@dataclass(frozen=True, slots=True)
+class _TaskPageSource:
+    assignment_id: str
+    mutable_fields: tuple
+    submission_json: str | None
+
+
+_AGENT_PAGE_FILTER = (
+    "WHERE a.state != 'released' AND json_extract(a.identity_json, '$.agent_id') = ? "
+    "AND json_extract(a.identity_json, '$.agent_root_id') = ? AND a.assignment_id > ? "
+    "ORDER BY a.assignment_id LIMIT ?"
+)
+
+
+def ensure_slurm_page_index(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        f"CREATE INDEX IF NOT EXISTS slurm_active_agent_page ON {_ASSIGNMENT_TABLE}"
+        "(json_extract(identity_json, '$.agent_id'), json_extract(identity_json, '$.agent_root_id'), assignment_id) "
+        "WHERE state != 'released'"
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -529,6 +552,7 @@ class SQLiteSlurmStageAssignments:
         _allow_initialize: bool = True,
         sqlite_policy: SQLitePolicy | None = None,
         schema_version: int = 3,
+        _on_terminal_operation: Callable[[str], None] | None = None,
     ) -> None:
         if type(schema_version) is not int or schema_version not in {3, 4, 5, 6, 7}:
             raise QueueServiceError("SLURM assignment schema selection is unsupported")
@@ -537,13 +561,14 @@ class SQLiteSlurmStageAssignments:
         self.transfer_root = Path(transfer_root)
         self._allow_initialize = _allow_initialize and sqlite_policy is None
         self._sqlite_policy = sqlite_policy
+        self._on_terminal_operation = _on_terminal_operation
 
     def _initialize(self) -> None:
         previous = self._allow_initialize
         self._allow_initialize = True
         try:
-            with self._transaction():
-                pass
+            with self._transaction() as conn:
+                ensure_slurm_page_index(conn)
         finally:
             self._allow_initialize = previous
 
@@ -611,6 +636,7 @@ class SQLiteSlurmStageAssignments:
         requested_gpu_count: int | None = None,
         max_reserved_gpus: int | None = None,
         reservation_guard: Callable[[], AbstractContextManager[None]] | None = None,
+        _reservation_transaction: Callable[[], AbstractContextManager[sqlite3.Connection]] | None = None,
     ) -> str:
         if not isinstance(assignment, SlurmStageAssignment):
             raise QueueServiceError("SLURM assignment is invalid")
@@ -650,7 +676,8 @@ class SQLiteSlurmStageAssignments:
             sort_keys=True,
             separators=(",", ":"),
         )
-        with (reservation_guard() if reservation_guard is not None else nullcontext()), self._transaction() as conn:
+        transaction = _reservation_transaction or self._transaction
+        with (reservation_guard() if reservation_guard is not None else nullcontext()), transaction() as conn:
             existing = conn.execute(
                 f"SELECT * FROM {_ASSIGNMENT_TABLE} WHERE assignment_id = ?",
                 (assignment.assignment_id,),
@@ -820,11 +847,14 @@ class SQLiteSlurmStageAssignments:
     def agent_evidence(
         self, assignment_id: str
     ) -> tuple[int, Mapping[str, PlainData] | None]:
-        with self._transaction() as conn:
-            row = self._row(conn, assignment_id)
-            return int(row["agent_sequence"]), None if row[
-                "agent_evidence_json"
-            ] is None else json.loads(str(row["agent_evidence_json"]))
+        with _connect(self.path, sqlite_policy=self._sqlite_policy, require_existing=True) as conn:
+            row = conn.execute(
+                f"SELECT agent_sequence, agent_evidence_json FROM {_ASSIGNMENT_TABLE} WHERE assignment_id = ?",
+                (assignment_id,),
+            ).fetchone()
+        if row is None:
+            raise QueueConflictError("SLURM assignment is not retained")
+        return int(row[0]), None if row[1] is None else json.loads(row[1])
 
     def accept_agent_evidence(
         self, assignment_id: str, sequence: int, evidence: Mapping[str, PlainData]
@@ -872,7 +902,7 @@ class SQLiteSlurmStageAssignments:
         }
         if (expected, next_state) not in allowed:
             raise QueueServiceError("invalid SLURM assignment transition")
-        with self._transaction() as conn:
+        with self._transaction(terminal_for=assignment_id if next_state in {"released", "conflict"} else None) as conn:
             row = self._row(conn, assignment_id)
             if str(row["state"]) == next_state:
                 return next_state
@@ -1013,7 +1043,7 @@ class SQLiteSlurmStageAssignments:
         }.get(state)
         if mapped is None:
             raise QueueServiceError("SLURM submission state is unsupported")
-        with self._transaction() as conn:
+        with self._transaction(terminal_for=assignment_id) as conn:
             row = self._row(conn, assignment_id)
             current = str(row["state"])
             if current in {
@@ -1252,6 +1282,13 @@ class SQLiteSlurmStageAssignments:
                 raise QueueConflictError("SLURM operation is not retained")
             return self._record(row)
 
+    def has_operation(self, operation_id: str) -> bool:
+        """Check public identity ownership without reading the job or its evidence."""
+        with _connect(self.path, sqlite_policy=self._sqlite_policy, require_existing=True) as conn:
+            return conn.execute(
+                f"SELECT 1 FROM {_ASSIGNMENT_TABLE} WHERE operation_id = ?", (operation_id,),
+            ).fetchone() is not None
+
     def find_operation(self, operation_id: str) -> SlurmStageRecord | None:
         """Return one exact retained operation without weakening store failures."""
 
@@ -1331,11 +1368,8 @@ class SQLiteSlurmStageAssignments:
         with _connect(self.path, sqlite_policy=self._sqlite_policy, require_existing=True) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
-                f"SELECT {self._agent_task_columns()} FROM {_ASSIGNMENT_TABLE} WHERE state != 'released' "
-                "AND json_extract(identity_json, '$.agent_id') = ? "
-                "AND json_extract(identity_json, '$.agent_root_id') = ? "
-                "AND (? IS NULL OR assignment_id > ?) ORDER BY assignment_id LIMIT ?",
-                (agent_id, agent_root_id, after, after, limit),
+                f"SELECT {self._agent_task_columns()} FROM {_ASSIGNMENT_TABLE} a " + _AGENT_PAGE_FILTER,
+                (agent_id, agent_root_id, after or "", limit),
             ).fetchall()
         return tuple(self._agent_task_record(row) for row in rows)
 
@@ -1344,7 +1378,7 @@ class SQLiteSlurmStageAssignments:
         with _connect(self.path, sqlite_policy=self._sqlite_policy, require_existing=True) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
-                f"SELECT {self._agent_task_columns()} FROM {_ASSIGNMENT_TABLE} WHERE assignment_id = ?",
+                f"SELECT {self._agent_task_columns()} FROM {_ASSIGNMENT_TABLE} a WHERE a.assignment_id = ?",
                 (assignment_id,),
             ).fetchone()
         if row is None:
@@ -1353,15 +1387,15 @@ class SQLiteSlurmStageAssignments:
 
     def _agent_task_columns(self) -> str:
         compute_release = (
-            "(publication_requested_at IS NOT NULL AND publication_completed_at IS NULL "
-            "AND compute_released_at IS NULL)"
+            "(a.publication_requested_at IS NOT NULL AND a.publication_completed_at IS NULL "
+            "AND a.compute_released_at IS NULL)"
             if self.schema_version >= 5 else "0"
         )
-        terminal = "terminal_observation_json" if self.schema_version >= 7 else "NULL"
+        terminal = "a.terminal_observation_json" if self.schema_version >= 7 else "NULL"
         return (
-            "identity_json, request_json, state, job_id, cluster, bootstrap_incarnation, "
-            "fence, process_execution_id, report_json IS NOT NULL AS report_present, "
-            f"start_consumed, agent_sequence, {compute_release} AS compute_release_requested, "
+            "a.identity_json, a.request_json, a.state, a.job_id, a.cluster, a.bootstrap_incarnation, "
+            "a.fence, a.process_execution_id, a.report_json IS NOT NULL AS report_present, "
+            f"a.start_consumed, a.agent_sequence, {compute_release} AS compute_release_requested, "
             f"{terminal} AS terminal_observation"
         )
 
@@ -1384,6 +1418,35 @@ class SQLiteSlurmStageAssignments:
                 json.loads(row["terminal_observation"]) if row["terminal_observation"] is not None else None
             ),
         )
+
+    def task_page_source(
+        self, conn: sqlite3.Connection, agent_id: str, root_id: str, after: str | None,
+        *, include_records: bool,
+    ) -> tuple[tuple[_TaskPageSource, ...], tuple[SlurmAgentTaskRecord, ...]]:
+        """Capture mutable task inputs and, on the initial read, the immutable deliveries."""
+        columns = [
+            "a.assignment_id", "a.state", "a.agent_sequence", "a.job_id", "a.cluster",
+            "a.bootstrap_incarnation", "a.process_execution_id", "a.fence", "a.start_consumed",
+            "a.report_json IS NOT NULL",
+        ]
+        if self.schema_version >= 5:
+            columns.extend(("a.publication_requested_at", "a.publication_completed_at", "a.compute_released_at"))
+        if self.schema_version >= 7:
+            columns.append("a.terminal_observation_json")
+        columns.append("s.value_json")
+        projection = ", ".join(columns)
+        if include_records:
+            projection += ", " + self._agent_task_columns()
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            f"SELECT {projection} FROM {_ASSIGNMENT_TABLE} a "
+            "LEFT JOIN ready_stage_submissions s ON s.operation_id = a.operation_id "
+            + _AGENT_PAGE_FILTER,
+            (agent_id, root_id, after or "", 33),
+        ).fetchall()
+        sources = tuple(_TaskPageSource(row[0], row[1:len(columns) - 1], row[len(columns) - 1]) for row in rows)
+        records = tuple(self._agent_task_record(row) for row in rows[:32]) if include_records else ()
+        return sources, records
 
     def read_input_chunk(
         self, assignment_id: str, incarnation: str, transfer_id: str, offset: int
@@ -1755,7 +1818,7 @@ class SQLiteSlurmStageAssignments:
         self.advance(assignment_id, expected="logical_released", next_state="released")
 
     @contextmanager
-    def _transaction(self) -> Iterator[sqlite3.Connection]:
+    def _transaction(self, *, terminal_for: str | None = None) -> Iterator[sqlite3.Connection]:
         if self.path.is_file():
             with inspect_sqlite_database(self.path) as conn:
                 initialize = _requires_initialization(conn, self._allow_initialize, self.schema_version)
@@ -1810,13 +1873,21 @@ class SQLiteSlurmStageAssignments:
                 conn.execute(f"PRAGMA user_version = {self.schema_version}")
             else:
                 _require_schema(conn, expected_version=self.schema_version)
+            before = conn.total_changes
+            terminal = None
             try:
                 yield conn
+                if terminal_for is not None and self._on_terminal_operation is not None and conn.total_changes != before:
+                    terminal = conn.execute(
+                        f"SELECT operation_id FROM {_ASSIGNMENT_TABLE} WHERE assignment_id = ? "
+                        "AND state IN ('released', 'conflict')", (terminal_for,),
+                    ).fetchone()
+                conn.commit()
             except Exception:
                 conn.rollback()
                 raise
-            else:
-                conn.commit()
+        if terminal is not None and self._on_terminal_operation is not None:
+            self._on_terminal_operation(terminal[0])
 
     @staticmethod
     def _row(conn: sqlite3.Connection, assignment_id: str) -> sqlite3.Row:
@@ -1861,6 +1932,7 @@ class SQLiteSlurmStageAssignments:
             start_consumed=bool(row["start_consumed"]),
             start_request_id=(None if "start_request_id" not in row.keys() else row["start_request_id"]),
             terminal_observation=(json.loads(row["terminal_observation_json"]) if "terminal_observation_json" in row.keys() and row["terminal_observation_json"] is not None else None),
+            agent_sequence=int(row["agent_sequence"]),
             agent_evidence_accepted_at=cast(
                 str | None, row["agent_evidence_accepted_at"]
             ),

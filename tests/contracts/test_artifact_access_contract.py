@@ -121,6 +121,8 @@ class LocalClient(CoordinatorClient):
         self.daemon = daemon
 
     def _native_call(self, operation, payload, expected=None, **kwargs):
+        if operation == "handshake":
+            return SimpleNamespace(coordinator_id="test-coordinator")
         return artifact_operation(
             self.daemon, operation, validate_artifact_request(operation, payload)
         )
@@ -155,6 +157,43 @@ def test_fetch_expiry_during_verification_prevents_publication(tmp_path, monkeyp
     assert result["items"][0]["outcome"] == "failed"
     assert result["success_count"] == 0
     assert list(destination.iterdir()) == []
+
+
+@pytest.mark.parametrize("external_state_root", [False, True])
+def test_ranges_read_the_named_original_fact_and_reauthorize_every_offset(tmp_path, monkeypatch, external_state_root):
+    from loom.pipeline.stores.coordinator_authority import EmbeddedCoordinatorAuthorityFactory, embedded_coordinator_authority
+    from loom.queue import _output_selection
+
+    daemon, authority, uri = fixture(tmp_path)
+    if external_state_root:
+        state = tmp_path / "authority-state"
+        state.mkdir(mode=0o700)
+        factory = EmbeddedCoordinatorAuthorityFactory(state, tmp_path)
+        authority = factory._store(uri)
+        authority.create_run(uri)
+        daemon.config.coordinator_authority_factory = factory
+    else:
+        daemon.config.coordinator_authority_factory = embedded_coordinator_authority
+    original, _ = local_ref(uri, b"first-data", name="original.bin")
+    current, _ = local_ref(uri, b"successor", name="successor.bin")
+    from loom.pipeline.status import StageStatus
+    from loom.pipeline.transition_policy import TransitionIntent
+
+    locator = publish(authority, uri, original)
+    authority.transition_stage(uri, "produce", from_status=StageStatus.SUCCEEDED,
+                               to_status=StageStatus.STALE, intent=TransitionIntent.RESUME)
+    publish(authority, uri, current)
+    client = LocalClient(daemon)
+    monkeypatch.setattr(SQLitePerRunAuthorityStore, "open_run", lambda *_: pytest.fail("full run read for exact artifact"))
+    monkeypatch.setattr(SQLitePerRunAuthorityStore, "list_output_commits", lambda *a, **kw: pytest.fail("historical scan"))
+    description = client.describe_artifact(locator, scope=SCOPE)
+    assert description["outcome"] == "available"
+    options = dict(scope=SCOPE, declaration=description["declaration"], member=description["primary"], length=4)
+    assert client.read_artifact_chunk(locator, offset=0, **options)["data"] == "Zmlycw=="
+    for wrong in (replace(locator, stage_name="other"), replace(locator, output_name="other"), replace(locator, commit_id="other")):
+        assert client.describe_artifact(wrong, scope=SCOPE)["outcome"] == "unavailable"
+    monkeypatch.setattr(_output_selection, "authorized_run", lambda *args: False)
+    assert client.read_artifact_chunk(locator, offset=4, **options)["outcome"] == "unavailable"
 
 
 @pytest.mark.parametrize("backend", ["embedded", "authenticated"])
@@ -352,7 +391,7 @@ def test_interrupted_retry_cleanup_corrupt_member_and_unavailable_authority(
     monkeypatch.setattr(client, "read_artifact_chunk", lost_reply)
     result = client.fetch_artifacts([selected], download_root / "retry", scope=SCOPE)
     assert result["success_count"] == 1
-    assert calls[0] == calls[1]
+    assert calls.count(calls[0]) == 2
 
     def corrupt_chunk(loc, **options):
         import base64
@@ -441,3 +480,166 @@ def test_trusted_tree_fetch_refuses_incomplete_companion_export(tmp_path):
         tmp_path / "download", scope=SCOPE, expected_coordinator_id=None)
     assert result["items"][0]["outcome"] == "unsupported_backend"
     assert not (tmp_path / "download").exists()
+
+
+def test_later_ranges_complete_with_first_range_paused(tmp_path, monkeypatch, download_root):
+    from threading import Event, Lock
+    from loom._artifact_ranges import CHUNK_BYTES, RANGE_WINDOW
+
+    daemon, authority, uri = fixture(tmp_path)
+    data = bytes(range(251)) * (CHUNK_BYTES * (RANGE_WINDOW + 2) // 251)
+    ref, _ = local_ref(uri, data)
+    locator = publish(authority, uri, ref)
+    client = LocalClient(daemon)
+    original = client.read_artifact_chunk
+    first, advanced, lock = Event(), Event(), Lock()
+    active = peak = 0
+    def read(loc, **options):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        try:
+            offset = options["offset"]
+            if not offset:
+                first.set()
+                assert advanced.wait(5)
+            assert first.wait(5)
+            result = original(loc, **options)
+            if offset >= CHUNK_BYTES * RANGE_WINDOW:
+                advanced.set()
+            return result
+        finally:
+            with lock:
+                active -= 1
+
+    monkeypatch.setattr(client, "read_artifact_chunk", read)
+    result = client.fetch_artifacts([{"locator": locator.to_dict()}], download_root / "window", scope=SCOPE)
+    assert result["success_count"] == 1 and 1 < peak <= RANGE_WINDOW
+    assert Path(result["items"][0]["primary_path"]).read_bytes() == data
+
+
+def test_concurrent_fleet_checks_share_range_capacity_and_verify_each_destination(tmp_path, monkeypatch, download_root):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event, Lock
+    from loom import _artifact_fetch, _artifact_ranges
+
+    daemon, authority, uri = fixture(tmp_path)
+    data = b"v" * (_artifact_ranges.CHUNK_BYTES * 5)
+    ref, _ = local_ref(uri, data)
+    locator = publish(authority, uri, ref)
+    gate, full, submitted, lock = Event(), Event(), Event(), Lock()
+    clients, pools = set(), set()
+    active = peak = 0
+    read = LocalClient.read_artifact_chunk
+    submit = ThreadPoolExecutor.submit
+
+    def offer(pool, fn, *args, **kwargs):
+        future = submit(pool, fn, *args, **kwargs)
+        if args and args[0] is _artifact_ranges._read:
+            with lock:
+                clients.add(args[1])
+                pools.add(pool)
+                if len(clients) == 3:
+                    submitted.set()
+        return future
+
+    def held(client, locator, **kw):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+            if active == _artifact_ranges.RANGE_WINDOW:
+                full.set()
+        try:
+            assert gate.wait(10)
+            return read(client, locator, **kw)
+        finally:
+            with lock:
+                active -= 1
+
+    monkeypatch.setattr(ThreadPoolExecutor, "submit", offer)
+    monkeypatch.setattr(LocalClient, "read_artifact_chunk", held)
+    with ThreadPoolExecutor(max_workers=3) as callers:
+        checks = [callers.submit(_artifact_fetch.fetch_artifacts, LocalClient(daemon), [{"locator": locator.to_dict()}],
+                                 download_root / str(i), scope=SCOPE, expected_coordinator_id="test-coordinator",
+                                 check_scratch=True) for i in range(3)]
+        try:
+            assert submitted.wait(10) and full.wait(10)
+            assert len(pools) == 1
+        finally:
+            gate.set()
+        for check in checks:
+            result = check.result()["items"][0]
+            assert result["verification"] == "recorded_sha256"
+            assert Path(result["primary_path"]).read_bytes() == data
+    assert peak == _artifact_ranges.RANGE_WINDOW
+    assert "test-coordinator" not in _artifact_ranges._check_pools
+
+
+@pytest.mark.parametrize(("errors", "outcome"), [
+    (["deadline_exceeded"], "available"),
+    (["deadline_exceeded", "deadline_exceeded"], "transport_deadline_exceeded"),
+    (["capacity_exhausted"], "capacity_exhausted"),
+])
+def test_range_attempt_deadline_and_capacity_remain_distinct_from_observer_expiry(
+    tmp_path, monkeypatch, download_root, errors, outcome,
+):
+    from time import monotonic
+    from loom import _artifact_fetch
+    from loom.queue._coordinator_control import CoordinatorClientError
+
+    daemon, authority, uri = fixture(tmp_path)
+    ref, _ = local_ref(uri)
+    locator = publish(authority, uri, ref)
+    client = LocalClient(daemon)
+    read = client.read_artifact_chunk
+    failures = iter(errors)
+    offsets = []
+    def limited(loc, **options):
+        offsets.append(options["offset"])
+        code = next(failures, None)
+        if code is not None:
+            raise CoordinatorClientError(code, operation="read_artifact_chunk", ids={}, boundary="connection")
+        return read(loc, **options)
+    monkeypatch.setattr(client, "read_artifact_chunk", limited)
+    result = _artifact_fetch.fetch_artifacts(client, [{"locator": locator.to_dict()}], download_root / "check",
+        scope=SCOPE, expected_coordinator_id="test-coordinator", check_scratch=True, deadline=monotonic() + 30)
+    assert result["items"][0]["outcome"] == outcome
+    assert offsets == ([0, 0] if errors[0] == "deadline_exceeded" else [0])
+
+
+def test_check_scratch_reauthorizes_and_restarts_changed_declaration(tmp_path, monkeypatch, download_root):
+    from loom import _artifact_ranges, _artifact_fetch
+
+    daemon, authority, uri = fixture(tmp_path)
+    ref, member = local_ref(uri, b"a" * 320000, checksum=False)
+    locator = publish(authority, uri, ref)
+    client = LocalClient(daemon)
+    selected = [{"locator": locator.to_dict()}]
+    destination = download_root / "private"
+    def fetch():
+        return _artifact_fetch.fetch_artifacts(
+            client, selected, destination, scope=SCOPE, expected_coordinator_id="test-coordinator",
+            check_scratch=True,
+        )["items"][0]
+    save = _artifact_ranges._save
+    def stop(path, data):
+        save(path, data)
+        raise TimeoutError("observer detached")
+    monkeypatch.setattr(_artifact_ranges, "_save", stop)
+    first = fetch()
+    assert first["outcome"] == "failed" and list((destination / ".ranges").glob("*/*"))
+    monkeypatch.setattr(_artifact_ranges, "_save", save)
+    resolver = daemon.config.coordinator_authority_factory
+    def offline(_):
+        raise OSError("owner unavailable")
+    monkeypatch.setattr(daemon.config, "coordinator_authority_factory", offline)
+    assert fetch()["outcome"] == "unavailable"
+    monkeypatch.setattr(daemon.config, "coordinator_authority_factory", resolver)
+    member.write_bytes(b"b" * 320000)
+    result = fetch()
+    assert result["outcome"] == "available" and result["verification"] == "unverified_original"
+    assert result["declaration"] != first["declaration"]
+    assert result["transfer"]["reused_bytes"] == 0
+    assert Path(result["primary_path"]).read_bytes() == member.read_bytes()

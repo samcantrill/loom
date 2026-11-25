@@ -8,8 +8,8 @@ private queue application infrastructure; pipeline execution never imports it.
 
 from __future__ import annotations
 
-from collections.abc import Generator
-from concurrent.futures import CancelledError
+from collections.abc import Callable, Generator
+from concurrent.futures import CancelledError, Future
 from loom._sqlite_policy import connect_existing, initialize_database
 from loom.pipeline.stores.atomic import atomic_write_text, atomic_write_bytes
 from ._storage_policy import StoragePolicy, parse_storage_policy
@@ -43,7 +43,7 @@ from loom.fingerprints import hash_mapping
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.pipeline.runtime._resource_controls import _validated_resource_controls
 from ._process_group import OwnedProcessGroup, require_group_wait_support
-from ._agent_progress import _Progress, _cooperative, _delay, _external, _steps
+from ._agent_progress import _Progress, _Spawn, _cooperative, _delay, _external, _steps
 from ._phase_timing import log_phases, observe_phases, phase
 from ._submitted_container_policy import SubmittedContainerPolicy
 from .submitted_execution import SubmittedContainerCapability, SubmittedContainerExecution
@@ -1916,6 +1916,8 @@ class AgentProcessSupervisorClient(_SupervisorControlClient):
     def __init__(
         self, agent_root: Path, configuration: SupervisorLaunchConfiguration
     ) -> None:
+        self._pending_control: dict[tuple[str, str], Future[SupervisorReceipt]] = {}
+        self._pending_control_lock = RLock()
         self._configuration = configuration
         super().__init__(agent_root, configuration.agent_id, configuration.fingerprint)
 
@@ -1947,25 +1949,62 @@ class AgentProcessSupervisorClient(_SupervisorControlClient):
     def request_stop(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
         return _receipt_from_value(self._call("request_stop", _launch_value(launch)))
 
+    def _control_exchange(self, operation: str, launch: ResidentWorkerLaunch, *, background: bool = False):
+        """Coalesce a single physical attempt from the receipt and execution views."""
+        key = (operation, launch.spec_digest)
+        with self._pending_control_lock:
+            pending = self._pending_control.get(key)
+            new = pending is None
+            if pending is None:
+                pending = Future()
+                self._pending_control[key] = pending
+
+        def send():
+            try:
+                if operation == "request_stop":
+                    receipt = yield from _external("stop", self.request_stop, launch)
+                else:
+                    raw = yield from _external("contain", self._call, "contain", _launch_value(launch))
+                    receipt = _receipt_from_value(raw)
+                pending.set_result(receipt)
+            except Exception as error:
+                pending.set_exception(error)
+            finally:
+                with self._pending_control_lock:
+                    del self._pending_control[key]
+
+        if new:
+            if background:
+                yield _Spawn(send())
+            else:
+                yield from send()
+        if not background:
+            while not pending.done():
+                yield from _delay(0.01)
+            return pending.result()
+        return None
+
     @_cooperative
-    def request_stop_wait(self, launch: ResidentWorkerLaunch) -> Generator[_Progress, Any, SupervisorReceipt]:
+    def request_stop_wait(self, launch: ResidentWorkerLaunch, *, checkpoint: Callable[[], None] | None = None) -> Generator[_Progress, Any, SupervisorReceipt]:
         """Join stop dispatch for synchronous callers, without claiming containment."""
-        return (yield from _steps(self._join, "request_stop", launch))
+        return (yield from _steps(self._join, "request_stop", launch, checkpoint=checkpoint))
 
     @_cooperative
-    def contain(self, launch: ResidentWorkerLaunch) -> Generator[_Progress, Any, SupervisorReceipt]:
-        return (yield from _steps(self._join, "contain", launch))
+    def contain(self, launch: ResidentWorkerLaunch, *, checkpoint: Callable[[], None] | None = None) -> Generator[_Progress, Any, SupervisorReceipt]:
+        return (yield from _steps(self._join, "contain", launch, checkpoint=checkpoint))
 
     @_cooperative
-    def _join(self, operation: str, launch: ResidentWorkerLaunch) -> Generator[_Progress, Any, SupervisorReceipt]:
+    def _join(self, operation: str, launch: ResidentWorkerLaunch, *, checkpoint: Callable[[], None] | None = None) -> Generator[_Progress, Any, SupervisorReceipt]:
         # Each exchange is bounded; only the synchronous caller joins a slow
         # effect. The service's reserved request handlers never wait for it.
         while True:
+            if checkpoint is not None:
+                checkpoint()
             try:
                 if operation == "query":
                     receipt = yield from _external("control", self.query, launch)
-                elif operation == "request_stop":
-                    receipt = yield from _external("control", self.request_stop, launch)
+                elif operation in {"request_stop", "contain"}:
+                    receipt = yield from self._control_exchange(operation, launch)
                 else:
                     receipt = _receipt_from_value((yield from _external("bulk", self._call, operation, _launch_value(launch))))
             except AgentProcessSupervisorError as exc:
@@ -2355,7 +2394,7 @@ class _SupervisorOperation:
 
 
 class _SupervisorDispatch:
-    """Two physical effects, no submission queue, and coalesced stop intent.
+    """Two general effects, one slow stop, and coalesced per-launch stop intent.
 
     The lock protects admission and operation maps only. Workers own all
     external waits; a disconnected requester cannot cancel an accepted effect.
@@ -2368,7 +2407,13 @@ class _SupervisorDispatch:
         self.lock = RLock()
         self.operations: dict[str, _SupervisorOperation] = {}
         self.active = 0
+        self._active_stops = 0
         self.closing = False
+
+    def _available(self, operation: str) -> int:
+        if operation == "request_stop":
+            return 1 - self._active_stops
+        return self._SLOW_LIMIT - (self.active - self._active_stops)
 
     def _snapshot(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
         self.supervisor._validate_launch(launch)
@@ -2433,7 +2478,7 @@ class _SupervisorDispatch:
                 if launch.backend_kind != "docker" and not current.temporary_storage_pending:
                     return current
             if entry is None:
-                if self.active >= self._SLOW_LIMIT or busy:
+                if not self._available(operation) or busy:
                     # New work is not accepted into a hidden executor queue.
                     if current.state is SupervisorLaunchState.NOT_ACCEPTED:
                         return current
@@ -2442,9 +2487,10 @@ class _SupervisorDispatch:
                 self.operations[launch.launch_operation_id] = entry
             if operation == "request_stop" and entry.active != "request_stop":
                 entry.stop = True
-            if not busy and self.active < self._SLOW_LIMIT:
+            selected = "request_stop" if entry.stop else operation
+            if not busy and self._available(selected):
                 self._start(
-                    entry, "request_stop" if entry.stop else operation,
+                    entry, selected,
                     new_launch=current.state is SupervisorLaunchState.NOT_ACCEPTED,
                 )
             if current.state is SupervisorLaunchState.NOT_ACCEPTED:
@@ -2470,6 +2516,7 @@ class _SupervisorDispatch:
         entry.new_launch = operation == "launch" and new_launch
         if operation == "request_stop":
             entry.stop = False
+            self._active_stops += 1
         self.active += 1
         Thread(target=self._run, args=(entry, operation), daemon=True).start()
 
@@ -2506,10 +2553,11 @@ class _SupervisorDispatch:
             entry.active = None
             entry.new_launch = False
             self.active -= 1
-            # One volatile stop intent per accepted launch, never another
-            # submitted task while both slow slots are charged.
+            if operation == "request_stop":
+                self._active_stops -= 1
+            # A detached caller leaves the accepted intent with the exact launch.
             for candidate in self.operations.values():
-                if self.active >= self._SLOW_LIMIT:
+                if not self._available("request_stop"):
                     break
                 if candidate.stop and candidate.active is None and not any(
                     item.active is not None
@@ -2521,12 +2569,13 @@ class _SupervisorDispatch:
     def retry_temporary_cleanup(self) -> None:
         """Use spare effect slots to resume terminal cleanup on agent reconnect."""
         with self.lock:
-            if self.closing or self.active >= self._SLOW_LIMIT:
+            available = self._available("query")
+            if self.closing or not available:
                 return
             with self.supervisor._connect() as conn:
                 rows = tuple(conn.execute(
                     "SELECT launch_json FROM launches WHERE temporary_storage_pending = 1 AND state = 'contained' LIMIT ?",
-                    (self._SLOW_LIMIT - self.active,),
+                    (available,),
                 ))
             for row in rows:
                 launch = _launch_from_value(json.loads(row["launch_json"]))

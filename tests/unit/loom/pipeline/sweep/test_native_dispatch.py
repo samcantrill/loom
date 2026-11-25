@@ -94,6 +94,7 @@ def test_persist_before_lost_response_and_replay_preserves_intent(
         deployment="selection.json",
         sweep_dir=tmp_path,
     )
+    assert len(sent) == 1  # Uncertain submission occupies the default window.
     write_sweep_plan(
         plan, tmp_path
     )  # A plan refresh must not erase accepted identities.
@@ -103,8 +104,8 @@ def test_persist_before_lost_response_and_replay_preserves_intent(
         deployment="selection.json",
         sweep_dir=tmp_path,
     )
-    assert sent[:2] == sent[2:]
-    assert [r.preparation.overrides for r in sent[:2]] == [
+    assert len(sent) == 3 and sent[0] == sent[1]
+    assert [r.preparation.overrides for r in sent[1:]] == [
         ("pipeline.name=base", 'pipeline.name="first"'),
         ("pipeline.name=base", 'pipeline.name="second"'),
     ]
@@ -117,6 +118,32 @@ def test_persist_before_lost_response_and_replay_preserves_intent(
     assert trials is not None
     assert trials.trials == plan.trials
     assert result.succeeded_count == 2
+
+
+def test_refused_resend_cannot_resolve_prior_unknown_acceptance(tmp_path, monkeypatch):
+    import loom
+
+    sent = []
+    outcomes = iter((ConnectionError("original reply lost"),
+                     QueueConfigError("local configuration refused resend")))
+
+    def send(request, **kwargs):
+        sent.append(request)
+        error = next(outcomes, None)
+        if error:
+            raise error
+        return _outcome(request)
+
+    monkeypatch.setattr(loom, "run", send)
+    args = dict(request_template=_template(), deployment="selection.json", sweep_dir=tmp_path)
+    for _ in range(2):
+        status = run_sweep(_plan(), **args)
+        assert [row.metadata["submission_state"] for row in status.trials] == [
+            "uncertain", "unselected"
+        ]
+    assert sent[0] == sent[1]
+    assert run_sweep(_plan(), **args).succeeded_count == 2
+    assert sent[2] == sent[0]
 
 
 def test_interruption_keeps_accepted_trial_and_leaves_remaining_unsent(
@@ -560,3 +587,154 @@ def _records(root) -> dict[str, Any]:
     manifest = read_sweep_plan(root).sweep_manifest
     assert manifest is not None
     return cast(dict[str, Any], manifest.metadata["native_runs"])
+
+
+def test_two_waiting_callers_count_the_same_uncertain_slot(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier, Event
+    from loom import _run, deployment
+
+    template = _template()
+    plan = plan_sweep(ManualSweepSpec(sweep_id="shared-window", run_uri_root="file:///runs", trials=tuple(
+        ManualTrialSpec(overrides={"pipeline.name": name}) for name in ("one", "two", "three")
+    )))
+    selection = SimpleNamespace(source=template.preparation.source, preparation_profile="local",
+                                startup_seconds=5, wait_seconds=None)
+    monkeypatch.setattr(deployment, "load_deployment", lambda _: selection)
+    ids = {}
+    reached_b, pending_b, deliver_a = Barrier(3), Event(), Event()
+
+    def observation(request, state):
+        result = _outcome(request, state).observation.to_dict()
+        result["connection"] = {"coordinator_id": "owner"}
+        return SimpleNamespace(to_dict=lambda: result, operation=SimpleNamespace(state="applied"),
+                               admission=SimpleNamespace(state=state))
+
+    def start(available, request, **kwargs):
+        trial_id = request.preparation.run_name
+        prior = ids.setdefault(trial_id, request)
+        assert prior == request
+        if trial_id == "trial-0001" and not deliver_a.is_set():
+            raise ConnectionError("lost acceptance response")
+        return observation(request, "ACTIVE")
+
+    def read(op, connection, **kwargs):
+        request = next(item for item in ids.values() if item.preparation.operation_id == op)
+        if request.preparation.run_name == "trial-0002" and not pending_b.is_set():
+            reached_b.wait(timeout=5)
+            assert pending_b.wait(5)
+        yield observation(request, "SUCCEEDED")
+
+    def available(*args, **kwargs):
+        return SimpleNamespace(connection_id="owner", roles={}, description=SimpleNamespace(coordinator_id="owner"),
+                               selection=selection, release=lambda deadline: None,
+                               client=SimpleNamespace(_run_observation_steps=read, close=lambda: None))
+
+    monkeypatch.setattr(deployment, "ensure_available", available)
+    monkeypatch.setattr(_run, "_start_exact", start)
+    monkeypatch.setattr(_run, "_cleanup_step", lambda *args: {"coordinator": {"state": "persistent/borrowed"}})
+    def invoke():
+        return run_sweep(plan, request_template=template, deployment="selection.json",
+                         sweep_dir=tmp_path, max_in_flight=2)
+
+    # Prewrite the plan as a normal 'sweep plan' invocation would.
+    write_sweep_plan(plan, tmp_path)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(invoke) for _ in range(2)]
+        try:
+            reached_b.wait(timeout=5)
+            rows = _records(tmp_path)
+            assert set(rows) == {"trial-0001", "trial-0002"}
+            assert rows["trial-0001"]["error"] and not rows["trial-0001"]["dispatch_failed"]
+            assert rows["trial-0002"]["observation"]["admission"]["state"] == "ACTIVE"
+        finally:
+            pending_b.set()
+        for future in futures:
+            assert future.result(timeout=5).succeeded_count == 2
+    deliver_a.set()
+    assert invoke().succeeded_count == 3
+    assert len(ids) == 3
+
+
+def test_wider_window_detaches_with_an_active_read_and_resumes_same_trials(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from loom import _run, deployment
+
+    template = _template()
+    plan = plan_sweep(ManualSweepSpec(
+        sweep_id="detach-window", run_uri_root="file:///runs", trials=tuple(
+            ManualTrialSpec(overrides={"pipeline.name": name}) for name in ("a", "b", "c")
+        ),
+    ))
+    selection = SimpleNamespace(source=template.preparation.source, preparation_profile="local",
+                                startup_seconds=4, wait_seconds=0.8)
+    monkeypatch.setattr(deployment, "load_deployment", lambda _: selection)
+    entered, allow, closed = Event(), Event(), Event()
+    requests = {}
+
+    def observation(request, state):
+        row = _outcome(request, state).observation.to_dict()
+        row["connection"] = {"coordinator_id": "owner"}
+        return SimpleNamespace(to_dict=lambda: row, operation=SimpleNamespace(state="applied"),
+                               admission=SimpleNamespace(state=state))
+
+    def start(available, request, **kwargs):
+        op = request.preparation.operation_id
+        assert op not in requests
+        requests[op] = request
+        return observation(request, "ACTIVE")
+
+    def open_trial(*args, attachment_id, **kwargs):
+        original_read = False
+
+        def read(op, connection, **kwargs):
+            nonlocal original_read
+            request = requests[op]
+            if request.preparation.run_name == "trial-0001" and attachment_id == op:
+                original_read = True
+                entered.set()
+                assert allow.wait(6)
+            yield observation(request, "SUCCEEDED" if allow.is_set() else "ACTIVE")
+
+        def close():
+            if original_read:
+                assert allow.is_set()
+                closed.set()
+
+        return SimpleNamespace(connection_id="owner", roles={}, description=SimpleNamespace(coordinator_id="owner"),
+                               selection=selection, release=lambda end: None,
+                               client=SimpleNamespace(_run_observation_steps=read, close=close))
+
+    monkeypatch.setattr(deployment, "ensure_available", open_trial)
+    monkeypatch.setattr(_run, "_start_exact", start)
+    monkeypatch.setattr(_run, "_cleanup_step", lambda *args: {"coordinator": {"state": "persistent/borrowed"}})
+
+    def invoke():
+        return run_sweep(plan, request_template=template, deployment="selection.json",
+                         sweep_dir=tmp_path, max_in_flight=2)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        watcher = pool.submit(invoke)
+        try:
+            assert entered.wait(3)
+            watcher.result(timeout=3)
+            assert not closed.is_set()
+            saved = _records(tmp_path)
+            assert set(saved) == {"trial-0001", "trial-0002"}
+            assert all(r["observation"]["admission"]["state"] == "ACTIVE" for r in saved.values())
+        finally:
+            allow.set()
+        assert closed.wait(3)
+    assert _records(tmp_path) == saved
+    selection.wait_seconds = None
+    assert invoke().succeeded_count == 3
+    assert len(requests) == 3
+
+
+@pytest.mark.parametrize("window", [0, -1, 1.5, True])
+def test_invalid_window_precedes_sweep_persistence(tmp_path, window):
+    with pytest.raises(SweepProtocolError, match="positive integer"):
+        run_sweep(_plan(), request_template=_template(), deployment="selection.json",
+                  sweep_dir=tmp_path / "sweep", max_in_flight=window)
+    assert not (tmp_path / "sweep").exists()

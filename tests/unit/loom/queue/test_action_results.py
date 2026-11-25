@@ -57,6 +57,40 @@ def _publish(store, claim):
     return result
 
 
+def test_authority_grant_uses_selected_attempt_and_reopens_only_unresolved_stage(tmp_path):
+    from types import SimpleNamespace
+
+    from loom.pipeline.stores.authority import ExecutionFence
+    from loom.queue._action_result_resolution import ActionResultResolution
+
+    store = _store(tmp_path)
+    claim = _select(store)["claim"]
+    assert _select(store, "consumer")["decision"] == "wait"
+    reads = []
+
+    def open_run(uri):
+        reads.append(uri)
+        return SimpleNamespace(stages=[SimpleNamespace(
+            stage_name="generate", attempts=[SimpleNamespace(attempt_id=name) for name in ("from-authority", "other")]
+        )])
+
+    resolver = object.__new__(ActionResultResolution)
+    resolver.store = store
+    resolver.execution = SimpleNamespace(_authority_store=lambda uri: SimpleNamespace(open_run=open_run))
+    fence = ExecutionFence("assignment", "from-authority", "fence")
+    resolver.attach_fence("consumer", fence)
+    assert reads == []
+    assert store.claim(claim["claim_id"])["assignment_id"] is None
+    resolver.attach_fence("run-a", fence)
+    assert reads == ["run-a"]
+    assert store.claim(claim["claim_id"])["assignment_id"] == "assignment"
+    resolver.attach_fence("run-a", fence)
+    assert reads == ["run-a"]
+    with pytest.raises(QueueConflictError, match="producer fence conflicts"):
+        resolver.attach_fence("run-a", ExecutionFence("successor", "other", "different"))
+    assert reads == ["run-a", "run-a"]
+
+
 def test_racing_demands_have_one_producer_and_reopen_retains_it(tmp_path):
     store = _store(tmp_path)
     barrier = Barrier(2)

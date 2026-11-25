@@ -7,7 +7,7 @@ from loom._sqlite_policy import SQLitePolicy, connect_existing, initialize_datab
 import hashlib
 import json
 import sqlite3
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
@@ -789,6 +789,19 @@ class SQLiteStageWorkStore:
             for row in rows
         )
 
+    def ready_ids(self, stage_work_ids: set[str]) -> set[str]:
+        """Return the READY subset of the supplied retained work identities."""
+        if not stage_work_ids:
+            return set()
+        with self._read_connection() as conn:
+            # Drive primary-key probes from the supplied IDs. An IN filter
+            # with a READY predicate can scan the entire ready-window index.
+            return {str(row[0]) for row in conn.execute(
+                "SELECT s.stage_work_id FROM json_each(?) AS ids CROSS JOIN stage_work AS s "
+                "ON s.stage_work_id = ids.value WHERE s.scheduling_state = 'ready'",
+                (json.dumps(tuple(stage_work_ids)),),
+            )}
+
     def find_stage_work(self, stage_work_id: str) -> StageWorkRecord | None:
         """Read the selected durable record without materializing the ready backlog."""
         with self._read_connection() as conn:
@@ -800,6 +813,24 @@ class SQLiteStageWorkStore:
 
     def ready_window(
         self, *, limit: int = READY_WINDOW_LIMIT,
+        after: StageWorkRecord | None = None, rotate_after: int | None = None,
+        ready_through: int | None = None, enqueue_through: int | None = None,
+        gpu_heads_only: bool = False,
+    ) -> tuple[StageWorkRecord, ...]:
+        return self._read_window(
+            _decode_stage_work, limit=limit, after=after, rotate_after=rotate_after,
+            ready_through=ready_through, enqueue_through=enqueue_through, gpu_heads_only=gpu_heads_only,
+        )
+
+    def _scheduling_window_reader(self):
+        """Reuse an exact payload only within the scheduling owner's read-only view."""
+        from functools import lru_cache, partial
+
+        decode = lru_cache(maxsize=2 * READY_WINDOW_LIMIT)(_decode_stage_work)
+        return partial(self._read_window, decode)
+
+    def _read_window(
+        self, decode: Callable[[str], StageWorkRecord], *, limit: int = READY_WINDOW_LIMIT,
         after: StageWorkRecord | None = None,
         rotate_after: int | None = None,
         ready_through: int | None = None,
@@ -845,7 +876,7 @@ class SQLiteStageWorkStore:
                  *(() if after is None else _ready_window_key(after, rotate_after)), limit),
             ).fetchall()
         return tuple(
-            StageWorkRecord.from_dict(_json_loads(cast(str, row["record_json"])))
+            decode(cast(str, row["record_json"]))
             for row in rows
         )
 
@@ -932,6 +963,42 @@ class RunOrchestrator:
         controller_action: ControllerActionHandler | None = None,
         ready_action: ReadyActionHandler | None = None,
     ) -> tuple[StageWorkRecord, ...]:
+        steps = self._ready_steps(
+            admission_id=admission_id, plan=plan, authority_snapshot=authority_snapshot,
+            placements=placements, execution_requirements=execution_requirements,
+            ready_at=ready_at, run_priority=run_priority, enqueue_sequence=enqueue_sequence,
+            max_work_items=max_work_items, after_stage=after_stage, resolve_ready=ready_action is not None,
+        )
+        revision = None
+        try:
+            while True:
+                try:
+                    stage, readiness, expected = steps.send(revision)
+                except StopIteration as settled:
+                    return settled.value
+                revision = None
+                if readiness.action is PlanAction.RUN and ready_action is not None:
+                    revision = ready_action(stage, readiness, expected)
+                elif controller_action is not None:
+                    controller_action(stage, readiness)
+        finally:
+            steps.close()
+
+    def _ready_steps(
+        self,
+        *,
+        admission_id: str,
+        plan: ExecutionPlan,
+        authority_snapshot: AuthoritativeRunSnapshot,
+        placements: Mapping[str, ResolvedStagePlacement],
+        execution_requirements: Mapping[str, ManagedExecutionRequirement],
+        ready_at: int,
+        run_priority: int = 0,
+        enqueue_sequence: int = 0,
+        max_work_items: int = 256,
+        after_stage: str | None = None,
+        resolve_ready: bool = False,
+    ) -> Generator[tuple[StagePlan, AttemptReadiness, BackendRevision], BackendRevision | None, tuple[StageWorkRecord, ...]]:
         admission_id = _non_empty(admission_id, "admission_id")
         _integer(ready_at, "ready_at", minimum=0)
         _integer(max_work_items, "max_work_items", minimum=1)
@@ -1036,11 +1103,12 @@ class RunOrchestrator:
             ):
                 continue
             if readiness.action is not PlanAction.RUN:
-                if controller_action is not None:
-                    controller_action(stage_plan, readiness)
+                committed = yield stage_plan, readiness, current_revision
+                if committed is not None:
+                    current_revision = _advance_revision_cursor(current_revision, committed)
                 continue
-            if ready_action is not None and prior_intent is None:
-                resolved_revision = ready_action(stage_plan, readiness, current_revision)
+            if resolve_ready and prior_intent is None:
+                resolved_revision = yield stage_plan, readiness, current_revision
                 if resolved_revision is not None:
                     current_revision = _advance_revision_cursor(current_revision, resolved_revision)
                     continue
@@ -1613,6 +1681,10 @@ def _string_mapping(value: Mapping[str, object], name: str) -> Mapping[str, str]
 
 def _json_dumps(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _decode_stage_work(payload: str) -> StageWorkRecord:
+    return StageWorkRecord.from_dict(_json_loads(payload))
 
 
 def _json_loads(value: str) -> object:

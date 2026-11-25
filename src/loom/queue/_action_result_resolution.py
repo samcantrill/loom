@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from concurrent.futures import Future
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+from functools import partial
 from time import monotonic
 from uuid import uuid4
 import json
@@ -33,13 +34,15 @@ from loom.pipeline.planning.fingerprints import _output_spec_identity
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores.authority import ActionProducerBinding
 from loom.pipeline.stores.coordinator_authority import coordinator_authority_identity
-from loom.pipeline.stores.read_models import ActionResultBinding, LifecycleReason
+from loom.pipeline.stores.read_models import ActionResultBinding, AuthoritativeRunSnapshot, LifecycleReason
 from loom.pipeline.stores.local_artifacts import LocalArtifactStore
 from loom.pipeline.stores.errors import ArtifactStoreError
 from loom.pipeline.stores.shared_artifacts import binding as shared_binding, verify_ref
 from loom.serialization import PlainData
 
 from ._action_results import ActionResults
+from ._run_observations import ObservationSteps
+from ._result_verification import PendingResult
 from ._phase_timing import PhaseTimings, phase
 from ._preparation_operations import _PendingActionVerification
 from .errors import QueueConflictError
@@ -78,6 +81,12 @@ class _PendingReuseProof:
     timings: PhaseTimings
 
 
+@dataclass(frozen=True, slots=True)
+class _PendingProducerRead:
+    token: tuple[Any, ...]
+    future: Future[tuple[Any, AuthoritativeRunSnapshot]]
+
+
 class _InputUnavailable(Exception):
     def __init__(self, port: str, artifact: ArtifactRef) -> None:
         self.detail = {"input_port": port, "original_artifact": artifact.to_dict()}
@@ -92,6 +101,7 @@ class ActionResultResolution:
         self.store = ActionResults(self.daemon._connection)
         # Bounded, disposable wait hints. Restart/eviction repeats the full proof;
         # no cached contract or artifact evidence can authorize adoption.
+        self._producer_reads: dict[tuple[str, str], _PendingProducerRead] = {}
         self._pending: dict[tuple[str, str], _PendingReuse] = {}
         self._contexts: dict[tuple[str, str], _PendingReuseContext] = {}
         self._reuse_proofs: dict[tuple[str, str], _PendingReuseProof] = {}
@@ -100,18 +110,64 @@ class ActionResultResolution:
         claims = self.store.producers(run_uri)
         if not claims:
             return
-        # These claims have one immutable owner run. Reuse its authority handle
-        # only for this pass; every operation still reads current durable state.
-        # Reconstructing it per claim also rereads the run and audit history.
         authority = self.execution._authority_store(run_uri)
+        self._apply_producer_observation(
+            authority, claims, authority.open_run(run_uri) if self._needs_observation(claims) else None,
+        )
+
+    @staticmethod
+    def _needs_observation(claims: tuple[dict[str, Any], ...]) -> bool:
+        return any(claim["state"] in {"owned", "settling"} for claim in claims)
+
+    def producer_steps(self, run_uri: str, authority: Any) -> ObservationSteps[None]:
+        claims = self.store.producers(run_uri)
+        snapshot = (yield) if self._needs_observation(claims) else None
+        self._apply_producer_observation(authority, claims, snapshot)
+
+    def _apply_producer_observation(
+        self, authority: Any, claims: tuple[Mapping[str, Any], ...], snapshot: AuthoritativeRunSnapshot | None,
+    ) -> None:
         for claim in claims:
-            self._observe(claim, authority)
+            # A retry or a demand detach can supersede a read in flight. Its
+            # original attempt must never release the successor's permission.
+            if snapshot is None or self.store.claim(claim["claim_id"])["revision"] == claim["revision"]:
+                self._observe(claim, authority, snapshot)
+
+    def _observe_waiting_producer(self, key: tuple[str, str], claim: Mapping[str, Any]) -> None:
+        uri = claim["owner_run_uri"]
+        # Live producers reconcile their own claims, even during cancellation.
+        # A retained terminal admission from a previous release may still
+        # need a consumer to drive settlement after restart.
+        with self.daemon._connection() as conn:
+            owner = conn.execute("SELECT state FROM managed_admissions WHERE run_uri = ?", (uri,)).fetchone()
+        if owner is not None and owner[0] not in {"SUCCEEDED", "FAILED", "CANCELLED", "BLOCKED"}:
+            return
+        token = (self.daemon._epoch, self.daemon._scheduling_epoch, claim["claim_id"], claim["revision"])
+        pending = self._producer_reads.get(key)
+        if pending is not None:
+            if not pending.future.done():
+                return
+            del self._producer_reads[key]
+            if pending.token == token:
+                authority, snapshot = pending.future.result()
+                self._apply_producer_observation(authority, (claim,), snapshot)
+                return
+        if len(self._producer_reads) >= 2:
+            return
+
+        def read():
+            authority = self.execution._authority_store(uri)
+            return authority, authority.open_run(uri)
+
+        future = self.daemon._result_verifications.bulk.submit(claim["claim_id"], "reuse_producer_observation", read)
+        if future is not None:
+            self._producer_reads[key] = _PendingProducerRead(token, future)
 
     def detach_graph(self, run_uri: str, operation_id: str) -> None:
         self.daemon._result_verifications.bulk.discard(("run", run_uri))
         self.daemon._result_verifications.bulk.discard(("dispatch", run_uri))
         self.daemon._preparations.discard_verification_reports(run_uri)
-        for work in (self._contexts, self._reuse_proofs):
+        for work in (self._contexts, self._reuse_proofs, self._producer_reads):
             for key in tuple(work):
                 if key[0] == run_uri:
                     del work[key]
@@ -127,7 +183,7 @@ class ActionResultResolution:
                 )
 
     def discard_terminal_contexts(self) -> None:
-        for work in (self._contexts, self._reuse_proofs):
+        for work in (self._contexts, self._reuse_proofs, self._producer_reads):
             for key, pending in tuple(work.items()):
                 if pending.future is not None and not pending.future.done():
                     continue
@@ -156,31 +212,30 @@ class ActionResultResolution:
         )
 
     def attach_fence(self, run_uri: str, fence: Any) -> None:
-        snapshot = self.execution._authority_store(run_uri).open_run(run_uri)
-        stage = next(
-            (
-                stage
-                for stage in snapshot.stages
-                if any(
-                    attempt.attempt_id == fence.attempt_id for attempt in stage.attempts
-                )
-            ),
-            None,
-        )
-        if stage is None:
-            raise QueueConflictError("action producer attempt is unavailable")
-        claim = self.store.owner(run_uri, stage.stage_name)
+        claims = self.store.producers(run_uri)
+        if not claims:
+            return
+        claim = next((row for row in claims if row["attempt_id"] == fence.attempt_id), None)
+        if claim is None:
+            # A retained claim may predate selection of the exact attempt.
+            # Resolve those cases and an unexpected successor through authority.
+            snapshot = self.execution._authority_store(run_uri).open_run(run_uri)
+            node = next((stage.stage_name for stage in snapshot.stages
+                         if any(attempt.attempt_id == fence.attempt_id for attempt in stage.attempts)), None)
+            if node is None:
+                raise QueueConflictError("action producer attempt is unavailable")
+            claim = next((row for row in claims if row["owner_node"] == node), None)
         if claim is not None:
             self.store.attach_fence(
                 claim["claim_id"],
                 run_uri=run_uri,
-                node=stage.stage_name,
+                node=claim["owner_node"],
                 attempt_id=fence.attempt_id,
                 assignment_id=fence.assignment_id,
                 fencing_token=fence.fencing_token,
             )
 
-    def resolve(
+    def resolve_steps(
         self,
         admission: Any,
         intent: Any,
@@ -188,17 +243,22 @@ class ActionResultResolution:
         stage_plan: Any,
         readiness: Any,
         revision: Any,
-    ) -> Any:
+        snapshot: AuthoritativeRunSnapshot,
+    ) -> ObservationSteps[Any]:
         timings = PhaseTimings()
+        emit_timings = True
         try:
             with timings.measure("reuse_resolution"):
-                return self._resolve(admission, intent, authority, stage_plan, readiness, revision, timings)
+                return (yield from self._resolve(admission, intent, authority, stage_plan, readiness, revision, snapshot, timings))
+        except GeneratorExit:
+            emit_timings = False
+            raise
         finally:
-            if len(timings.spans) > 2 or timings.related:
+            if emit_timings and (len(timings.spans) > 2 or timings.related):
                 try:
                     # Audit writes happen after the revision-guarded transition.
-                    self.execution._event_observers.defer_emit(
-                        self.execution._authority_for_run(admission.run_uri), admission.run_uri,
+                    authority.defer_event(
+                        self.execution._event_observers, admission.run_uri,
                         event_type="stage.reuse_timing", stage_name=stage_plan.stage_name,
                         revision=replace(revision, created_at=datetime.now(timezone.utc).isoformat()),
                         identity=uuid4().hex, payload=timings.payload(),
@@ -208,8 +268,8 @@ class ActionResultResolution:
 
     def _resolve(
         self, admission: Any, intent: Any, authority: Any, stage_plan: Any,
-        readiness: Any, revision: Any, timings: PhaseTimings,
-    ) -> Any:
+        readiness: Any, revision: Any, snapshot: AuthoritativeRunSnapshot, timings: PhaseTimings,
+    ) -> ObservationSteps[Any]:
         # Context loading already captured this retained document, including
         # its absence. Runs without project contracts cannot use action reuse;
         # they need no per-stage bulk operation merely to rediscover that fact.
@@ -240,7 +300,6 @@ class ActionResultResolution:
         # Recheck periodically even when a child cannot finish: unavailable
         # original bytes can prevent verifier input materialization indefinitely.
         # Completion or changed bindings also take this full path before adoption.
-        snapshot = timings.call("reuse_authority_read", authority.open_run, run_uri)
         token = (
             self.daemon._epoch, self.daemon._scheduling_epoch,
             readiness_binding, admission.cancellation_operation_id,
@@ -316,13 +375,16 @@ class ActionResultResolution:
             or readiness.expected_stage_status is StageStatus.STALE,
         )
         claim = selected["claim"]
-        timings.call("reuse_retention", self._retain, claim)
+        with timings.measure("reuse_retention"):
+            yield partial(self._retain, claim)
+        if self.store.claim(claim["claim_id"])["revision"] != claim["revision"]:
+            return revision
         if selected["decision"] == "owner":
             self._reuse_proofs.pop(key, None)
             timings.call("reuse_producer_binding", authority.bind_action_producer, run_uri, self._producer_binding(claim))
             return None
         if selected["decision"] == "wait":
-            timings.call("reuse_producer_observation", self._observe, claim)
+            timings.call("reuse_producer_observation", self._observe_waiting_producer, key, claim)
             selected = timings.call("reuse_lookup", self.store.select,
                 run_uri=run_uri, node=node, scope=scope, identity=identity
             )
@@ -333,7 +395,7 @@ class ActionResultResolution:
         if selected["decision"] == "failed":
             self._reuse_proofs.pop(key, None)
             return self._reject(
-                authority, run_uri, node, revision, claim, "action.producer_failed"
+                authority, snapshot, run_uri, node, revision, claim, "action.producer_failed"
             )
         if selected["decision"] == "bound":
             try:
@@ -343,7 +405,7 @@ class ActionResultResolution:
                     return revision
             except (ArtifactStoreError, OSError, QueueConflictError):
                 return self._reject(
-                    authority,
+                    authority, snapshot,
                     run_uri,
                     node,
                     revision,
@@ -362,7 +424,7 @@ class ActionResultResolution:
                 return revision
         except (ArtifactStoreError, OSError, QueueConflictError):
             return self._reject(
-                authority,
+                authority, snapshot,
                 run_uri,
                 node,
                 revision,
@@ -394,14 +456,7 @@ class ActionResultResolution:
                 ),
             },
         }
-        from loom.pipeline._project_contracts import CONTRACTS, report_entry
-        from loom.pipeline.stores.shared_artifacts import binding as shared_binding
-        reports = {}
-        for label, source_uri in (("producer", claim["owner_run_uri"]), ("desired", run_uri)):
-            prepared = self.execution.run_store.read_prepared_run(source_uri)
-            reference = report_entry(prepared["metadata"][CONTRACTS])["report_ref"]
-            if shared_binding(ArtifactRef.from_dict(reference).metadata) is not None:
-                reports[label] = reference
+        reports = yield partial(self._project_report_refs, claim["owner_run_uri"], run_uri)
         if reports:
             candidate["access"] = {**plain_mapping(candidate["access"]), "project_reports": reports}
         candidate["candidate_digest"] = hash_mapping(candidate)
@@ -424,12 +479,12 @@ class ActionResultResolution:
             return revision
         if verification["failure_code"] is not None:
             return self._reject(
-                authority, run_uri, node, revision, claim, "action.verification_invalid"
+                authority, snapshot, run_uri, node, revision, claim, "action.verification_invalid"
             )
         verdict = action_verification_response(verification["verification"], candidate)
         if verdict["verdict"] == "rejected":
             return self._reject(
-                authority,
+                authority, snapshot,
                 run_uri,
                 node,
                 revision,
@@ -441,10 +496,12 @@ class ActionResultResolution:
         # project verifier returns above and requires a new audit on resumption.
         # Recheck mutable authority, retention and principal before binding.
         try:
-            self._checked_result_outputs(claim, result, timings=timings)
+            source_timings = PhaseTimings()
+            yield partial(self._checked_result_outputs, claim, result, timings=source_timings)
+            timings.observe(source_timings.payload())
         except (ArtifactStoreError, OSError, QueueConflictError):
             return self._reject(
-                authority,
+                authority, snapshot,
                 run_uri,
                 node,
                 revision,
@@ -472,6 +529,16 @@ class ActionResultResolution:
             ActionResultBinding.from_dict(binding),
             expected_revision=revision,
         )
+
+    def _project_report_refs(self, producer_uri: str, run_uri: str) -> dict[str, PlainData]:
+        from loom.pipeline._project_contracts import CONTRACTS, report_entry
+        reports = {}
+        for label, source_uri in (("producer", producer_uri), ("desired", run_uri)):
+            prepared = self.execution.run_store.read_prepared_run(source_uri)
+            reference = report_entry(prepared["metadata"][CONTRACTS])["report_ref"]
+            if shared_binding(ArtifactRef.from_dict(reference).metadata) is not None:
+                reports[label] = reference
+        return reports
 
     def _load_reuse_context(
         self, run_uri: str, intent: Any, stage_plan: Any, snapshot: Any,
@@ -528,20 +595,19 @@ class ActionResultResolution:
             cast(str, report["operation_id"]), implementation, plain_mapping(contract), identity,
         )
 
-    def _observe(self, claim: Mapping[str, Any], authority: Any) -> None:
-        self._observe_result(claim, authority)
+    def _observe(self, claim: Mapping[str, Any], authority: Any, snapshot: AuthoritativeRunSnapshot | None) -> None:
+        if snapshot is not None:
+            self._observe_result(claim, authority, snapshot)
         current = self.store.claim(claim["claim_id"])
-        if current["state"] != "owned" and current["attempt_id"] is not None:
+        if (current["state"] != "owned" and current["attempt_id"] is not None
+                and current["attempt_id"] == claim["attempt_id"]):
             authority.release_action_producer(
                 current["owner_run_uri"], self._producer_binding(current)
             )
 
-    def _observe_result(self, claim: Mapping[str, Any], authority: Any) -> None:
+    def _observe_result(self, claim: Mapping[str, Any], authority: Any, snapshot: AuthoritativeRunSnapshot) -> None:
         if claim["state"] not in {"owned", "settling"}:
             return
-        snapshot = authority.open_run(
-            claim["owner_run_uri"]
-        )
         stage = next(
             (
                 stage
@@ -572,15 +638,12 @@ class ActionResultResolution:
                 "commit": stage.latest_commit.to_dict(),
                 "artifact_facts": [fact.to_dict() for fact in stage.artifact_facts],
             }
-            try:
-                outputs = self._checked_result_outputs(claim, result)
-            except (ArtifactStoreError, OSError, QueueConflictError):
-                self.store.fail(claim["claim_id"], {"code": "candidate_unavailable"},
-                                expected_revision=claim["revision"])
-                return
+            def verify():
+                outputs = self._checked_result_outputs(claim, result, snapshot=snapshot)
+                self._verify_artifacts(outputs)
+
             self.daemon._result_verifications.submit(
-                claim, (self.daemon._epoch, self.daemon._scheduling_epoch), result,
-                outputs, self._verify_artifacts,
+                claim, (self.daemon._epoch, self.daemon._scheduling_epoch), result, verify,
             )
         elif stage.status in {StageStatus.FAILED, StageStatus.CANCELLED}:
             self.store.fail(
@@ -600,11 +663,6 @@ class ActionResultResolution:
         self, key: tuple[str, str], token: tuple[Any, ...], context: _ReuseContext,
         claim: Mapping[str, Any], result: Mapping[str, PlainData], timings: PhaseTimings,
     ) -> bool:
-        try:
-            outputs = self._checked_result_outputs(claim, result, timings=timings)
-        except (ArtifactStoreError, OSError, QueueConflictError):
-            self._reuse_proofs.pop(key, None)
-            raise
         claim_token = tuple(claim[name] for name in (
             "claim_id", "revision", "owner_run_uri", "owner_node",
             "attempt_id", "assignment_id", "fencing_token",
@@ -621,38 +679,51 @@ class ActionResultResolution:
         if key not in self._reuse_proofs and len(self._reuse_proofs) >= 2:
             return False
         worker_timings = PhaseTimings()
+        def verify():
+            outputs = self._checked_result_outputs(claim, result, timings=worker_timings)
+            worker_timings.call("reuse_artifact_verification", self._verify_artifacts, outputs)
+            # Bytes and original authority can change independently during the
+            # audit. A completed proof includes a fresh retention/commit check.
+            self._checked_result_outputs(claim, result, timings=worker_timings)
+
         future = self.daemon._result_verifications.bulk.submit(
-            key[0] + ":" + key[1], "reuse_result_verification",
-            worker_timings.call, "reuse_artifact_verification", self._verify_artifacts, outputs,
+            key[0] + ":" + key[1], "reuse_result_verification", verify,
         )
         self._reuse_proofs[key] = _PendingReuseProof(token, context, claim_token, future, worker_timings)
         return False
 
     def complete_verifications(self) -> None:
-        for completed in self.daemon._result_verifications.completed():
-            with phase("action_result_completion_apply",
-                       operation_id=str(completed.claim["claim_id"])):
-                claim, result = completed.claim, completed.result
-                if completed.epochs != (self.daemon._epoch, self.daemon._scheduling_epoch):
-                    continue
-                current = self.store.claim(claim["claim_id"])
-                keys = ("revision", "owner_run_uri", "owner_node", "attempt_id", "assignment_id", "fencing_token")
-                if any(current[key] != claim[key] for key in keys):
-                    continue
-                try:
-                    completed.future.result()
-                    self._checked_result_outputs(current, result)
-                except (ArtifactStoreError, OSError, QueueConflictError):
-                    self.store.fail(claim["claim_id"], {"code": "candidate_unavailable", "original_result": result},
-                                    expected_revision=claim["revision"])
-                    continue
-                self.store.publish(claim["claim_id"], result=result,
-                                   expected_revision=claim["revision"], attempt_id=claim["attempt_id"],
-                                   assignment_id=claim["assignment_id"], fencing_token=claim["fencing_token"])
+        self.daemon._result_verifications.advance(self._apply_verified_producer)
+
+    def _apply_verified_producer(self, completed: PendingResult) -> None:
+        from ._coordinator_transactions import short_write
+
+        claim, result = completed.claim, completed.result
+        def current_owner():
+            return (self.daemon._execution is self.execution and not self.daemon._stop.is_set()
+                    and completed.epochs == (self.daemon._epoch, self.daemon._scheduling_epoch))
+
+        with phase("action_result_completion_apply", operation_id=str(claim["claim_id"])):
+            if not current_owner() or self.store.claim(claim["claim_id"])["revision"] != claim["revision"]:
+                return
+            try:
+                completed.future.result()
+                self._checked_result_outputs(claim, result)
+                failure = None
+            except (ArtifactStoreError, OSError, QueueConflictError):
+                failure = {"code": "candidate_unavailable", "original_result": result}
+
+            def commit(conn):
+                # Reload, shutdown, demand detachment, or retry can win during
+                # verification. No filesystem or authority read runs in this guard.
+                if current_owner():
+                    self.store.settle_verified_in(conn, claim, result, failure)
+
+            short_write(self.daemon, commit)
 
     def _checked_result_outputs(
         self, claim: Mapping[str, Any], result: Mapping[str, PlainData],
-        *, timings: PhaseTimings | None = None,
+        *, timings: PhaseTimings | None = None, snapshot: AuthoritativeRunSnapshot | None = None,
     ) -> dict[str, ArtifactRef]:
         with phase("action_result_verification"):
             timings = timings or PhaseTimings()
@@ -661,7 +732,9 @@ class ActionResultResolution:
                 self.execution.run_store.local_run_dir(uri)
             ):
                 raise QueueConflictError("action result retention is unavailable")
-            snapshot = timings.call("reuse_authority_read", self.execution._authority_store(uri).open_run, uri)
+            if snapshot is None:
+                snapshot = timings.call("reuse_authority_read", self.execution._authority_store(uri).open_run, uri)
+            assert snapshot is not None
             stage = next(
                 (
                     stage
@@ -707,6 +780,7 @@ class ActionResultResolution:
     @staticmethod
     def _reject(
         authority: Any,
+        snapshot: AuthoritativeRunSnapshot,
         run_uri: str,
         node: str,
         revision: Any,
@@ -717,7 +791,7 @@ class ActionResultResolution:
         current = next(
             (
                 stage.status
-                for stage in authority.open_run(run_uri).stages
+                for stage in snapshot.stages
                 if stage.stage_name == node
             ),
             None,

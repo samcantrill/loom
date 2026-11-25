@@ -416,6 +416,29 @@ def test_pregrant_cancellation_releases_exact_claim_before_decline(
     )
 
 
+def test_cancel_reconciles_a_claim_acquired_before_prepare_result_was_recorded(tmp_path, monkeypatch):
+    journal = SQLiteAgentJournal(tmp_path / "journal.sqlite")
+    assignment = _assignment()
+    provider, command = _provider()
+    providers = {"cpu": provider}
+    journal.persist_request(assignment, {"request": "durable"})
+
+    def interrupt_before_journal_write(*args):
+        raise OSError("interrupt between provider prepare and journal write")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(journal, "_set_state", interrupt_before_journal_write)
+        with pytest.raises(OSError):
+            journal.prepare_composite(assignment, (command,), providers)
+    assert journal.read_state(assignment.assignment_id) is AssignmentState.REQUEST_DURABLE
+    assert provider.observe(ObserveRequest("agent", "session", "before")).live_claim_ids
+    reopened = SQLiteAgentJournal(journal.path, _allow_initialize=False)
+    assert reopened.cancel_pregrant(assignment.assignment_id, providers) is AssignmentState.DECLINED
+    assert not provider.observe(ObserveRequest("agent", "session", "after")).live_claim_ids
+    reopened.release_declined(assignment.assignment_id, "released-revision")
+    assert reopened.cancel_pregrant(assignment.assignment_id, {}) is AssignmentState.RELEASED
+
+
 def test_journal_rejects_event_gap_and_conflicting_replay(tmp_path) -> None:
     journal = SQLiteAgentJournal(tmp_path / "journal.sqlite")
     assignment = _assignment()
@@ -434,6 +457,15 @@ def test_journal_rejects_event_gap_and_conflicting_replay(tmp_path) -> None:
     with pytest.raises(ManagedLocalError, match="conflicts"):
         journal.record_event(assignment.assignment_id, 1, "event-1", {"kind": "result"})
     assert journal.acknowledge(assignment.assignment_id, 1) == 1
+    journal.record_event(assignment.assignment_id, 2, "event-2", {"kind": "end"})
+    journal.acknowledge(assignment.assignment_id, 2)
+    journal.acknowledge(assignment.assignment_id, 2)
+    with pytest.raises(ManagedLocalError, match="gap"):
+        journal.acknowledge(assignment.assignment_id, 3)
+    with sqlite3.connect(journal.path) as conn:
+        assert conn.execute(
+            "SELECT sequence, acknowledged_sequence FROM events ORDER BY sequence"
+        ).fetchall() == [(1, 1), (2, 2)]
 
 
 def test_regular_file_tree_replay_rejects_extra_companion(tmp_path) -> None:
@@ -1098,6 +1130,76 @@ def test_event_replay_after_commit_can_be_acknowledged_exactly_once(tmp_path) ->
         == 1
     )
     assert journal.acknowledge(command.assignment.assignment_id, sequence) == 1
+
+
+@pytest.mark.parametrize("interruption", ["partial", "lost_reply", "wrong_receipt"])
+def test_event_batch_recovers_exact_content_across_restart(tmp_path, interruption):
+    from types import SimpleNamespace
+    from loom.queue import agent_session_transport as transport
+    from loom.queue._agent_event_batch import apply_event_batch, pack_event_batch
+    from loom.queue._agent_session_codec import _MAX_BODY_BYTES, _decode
+    from loom.queue._agent_session_journal import _canonical_json
+    from loom.queue._remote_stage_execution import _ResidentAssignmentWorkspace
+    from loom.queue.errors import QueueConflictError
+
+    _, command = _provider()
+    assignment = command.assignment
+    identity = assignment.assignment_id
+    path = tmp_path / "coordinator.sqlite"
+    _seed_stage_work(path, assignment)
+    coordinator = SQLiteCoordinatorAssignments(path, command.claim.atoms)
+    coordinator.publish_offer(_offer(assignment, command.claim.atoms))
+    coordinator.reserve(assignment, (command.claim,), max_parallel_stages=1,
+                        decision_receipt=_decision_receipt(assignment, command.claim))
+    workspace = _ResidentAssignmentWorkspace(tmp_path, identity)
+    for sequence in range(1, 33):
+        workspace.record_event(sequence, f"event-{sequence}", {"message": "x" * 4000})
+
+    def record(session_id, assignment_id, *, sequence, event_id, payload):
+        assert (session_id, assignment_id) == ("session", identity)
+        if interrupted and interruption == "partial" and sequence == 3:
+            raise ConnectionError("coordinator restart")
+        ack = coordinator.record_event(assignment_id, sequence, event_id, payload)
+        return {"assignment_id": assignment_id, "acknowledged_sequence": ack}
+
+    view = SimpleNamespace(report_event=record)
+    requests = []
+
+    def exchange(operation, request):
+        assert operation == "event_batch"
+        raw = _canonical_json(request).encode()
+        assert len(raw) <= _MAX_BODY_BYTES
+        requests.append(raw)
+        receipt = apply_event_batch(view, _decode(raw, event_batch=True))
+        if interrupted and interruption == "lost_reply":
+            raise ConnectionError("lost response")
+        if interrupted and interruption == "wrong_receipt":
+            return {**receipt, "request_digest": "wrong"}
+        return receipt
+
+    client = SimpleNamespace(_supports_event_batch=True, _assignment_call=lambda s, a, fn: fn(),
+                             _call=exchange, report_event=record)
+    interrupted = True
+    with pytest.raises(QueueConflictError if interruption == "wrong_receipt" else ConnectionError):
+        transport.LocalDaemonAgentHttpClient._flush_workspace_events(client, "session", workspace)
+    assert len(workspace.pending_events()) == 32
+    interrupted = False
+    coordinator = SQLiteCoordinatorAssignments(path, command.claim.atoms)
+    workspace = _ResidentAssignmentWorkspace(tmp_path, identity)
+    batch, _ = pack_event_batch("session", identity, workspace.pending_events(limit=2))
+    batch["events"][1]["sequence"] += 1
+    with pytest.raises(QueueConflictError, match="gap"):
+        apply_event_batch(view, batch)
+    batch["events"][1]["sequence"] -= 1
+    batch["events"][0]["payload"] = {"message": "changed"}
+    with pytest.raises(ManagedLocalError, match="replay conflicts"):
+        apply_event_batch(view, batch)
+    transport.LocalDaemonAgentHttpClient._flush_workspace_events(client, "session", workspace, final=True)
+    assert requests[0] == requests[1]
+    assert len(requests) == 3
+    assert not workspace.pending_events()
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM coordinator_events WHERE assignment_id = ?", (identity,)).fetchone()[0] == 32
 
 
 def test_shared_local_projection_keeps_native_tree_without_copy(tmp_path, monkeypatch):

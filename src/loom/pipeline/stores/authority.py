@@ -388,7 +388,13 @@ class PreparedAttemptExecutionAuthority(PreparedAttemptAuthority, Protocol):
     ) -> None: ...
     def unbind_prepared_attempt(
         self, run_uri: str, *, assignment_id: str, attempt_id: str
-    ) -> None: ...
+    ) -> None:
+        """Retain exact pre-grant release, including a never-bound cancelled attempt.
+
+        The latter requires a prepared attempt covered by the effective epoch
+        and no competing binding. An existing grant always retains its fence.
+        """
+        ...
     def grant_prepared_attempt(
         self, run_uri: str, *, assignment_id: str, attempt_id: str
     ) -> ExecutionFence: ...

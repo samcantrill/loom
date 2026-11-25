@@ -6,6 +6,7 @@ does not import diagnostics, the integration facade, or worker process owners.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 import json
@@ -16,6 +17,7 @@ from typing import Any, cast
 
 from loom.serialization import PlainData, thaw_plain_data
 
+from ._phase_timing import reported_phases, qualification_timings
 from ._shared_assignment import _AssignmentPayloadRootRequired
 from .errors import (
     QueueConflictError,
@@ -720,12 +722,7 @@ def dispatch_control(
         elif operation == "startup_release":
             result = daemon._lifetime.release(cast(str, value["attachment_id"]))
         elif operation == "service_lifetime":
-            with daemon._cycle_lock:
-                result = {"coordinator_id": daemon._require_started(), "coordinator_epoch": daemon._epoch, "retiring": daemon._lifetime.retiring, "retained": daemon._lifetime.retained(), "cleanup_blocked": daemon._lifetime.cleanup_blocked}
-                if value["agent_root_id"] is not None:
-                    with daemon._connection() as conn:
-                        row = conn.execute("SELECT value FROM daemon_metadata WHERE key = ?", ("service-agent:" + cast(str, value["agent_root_id"]),)).fetchone()
-                    result["agent"] = None if row is None else json.loads(row[0])
+            result = daemon._lifetime.observe(value["agent_root_id"])
         elif operation == "status":
             result = view.status()
         elif operation == "admissions":
@@ -831,7 +828,9 @@ def dispatch_control(
                 )
             dispatched = True
             try:
-                result = view.start_run(run_request) if run_request is not None else view.prepare_run(request)
+                with (reported_phases("durable_acceptance", operation_id=request.operation_id)
+                      if qualification_timings() else nullcontext()):
+                    result = view.start_run(run_request) if run_request is not None else view.prepare_run(request)
             except QueueConflictError as exc:
                 raise control_error(
                     "conflict",

@@ -253,10 +253,24 @@ def _trial_status(
             else native["request"]["preparation"]["operation_id"],
             "admission_id": admission.get("admission_id"),
             "dispatch_error": None if native is None else native.get("error"),
+            "submission_state": _submission_state(native),
             "provider_trial_id": trial.provider_trial_id,
             "proposal_overrides": dict(trial.proposal_overrides),
         },
     )
+
+
+def _submission_state(native: Mapping[str, Any] | None) -> str:
+    if native is None:
+        return "unselected"
+    observation = native.get("observation") or {}
+    if observation.get("operation") or observation.get("admission") or native.get("cancellation_operation_id"):
+        return "accepted"
+    if native.get("dispatch_failed"):
+        return "rejected"
+    if native.get("error"):
+        return "uncertain"
+    return "intent_retained"
 
 
 def _outcome(

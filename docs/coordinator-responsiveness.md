@@ -6,6 +6,16 @@ Merged responsiveness change: `codex/coordinator-responsiveness`, based on
 Follow-up branch: `codex/slow-publication-recovery`, based on merged `c65af543`.
 This is a focused maintenance change, not a numbered roadmap stage.
 
+## Measuring lifecycle latency
+
+Set `LOOM_QUALIFICATION_TIMINGS=all` on the isolated coordinator, agents,
+and observing client to capture every timed operation. Normal service logs
+sample ordinary requests. Compare elapsed times on the process that measured
+them and correlate processes by the retained operation or assignment identity.
+The agent reports sender queue wait separately from the network exchange.
+Result commit, control application, release, and the caller's observation can
+therefore be inspected separately from coordinator lock and bulk capacity waits.
+
 ## Accepted scope
 
 Slow reconciliation must not block healthy offer renewals, bounded work polls,
@@ -548,9 +558,14 @@ same stage. Reservation still checks the current offer and capacity before launc
 Preparation event reporting uses the exact native attempt receipt instead of
 retaining two whole-run snapshots per stage. Native replay lookup selects its
 exact event rather than decoding all prior events. Observer flushing alternates
-its fact queues and yields after 32 facts or a cooperative 100 ms budget. One
-slow callback may exceed that budget; later facts retain their original identity
-for another turn. Observation remains best effort, with no new durable queue.
+its per-run fact queues and yields after 32 items or a cooperative 100 ms
+budget. Audit appends occur between readiness decisions. One callback worker
+delivers events in order outside the mutation guard. Once 16 callbacks await
+completion or application, subsequent facts stay pending. Operator status
+exposes the pending fact and callback counts, whether a fact is being applied,
+and `lifecycle_observers.oldest_pending_ms`. This process-local monotonic age
+runs from initial retention through callback evidence application and returns
+to zero when the queues drain. Delivery remains best effort across a crash.
 The 257-stage unavailable-Slurm/independent-resident regression passes with its
 unchanged 45-second completion bound. This is source/fake-scheduler evidence,
 not physical Slurm or GPU qualification.

@@ -36,7 +36,7 @@ from pathlib import Path
 import shutil
 import sqlite3
 import stat
-from threading import Event, RLock, Thread
+from threading import Event, RLock, Thread, current_thread
 import time
 from typing import TYPE_CHECKING, Any, Iterator, Literal, cast
 from uuid import uuid4
@@ -62,6 +62,8 @@ from .agent_sessions import (
     AgentPolicyConfig,
     AgentSessionView,
     SessionReplacementRequest,
+    ensure_agent_lookup_indexes,
+    invalidate_current_offers,
     initialize_agent_session_schema,
     replace_agent_session,
     validate_agent_session_schema,
@@ -76,8 +78,10 @@ from ._remote_stage_execution import GpuDeviceDescriptor, ResidentProfileDescrip
 from ._preparation_policy import PreparationPolicy
 from .submitted_execution import SubmittedContainerCapability
 from .errors import QueueConflictError, QueueServiceError, QueueStorageError, _AcceptedTimeError
-from ._service_signals import _ChangeConnection, _ServiceSignal
+from ._admission_scan import LEGACY_CANCELLED, AdmissionScan, SchedulingAdmissions, ensure_scan_index, ensure_retry_index
+from ._service_signals import _ChangeConnection, _ChangeSignal, _KeyedWaiters, _ServiceSignal, write_status
 from ._recovery_retry import _RecoveryRetry
+from ._run_observations import RunObservation, RunObservationPending
 
 if TYPE_CHECKING:
     from ._preparation_operations import PreparationCallbacks
@@ -1713,16 +1717,20 @@ class LocalDaemon:
         self._scheduling_epoch: str | None = None
         self._stop = Event()
         self._wake = _ServiceSignal()
-        self._status_changed = _ServiceSignal()
+        self._status_changed = _KeyedWaiters()
         self._thread: Thread | None = None
         self._execution: LocalDaemonExecution | None = None
         self._cycle_lock = RLock()
         self._scheduling_reference_revision = 0
         self._reconcile_guard = RLock()
-        from ._admission_scan import AdmissionScan
         from ._context_preparation import ContextPreparations
+        from ._coordinator_gpu import CoordinatorGpuSamples
 
+        self._gpu_samples = CoordinatorGpuSamples(self._wake.set)
+        self._admission_retry_cursor: str | None = None
+        self._continuation_retries: dict[str, _RecoveryRetry] = {}
         self._admission_scan = AdmissionScan()
+        self._retirement_after = None
         self._contexts = ContextPreparations(self._wake.set)
         from ._result_verification import ResultVerifications
 
@@ -1736,7 +1744,8 @@ class LocalDaemon:
         self._service_error: str | None = None
         self._admission_retries: dict[str, _RecoveryRetry] = {}
         self._context_invalidations: set[str] = set()
-        self._cancelled_admission_repairs: deque[str] | None = None
+        self._legacy_repair_after: tuple[int, str] | None = (0, "")
+        self._legacy_repair_retries: deque[tuple[float, str]] = deque()
         self._recovery_cursor: str | None = None
         self._recovery_retries: dict[str, _RecoveryRetry] = {}
         self._agent_policy = config.agent_policy
@@ -1941,8 +1950,18 @@ class LocalDaemon:
             from .retirement import require_unretired
             require_unretired(self.config.coordinator_root)
             require_storage_upgrade_ready(self.config.coordinator_root, entering=True)
+            from .local_daemon_execution import ensure_child_release_indexes
+            from .slurm_ready_stage import ensure_slurm_page_index
+            with self.config.connect_database(self.config.execution_database) as execution_conn:
+                ensure_slurm_page_index(execution_conn)
+                ensure_child_release_indexes(execution_conn)
             with self._connection() as conn:
                 conn.execute("BEGIN IMMEDIATE")
+                ensure_agent_lookup_indexes(conn)
+                ensure_scan_index(conn)
+                ensure_retry_index(conn)
+                _ensure_recovery_assignment_index(conn)
+                _ensure_preparation_child_index(conn)
                 retained = conn.execute("SELECT value FROM root_metadata WHERE key = 'assignment_payload_root_id'").fetchone()
                 selected = self.config.assignment_payload_root_id
                 if retained is not None and retained[0] != selected:
@@ -2124,14 +2143,20 @@ class LocalDaemon:
         self._scheduling_epoch = scheduling_epoch
         self._service_error = None
         self._admission_retries.clear()
-        self._cancelled_admission_repairs = None
+        self._legacy_repair_after = (0, "")
+        self._legacy_repair_retries.clear()
         self._verified_local_owner_subject = verified_local_owner_subject
         self._contexts.close()
+        self._gpu_samples.close()
         self._result_verifications.close()
-        from ._admission_scan import AdmissionScan
         from ._context_preparation import ContextPreparations
+        from ._coordinator_gpu import CoordinatorGpuSamples
 
+        self._gpu_samples = CoordinatorGpuSamples(self._wake.set)
+        self._admission_retry_cursor = None
+        self._continuation_retries.clear()
         self._admission_scan = AdmissionScan()
+        self._retirement_after = None
         self._contexts = ContextPreparations(self._wake.set)
         from ._result_verification import ResultVerifications
 
@@ -2139,20 +2164,25 @@ class LocalDaemon:
         self._preparations._verification_reports.clear()
         self._preparations._reports.clear()
         self._preparations._publications.clear()
+        self._preparations._ready_publications.clear()
         self._preparations._children.clear()
+        self._preparations._child_release_checks.clear()
         self._preparations._captures.clear()
         self._preparations._images.clear()
         self._preparations._candidates.clear()
+        self._preparations._target_retries.clear()
         self._stop.clear()
         from ._agent_poll_waiters import _PollWaiters
 
         self._poll_waiters = _PollWaiters()
+        self._status_changed = _KeyedWaiters()
         from ._publication_guards import PublicationGuards
 
         self._publication_guards = PublicationGuards()
         self._wake.set()
         self._execution = execution
         self._thread = thread
+        self._event_observers.enable_delivery(self._wake.set)
         try:
             thread.start()
         except Exception:
@@ -2189,14 +2219,17 @@ class LocalDaemon:
             self._poll_waiters.close()
             self._publication_guards.close()
             self._wake.set()
-            self._status_changed.set()
+            self._status_changed.close()
         self._poll_waiters.drain()
+        self._status_changed.drain()
         self._publication_guards.drain()
         thread = self._thread
         self._thread = None
         if thread is not None:
             thread.join()
+        self._event_observers.close_delivery()
         self._contexts.close()
+        self._gpu_samples.close()
         self._result_verifications.close()
         if self._execution is not None:
             self._execution.close()
@@ -2632,30 +2665,31 @@ class LocalDaemon:
         ):
             raise QueueServiceError("operation wait timeout is invalid")
         deadline = None if timeout is None else time.monotonic() + float(timeout)
-        while True:
-            observed = self._status_changed.snapshot()
-            self._require_wait_running()
-            operation = self.operation(operation_id)
-            state = operation.state
-            if operation.kind == "slurm_stage_assignment":
-                if state in {"released", "conflict"}:
+        with self._status_changed.subscribe("operation:" + operation_id) as signal:
+            while True:
+                observed = signal.snapshot()
+                self._require_wait_running()
+                operation = self.operation(operation_id)
+                state = operation.state
+                if operation.kind == "slurm_stage_assignment":
+                    if state in {"released", "conflict"}:
+                        return OperationWaitResult(OperationWaitKind.TERMINAL, operation)
+                    if deadline is not None and time.monotonic() >= deadline:
+                        return OperationWaitResult(OperationWaitKind.TIMEOUT, operation)
+                    self._wait_for_status_change(signal, observed, deadline)
+                    continue
+                if state not in {
+                    "pending_delivery",
+                    "applying",
+                    "pending",
+                    "evidence_confirmed",
+                    "decision",
+                    "bound",
+                }:
                     return OperationWaitResult(OperationWaitKind.TERMINAL, operation)
                 if deadline is not None and time.monotonic() >= deadline:
                     return OperationWaitResult(OperationWaitKind.TIMEOUT, operation)
-                self._wait_for_status_change(observed, deadline)
-                continue
-            if state not in {
-                "pending_delivery",
-                "applying",
-                "pending",
-                "evidence_confirmed",
-                "decision",
-                "bound",
-            }:
-                return OperationWaitResult(OperationWaitKind.TERMINAL, operation)
-            if deadline is not None and time.monotonic() >= deadline:
-                return OperationWaitResult(OperationWaitKind.TIMEOUT, operation)
-            self._wait_for_status_change(observed, deadline)
+                self._wait_for_status_change(signal, observed, deadline)
 
     def wait_admission(
         self, admission_id: str, *, expected_revision: int, timeout: float | None
@@ -2679,45 +2713,46 @@ class LocalDaemon:
             LocalDaemonAdmissionState.CANCELLED,
             LocalDaemonAdmissionState.BLOCKED,
         }
-        while True:
-            observed = self._status_changed.snapshot()
-            self._require_wait_running()
-            with self._connection() as conn:
-                row = conn.execute(
-                    "SELECT * FROM managed_admissions WHERE admission_id = ?",
-                    (admission_id,),
-                ).fetchone()
-            if row is None:
-                raise AdmissionNotFoundError("managed admission was not found")
-            current = _positive_revision(int(row["revision"]))
-            if expected_revision > current:
-                raise QueueConflictError(
-                    "expected admission revision is ahead of current revision"
-                )
-            admission = _admission_from_row(row)
-            if admission.state in terminal:
-                return AdmissionWaitResult(
-                    AdmissionWaitKind.TERMINAL, admission, current
-                )
-            if current != expected_revision:
-                return AdmissionWaitResult(
-                    AdmissionWaitKind.CHANGED, admission, current
-                )
-            if deadline is not None and time.monotonic() >= deadline:
-                return AdmissionWaitResult(
-                    AdmissionWaitKind.TIMEOUT, admission, current
-                )
-            self._wait_for_status_change(observed, deadline)
+        with self._status_changed.subscribe("admission:" + admission_id) as signal:
+            while True:
+                observed = signal.snapshot()
+                self._require_wait_running()
+                with self._connection() as conn:
+                    row = conn.execute(
+                        "SELECT * FROM managed_admissions WHERE admission_id = ?",
+                        (admission_id,),
+                    ).fetchone()
+                if row is None:
+                    raise AdmissionNotFoundError("managed admission was not found")
+                current = _positive_revision(int(row["revision"]))
+                if expected_revision > current:
+                    raise QueueConflictError(
+                        "expected admission revision is ahead of current revision"
+                    )
+                admission = _admission_from_row(row)
+                if admission.state in terminal:
+                    return AdmissionWaitResult(
+                        AdmissionWaitKind.TERMINAL, admission, current
+                    )
+                if current != expected_revision:
+                    return AdmissionWaitResult(
+                        AdmissionWaitKind.CHANGED, admission, current
+                    )
+                if deadline is not None and time.monotonic() >= deadline:
+                    return AdmissionWaitResult(
+                        AdmissionWaitKind.TIMEOUT, admission, current
+                    )
+                self._wait_for_status_change(signal, observed, deadline)
 
     def _require_wait_running(self) -> None:
         if self._stop.is_set():
             raise QueueServiceError("coordinator is stopping")
 
-    def _wait_for_status_change(self, observed: int, deadline: float | None) -> None:
+    def _wait_for_status_change(self, signal: _ChangeSignal, observed: int, deadline: float | None) -> None:
         # Other owner databases and external processes can change without this
         # process observing their commit. Re-read at the bounded safety deadline.
         remaining = 1.0 if deadline is None else max(0.0, deadline - time.monotonic())
-        self._status_changed.wait_for_change(observed, min(1.0, remaining))
+        signal.wait_for_change(observed, min(1.0, remaining))
 
     def _local_resource_providers(self) -> tuple[AgentResourceProvider, ...]:
         """Read the installed execution owners, including owners retained by reload."""
@@ -2739,82 +2774,72 @@ class LocalDaemon:
         from ._phase_timing import reported_phases
 
         with reported_phases("coordinator.reconcile_cycle"):
+            checked = None
+            if current_thread() is not self._thread:
+                # An explicit caller observes owner loss synchronously. Its
+                # filesystem wait need not own the background scheduling turn.
+                with self._state_guard():
+                    self._require_started()
+                    owner = self._execution
+                    epochs = (self._epoch, self._scheduling_epoch)
+                if owner is None:
+                    raise QueueServiceError("local daemon execution is absent")
+                owner.open_owner_stores()
+                checked = (owner, epochs)
             with self._reconcile_guard:
-                return self._reconcile_once()
+                return self._reconcile_once(checked)
 
 
-    def _reconcile_once(self) -> tuple[LocalDaemonAdmission, ...]:
+    def _reconcile_once(self, checked=None) -> tuple[LocalDaemonAdmission, ...]:
         self._require_started()
         self._preparations.reconcile()
-        for provider in self._local_resource_providers():
-            if isinstance(provider, GpuResourceProvider):
-                provider.refresh_occupancy()
-        if self._event_observers.flush_prepared():
-            self._wake.set()
-        # A reload may replace providers while the bounded query runs.
-        # Its new provider starts unknown and is refreshed next cycle.
         with self._state_guard():
-            time_healthy = self._sample_clock_health()
+            self._gpu_samples.advance(self._local_resource_providers())
+        time_healthy = self._sample_clock_health(wait_for_writer=False)
+        with self._state_guard():
             execution = self._execution
         if execution is None:
             raise QueueServiceError("local daemon execution is absent")
-        execution.open_owner_stores()
+        self._event_observers.offer_audit(excluded=execution.run_observations.pending_runs())
+        epochs = (self._epoch, self._scheduling_epoch)
+        if checked != (execution, epochs) and not execution.owner_stores_ready(epochs):
+            return ()
         self._resume_pending_admission_retries(execution)
-        self._resume_pending_recoveries(execution)
+        self._resume_pending_recoveries(execution, background=True)
         execution.begin_cycle()
         self._repair_cancelled_admissions(execution)
         with self._connection() as conn:
-            admissions = tuple(
-                _admission_from_row(row)
-                for row in conn.execute(
-                    "SELECT * FROM managed_admissions "
-                    "WHERE state NOT IN (?, ?, ?, ?) "
-                    "ORDER BY run_priority DESC, enqueue_sequence, admission_id",
-                    (
-                        LocalDaemonAdmissionState.SUCCEEDED.value,
-                        LocalDaemonAdmissionState.FAILED.value,
-                        LocalDaemonAdmissionState.CANCELLED.value,
-                        LocalDaemonAdmissionState.BLOCKED.value,
-                    ),
-                )
-            )
-        self._result_verifications.bulk.retain(
-            ("run",), {("run", admission.run_uri) for admission in admissions},
-        )
-        active_run_uris = {admission.run_uri for admission in admissions}
+            enqueue_through = int(conn.execute(
+                "SELECT COALESCE(MAX(enqueue_sequence), 0) FROM managed_admissions"
+            ).fetchone()[0])
+            admissions = tuple(_admission_from_row(row) for row in self._admission_scan.page(conn, enqueue_through))
+        self._retire_inactive_scheduling_owners(execution)
         bulk = self._result_verifications.bulk
-        bulk.retain(("dispatch",), {
-            scope for scope in bulk.scopes(("dispatch",)) if scope[1] in active_run_uris
-        })
         with self._state_guard():
             epochs = (self._epoch, self._scheduling_epoch)
-            invalidated = tuple(self._context_invalidations)
+            invalidated = set(self._context_invalidations)
             self._context_invalidations.clear()
-        prepared = {item.admission.admission_id: item for item in self._contexts.completed()}
-        self._contexts.begin_cycle(
-            admissions,
-            minimum_interval=self.config.poll_interval_seconds, invalidated=invalidated,
-        )
-
-        schedulable: dict[str, LocalDaemonAdmission] = {
-            row.admission_id: row for row in admissions
-            if row.state in {LocalDaemonAdmissionState.ACTIVE, LocalDaemonAdmissionState.WAITING}
-            and row.cancellation_operation_id is None
-            and row.run_uri not in self._admission_retries
-        }
+        execution.invalidate_dispatch_contexts(invalidated)
+        execution.run_observations.invalidate(invalidated, bulk)
+        execution.dispatch_observations.begin_cycle(invalidated, epochs, self.config.poll_interval_seconds)
+        self._contexts.begin_cycle(minimum_interval=self.config.poll_interval_seconds, invalidated=invalidated)
+        prepared = {item.admission.admission_id: item for item in (
+            *self._contexts.completed(), *execution.run_observations.completed(),
+        )}
+        schedulable = SchedulingAdmissions(enqueue_through, self._lookup_schedulable_admissions)
         waiting_outcomes: dict[str, LocalDaemonExecutionOutcome] = {}
-        active_runs = {admission.run_uri for admission in admissions}
-        with self._state_guard():
-            for run_uri in self._admission_retries.keys() - active_runs:
-                del self._admission_retries[run_uri]
-        for admission in admissions:
-            preparation = prepared.get(admission.admission_id)
-            if preparation is None:
-                continue
+        for preparation in sorted(prepared.values(), key=lambda item: AdmissionScan.key(item.admission)):
+            admission = preparation.admission
             with self._state_guard():
-                current = self._admission(admission.admission_id)
+                try:
+                    current = self._admission(admission.admission_id)
+                except AdmissionNotFoundError:
+                    execution.run_observations.discard(admission.admission_id, bulk)
+                    continue
                 epochs = (self._epoch, self._scheduling_epoch)
             if preparation.epochs != epochs or preparation.admission.revision != current.revision:
+                if isinstance(preparation, RunObservation):
+                    execution.run_observations.discard(admission.admission_id, bulk)
                 self._wake.set()
                 continue
             admission = current
@@ -2824,9 +2849,11 @@ class LocalDaemon:
             if retry is not None and not retry.ready(progress):
                 continue
             try:
-                intent = preparation.future.result()  # completed() only returns done futures
+                context = preparation.result()
                 execution._cycle_context_epochs[admission.admission_id] = preparation.epochs
-                outcome = execution.reconcile_admission(admission, prepared_intent=intent)
+                outcome = execution.reconcile_admission(admission, prepared_context=context)
+            except RunObservationPending:
+                continue
             except QueueConflictError:
                 bulk.discard(("run", admission.run_uri))
                 bulk.discard(("dispatch", admission.run_uri))
@@ -2861,7 +2888,7 @@ class LocalDaemon:
                 }:
                     bulk.discard(("run", admission.run_uri))
                     bulk.discard(("dispatch", admission.run_uri))
-                    self._event_observers.flush_prepared(admission.run_uri)
+                    self._event_observers.offer_audit(admission.run_uri)
                 self._record_admission_health(
                     admission.admission_id,
                     (
@@ -2890,9 +2917,13 @@ class LocalDaemon:
         # launch at most that many assignments, but a larger pipeline is
         # never rejected merely for having more stages.
         started_admissions: set[str] = set()
-        with bulk.visiting({("dispatch", admission.run_uri) for admission in schedulable.values()}):
+        with bulk.visiting(schedulable.visited_dispatch):
             if time_healthy:
-                for _ in range(256):
+                dispatch_deadline = time.monotonic() + 0.1
+                for turn in range(256):
+                    if turn and time.monotonic() >= dispatch_deadline:
+                        self._wake.set()
+                        break
                     if epochs != (self._epoch, self._scheduling_epoch):
                         self._wake.set()
                         break
@@ -2933,16 +2964,64 @@ class LocalDaemon:
             retry = self._admission_retries.get(admission.run_uri)
             if retry is not None and not retry.ready((admission.revision, epochs[1])):
                 return True
-            return self._contexts.try_submit(admission, epochs, execution.load_context)
+            if execution.run_observations.awaiting_read(admission, epochs, bulk):
+                return True
+            if not execution.run_observations.can_start(admission.admission_id):
+                return False
+            return self._contexts.try_submit(admission, epochs, execution.prepare_admission_context)
 
         visited = self._admission_scan.take(admissions, visit)
-        if self._admission_scan.high_water is not None and self._contexts.has_capacity():
+        if self._admission_scan.high_water is not None and self._contexts.has_capacity() and execution.run_observations.has_capacity():
             self._wake.set()
         # Reconciliation is an internal operation; retain its bounded
         # nonterminal work result without rebuilding public detail/status.
         return tuple(
             self._admission(admission.admission_id) for admission in visited
         )
+
+    def _lookup_schedulable_admissions(self, identities: set[str]) -> dict[str, LocalDaemonAdmission]:
+        placeholders = ",".join("?" for _ in identities)
+        with self._connection() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM managed_admissions WHERE admission_id IN ({placeholders}) "
+                "AND state IN ('ACTIVE','WAITING') AND cancellation_operation_id IS NULL", tuple(identities),
+            ).fetchall()
+        with self._state_guard():
+            return {row["admission_id"]: _admission_from_row(row) for row in rows
+                    if row["run_uri"] not in self._admission_retries}
+
+    def _retire_inactive_scheduling_owners(self, execution: LocalDaemonExecution) -> None:
+        """Retire bounded, positively checked owners independently of discovery pages."""
+        from heapq import nsmallest
+
+        bulk = self._result_verifications.bulk
+        scopes = bulk.scopes(("run",)) | bulk.scopes(("dispatch",))
+        with self._state_guard():
+            scopes.update(("retry", run_uri) for run_uri in self._admission_retries)
+        after = self._retirement_after
+        page = nsmallest(33, (scope for scope in scopes if after is None or scope > after))
+        self._retirement_after = page[31] if len(page) > 32 else None
+        if not page:
+            return
+        page = page[:32]
+        uris = {scope[1] for scope in page}
+        placeholders = ",".join("?" for _ in uris)
+        with self._connection() as conn:
+            active = {row[0] for row in conn.execute(
+                f"SELECT run_uri FROM managed_admissions WHERE coordinator_id=? AND run_uri IN ({placeholders}) "
+                "AND state NOT IN ('SUCCEEDED','FAILED','CANCELLED','BLOCKED')",
+                (self._coordinator_id, *uris),
+            )}
+        dispatch_ids = {scope[2] for scope in page if scope[0] == "dispatch" and scope[1] in active}
+        ready = execution.stage_work_store.ready_ids(dispatch_ids)
+        for scope in page:
+            if scope[1] in active and (scope[0] != "dispatch" or scope[2] in ready):
+                continue
+            if scope[0] == "retry":
+                with self._state_guard():
+                    self._admission_retries.pop(scope[1], None)
+            else:
+                bulk.discard(scope)
 
     def _serve(self) -> None:
         from ._phase_timing import reported_phases
@@ -2968,6 +3047,9 @@ class LocalDaemon:
                         local_retry = self._execution.next_local_retry_at(now)
                         if local_retry is not None:
                             delay = min(delay, local_retry - now)
+                target_delay = self._preparations.next_target_delay()
+                if target_delay is not None:
+                    delay = min(delay, target_delay)
                 context_delay = self._contexts.next_delay()
                 if context_delay is not None:
                     delay = min(delay, context_delay)
@@ -3003,27 +3085,42 @@ class LocalDaemon:
         _resume_pending_admission_retries(self, execution)
 
     def _repair_cancelled_admissions(self, execution: LocalDaemonExecution) -> None:
-        if self._cancelled_admission_repairs is None:
-            with self._connection() as conn:
-                self._cancelled_admission_repairs = deque(
-                    str(row["admission_id"])
-                    for row in conn.execute(
-                        "SELECT admission_id FROM managed_admissions "
-                        "WHERE state = ? AND cancellation_operation_id IS NULL "
-                        "ORDER BY enqueue_sequence, admission_id",
-                        (LocalDaemonAdmissionState.CANCELLED.value,),
-                    )
-                )
-        pending = self._cancelled_admission_repairs
-        for _ in range(min(16, len(pending))):
-            admission_id = pending.popleft()
+        from functools import partial
+
+        workers = execution.cancelled_repair_workers
+        now = time.monotonic()
+        epochs = (self._epoch, self._scheduling_epoch)
+        for identity, _, _, result in workers.completed(0):
             try:
-                execution.repair_cancelled_admission(self._admission(admission_id))
+                result.result()
             except Exception:
-                self._record_admission_health(admission_id, "unavailable")
-                pending.append(admission_id)
+                self._record_admission_health(identity, "unavailable")
+                self._legacy_repair_retries.append((now + self.config.poll_interval_seconds, identity))
             else:
-                self._record_admission_health(admission_id, "healthy")
+                self._record_admission_health(identity, "healthy")
+
+        def offer(identity: str) -> None:
+            workers.submit(identity, identity, epochs, partial(execution.repair_cancelled_admission, identity, epochs))
+
+        if self._legacy_repair_retries and self._legacy_repair_retries[0][0] <= now and not workers.full():
+            _, identity = self._legacy_repair_retries.popleft()
+            offer(identity)
+        if self._legacy_repair_after is None or workers.full():
+            return
+        with self._connection() as conn:
+            rows = conn.execute(
+                f"SELECT enqueue_sequence, admission_id FROM managed_admissions WHERE {LEGACY_CANCELLED} "
+                "AND (enqueue_sequence, admission_id) > (?, ?) ORDER BY enqueue_sequence, admission_id LIMIT 2",
+                self._legacy_repair_after,
+            ).fetchall()
+        for row in rows:
+            if workers.full():
+                return
+            identity = str(row["admission_id"])
+            offer(identity)
+            self._legacy_repair_after = int(row["enqueue_sequence"]), identity
+        if len(rows) < 2:
+            self._legacy_repair_after = None
 
     def _cancel(
         self,
@@ -3138,7 +3235,8 @@ class LocalDaemon:
             if control.promotion is not None:
                 from ._profile_promotion import authorize
                 authorize(self, conn, control)
-            conn.execute(
+            write_status(
+                conn, "operation",
                 "INSERT INTO agent_controls(operation_id, principal_id, session_id, agent_id, request_json, state, result_code, acknowledged) VALUES (?, ?, ?, ?, ?, 'pending_delivery', NULL, 0)",
                 (
                     control.operation_id,
@@ -3151,10 +3249,7 @@ class LocalDaemon:
             # Withdrawal is coordinator-owned and happens before delivery.  It
             # changes only future offers; it never releases a durable claim.
             if control.kind.value in {"drain", "reload", "promote"}:
-                conn.execute(
-                    "UPDATE agent_offers SET current = 0 WHERE session_id = ?",
-                    (control.expected_session_id,),
-                )
+                invalidate_current_offers(conn, control.expected_session_id)
                 conn.execute(
                     "UPDATE agent_poll_state SET active = 0 WHERE session_id = ?",
                     (control.expected_session_id,),
@@ -3354,7 +3449,8 @@ class LocalDaemon:
                             "VALUES ('active_configuration_revision', ?)",
                             (str(next_revision),),
                         )
-                        conn.execute(
+                        write_status(
+                            conn, "operation",
                             "UPDATE scheduling_reloads SET state = 'applied', "
                             "result_code = 'applied', scheduling_epoch = ?, "
                             "configuration_revision = ? "
@@ -3443,7 +3539,8 @@ class LocalDaemon:
                     if raced is not None:
                         raise _RecoveryNotAccepted("recovery operation conflicts")
                     recorded_at = self._accepted_time(conn)
-                    conn.execute(
+                    write_status(
+                        conn, "recovery",
                         "INSERT INTO recovery_operations("
                         "recovery_id, principal_id, request_json, request_digest, "
                         "recorded_at, state, evidence_json, result_json) "
@@ -3559,7 +3656,8 @@ class LocalDaemon:
             )
             with self._connection() as conn:
                 conn.execute("BEGIN IMMEDIATE")
-                updated = conn.execute(
+                updated = write_status(
+                    conn, "recovery",
                     "UPDATE recovery_operations SET state = 'evidence_confirmed', "
                     "evidence_json = ? WHERE recovery_id = ? AND state = 'pending'",
                     (encoded_evidence, request.recovery_id),
@@ -3595,7 +3693,8 @@ class LocalDaemon:
         )
         with self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            conn.execute(
+            write_status(
+                conn, "recovery",
                 "UPDATE recovery_operations SET state = ?, result_json = ? "
                 "WHERE recovery_id = ?",
                 (state, encoded, recovery_id),
@@ -3603,7 +3702,21 @@ class LocalDaemon:
             conn.commit()
         return result
 
-    def _resume_pending_recoveries(self, execution: "LocalDaemonExecution") -> None:
+    def _resume_pending_recoveries(self, execution: LocalDaemonExecution, *, background: bool = False) -> None:
+        from functools import partial
+
+        workers = execution.recovery_workers if background else None
+        if workers is not None:
+            for identity, assignment_id, state, future in workers.completed(self.config.poll_interval_seconds):
+                try:
+                    applied = future.result()
+                except Exception as error:
+                    self._pace_recovery_failure(identity, assignment_id, state, error)
+                else:
+                    if applied:
+                        self._recovery_retries.pop(identity, None)
+            if workers.full():
+                return
         with self._connection() as conn:
             rows = tuple(
                 conn.execute(
@@ -3617,7 +3730,7 @@ class LocalDaemon:
         deadline = time.monotonic() + 0.25
         scanned = 0
         for row in rows:
-            if scanned and time.monotonic() >= deadline:
+            if (workers is not None and workers.full()) or (scanned and time.monotonic() >= deadline):
                 break
             scanned += 1
             self._recovery_cursor = str(row["recovery_id"])
@@ -3628,28 +3741,35 @@ class LocalDaemon:
             retry = self._recovery_retries.get(request.recovery_id)
             if retry is not None and not retry.ready(progress):
                 continue
-            with self._publication_guards.try_hold("recovery:" + request.recovery_id) as acquired:
-                if not acquired:
-                    continue
+            apply = partial(self._resume_recovery, execution, request, row)
+            if workers is not None:
+                workers.submit(request.recovery_id, request.assignment_id, progress, apply)
+            else:
                 try:
-                    if row["state"] == "closed":
-                        execution.reconcile_closed_slurm_recovery(
-                            request, json.loads(str(row["evidence_json"]))
-                        )
-                    else:
-                        self._advance_recovery(execution, request, str(row["recorded_at"]))
+                    if apply():
+                        self._recovery_retries.pop(request.recovery_id, None)
                 except Exception as error:
-                    if request.recovery_id not in self._recovery_retries and len(self._recovery_retries) >= 256:
-                        self._recovery_retries.pop(next(iter(self._recovery_retries)))
-                    retry = self._recovery_retries.setdefault(request.recovery_id, _RecoveryRetry())
-                    retry.failed(error, operation_id=request.recovery_id,
-                                 assignment_id=request.assignment_id, state=progress)
-                else:
-                    self._recovery_retries.pop(request.recovery_id, None)
+                    self._pace_recovery_failure(request.recovery_id, request.assignment_id, progress, error)
         if scanned == len(rows) and len(rows) < 32:
             self._recovery_cursor = None
-        elif rows:
+        elif rows and (workers is None or not workers.full()):
             self._wake.set()
+
+    def _resume_recovery(self, execution: LocalDaemonExecution, request: RecoverUnknownAssignment, row: sqlite3.Row) -> bool:
+        with self._publication_guards.try_hold("recovery:" + request.recovery_id) as acquired:
+            if not acquired:
+                return False
+            if row["state"] == "closed":
+                execution.reconcile_closed_slurm_recovery(request, json.loads(str(row["evidence_json"])))
+            else:
+                self._advance_recovery(execution, request, str(row["recorded_at"]))
+            return True
+
+    def _pace_recovery_failure(self, identity: str, assignment_id: str, state: object, error: Exception) -> None:
+        if identity not in self._recovery_retries and len(self._recovery_retries) >= 256:
+            self._recovery_retries.pop(next(iter(self._recovery_retries)))
+        retry = self._recovery_retries.setdefault(identity, _RecoveryRetry())
+        retry.failed(error, operation_id=identity, assignment_id=assignment_id, state=state)
 
     def _recovery_fences_ordinary_terminal(self, assignment_id: str) -> bool:
         """A provider-driven retry lets an arriving worker result race the close."""
@@ -3707,7 +3827,8 @@ class LocalDaemon:
                 if retained is not None and retained[0] != assignment_payload_root_id:
                     raise QueueConflictError("assignment payload root conflicts with durable deployment binding")
                 conn.execute("INSERT OR IGNORE INTO root_metadata(key, value) VALUES ('assignment_payload_root_id', ?)", (assignment_payload_root_id,))
-            conn.execute(
+            write_status(
+                conn, "operation",
                 "INSERT INTO scheduling_reloads(operation_id, principal_id, "
                 "request_json, state, result_code, scheduling_epoch, "
                 "configuration_revision, replacement_fingerprint) "
@@ -3741,7 +3862,8 @@ class LocalDaemon:
         request_json: str,
     ) -> Mapping[str, PlainData]:
         with self._connection() as conn:
-            conn.execute(
+            write_status(
+                conn, "operation",
                 "INSERT INTO scheduling_reloads(operation_id, principal_id, "
                 "request_json, state, result_code, scheduling_epoch, "
                 "configuration_revision, replacement_fingerprint) "
@@ -3840,7 +3962,8 @@ class LocalDaemon:
                 "VALUES ('active_configuration_revision', ?)",
                 (str(next_revision),),
             )
-            conn.execute(
+            write_status(
+                conn, "operation",
                 "UPDATE scheduling_reloads SET state = 'applied', "
                 "result_code = 'applied', scheduling_epoch = ?, "
                 "configuration_revision = ? WHERE operation_id = ?",
@@ -4009,17 +4132,18 @@ class LocalDaemon:
             LocalDaemonAdmissionState.CANCELLED,
             LocalDaemonAdmissionState.BLOCKED,
         }
-        while True:
-            observed = self._status_changed.snapshot()
-            self._require_wait_running()
-            admission = self._admission_for_queue_item(queue_item_id)
-            if admission.state in terminal:
-                return admission
-            if deadline is not None and time.monotonic() >= deadline:
-                raise TimeoutError(
-                    "managed local admission did not reach terminal state"
-                )
-            self._wait_for_status_change(observed, deadline)
+        with self._status_changed.subscribe("queue_item:" + queue_item_id) as signal:
+            while True:
+                observed = signal.snapshot()
+                self._require_wait_running()
+                admission = self._admission_for_queue_item(queue_item_id)
+                if admission.state in terminal:
+                    return admission
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        "managed local admission did not reach terminal state"
+                    )
+                self._wait_for_status_change(signal, observed, deadline)
 
     def _cancellation_operation_id(self, admission_id: str) -> str | None:
         return self._admission(admission_id).cancellation_operation_id
@@ -4056,7 +4180,8 @@ class LocalDaemon:
 
     def _activate_admission(self, admission_id: str) -> None:
         with self._connection() as conn:
-            conn.execute(
+            write_status(
+                conn, "admission",
                 "UPDATE managed_admissions SET state = ?, blocked_reason = NULL, "
                 "revision = revision + 1 "
                 "WHERE admission_id = ? AND cancellation_operation_id IS NULL "
@@ -4101,7 +4226,8 @@ class LocalDaemon:
         observed: LocalDaemonAdmission | None = None,
     ) -> None:
         with self._connection() as conn:
-            conn.execute(
+            write_status(
+                conn, "admission",
                 "UPDATE managed_admissions SET state = ?, blocked_reason = ?, "
                 "revision = revision + 1 WHERE admission_id = ? AND "
                 "(state != ? OR blocked_reason IS NOT ?) "
@@ -4149,15 +4275,24 @@ class LocalDaemon:
             raise QueueConflictError("retained assignment admission is unavailable")
         self._record_admission_health(str(rows[0]["admission_id"]), health)
 
-    def _sample_clock_health(self) -> bool:
-        with self._connection() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            try:
-                self._accepted_time(conn)
-            except QueueServiceError:
-                return False
-            conn.commit()
-        return True
+    def _sample_clock_health(self, *, wait_for_writer: bool = True) -> bool:
+        from ._coordinator_transactions import short_write
+
+        def sample(conn: sqlite3.Connection) -> bool:
+            self._accepted_time(conn)
+            return True
+
+        try:
+            return short_write(self, sample, wait_for_writer=wait_for_writer)
+        except QueueServiceError:
+            # An accepted-time regression commits its diagnostic before raising.
+            return False
+        except sqlite3.OperationalError as exc:
+            if wait_for_writer or (getattr(exc, "sqlite_errorcode", 0) & 255) != sqlite3.SQLITE_BUSY:
+                raise
+            # This turn cannot establish clock health. Recheck before the next
+            # dispatch instead of joining the writer or marking time degraded.
+            return False
 
     def _recover_time(
         self, principal: LocalDaemonPrincipal, request: TimeRecoveryRequest
@@ -4242,7 +4377,8 @@ class LocalDaemon:
                     "DELETE FROM daemon_metadata WHERE key = 'accepted_time_diagnostic'"
                 )
                 conn.execute("UPDATE agent_offers SET current = 0 WHERE current = 1")
-                conn.execute(
+                write_status(
+                    conn, "operation",
                     "INSERT INTO time_recoveries(operation_id, principal_id, "
                     "request_json, request_digest, result_json) VALUES (?, ?, ?, ?, ?)",
                     (
@@ -4287,7 +4423,7 @@ class LocalDaemon:
                 ) if self.config.storage is None else
                 self.config.connect_database(self.config.control_database, factory=_ChangeConnection)
             )
-            cast(_ChangeConnection, conn).on_commit = self._status_changed.set
+            cast(_ChangeConnection, conn).on_commit = self._status_changed.notify
             conn.row_factory = sqlite3.Row
             expected = self._coordinator_id
             if expected is not None:
@@ -4874,6 +5010,13 @@ def _initialize_root(path: Path, *, role: str, sqlite_policy: SQLitePolicy | Non
     database.chmod(0o600)
 
 
+def _ensure_recovery_assignment_index(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS recovery_by_assignment "
+        "ON recovery_operations(json_extract(request_json, '$.assignment_id'))"
+    )
+
+
 def _initialize_coordinator_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE TABLE daemon_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
@@ -4934,6 +5077,9 @@ def _initialize_coordinator_schema(conn: sqlite3.Connection) -> None:
         "recorded_at TEXT NOT NULL, state TEXT NOT NULL, "
         "evidence_json TEXT, result_json TEXT NOT NULL)"
     )
+    ensure_scan_index(conn)
+    ensure_retry_index(conn)
+    _ensure_recovery_assignment_index(conn)
     conn.execute(
         "CREATE TABLE time_recoveries ("
         "operation_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, "
@@ -4946,6 +5092,11 @@ def _initialize_coordinator_schema(conn: sqlite3.Connection) -> None:
     from ._action_results import initialize_action_results
 
     initialize_action_results(conn)
+
+
+def _ensure_preparation_child_index(conn: sqlite3.Connection) -> None:
+    conn.execute("CREATE INDEX IF NOT EXISTS preparation_target_children "
+                 "ON preparation_operations(target_name, principal_id, child_admission_id)")
 
 
 def _initialize_preparation_schema(conn: sqlite3.Connection) -> None:
@@ -4967,6 +5118,7 @@ def _initialize_preparation_schema(conn: sqlite3.Connection) -> None:
         "REFERENCES preparation_operations(operation_id), state TEXT NOT NULL, "
         "result_code TEXT, result_json TEXT NOT NULL)"
     )
+    _ensure_preparation_child_index(conn)
 
 
 def _validate_coordinator_schema(conn: sqlite3.Connection) -> None:
@@ -5125,16 +5277,26 @@ def _request_admission_cancellation(
         and repair_revision == admission.revision
         and admission.cancellation_operation_id is None
     )
+    if repair_revision is not None and not repairing_cancelled:
+        return admission
     if not repairing_cancelled and admission.state in {
         LocalDaemonAdmissionState.SUCCEEDED,
         LocalDaemonAdmissionState.FAILED,
         LocalDaemonAdmissionState.CANCELLED,
     }:
         return admission
+    if (
+        admission.cancellation_operation_id and admission.cancellation_principal_id
+        and admission.state in {LocalDaemonAdmissionState.CANCELLATION_REQUESTED, LocalDaemonAdmissionState.CANCELLING}
+    ):
+        # The intent and graph detachment committed together. Re-observing
+        # that intent preserves progress and its original principal/revision.
+        return admission
     operation_id = admission.cancellation_operation_id or (
         request_operation_id or f"authority-cancel-{uuid4()}"
     )
-    conn.execute(
+    write_status(
+        conn, "admission",
         "UPDATE managed_admissions SET state = ?, "
         "cancellation_operation_id = ?, "
         "cancellation_principal_id = COALESCE("

@@ -76,22 +76,24 @@ def _query_responses(monkeypatch, runner, response):
     monkeypatch.setattr(runner, "discover_named_operations", query)
 
 
-def test_blocked_accounting_batch_allows_other_assignment_submission_and_cancel(tmp_path, monkeypatch):
+@pytest.mark.parametrize("cancel_in_batch", [False, True], ids=["other-job", "same-job"])
+def test_blocked_accounting_batch_allows_other_assignment_submission_and_cancel(tmp_path, monkeypatch, cancel_in_batch):
     from threading import Event
 
     owner, clock, runner, profile = _batch_owner(tmp_path, monkeypatch)
     owner._asynchronous_preparation = True
     entered, release = Event(), Event()
     calls = []
+    cancel_key = 1 if cancel_in_batch else 2
 
     def blocked(**selection):
         calls.append(selection)
         entered.set()
         assert release.wait(10)
-        return SlurmCommandResult("sacct", ("sacct",), 0, stdout=_line(1))
+        return SlurmCommandResult("sacct", ("sacct",), 0, stdout=_line(1).replace("RUNNING", "PENDING"))
 
     monkeypatch.setattr(runner, "discover_named_operations", blocked)
-    monkeypatch.setattr(runner, "discover_named_operation", lambda **_selection: SlurmCommandResult("sacct", ("sacct",), 0, stdout=_line(2)))
+    monkeypatch.setattr(runner, "discover_named_operation", lambda **_selection: SlurmCommandResult("sacct", ("sacct",), 0, stdout=_line(cancel_key)))
     first, peer = _task(profile), _task(profile, key="2")
     def turn(function, *args):
         clock[0] += 0.1
@@ -99,17 +101,20 @@ def test_blocked_accounting_batch_allows_other_assignment_submission_and_cancel(
     try:
         drive_until(lambda: turn(owner.step_cycle, [first], _ack), entered.is_set)
         drive_until(lambda: turn(owner.step, peer, _ack), lambda: (value := owner.journal.find("operation-2")) is not None and value.job_id is not None)
-        closing = {**peer, "cancel_requested": True, "containment_request": {}}
+        closing = {**(first if cancel_in_batch else peer), "cancel_requested": True, "containment_request": {}}
         def cancel(value):
             return {"sequence": value["sequence"], "cancel_requested": True}
-        drive_until(lambda: turn(owner.step, closing, cancel), lambda: owner.journal.read("operation-2").cancel_requested)
+        drive_until(lambda: turn(owner.step, closing, cancel), lambda: owner.journal.read(f"operation-{cancel_key}").cancel_requested)
         assert not release.is_set()
+        to_observe = [closing if cancel_in_batch else first]
         for _ in range(10):
-            owner.step_cycle([first], _ack)
+            owner.step_cycle(to_observe, _ack)
         assert len(calls) == 1, "pending accounting must retain its bounded query slot"
         assert sum(call[0] == "sbatch" for call in runner.calls) == 2
         release.set()
-        drive_until(lambda: turn(owner.step_cycle, [first], _ack), lambda: not owner._batch_pending)
+        drive_until(lambda: turn(owner.step_cycle, to_observe, _ack), lambda: not owner._batch_pending)
+        if cancel_in_batch:
+            assert owner.journal.read("operation-1").scheduler_state == "RUNNING"
     finally:
         release.set()
         owner.close()

@@ -165,6 +165,54 @@ def test_host_selection_and_native_agent_identity_are_not_ssh_aliases(tmp_path):
     )
 
 
+def test_native_status_observes_agents_independently_in_inventory_order(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    from threading import Event
+    from types import SimpleNamespace
+
+    from loom.fleet import administration
+    from loom.queue.operations import OperatorObservation
+
+    path = inventory(tmp_path)
+    value = json.loads(path.read_text())
+    value["agents"]["gpu02"] = {"host": "second-gpu", "config": "agent.yaml"}
+    _write_protected(path, value)
+    slow_started, fast_observed = Event(), Event()
+    closed = []
+
+    class Operator:
+        def observe_status(self):
+            return OperatorObservation("controller", "2026-01-01T00:00:00Z", "1", "current", "available", {})
+
+        def observe_agent(self, name):
+            if name == "gpu01":
+                slow_started.set()
+                assert fast_observed.wait(5)
+                raise administration.CoordinatorClientError(
+                    "deadline_exceeded", boundary="transport", operation="observe_agent"
+                )
+            assert slow_started.wait(5)
+            fast_observed.set()
+            return OperatorObservation(name, "2026-01-01T00:00:01Z", "2", "current", "available", {})
+
+    @contextmanager
+    def client(connection, *, expected_coordinator_id):
+        assert expected_coordinator_id == "controller"
+        operator = Operator()
+        try:
+            yield operator
+        finally:
+            closed.append(operator)
+
+    monkeypatch.setattr(administration, "load_coordinator_connection_file", lambda _: SimpleNamespace(expected_coordinator_id="controller"))
+    monkeypatch.setattr(administration.CoordinatorOperatorClient, "from_connection_file", client)
+    result = administration.observe(load_inventory(path), command="status", connection=tmp_path / "operator.yml")
+    assert len(closed) == 3
+    assert list(result["hosts"]) == ["coordinator", "gpu01", "gpu02"]
+    assert result["hosts"]["gpu01"]["native"]["reason"] == "deadline_exceeded"
+    assert result["hosts"]["gpu02"]["native"]["observed_at"] == "2026-01-01T00:00:01Z"
+
+
 def test_world_readable_role_is_rejected_without_echoing_secret(tmp_path):
     path = inventory(tmp_path)
     role = tmp_path / "agent.yaml"

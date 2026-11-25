@@ -338,11 +338,19 @@ def _grant_receipt(request: PublicationRequest, agent_id: str, fence: str):
 
 def require_grant_continuation(request: PublicationRequest, conn: Any, *, agent_id: str, fence: str) -> None:
     """Refuse a start permit until its selected handoff is durably acknowledged."""
-    expected = _grant_receipt(request, agent_id, fence)
+    require_grant_receipt(conn, request.assignment_id, expected_grant_receipt(request, agent_id, fence))
+
+
+def expected_grant_receipt(request: PublicationRequest, agent_id: str, fence: str) -> tuple[str, str] | None:
+    receipt = _grant_receipt(request, agent_id, fence)
+    return None if receipt is None else (receipt[2], receipt[3])
+
+
+def require_grant_receipt(conn: Any, assignment_id: str, expected: tuple[str, str] | None) -> None:
     if expected is None:
         return
-    previous = conn.execute(_GRANT_QUERY, (_PRINCIPAL, request.assignment_id)).fetchone()
-    if previous is None or tuple(previous) != expected[2:]:
+    previous = conn.execute(_GRANT_QUERY, (_PRINCIPAL, assignment_id)).fetchone()
+    if previous is None or tuple(previous) != expected:
         raise QueueConflictError("staging continuation is not acknowledged for this grant")
 
 

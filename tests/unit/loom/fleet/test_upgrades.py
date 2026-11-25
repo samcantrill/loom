@@ -88,14 +88,13 @@ def test_runtime_workload_repair_cli_retains_parent_and_target():
 
 @pytest.mark.parametrize("device_source", ["native_inventory", "profile", "cpu_only"])
 def test_upgrade_gpu_qualification_includes_native_inventory(
-    tmp_path, monkeypatch, device_source
+    tmp_path, check_gate, monkeypatch, device_source
 ):
     # NVIDIA discovery puts devices in the native offer while the authored
     # resident profile keeps an empty legacy GPU declaration.
     device = {"id": "GPU-qualified", "provider": "exclusive"}
     profile = {"gpu_devices": [device] if device_source == "profile" else []}
     agent = {"offer": {"gpu_devices": [device] if device_source == "native_inventory" else []}}
-    authorized = []
     observed = []
     settled = []
     operation = SimpleNamespace(
@@ -107,11 +106,11 @@ def test_upgrade_gpu_qualification_includes_native_inventory(
             "agents": {"worker": agent},
             "timeout_seconds": 30,
         },
-        maintenance=lambda key, action, authorization: authorized.append(authorization),
-        settled=lambda: settled.append(True),
+        gate=check_gate.observe, maintenance=check_gate.authorize,
+        settled=lambda **kw: settled.append(True),
     )
 
-    def prepare(operation, name, check, identity):
+    def prepare(operation, name, check, identity, **kw):
         return {"operation_id": identity, "authorization": {"check": check}}
 
     def self_test(inventory, *, operation_id, timeout_seconds, _dispatch_only, _wait):
@@ -123,7 +122,7 @@ def test_upgrade_gpu_qualification_includes_native_inventory(
     monkeypatch.setattr(upgrades, "self_test", self_test)
     upgrades._run_checks(operation)
     expected = ["cpu", "storage"] + ([] if device_source == "cpu_only" else ["gpu"])
-    assert [row["check"] for row in authorized] == expected
+    assert [row["check"] for row in check_gate.checks.values()] == expected
     attempts = upgrades.read(tmp_path / "checks.json")
     assert set(attempts) == {"worker:" + check for check in expected}
     assert len(observed) == len(expected)
@@ -134,7 +133,7 @@ def test_upgrade_gpu_qualification_includes_native_inventory(
     assert sorted(observed[len(expected):]) == sorted(observed[:len(expected)])
 
 
-def test_explicit_deferred_host_retains_checks_and_native_settlement(tmp_path, monkeypatch):
+def test_explicit_deferred_host_retains_checks_and_native_settlement(tmp_path, check_gate, monkeypatch):
     from loom.queue.errors import QueueConflictError
 
     intent = {
@@ -150,8 +149,8 @@ def test_explicit_deferred_host_retains_checks_and_native_settlement(tmp_path, m
     operation = SimpleNamespace(
         directory=tmp_path, intent=intent, inventory=object(),
         recheck=lambda: None,
-        maintenance=lambda *args: None,
-        settled=lambda: (_ for _ in ()).throw(upgrades._Waiting("retained check work")),
+        gate=check_gate.observe, maintenance=check_gate.authorize,
+        settled=lambda **kw: (_ for _ in ()).throw(upgrades._Waiting("retained check work")),
     )
     attempts = {"busy:cpu": [{"operation_id": "retained-busy-check"}]}
     upgrades.atomic(tmp_path / "checks.json", attempts)
@@ -161,7 +160,7 @@ def test_explicit_deferred_host_retains_checks_and_native_settlement(tmp_path, m
     assert (tmp_path / "deferred-checks.json").read_bytes() == receipt
     with pytest.raises(QueueConflictError, match="exception changed"):
         upgrades._bind_deferred_checks(operation, ["ready"], "Different selection")
-    monkeypatch.setattr(upgrades, "_prepare_attempt", lambda operation, name, check, identity: {
+    monkeypatch.setattr(upgrades, "_prepare_attempt", lambda operation, name, check, identity, **kw: {
         "operation_id": identity, "authorization": {"check": check},
     })
     monkeypatch.setattr(upgrades, "self_test", lambda inventory, *, operation_id, timeout_seconds, _dispatch_only, _wait: (

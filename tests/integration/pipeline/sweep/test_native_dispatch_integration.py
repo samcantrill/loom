@@ -134,7 +134,7 @@ def test_cli_observation_skips_unaccepted_request_and_recovers_later_acceptance(
     def lose_response(request, **kwargs):
         if request.preparation.run_name == "trial-0001":
             raise ConnectionError("connection lost before acceptance")
-        result = native_run(request, **kwargs)
+        result = native_run(request, **{**kwargs, "wait": True})
         assert result.observation.admission is not None
         accepted.append(result.observation.admission.admission_id)
         raise ConnectionError("accepted response lost before sweep persistence")
@@ -145,7 +145,7 @@ def test_cli_observation_skips_unaccepted_request_and_recovers_later_acceptance(
         plan,
         request_template=RunRequest(_request(), "template"),
         deployment=selection,
-        sweep_dir=root,
+        sweep_dir=root, wait=False,
     )
     assert [t.outcome.value for t in first.trials] == ["unknown", "unknown"]
     before = _records(root)["trial-0001"]
@@ -263,3 +263,138 @@ def _records(root) -> dict[str, Any]:
     manifest = read_sweep_plan(root).sweep_manifest
     assert manifest is not None
     return cast(dict[str, Any], manifest.metadata["native_runs"])
+
+
+def test_waiting_window_refills_while_first_trial_is_running(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    import time
+    from loom import _run
+
+    selection = _selection(tmp_path)
+    agent = tmp_path / "agent.json"
+    config = json.loads(agent.read_text())
+    config["resident_profiles"][0]["cpu_capacity"] = 3
+    coordinator = tmp_path / "coordinator.json"
+    service = json.loads(coordinator.read_text())
+    service["preparation"]["profiles"]["existing-project"]["configuration_policy"] = "local"
+    coordinator.write_text(json.dumps(service))
+    agent.write_text(json.dumps(config))
+    first = json.loads((tmp_path / "projects" / "pipeline.yaml").read_text())["pipeline"]["stages"][0]
+    first["factory"]["_target_"] = "tests.support.pipeline_execution_stages.ReleaseStage"
+    marker = tmp_path / "marker"
+    first["config"] = {"marker_dir": str(marker), "timeout_seconds": 90}
+    plan = plan_sweep(ManualSweepSpec(
+        sweep_id="window", run_uri_root=(tmp_path / "runs").as_uri(), trials=(
+            ManualTrialSpec(overrides={"pipeline.stages": [first]}),
+            ManualTrialSpec(overrides={"pipeline.name": "second"}),
+            ManualTrialSpec(overrides={"pipeline.name": "third"}),
+        ),
+    ))
+    root = tmp_path / "sweep"
+    send = _run._start_exact
+    sent = []
+    status_entered, allow_status = Event(), Event()
+
+    def start(available, request, **kwargs):
+        trial = request.preparation.run_name
+        if trial == "trial-0001":
+            native_call = available.client._native_call
+
+            def delayed_reply(operation, *args, **kwargs):
+                reply = native_call(operation, *args, **kwargs)
+                if operation == "operation":
+                    status_entered.set()
+                    assert allow_status.wait(75)
+                return reply
+
+            monkeypatch.setattr(available.client, "_native_call", delayed_reply)
+        if trial == "trial-0002":
+            end = time.monotonic() + 35
+            while not (marker / "produce.started").exists():
+                assert time.monotonic() < end, "first worker failed to start"
+                time.sleep(0.05)
+        if trial == "trial-0003":
+            assert status_entered.is_set() and not allow_status.is_set()
+            rows = _records(root)
+            assert rows["trial-0002"]["observation"]["admission"]["state"] == "SUCCEEDED"
+            assert not (marker / "release").exists()
+        sent.append(trial)
+        return send(available, request, **kwargs)
+
+    monkeypatch.setattr(_run, "_start_exact", start)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(run_sweep, plan, request_template=RunRequest(_request(), "template"),
+                             deployment=selection, sweep_dir=root, max_in_flight=2, timeout_seconds=85)
+        try:
+            end = time.monotonic() + 65
+            while not future.done() and time.monotonic() < end:
+                if (root / "sweep.json").is_file():
+                    rows = json.loads((root / "sweep.json").read_text())["metadata"].get("native_runs", {})
+                    if (rows.get("trial-0003", {}).get("observation", {}).get("admission") or {}).get("state") == "SUCCEEDED":
+                        break
+                time.sleep(0.05)
+            if future.done():
+                future.result()
+            assert sent == ["trial-0001", "trial-0002", "trial-0003"]
+            assert (marker / "produce.started").exists()
+            assert _records(root)["trial-0003"]["observation"]["admission"]["state"] == "SUCCEEDED"
+        finally:
+            allow_status.set()
+            marker.mkdir(exist_ok=True)
+            (marker / "release").touch()
+        assert future.result(timeout=30).succeeded_count == 3
+    rows = _records(root)
+    assert rows["trial-0001"]["cleanup"]["coordinator"]["state"] == "stopped"
+    assert rows["trial-0002"]["cleanup"]["coordinator"]["state"] == "retained-for-other-work"
+
+
+@pytest.mark.parametrize("after_acceptance", [False, True])
+def test_window_recovers_interrupted_send_and_preserves_unsent_trials(tmp_path, monkeypatch, after_acceptance):
+    from loom import _run
+    from loom.cli.sweep import build_sweep_status_result
+    import sqlite3
+
+    selection = _selection(tmp_path)
+    root = tmp_path / "sweep"
+    plan = plan_sweep(ManualSweepSpec(sweep_id="restart", run_uri_root=(tmp_path / "runs").as_uri(),
+                                     trials=(ManualTrialSpec(overrides={}), ManualTrialSpec(overrides={}))))
+    template = RunRequest(_request(), "template")
+    send = _run._start_exact
+    attempts = []
+
+    def interrupt(available, request, **kwargs):
+        attempts.append(request)
+        if len(attempts) == 1:
+            if after_acceptance:
+                send(available, request, **kwargs)
+            raise KeyboardInterrupt
+        return send(available, request, **kwargs)
+
+    monkeypatch.setattr(_run, "_start_exact", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        run_sweep(plan, request_template=template, deployment=selection, sweep_dir=root, max_in_flight=2)
+    saved = _records(root)
+    assert list(saved) == ["trial-0001"]
+    from loom.serialization import thaw_plain_data
+    assert thaw_plain_data(saved["trial-0001"]["request"]) == attempts[0].to_dict()
+
+    status = build_sweep_status_result(root, deployment=selection)
+    assert len(attempts) == 1
+    assert [t.metadata["submission_state"] for t in status.trials] == [
+        "accepted" if after_acceptance else "intent_retained", "unselected",
+    ]
+    resumed = run_sweep(plan, request_template=template, deployment=selection, sweep_dir=root, max_in_flight=2)
+    assert resumed.succeeded_count == 2
+    assert _records(root)["trial-0001"]["request"] == saved["trial-0001"]["request"]
+    if after_acceptance:
+        assert len(attempts) == 2  # The passive read established acceptance; only B is sent.
+    else:
+        assert len(attempts) == 3 and attempts[0] == attempts[1]
+    with sqlite3.connect(tmp_path / "deployment" / "coordinator" / "control.sqlite") as db:
+        for row in _records(root).values():
+            request = row["request"]
+            assert db.execute("SELECT COUNT(*) FROM preparation_operations WHERE operation_id=?",
+                              (request["preparation"]["operation_id"],)).fetchone() == (1,)
+            assert db.execute("SELECT COUNT(*) FROM managed_admissions WHERE queue_item_id=?",
+                              (request["queue_item_id"],)).fetchone() == (1,)

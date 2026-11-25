@@ -162,6 +162,373 @@ def test_assignment_before_subscription_and_exact_reply_replay(waiting_owner):
     assert daemon._poll_waiters._subscribers == {}
 
 
+@pytest.mark.parametrize("kind", ["work", "control"])
+@pytest.mark.parametrize("boundary", ["before_read", "after_read"])
+def test_stalled_session_allows_other_renewals_and_controls(
+    waiting_owner, monkeypatch, kind, boundary
+):
+    from datetime import timedelta
+    from loom.queue.agent_sessions import AgentOfferRenewal
+    from loom.timestamps import parse_timestamp, utc_timestamp
+
+    daemon, session, request, target, poll = waiting_owner
+    policy = daemon._agent_policy
+    peers = [
+        replace(
+            policy.agents[0],
+            agent_id=f"agent-{name}",
+            principal_id=f"principal-{name}",
+            credential_id=f"agent-{name}",
+        )
+        for name in ("b", "c")
+    ]
+    daemon.replace_agent_policy(
+        replace(
+            policy,
+            agents=(*policy.agents, *peers),
+            principals=(
+                replace(policy.principals[0], agent_ids=("agent-a", "agent-c")),
+            ),
+        )
+    )
+    registered = []
+    for peer in peers:
+        view = daemon.agent_view(
+            LocalDaemonPrincipal(
+                peer.principal_id, LocalDaemonRole.AGENT, peer.agent_id
+            )
+        )
+        other = view.register(
+            AgentRegistration(
+                f"register-{peer.agent_id}",
+                session.coordinator_id,
+                session.coordinator_epoch,
+                f"root-{peer.agent_id}",
+                "config-1",
+                "inventory-1",
+                "availability-1",
+                ("default",),
+                peer.capabilities,
+                retirement_verifier=_TEST_RETIREMENT_VERIFIER,
+            )
+        )
+        offer = view.publish_offer(
+            _offer(other.session_id, other.coordinator_epoch), idempotency_key="offer"
+        )
+        registered.append((view, other, offer))
+    (view_b, b, offer_b), (view_c, c, _) = registered
+    operator = daemon.operator_view(
+        LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
+    )
+
+    def control(s):
+        return AgentControl(
+            f"drain-{s.agent_id}",
+            AgentControlKind.DRAIN,
+            s.agent_id,
+            s.session_id,
+            s.config_revision,
+            "default",
+            False,
+            "inspection interleaving",
+        )
+
+    if kind == "control":
+        operator.control_agent(control(session))
+    elif boundary == "after_read":
+        target()
+    operator.control_agent(control(c))
+    inspect = "_inspect_work_candidate" if kind == "work" else "_inspect_controls"
+    original = getattr(AgentSessionService, inspect)
+    paused, release = Event(), Event()
+
+    def pause():
+        paused.set()
+        assert release.wait(5)
+
+    def stalled(self, session_id, *args, **kwargs):
+        if session_id == session.session_id and boundary == "before_read":
+            pause()
+        result = original(self, session_id, *args, **kwargs)
+        if session_id == session.session_id and boundary == "after_read":
+            assert result is not None
+            pause()
+        return result
+
+    monkeypatch.setattr(AgentSessionService, inspect, stalled)
+    with ThreadPoolExecutor() as pool:
+        pending = (
+            pool.submit(poll)
+            if kind == "work"
+            else pool.submit(
+                _view(daemon).wait_for_controls,
+                session.session_id,
+                received_operation_ids=(),
+                wait_timeout_ms=0,
+            )
+        )
+        try:
+            assert paused.wait(2)
+            renewal = AgentOfferRenewal(
+                b.session_id, offer_b["offer_id"], b.availability_revision, 1
+            )
+            assert (
+                pool.submit(view_b.renew_offer, renewal).result(timeout=2)["state"]
+                == "renewed"
+            )
+            reply = pool.submit(
+                view_c.wait_for_controls,
+                c.session_id,
+                received_operation_ids=(),
+                wait_timeout_ms=0,
+            )
+            assert reply.result(timeout=2)["control"] == control(c).value()
+            if kind == "work" and boundary == "after_read":
+                # The targeted delivery is live. A drain revokes this offer and fences the poll.
+                operator.control_agent(control(session))
+            else:
+                with daemon._connection() as conn:
+                    expiry = conn.execute(
+                        "SELECT expires_at FROM agent_offers WHERE session_id=? AND current=1",
+                        (session.session_id,),
+                    ).fetchone()
+                if expiry is not None:
+                    now = utc_timestamp(
+                        parse_timestamp(expiry[0]) + timedelta(seconds=1)
+                    )
+                    monkeypatch.setattr(daemon, "_clock", lambda: now)
+                operator.replace_agent_session(
+                    SessionReplacementRequest(
+                        "replace-a", session.agent_id, "lost agent"
+                    )
+                )
+        finally:
+            release.set()
+        with pytest.raises((QueueConflictError, QueueServiceError)):
+            pending.result(timeout=2)
+    with daemon._connection() as conn:
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM agent_deliveries WHERE session_id=? AND state='DELIVERED'",
+                (session.session_id,),
+            ).fetchone()[0]
+            == 0
+        )
+
+
+@pytest.mark.parametrize("transaction", ["BEGIN IMMEDIATE", "BEGIN"])
+def test_sqlite_busy_retries_release_the_state_guard(
+    waiting_owner, monkeypatch, transaction
+):
+    from loom.queue import _coordinator_transactions
+
+    daemon, session, _, _, poll = waiting_owner
+    busy, retry = Event(), Event()
+
+    def wait_to_retry(seconds):
+        busy.set()
+        assert retry.wait(3)
+
+    monkeypatch.setattr(_coordinator_transactions, "sleep", wait_to_retry)
+    with ThreadPoolExecutor() as pool, daemon._connection() as blocker:
+        blocker.execute(transaction)
+        # A read transaction in rollback-journal mode blocks COMMIT. An
+        # immediate transaction blocks the polling writer at BEGIN instead.
+        blocker.execute("SELECT * FROM agent_sessions").fetchall()
+        pending = pool.submit(poll, 1)
+        try:
+            assert busy.wait(2)
+            empty = pool.submit(
+                _view(daemon).wait_for_controls,
+                session.session_id,
+                received_operation_ids=(),
+                wait_timeout_ms=0,
+            )
+            assert empty.result(timeout=1) == {
+                "control": None,
+                "assignment_control": None,
+            }
+        finally:
+            blocker.rollback()
+            retry.set()
+        assert pending.result(timeout=2)["result"] == "wait"
+
+
+@pytest.mark.parametrize("blocker_transaction", ["BEGIN IMMEDIATE", "BEGIN"])
+def test_registration_releases_state_guard_while_writer_is_busy(tmp_path, monkeypatch, blocker_transaction):
+    from loom.queue import _coordinator_transactions
+    from tests.unit.loom.queue.test_agent_sessions import _register
+
+    monkeypatch.setattr(LocalDaemon, "_serve", lambda self: self._stop.wait())
+    policy = _policy()
+    first = policy.agents[0]
+    second = replace(first, credential_id="agent-b", principal_id="principal-b", agent_id="agent-b")
+    config = _config(tmp_path, replace(policy, agents=(first, second)))
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    waiting, retry = Event(), Event()
+
+    def wait_to_retry(_seconds):
+        waiting.set()
+        assert retry.wait(5)
+
+    try:
+        current = _register(daemon)
+        view = daemon.agent_view(LocalDaemonPrincipal("principal-b", LocalDaemonRole.AGENT, "agent-b"))
+        request = AgentRegistration(
+            "register-b", current.coordinator_id, current.coordinator_epoch, "root-b", "cfg",
+            "inv", "avail", ("default",), ("python",), retirement_verifier=_TEST_RETIREMENT_VERIFIER,
+        )
+        monkeypatch.setattr(_coordinator_transactions, "sleep", wait_to_retry)
+        with ThreadPoolExecutor() as workers, daemon._connection() as blocker:
+            blocker.execute(blocker_transaction)
+            blocker.execute("SELECT * FROM agent_sessions").fetchall()
+            pending = workers.submit(view.register, request)
+            try:
+                assert waiting.wait(3)
+                read = workers.submit(_view(daemon).wait_for_controls, current.session_id,
+                                      received_operation_ids=(), wait_timeout_ms=0)
+                assert read.result(2) == {"control": None, "assignment_control": None}
+            finally:
+                blocker.rollback()
+                retry.set()
+            assert pending.result(3) == view.register(request)
+        with daemon._connection() as conn:
+            assert conn.execute("SELECT count(*) FROM agent_sessions WHERE agent_id='agent-b'").fetchone()[0] == 1
+            assert conn.execute(
+                "SELECT count(*) FROM agent_receipts WHERE principal_id='principal-b' AND operation='register'"
+            ).fetchone()[0] == 1
+    finally:
+        retry.set()
+        daemon.stop()
+
+
+@pytest.mark.parametrize(("store", "transaction"), [
+    ("control", "BEGIN IMMEDIATE"), ("control", "BEGIN"),
+    ("execution", "BEGIN IMMEDIATE"), ("execution", "BEGIN"),
+    ("replacement", None), ("lost_commit_reply", None),
+])
+def test_native_reservation_leaves_no_claim_on_busy_or_store_substitution(
+    waiting_owner, tmp_path, monkeypatch, store, transaction,
+):
+    import os
+    import shutil
+    import sqlite3
+
+    from loom.queue.local_daemon_execution import _RemoteCandidateTarget, _ReservationBusy
+    from tests.unit.loom.queue import test_managed_local as managed
+
+    daemon, session, _, _, _ = waiting_owner
+    execution = daemon._execution
+    with daemon._connection() as conn:
+        offer_id = conn.execute("SELECT offer_id FROM agent_offers WHERE current=1").fetchone()[0]
+    _, command = managed._provider()
+    assignment = replace(command.assignment, session_id=session.session_id, agent_id=session.agent_id, offer_id=offer_id)
+    atom = replace(command.claim.atoms[0], local_capacity_key=f"{session.agent_id}:cpu")
+    claim = replace(command.claim, atoms=(atom,))
+    path = daemon.config.execution_database
+    managed._seed_stage_work(path, assignment)
+    execution.coordinator.publish_offer(managed._offer(assignment, (atom,)))
+    receipt = managed._decision_receipt(assignment, claim)
+    work = execution.stage_work_store.find_stage_work(assignment.stage_work_id)
+    target = _RemoteCandidateTarget(
+        agent_id=session.agent_id, session_id=session.session_id, offer_id=offer_id,
+        availability_revision=session.availability_revision, scheduling_availability_revision=session.availability_revision,
+        inventory_revision=session.inventory_revision, offer=_offer(session.session_id, session.coordinator_epoch),
+        profile=_profile(tmp_path).descriptor, availability_atoms=(atom,), reflected_claim_ids=(),
+    )
+    epochs = (daemon._epoch, daemon._scheduling_epoch)
+
+    def reserve():
+        return execution.coordinator.reserve(
+            assignment, (claim,), max_parallel_stages=1, decision_receipt=receipt,
+            _reservation_transaction=lambda: execution._reservation_transaction(work, epochs, target),
+        )
+
+    if store == "replacement":
+        execution.open_owner_stores()
+        donor = tmp_path / "substituted.sqlite"
+        shutil.copyfile(path, donor)
+        with sqlite3.connect(donor) as conn:
+            conn.execute("UPDATE local_daemon_owner_identity SET stable_id='different-coordinator'")
+        os.replace(donor, path)
+        with pytest.raises(sqlite3.DatabaseError, match="owner identity"):
+            reserve()
+        with sqlite3.connect(path) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM coordinator_assignments").fetchone() == (0,)
+        return
+
+    revision = daemon._scheduling_reference_revision
+    if store == "lost_commit_reply":
+        from loom.queue import local_daemon_execution
+
+        class LostReply(sqlite3.Connection):
+            def commit(self):
+                super().commit()
+                raise sqlite3.OperationalError("lost reply after execution commit")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(local_daemon_execution, "_connect_existing_sqlite",
+                          lambda path, **kwargs: sqlite3.connect(path.as_uri() + "?mode=rw", uri=True, factory=LostReply))
+            with pytest.raises(sqlite3.OperationalError, match="lost reply"):
+                reserve()
+        assert daemon._scheduling_reference_revision > revision
+        with sqlite3.connect(path) as conn:
+            assert conn.execute("SELECT assignment_id FROM coordinator_assignments").fetchall() == [(assignment.assignment_id,)]
+    else:
+        blocking_path = daemon.config.control_database if store == "control" else path
+        with sqlite3.connect(blocking_path) as blocker, ThreadPoolExecutor() as pool:
+            blocker.execute(transaction)
+            blocker.execute("SELECT COUNT(*) FROM sqlite_schema").fetchone()
+            try:
+                with pytest.raises(_ReservationBusy):
+                    pool.submit(reserve).result(timeout=2)
+                assert pool.submit(_view(daemon).wait_for_controls, session.session_id,
+                                   received_operation_ids=(), wait_timeout_ms=0).result(timeout=2) == {
+                                       "control": None, "assignment_control": None,
+                                   }
+                with sqlite3.connect(path) as conn:
+                    assert conn.execute("SELECT COUNT(*) FROM coordinator_assignments").fetchone() == (0,)
+                    assert conn.execute("SELECT COUNT(*) FROM coordinator_atoms").fetchone() == (0,)
+                assert daemon._scheduling_reference_revision == revision
+            finally:
+                blocker.rollback()
+    assert reserve() == reserve() == "reserved"
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT assignment_id FROM coordinator_assignments").fetchall() == [(assignment.assignment_id,)]
+        assert conn.execute("SELECT capacity_key FROM coordinator_atoms").fetchall() == [(atom.local_capacity_key,)]
+
+
+def test_reconciliation_clock_check_yields_while_sqlite_writer_is_busy(waiting_owner, monkeypatch):
+    daemon, session, _, _, _ = waiting_owner
+    sample = daemon._sample_clock_health
+    outcomes = []
+    sampled = Event()
+
+    def record(**kwargs):
+        result = sample(**kwargs)
+        outcomes.append(result)
+        sampled.set()
+        return result
+
+    monkeypatch.setattr(daemon, "_sample_clock_health", record)
+    with ThreadPoolExecutor() as workers, daemon._connection() as blocker:
+        blocker.execute("BEGIN IMMEDIATE")
+        turn = workers.submit(daemon.reconcile_once)
+        try:
+            assert sampled.wait(2)
+            assert outcomes == [False]
+            assert _view(daemon).wait_for_controls(
+                session.session_id, received_operation_ids=(), wait_timeout_ms=0,
+            ) == {"control": None, "assignment_control": None}
+            assert turn.result(2) == ()
+        finally:
+            blocker.rollback()
+    daemon.reconcile_once()
+    assert outcomes == [False, True]
+
+
 @pytest.mark.parametrize("sleeping", [False, True])
 def test_target_commit_wakes_same_pending_poll_without_deadline(
     waiting_owner,
@@ -687,6 +1054,53 @@ def test_retirement_notifies_at_withdrawal_even_if_later_proof_fails(
         assert (
             conn.execute("SELECT state FROM agent_sessions").fetchone()[0] == "RETIRING"
         )
+
+
+@pytest.mark.parametrize("reader", ["agent", "coordinator", "observation"])
+def test_lifetime_owner_scan_allows_renewal_and_refuses_new_work(waiting_owner, monkeypatch, reader):
+    from loom.queue import local_daemon_execution
+    from loom.queue.agent_sessions import AgentOfferRenewal
+
+    daemon, session, _, target, _ = waiting_owner
+    view = _view(daemon)
+    entered, resume = Event(), Event()
+    inspect = local_daemon_execution.local_daemon_owner_work_is_retained
+
+    def paused(*args, **kw):
+        retained = inspect(*args, **kw)
+        assert not retained
+        entered.set()
+        assert resume.wait(5)
+        return retained
+
+    monkeypatch.setattr(local_daemon_execution, "local_daemon_owner_work_is_retained", paused)
+    with daemon._connection() as conn:
+        offer_id = conn.execute("SELECT offer_id FROM agent_offers WHERE current=1").fetchone()[0]
+    with ThreadPoolExecutor() as pool:
+        if reader == "agent":
+            decision = pool.submit(view.service_lifetime, session.session_id, session.coordinator_epoch,
+                                   "generation", "observe")
+        elif reader == "coordinator":
+            decision = pool.submit(daemon._lifetime.retire_if_idle)
+        else:
+            decision = pool.submit(daemon._lifetime.observe, session.agent_root_id)
+        try:
+            assert entered.wait(3)
+            renewal = AgentOfferRenewal(session.session_id, offer_id, session.availability_revision, 1)
+            assert pool.submit(view.renew_offer, renewal).result(2)["state"] == "renewed"
+            pool.submit(target).result(2)
+        finally:
+            resume.set()
+        outcome = decision.result(3)
+    if reader == "agent":
+        assert outcome["state"] == "retained"
+    elif reader == "coordinator":
+        assert outcome is False
+    else:
+        assert outcome["retained"] and not outcome["retiring"]
+    assert not daemon._lifetime.retiring
+    with daemon._connection() as conn:
+        assert conn.execute("SELECT state FROM agent_sessions").fetchone()[0] == "ACTIVE"
 
 
 def test_command_lifetime_withdrawal_wakes_poll(waiting_owner, monkeypatch):

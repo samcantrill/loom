@@ -156,7 +156,7 @@ def _client(tmp_path, request, profile, provider):
             )
         daemon = SimpleNamespace(
             config=SimpleNamespace(coordinator_shared_roots=profile.shared_roots),
-            _agent_policy=policy, _epoch="epoch", _connection=control.connection,
+            _agent_policy=policy, _epoch="epoch", _scheduling_epoch=1, _connection=control.connection,
             _publication_guards=guards, _state_guard=lambda: state_lock,
             _require_started=lambda: "coordinator",
             _execution=SimpleNamespace(

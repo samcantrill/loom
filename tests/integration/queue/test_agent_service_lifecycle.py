@@ -696,15 +696,85 @@ def test_outstanding_poll_recovery_across_coordinator_epoch(
         assert conn.execute("SELECT COUNT(*) FROM remote_assignments").fetchone()[0] == 1
 
 
+@pytest.mark.parametrize("already_accepted", [True, False])
+def test_late_renewal_reply_preserves_new_offer(remote_owner, monkeypatch, already_accepted):
+    from loom.queue import agent_session_transport as transport
+    from loom.queue._agent_progress import _Spawn, _delay, _run_manager, _steps
+    from loom.queue.agent_sessions import AgentRegistration
+
+    config = remote_owner.service_config
+    client = LocalDaemonAgentHttpClient(config.client)
+    hello = client.handshake()
+    registration = config.registration
+    session = client.register(AgentRegistration(
+        "late-renewal", str(hello["coordinator_id"]), str(hello["coordinator_epoch"]), client.agent_root_id,
+        registration.config_revision, registration.inventory_revision,
+        registration.availability_revision, registration.pools, registration.capabilities,
+    ))
+    first = client.refresh_resource_offer()
+    journal = client._require_journal()
+    offer = journal.current_resource_offer(session.session_id)
+    assert offer is not None and first is not None
+    dispatch = transport._dispatch
+    held, release = Event(), Event()
+
+    def delay_renewal(view, operation, value):
+        if operation == "renew" and not held.is_set():
+            result = dispatch(view, operation, value) if already_accepted else None
+            held.set()
+            assert release.wait(10)
+            if result is not None:
+                return result
+        return dispatch(view, operation, value)
+
+    monkeypatch.setattr(transport, "_dispatch", delay_renewal)
+    client._service_progress = True
+
+    def advance():
+        attempt = yield _Spawn(_steps(client.refresh_resource_offer))
+        try:
+            while not held.is_set():
+                yield from _delay(0.01)
+            replacement = yield from _steps(
+                client.publish_offer, replace(offer, ttl_seconds=45, availability_revision="replacement"),
+                idempotency_key="replacement-offer", expected_availability_revision=offer.availability_revision,
+            )
+        finally:
+            release.set()
+        while not attempt.complete:
+            yield from _delay(0.01)
+        assert attempt.error is None
+        if already_accepted:
+            assert attempt.value["offer_id"] == first["offer_id"]
+        else:
+            assert attempt.value is None
+        assert journal.pending_resource_mutation(session.session_id) is None
+        next_renewal = journal.next_offer_renewal(session.session_id)
+        assert next_renewal is not None and next_renewal.sequence == 1
+        assert next_renewal.offer_id == replacement["offer_id"] != first["offer_id"]
+        receipt = yield from _steps(client.renew_offer, next_renewal)
+        assert receipt["state"] == "renewed" and receipt["offer_id"] == replacement["offer_id"]
+
+    try:
+        _run_manager(advance(), _delay(0))
+    finally:
+        release.set()
+        client.close()
+
+
 def test_agent_restart_recovers_fenced_poll_without_coordinator_restart(
     remote_owner: _RemoteWork, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A lost rejection after real offer expiry must not wedge startup replay."""
     from loom.queue.errors import QueueConflictError
-    from loom.queue._agent_progress import _cooperative, _steps
+    import loom.queue.deployment as deployment
+    from loom.queue._agent_progress import _cooperative, _delay, _steps
 
     work = remote_owner
-    lost = Event()
+    lost, recovery_finished = Event(), Event()
+    during_recovery = []
+    offset = [0]
+    monkeypatch.setattr(deployment, "monotonic", lambda: monotonic() + offset[0])
     original_refresh = LocalDaemonAgentHttpClient.refresh_resource_offer
     original_call = LocalDaemonAgentHttpClient._call
 
@@ -713,13 +783,22 @@ def test_agent_restart_recovers_fenced_poll_without_coordinator_restart(
 
     @_cooperative
     def short_first_offer(client, *, ttl_seconds=30):
+        if not lost.is_set() and client._live_work_poll is not None:
+            return None  # Exercise startup from a real expired offer.
         return (yield from _steps(original_refresh, client,
                                  ttl_seconds=ttl_seconds if lost.is_set() else 1))
 
     @_cooperative
     def lose_expiry_reply(client, operation, value, **kwargs):
+        if operation in {"offer", "renew"} and lost.is_set() and not recovery_finished.is_set():
+            during_recovery.append(operation)
         try:
-            return (yield from _steps(original_call, client, operation, value, **kwargs))
+            result = yield from _steps(original_call, client, operation, value, **kwargs)
+            if operation == "recover_poll":
+                offset[0] += 60
+                yield from _delay(0.2)
+                recovery_finished.set()
+            return result
         except QueueConflictError:
             if operation == "poll" and not lost.is_set():
                 lost.set()
@@ -780,6 +859,7 @@ def test_agent_restart_recovers_fenced_poll_without_coordinator_restart(
         )
         assert not second.errors
         sleep(0.05)
+    assert recovery_finished.is_set() and during_recovery == []
     assert work.daemon._epoch == epoch
     assert all(stage.status is StageStatus.SUCCEEDED for stage in work.authority.open_run(work.run_uri).stages)
     assert not second.errors

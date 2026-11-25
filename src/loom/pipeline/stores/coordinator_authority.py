@@ -239,6 +239,17 @@ def embedded_coordinator_authority(run_uri: str):
     return authority
 
 
+def _embedded_artifact_reader(factory: object):
+    """Select the configured embedded owner for an immediately following exact read."""
+    if factory is embedded_coordinator_authority:
+        from .sqlite_authority import SQLitePerRunAuthorityStore
+
+        return SQLitePerRunAuthorityStore
+    if type(factory) is EmbeddedCoordinatorAuthorityFactory:
+        return factory._store
+    return None
+
+
 def _require_embedded_schema(conn: sqlite3.Connection) -> None:
     """Validate an existing embedded owner's schema during stopped migration."""
     from .sqlite_authority import _raise_for_schema

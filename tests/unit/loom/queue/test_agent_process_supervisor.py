@@ -617,8 +617,9 @@ def test_ipc_request_admission_is_bounded_before_authentication(
                 sleep(0.01)
 
 
+@pytest.mark.parametrize("hold_stop", [False, True])
 def test_ipc_docker_waits_use_slow_capacity_and_coalesce_exact_stop(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, hold_stop: bool,
 ) -> None:
     from types import SimpleNamespace
     from loom.queue._docker_worker import DockerWorker
@@ -640,9 +641,8 @@ def test_ipc_docker_waits_use_slow_capacity_and_coalesce_exact_stop(
     held_calls = []
 
     def call(owner, *args):
-        if holding and not release.is_set() and args[0] == "inspect":
+        if holding and not release.is_set() and args[0] == "inspect" and owner.operation_id in reached:
             held_calls.append(owner.operation_id)
-            assert owner.operation_id in reached, "third backend operation submitted"
             reached[owner.operation_id].set()
             assert release.wait(10)
         daemon = daemons.setdefault(owner.operation_id, Daemon())
@@ -661,23 +661,32 @@ def test_ipc_docker_waits_use_slow_capacity_and_coalesce_exact_stop(
         try:
             assert client.query(launches["A"]).state is SupervisorLaunchState.STARTING
             assert reached["launch-A"].wait(3)
-            assert client.request_stop(launches["C"]).state is SupervisorLaunchState.STARTING
+            second_op = "request_stop" if hold_stop else "contain"
+            assert _receipt_from_value(client._call(second_op, _launch_value(launches["C"]))).state is SupervisorLaunchState.STARTING
             assert reached["launch-C"].wait(3)
             assert client.query(b).state is SupervisorLaunchState.RUNNING
             assert client.request_stop(b).state is SupervisorLaunchState.RUNNING
             assert client.query(d).state is SupervisorLaunchState.RUNNING
-            for _ in range(12):
-                assert client.request_stop(launches["E"]).state is SupervisorLaunchState.STARTING
-                assert _receipt_from_value(client._call("contain", _launch_value(launches["C"]))).state is SupervisorLaunchState.STARTING
+            if hold_stop:
+                for _ in range(12):
+                    assert client.request_stop(launches["E"]).state is SupervisorLaunchState.STARTING
+                    assert _receipt_from_value(client._call("contain", _launch_value(launches["C"]))).state is SupervisorLaunchState.STARTING
+                assert dispatch.operations["launch-E"].stop
+                assert not any(call[0] == "kill" for call in daemons["launch-E"].calls)
+            else:
+                # Both general effect workers remain inside the actual daemon
+                # adapter. A third Docker assignment can still receive its stop.
+                client.request_stop_wait(launches["E"])
+                assert sum(call[0] == "kill" for call in daemons["launch-E"].calls) == 1
             assert dispatch.active == 2
             assert held_calls == ["launch-A", "launch-C"]
-            assert dispatch.operations["launch-E"].stop
-            assert not any(call[0] == "kill" for call in daemons["launch-E"].calls)
             with pytest.raises(AgentProcessSupervisorError, match="in-flight"):
                 client._call("shutdown", None)
         finally:
             release.set()
         client.request_stop(launches["A"])
+        if not hold_stop:
+            client.request_stop_wait(launches["C"])
         for launch in launches.values():
             receipt = client.contain(launch)
             assert receipt.state is SupervisorLaunchState.CONTAINED

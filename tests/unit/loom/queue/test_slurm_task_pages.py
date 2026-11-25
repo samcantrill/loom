@@ -1,8 +1,9 @@
 """Slurm control pages honor encoded bytes and never skip an undelivered task."""
 
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 import json
+import sqlite3
 from threading import Event, RLock
 from typing import Any, cast
 from types import SimpleNamespace
@@ -10,7 +11,9 @@ from types import SimpleNamespace
 import pytest
 
 from loom.queue.errors import QueueServiceError
+from loom.queue.local_daemon import _ensure_recovery_assignment_index
 from loom.queue.local_daemon_execution import LocalDaemonExecution
+from loom.queue._slurm_task_page import pack_page
 from loom.queue._agent_session_codec import _MAX_BODY_BYTES, _decode
 from loom.queue import agent_sessions
 
@@ -23,7 +26,7 @@ def owner_for(sizes, *, withheld=()):
         assert (agent, root) == ("agent", "root")
         return tuple(row for row in records if after is None or row.assignment.assignment_id > after)[:33]
 
-    def task(row):
+    def task(row, facts):
         identity = row.assignment.assignment_id
         constructed.append(identity)
         return {"assignment": {"assignment_id": identity}, "recovery_request": None,
@@ -31,12 +34,19 @@ def owner_for(sizes, *, withheld=()):
 
     return SimpleNamespace(
         slurm_assignments=SimpleNamespace(agent_page=page), _slurm_task=task,
-        _recovery_retains_assignment=lambda identity: identity in withheld,
+        _slurm_recoveries=lambda ids: {key: [("{}", "pending", True)] for key in ids if key in withheld},
     ), constructed
 
 
 def page(owner, cursor=None):
-    return cast(dict[str, Any], LocalDaemonExecution.slurm_agent_task_page(owner, "agent", "root", cursor=cursor))
+    rows = owner.slurm_assignments.agent_page("agent", "root", after=cursor)
+    ids = [row.assignment.assignment_id for row in rows]
+    facts = owner._slurm_recoveries(ids)
+
+    def task_at(index):
+        return owner._slurm_task(rows[index], facts.get(ids[index], ())), ids[index] in facts
+
+    return cast(dict[str, Any], pack_page(ids, cursor, task_at))
 
 
 def wire(reply):
@@ -81,6 +91,145 @@ def test_withheld_recovery_page_still_advances_scan_without_losing_later_work():
     first = page(owner)
     assert first == {"tasks": [], "next_cursor": "assignment-031"}
     assert len(page(owner, first["next_cursor"])["tasks"]) == 2
+
+@pytest.mark.parametrize("page_size", [1, 32])
+def test_recovery_lookup_reads_one_indexed_page(tmp_path, page_size):
+    path = tmp_path / "control.sqlite"
+    queries = []
+
+    @contextmanager
+    def connect(database):
+        with sqlite3.connect(database) as conn:
+            conn.set_trace_callback(queries.append)
+            yield conn
+
+    ids = tuple(f"page-{i}" for i in range(page_size))
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE recovery_operations (request_json TEXT, state TEXT)")
+        conn.executemany(
+            "INSERT INTO recovery_operations VALUES (?, ?)",
+            [(json.dumps({"assignment_id": f"other-{i}"}), "pending") for i in range(4096)]
+            + [(json.dumps({"assignment_id": ids[0], "target": {"kind": kind}}), state)
+               for kind, state in (("slurm", "closed"), ("managed", "closed"), ("slurm", "pending"),
+                                   ("slurm", "evidence_confirmed"), ("slurm", "refused"))],
+        )
+        _ensure_recovery_assignment_index(conn)
+    owner = SimpleNamespace(config=SimpleNamespace(control_database=path, connect_database=connect))
+    facts = LocalDaemonExecution._slurm_recoveries(cast(LocalDaemonExecution, owner), ids)
+    assert list(facts) == [ids[0]]
+    assert [(state, retains) for _, state, retains in facts[ids[0]]] == [
+        ("closed", False), ("closed", True), ("pending", True), ("evidence_confirmed", True),
+    ]
+    assert len(queries) == 1
+    with sqlite3.connect(path) as conn:
+        plan = conn.execute("EXPLAIN QUERY PLAN " + queries[0]).fetchall()
+    assert any("SEARCH recovery_operations USING INDEX recovery_by_assignment" in row[3] for row in plan)
+
+
+@pytest.mark.parametrize("change", ["recovery", "sequence", "unrelated"])
+def test_agent_renews_during_packing_and_reply_uses_current_page(tmp_path, monkeypatch, change):
+    from dataclasses import replace
+
+    from loom.queue import LocalDaemon, LocalDaemonPrincipal, LocalDaemonRole
+    from loom.queue.local_daemon import RecoverUnknownAssignment, SlurmRecoveryTarget
+    from loom.queue import _slurm_task_page
+    from loom.queue.agent_sessions import AgentOfferRenewal, AgentRegistration, SLURM_SUBMISSION_CAPABILITY
+    from tests.unit.loom.queue.test_agent_sessions import _config, _offer, _policy, _TEST_RETIREMENT_VERIFIER
+    from tests.unit.loom.queue.test_slurm_admission import ReservationFixture
+
+    directory = tmp_path / "reservation"
+    directory.mkdir()
+    fixture = ReservationFixture(directory)
+    policy = _policy()
+    a = replace(policy.agents[0], capabilities=("python", SLURM_SUBMISSION_CAPABILITY))
+    b = replace(a, credential_id="agent-b", agent_id="agent-b", principal_id="principal-b")
+    config = replace(_config(tmp_path, replace(policy, agents=(a, b))),
+                     agent_root=None, resident_worker_launch_profile=None, agent_resource_providers=(),
+                     cpu_capacity=0, memory_capacity_bytes=0, slurm_profiles=(fixture.profile,))
+    monkeypatch.setattr(LocalDaemon, "_serve", lambda self: self._stop.wait())
+    LocalDaemon.initialize(config)
+    if change == "unrelated":
+        with config.connect_database(config.execution_database) as conn:
+            conn.execute("DROP INDEX slurm_active_agent_page")
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        def register(rule):
+            view = daemon.agent_view(LocalDaemonPrincipal(rule.principal_id, LocalDaemonRole.AGENT, rule.credential_id))
+            identity = view.handshake()
+            session = view.register(AgentRegistration(
+                rule.agent_id, str(identity["coordinator_id"]), str(identity["coordinator_epoch"]),
+                "root-" + rule.agent_id, "config-1", "inventory-1", "availability-1",
+                ("default",), rule.capabilities, retirement_verifier=_TEST_RETIREMENT_VERIFIER,
+            ))
+            return view, session
+
+        view, session = register(a)
+        other, peer = register(b)
+        offer = other.publish_offer(_offer(peer.session_id, peer.coordinator_epoch), idempotency_key="offer")
+        execution = daemon._execution
+        assert execution is not None
+        with config.connect_database(config.execution_database) as conn:
+            plan = conn.execute("EXPLAIN QUERY PLAN SELECT assignment_id FROM slurm_stage_assignments "
+                                "WHERE state != 'released' AND json_extract(identity_json, '$.agent_id') = ? "
+                                "AND json_extract(identity_json, '$.agent_root_id') = ? AND assignment_id > ? "
+                                "ORDER BY assignment_id LIMIT 33", (session.agent_id, session.agent_root_id, "")).fetchall()
+            assert any("USING INDEX slurm_active_agent_page" in row[3] for row in plan)
+        fixture.work = execution.stage_work_store
+        assignment, args = fixture.candidate("work", 0)
+        assignment = replace(assignment, agent_id=session.agent_id, agent_root_id=session.agent_root_id)
+        store = execution.slurm_assignments
+        store.reserve(assignment, **{**args, "max_reserved_gpus": None})
+
+        def reject_full_record(_row):
+            pytest.fail("agent task observation decoded a complete worker record")
+
+        monkeypatch.setattr(store, "_record", reject_full_record)
+        paused, resume = Event(), Event()
+        attempts = []
+        original = _slurm_task_page.pack_page
+
+        def pack(*args):
+            page = original(*args)
+            attempts.append(page)
+            if len(attempts) == 1:
+                paused.set()
+                assert resume.wait(5)
+            return page
+
+        monkeypatch.setattr(_slurm_task_page, "pack_page", pack)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            pending = pool.submit(view.slurm_work, session.session_id, session.coordinator_epoch)
+            try:
+                assert paused.wait(3)
+                renewal = AgentOfferRenewal(peer.session_id, str(offer["offer_id"]), peer.availability_revision, 1)
+                assert pool.submit(other.renew_offer, renewal).result(timeout=2)["state"] == "renewed"
+                if change == "recovery":
+                    # Model the control journal immediately after durable recovery admission.
+                    request = RecoverUnknownAssignment(
+                        "recovery", assignment.run_uri, assignment.stage_name, assignment.attempt,
+                        assignment.stage_work_id, assignment.assignment_id, "process", "fence",
+                        SlurmRecoveryTarget(assignment.profile_id, assignment.operation_id, "cluster", "123", None),
+                        1, "failed", False, "verify task withholding during recovery",
+                    )
+                    with daemon._connection() as conn:
+                        conn.execute("INSERT INTO recovery_operations VALUES "
+                                     "('recovery', 'operator', ?, 'digest', '2026-11-01T00:00:00Z', 'pending', NULL, '{}')",
+                                     (json.dumps(request.to_dict()),))
+                        conn.commit()
+                elif change == "sequence":
+                    store.accept_agent_evidence(assignment.assignment_id, 1, {"sequence": 1})
+            finally:
+                resume.set()
+            result = cast(dict[str, Any], pending.result(timeout=5))
+        assert len(attempts) == (1 if change == "unrelated" else 2)
+        assert attempts[0]["tasks"][0]["expected_sequence"] == 0
+        if change == "recovery":
+            assert result == {"tasks": [], "next_cursor": None}
+        else:
+            assert result["tasks"][0]["expected_sequence"] == (1 if change == "sequence" else 0)
+    finally:
+        daemon.stop()
 
 
 @pytest.mark.parametrize("reload", [False, True])

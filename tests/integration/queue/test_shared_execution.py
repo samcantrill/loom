@@ -186,11 +186,11 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, s
             with sqlite3.connect(service.daemon.execution_database) as conn:
                 assert conn.execute("SELECT COUNT(*) FROM coordinator_assignments WHERE run_uri = ?", (target_uri,)).fetchone()[0] == 0
             if scenario in {"preflight_cancel", "descriptor_cancel"}:
-                from loom.queue import local_daemon_execution as execution
+                from loom.queue import _ready_preparation, local_daemon_execution as execution
 
                 preflight = (
                     execution.LocalDaemonExecution._remote_eligible if scenario == "preflight_cancel"
-                    else execution._describe_transfer_inputs
+                    else _ready_preparation.describe_inputs
                 )
 
                 def held_preflight(*args, **kwargs):
@@ -204,7 +204,7 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, s
                 if scenario == "preflight_cancel":
                     monkeypatch.setattr(execution.LocalDaemonExecution, "_remote_eligible", staticmethod(held_preflight))
                 else:
-                    monkeypatch.setattr(execution, "_describe_transfer_inputs", held_preflight)
+                    monkeypatch.setattr(_ready_preparation, "describe_inputs", held_preflight)
             remote.publish_offer(AgentOffer(session.session_id, session.coordinator_epoch, session.config_revision,
                 session.inventory_revision, session.availability_revision, 1, 0, 30,
                 _resident_provider_descriptors(executor, session.agent_id), resident_profiles=(executor.descriptor,)), idempotency_key="offer-qualified")

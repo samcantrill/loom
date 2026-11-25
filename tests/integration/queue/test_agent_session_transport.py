@@ -3898,6 +3898,8 @@ def test_fresh_agent_processes_replay_one_continuous_supervisor_launch(
         ("normal", 1),
         ("normal", 2),
         ("release_restart", 1),
+        ("reconcile_before_accepted_replay", 1),
+        ("reconcile_before_unaccepted_replay", 1),
         ("legacy_renewal", 1),
     ],
 )
@@ -4002,7 +4004,7 @@ def test_repeated_capacity_release_publishes_fresh_offer(
             current = agent.active_session()
             assert current is not None
             coordinator.submit(LocalDaemonAdmissionRequest(f"repeat-{index}", run_uri))
-            if index == 1 and recovery != "normal":
+            if index == 1 and recovery in {"release_restart", "legacy_renewal"}:
                 def prior_release(journal, released, assignment_id):
                     if recovery == "release_restart":
                         raise RuntimeError("release acknowledgement interrupted")
@@ -4014,7 +4016,60 @@ def test_repeated_capacity_release_publishes_fresh_offer(
                 assert current is not None
                 return agent.execute_one(current.session_id, current.availability_revision,
                     sequence=agent.next_poll_sequence(current.session_id), wait_timeout_ms=5000)
-            if index == 1 and recovery == "release_restart":
+            if index == 1 and recovery.startswith("reconcile_before_"):
+                exchange = agent_session_transport._exchange_agent_request
+                attempts = []
+                accepted = recovery == "reconcile_before_accepted_replay"
+
+                def interrupt_once(config, operation, body, *args, **kwargs):
+                    if operation != "release":
+                        return exchange(config, operation, body, *args, **kwargs)
+                    proof = json.loads(body)["provider_release_proof"]
+                    del proof["retirement_secret"]
+                    if not attempts and not accepted:
+                        attempts.append(proof)
+                        raise RuntimeError("interrupted release")
+                    try:
+                        result = exchange(config, operation, body, *args, **kwargs)
+                    except agent_session_transport._AgentReleaseEpochRejected:
+                        attempts.append(proof)
+                        raise
+                    attempts.append(proof)
+                    if len(attempts) == 1:
+                        result.connection.close()
+                        raise RuntimeError("interrupted release")
+                    return result
+
+                with monkeypatch.context() as patch:
+                    patch.setattr(agent_session_transport, "_exchange_agent_request", interrupt_once)
+                    with pytest.raises(RuntimeError, match="interrupted release"):
+                        execute()
+                    agent.close()
+                    daemon.stop()
+                    daemon.start()
+                    agent = LocalDaemonAgentHttpClient(remote_config)
+                    epoch = str(agent.handshake()["coordinator_epoch"])
+                    assert epoch != current.coordinator_epoch
+                    # The service negotiates the exact pre/post-release availability
+                    # from the durable execution journal during epoch reconciliation.
+                    agent._service_progress = True
+                    agent.reconcile(current.session_id, epoch, idempotency_key=f"while-release:{epoch}")
+                    agent._service_progress = False
+                    assert agent.resume_retained_work()[0]["state"] == "RELEASED"
+                    assert attempts[1] == attempts[0]
+                    if accepted:
+                        assert len(attempts) == 2
+                    else:
+                        assert attempts[2:] == [{**attempts[0], "coordinator_epoch": epoch}]
+                    recovered = agent.active_session()
+                    assert recovered.coordinator_epoch == epoch
+                    assert recovered.availability_revision == attempts[0]["released_availability_revision"]
+                    assert agent._require_journal().next_offer_renewal(current.session_id) is None
+                    with sqlite3.connect(config.control_database) as conn:
+                        stored = conn.execute("SELECT state, provider_release_proof_json FROM remote_assignments "
+                                              "WHERE assignment_id=?", (attempts[0]["assignment_id"],)).fetchone()
+                    assert stored[0] == "RELEASED" and json.loads(stored[1]) == attempts[-1]
+            elif index == 1 and recovery == "release_restart":
                 with pytest.raises(RuntimeError, match="acknowledgement interrupted"):
                     execute()
                 monkeypatch.setattr(_RemoteAgentJournal, "complete_assignment_release", completed)
@@ -4474,7 +4529,17 @@ def test_two_remote_agents_execute_two_globally_selected_runs(
         daemon.stop()
 
 
-def test_same_run_local_and_remote_stages_overlap(tmp_path: Path) -> None:
+@pytest.mark.parametrize("scenario", [
+    "execution", "cancel-pregrant", "restart-before-coordinator-release",
+    "slow-local-observation", "lost-committed-grant", "cancel-before-bind", "restart-after-committed-bind",
+])
+def test_same_run_local_and_remote_stages_overlap(tmp_path: Path, monkeypatch, scenario: str) -> None:
+    slow_offer = scenario == "slow-local-observation"
+    cancel_pregrant = scenario not in {"execution", "slow-local-observation"}
+    binding_pause = scenario in {"cancel-before-bind", "restart-after-committed-bind"}
+    expects_abort = cancel_pregrant and not binding_pause and scenario != "lost-committed-grant"
+    bound_identity = {}
+    unbind_attempted = Event()
     credentials = _credentials(tmp_path / "tls")
     descriptor = ResidentProfileDescriptor(
         "resident-1", "revision-1", "project-1", "environment-1", "executor-1"
@@ -4508,7 +4573,74 @@ def test_same_run_local_and_remote_stages_overlap(tmp_path: Path) -> None:
     )
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config)
+    grant_entered, allow_grant = Event(), Event()
+    abort_entered, allow_abort = Event(), Event()
+    offer_entered, allow_offer = Event(), Event()
+    if slow_offer:
+        observe = AtomResourceProvider.observe
+
+        def pause_provider(provider, request):
+            if request.operation_id.startswith("candidate-observe-") and request.agent_id == config.machine_id:
+                offer_entered.set()
+                assert allow_offer.wait(25)
+            return observe(provider, request)
+
+        monkeypatch.setattr(AtomResourceProvider, "observe", pause_provider)
+    if cancel_pregrant:
+        from threading import current_thread
+        scoped = local_daemon_execution._ScopedCoordinatorAuthority
+        bind = scoped.bind_prepared_attempt
+        unbind = scoped.unbind_prepared_attempt
+        grant = scoped.grant_prepared_attempt
+        abort = AtomResourceProvider.abort
+
+        def hold_local_grant(owner, uri, **kwargs):
+            if current_thread().name.startswith("loom-local-assignment") and not grant_entered.is_set():
+                if scenario == "lost-committed-grant":
+                    grant(owner, uri, **kwargs)
+                grant_entered.set()
+                assert allow_grant.wait(40)
+                if scenario == "lost-committed-grant":
+                    raise OSError("authority committed the local grant before the reply was lost")
+            return grant(owner, uri, **kwargs)
+
+        def hold_abort(provider, command):
+            if command.assignment.agent_id == config.machine_id:
+                abort_entered.set()
+                assert allow_abort.wait(40)
+            return abort(provider, command)
+
+        if binding_pause:
+            def hold_local_binding(owner, uri, **kwargs):
+                if current_thread().name.startswith("loom-local-assignment") and not grant_entered.is_set():
+                    bound_identity.update(kwargs)
+                    if scenario == "restart-after-committed-bind":
+                        bind(owner, uri, **kwargs)
+                    grant_entered.set()
+                    assert allow_grant.wait(40)
+                    if scenario == "restart-after-committed-bind":
+                        raise OSError("authority committed the local bind before the reply was lost")
+                return bind(owner, uri, **kwargs)
+
+            def interrupt_unbind(owner, uri, **kwargs):
+                if scenario == "restart-after-committed-bind" and kwargs == bound_identity:
+                    unbind_attempted.set()
+                    raise OSError("authority unavailable until restart")
+                return unbind(owner, uri, **kwargs)
+
+            monkeypatch.setattr(scoped, "bind_prepared_attempt", hold_local_binding)
+            monkeypatch.setattr(scoped, "unbind_prepared_attempt", interrupt_unbind)
+        else:
+            monkeypatch.setattr(scoped, "grant_prepared_attempt", hold_local_grant)
+        monkeypatch.setattr(AtomResourceProvider, "abort", hold_abort)
     daemon.start()
+    release_attempted = Event()
+    if scenario == "restart-before-coordinator-release":
+        def interrupt_release(assignment_id):
+            release_attempted.set()
+            raise OSError("execution-store release unavailable until restart")
+
+        monkeypatch.setattr(daemon._execution.coordinator, "cancellation_release_pregrant", interrupt_release)
     server = LocalDaemonAgentHttpServer(
         daemon,
         AgentTlsServerConfig(
@@ -4573,7 +4705,17 @@ def test_same_run_local_and_remote_stages_overlap(tmp_path: Path) -> None:
         coordinator = daemon.client_view(
             LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
         )
-        with ThreadPoolExecutor(max_workers=1) as workers:
+        if expects_abort:
+            call = agent._call
+
+            def wait_for_local_abort(operation, payload, **kwargs):
+                response = call(operation, payload, **kwargs)
+                if operation == "assignment_control" and response.get("control") is not None:
+                    assert abort_entered.wait(30)
+                return response
+
+            monkeypatch.setattr(agent, "_call", wait_for_local_abort)
+        with ThreadPoolExecutor(max_workers=2) as workers:
             remote = workers.submit(
                 _execute_available_assignment,
                 agent,
@@ -4594,17 +4736,109 @@ def test_same_run_local_and_remote_stages_overlap(tmp_path: Path) -> None:
                             (run_uri,),
                         )
                     }
+                    if slow_offer and offer_entered.is_set() and not allow_offer.is_set():
+                        remote_running = conn.execute(
+                            "SELECT 1 FROM coordinator_assignments WHERE run_uri=? AND agent_id='agent-a' AND state='running'",
+                            (run_uri,),
+                        ).fetchone()
+                        if remote_running is not None:
+                            assert active_agent_ids == {"agent-a"}
+                            allow_offer.set()
                 if active_agent_ids == {"machine-A", "agent-a"}:
                     break
                 sleep(0.01)
+            if slow_offer:
+                assert offer_entered.is_set() and allow_offer.is_set()
             assert active_agent_ids == {"machine-A", "agent-a"}
+            if cancel_pregrant:
+                try:
+                    assert grant_entered.wait(10)
+                    with sqlite3.connect(config.control_database) as conn:
+                        deadline = monotonic() + 20
+                        while monotonic() < deadline and not conn.execute(
+                            "SELECT 1 FROM remote_assignments WHERE run_uri=? AND state='RUNNING'", (run_uri,)
+                        ).fetchone():
+                            sleep(0.01)
+                        assert conn.execute("SELECT 1 FROM remote_assignments WHERE run_uri=? AND state='RUNNING'", (run_uri,)).fetchone()
+                    coordinator.cancel("mixed-item")
+                    with sqlite3.connect(config.control_database) as conn:
+                        deadline = monotonic() + 15
+                        while monotonic() < deadline and not conn.execute("SELECT 1 FROM remote_assignment_controls").fetchone():
+                            sleep(0.01)
+                        assert conn.execute("SELECT COUNT(*) FROM remote_assignment_controls").fetchone() == (1,)
+                    if binding_pause:
+                        assert remote.result(timeout=20).get("state") == "RELEASED"
+                        assert coordinator.cancel("mixed-item").state is LocalDaemonAdmissionState.CANCELLING
+                        with sqlite3.connect(config.agent_journal) as conn:
+                            assert conn.execute("SELECT COUNT(*) FROM assignments").fetchone() == (0,)
+                    allow_grant.set()
+                    if expects_abort:
+                        assert abort_entered.wait(20)
+                        assert remote.result(timeout=20).get("state") == "RELEASED"
+                        workers.submit(daemon.reconcile_once).result(timeout=5)
+                        # The pending diagnostic is part of current progress.
+                        # Repeating the public control must preserve it and its revision.
+                        settling = coordinator.cancel("mixed-item")
+                        assert settling.state is LocalDaemonAdmissionState.CANCELLING
+                        assert settling.blocked_reason
+                        assert coordinator.cancel("mixed-item") == settling
+                        with pytest.raises(TimeoutError):
+                            coordinator.wait("mixed-item", timeout_seconds=0.1)
+                        assert authority.open_run(run_uri).status is RunStatus.RUNNING
+                finally:
+                    allow_grant.set()
+                    allow_abort.set()
             result = remote.result(timeout=90)
             assert result.get("state") == "RELEASED", result
+        if scenario == "restart-before-coordinator-release":
+            assert release_attempted.wait(10)
+            with sqlite3.connect(config.agent_journal) as conn:
+                assert conn.execute(
+                    "SELECT state, declined, grant_fence, process_execution_id FROM assignments"
+                ).fetchall() == [("released", 1, None, None)]
+            with sqlite3.connect(config.execution_database) as conn:
+                assert conn.execute(
+                    "SELECT state FROM coordinator_assignments WHERE agent_id=?", (config.machine_id,)
+                ).fetchone() == ("accepted",)
+        if scenario == "restart-after-committed-bind":
+            assert unbind_attempted.wait(20)
+            with sqlite3.connect(config.execution_database) as conn:
+                assert conn.execute(
+                    "SELECT state FROM coordinator_assignments WHERE assignment_id=?",
+                    (bound_identity["assignment_id"],),
+                ).fetchone() == ("reserved",)
+        if scenario in {"restart-before-coordinator-release", "restart-after-committed-bind"}:
+            daemon.stop()
+            if scenario == "restart-after-committed-bind":
+                monkeypatch.setattr(scoped, "unbind_prepared_attempt", unbind)
+            daemon = LocalDaemon(config)
+            daemon.start()
+            coordinator = daemon.client_view(LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT))
         assert coordinator.wait("mixed-item", timeout_seconds=90).state is (
-            LocalDaemonAdmissionState.SUCCEEDED
+            LocalDaemonAdmissionState.CANCELLED if cancel_pregrant else LocalDaemonAdmissionState.SUCCEEDED
         )
-        assert authority.open_run(run_uri).status is RunStatus.SUCCEEDED
+        assert authority.open_run(run_uri).status is (RunStatus.CANCELLED if cancel_pregrant else RunStatus.SUCCEEDED)
+        if scenario == "lost-committed-grant":
+            assert not abort_entered.is_set()
+            with sqlite3.connect(config.agent_journal) as conn:
+                assert conn.execute(
+                    "SELECT state, grant_fence IS NOT NULL, process_execution_id FROM assignments"
+                ).fetchall() == [("released", 1, None)]
+        if binding_pause:
+            authority.bind_prepared_attempt(run_uri, **bound_identity)
+            with pytest.raises(ValueError, match="not bound"):
+                authority.grant_prepared_attempt(run_uri, **bound_identity)
+            with sqlite3.connect(config.agent_journal) as conn:
+                assert conn.execute("SELECT COUNT(*) FROM assignments").fetchone() == (0,)
+        if cancel_pregrant:
+            with sqlite3.connect(config.execution_database) as conn:
+                assert conn.execute(
+                    "SELECT state FROM coordinator_assignments WHERE run_uri=?", (run_uri,)
+                ).fetchall() == [("released",), ("released",)]
     finally:
+        allow_offer.set()
+        allow_grant.set()
+        allow_abort.set()
         agent.close()
         server.stop()
         daemon.stop()
@@ -7310,6 +7544,80 @@ def test_native_https_authentication_rejects_before_mutation(
     assert caught.value.mutation_outcome == "not_applied"
     assert caught.value.ids["queue_item_id"] == "original-item"
     assert daemon.admissions().admissions == ()
+
+
+def test_independent_authenticated_client_completes_while_negotiation_is_paused(native_control_endpoint, monkeypatch):
+    daemon, server, _, credentials = native_control_endpoint
+    entered, release = Event(), Event()
+    handshake = ssl.SSLSocket.do_handshake
+
+    def pause_first(sock, *args, **kwargs):
+        if sock.server_side and not entered.is_set():
+            entered.set()
+            assert release.wait(8)
+        return handshake(sock, *args, **kwargs)
+
+    monkeypatch.setattr(ssl.SSLSocket, "do_handshake", pause_first)
+    config = AgentTlsClientConfig(
+        f"https://localhost:{server.port}", credentials["ca"].with_suffix(".crt"),
+        credentials["agent"].with_suffix(".crt"), credentials["agent"].with_suffix(".key"),
+    )
+
+    def observed():
+        client = LocalDaemonAgentHttpClient(config)
+        try:
+            return client.handshake()["coordinator_id"]
+        finally:
+            client.close()
+
+    with ThreadPoolExecutor() as callers:
+        first = callers.submit(observed)
+        try:
+            assert entered.wait(3)
+            assert callers.submit(observed).result(3) == daemon._coordinator_id
+            assert not first.done()
+        finally:
+            release.set()
+        assert first.result(3) == daemon._coordinator_id
+
+
+def test_handshake_capacity_and_shutdown_own_queued_sockets(native_control_endpoint, monkeypatch):
+    _, listener, _, _ = native_control_endpoint
+    server = listener._server
+    release, closing = Event(), Event()
+    authenticate = server._authenticate_connection
+    shutdown = server._handshakes.shutdown
+
+    def held(*args):
+        assert release.wait(8)
+        authenticate(*args)
+
+    def shutting_down(*args, **kwargs):
+        closing.set()
+        return shutdown(*args, **kwargs)
+
+    monkeypatch.setattr(server, "_authenticate_connection", held)
+    monkeypatch.setattr(server._handshakes, "shutdown", shutting_down)
+    pairs = [socket.socketpair() for _ in range(9)]
+    try:
+        for connection, _ in pairs:
+            server.process_request(connection, ("localhost", 0))
+        assert len(server._negotiating) == 8
+        assert pairs[-1][0].fileno() == -1
+        with ThreadPoolExecutor() as callers:
+            stopped = callers.submit(listener.stop)
+            try:
+                assert closing.wait(3)
+                assert all(connection.fileno() == -1 for connection, _ in pairs)
+            finally:
+                release.set()
+            stopped.result(3)
+        assert not server._negotiating
+    finally:
+        release.set()
+        for connection, peer in pairs:
+            connection.close()
+            peer.close()
 
 
 def test_worker_keepalive_remains_usable_after_the_tls_accept_deadline(

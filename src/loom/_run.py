@@ -97,49 +97,56 @@ def _owned_assignments_pending(
     return False
 
 
-def _cleanup(
+def _cleanup_step(
     available: AvailableDeployment, observation: RunObservation, deadline: float
-) -> dict[str, PlainData]:
+) -> dict[str, PlainData] | None:
     roles = available.roles
     result: dict[str, PlainData] = {}
     if "coordinator" not in roles:
         result["coordinator"] = {"state": "persistent/borrowed"}
-    while True:
-        pending = False
-        retained = None
-        blocked = None
-        own_pending = True
+    pending = False
+    retained = None
+    blocked = None
+    own_pending = True
+    try:
+        projection = available.client._native_call(
+            "service_lifetime", {}, available.connection_id, deadline=deadline
+        )
+        retained, blocked = projection["retained"], projection["cleanup_blocked"]
+        if retained and blocked is None and any(
+            role["identity"]["lifetime"] == "run" for role in roles.values()
+        ):
+            own_pending = _owned_assignments_pending(available, observation, deadline)
+    except CoordinatorClientError:
+        pass
+    for name, role in roles.items():
+        root = Path(role["identity"]["root"])
+        if name == "coordinator":
+            root /= "coordinator"
         try:
-            projection = available.client._native_call(
-                "service_lifetime", {}, available.connection_id, deadline=deadline
-            )
-            retained, blocked = projection["retained"], projection["cleanup_blocked"]
-            if retained and blocked is None and any(
-                role["identity"]["lifetime"] == "run" for role in roles.values()
-            ):
-                own_pending = _owned_assignments_pending(available, observation, deadline)
-        except CoordinatorClientError:
-            pass
-        for name, role in roles.items():
-            root = Path(role["identity"]["root"])
-            if name == "coordinator":
-                root /= "coordinator"
-            try:
-                state, evidence = _process_receipt(root)
-            except (OSError, sqlite3.Error, ValueError) as exc:
-                state, evidence = "cleanup-blocked", {"diagnostic": str(exc)}
-            if state == "running":
-                if blocked is not None:
-                    state = "cleanup-blocked"
-                    evidence = {**evidence, "diagnostic": blocked}
-                elif retained and not own_pending:
-                    state = "retained-for-other-work"
-                elif time.monotonic() >= deadline:
-                    state = "cleanup-blocked"
-                else:
-                    pending = True
-            result[name] = cast(PlainData, {"state": state, "evidence": evidence})
-        if not pending:
+            state, evidence = _process_receipt(root)
+        except (OSError, sqlite3.Error, ValueError) as exc:
+            state, evidence = "cleanup-blocked", {"diagnostic": str(exc)}
+        if state == "running":
+            if blocked is not None:
+                state = "cleanup-blocked"
+                evidence = {**evidence, "diagnostic": blocked}
+            elif retained and not own_pending:
+                state = "retained-for-other-work"
+            elif time.monotonic() >= deadline:
+                state = "cleanup-blocked"
+            else:
+                pending = True
+        result[name] = cast(PlainData, {"state": state, "evidence": evidence})
+    return None if pending else result
+
+
+def _cleanup(
+    available: AvailableDeployment, observation: RunObservation, deadline: float
+) -> dict[str, PlainData]:
+    while True:
+        result = _cleanup_step(available, observation, deadline)
+        if result is not None:
             return result
         time.sleep(min(0.05, max(0, deadline - time.monotonic())))
 
@@ -191,6 +198,80 @@ def _validate_run_selection(request: RunRequest, selection: DeploymentSelection)
             )
 
 
+def _start_exact(
+    available: AvailableDeployment, request: RunRequest, *,
+    deadline: float, expected_coordinator_id: str | None,
+) -> RunObservation:
+    """Submit against the bound owner and capture its first durable response."""
+    available.client._guard("start_run", {"request": request.to_dict()}, expected_coordinator_id)
+    operation = available.client._native_call(
+        "start_run",
+        {"request": request.to_dict()},
+        available.connection_id,
+        deadline=deadline,
+    )
+    return RunObservation(
+        request.preparation.operation_id, operation, None, None, available.description
+    )
+
+
+def _run_outcome(
+    available: AvailableDeployment, observation: RunObservation, *,
+    wait: bool, deadline: float | None,
+) -> RunOutcome:
+    """Project the observed result and per-role cleanup after releasing the attachment."""
+    terminal = (
+        observation.operation is not None
+        and observation.operation.state in {"failed", "cancelled", "conflict"}
+    )
+    terminal = terminal or (
+        observation.admission is not None
+        and observation.admission.state
+        in {
+            LocalDaemonAdmissionState.SUCCEEDED,
+            LocalDaemonAdmissionState.FAILED,
+            LocalDaemonAdmissionState.CANCELLED,
+        }
+    )
+    if wait and terminal:
+        cleanup_deadline = min(
+            time.monotonic() + available.selection.startup_seconds,
+            deadline if deadline is not None else math.inf,
+        )
+        cleanup = _cleanup(available, observation, cleanup_deadline)
+    else:
+        cleanup = {
+            name: {
+                "state": "persistent/borrowed"
+                if role["identity"]["lifetime"] == "persistent"
+                else "retained-for-other-work"
+            }
+            for name, role in available.roles.items()
+        }
+        cleanup.setdefault("coordinator", {"state": "persistent/borrowed"})
+        if (
+            observation.admission is not None
+            and observation.admission.state == LocalDaemonAdmissionState.BLOCKED
+        ):
+            for role in cleanup.values():
+                if role["state"] != "persistent/borrowed":
+                    role["state"] = "cleanup-blocked"
+    return _role_outcome(available, observation, cast(Mapping[str, PlainData], cleanup))
+
+
+def _role_outcome(
+    available: AvailableDeployment, observation: RunObservation, cleanup: Mapping[str, PlainData],
+) -> RunOutcome:
+    coordinator = available.roles.get("coordinator")
+    if coordinator is not None and "agent" in coordinator["ids"]:
+        cleanup = {**cleanup, "agent": {
+            "state": cast(dict[str, PlainData], cleanup["coordinator"])["state"],
+            "cohosted_with": "coordinator",
+            "service_id": coordinator["ids"]["agent"],
+        }}
+    return RunOutcome(observation, cast(Mapping[str, PlainData], cleanup))
+
+
 def run(
     request: RunRequest,
     *,
@@ -232,16 +313,10 @@ def run(
         ) from exc
     release_deadline = deadline
     try:
-        available.client._guard("start_run", {"request": request.to_dict()}, expected_coordinator_id)
-        operation = available.client._native_call(
-            "start_run",
-            {"request": request.to_dict()},
-            available.connection_id,
-            deadline=startup_deadline,
+        observation = _start_exact(
+            available, request, deadline=startup_deadline, expected_coordinator_id=expected_coordinator_id,
         )
-        observation = RunObservation(
-            preparation.operation_id, operation, None, None, available.description
-        )
+        operation = observation.operation
         observation_deadline = deadline
         if selection.wait_seconds is not None:
             observation_deadline = min(
@@ -282,7 +357,7 @@ def run(
                         available = ensure_available(
                             selection,
                             attachment_id="observe-" + uuid4().hex,
-                            deadline=observation_deadline,
+                            deadline=observation_deadline, expected_coordinator_id=available.connection_id,
                         )
                     except CoordinatorClientError as reopen_error:
                         if reopen_error.code in {"unavailable", "deadline_exceeded"}:
@@ -292,50 +367,7 @@ def run(
             available.release(release_deadline)
         except QueueError:
             pass
-        terminal = (
-            observation.operation is not None
-            and observation.operation.state in {"failed", "cancelled", "conflict"}
-        )
-        terminal = terminal or (
-            observation.admission is not None
-            and observation.admission.state
-            in {
-                LocalDaemonAdmissionState.SUCCEEDED,
-                LocalDaemonAdmissionState.FAILED,
-                LocalDaemonAdmissionState.CANCELLED,
-            }
-        )
-        if wait and terminal:
-            cleanup_deadline = min(
-                time.monotonic() + selection.startup_seconds,
-                deadline if deadline is not None else math.inf,
-            )
-            cleanup = _cleanup(available, observation, cleanup_deadline)
-        else:
-            cleanup = {
-                name: {
-                    "state": "persistent/borrowed"
-                    if role["identity"]["lifetime"] == "persistent"
-                    else "retained-for-other-work"
-                }
-                for name, role in available.roles.items()
-            }
-            cleanup.setdefault("coordinator", {"state": "persistent/borrowed"})
-            if (
-                observation.admission is not None
-                and observation.admission.state == LocalDaemonAdmissionState.BLOCKED
-            ):
-                for role in cleanup.values():
-                    if role["state"] != "persistent/borrowed":
-                        role["state"] = "cleanup-blocked"
-        coordinator = available.roles.get("coordinator")
-        if coordinator is not None and "agent" in coordinator["ids"]:
-            cleanup["agent"] = {
-                "state": cast(dict[str, PlainData], cleanup["coordinator"])["state"],
-                "cohosted_with": "coordinator",
-                "service_id": coordinator["ids"]["agent"],
-            }
-        return RunOutcome(observation, cast(Mapping[str, PlainData], cleanup))
+        return _run_outcome(available, observation, wait=wait, deadline=deadline)
     finally:
         try:
             available.release(release_deadline)

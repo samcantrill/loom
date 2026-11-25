@@ -19,6 +19,8 @@ from ._storage_policy import StoragePolicy
 from loom.pipeline.stores.atomic import _fsync_path_strict
 
 from . import _agent_session_protocol as _session_protocol
+from ._agent_lifecycle import LIFECYCLE_OPERATIONS, LifecyclePending, LifecyclePreparations
+from ._agent_event_batch import apply_event_batch, pack_event_batch
 from . import _agent_assignment as _assignment_progress
 from ._agent_session_protocol import _raise_if_application_suspended
 from ._agent_session_codec import (
@@ -50,9 +52,10 @@ from ._agent_session_journal import (
 )
 
 from .gpu.occupancy import GpuOccupancyPolicy, GpuOccupancyMonitor
-from ._phase_timing import log_phases, phase
+from ._phase_timing import log_phases, phase, reported_phases, request_identity
 from ._managed_local import ResourceAvailabilityStatus
 
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 import fcntl
@@ -64,6 +67,7 @@ from pathlib import Path
 import secrets
 import shutil
 import sqlite3
+import socket
 import ssl
 from threading import BoundedSemaphore, RLock, Thread
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -72,6 +76,7 @@ from typing import Any, Literal, cast
 from urllib.parse import urlsplit
 
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
+from loom.timestamps import utc_timestamp
 from loom.queue._managed_local import (
     AgentResourceProvider,
     AssignmentState,
@@ -102,6 +107,7 @@ from loom.scheduling import CapacityAtom
 
 from .agent_sessions import (
     _MAX_RECEIVED_CONTROLS,
+    LIFECYCLE_CAPABILITY,
     AgentAssignmentControl,
     AgentOffer,
     AgentOfferRenewal,
@@ -110,6 +116,7 @@ from .agent_sessions import (
     AgentControlEffect,
     AgentPollActiveError,
     AgentPollFencedError,
+    AgentPollOfferUnavailable,
     AgentPollSequenceGapError,
     AgentRegistration,
     AgentSession,
@@ -142,7 +149,7 @@ from ._agent_process_supervisor import (
     SupervisorLaunchState,
     _launch_from_value,
 )
-from .errors import QueueConflictError, QueueError, QueueServiceError
+from .errors import QueueConflictError, QueueError, QueueServiceError, _AgentReleaseEpochRejected
 from ._coordinator_control import (
     CONTROL_CAPABILITY,
     CoordinatorClientError,
@@ -152,7 +159,8 @@ from ._coordinator_control import (
     error_envelope,
 )
 from ._coordinator_transport import https_connection
-from ._agent_progress import _Progress, _cooperative, _steps, _external, _delay, _Gate, _serialized, _owns_assignment
+from ._agent_progress import _Progress, _cooperative, _steps, _external, _delay, _Gate, _serialized, _owns_assignment, _current_assignment_id, _gather
+from ._agent_progress import _bound_exchanges, _exchange_deadline, _ExternalDeadline
 from .local_daemon import (
     AdmissionNotFoundError,
     LocalDaemon,
@@ -908,9 +916,17 @@ class LocalDaemonAgentHttpClient:
         self._closed = False
         self._service_progress = False
         self._service_control_due = True
-        self._resident_poll_active = False
+        self._live_work_poll: tuple[str, str, int] | None = None
+        self._defer_offer_until_poll_settles = False
+        # Polls and assignment release/decline advance the same availability
+        # revision. Their ordering is independent of unchanged-offer renewal.
+        self._delivery_gate = _Gate()
+        self._release_gate = _Gate()
+        self._supports_event_batch = False
+        self._supports_lifecycle = False
         self._epoch_reconciliation_pending = False
         self._mutation_gate = _Gate()
+        self._agent_control_gate = _Gate()
         self._suspend_requested: Callable[[], bool] | None = None
         self._slurm_agent = (
             AgentSlurmJobs(
@@ -990,6 +1006,7 @@ class LocalDaemonAgentHttpClient:
                 else ()
             )
             self._received_cancellations: set[str] = set()
+            self._machine_stop_requested: set[str] = set()
             if self._journal is not None:
                 self._journal.recover_pending_reload(config)
             self._drained = (
@@ -1298,12 +1315,10 @@ class LocalDaemonAgentHttpClient:
         return (yield from _session_protocol.publish_offer(self, offer, idempotency_key=idempotency_key, expected_availability_revision=expected_availability_revision, _observed_snapshot=_observed_snapshot))
 
     @_cooperative
-    @_serialized("_mutation_gate")
     def renew_offer(self, renewal: AgentOfferRenewal) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
         return (yield from _session_protocol.renew_offer(self, renewal))
 
     @_cooperative
-    @_serialized("_mutation_gate")
     def refresh_resource_offer(
         self, *, ttl_seconds: int = 30
     ) -> Generator[_Progress, Any, Mapping[str, PlainData] | None]:
@@ -1339,7 +1354,7 @@ class LocalDaemonAgentHttpClient:
         return (yield from _session_protocol.renew_current_offer(self, session_id))
 
     @_cooperative
-    @_serialized("_mutation_gate")
+    @_serialized("_delivery_gate")
     def wait_for_work(
         self,
         session_id: str,
@@ -1360,18 +1375,10 @@ class LocalDaemonAgentHttpClient:
                                      sequence=sequence, wait_timeout_ms=wait_timeout_ms))
         from ._agent_progress import _Spawn
 
-        self._resident_poll_active = True
-
-        def receive_poll():
-            try:
-                return (yield from _steps(self.wait_for_work, session_id, availability_revision,
-                                         sequence=sequence, wait_timeout_ms=wait_timeout_ms))
-            finally:
-                # A long scheduler command may outlive the resident poll. Its
-                # offer renewals can resume as soon as the mutation gate opens.
-                self._resident_poll_active = False
-
-        poll = yield _Spawn(receive_poll())
+        poll = yield _Spawn(_steps(
+            self.wait_for_work, session_id, availability_revision,
+            sequence=sequence, wait_timeout_ms=wait_timeout_ms,
+        ))
         try:
             while not poll.complete:
                 yield from _steps(self.drive_slurm_jobs)
@@ -1384,119 +1391,107 @@ class LocalDaemonAgentHttpClient:
             # Its exact receipt is retained even when scheduler progress fails.
             while not poll.complete:
                 yield from _delay(0.01)
-            self._resident_poll_active = False
 
     @_cooperative
-    @_serialized("_mutation_gate")
+    @_serialized("_agent_control_gate")
     def poll_control(self, session_id: str) -> Generator[_Progress, Any, AgentControl | None]:
-        (yield from _steps(self._replay_pending_resource_mutation, session_id))
+        journal = self._require_journal()
+        received = yield from self._mutation_gate.run(self._prepare_next_control(session_id))
+        if received is None:
+            return None
+        control, effect = received
+        if effect is None:
+            contained = True
+            if control.cancel_active:
+                contained = yield from _steps(self._cancel_active_assignments)
+            effect = yield from self._mutation_gate.run(
+                self._finish_agent_control(control, contained)
+            )
+        journal.session(session_id)
+        yield from _steps(self._call, "control_ack", {"session_id": session_id, "effect": effect.value()})
+        journal.acknowledge_control(control.operation_id)
+        return control
+
+    def _prepare_next_control(
+        self, session_id: str,
+    ) -> Generator[_Progress, Any, tuple[AgentControl, AgentControlEffect | None] | None]:
         journal = self._require_journal()
         if self._service_progress and journal.pending_poll() is not None:
             self._service_control_due = True
             return None
+        yield from _steps(self._replay_pending_resource_mutation, session_id)
         pending = journal.next_unacknowledged_control()
         if pending is not None:
-            control, effect = pending
-            if control.expected_session_id != session_id:
-                raise QueueConflictError(
-                    "retained agent control belongs to another session"
-                )
-            (yield from _steps(self._call,
-                "control_ack",
-                {"session_id": session_id, "effect": effect.value()},
-            ))
-            journal.acknowledge_control(control.operation_id)
-            return control
-        received = journal.next_received_control(session_id)
-        if received is not None:
-            raw = received.value()
-        elif self._service_progress:
-            return None
-        else:
-            result = (yield from _steps(self._call, "control", {"session_id": session_id}))
+            if pending[0].expected_session_id != session_id:
+                raise QueueConflictError("retained agent control belongs to another session")
+            return pending
+        control = journal.next_received_control(session_id)
+        if control is None:
+            if self._service_progress:
+                return None
+            result = yield from _steps(self._call, "control", {"session_id": session_id})
             raw = result.get("control")
-        if raw is None:
-            return None
-        if not isinstance(raw, Mapping):
-            raise QueueServiceError("agent control response is invalid")
-        control = AgentControl.from_value(raw)
-        effect = journal.replayed_control_effect(control)
-        prepared_reload: _PreparedAgentReload | None = None
-        prepared_error: str | None = None
-        cancellation_prepared = False
-        if effect is None and control.kind.value == "reload":
-            with self._control_lock:
-                if control.cancel_active:
-                    cancellation_prepared = True
-                    if not (yield from _steps(self._cancel_active_assignments)):
-                        prepared_error = "unknown_work"
-                if prepared_error is None:
-                    if self._trusted_config_loader is None:
-                        prepared_error = "reload_unavailable"
-                    else:
-                        try:
-                            prepared_reload = self._prepare_agent_reload()
-                        except (QueueError, OSError, TypeError, ValueError):
-                            prepared_error = "reload_rejected"
-        if effect is None:
-            effect = journal.prepare_control(
-                control,
-                replacement_fingerprint=(
-                    None
-                    if prepared_reload is None
-                    else prepared_reload.active_fingerprint
-                ),
+            if raw is None:
+                return None
+            if not isinstance(raw, Mapping):
+                raise QueueServiceError("agent control response is invalid")
+            control = AgentControl.from_value(raw)
+        if control.expected_session_id != session_id:
+            raise QueueConflictError("agent control belongs to another session")
+        effect = journal.prepare_control(control)
+        if effect is None and control.kind.value in {"drain", "reload", "promote"}:
+            self._drained = True
+        return control, effect
+
+    def _finish_agent_control(
+        self, control: AgentControl, contained: bool,
+    ) -> Generator[_Progress, Any, AgentControlEffect]:
+        from ._phase_timing import phase
+        journal = self._require_journal()
+        # Physical results belong to each exact launch. Recheck the command
+        # after returning to the mutation gate before changing session state.
+        if control.cancel_active:
+            current_effect = journal.prepare_control(control)
+            if current_effect is not None:
+                return current_effect
+        with phase("control_application", operation_id=control.operation_id):
+            effect = yield from _steps(
+                self._apply_agent_control, control,
+                prepared_error=None if contained else "unknown_work",
+                cancellation_prepared=True,
             )
-        if effect is None:
-            from ._phase_timing import phase
-            with phase("control_application", operation_id=control.operation_id):
-                effect = (yield from _steps(self._apply_agent_control,
-                    control,
-                    prepared_reload=prepared_reload,
-                    prepared_error=prepared_error,
-                    cancellation_prepared=cancellation_prepared,
-                ))
-            journal.record_control_effect(control, effect)
-        (yield from _steps(self._call,
-            "control_ack",
-            {"session_id": session_id, "effect": effect.value()},
-        ))
-        journal.acknowledge_control(control.operation_id)
-        return control
+        journal.record_control_effect(control, effect)
+        return effect
 
     @_cooperative
     def _apply_agent_control(
         self,
         control: AgentControl,
         *,
-        prepared_reload: _PreparedAgentReload | None = None,
         prepared_error: str | None = None,
         cancellation_prepared: bool = False,
     ) -> Generator[_Progress, Any, AgentControlEffect]:
         """Apply an inert command using only trusted owner-local configuration."""
 
+        if control.cancel_active and not cancellation_prepared:
+            if not (yield from _steps(self._cancel_active_assignments)):
+                prepared_error = "unknown_work"
         session = self._require_journal().session(control.expected_session_id)
         with self._control_lock:
             if control.kind.value in {"drain", "reload", "promote"}:
                 self._drained = True
             if prepared_error is not None:
                 return self._unchanged_control_effect(control, session, prepared_error)
-            if (
-                control.cancel_active
-                and not cancellation_prepared
-                and not (yield from _steps(self._cancel_active_assignments))
-            ):
-                return self._unchanged_control_effect(control, session, "unknown_work")
             if control.kind.value == "promote":
                 from ._profile_promotion import apply
                 return apply(self, control)
             if control.kind.value == "reload":
-                if prepared_reload is None and self._trusted_config_loader is None:
+                if self._trusted_config_loader is None:
                     return self._unchanged_control_effect(
                         control, session, "reload_unavailable"
                     )
                 try:
-                    plan = prepared_reload or self._prepare_agent_reload()
+                    plan = self._prepare_agent_reload()
                 except (QueueError, OSError, TypeError, ValueError):
                     return self._unchanged_control_effect(
                         control, session, "reload_rejected"
@@ -1519,6 +1514,8 @@ class LocalDaemonAgentHttpClient:
                 )
                 journal.complete_reload(control, plan.replacement, effect)
                 self._config = plan.replacement
+                self._supports_event_batch = False
+                self._supports_lifecycle = False
                 if self._slurm_agent is not None:
                     self._slurm_agent.submit_interval_seconds = plan.replacement.slurm_submit_interval_seconds
                     self._slurm_agent.observation_policy = plan.replacement.slurm_observation_policy
@@ -1778,7 +1775,9 @@ class LocalDaemonAgentHttpClient:
 
     @_cooperative
     @_serialized("_mutation_gate")
-    def _qualify_service_admission(self) -> Generator[_Progress, Any, bool]:
+    def _qualify_service_admission(
+        self, *, retrying_renewal: AgentOfferRenewal | None = None,
+    ) -> Generator[_Progress, Any, bool]:
         """Prove current recovery ownership without joining the workers' exit.
 
         Only the concurrent service can use this proof. The ordered mutation
@@ -1803,11 +1802,7 @@ class LocalDaemonAgentHttpClient:
             self._restart_with_retained_work = _has_retained_agent_work(
                 self._journal, self._execution_journal, None,
             )
-            if not self._restart_with_retained_work:
-                # External jobs have joined the current coordinator epoch.
-                # Later assignment-local pending effects must not reopen
-                # this service's startup admission assessment.
-                self._service_recovery_admission = False
+            self._service_recovery_admission = self._restart_with_retained_work
             return not self._restart_with_retained_work
         execution = self._execution_journal
         supervisor = self._supervisor
@@ -1818,7 +1813,10 @@ class LocalDaemonAgentHttpClient:
         references, rows, pending, session, poll, control, received, acknowledgement = (
             inventory
         )
-        if pending or poll or control or received or acknowledgement or session is None:
+        if retrying_renewal is not None:
+            operation_id = f"{retrying_renewal.session_id}:{retrying_renewal.offer_id}:{retrying_renewal.sequence}"
+            pending = tuple(item for item in pending if item[:2] != ("renew", operation_id))
+        if pending or (poll is not None and poll != self._live_work_poll) or control or received or acknowledgement or session is None:
             return False
         ids = {assignment_id for _, assignment_id in references}
         states = {row["assignment_id"]: AssignmentState(row["state"]) for row in rows}
@@ -1947,31 +1945,77 @@ class LocalDaemonAgentHttpClient:
         self._runtime_provider_key = None
         self._providers = {}
 
+    def _control_checkpoint(self) -> None:
+        _raise_if_application_suspended(self._suspend_requested)
+
     @_cooperative
-    def _cancel_active_assignments(self) -> Generator[_Progress, Any, bool]:
+    def _cancel_active_assignments(self, *, request_only: bool = False) -> Generator[_Progress, Any, bool]:
         journal = self._journal
         supervisor = self._supervisor
-        if journal is None or supervisor is None:
+        if journal is None:
             return True
-        all_contained = True
-        for _, assignment_id in journal.unresolved_assignment_references():
-            workspace = self._assignment_workspace(assignment_id)
-            encoded_launch = workspace.supervisor_launch_json()
-            if encoded_launch is None:
-                continue
+        references = journal.unresolved_assignment_references()
+        if not references:
+            return True
+        for _, assignment_id in references:
+            self._received_cancellations.add(assignment_id)
+            self._machine_stop_requested.add(assignment_id)
+
+        execution = self._execution_journal
+        if supervisor is None or execution is None:
+            return False
+
+        def stop(session_id: str, assignment_id: str):
+            root = cast(Path, self._config.agent_root)
+            read_launch = _ResidentAssignmentWorkspace.read_supervisor_launch_json
+            encoded = read_launch(root, assignment_id)
             try:
-                launch = _launch_from_value(json.loads(encoded_launch))
-                (yield from _steps(supervisor.request_stop_wait, launch))
-                receipt = (yield from _steps(supervisor.contain, launch))
+                if encoded is None:
+                    if request_only:
+                        return True
+                    # Race a grant/start against a permanent no-start decision
+                    # in the native supervisor. A launch that won has its own proof.
+                    if (yield from _external("stop", supervisor.reject_unstarted_assignment, assignment_id)):
+                        return True
+                    encoded = read_launch(root, assignment_id)
+                    if encoded is None:
+                        return False
+                launch = _launch_from_value(json.loads(encoded))
+                if launch.session_id != session_id or launch.assignment_id != assignment_id:
+                    return False
+                if request_only:
+                    yield from supervisor._control_exchange("request_stop", launch, background=self._service_progress)
+                    return True
+                yield from _steps(supervisor.request_stop_wait, launch, checkpoint=self._control_checkpoint)
+                receipt = yield from _steps(supervisor.contain, launch, checkpoint=self._control_checkpoint)
+                if receipt.launch != launch or read_launch(root, assignment_id) != encoded:
+                    return False
                 self._observe_supervisor_ownership(receipt)
+                if receipt.state is not SupervisorLaunchState.CONTAINED:
+                    return False
+                # The execution view may have independently finished and released.
+                if execution.find_state(assignment_id) is not AssignmentState.RELEASED:
+                    self._record_contained_cancellation(self._assignment_workspace(assignment_id))
+                return True
+            except _ManagedApplicationSuspended:
+                raise
             except (AgentProcessSupervisorError, QueueError, ValueError):
-                all_contained = False
-                continue
-            if receipt.state is not SupervisorLaunchState.CONTAINED:
-                all_contained = False
-                continue
-            self._record_contained_cancellation(workspace)
-        return all_contained
+                return False
+
+        return all((yield from _gather(stop(*reference) for reference in references)))
+
+    def _pending_machine_stop(self, assignment_id: str) -> bool:
+        if assignment_id in self._machine_stop_requested:
+            return True
+        # Recovery can observe the worker's exit before the service resumes
+        # application of a machine control retained by the previous process.
+        journal = self._require_journal()
+        session = journal.active_session()
+        if session is None:
+            return False
+        control = journal.next_received_control(session.session_id)
+        return (control is not None and control.cancel_active
+                and journal.control_refusal(control, session, journal.startup_hold_id()) is None)
 
     def _record_contained_cancellation(
         self, workspace: _ResidentAssignmentWorkspace
@@ -2085,20 +2129,18 @@ class LocalDaemonAgentHttpClient:
         """Apply an owned control, or settle a released assignment's late receipt."""
         journal = self._require_journal()
 
-        def owned(control: AgentAssignmentControl) -> bool:
+        def owned(assignment_id: str) -> bool:
             if released_only:
                 return (
                     self._execution_journal is not None
-                    and self._execution_journal.find_state(control.assignment_id)
-                    is AssignmentState.RELEASED
+                    and self._execution_journal.find_state(assignment_id) is AssignmentState.RELEASED
                 )
-            return not self._service_progress or _owns_assignment(control.assignment_id)
+            return not self._service_progress or _owns_assignment(assignment_id)
 
-        pending = journal.next_unacknowledged_assignment_control()
+        assignment_id = _current_assignment_id() if self._service_progress and not released_only else None
+        pending = journal.next_unacknowledged_assignment_control(assignment_id=assignment_id, owned=owned)
         if pending is not None:
             control, code, evidence = pending
-            if not owned(control):
-                return None
             if control.session_id != session_id:
                 raise QueueConflictError(
                     "retained assignment control belongs to another session"
@@ -2107,7 +2149,7 @@ class LocalDaemonAgentHttpClient:
                 self._cancelled_assignments.add(control.assignment_id)
             (yield from _steps(self._acknowledge_assignment_control, session_id, control, code, evidence))
             return control
-        received = journal.next_received_assignment_control()
+        received = journal.next_received_assignment_control(assignment_id=assignment_id, owned=owned)
         if received is None:
             if self._service_progress or released_only:
                 return None
@@ -2123,7 +2165,7 @@ class LocalDaemonAgentHttpClient:
         if control.session_id != session_id:
             raise QueueConflictError("retained assignment control belongs to another session")
         self._received_cancellations.add(control.assignment_id)
-        if not owned(control):
+        if not owned(control.assignment_id):
             journal.prepare_assignment_control(control)
             return None
         prior = journal.prepare_assignment_control(control)
@@ -2231,13 +2273,25 @@ class LocalDaemonAgentHttpClient:
                     # Release already proved containment and returned claims.
                     # A late command cannot change its committed result.
                     return "terminal", None
-                (yield from _steps(self._supervisor.request_stop_wait, launch))
-                contained = (yield from _steps(self._supervisor.contain, launch))
-                self._observe_supervisor_ownership(contained)
             except (AgentProcessSupervisorError, QueueError, ValueError):
                 return "unknown", None
+            supervisor = self._supervisor
+        try:
+            yield from _steps(supervisor.request_stop_wait, launch, checkpoint=self._control_checkpoint)
+            contained = yield from _steps(supervisor.contain, launch, checkpoint=self._control_checkpoint)
+        except _ManagedApplicationSuspended:
+            raise
+        except (AgentProcessSupervisorError, QueueError, ValueError):
+            return "unknown", None
+        with self._control_lock:
+            if (contained.launch != launch or workspace.supervisor_launch_json() != encoded_launch
+                    or journal.read_grant_fence(control.assignment_id) != control.fence):
+                return "unknown", None
+            self._observe_supervisor_ownership(contained)
             if contained.state is not SupervisorLaunchState.CONTAINED:
                 return "unknown", None
+            if journal.read_state(control.assignment_id) is AssignmentState.RELEASED:
+                return "terminal", None
             self._record_contained_cancellation(workspace)
             target_agent_id = self._runtime_agent_id
             if target_agent_id is None:
@@ -2380,7 +2434,7 @@ class LocalDaemonAgentHttpClient:
         ))
 
     @_cooperative
-    @_serialized("_mutation_gate")
+    @_serialized("_release_gate")
     def release_assignment(
         self,
         session_id: str,
@@ -2389,39 +2443,47 @@ class LocalDaemonAgentHttpClient:
         fence: str,
         availability_revision: str,
     ) -> Generator[_Progress, Any, AgentSession]:
-        (yield from _steps(self._replay_pending_resource_mutation, session_id))
         journal = self._require_journal()
         execution_journal = self._execution_journal
         if execution_journal is None:
             raise QueueServiceError("remote execution journal is required")
-        proof = journal.provider_release_proof(
-            session_id, assignment_id, execution_journal
-        )
-        if (
-            proof.execution_fence != fence
-            or proof.released_availability_revision != availability_revision
-        ):
-            raise QueueConflictError("remote provider release proof is stale")
-        session = _session_from_value(
-            (yield from _steps(self._call,
-                "release",
-                {
-                    "session_id": session_id,
-                    "assignment_id": assignment_id,
-                    "fence": fence,
-                    "availability_revision": availability_revision,
-                    "provider_release_proof": proof.value(),
-                },
-            ))
-        )
-        if session.state not in {AgentSessionState.ACTIVE, AgentSessionState.REPLACED}:
+        if journal.pending_release_assignment(session_id) is None:
+            yield from _steps(self._replay_pending_resource_mutation, session_id)
+        proof = yield from self._delivery_gate.run(self._mutation_gate.run(_steps(
+            self._prepare_release_proof, session_id, assignment_id, execution_journal,
+            fence, availability_revision,
+        )))
+        def exchange(exact):
+            return _steps(self._call, "release", {
+                "session_id": session_id, "assignment_id": assignment_id, "fence": fence,
+                "availability_revision": availability_revision, "provider_release_proof": exact.value(),
+            })
+
+        try:
+            reply = yield from exchange(proof)
+        except _AgentReleaseEpochRejected:
+            def rebind():
+                current = journal.provider_release_proof(session_id, assignment_id, execution_journal)
+                return journal.rebind_rejected_release(proof, current)
+
+            proof = yield from self._mutation_gate.run(_steps(rebind))
+            reply = yield from exchange(proof)
+        session = _session_from_value(reply)
+        if session.session_id != session_id or session.state not in {AgentSessionState.ACTIVE, AgentSessionState.REPLACED}:
             raise QueueConflictError("remote release returned an invalid session state")
-        journal.complete_assignment_release(session, assignment_id)
+        yield from self._mutation_gate.run(_steps(journal.complete_assignment_release, session, assignment_id))
         self._next_resource_maintenance = 0
         return session
 
+    def _prepare_release_proof(self, session_id, assignment_id, execution_journal, fence, availability_revision):
+        journal = self._require_journal()
+        proof = journal.provider_release_proof(session_id, assignment_id, execution_journal)
+        if proof.execution_fence != fence or proof.released_availability_revision != availability_revision:
+            raise QueueConflictError("remote provider release proof is stale")
+        return journal.prepare_assignment_release(proof)
+
     @_cooperative
-    @_serialized("_mutation_gate")
+    @_serialized("_release_gate")
     def release_contained_assignment(
         self, session_id: str, assignment_id: str, *, fence: str
     ) -> Generator[_Progress, Any, AgentSession]:
@@ -2502,13 +2564,9 @@ class LocalDaemonAgentHttpClient:
             AssignmentState.RELEASED,
         }:
             raise QueueConflictError("contained assignment is not provider-releasable")
-        availability_revision = self._release_provider_claims(
-            session,
-            assignment,
-            commands,
-            providers,
-            execution_journal,
-        )
+        journal.contained_assignment_control(session_id, assignment_id, fence)
+        availability_revision = yield from _steps(self._prepare_provider_release,
+            session, assignment, commands, providers, execution_journal, fence)
         return (yield from _steps(self.release_assignment,
             session_id,
             assignment_id,
@@ -2653,7 +2711,7 @@ class LocalDaemonAgentHttpClient:
                     and launch.assignment_id == control.assignment_id
                     and launch.execution_fence == control.fence
                     and control.process_execution_id in {None, launch.process_execution_id}):
-                    yield from _external("control", self._supervisor.request_stop, launch)
+                    yield from self._supervisor._control_exchange("request_stop", launch, background=self._service_progress)
         # Native drain preparation fences polls, so it must wait for exact poll
         # settlement. Receipt of a late delivery is never replaced by withdrawal.
         if self._closed or (not waiting and journal.pending_poll() is not None):
@@ -2669,13 +2727,10 @@ class LocalDaemonAgentHttpClient:
                 raise QueueConflictError("received control belongs to another session")
             journal.retain_control(control)
             self._service_control_due = True
-            if control.cancel_active:
-                for _, assignment_id in journal.unresolved_assignment_references():
-                    self._received_cancellations.add(assignment_id)
-                    encoded = _ResidentAssignmentWorkspace.read_supervisor_launch_json(
-                        cast(Path, self._config.agent_root), assignment_id)
-                    if encoded is not None and self._supervisor is not None:
-                        yield from _external("control", self._supervisor.request_stop, _launch_from_value(json.loads(encoded)))
+            current = journal.session(session.session_id)
+            if (control.cancel_active and journal.replayed_control_effect(control) is None
+                and journal.control_refusal(control, current, journal.startup_hold_id()) is None):
+                yield from _steps(self._cancel_active_assignments, request_only=True)
 
     def _assignment_workspace(self, assignment_id: str) -> _ResidentAssignmentWorkspace:
         policy = self._config.sqlite_policy
@@ -2736,7 +2791,7 @@ class LocalDaemonAgentHttpClient:
         wait_timeout_ms: int,
         suspend_requested: Callable[[], bool] | None = None,
     ) -> Generator[_Progress, Any, None]:
-        return (yield from _session_protocol._resume_pending_poll(self, wait_timeout_ms=wait_timeout_ms, suspend_requested=suspend_requested))
+        yield from _session_protocol._resume_pending_poll(self, wait_timeout_ms=wait_timeout_ms, suspend_requested=suspend_requested)
 
     @_cooperative
     def resume_retained_work(
@@ -2780,6 +2835,24 @@ class LocalDaemonAgentHttpClient:
         return (yield from _assignment_progress._cancel_pregrant_if_requested(
             self, session, assignment_id, assignment, commands, providers, execution_journal
         ))
+
+    @_cooperative
+    def _prepare_provider_release(
+        self, session, assignment, commands, providers, execution_journal, fence,
+    ) -> Generator[_Progress, Any, str]:
+        journal = self._require_journal()
+        if journal.pending_release_assignment(session.session_id) is None:
+            yield from _steps(self._replay_pending_resource_mutation, session.session_id)
+
+        def prepare():
+            pending = journal.pending_release_assignment(session.session_id)
+            if pending is not None and pending != assignment.assignment_id:
+                raise QueueConflictError("an earlier assignment release is pending")
+            revision = self._release_provider_claims(session, assignment, commands, providers, execution_journal)
+            self._prepare_release_proof(session.session_id, assignment.assignment_id, execution_journal, fence, revision)
+            return revision
+
+        return (yield from self._delivery_gate.run(self._mutation_gate.run(_steps(prepare))))
 
     def _release_provider_claims(
         self,
@@ -2895,39 +2968,40 @@ class LocalDaemonAgentHttpClient:
         """Retry one exact assignment operation across coordinator restart."""
 
         deadline = monotonic() + _ASSIGNMENT_RECONCILIATION_SECONDS
-        while True:
-            try:
-                return (yield from _steps(operation))
-            except QueueConflictError as conflict:
-                prior = self._require_journal().session(session_id)
-                current = (yield from _steps(self.handshake))
-                epoch = current.get("coordinator_epoch")
-                if not isinstance(epoch, str) or epoch == prior.coordinator_epoch:
-                    raise conflict
-                self._epoch_reconciliation_pending = True
-                (yield from _steps(self.reconcile,
-                    session_id,
-                    epoch,
-                    idempotency_key=(f"{assignment_id}:reconcile:{epoch}"),
-                ))
-            except _IndeterminateAgentProtocolError:
-                _raise_if_application_suspended(getattr(self, "_suspend_requested", None))
-                if monotonic() >= deadline:
-                    raise
+        with _bound_exchanges(deadline):
+            while True:
                 try:
+                    return (yield from _steps(operation))
+                except QueueConflictError as conflict:
+                    prior = self._require_journal().session(session_id)
                     current = (yield from _steps(self.handshake))
                     epoch = current.get("coordinator_epoch")
-                    prior = self._require_journal().session(session_id)
-                    if isinstance(epoch, str) and epoch != prior.coordinator_epoch:
-                        self._epoch_reconciliation_pending = True
-                        (yield from _steps(self.reconcile,
-                            session_id,
-                            epoch,
-                            idempotency_key=(f"{assignment_id}:reconcile:{epoch}"),
-                        ))
+                    if not isinstance(epoch, str) or epoch == prior.coordinator_epoch:
+                        raise conflict
+                    self._epoch_reconciliation_pending = True
+                    (yield from _steps(self.reconcile,
+                        session_id,
+                        epoch,
+                        idempotency_key=(f"{assignment_id}:reconcile:{epoch}"),
+                    ))
                 except _IndeterminateAgentProtocolError:
-                    pass
-                (yield from _delay(0.05))
+                    _raise_if_application_suspended(getattr(self, "_suspend_requested", None))
+                    if monotonic() >= deadline:
+                        raise
+                    try:
+                        current = (yield from _steps(self.handshake))
+                        epoch = current.get("coordinator_epoch")
+                        prior = self._require_journal().session(session_id)
+                        if isinstance(epoch, str) and epoch != prior.coordinator_epoch:
+                            self._epoch_reconciliation_pending = True
+                            (yield from _steps(self.reconcile,
+                                session_id,
+                                epoch,
+                                idempotency_key=(f"{assignment_id}:reconcile:{epoch}"),
+                            ))
+                    except _IndeterminateAgentProtocolError:
+                        pass
+                    (yield from _delay(0.05))
 
     def _runtime_owners(
         self, session: AgentSession
@@ -3104,27 +3178,65 @@ class LocalDaemonAgentHttpClient:
 
     @_cooperative
     def _flush_workspace_events(
-        self, session_id: str, workspace: _ResidentAssignmentWorkspace
+        self, session_id: str, workspace: _ResidentAssignmentWorkspace, *, final: bool = False,
     ) -> Generator[_Progress, Any, None]:
-        for sequence, event_id, payload in workspace.pending_events():
-            result = cast(
-                Mapping[str, PlainData],
-                (yield from _steps(self._assignment_call,
-                    session_id,
-                    workspace.assignment_id,
-                    lambda: _steps(self.report_event,
-                        session_id,
-                        workspace.assignment_id,
-                        sequence=sequence,
-                        event_id=event_id,
-                        payload=payload,
-                    ),
-                )),
-            )
-            acknowledged = result.get("acknowledged_sequence")
-            if acknowledged != sequence:
-                raise QueueConflictError("remote event acknowledgement has a gap")
-            workspace.acknowledge_event(sequence)
+        boundary = workspace.last_event_sequence()
+        while True:
+            page = workspace.pending_events(through=boundary, limit=32)
+            if not page:
+                if final:
+                    # Completion owns the last producer and the provider-release
+                    # transition. Include facts handed off during the last exchange.
+                    latest = workspace.last_event_sequence()
+                    if latest > boundary:
+                        boundary = latest
+                        continue
+                return
+            if self._supports_event_batch and len(page) > 1:
+                request, last = pack_event_batch(session_id, workspace.assignment_id, page)
+                try:
+                    receipt = yield from _steps(
+                        self._assignment_call, session_id, workspace.assignment_id,
+                        lambda: _steps(self._call, "event_batch", request),
+                    )
+                except QueueServiceError as exc:
+                    if str(exc) != "agent_protocol_rejected":
+                        raise
+                    # A retained session can reconnect to a downgraded peer.
+                    # Fall back only after authenticated renegotiation.
+                    yield from _steps(self.handshake)
+                    if self._supports_event_batch:
+                        raise
+                    continue
+                if (
+                    receipt.get("assignment_id") != workspace.assignment_id
+                    or type(receipt.get("acknowledged_sequence")) is not int
+                    or receipt["acknowledged_sequence"] != last
+                    or receipt.get("request_digest") != _canonical_digest(request)
+                ):
+                    raise QueueConflictError("remote event batch acknowledgement conflicts")
+                workspace.acknowledge_event(last)
+                yield from _delay(0)
+                continue
+            for sequence, event_id, payload in page:
+                result = cast(
+                    Mapping[str, PlainData],
+                    (yield from _steps(self._assignment_call,
+                        session_id, workspace.assignment_id,
+                        lambda: _steps(self.report_event,
+                            session_id, workspace.assignment_id,
+                            sequence=sequence, event_id=event_id, payload=payload,
+                        ),
+                    )),
+                )
+                if (
+                    result.get("assignment_id") != workspace.assignment_id
+                    or type(result.get("acknowledged_sequence")) is not int
+                    or result["acknowledged_sequence"] != sequence
+                ):
+                    raise QueueConflictError("remote event acknowledgement has a gap or conflicting assignment")
+                workspace.acknowledge_event(sequence)
+            yield from _delay(0)
 
     @_cooperative
     def retire_clean(
@@ -3155,11 +3267,20 @@ class LocalDaemonAgentHttpClient:
     def _call(
         self, operation: str, value: Mapping[str, PlainData], *, role: str = "agent"
     ) -> Generator[_Progress, Any, Mapping[str, PlainData]]:
+        exchange_deadline = _exchange_deadline()
+        lifecycle = role == "agent" and self._supports_lifecycle and operation in LIFECYCLE_OPERATIONS
+        lane = _agent_exchange_lane(operation, lifecycle=lifecycle, evidence=value.get("evidence") is not None)
+        if lifecycle and exchange_deadline is None:
+            policy = self._config.transport_policy
+            assert policy is not None
+            exchange_deadline = monotonic() + policy.response_timeout_seconds
         while self._service_progress and self._epoch_reconciliation_pending and operation in {
-            "accept", "start_permit", "started", "event", "authorize", "input",
+            "accept", "start_permit", "started", "event", "event_batch", "authorize", "input",
             "output_manifest", "output", "result", "assignment_control_ack",
         }:
             _raise_if_application_suspended(self._suspend_requested)
+            if exchange_deadline is not None and monotonic() >= exchange_deadline:
+                raise _IndeterminateAgentProtocolError("assignment exchange deadline expired")
             yield from _delay(0.01)
         operation_id, assignment_id = value.get("operation_id"), value.get("assignment_id")
         body = json.dumps(
@@ -3169,25 +3290,46 @@ class LocalDaemonAgentHttpClient:
             _decode(body, failure_report=True)
         connection, self._connection = self._connection, None
         retry = _RecoveryRetry()
+        prepared_config = self._config
+        pending_delay = 0.025
         while True:
             try:
-                wait_options = (
+                wait_options: dict[str, Any] = (
                     {"cancel_requested": self._suspend_requested}
                     if self._service_progress and operation in {"poll", "control_wait"}
                     else {}
                 )
+                if lifecycle:
+                    if self._config is not prepared_config:
+                        if connection is not None:
+                            connection.close()
+                        raise QueueConflictError("agent configuration changed during lifecycle exchange")
+                    wait_options["lifecycle"] = True
                 reply = yield from _external(
-                    "slurm_http" if operation == "slurm_work" and value.get("evidence") is not None
-                    else "control_wait" if operation == "control_wait" else "poll" if operation == "poll" else "bulk" if operation in _AGENT_BULK_OPERATIONS else "control",
-                    _exchange_agent_request, self._config, operation, body, role, connection,
-                    not self._service_progress, **wait_options,
+                    lane,
+                    _timed_agent_exchange, monotonic(), utc_timestamp(), request_identity(value),
+                    self._config, operation, body, role, connection,
+                    not self._service_progress, _queue_deadline=exchange_deadline,
+                    exchange_deadline=exchange_deadline, **wait_options,
                 )
                 break
+            except LifecyclePending:
+                connection = None
+                if exchange_deadline is None or monotonic() >= exchange_deadline:
+                    raise _IndeterminateAgentProtocolError("lifecycle preparation deadline expired")
+                _raise_if_application_suspended(self._suspend_requested)
+                yield from _delay(min(pending_delay, max(0, exchange_deadline - monotonic())))
+                pending_delay = min(0.25, 2 * pending_delay)
+            except _ExternalDeadline as error:
+                if connection is not None:
+                    connection.close()
+                raise _IndeterminateAgentProtocolError("assignment exchange deadline expired in sender queue") from error
             except _IndeterminateAgentProtocolError as error:
                 if operation == "slurm_work":
                     from ._slurm_result_transport import SlurmRequestUncertain
                     raise SlurmRequestUncertain(str(error)) from error
-                if not self._service_progress:
+                if (not self._service_progress or operation == "renew"
+                        or (exchange_deadline is not None and monotonic() >= exchange_deadline)):
                     raise
                 connection = None
                 _raise_if_application_suspended(self._suspend_requested)
@@ -3202,6 +3344,8 @@ class LocalDaemonAgentHttpClient:
                         assignment_id=assignment_id if isinstance(assignment_id, str) else None,
                         state=(role, operation),
                     )
+                if exchange_deadline is not None:
+                    delay = min(delay, max(0, exchange_deadline - monotonic()))
                 yield from _delay(delay)
                 _raise_if_application_suspended(self._suspend_requested)
         if self._connection is None and not self._closed and not self._service_progress:
@@ -3309,11 +3453,29 @@ class _AgentHttpReply:
     value: Mapping[str, PlainData]
 
 
+def _timed_agent_exchange(
+    queued: float, queued_at: str, identity: str | None,
+    config: AgentTlsClientConfig, operation: str, *args: Any, exchange_deadline: float | None = None, **options: Any,
+) -> _AgentHttpReply:
+    elapsed = round((monotonic() - queued) * 1_000_000_000)
+    with reported_phases("agent_exchange", operation_id=identity, started_monotonic=queued) as timings:
+        timings.related["operation"] = operation
+        timings.spans.append({
+            "action": "sender_queue_wait", "started_at": queued_at,
+            "elapsed_nanoseconds": elapsed, "outcome": "complete",
+        })
+        if exchange_deadline is not None and config.transport_policy is not None:
+            if monotonic() + config.transport_policy.response_timeout_seconds >= exchange_deadline:
+                options["attempt_deadline"] = exchange_deadline
+        return _exchange_agent_request(config, operation, *args, **options)
+
+
 def _exchange_agent_request(
     config: AgentTlsClientConfig, operation: str, body: bytes, role: str,
     connection: http.client.HTTPSConnection | None,
     keep_alive: bool,
-    *, cancel_requested: Callable[[], bool] | None = None,
+    *, cancel_requested: Callable[[], bool] | None = None, attempt_deadline: float | None = None,
+    lifecycle: bool = False,
 ) -> _AgentHttpReply:
     """Exchange exact prepared bytes using one exclusively owned connection."""
     from threading import Event, Thread
@@ -3322,10 +3484,17 @@ def _exchange_agent_request(
     policy = config.transport_policy
     assert policy is not None  # Normalized by the protected constructor.
     deadline = monotonic() + policy.response_timeout_seconds
+    if attempt_deadline is not None:
+        deadline = min(deadline, attempt_deadline)
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        if connection is not None:
+            connection.close()
+        raise _IndeterminateAgentProtocolError("assignment exchange deadline expired before connection")
     connection = connection or https_connection(
         config.url, config.server_ca_path, config.certificate_path,
         config.private_key_path,
-        timeout=min(policy.connect_timeout_seconds, policy.response_timeout_seconds),
+        timeout=min(policy.connect_timeout_seconds, remaining),
     )
     expired = Event()
     interrupted = Event()
@@ -3368,7 +3537,7 @@ def _exchange_agent_request(
         require_uninterrupted()
         if expired.is_set() or monotonic() >= deadline:
             raise TimeoutError("agent response deadline exceeded before send")
-        value = _read_agent_reply(connection, operation, body, role, deadline=deadline)
+        value = _read_agent_reply(connection, operation, body, role, deadline=deadline, lifecycle=lifecycle)
         require_uninterrupted()
         if expired.is_set():
             raise TimeoutError("agent response deadline exceeded")
@@ -3393,7 +3562,7 @@ def _exchange_agent_request(
 
 def _read_agent_reply(
     connection: http.client.HTTPSConnection, operation: str, body: bytes, role: str,
-    *, deadline: float | None = None,
+    *, deadline: float | None = None, lifecycle: bool = False,
 ) -> Mapping[str, PlainData]:
     slurm_registration = role == "slurm_bootstrap" and operation == "register"
     maximum = _MAX_SLURM_REGISTRATION_BYTES if slurm_registration else _MAX_BODY_BYTES
@@ -3411,7 +3580,7 @@ def _read_agent_reply(
             "POST",
             f"/v1/{role}/{operation}",
             body=body,
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", **({"X-Loom-Agent-Lifecycle": LIFECYCLE_CAPABILITY} if lifecycle else {})},
         )
         refresh_timeout()
         response = connection.getresponse()
@@ -3456,7 +3625,11 @@ def _read_agent_reply(
                 and revision >= 0):
                 raise _AcceptedTimeError(str(diagnostic), revision)
         raise QueueServiceError("invalid accepted-time diagnostic")
+    if lifecycle and response.status == 202 and payload == {"ok": False, "error": "lifecycle_pending"}:
+        raise LifecyclePending()
     if response.status == 409:
+        if operation == "release" and payload.get("error") == "agent_release_epoch_rejected":
+            raise _AgentReleaseEpochRejected("release epoch was rejected before retaining proof")
         if operation == "register" and payload.get("error") == "agent_registration_epoch_rejected":
             from .errors import _AgentRegistrationEpochRejected
             raise _AgentRegistrationEpochRejected("registration epoch was rejected without acceptance")
@@ -3464,6 +3637,8 @@ def _read_agent_reply(
             raise AgentPollActiveError("work poll is already active")
         if payload.get("error") == "agent_poll_fenced":
             raise AgentPollFencedError("work poll was fenced and is not reusable")
+        if payload.get("error") == "agent_poll_offer_unavailable":
+            raise AgentPollOfferUnavailable("work poll requires a current offer")
         if payload.get("error") == "agent_poll_stale":
             raise AgentStalePollError("work poll sequence is stale")
         if payload.get("error") == "agent_poll_sequence_gap":
@@ -3498,9 +3673,19 @@ def _read_agent_reply(
 # Slurm evidence has separate bounded admission and pending-effect replies; it
 # must not wait for the artifact-transfer lane to become free.
 _AGENT_BULK_OPERATIONS = frozenset({
-    "authorize", "input", "accept", "start_permit", "started", "event",
-    "output_manifest", "output", "result", "release", "recovery_release_ready",
-})
+    "authorize", "input", "event", "event_batch",
+    "output_manifest", "output", "result", "recovery_release_ready",
+}) | LIFECYCLE_OPERATIONS
+def _agent_exchange_lane(operation: str, *, lifecycle: bool, evidence: bool = False) -> str:
+    if lifecycle and operation in LIFECYCLE_OPERATIONS:
+        return "lifecycle"
+    if operation == "slurm_work" and evidence:
+        return "slurm_http"
+    if operation in {"poll", "control_wait"}:
+        return operation
+    return "bulk" if operation in _AGENT_BULK_OPERATIONS else "control"
+
+
 _CLIENT_SHORT_OPERATIONS = frozenset({
     "handshake", "status", "cancel", "cancel_preparation", "cancel_run_operation",
     "admissions", "admission_for_queue_item", "agents", "service_lifetime",
@@ -3528,10 +3713,17 @@ class _MutualTlsHttpServer(ThreadingHTTPServer):
         self.client_slots = BoundedSemaphore(8)
         self.client_wait_slots = BoundedSemaphore(6)
         self.agent_bulk_slots = BoundedSemaphore(4)
+        self.agent_lifecycle_slots = BoundedSemaphore(4)
+        self.lifecycle = LifecyclePreparations()
         self.agent_work_wait_slots = BoundedSemaphore(32)
         self.agent_slurm_work_slots = BoundedSemaphore(8)
         self.agent_control_wait_slots = BoundedSemaphore(32)
         super().__init__(address, _Handler)
+        self._handshake_lock = RLock()
+        self._negotiating: set[socket.socket] = set()
+        self._handshake_capacity = BoundedSemaphore(8)
+        self._handshakes = ThreadPoolExecutor(max_workers=4, thread_name_prefix="loom-tls")
+        self._closing = False
 
     def acquire_agent_wait(self, role: str, operation: str) -> BoundedSemaphore | None:
         if role != "agent" or operation not in {"poll", "control_wait", "slurm_work"}:
@@ -3546,19 +3738,76 @@ class _MutualTlsHttpServer(ThreadingHTTPServer):
             raise QueueServiceError("agent wait capacity is exhausted")
         return slot
 
-    def get_request(self) -> tuple[ssl.SSLSocket, tuple[str, int]]:
-        connection, address = super().get_request()
+    def process_request(self, request: Any, client_address: tuple[str, int]) -> None:
+        accepted = monotonic()
+        with self._handshake_lock:
+            if self._closing or not self._handshake_capacity.acquire(blocking=False):
+                request.close()
+                return
+            self._negotiating.add(request)
+            try:
+                self._handshakes.submit(self._authenticate_connection, request, client_address,
+                                        self._context, accepted, utc_timestamp(), accepted + _HTTP_TIMEOUT_SECONDS)
+            except BaseException:
+                self._negotiating.discard(request)
+                self._handshake_capacity.release()
+                request.close()
+                raise
+
+    def _authenticate_connection(self, raw: socket.socket, address: tuple[str, int],
+                                 context: ssl.SSLContext, accepted: float, accepted_at: str, deadline: float) -> None:
+        connection = raw
+        handed_off = False
         try:
-            connection.settimeout(_HTTP_TIMEOUT_SECONDS)
-            authenticated = self._context.wrap_socket(connection, server_side=True)
-            # The accept deadline bounds TLS negotiation, not the established
-            # worker protocol's idle keepalive interval. Native control I/O has
-            # its own cumulative client deadline.
-            authenticated.settimeout(None)
-            return authenticated, address
-        except Exception:
-            connection.close()
-            raise
+            with reported_phases("tls_handshake", started_monotonic=accepted) as timings:
+                timings.spans.append({
+                    "action": "tls_handshake_queue_wait", "started_at": accepted_at,
+                    "elapsed_nanoseconds": round((monotonic() - accepted) * 1_000_000_000),
+                    "outcome": "complete",
+                })
+                with self._handshake_lock:
+                    if self._closing or monotonic() >= deadline or self._context is not context:
+                        return
+                    # No negotiation occurs here. Transfer descriptor ownership
+                    # atomically so shutdown can interrupt either socket.
+                    tls = context.wrap_socket(raw, server_side=True, do_handshake_on_connect=False)
+                    self._negotiating.remove(raw)
+                    self._negotiating.add(tls)
+                    connection = tls
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    return
+                tls.settimeout(remaining)
+                tls.do_handshake()
+                with self._handshake_lock:
+                    if self._closing or self._context is not context or monotonic() >= deadline:
+                        return
+                    tls.settimeout(None)
+                    super().process_request(tls, address)
+                    self._negotiating.remove(tls)
+                    handed_off = True
+        except OSError:
+            # Transport refusal or peer disconnect precedes application dispatch.
+            pass
+        finally:
+            with self._handshake_lock:
+                self._negotiating.discard(connection)
+                if not handed_off:
+                    connection.close()
+            self._handshake_capacity.release()
+
+    def server_close(self) -> None:
+        with self._handshake_lock:
+            self._closing = True
+            for connection in self._negotiating:
+                try:
+                    connection.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                connection.close()
+        self._handshakes.shutdown(wait=True)
+        self.lifecycle.close()
+        super().server_close()
 
     def replace_tls(
         self,
@@ -3567,8 +3816,9 @@ class _MutualTlsHttpServer(ThreadingHTTPServer):
     ) -> None:
         """Install a fully prepared context for subsequent requests."""
 
-        self._context = context
-        self.credential_fingerprints = credential_fingerprints
+        with self._handshake_lock:
+            self._context = context
+            self.credential_fingerprints = credential_fingerprints
 
 
 def _agent_server_context(config: AgentTlsServerConfig) -> ssl.SSLContext:
@@ -3618,6 +3868,8 @@ class _Handler(BaseHTTPRequestHandler):
             return dict(_decode(raw, failure_report=True))
         if role == "agent" and operation == "control_wait":
             return dict(_decode(raw, control_wait=True))
+        if role == "agent" and operation == "event_batch":
+            return dict(_decode(raw, event_batch=True))
         return dict(_decode(raw))
 
     def do_POST(self) -> None:  # noqa: N802
@@ -3651,6 +3903,60 @@ class _Handler(BaseHTTPRequestHandler):
             mapped_role = LocalDaemonRole.SLURM_BOOTSTRAP.value
         return principal_id, mapped_role, credential
 
+    def _acquire_agent_request(self, operation: str, lifecycle: bool) -> BoundedSemaphore | None:
+        lane = _agent_exchange_lane(operation, lifecycle=lifecycle)
+        if lane not in {"bulk", "lifecycle"}:
+            return None
+        slot = self._daemon_server.agent_lifecycle_slots if lane == "lifecycle" else self._daemon_server.agent_bulk_slots
+        with phase("request_admission_wait"):
+            if not slot.acquire(blocking=False):
+                raise control_error("capacity_exhausted", operation, {}, boundary="coordinator")
+        return slot
+
+    def _dispatch_agent(self, principal: LocalDaemonPrincipal, operation: str, payload: dict, lifecycle: bool):
+        if operation not in {
+            "slurm_work",
+            "service_lifetime",
+            "handshake",
+            "register",
+            "reconcile",
+            "offer",
+            "renew",
+            "poll",
+            "recover_poll",
+            "authorize",
+            "input",
+            "accept",
+            "decline",
+            "started",
+            "event",
+            "event_batch",
+            "output_manifest",
+            "output",
+            "result",
+            "release",
+            "recovery_release_ready",
+            "control",
+            "control_wait",
+            "control_ack",
+            "assignment_control",
+            "assignment_control_ack",
+            "start_permit",
+            "retire",
+        }:
+            raise QueueServiceError("agent protocol operation is unsupported")
+        # Handler threads do not inherit the service's ContextVars.
+        # Keep diagnostic context bounded and free of request contents.
+        self._reply_context = {"operation": operation, **{
+            key: value for key in ("assignment_id", "session_id")
+            if isinstance(value := payload.get(key), str) and len(value) <= 256
+        }}
+        with phase(operation, operation_id=request_identity(payload)):
+            owner = self._daemon_server.daemon_owner
+            view = (self._daemon_server.lifecycle.view(owner, principal, operation, payload)
+                    if lifecycle and operation in LIFECYCLE_OPERATIONS else owner.agent_view(principal))
+            return _dispatch(view, operation, payload)
+
     def _dispatch_post(self) -> None:
         self._reply_context = {}
         query_path = self.path.startswith("/v1/query/")
@@ -3664,7 +3970,7 @@ class _Handler(BaseHTTPRequestHandler):
         authenticated = dispatched = False
         client_acquired = wait_acquired = False
         agent_wait_slot: BoundedSemaphore | None = None
-        bulk_acquired = False
+        agent_slot: BoundedSemaphore | None = None
         try:
             principal_id, mapped_role, credential = self._authenticate_transport()
             query_credential = mapped_role == LocalDaemonRole.QUERY.value
@@ -3676,11 +3982,9 @@ class _Handler(BaseHTTPRequestHandler):
                 raise QueueServiceError("agent TLS credential is not authorized")
             authenticated = True
             agent_wait_slot = self._daemon_server.acquire_agent_wait(role_name, operation)
-            if role_name == "agent" and operation in _AGENT_BULK_OPERATIONS:
-                with phase("request_admission_wait"):
-                    bulk_acquired = self._daemon_server.agent_bulk_slots.acquire(blocking=False)
-                if not bulk_acquired:
-                    raise control_error("capacity_exhausted", operation, payload, boundary="coordinator")
+            lifecycle = self.headers.get("X-Loom-Agent-Lifecycle") == LIFECYCLE_CAPABILITY
+            if role_name == "agent":
+                agent_slot = self._acquire_agent_request(operation, lifecycle)
             if role_name == "client":
                 if operation not in _CLIENT_SHORT_OPERATIONS:
                     wait_acquired = self._daemon_server.client_wait_slots.acquire(
@@ -3705,48 +4009,7 @@ class _Handler(BaseHTTPRequestHandler):
                 principal_id, LocalDaemonRole(mapped_role), credential
             )
             if role_name == "agent":
-                if operation not in {
-                    "slurm_work",
-                    "service_lifetime",
-                    "handshake",
-                    "register",
-                    "reconcile",
-                    "offer",
-                    "renew",
-                    "poll",
-                    "recover_poll",
-                    "authorize",
-                    "input",
-                    "accept",
-                    "decline",
-                    "started",
-                    "event",
-                    "output_manifest",
-                    "output",
-                    "result",
-                    "release",
-                    "recovery_release_ready",
-                    "control",
-                    "control_wait",
-                    "control_ack",
-                    "assignment_control",
-                    "assignment_control_ack",
-                    "start_permit",
-                    "retire",
-                }:
-                    raise QueueServiceError("agent protocol operation is unsupported")
-                # Handler threads do not inherit the service's ContextVars.
-                # Keep diagnostic context bounded and free of request contents.
-                self._reply_context = {"operation": operation, **{
-                    key: value for key in ("assignment_id", "session_id")
-                    if isinstance(value := payload.get(key), str) and len(value) <= 256
-                }}
-                with phase(operation, operation_id=self._reply_context.get("assignment_id")):
-                    result = _dispatch(
-                        self._daemon_server.daemon_owner.agent_view(principal),
-                        operation,
-                        payload,
-                    )
+                result = self._dispatch_agent(principal, operation, payload, lifecycle)
             else:
                 dispatched = True
                 result = _dispatch_application(
@@ -3762,6 +4025,8 @@ class _Handler(BaseHTTPRequestHandler):
                 self._reply_query_result(result)
             else:
                 self._reply(200, {"ok": True, "result": result})
+        except LifecyclePending:
+            self._reply(202, {"ok": False, "error": "lifecycle_pending"})
         except _SlurmWorkCapacityError:
             self._reply(503, {"ok": False, "error": "slurm_work_capacity"})
         except _RunInspectionHttpError as exc:
@@ -3770,6 +4035,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._reply(409, {"ok": False, "error": "agent_poll_active"})
         except AgentPollFencedError:
             self._reply(409, {"ok": False, "error": "agent_poll_fenced"})
+        except AgentPollOfferUnavailable:
+            self._reply(409, {"ok": False, "error": "agent_poll_offer_unavailable"})
         except AgentStalePollError:
             self._reply(409, {"ok": False, "error": "agent_poll_stale"})
         except AgentPollSequenceGapError:
@@ -3801,6 +4068,9 @@ class _Handler(BaseHTTPRequestHandler):
                 )
         except QueueConflictError as exc:
             from .errors import _AgentRegistrationEpochRejected
+            if isinstance(exc, _AgentReleaseEpochRejected):
+                self._reply(409, {"ok": False, "error": "agent_release_epoch_rejected"})
+                return
             if isinstance(exc, _AgentRegistrationEpochRejected):
                 self._reply(409, {"ok": False, "error": "agent_registration_epoch_rejected"})
                 return
@@ -3832,8 +4102,8 @@ class _Handler(BaseHTTPRequestHandler):
         finally:
             if agent_wait_slot is not None:
                 agent_wait_slot.release()
-            if bulk_acquired:
-                self._daemon_server.agent_bulk_slots.release()
+            if agent_slot is not None:
+                agent_slot.release()
             if client_acquired:
                 self._daemon_server.client_slots.release()
             if wait_acquired:
@@ -4090,6 +4360,8 @@ def _dispatch(
             fence=_string(value, "fence"),
             process_execution_id=_string(value, "process_execution_id"),
         )
+    if operation == "event_batch":
+        return apply_event_batch(view, value)
     if operation == "event":
         _exact(
             value,

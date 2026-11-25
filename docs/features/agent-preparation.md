@@ -1279,6 +1279,20 @@ it revokes continuation for that agent's exact affected attempts even when other
 graphs still need them. Those consumers observe the unsuccessful producer; Loom
 does not silently replace it. This differs from cancelling one graph's demand.
 
+The outbound agent retains the machine command when it arrives. Each retained
+assignment can receive its own supervisor stop while a work poll is settling.
+The agent withdraws capacity before joining containment. Stop delivery and
+containment use separate bounded IPC workers. Concurrent requests for the same
+operation and launch share an in-flight exchange. The assignment's result can
+be recorded and its providers released while another launch is still waiting.
+If a worker already wrote its result, that result remains authoritative.
+
+The machine command stays unacknowledged while a containment observation is
+pending. Stopping the agent at that boundary preserves the control and exact
+launch identities. On restart the agent rejoins the supervisor, records any
+missing result after positive containment, and revalidates the command against
+the current session before acknowledging its effect.
+
 ## Durable remote recovery
 
 Remote worker environment and launch construction errors are reported as failed
@@ -1708,7 +1722,7 @@ scheduling turn visits at most four ordinary pages of 256 records, continuing on
 cycle if the prefix remains blocked. Cursor keys contain the full ordering key,
 so releasing an earlier row does not shift an offset and skip work. Completing
 a sweep or restarting the coordinator returns to the priority head. Each sweep
-captures the accepted ready timestamp and largest eligible admission sequence;
+captures the accepted ready timestamp and the admission enqueue high-water mark;
 later stages and admissions cannot extend it indefinitely. The admission bound
 also excludes new admissions sharing the captured timestamp's whole second.
 Successful dispatch resets the boundary together with the cursor. No saved work
@@ -1801,9 +1815,32 @@ Already projected READY work is not restricted to the current reconciliation
 batch. Dispatch reloads exact retained intent for an eligible ACTIVE/WAITING run
 when needed, checks cancellation and current authority, and retains the existing
 transactional reservation checks. This keeps reconciliation throughput separate
-from GPU dispatch opportunities. The current implementation still reads active
-admission metadata for the global eligibility view; the bound applies to heavy
-run reconciliation, not total metadata cardinality.
+from GPU dispatch opportunities. Discovery reads a page of at most 32 active admissions plus one lookahead
+from the retained priority index. Dispatch loads current admissions by the
+identities in its ready-stage page. Each turn checks a bounded set of outstanding
+preparation tickets against their exact owners. Off-page admissions keep their
+tickets until their owners retire or withdraw them.
+
+Background owner-store validation and admission binding use bounded workers.
+Explicit reconciliation still reports an unavailable owner. Each reservation
+rechecks the execution-store identity, scheduling epoch and cancellation at
+its own transaction boundary. Embedded input staging can complete on multiple
+workers. The scheduling owner selects among eligible completed workspaces in
+priority order and commits the exact claim before offering that capacity again.
+Binding, grant and launch continue with the committed assignment. A lost commit
+reply recovers its original assignment from the execution store and staged
+workspace. A pending workspace holds no CPU or GPU capacity. The coordinator samples its embedded
+providers on a bounded worker and uses the same sample for selection and offer
+publication. A slow local provider leaves remote placements eligible. A new
+local reservation, finished assignment, or scheduling reload invalidates the
+previous capacity generation. Samples older than 30 seconds are withdrawn.
+The provider still checks its physical claim at preparation.
+
+During service, each retained recovery and failed-admission retry gets a bounded
+worker attempt on its original identity. A slow authority observation or retry
+replay leaves reconciliation turns available. The owner rechecks the retained
+operation before acting and applies its original receipt. Exclusive startup can
+drive recovery synchronously before the coordinator accepts work.
 
 Slow coordinator cycles (at least one second) emit bounded local phase timings
 to the existing service stderr log, including admission reconciliation. The

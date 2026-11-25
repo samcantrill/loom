@@ -789,7 +789,13 @@ def _settle_supervised_worker_result(
         yield from _steps(self.poll_assignment_control, launch.session_id)
     result_path = workspace.root / "worker-result.json"
     if not result_path.is_file():
-        if workspace.assignment_id in self._cancelled_assignments:
+        if self._pending_machine_stop(workspace.assignment_id):
+            contained = yield from _steps(supervisor.contain, launch, checkpoint=self._control_checkpoint)
+            self._observe_supervisor_ownership(contained)
+            if contained.launch != launch or contained.state is not SupervisorLaunchState.CONTAINED:
+                return False
+            self._record_contained_cancellation(workspace)
+        elif workspace.assignment_id in self._cancelled_assignments:
             self._record_contained_cancellation(workspace)
         else:
             result = _managed_root_failed_worker_result(
@@ -807,7 +813,7 @@ def _settle_supervised_worker_result(
                     separators=(",", ":"),
                     allow_nan=False,
                 ).encode(), durability=workspace.durable_files)
-    contained = (yield from _steps(supervisor.contain, launch))
+    contained = (yield from _steps(supervisor.contain, launch, checkpoint=self._control_checkpoint))
     self._observe_supervisor_ownership(contained)
     if contained.state is not SupervisorLaunchState.CONTAINED:
         return False
@@ -1025,7 +1031,7 @@ def _complete_remote_result_and_release(
         workspace.record_timing(timings.payload())
     # The terminal assignment still accepts events before provider release.
     # Failed transfers leave their diagnostic event in the existing replay outbox.
-    (yield from _steps(self._flush_workspace_events, session.session_id, workspace))
+    (yield from _steps(self._flush_workspace_events, session.session_id, workspace, final=True))
     released_session = yield from _steps(
         _release_completed_assignment, self, session, assignment, commands,
         providers, execution_journal, fence=fence,
@@ -1033,6 +1039,7 @@ def _complete_remote_result_and_release(
     self._next_resource_maintenance = 0
     self._cancelled_assignments.discard(request.assignment_id)
     self._received_cancellations.discard(request.assignment_id)
+    self._machine_stop_requested.discard(request.assignment_id)
     self._joined_starts.discard(request.assignment_id)
     return freeze_plain_data(
         {
@@ -1046,16 +1053,12 @@ def _complete_remote_result_and_release(
 
 
 
-@_serialized("_mutation_gate")
+@_serialized("_release_gate")
 def _release_completed_assignment(
     self: LocalDaemonAgentHttpClient, session, assignment, commands, providers, execution_journal, *, fence
 ):
-    next_revision = self._release_provider_claims(
-        session,
-        assignment,
-        commands,
-        providers,
-        execution_journal,
+    next_revision = yield from _steps(
+        self._prepare_provider_release, session, assignment, commands, providers, execution_journal, fence,
     )
     released_session = cast(
         AgentSession,
@@ -1103,6 +1106,7 @@ def _cancel_pregrant_if_requested(
 
 
 
+@_serialized("_delivery_gate")
 @_serialized("_mutation_gate")
 def _decline_pregrant_assignment(
     self: LocalDaemonAgentHttpClient, session, assignment, commands, providers, execution_journal, *, cancelled=False

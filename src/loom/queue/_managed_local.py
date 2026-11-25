@@ -1397,6 +1397,12 @@ class SQLiteAgentJournal:
                 return state
             if state not in {AssignmentState.PREPARED, AssignmentState.ACCEPTED}:
                 raise ManagedLocalError("only prepared pre-grant claims can be aborted")
+        return self._abort_exact_claims(assignment_id, commands, providers)
+
+    def _abort_exact_claims(
+        self, assignment_id: str, commands: Sequence[ClaimCommand],
+        providers: Mapping[str, AgentResourceProvider],
+    ) -> AssignmentState:
         for command in sorted(
             commands, key=lambda item: item.claim.resource_kind, reverse=True
         ):
@@ -1413,43 +1419,31 @@ class SQLiteAgentJournal:
     def cancel_pregrant(
         self, assignment_id: str, providers: Mapping[str, AgentResourceProvider]
     ) -> AssignmentState:
-        """Settle a durable no-start local claim using its retained exact commands."""
-
+        """Settle exact claims after the authority has unbound the attempt."""
         with self._transaction() as conn:
             row = self._assignment(conn, assignment_id)
             state = AssignmentState(row["state"])
-            if state is AssignmentState.REQUEST_DURABLE:
+            if row["grant_fence"] is not None or row["process_execution_id"] is not None:
+                raise ManagedLocalError("local assignment has a grant or process")
+            if state is AssignmentState.DECLINED:
+                return state
+            if state is AssignmentState.RELEASED and row["declined"] and row["availability_revision"]:
+                return state
+            if state is AssignmentState.REQUEST_DURABLE and row["claims_json"] is None:
                 conn.execute(
-                    "UPDATE assignments SET state = ? WHERE assignment_id = ?",
+                    "UPDATE assignments SET state = ?, declined = 1 WHERE assignment_id = ?",
                     (AssignmentState.DECLINED.value, assignment_id),
                 )
                 return AssignmentState.DECLINED
-            if state is AssignmentState.DECLINED:
-                return state
-            if state not in {AssignmentState.PREPARED, AssignmentState.ACCEPTED}:
+            if state not in {
+                AssignmentState.REQUEST_DURABLE, AssignmentState.PREPARE_UNKNOWN,
+                AssignmentState.PREPARED, AssignmentState.ACCEPTED,
+            }:
                 raise ManagedLocalError("local assignment is not proven pre-grant")
-            identity = json.loads(cast(str, row["identity_json"]))
-            commands = json.loads(cast(str, row["claims_json"]))
-        values = commands.get("commands") if isinstance(commands, dict) else None
-        if not isinstance(values, list):
-            raise ManagedLocalError("retained local claim commands are invalid")
-        assignment = ManagedAssignment(
-            assignment_id=cast(str, identity["assignment_id"]),
-            run_uri=cast(str, identity["run_uri"]),
-            stage_work_id=cast(str, identity["stage_work_id"]),
-            stage_name=cast(str, identity["stage_name"]),
-            attempt=cast(int, identity["attempt"]),
-            attempt_id=cast(str, identity["attempt_id"]),
-            agent_id=cast(str, identity["agent_id"]),
-            session_id=cast(str, identity["session_id"]),
-            offer_id=cast(str, identity["offer_id"]),
-            claim_id=cast(str, identity["claim_id"]),
-        )
-        return self.abort_pregrant(
-            assignment_id,
-            tuple(_claim_command_from_dict(assignment, value) for value in values),
-            providers,
-        )
+            # The commands precede the first physical prepare. A crash can leave
+            # any prefix applied while the overall state still reads REQUEST_DURABLE.
+            commands = _claim_commands_from_row(row)
+        return self._abort_exact_claims(assignment_id, commands, providers)
 
     def grant(self, assignment_id: str, fence: str) -> AssignmentState:
         if not fence:
@@ -1707,16 +1701,18 @@ class SQLiteAgentJournal:
 
     def acknowledge(self, assignment_id: str, sequence: int) -> int:
         with self._transaction() as conn:
-            count = int(
-                conn.execute(
-                    "SELECT COUNT(*) FROM events WHERE assignment_id = ? AND sequence <= ?",
-                    (assignment_id, sequence),
-                ).fetchone()[0]
-            )
-            if count != sequence:
+            if sequence and conn.execute(
+                "SELECT 1 FROM events WHERE assignment_id = ? AND sequence = ?",
+                (assignment_id, sequence),
+            ).fetchone() is None:
                 raise ManagedLocalError("cannot acknowledge an event gap")
             conn.execute(
-                "UPDATE events SET acknowledged_sequence = ? WHERE assignment_id = ? AND sequence <= ?",
+                "CREATE INDEX IF NOT EXISTS events_pending_sequence ON events(assignment_id, sequence) "
+                "WHERE acknowledged_sequence IS NULL"
+            )
+            conn.execute(
+                "UPDATE events INDEXED BY events_pending_sequence SET acknowledged_sequence = ? "
+                "WHERE assignment_id = ? AND acknowledged_sequence IS NULL AND sequence <= ?",
                 (sequence, assignment_id, sequence),
             )
             return sequence
@@ -2393,6 +2389,7 @@ class SQLiteCoordinatorAssignments:
         *,
         max_parallel_stages: int | None,
         decision_receipt: Mapping[str, PlainData],
+        _reservation_transaction: Callable[[], AbstractContextManager[sqlite3.Connection]] | None = None,
     ) -> str:
         if max_parallel_stages is not None and (
             type(max_parallel_stages) is not int or max_parallel_stages < 1
@@ -2412,7 +2409,7 @@ class SQLiteCoordinatorAssignments:
                 requested.get(atom.key, Fraction(0)) + atom.amount.fraction
             )
         identity = _json(_assignment_dict(assignment))
-        with self._transaction() as conn:
+        with (_reservation_transaction or self._transaction)() as conn:
             current = conn.execute(
                 "SELECT identity_json, receipt_json, state "
                 "FROM coordinator_assignments WHERE assignment_id = ?",
@@ -2844,7 +2841,7 @@ class SQLiteCoordinatorAssignments:
     def list_run_live_states(self, run_uri: str) -> tuple[tuple[str, str], ...]:
         """Return coordinator-owned nonterminal assignment facts for cancellation."""
 
-        with self._transaction() as conn:
+        with self._transaction(read_only=True) as conn:
             return tuple(
                 (str(row["assignment_id"]), str(row["state"]))
                 for row in conn.execute(
@@ -2859,7 +2856,7 @@ class SQLiteCoordinatorAssignments:
 
         if not isinstance(run_uri, str) or not run_uri:
             raise ManagedLocalError("run URI is required")
-        with self._transaction() as conn:
+        with self._transaction(read_only=True) as conn:
             has_slurm_assignments = (
                 conn.execute(
                     "SELECT 1 FROM sqlite_schema WHERE type = 'table' "
@@ -2872,6 +2869,18 @@ class SQLiteCoordinatorAssignments:
                 run_uri,
                 has_slurm_assignments=has_slurm_assignments,
             )
+
+    def child_assignments_released(self, run_uris: Sequence[str]) -> bool:
+        """Read physical release across native and SLURM owners in a single snapshot."""
+        with self._transaction(read_only=True) as conn:
+            row = conn.execute(
+                "WITH children AS (SELECT value FROM json_each(?)) "
+                "SELECT NOT EXISTS (SELECT 1 FROM coordinator_assignments "
+                "WHERE run_uri IN children AND state != 'released') "
+                "AND NOT EXISTS (SELECT 1 FROM slurm_stage_assignments "
+                "WHERE run_uri IN children AND state != 'released')", (json.dumps(run_uris),),
+            ).fetchone()
+        return bool(row[0])
 
     def retained_scheduling_descriptors(
         self,
@@ -3244,7 +3253,7 @@ class SQLiteCoordinatorAssignments:
             return cast(str, row["state"])
 
     @contextmanager
-    def _transaction(self):
+    def _transaction(self, *, read_only: bool = False):
         if not self.path.is_file():
             if not self._allow_initialize:
                 raise ManagedLocalError("coordinator assignment store is missing")
@@ -3253,7 +3262,7 @@ class SQLiteCoordinatorAssignments:
             self.path, sqlite_policy=self._sqlite_policy, require_existing=not self._allow_initialize
         ) as conn:
             conn.row_factory = sqlite3.Row
-            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("BEGIN" if read_only and not self._allow_initialize else "BEGIN IMMEDIATE")
             if not self._allow_initialize:
                 _require_coordinator_assignment_schema(conn)
                 try:
@@ -3509,35 +3518,27 @@ def grant_and_start_managed_assignment(
     return fence
 
 
-def run_managed_local_assignment(
-    *,
-    coordinator: SQLiteCoordinatorAssignments,
-    authority: PreparedAttemptExecutionAuthority,
-    journal: SQLiteAgentJournal,
-    assignment: ManagedAssignment,
-    worker_request: StageWorkerRequest,
-    claims: Sequence[ResourceClaim],
-    providers: Mapping[str, AgentResourceProvider],
-    run_store: LocalRunStore,
-    max_parallel_stages: int | None,
-    decision_receipt: Mapping[str, PlainData],
-    agent_root: Path,
-    supervisor: AgentProcessSupervisorClient,
+@dataclass(frozen=True)
+class _PreparedLocalWorkspace:
+    assignment: ManagedAssignment
+    worker_request: StageWorkerRequest
+    commands: tuple[ClaimCommand, ...]
+    workspace: _ResidentAssignmentWorkspace
+    delivered: _ResidentAssignmentBundle
+    predecessor: str | None
+    continuing: bool
+
+
+def _prepare_local_workspace(
+    *, assignment: ManagedAssignment, worker_request: StageWorkerRequest,
+    claims: Sequence[ResourceClaim], providers: Mapping[str, AgentResourceProvider],
+    journal: SQLiteAgentJournal, run_store: LocalRunStore,
+    decision_receipt: Mapping[str, PlainData], agent_root: Path,
     resident_launch_profile: ResidentWorkerLaunchProfile,
-    durable_files: Literal["best_effort", "strict"] = "best_effort",
-    cancellation_requested: Callable[[], bool] | None = None,
-    suspend_requested: Callable[[], bool] | None = None,
-    execution_started: Callable[[], None] | None = None,
-    reservation_guard: Callable[[], AbstractContextManager[None]] | None = None,
-    embedded_recovery: EmbeddedRecovery | None = None,
-) -> ManagedExecutionReceipt:
-    """Run one exact local assignment through the durable Phase 2 saga.
-
-    The coordinator, authority, and journal remain separate transaction owners.
-    Each cross-owner fact is replayable, while this bounded composition drives
-    them synchronously for local tests and later command facades.
-    """
-
+    durable_files: Literal["best_effort", "strict"],
+    embedded_recovery: EmbeddedRecovery | None,
+) -> _PreparedLocalWorkspace:
+    """Stage the exact restartable workspace before acquiring coordinator capacity."""
     _require_worker_assignment_match(assignment, worker_request)
     predecessor = worker_request.metadata.get("managed_output_predecessor")
     if predecessor is not None and (
@@ -3731,6 +3732,46 @@ def run_managed_local_assignment(
     elif workspace_state not in {"GRANTED", "STARTED", "RESULT"}:
         raise ManagedLocalError("resident workspace state is not replayable")
 
+    return _PreparedLocalWorkspace(assignment, worker_request, commands, workspace, delivered, predecessor, continuing)
+
+
+def run_managed_local_assignment(
+    *,
+    coordinator: SQLiteCoordinatorAssignments,
+    authority: PreparedAttemptExecutionAuthority,
+    journal: SQLiteAgentJournal,
+    assignment: ManagedAssignment,
+    worker_request: StageWorkerRequest,
+    claims: Sequence[ResourceClaim],
+    providers: Mapping[str, AgentResourceProvider],
+    run_store: LocalRunStore,
+    max_parallel_stages: int | None,
+    decision_receipt: Mapping[str, PlainData],
+    agent_root: Path,
+    supervisor: AgentProcessSupervisorClient,
+    resident_launch_profile: ResidentWorkerLaunchProfile,
+    durable_files: Literal["best_effort", "strict"] = "best_effort",
+    cancellation_requested: Callable[[], bool] | None = None,
+    suspend_requested: Callable[[], bool] | None = None,
+    execution_started: Callable[[], None] | None = None,
+    reservation_guard: Callable[[], AbstractContextManager[None]] | None = None,
+    _reservation_transaction: Callable[[], AbstractContextManager[sqlite3.Connection]] | None = None,
+    embedded_recovery: EmbeddedRecovery | None = None,
+) -> ManagedExecutionReceipt:
+    """Run one exact local assignment through the durable Phase 2 saga.
+
+    The coordinator, authority, and journal remain separate transaction owners.
+    Each cross-owner fact is replayable, while this bounded composition drives
+    them synchronously for local tests and later command facades.
+    """
+
+    prepared = _prepare_local_workspace(
+        assignment=assignment, worker_request=worker_request, claims=claims,
+        providers=providers, journal=journal, run_store=run_store,
+        decision_receipt=decision_receipt, agent_root=agent_root,
+        resident_launch_profile=resident_launch_profile, durable_files=durable_files,
+        embedded_recovery=embedded_recovery,
+    )
     # The assignment-local bundle and exact bytes precede the logical reserve.
     # A crash after reserve can therefore reconstruct claims and launch identity
     # without serializing the coordinator run URI into the child workspace.
@@ -3740,16 +3781,42 @@ def run_managed_local_assignment(
             claims,
             max_parallel_stages=max_parallel_stages,
             decision_receipt=decision_receipt,
+            _reservation_transaction=_reservation_transaction,
         )
-        authority.bind_prepared_attempt(
-            assignment.run_uri,
-            assignment_id=assignment.assignment_id,
-            attempt_id=assignment.attempt_id,
-        )
-        coordinator.advance(
-            assignment.assignment_id, expected="reserved", next_state="bound"
-        )
-        journal.persist_request(assignment, delivered.to_dict())
+    return _run_reserved_local_assignment(
+        prepared, coordinator=coordinator, authority=authority, journal=journal,
+        providers=providers, run_store=run_store, supervisor=supervisor,
+        resident_launch_profile=resident_launch_profile, cancellation_requested=cancellation_requested,
+        suspend_requested=suspend_requested, execution_started=execution_started, embedded_recovery=embedded_recovery,
+    )
+
+
+def _run_reserved_local_assignment(
+    staged: _PreparedLocalWorkspace, *, coordinator: SQLiteCoordinatorAssignments,
+    authority: PreparedAttemptExecutionAuthority, journal: SQLiteAgentJournal,
+    providers: Mapping[str, AgentResourceProvider], run_store: LocalRunStore,
+    supervisor: AgentProcessSupervisorClient, resident_launch_profile: ResidentWorkerLaunchProfile,
+    cancellation_requested: Callable[[], bool] | None,
+    suspend_requested: Callable[[], bool] | None, execution_started: Callable[[], None] | None,
+    embedded_recovery: EmbeddedRecovery | None,
+) -> ManagedExecutionReceipt:
+    """Drive the authority, journal and supervisor for the durable reservation."""
+    assignment = staged.assignment
+    worker_request = staged.worker_request
+    commands = staged.commands
+    workspace = staged.workspace
+    delivered = staged.delivered
+    predecessor = staged.predecessor
+    continuing = staged.continuing
+    authority.bind_prepared_attempt(
+        assignment.run_uri,
+        assignment_id=assignment.assignment_id,
+        attempt_id=assignment.attempt_id,
+    )
+    coordinator.advance(
+        assignment.assignment_id, expected="reserved", next_state="bound"
+    )
+    journal.persist_request(assignment, delivered.to_dict())
     if journal.read_state(assignment.assignment_id) is AssignmentState.START_FAILED:
         retained_fence = journal.read_grant_fence(assignment.assignment_id)
         if retained_fence is None:

@@ -18,6 +18,7 @@ import json
 import os
 import traceback
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any, cast
 
 from loom._preparation_report import PREPARATION_REPORT_SCHEMA_VERSION, SUBMITTED_PREPARATION_REPORT_SCHEMA_VERSION, SUPPORTED_REPORT_FORMATS
@@ -61,6 +62,8 @@ from loom.queue.managed_local_preparation import (
     ManagedLocalPreparationReceipt,
     _pipeline_from_resolved,
     _recipe_manifest_data,
+    _render_config,
+    _RenderedConfig,
     _runtime_for_service,
     _validate_preparation_service,
     prepare_managed_run,
@@ -893,6 +896,7 @@ def prepare_child_run(
     run_name: str,
     *,
     runtime_options: RunOptions,
+    _defer_locked: bool = False,
 ) -> ManagedLocalPreparationReceipt:
     """Publish the fixed internal child without composing any project configuration."""
     resolved: dict[str, PlainData] = {
@@ -937,6 +941,7 @@ def prepare_child_run(
         service,
         composed,
         run_name,
+        _defer_locked=_defer_locked,
         execution_requirements={
             "prepare": _binding_requirement(binding),
         },
@@ -1027,14 +1032,76 @@ def _plain_mapping(value: object) -> dict[str, PlainData]:
     return plain
 
 
-def _prospective_run_name(request: PrepareRunRequest, binding: PreparationChildInput, composed: _ReceivedComposition) -> str:
+@dataclass(frozen=True, slots=True)
+class _DecodedPublication:
+    pipeline: PlainData
+    stage_names: tuple[str, ...]
+    options: dict[str, PlainData] | None
+    requirements: dict[str, dict[str, PlainData]]
+    preflight: dict[str, PlainData]
+    reconciliation_key: PlainData
+    run_name: str | None
+    config_digests: dict[str, str]
+
+
+@dataclass(frozen=True, slots=True)
+class _CheckedTarget:
+    resolved: dict[str, PlainData]
+    effective_run_options: RunOptions | None
+    rendered_config: _RenderedConfig
+    project_preparation: Mapping[str, PlainData] | None
+    project_contracts_entry: Mapping[str, PlainData] | None
+
+
+def _decode_publication(
+    reference_data: dict[str, PlainData],
+    path: Path,
+    binding_data: dict[str, PlainData],
+    run_root: Path,
+    run_name: str | None,
+    private_root: Path,
+    authority_identity: dict[str, PlainData],
+) -> _DecodedPublication:
+    from loom.queue.preparation import _project_target_uri
     from loom.pipeline.stores import run_uri_to_path
 
-    if request.run_name is not None:
-        return request.run_name
-    if composed.project_result is None:
-        raise QueueConflictError("reconciled preparation has no checked project result")
-    return run_uri_to_path(_checked_project_uri(binding, composed.project_result)).name
+    reference = ArtifactRef.from_dict(reference_data)
+    binding = PreparationChildInput.from_dict(binding_data)
+    value = load_preparation_report(reference, path)
+    composition, requirements, preflight = decode_preparation_report(
+        value, expected=binding
+    )
+    received = cast(_ReceivedComposition, composition)
+    digests: dict[str, str] = {}
+    pipeline: PlainData = None
+    stage_names: tuple[str, ...] = ()
+    if preparation_checks_allow_publication(preflight):
+        if run_name is None:
+            if received.project_result is None:
+                raise QueueConflictError(
+                    "reconciled preparation has no checked project result"
+                )
+            run_name = run_uri_to_path(
+                _checked_project_uri(binding, received.project_result)
+            ).name
+        uri = _project_target_uri(run_root, run_name)
+        digests = _render_config(private_root, uri, received, authority_identity)
+        pipeline = received.resolved["pipeline"]
+        stage_names = _pipeline_from_resolved(received.resolved).stage_names
+    return _DecodedPublication(
+        pipeline,
+        stage_names,
+        None
+        if received.effective_run_options is None
+        else received.effective_run_options.to_dict(),
+        {key: requirement.to_dict() for key, requirement in requirements.items()},
+        preflight.to_dict(),
+        None
+        if received.project_result is None
+        else received.project_result["reconciliation_key"],
+        run_name,
+        digests,
+    )
 
 
 class CoordinatorPreparation:
@@ -1062,7 +1129,7 @@ class CoordinatorPreparation:
         options: RunOptions,
     ) -> ManagedLocalPreparationReceipt:
         return prepare_child_run(
-            self._service(config), binding, run_name, runtime_options=options
+            self._service(config), binding, run_name, runtime_options=options, _defer_locked=True
         )
 
     def read_report(
@@ -1133,67 +1200,132 @@ class CoordinatorPreparation:
             raise QueueConflictError(
                 "preparation report does not match the committed worker result"
             )
+        artifacts = LocalArtifactStore(store.local_artifact_root(admission.run_uri))
         try:
-            value = LocalArtifactStore(
-                store.local_artifact_root(admission.run_uri)
-            ).load(reference)
+            if binding.action_verification is not None:
+                checked = _decode_action_verification_report(artifacts.load(reference), binding)
+                preflight = PreflightResult((), ())
+                return PreparationReport(reference, preflight.to_dict(), preflight.status.value,
+                                         False, None, None, action_verification=checked)
+            report_path = artifacts.local_path(reference)
         except ArtifactChecksumMismatchError as exc:
-            raise QueueConflictError(
-                "preparation committed report checksum conflicts"
-            ) from exc
+            raise QueueConflictError("preparation committed report checksum conflicts") from exc
         except ArtifactStoreError as exc:
             if isinstance(exc.__cause__, CodecDecodeError):
-                raise QueueConflictError(
-                    "preparation committed report cannot be decoded"
-                ) from exc
+                raise QueueConflictError("preparation committed report cannot be decoded") from exc
             raise
-        if binding.action_verification is not None:
-            checked = _decode_action_verification_report(value, binding)
-            preflight = PreflightResult((), ())
-            return PreparationReport(reference, preflight.to_dict(), preflight.status.value,
-                                     False, None, None, action_verification=checked)
-        value = load_preparation_report(
-            reference, LocalArtifactStore(store.local_artifact_root(admission.run_uri)).local_path(reference)
+
+        return self._read_publication_inputs(config, request, binding, reference, report_path)
+
+    def _read_publication_inputs(
+        self,
+        config: LocalDaemonConfig,
+        request: PrepareRunRequest,
+        binding: PreparationChildInput,
+        reference: ArtifactRef,
+        report_path: Path,
+    ) -> PreparationReport:
+        # The admitted bulk callback owns this child through exit, including
+        # failure. No daemon configuration, locks or open stores cross spawn.
+        from concurrent.futures import ProcessPoolExecutor
+        import multiprocessing
+
+        from loom.pipeline.stores.coordinator_authority import (
+            coordinator_authority_identity,
         )
-        composed, requirements, preflight = decode_preparation_report(
-            value, expected=binding
-        )
-        if binding.project_preparation is not None:
-            selected = _plain_mapping(cast(Mapping[str, PlainData], binding.project_preparation)["processor"])
-            composed = replace(cast(_ReceivedComposition, composed), project_contracts_entry={
-                "kind": "project_contracts", "data": {"schema_version": 1,
-                "namespace": selected["evidence_namespace"], "report_ref": reference.to_dict()}})
-        allowed = preparation_checks_allow_publication(preflight)
-        prospective = None
-        if allowed:
-            resolved = cast(_ReceivedComposition, composed).resolved
-            pipeline = _pipeline_from_resolved(resolved)
-            try:
-                run_uri, _options = _runtime_for_service(
-                    self._service(config),
-                    resolved,
-                    pipeline,
-                    _prospective_run_name(request, binding, cast(_ReceivedComposition, composed)),
-                    effective_options=cast(
-                        _ReceivedComposition, composed
-                    ).effective_run_options,
+        from loom.queue.preparation import _project_target_uri
+
+        directory = TemporaryDirectory(prefix="loom-preparation-config-")
+        try:
+            with ProcessPoolExecutor(
+                max_workers=1, mp_context=multiprocessing.get_context("spawn")
+            ) as worker:
+                decoded = worker.submit(
+                    _decode_publication,
+                    reference.to_dict(),
+                    report_path,
+                    binding.to_dict(compact_candidate=True),
+                    config.run_store_root,
+                    request.run_name,
+                    Path(directory.name),
+                    coordinator_authority_identity(
+                        config.coordinator_authority_factory
+                    ),
+                ).result()
+            preflight = PreflightResult.from_dict(decoded.preflight)
+            allowed = preparation_checks_allow_publication(preflight)
+            prospective = None
+            data = None
+            if allowed:
+                assert decoded.run_name is not None
+                resolved = {"pipeline": decoded.pipeline}
+                options = (
+                    None
+                    if decoded.options is None
+                    else RunOptions.from_dict(decoded.options)
                 )
-            except (ValueError, ValidationError, SerializationError) as exc:
-                raise QueueConflictError(
-                    "preparation report runtime evidence is invalid"
-                ) from exc
-            prospective = ManagedLocalPreparationReceipt(
-                run_uri, "f" * 64, "f" * 64, pipeline.stage_names
+                try:
+                    run_uri, _ = _runtime_for_service(
+                        self._service(config),
+                        resolved,
+                        decoded.stage_names,
+                        decoded.run_name,
+                        effective_options=options,
+                    )
+                except (ValueError, ValidationError, SerializationError) as exc:
+                    raise QueueConflictError(
+                        "preparation report runtime evidence is invalid"
+                    ) from exc
+                prospective = ManagedLocalPreparationReceipt(
+                    run_uri, "f" * 64, "f" * 64, decoded.stage_names
+                )
+                project = binding.project_preparation
+                entry = None
+                if project is not None:
+                    processor = _plain_mapping(project["processor"])
+                    entry = {
+                        "kind": "project_contracts",
+                        "data": {
+                            "schema_version": 1,
+                            "namespace": processor["evidence_namespace"],
+                            "report_ref": reference.to_dict(),
+                        },
+                    }
+                    if project["target_run_uri"] is None:
+                        project = {
+                            "processor": processor,
+                            "target_run_uri": _project_target_uri(
+                                config.run_store_root, decoded.run_name
+                            ),
+                        }
+                target = _CheckedTarget(
+                    resolved,
+                    options,
+                    _RenderedConfig(directory, run_uri, decoded.config_digests),
+                    project,
+                    entry,
+                )
+                data = (
+                    target,
+                    {
+                        name: ExecutionRequirement.from_dict(item)
+                        for name, item in decoded.requirements.items()
+                    },
+                )
+            else:
+                directory.cleanup()
+            return PreparationReport(
+                reference,
+                preflight.to_dict(),
+                preflight.status.value,
+                allowed,
+                prospective,
+                data,
+                decoded.reconciliation_key,
             )
-        return PreparationReport(
-            reference,
-            preflight.to_dict(),
-            preflight.status.value,
-            allowed,
-            prospective,
-            (composed, requirements),
-            None if cast(_ReceivedComposition, composed).project_result is None else cast(Mapping[str, PlainData], cast(_ReceivedComposition, composed).project_result)["reconciliation_key"],
-        )
+        except BaseException:
+            directory.cleanup()
+            raise
 
     def capture_candidate(self, config: LocalDaemonConfig, run_uri: str,
                           admission: LocalDaemonAdmission | None) -> dict[str, PlainData]:
@@ -1254,17 +1386,13 @@ class CoordinatorPreparation:
         composed, requirements = cast(
             tuple[object, Mapping[str, ManagedExecutionRequirement]], report.publication_data
         )
-        received = cast(_ReceivedComposition, composed)
-        if received.project_preparation is not None and received.project_preparation["target_run_uri"] is None:
-            from loom.queue.preparation import _project_target_uri
-            received = replace(received, project_preparation={"processor": received.project_preparation["processor"],
-                "target_run_uri": _project_target_uri(config.run_store_root, cast(str, request.run_name))})
         try:
             return prepare_managed_run(
                 self._service(config),
-                received,
+                composed,
                 cast(str, request.run_name),
                 execution_requirements=requirements,
+                _defer_locked=True,
             )
         except QueueServiceError as exc:
             # Native publisher rejects existing changed/partial targets. Keep

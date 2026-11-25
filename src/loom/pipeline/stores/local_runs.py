@@ -377,12 +377,6 @@ class LocalRunStore:
                 f"run metadata must be a mapping, got {type(normalized_metadata)!r}"
             )
 
-        if run_dir.exists() and (run_dir / "run.json").exists():
-            existing = self._read_run_wrapper(run_uri_text)
-            created_at = cast(str, existing["created_at"])
-        else:
-            created_at = utc_timestamp()
-
         provenance = normalized_metadata.get("config_provenance")
         if isinstance(provenance, dict) and isinstance(provenance.get("metadata"), dict):
             manifest = self.read_composition_manifest(run_uri_text)
@@ -402,11 +396,24 @@ class LocalRunStore:
                 else:
                     del provenance["metadata"]
 
+        self._write_projected_run_metadata(run_uri_text, normalized_metadata)
+
+    def _write_projected_run_metadata(
+        self, run_uri_text: str, metadata: dict[str, PlainData]
+    ) -> None:
+        """Commit native metadata whose composition references are already bound."""
+        run_dir = self.local_run_dir(run_uri_text)
+        if run_dir.exists() and (run_dir / "run.json").exists():
+            existing = self._read_run_wrapper(run_uri_text)
+            created_at = cast(str, existing["created_at"])
+        else:
+            created_at = utc_timestamp()
+
         payload = {
             "schema_version": _SCHEMA_VERSION,
             "run_uri": run_uri_text,
             "created_at": created_at,
-            "metadata": normalized_metadata,
+            "metadata": metadata,
         }
         from ._run_discovery_index import register
 

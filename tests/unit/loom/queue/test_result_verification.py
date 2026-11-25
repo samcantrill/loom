@@ -13,6 +13,42 @@ from loom.queue._result_verification import ResultVerifications
 pytestmark = pytest.mark.unit
 
 
+def test_one_producer_snapshot_settles_peers_and_skips_a_retried_claim(tmp_path):
+    from types import SimpleNamespace
+
+    from loom.pipeline.status import RunStatus, StageStatus
+    from loom.queue._action_result_resolution import ActionResultResolution
+    from tests.unit.loom.queue.test_action_results import _store
+
+    store = _store(tmp_path)
+    owner = object.__new__(ActionResultResolution)
+    owner.store = store
+    claims = {}
+    for node in ("fit", "score"):
+        claims[node] = store.select(
+            run_uri="owner", node=node, scope={"principal": "one"},
+            identity={"digest": node}, attempt_id=node + "-1",
+        )["claim"]
+    releases = []
+    authority = SimpleNamespace(release_action_producer=lambda uri, binding: releases.append(binding.attempt_id))
+    observation = owner.producer_steps("owner", authority)
+    assert next(observation) is None
+    store.fail(claims["fit"]["claim_id"], {"code": "producer_failed"})
+    retry = store.select(
+        run_uri="owner", node="fit", scope={"principal": "one"},
+        identity={"digest": "fit"}, attempt_id="fit-2", retry_authorized=True,
+    )["claim"]
+    snapshot: Any = SimpleNamespace(
+        status=RunStatus.FAILED,
+        stages=[SimpleNamespace(stage_name=node, status=StageStatus.FAILED) for node in claims],
+    )
+    with pytest.raises(StopIteration):
+        observation.send(snapshot)
+    assert store.claim(retry["claim_id"]) == retry
+    assert store.claim(claims["score"]["claim_id"])["state"] == "failed"
+    assert releases == ["score-1"]
+
+
 def test_audits_have_no_backlog_and_close_retains_running_capacity():
     entered = Barrier(3)
     release = Event()
@@ -20,20 +56,20 @@ def test_audits_have_no_backlog_and_close_retains_running_capacity():
     pool = ResultVerifications(woke.set)
     calls = []
 
-    def verify(outputs):
-        calls.append(outputs)
+    def verify():
+        calls.append(True)
         entered.wait(timeout=10)
         assert release.wait(timeout=10)
 
     try:
         for identity in ("first", "second", "excess", "first"):
-            pool.submit({"claim_id": identity}, ("epoch", "schedule"), {}, {}, verify)
+            pool.submit({"claim_id": identity}, ("epoch", "schedule"), {}, verify)
         entered.wait(timeout=10)
         assert len(calls) == 2
         assert pool.completed() == ()
         pool.close()
         assert pool.running()
-        pool.submit({"claim_id": "after-close"}, (None, None), {}, {}, verify)
+        pool.submit({"claim_id": "after-close"}, (None, None), {}, verify)
         release.set()
         # Wait for both actual workers, without manufacturing capacity on close.
         for item in tuple(pool._pending.values()):
@@ -53,13 +89,13 @@ def test_worker_failure_is_returned_to_owner_without_mutating_parent_timings():
     parent_spans = []
     pool = ResultVerifications(woke.set)
 
-    def verify(outputs):
+    def verify():
         with phase("publication_inventory_hash"):
             raise OSError("unreadable companion")
 
     try:
         with observe_phases(parent_spans.append):
-            pool.submit({"claim_id": "failed"}, ("epoch", "schedule"), {}, {}, verify)
+            pool.submit({"claim_id": "failed"}, ("epoch", "schedule"), {}, verify)
         assert woke.wait(timeout=10)
         completed, = pool.completed()
         with pytest.raises(OSError, match="unreadable companion"):
@@ -107,7 +143,7 @@ def test_terminal_admission_waits_for_its_unsettled_action_claim(tmp_path, cance
 
 
 @pytest.mark.parametrize(
-    "change", ["none", "cancel", "shared_cancel", "epoch", "scheduling_epoch", "authority", "retry", "corrupt"]
+    "change", ["none", "cancel", "shared_cancel", "epoch", "scheduling_epoch", "authority", "retry", "corrupt", "final_cancel", "final_epoch"]
 )
 def test_delayed_proof_rechecks_demand_epochs_and_authority(tmp_path, monkeypatch, change):
     from types import SimpleNamespace
@@ -127,29 +163,41 @@ def test_delayed_proof_rechecks_demand_epochs_and_authority(tmp_path, monkeypatc
     captured = store.claim(identity)
     entered, release, woke = Event(), Event(), Event()
     pool = ResultVerifications(woke.set)
+    from threading import RLock
+    from loom.queue import _phase_timing
+
+    guard = RLock()
     daemon = SimpleNamespace(
-        _result_verifications=pool, _epoch="epoch", _scheduling_epoch="schedule"
+        _result_verifications=pool, _epoch="epoch", _scheduling_epoch="schedule",
+        _connection=store.connection, _state_guard=lambda: guard, _stop=Event(), _execution=object(),
     )
     resolver = object.__new__(ActionResultResolution)
-    resolver.daemon, resolver.store = daemon, store
+    resolver.daemon, resolver.store, resolver.execution = daemon, store, daemon._execution
+    diagnostics = []
+    monkeypatch.setenv("LOOM_QUALIFICATION_TIMINGS", "all")
+    monkeypatch.setattr(_phase_timing, "log_phases", diagnostics.append)
     checked = []
 
     def check_authority(claim, result):
         checked.append(claim["claim_id"])
+        if change == "final_cancel":
+            store.detach_graph("run-a", "cancel-a")
+        elif change == "final_epoch":
+            daemon._scheduling_epoch = "successor"
         if change == "authority":
             raise QueueConflictError("action candidate original authority changed")
         return {}
 
     monkeypatch.setattr(resolver, "_checked_result_outputs", check_authority)
 
-    def verify(outputs):
+    def verify():
         entered.set()
         assert release.wait(timeout=10)
         if change == "corrupt":
             raise OSError("companion became unreadable")
 
     try:
-        pool.submit(captured, ("epoch", "schedule"), {"commit": "original"}, {}, verify)
+        pool.submit(captured, ("epoch", "schedule"), {"commit": "original"}, verify)
         assert entered.wait(timeout=10)
         if change in {"cancel", "shared_cancel"}:
             store.detach_graph("run-a", "cancel-a")
@@ -171,13 +219,10 @@ def test_delayed_proof_rechecks_demand_epochs_and_authority(tmp_path, monkeypatc
             )
         release.set()
         assert woke.wait(timeout=10)
-        diagnostics = []
-        with observe_phases(diagnostics.append):
-            resolver.complete_verifications()
-        assert len(diagnostics) == 1
-        assert diagnostics[0]["operation_id"] == identity
-        completion, = diagnostics[0]["spans"]
-        assert completion["action"] == "action_result_completion_apply"
+        resolver.complete_verifications()
+        pool._applying[identity].result(timeout=10)
+        completion, = [span for item in diagnostics if item["operation_id"] == identity
+                       for span in item["spans"] if span["action"] == "action_result_completion_apply"]
         assert completion["outcome"] == "complete"
         assert completion["elapsed_nanoseconds"] >= 0
         current = store.claim(identity)
@@ -191,12 +236,13 @@ def test_delayed_proof_rechecks_demand_epochs_and_authority(tmp_path, monkeypatc
                 "cancel": "settling", "epoch": "owned",
                 "scheduling_epoch": "owned", "authority": "failed",
                 "retry": "owned", "corrupt": "failed",
+                "final_epoch": "owned", "final_cancel": "settling",
             }[change]
-            assert checked == ([identity] if change == "authority" else [])
+            assert checked == ([identity] if change in {"authority", "final_cancel", "final_epoch"} else [])
         # Completion consumption cannot publish a second time.
-        with observe_phases(diagnostics.append):
-            resolver.complete_verifications()
-        assert len(diagnostics) == 1
+        observed = len(diagnostics)
+        resolver.complete_verifications()
+        assert len(diagnostics) == observed
         assert store.claim(identity) == current
     finally:
         release.set()
@@ -219,10 +265,10 @@ def test_report_and_result_consumers_share_actual_io_capacity():
     try:
         report = pool.bulk.submit("preparation", "report_hydration", blocked)
         assert report is not None
-        pool.submit({"claim_id": "producer"}, (None, None), {}, {}, verify)
+        pool.submit({"claim_id": "producer"}, (None, None), {}, verify)
         entered.wait(timeout=10)
         assert pool.bulk.submit("excess-report", "report_hydration", blocked) is None
-        pool.submit({"claim_id": "excess-producer"}, (None, None), {}, {}, verify)
+        pool.submit({"claim_id": "excess-producer"}, (None, None), {}, verify)
         release.set()
         assert report.result(timeout=10) == "hydrated"
         for item in tuple(pool._pending.values()):

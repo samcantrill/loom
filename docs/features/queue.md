@@ -342,6 +342,11 @@ expiry, fallback, receipt, and freshness. Detected local regression or an out-
 of-policy jump makes time health degraded, pauses new scheduling, and withholds
 retained capacity until clock/session reconciliation; it never extends an old
 offer by trusting a rolled-back clock.
+The scheduler attempts its clock-health write without waiting for a SQLite
+writer. If that attempt encounters contention, that turn skips new dispatch.
+It can still process independent observations. The next turn samples again.
+Only a committed clock diagnostic changes the durable clock-health status.
+
 Clock sampling and the high-water comparison/update run inside the same
 immediate SQLite write transaction, held through commit or rollback. This also
 applies to work-poll and transfer-authorization checks; filesystem and network
@@ -658,6 +663,12 @@ provider claim set. A held worker or publication does not prevent an independent
 eligible assignment from progressing; two blocked bulk operations can delay
 launch/publication/containment, while healthy receipt and stop-request paths
 remain independent. CPU and RAM are accounting reservations, not OS limits;
+An agent replays a pending release with the same provider proof after restart.
+After session reconciliation the coordinator can recognize that exact retained
+proof under the previous epoch. If no proof was accepted, the authenticated
+coordinator can explicitly reject the old epoch. Only that reply allows the
+agent to rebind unchanged physical evidence to its reconciled epoch and policy.
+A delayed receipt settles its own delivery and preserves later session changes.
 GPU claims remain whole-device exclusive through publication and release.
 
 On application restart, each retained assignment recovers independently from
@@ -1048,11 +1059,29 @@ new scheduling cycle.
 
 Coordinator artifact audits, preparation capture/publication, contract/report
 hydration, worker-request construction and remote input preflight share two
-actual bulk IO slots outside reconciliation. Waiting owners retain small FIFO
-identity hints, not an executor backlog of payloads. A hint is retired when its
+actual bulk IO slots outside reconciliation. Child construction, report hydration
+and target publication can occupy one of those slots collectively. The oldest
+eligible waiting operation goes first. A waiting publisher keeps its position
+while an image-retention operation uses the other slot. Waiting owners retain
+small identity hints. A hint is retired when its
 owner is reconsidered and no longer offers that work, or authoritative admission
 state retires the owner; merely missing an asynchronous context result does not
 erase its position. A running operation retains capacity until it actually ends.
+
+A preparation that has validated its child report and selected its publication
+retains the report while the publisher waits for capacity. Validation in progress
+and reports awaiting or undergoing publication share a two-report limit. When
+another publisher holds the target file lock, the coordinator releases the worker
+and retries the retained candidate after 100 ms. It checks the child and current
+publication claim on retry and holds the target lock through installation. An admitted report
+decoder renders native configuration documents in a private temporary directory
+within its existing bulk slot. Publication resolves the protected scheduling
+policy in the coordinator and passes its placement decisions to a worker to
+render the plan and exact runtime record. The coordinator checks the selected
+child, input and publication claim, verifies the rendered bytes before creating
+the target, and publishes through the configured authority. Temporary files
+belong to the checked report and can be regenerated from the committed child.
+After restart it uses the durable child evidence and publication claim to recover.
 
 Completion alone cannot authorize a transition. The coordinator rechecks the
 captured epoch, claim/attempt, inputs and current demand before applying results;
@@ -1087,6 +1116,66 @@ scheduling lock is retained during waiting, and empty checks do not acquire a
 SQLite write transaction. Notifications are hints; every delivery rechecks the
 authenticated session and current durable control state.
 
+The native supervisor has two workers for launch, query, containment and
+cleanup, plus one worker reserved for a stop that requires backend I/O.
+Immediate native signals still use the short IPC path. A busy assignment keeps
+its own ordering. An accepted stop for it remains pending until the worker can
+deliver it. Shutdown waits for the physical effect to settle.
+
+For embedded GPU providers the coordinator runs one background occupancy query
+at a time. CPU admissions can reach terminal state while it runs. The scheduling
+owner installs a fresh result only for the same provider, monitor and revision.
+A replaced provider starts with unknown occupancy. An outstanding query retains
+its worker until it exits, including during shutdown.
+
+Resource maintenance samples GPU occupancy outside the agent mutation gate.
+It applies the sample while the session, provider and claim revision still
+match and the observation is fresh. A control can take effect during sampling.
+If a drain withdraws an offer just before a poll starts, the service recovers
+the exact poll outcome and predecessor watermark before applying the control.
+Assignment reconciliation bounds queued HTTP attempts, socket exchanges and
+retry delays by its original deadline. Expiration retains the request's replay
+identity and any uncertain physical ownership.
+
+The agent journals a pending provider release against its original delivery and
+availability before sending it. Pending release fences the session's offer and
+work polling. Its HTTP exchange leaves the mutation gate free for controls.
+On acknowledgement the journal resolves that delivery. It applies capacity
+changes only while the captured active session and offer still own them.
+Concurrent releases that advance the same availability revision run in order.
+
+Operation, admission and queue-item waits subscribe to their own identifiers
+before reading durable state. A coordinator transaction notifies those waiters
+after commit using the identities of the modified rows. A rolled-back change
+leaves the waiter asleep. SLURM terminal assignment commits signal their own
+operation. Waiters also reread at least once per second to discover changes
+from other processes and wake on shutdown.
+
+A submit agent reads up to 32 SLURM tasks and one cursor lookahead from its
+indexed active assignments. The coordinator collects matching recovery facts
+in one query and builds the byte-limited reply outside the scheduling lock.
+Before returning, it checks the session and scheduling epoch and verifies
+changes to the relevant assignments, submission evidence, cancellation and
+recovery. A changing page retries the original cursor. Other agents can renew
+their offers while the reply is being assembled.
+
+The agent handshake can also advertise `agent-event-batch-v1`. An outbound
+agent sends up to 32 consecutive events for one assignment in a request of at
+most 65,536 bytes. Each event is authorized and persisted by the same owner as
+single-event delivery. The receipt identifies the assignment, final contiguous
+sequence and digest of the exact request. A lost reply or interrupted batch
+replays the original event IDs and payloads from the workspace. Older peers
+use paged single-event delivery. The agent flushes its terminal events before
+releasing the assignment.
+
+The work and control handlers inspect session candidates outside the coordinator
+state lock and close that read before checking external receipts. Claiming a
+control or delivering work rechecks the session and selected request under the
+current policy. Work delivery and its exact poll receipt commit together.
+Current-offer lookup uses a partial index installed at initialization and on
+owned startup of existing roots. A polling write that encounters a busy database
+releases the state lock before retrying.
+
 Received IDs come from the existing durable local journal and suppress only
 redelivery. Each ID is encoded as `agent:<operation_id>` or
 `assignment:<operation_id>`; the independent operation namespaces cannot
@@ -1103,6 +1192,19 @@ a terminal acknowledgement, and preserves the committed result. Lost replies
 replay the same acknowledgement after reconnect or application restart. Controls
 for assignments that still own work remain with their execution views.
 
+Peers negotiating `agent-lifecycle-progress-v1` can advance assignment accept,
+start permit, started and release over two dedicated sender slots and four
+short receiver slots. A request that needs external authority or storage work
+returns pending. The agent retries the same authenticated payload within its
+original attempt budget. The receiver runs up to two authority preparations
+and two grant/publication preparations. Only actual workers consume those
+slots. It can discard a completed preparation and reconstruct it from the
+durable assignment after disconnection or restart. A busy assignment guard
+or SQLite writer yields another pending response. Before replying, the
+coordinator checks the current session and assignment and applies the short
+transition. A cancellation that commits before the permit prevents start.
+Older peers use the original synchronous exchange.
+
 Control waits have a dedicated agent execution slot, separate from work polling,
 short controls/renewals and bulk IO. The HTTPS listener admits at most 32 active
 work waits and 32 control waits independently; those limits do not consume its
@@ -1111,8 +1213,10 @@ The receipt list accepts up to 1025 unique bounded identifiers within the existi
 64 KiB request envelope. An agent whose current receipt inventory exceeds its
 count or byte limit uses bounded control polling without truncating receipts.
 Explicit synchronous polling remains supported. A coordinator lacking the
-capability is refused during handshake. Resource renewal and GPU freshness
-policies are unchanged.
+capability is refused during handshake. A live outbound agent observes resources
+and renews an unchanged offer while its work poll awaits a reply. Changed
+capacity waits for the original poll to settle. Renewals match an exact offer,
+availability revision and sequence, including replies recovered after a disconnect.
 
 Recoverable admission and retained-assignment failures are paced independently
 with exponential backoff (initial ceiling 0.1 seconds, maximum ceiling five

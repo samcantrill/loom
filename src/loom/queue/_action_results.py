@@ -225,23 +225,30 @@ class ActionResults:
         """
         encoded = _json(result)
         with self.transaction() as conn:
-            claim = _claim(conn, claim_id)
-            if tuple(
-                claim[key] for key in ("attempt_id", "assignment_id", "fencing_token")
-            ) != (attempt_id, assignment_id, fencing_token):
-                raise QueueConflictError("action result producer fence conflicts")
-            if claim["result_json"] is not None:
-                if claim["result_json"] != encoded:
-                    raise QueueConflictError("immutable action result conflicts")
-                return
-            if claim["revision"] != expected_revision:
-                raise QueueConflictError("verified action claim revision changed before publication")
-            if claim["state"] not in {"owned", "settling"}:
-                raise QueueConflictError("action claim cannot publish a result")
-            conn.execute(
-                "UPDATE action_claims SET state = 'succeeded', result_json = ?, revision = revision + 1 WHERE claim_id = ?",
-                (encoded, claim_id),
-            )
+            self._publish_in(conn, _claim(conn, claim_id), encoded, expected_revision,
+                             attempt_id, assignment_id, fencing_token)
+
+    @staticmethod
+    def _publish_in(
+        conn: sqlite3.Connection, claim: Mapping[str, Any], encoded: str, expected_revision: int,
+        attempt_id: str, assignment_id: str, fencing_token: str,
+    ) -> None:
+        if tuple(
+            claim[key] for key in ("attempt_id", "assignment_id", "fencing_token")
+        ) != (attempt_id, assignment_id, fencing_token):
+            raise QueueConflictError("action result producer fence conflicts")
+        if claim["result_json"] is not None:
+            if claim["result_json"] != encoded:
+                raise QueueConflictError("immutable action result conflicts")
+            return
+        if claim["revision"] != expected_revision:
+            raise QueueConflictError("verified action claim revision changed before publication")
+        if claim["state"] not in {"owned", "settling"}:
+            raise QueueConflictError("action claim cannot publish a result")
+        conn.execute(
+            "UPDATE action_claims SET state = 'succeeded', result_json = ?, revision = revision + 1 WHERE claim_id = ?",
+            (encoded, claim["claim_id"]),
+        )
 
     def fail(
         self,
@@ -251,16 +258,36 @@ class ActionResults:
         expected_revision: int | None = None,
     ) -> None:
         with self.transaction() as conn:
-            claim = _claim(conn, claim_id)
-            if expected_revision is not None and claim["revision"] != expected_revision:
-                return
-            if claim["state"] in {"succeeded", "failed", "cancelled"}:
-                return
-            state = "cancelled" if claim["state"] == "settling" else "failed"
-            conn.execute(
-                "UPDATE action_claims SET state = ?, failure_json = ?, revision = revision + 1 WHERE claim_id = ?",
-                (state, _json(failure), claim_id),
-            )
+            self._fail_in(conn, _claim(conn, claim_id), _json(failure), expected_revision)
+
+    @staticmethod
+    def _fail_in(
+        conn: sqlite3.Connection, claim: Mapping[str, Any], encoded: str, expected_revision: int | None,
+    ) -> None:
+        if expected_revision is not None and claim["revision"] != expected_revision:
+            return
+        if claim["state"] in {"succeeded", "failed", "cancelled"}:
+            return
+        state = "cancelled" if claim["state"] == "settling" else "failed"
+        conn.execute(
+            "UPDATE action_claims SET state = ?, failure_json = ?, revision = revision + 1 WHERE claim_id = ?",
+            (state, encoded, claim["claim_id"]),
+        )
+
+    def settle_verified_in(
+        self, conn: sqlite3.Connection, captured: Mapping[str, Any], result: Mapping[str, PlainData],
+        failure: Mapping[str, PlainData] | None,
+    ) -> None:
+        """Apply a completed proof only to its original durable claim and fence."""
+        current = _claim(conn, captured["claim_id"])
+        keys = ("revision", "owner_run_uri", "owner_node", "attempt_id", "assignment_id", "fencing_token")
+        if any(current[key] != captured[key] for key in keys):
+            return
+        if failure is None:
+            self._publish_in(conn, current, _json(result), captured["revision"],
+                             captured["attempt_id"], captured["assignment_id"], captured["fencing_token"])
+        else:
+            self._fail_in(conn, current, _json(failure), captured["revision"])
 
     def bind(
         self,
@@ -333,7 +360,9 @@ class ActionResults:
             return tuple(
                 dict(row)
                 for row in conn.execute(
-                    "SELECT * FROM action_claims WHERE owner_run_uri = ?", (run_uri,)
+                    "SELECT c.* FROM action_demands d JOIN action_claims c ON c.claim_id = d.claim_id "
+                    "WHERE d.run_uri = ? AND c.owner_run_uri = d.run_uri AND c.owner_node = d.node",
+                    (run_uri,),
                 )
             )
 

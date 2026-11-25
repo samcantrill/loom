@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import nullcontext
 import math
 import time
 from typing import Any, Self, cast
@@ -24,6 +25,7 @@ from ._coordinator_control import (
     validate_request,
 )
 from . import _coordinator_transport as transport_io
+from ._phase_timing import qualification_timings, reported_phases, request_identity
 from ._coordinator_transport import ControlTransport
 from .errors import QueueError
 from .local_daemon import (
@@ -102,12 +104,11 @@ class NativeCoordinatorClient:
         delay = 0.01
         while True:
             try:
-                response = self._transport.call(
-                    operation,
-                    payload,
-                    deadline,
-                    waiting=waiting,
-                )
+                with (reported_phases("client." + operation, operation_id=request_identity(payload))
+                      if qualification_timings() else nullcontext()):
+                    response = self._transport.call(
+                        operation, payload, deadline, waiting=waiting,
+                    )
                 try:
                     return decode_envelope(response, operation, payload)
                 except (ValueError, TypeError, KeyError, RecursionError) as exc:
@@ -148,6 +149,11 @@ class NativeCoordinatorClient:
         except (ValueError, TypeError, QueueError) as exc:
             raise control_error("invalid_request", operation, envelope) from exc
         waiting = waiting or operation in WAIT_OPERATIONS
+        if (operation == "read_artifact_chunk" and
+                isinstance(self._transport, transport_io.HttpsControlTransport) and
+                self._transport.negotiating_ranges):
+            # The transfer worker negotiates on the same authenticated socket.
+            negotiate = False
         if operation not in {"handshake", "operator_handshake"} and negotiate:
             try:
                 # Separate connections renegotiate within this request's budget.
@@ -325,13 +331,14 @@ class NativeCoordinatorClient:
         )
 
     def admission(
-        self, admission_id: str, *, expected_coordinator_id: str | None = None
+        self, admission_id: str, *, expected_coordinator_id: str | None = None,
+        deadline: float | None = None,
     ) -> LocalDaemonAdmissionDetail:
         """Read one admission and its non-atomic owner evidence."""
         return cast(
             LocalDaemonAdmissionDetail,
             self._native_call(
-                "admission", {"admission_id": admission_id}, expected_coordinator_id
+                "admission", {"admission_id": admission_id}, expected_coordinator_id, deadline=deadline
             ),
         )
 
@@ -373,13 +380,14 @@ class NativeCoordinatorClient:
         )
 
     def operation(
-        self, operation_id: str, *, expected_coordinator_id: str | None = None
+        self, operation_id: str, *, expected_coordinator_id: str | None = None,
+        deadline: float | None = None,
     ) -> LocalDaemonOperation:
         """Read an operation; an observed failed operation is a successful read."""
         return cast(
             LocalDaemonOperation,
             self._native_call(
-                "operation", {"operation_id": operation_id}, expected_coordinator_id
+                "operation", {"operation_id": operation_id}, expected_coordinator_id, deadline=deadline
             ),
         )
 
@@ -420,7 +428,8 @@ class NativeCoordinatorClient:
         )
 
     def start_run(
-        self, request: RunRequest, *, expected_coordinator_id: str | None = None
+        self, request: RunRequest, *, expected_coordinator_id: str | None = None,
+        deadline: float | None = None,
     ) -> LocalDaemonOperation:
         """Durably accept preparation plus admission; returning detaches observation.
 
@@ -433,7 +442,7 @@ class NativeCoordinatorClient:
         if not isinstance(request, RunRequest):
             raise control_error("invalid_request", "start_run", {})
         return cast(LocalDaemonOperation, self._native_call(
-            "start_run", {"request": request.to_dict()}, expected_coordinator_id
+            "start_run", {"request": request.to_dict()}, expected_coordinator_id, deadline=deadline
         ))
 
     def cancel_run_operation(

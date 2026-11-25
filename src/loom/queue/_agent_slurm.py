@@ -753,7 +753,7 @@ class AgentSlurmJobs:
             except SlurmRequestUncertain:
                 self._ack_retry_at[operation] = monotonic() + 5
 
-    def _batch_query_steps(self, batch, profile, key, timeout):
+    def _batch_query_steps(self, batch, profile, key, timeout, operations):
         history = profile.accounting_history
         assert history is not None
         names = [operation_job_name(item[1].operation_id) for item in batch]
@@ -777,6 +777,8 @@ class AgentSlurmJobs:
                 self._batch_limits[key] = max(1, len(batch) // 2)
         for task, assignment, _current, _key in batch:
             operation = assignment.operation_id
+            if operation not in operations:
+                continue  # A cancellation now owns a newer identity observation.
             filtered = (
                 replace(result, stdout=partitioned[operation_job_name(operation)])
                 if isinstance(result, SlurmCommandResult) else result
@@ -831,7 +833,7 @@ class AgentSlurmJobs:
             operations = {item[1].operation_id for item in batch}
             remaining = [item for item in remaining if item[1].operation_id not in operations]
             steps = self._batch_query_steps(
-                batch, profile, key, min(command_policy.observation_timeout_seconds, time_left),
+                batch, profile, key, min(command_policy.observation_timeout_seconds, time_left), operations,
             )
             calls += 1
             if self._asynchronous_preparation:
@@ -989,6 +991,12 @@ class AgentSlurmJobs:
                     release=last["release"], provider_released=True,
                 )
                 return
+        if task.get("cancel_requested") is True:
+            submission = self.journal.find(request.operation_id)
+            if submission is not None and submission.job_id is not None and not submission.cancel_requested:
+                self._commands.supersede_observation(request.operation_id)
+                for batch in self._batch_pending.values():
+                    batch.discard(request.operation_id)
         if any(request.operation_id in batch for batch in self._batch_pending.values()):
             self._deliver_result(
                 task, {"cancel_requested": task.get("cancel_requested") is True},
@@ -1138,7 +1146,7 @@ class AgentSlurmJobs:
                     return value
 
                 if self._asynchronous_preparation:
-                    self._commands.start(request.operation_id, "control", cancel(), kind="cancel")
+                    self._commands.start(request.operation_id, "cancel", cancel(), kind="cancel")
                     current = self.journal.read(request.operation_id)
                 else:
                     current = self.journal.request_cancel(

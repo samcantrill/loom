@@ -353,7 +353,7 @@ def test_nonterminal_admission_waits_are_passive(
     def record_wake() -> None:
         wake_calls.append(None)
 
-    def stop_after_observation(_observed: int, _deadline: float | None) -> None:
+    def stop_after_observation(_signal, _observed: int, _deadline: float | None) -> None:
         raise RuntimeError("stop after one nonterminal observation")
 
     monkeypatch.setattr(daemon._wake, "set", record_wake)
@@ -830,6 +830,55 @@ def test_recovery_persists_exact_evidence_before_close_and_replays_it(
     assert execution.close_calls == 2
     with pytest.raises(QueueConflictError, match="operation conflicts"):
         replacement_operator.recover_unknown(replace(request, reason="changed replay"))
+
+
+def test_second_recovery_settles_while_first_authority_observation_remains_held(tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    entered, release = Event(), Event()
+    try:
+        execution = daemon._execution
+        assert execution is not None
+
+        def winner(request):
+            if request.recovery_id == "recovery-a":
+                entered.set()
+                assert release.wait(10)
+            return True
+
+        monkeypatch.setattr(execution, "recovery_has_ordinary_winner", winner)
+        with sqlite3.connect(config.control_database) as conn:
+            for name in ("a", "b"):
+                request = RecoverUnknownAssignment(
+                    recovery_id="recovery-" + name, run_uri="file:///run-" + name, stage_name="train",
+                    attempt=1, stage_work_id="work-" + name, assignment_id="assignment-" + name,
+                    process_execution_id="process-" + name, execution_fence="fence-" + name,
+                    target=ManagedRecoveryTarget("agent-1", "session-1"), expected_state_version=7,
+                    requested_outcome="failed", consider_retry=False, reason="retained recovery",
+                )
+                conn.execute(
+                    "INSERT INTO recovery_operations VALUES (?, 'operator', ?, 'fixture', "
+                    "'2026-11-17T00:00:00Z', 'pending', NULL, '{}')",
+                    (request.recovery_id, json.dumps(request.to_dict())),
+                )
+        daemon._wake.set()
+        assert entered.wait(5)
+        deadline = time.monotonic() + 5
+        while True:
+            observed = daemon._wake.snapshot()
+            with sqlite3.connect(config.control_database) as conn:
+                states = dict(conn.execute("SELECT recovery_id, state FROM recovery_operations"))
+            if states["recovery-b"] == "superseded":
+                break
+            assert time.monotonic() < deadline
+            daemon._wake.wait_for_change(observed, max(0, deadline - time.monotonic()))
+        assert states["recovery-a"] == "pending" and not release.is_set()
+        daemon.reconcile_once()
+    finally:
+        release.set()
+        daemon.stop()
 
 
 def test_recovery_pages_skip_busy_and_failed_owners_without_starving_later_rows(tmp_path, monkeypatch):
@@ -2286,6 +2335,38 @@ def test_start_rejects_current_schema_owner_substitution(
         LocalDaemon(config).start()
 
 
+def test_paused_background_owner_validation_releases_the_reconciliation_turn(tmp_path, monkeypatch):
+    from threading import current_thread
+    from loom.queue.local_daemon_execution import LocalDaemonExecution
+
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    entered, release = Event(), Event()
+    calls = []
+    original = LocalDaemonExecution.open_owner_stores
+
+    def held(execution):
+        if current_thread().name.startswith("loom-owner-check"):
+            calls.append(execution)
+            entered.set()
+            assert release.wait(10)
+        return original(execution)
+
+    monkeypatch.setattr(LocalDaemonExecution, "open_owner_stores", held)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        assert entered.wait(3)
+        with ThreadPoolExecutor(max_workers=1) as workers:
+            assert workers.submit(daemon.reconcile_once).result(timeout=2) == ()
+            daemon._wake.set()
+            assert workers.submit(daemon.reconcile_once).result(timeout=2) == ()
+            assert len(calls) == 1
+    finally:
+        release.set()
+        daemon.stop()
+
+
 def test_owner_store_validation_is_once_per_operation_not_cached_across_operations(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2678,6 +2759,97 @@ def test_gpu_monitoring_follows_execution_owners_across_reload(
         assert not status.available
         assert observed_policies[-1] == next_policy
     finally:
+        daemon.stop()
+
+
+def test_dispatch_discards_a_provider_observation_from_before_scheduling_reload(tmp_path, monkeypatch):
+    monkeypatch.setattr(LocalDaemon, "_serve", lambda owner: owner._stop.wait())
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config, trusted_scheduling_loader=lambda: config)
+    status = daemon.start()
+    started = [Event(), Event()]
+    release = [Event(), Event()]
+    try:
+        execution = daemon._execution
+        original = execution._inspect_local_offer
+        samples = []
+
+        def observe(*args):
+            sample = original(*args)
+            index = len(samples)
+            samples.append(sample)
+            started[index].set()
+            assert release[index].wait(10)
+            return sample
+
+        monkeypatch.setattr(execution, "_inspect_local_offer", observe)
+        assert execution._candidate_for_dispatch() is None and started[0].wait(5)
+        old = execution._pending_offer[1]
+        operator = daemon.operator_view(LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR))
+        assert operator.reload_scheduling(CoordinatorSchedulingReload("offer-reload", status.scheduling_epoch, "test"))["state"] == "applied"
+        assert execution._candidate_for_dispatch() is None
+        release[0].set()
+        old.result(timeout=5)
+        assert execution._candidate_for_dispatch() is None and started[1].wait(5)
+        current = execution._pending_offer[1]
+        assert execution._candidate_for_dispatch() is None
+        release[1].set()
+        current.result(timeout=5)
+        assert execution._candidate_for_dispatch() is samples[1].candidate
+    finally:
+        for signal in release:
+            signal.set()
+        daemon.stop()
+
+
+def test_coordinator_discards_gpu_sample_from_replaced_provider(tmp_path, monkeypatch):
+    from loom.queue import ConfiguredGpuDevice, GpuDeviceDescriptor
+    from loom.queue.gpu.occupancy import (
+        GpuOccupancyPolicy, GpuProcessObservation, NvidiaSmiGpuProcessObserver,
+    )
+
+    old_policy = GpuOccupancyPolicy(0.01, 2, 0.1)
+    old_started, old_release = Event(), Event()
+    new_started, new_release = Event(), Event()
+
+    def observe(observer: NvidiaSmiGpuProcessObserver):
+        old = observer.policy == old_policy
+        (old_started if old else new_started).set()
+        assert (old_release if old else new_release).wait(10)
+        return {uuid: GpuProcessObservation(uuid, True, not old, "available")
+                for uuid in observer.selected_uuids}
+
+    monkeypatch.setattr(NvidiaSmiGpuProcessObserver, "observe", observe)
+    config = replace(
+        _config(tmp_path), agent_resource_providers=None, gpu_occupancy_policy=old_policy,
+        gpu_devices=(ConfiguredGpuDevice(GpuDeviceDescriptor("gpu-0", "model", 1024), "GPU-private"),),
+    )
+    replacement = replace(
+        config, agent_resource_providers=None, gpu_occupancy_policy=GpuOccupancyPolicy(0.02, 2, 0.1),
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config, trusted_scheduling_loader=lambda: replacement)
+    before = daemon.start()
+    try:
+        assert old_started.wait(3)
+        operator = daemon.operator_view(LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR))
+        receipt = operator.reload_scheduling(
+            CoordinatorSchedulingReload("gpu-reload", before.scheduling_epoch, "replace held probe")
+        )
+        assert receipt["state"] == "applied"
+        assert not new_started.is_set()
+        old_release.set()
+        assert new_started.wait(3)
+        assert daemon.status().local_resource_status[0].reason_code == "observation_unavailable"
+        new_release.set()
+        deadline = time.monotonic() + 3
+        while daemon.status().local_resource_status[0].reason_code != "external_process_detected":
+            assert time.monotonic() < deadline
+            daemon.reconcile_once()
+    finally:
+        old_release.set()
+        new_release.set()
         daemon.stop()
 
 

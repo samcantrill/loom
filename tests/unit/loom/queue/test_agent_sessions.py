@@ -1519,6 +1519,113 @@ def test_retirement_secret_rejects_before_mutation_and_is_redacted(
         daemon.stop()
 
 
+def test_owned_restart_indexes_current_offers_and_preserves_receipts(
+    tmp_path, monkeypatch
+):
+    import sqlite3
+    from loom.queue.agent_sessions import invalidate_current_offers
+    from loom.queue.local_daemon import _open_root
+
+    monkeypatch.setattr(LocalDaemon, "_serve", lambda daemon: daemon._stop.wait())
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        session = _register(daemon)
+        view = _view(daemon)
+        offer = view.publish_offer(
+            _offer(session.session_id, session.coordinator_epoch),
+            idempotency_key="offer",
+        )
+        view.wait_for_work(
+            session.session_id,
+            session.availability_revision,
+            sequence=1,
+            wait_timeout_ms=1,
+        )
+    finally:
+        daemon.stop()
+
+    lookup = (
+        "SELECT expires_at FROM agent_offers WHERE session_id=? AND coordinator_epoch=? "
+        "AND availability_revision=? AND current=1"
+    )
+    key = (session.session_id, session.coordinator_epoch, session.availability_revision)
+
+    def rows(conn, table):
+        return conn.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall()
+
+    def history(conn, ids):
+        conn.executemany(
+            "INSERT INTO agent_offers SELECT ?,session_id,coordinator_epoch,availability_revision,"
+            "offer_json,accepted_at,'2000-01-01T00:00:00Z',0 FROM agent_offers WHERE offer_id=?",
+            ((f"old-{i}", offer["offer_id"]) for i in ids),
+        )
+
+    with sqlite3.connect(config.control_database) as conn:
+        conn.execute("DROP INDEX agent_offers_current_session")
+        conn.execute("DROP INDEX agent_offers_session_revision")
+        conn.execute("DROP INDEX agent_offers_session")
+        conn.execute("DROP INDEX agent_controls_session")
+        history(conn, range(100))
+        expected = conn.execute(lookup, key).fetchall()
+        original = rows(conn, "agent_sessions"), rows(conn, "agent_poll_state")
+        assert expected and original[1][0][-1] is not None
+    _open_root(config.coordinator_root, role="coordinator")
+    with sqlite3.connect(config.control_database) as conn:
+        assert "SCAN agent_offers" in str(
+            conn.execute("EXPLAIN QUERY PLAN " + lookup, key).fetchall()
+        )
+        version = conn.execute("PRAGMA user_version").fetchone()
+    costs = []
+    for retained in (100, 10000):
+        daemon = LocalDaemon(config)
+        daemon.start()
+        daemon.stop()
+        with sqlite3.connect(config.control_database) as conn:
+            assert conn.execute("PRAGMA user_version").fetchone() == version
+            assert (
+                rows(conn, "agent_sessions"),
+                rows(conn, "agent_poll_state"),
+            ) == original
+            assert (
+                conn.execute("SELECT COUNT(*) FROM agent_offers").fetchone()[0]
+                == retained + 1
+            )
+            plan = str(conn.execute("EXPLAIN QUERY PLAN " + lookup, key).fetchall())
+            assert (
+                "SEARCH agent_offers USING INDEX agent_offers_current_session" in plan
+            )
+            steps = []
+            conn.set_progress_handler(lambda: steps.append(1), 1)
+            assert conn.execute(lookup, key).fetchall() == expected
+            conn.set_progress_handler(None, 0)
+            costs.append(len(steps))
+            for table, index, predicate, args in (
+                ("agent_offers", "agent_offers_session_revision",
+                 "session_id=? AND availability_revision=?", (session.session_id, "absent")),
+                ("agent_offers", "agent_offers_session", "session_id=? ORDER BY rowid DESC LIMIT 1",
+                 (session.session_id,)),
+                ("agent_controls", "agent_controls_session", "session_id=? ORDER BY rowid DESC LIMIT 1",
+                 (session.session_id,)),
+            ):
+                plan = conn.execute(
+                    f"EXPLAIN QUERY PLAN SELECT * FROM {table} WHERE {predicate}", args
+                ).fetchall()
+                assert any(f"USING INDEX {index} (" in row[-1] for row in plan), plan
+                assert not any("TEMP B-TREE" in row[-1] for row in plan)
+            conn.execute("SAVEPOINT withdraw")
+            before = conn.total_changes
+            invalidate_current_offers(conn, session.session_id)
+            assert conn.total_changes == before + 1
+            conn.execute("ROLLBACK TO withdraw")
+            conn.execute("RELEASE withdraw")
+            if retained == 100:
+                history(conn, range(100, 10000))
+    assert costs[0] == costs[1]
+
+
 def test_offer_renewal_is_sequenced_replayed_and_retains_one_offer(
     tmp_path: Path,
 ) -> None:

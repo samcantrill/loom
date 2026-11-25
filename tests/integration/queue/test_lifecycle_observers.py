@@ -13,7 +13,7 @@ from loom.queue._lifecycle_observers import LifecycleObservers, parse_event_sink
 from loom.queue.deployment import load_coordinator_service_config
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from tests.integration.queue.test_run_operations import _two_stage_service, _request
-from tests.support.lifecycle_observers import captured_events, selected_capture
+from tests.support.lifecycle_observers import captured_events, selected_capture, wait_for_callbacks
 
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
@@ -51,6 +51,7 @@ def test_native_observer_committed_events_failure_and_no_replay(tmp_path):
         assert operation.state == "applied", operation
         admission = daemon._wait("target-admission", timeout_seconds=60)
         assert admission.state.value == "SUCCEEDED", admission
+        wait_for_callbacks(daemon)
         rows = [json.loads(line) for line in observed.read_text().splitlines()]
         assert sum(row.get("constructed", False) for row in rows) == 1
         events = [
@@ -66,12 +67,8 @@ def test_native_observer_committed_events_failure_and_no_replay(tmp_path):
             "stage.completed",
             "run.completed",
         } <= set(kinds)
-        assert (
-            next(row for row in events if row["event"]["event_type"] == "run.started")[
-                "status"
-            ]
-            == "RUNNING"
-        )
+        started = next(row["event"] for row in events if row["event"]["event_type"] == "run.started")
+        assert started["payload"]["status"] == "RUNNING"
         authority = SQLitePerRunAuthorityStore(admission.run_uri)
         failures = authority.read_event_sink_failures(admission.run_uri)
         assert len(failures) == 1
@@ -118,6 +115,7 @@ def test_coordinator_restart_selects_future_callbacks_without_history_replay(tmp
         assert daemon.wait_operation("prepare-1", timeout=60).operation.state == "applied"
         admission = daemon._wait("target-admission", timeout_seconds=60)
         assert admission.state.value == "SUCCEEDED"
+        wait_for_callbacks(daemon)
         authority = SQLitePerRunAuthorityStore(admission.run_uri)
         events = authority.list_audit_events(admission.run_uri)
         assert [event.event_id for event in events] == [
@@ -151,6 +149,7 @@ def test_coordinator_restart_selects_future_callbacks_without_history_replay(tmp
         assert restarted.wait_operation("prepare-2", timeout=60).operation.state == "applied"
         next_admission = restarted._wait("second-admission", timeout_seconds=60)
         assert next_admission.state.value == "SUCCEEDED"
+        wait_for_callbacks(restarted)
         kinds = [event["event_type"] for event in captured_events(second_path, next_admission.run_uri)]
         assert "run.started" in kinds and "run.completed" in kinds
         assert captured_events(second_path, admission.run_uri) == []
@@ -183,6 +182,7 @@ def test_native_terminal_observers_preserve_failed_and_cancelled_outcomes(tmp_pa
         assert daemon.wait_operation("prepare-1", timeout=60).operation.state == "applied"
         admission = daemon._wait("target-admission", timeout_seconds=60)
         assert admission.state.value == outcome
+        wait_for_callbacks(daemon)
         authority = SQLitePerRunAuthorityStore(admission.run_uri)
         assert authority.open_run(admission.run_uri).status.value == outcome
         assert authority.list_output_commits(admission.run_uri) == ()

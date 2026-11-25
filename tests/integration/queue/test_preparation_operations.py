@@ -320,13 +320,25 @@ def test_prepared_native_failed_admission_explicit_retry(
                     client.submit(request)
                 server.stop()
                 daemon.stop()
-                monkeypatch.setattr(
-                    LocalDaemonExecution, "resume_failed_admission", resume
-                )
+                replay_entered, allow_replay = Event(), Event()
+
+                def pause_background_replay(self, *args, **kwargs):
+                    replay_entered.set()
+                    assert allow_replay.wait(10)
+                    return resume(self, *args, **kwargs)
+
+                monkeypatch.setattr(LocalDaemonExecution, "resume_failed_admission", pause_background_replay)
                 daemon = LocalDaemon(service.daemon)
                 server = LocalDaemonSocketServer(daemon, service.daemon.endpoint)
                 daemon.start()
                 server.start()
+                with ThreadPoolExecutor(max_workers=1) as controls:
+                    try:
+                        assert replay_entered.wait(5)
+                        controls.submit(daemon.reconcile_once).result(timeout=5)
+                        assert daemon._admission(admitted.admission_id).state.value == "FAILED"
+                    finally:
+                        allow_replay.set()
 
         def submit_retry():
             with CoordinatorClient.from_unix_socket(
@@ -1226,6 +1238,26 @@ def test_running_preparation_cancellation_waits_for_native_resource_release(
     LocalDaemon.initialize_deployment(service.daemon)
     daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
     daemon.start()
+    assignments = daemon._execution.coordinator
+    read_releases = assignments.child_assignments_released
+    sample_read, allow_sample = Event(), Event()
+    rechecked, allow_recheck = Event(), Event()
+    scans = []
+    # The outer run control collects its group after its own child has settled.
+    sampled_index = 2 if run_intent else 1
+
+    def pause_sample(uris):
+        value = read_releases(uris)
+        scans.append((uris, value))
+        if len(scans) == sampled_index:
+            sample_read.set()
+            assert allow_sample.wait(20)
+        elif len(scans) == sampled_index + 1:
+            rechecked.set()
+            assert allow_recheck.wait(20)
+        return value
+
+    monkeypatch.setattr(assignments, "child_assignments_released", pause_sample)
     server = LocalDaemonSocketServer(daemon, service.daemon.endpoint)
     server.start()
     connection = None
@@ -1245,6 +1277,17 @@ def test_running_preparation_cancellation_waits_for_native_resource_release(
             cancellation = client.cancel_run_operation("prepare-1") if run_intent else client.cancel_preparation("prepare-1")
             assert cancellation.state == "pending"
             assert release_entered.wait(25)
+            from loom.queue.local_daemon import _request_admission_cancellation
+            with daemon._connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                before = conn.execute(
+                    "SELECT state, revision, cancellation_operation_id FROM managed_admissions WHERE admission_id=?",
+                    (child.admission_id,),
+                ).fetchone()
+                assert before[0] in {"CANCELLATION_REQUESTED", "CANCELLING"}
+                replay = _request_admission_cancellation(conn, child.queue_item_id, principal_id="repeat-observer")
+                assert (replay.state.value, replay.revision, replay.cancellation_operation_id) == tuple(before)
+                conn.commit()
             observation = client.wait_operation("prepare-1", timeout_seconds=0)
             assert observation.operation.state == "pending"
             assert client.operation(cancellation.operation_id).state == "pending"
@@ -1257,7 +1300,27 @@ def test_running_preparation_cancellation_waits_for_native_resource_release(
                     == 1
                 )
             assert not (service.daemon.run_store_root / "target-1").exists()
+            with sqlite3.connect(service.daemon.execution_database) as writer:
+                writer.execute("BEGIN IMMEDIATE")
+                assert not read_releases((child.run_uri,))
             allow_release.set()
+            try:
+                assert sample_read.wait(20)
+                assert scans[-1] == ((child.run_uri,), True)
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    pool.submit(daemon.reconcile_once).result(timeout=4)
+                # A real new reference commits during the physical-owner read.
+                # Keep its own capture from starting before its cancellation.
+                with daemon._preparations._reconcile_lock:
+                    client.prepare_run(replace(_request(), operation_id="peer-proof", run_name="peer-proof"))
+                    client.cancel_preparation("peer-proof")
+                allow_sample.set()
+                assert rechecked.wait(15)
+                observed = client.operation(cancellation.operation_id)
+                assert observed.state == "pending"
+            finally:
+                allow_sample.set()
+                allow_recheck.set()
             cancelled = client.wait_operation("prepare-1", timeout_seconds=25).operation
             assert cancelled.state == "cancelled"
             if run_intent:
@@ -1278,6 +1341,8 @@ def test_running_preparation_cancellation_waits_for_native_resource_release(
             )
             assert len(client.admissions().admissions) == 1
     finally:
+        allow_sample.set()
+        allow_recheck.set()
         allow_release.set()
         if connection is not None:
             connection.close()
@@ -1794,6 +1859,123 @@ def test_child_failure_or_inconsistent_evidence_never_publishes(
         daemon.stop()
 
 
+def test_preparation_rechecks_slurm_identity_after_an_off_guard_read(tmp_path, monkeypatch):
+    from loom.queue.errors import QueueConflictError
+    from tests.unit.loom.queue.test_slurm_admission import ReservationFixture
+
+    service = _service(tmp_path)
+    monkeypatch.setattr(LocalDaemon, "_serve", lambda self: self._stop.wait())
+    LocalDaemon.initialize_deployment(service.daemon)
+    daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
+    daemon.start()
+    sampled, resume = Event(), Event()
+    try:
+        execution = daemon._execution
+        fixture_root = tmp_path / "reservation"
+        fixture_root.mkdir()
+        fixture = ReservationFixture(fixture_root)
+        fixture.work = execution.stage_work_store
+        assignment, args = fixture.candidate("competing-stage", 0)
+        store = execution.slurm_assignments
+        query = store.has_operation
+        observations = []
+
+        def pause(identity):
+            value = query(identity)
+            if identity == assignment.operation_id:
+                observations.append(value)
+                if len(observations) == 1:
+                    sampled.set()
+                    assert resume.wait(10)
+            return value
+
+        monkeypatch.setattr(store, "has_operation", pause)
+        def reserve(candidate, options):
+            record = fixture.work.find_stage_work(candidate.stage_work_id)
+            store.reserve(candidate, **{**options, "max_reserved_gpus": None},
+                          _reservation_transaction=lambda: execution._reservation_transaction(
+                              record, (daemon._epoch, daemon._scheduling_epoch), slurm_operation_id=candidate.operation_id,
+                          ))
+
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            pending = workers.submit(
+                daemon.prepare_run, replace(_request(), operation_id=assignment.operation_id), principal_id="caller",
+            )
+            try:
+                assert sampled.wait(5)
+                workers.submit(reserve, assignment, args).result(timeout=4)
+            finally:
+                resume.set()
+            with pytest.raises(QueueConflictError, match="identity is ambiguous"):
+                pending.result(timeout=5)
+        assert observations == [False, True]
+        with daemon._connection() as conn:
+            assert not conn.execute("SELECT 1 FROM preparation_operations WHERE operation_id=?",
+                                    (assignment.operation_id,)).fetchone()
+        next_assignment, options = fixture.candidate("public-first", 0)
+        daemon.prepare_run(replace(_request(), operation_id=next_assignment.operation_id), principal_id="caller")
+        with pytest.raises(QueueConflictError, match="owned by a preparation"):
+            reserve(next_assignment, options)
+        assert not query(next_assignment.operation_id)
+    finally:
+        resume.set()
+        daemon.stop()
+
+
+def test_run_cancellation_yields_to_peer_reads_and_replays_without_external_probe(tmp_path, monkeypatch):
+    from loom.queue import _coordinator_transactions
+
+    service = _service(tmp_path)
+    monkeypatch.setattr(LocalDaemon, "_serve", lambda self: self._stop.wait())
+    LocalDaemon.initialize_deployment(service.daemon)
+    daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
+    daemon.start()
+    retry, contended = Event(), Event()
+    sampled, resume = Event(), Event()
+    try:
+        accepted = daemon.start_run(RunRequest(_request(), "target"), principal_id="caller")
+        original = daemon._execution.slurm_assignments.has_operation
+        probed = []
+
+        def lookup(identity):
+            value = original(identity)
+            probed.append(identity)
+            sampled.set()
+            assert resume.wait(8)
+            return value
+
+        def wait_to_retry(_seconds):
+            contended.set()
+            assert retry.wait(8)
+
+        monkeypatch.setattr(daemon._execution.slurm_assignments, "has_operation", lookup)
+        monkeypatch.setattr(_coordinator_transactions, "sleep", wait_to_retry)
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            try:
+                with daemon._connection() as writer:
+                    writer.execute("BEGIN IMMEDIATE")
+                    pending = workers.submit(daemon.cancel_run_operation, accepted.operation_id, principal_id="caller")
+                    assert contended.wait(4)
+                    assert workers.submit(daemon.operation, accepted.operation_id).result(timeout=3).state == "pending"
+                    writer.rollback()
+                retry.set()
+                assert sampled.wait(4)
+                assert workers.submit(daemon.operation, accepted.operation_id).result(timeout=3).state == "pending"
+            finally:
+                resume.set()
+                retry.set()
+            receipt = pending.result(timeout=5)
+        assert receipt.state == "pending"
+        assert daemon.cancel_run_operation(accepted.operation_id, principal_id="caller") == receipt
+        assert probed == [receipt.operation_id]
+        with daemon._connection() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM preparation_cancellations").fetchone()[0] == 1
+    finally:
+        resume.set()
+        retry.set()
+        daemon.stop()
+
+
 def test_preparation_rejects_other_operation_ids_and_public_child_submission(
     tmp_path: Path,
 ) -> None:
@@ -1868,6 +2050,61 @@ def test_partial_target_is_preserved_as_a_publication_conflict(tmp_path: Path) -
             daemon.cancel_preparation("prepare-1", principal_id="caller") == completed
         )
     finally:
+        daemon.stop()
+
+
+def test_validated_reports_survive_publication_capacity_wait(tmp_path, monkeypatch):
+    from collections import Counter
+
+    service = _service(tmp_path)
+    reads, submissions, publications = Counter(), Counter(), Counter()
+    blocked, release = Event(), Event()
+    requests = [
+        replace(_request(), operation_id=f"capacity-{i}", run_name=f"capacity-{i}")
+        for i in range(2)
+    ]
+
+    class CountedPreparation(CoordinatorPreparation):
+        def read_report(self, config, admission, request, binding):
+            reads[request.operation_id] += 1
+            return super().read_report(config, admission, request, binding)
+
+        def publish_target(self, config, request, report):
+            publications[request.operation_id] += 1
+            return super().publish_target(config, request, report)
+
+    LocalDaemon.initialize_deployment(service.daemon)
+    daemon = LocalDaemon(service.daemon, preparation=CountedPreparation(service))
+    daemon.start()
+    bulk = daemon._result_verifications.bulk
+    submit = bulk.submit
+
+    def limited(operation_id, action, function, *args):
+        if action == "preparation_target_publication" and not release.is_set():
+            submissions[operation_id] += 1
+            if all(submissions[r.operation_id] >= 3 for r in requests):
+                blocked.set()
+            return None
+        return submit(operation_id, action, function, *args)
+
+    monkeypatch.setattr(bulk, "submit", limited)
+    try:
+        for request in requests:
+            daemon.prepare_run(request, principal_id="caller")
+        assert blocked.wait(45), (reads, submissions)
+        expected = {request.operation_id: 1 for request in requests}
+        assert reads == expected
+        release.set()
+        daemon._wake.set()
+        for request in requests:
+            completed = daemon.wait_operation(
+                request.operation_id, timeout=25
+            ).operation
+            assert completed.state == "applied", completed
+            assert daemon.prepare_run(request, principal_id="caller") == completed
+        assert reads == publications == expected
+    finally:
+        release.set()
         daemon.stop()
 
 
@@ -2602,4 +2839,105 @@ class Consumer:
         assert delivered["binding"]["environment_fingerprint"] == report["profile_descriptor"]["environment_fingerprint"]
     finally:
         server.stop()
+        daemon.stop()
+
+
+def _held_report_renderer(entered, release, render, args):
+    entered.touch()
+    deadline = monotonic() + 35
+    while not release.exists():
+        if monotonic() >= deadline:
+            raise TimeoutError("renderer barrier timed out")
+        sleep(0.02)
+    return render(*args)
+
+
+def test_external_target_lock_and_renderer_leave_capacity_for_image_admission_and_cancel(tmp_path, monkeypatch):
+    from collections import Counter
+    from concurrent.futures import ProcessPoolExecutor
+    import fcntl
+    from weave import compose_config
+    from loom.queue.local_daemon import LocalDaemonPrincipal, LocalDaemonRole
+    from loom.queue.errors import _PreparationTargetBusy
+    from loom.pipeline.cleanup.preparation_pins import preparation_path_is_retained
+    from tests.unit.loom.queue.test_submitted_execution import _policy, _capability, _execution
+
+    service = _service(tmp_path)
+    policy = service.daemon.preparation_policy
+    assert policy is not None
+    submitted = _policy(tmp_path).profiles["shared-container"]
+    service = replace(service, daemon=replace(service.daemon,
+        preparation_policy=replace(policy, profiles={**policy.profiles, "shared-container": submitted}),
+        container_capabilities=(_capability(tmp_path),)))
+    image = tmp_path / "workloads/images/aaa/image.sif"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b"x" * 1024)
+    image.chmod(0o444)
+    ordinary = prepare_managed_run(service, compose_config(tmp_path / "projects/pipeline.yaml"), "ordinary",
+                                  execution_requirements={"produce": ExecutionRequirement("project", "environment", "executor")})
+    lock_seen = Event()
+    reads, applied = Counter(), Counter()
+
+    class Preparation(CoordinatorPreparation):
+        def read_report(self, config, admission, request, binding):
+            reads[request.operation_id] += 1
+            return super().read_report(config, admission, request, binding)
+
+        def publish_target(self, config, request, report):
+            try:
+                result = super().publish_target(config, request, report)
+            except _PreparationTargetBusy:
+                if request.operation_id == "locked":
+                    lock_seen.set()
+                raise
+            applied[request.operation_id] += 1
+            return result
+
+    entered, release = tmp_path / "rendering", tmp_path / "release-renderer"
+    submit = ProcessPoolExecutor.submit
+
+    def controlled_submit(pool, function, *args, **kwargs):
+        if function.__name__ == "_decode_publication" and args[4] == "rendering":
+            return submit(pool, _held_report_renderer, entered, release, function, args)
+        return submit(pool, function, *args, **kwargs)
+
+    monkeypatch.setattr(ProcessPoolExecutor, "submit", controlled_submit)
+    LocalDaemon.initialize_deployment(service.daemon)
+    daemon = LocalDaemon(service.daemon, preparation=Preparation(service))
+    daemon.start()
+    client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+    lock_path = service.daemon.run_store_root / ".loom/preparation-locks/locked.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    locked = replace(_request(), operation_id="locked", run_name="locked")
+    try:
+        with lock_path.open("a+b") as other_publisher:
+            fcntl.flock(other_publisher.fileno(), fcntl.LOCK_EX)
+            client.prepare_run(locked)
+            assert lock_seen.wait(30), daemon.operation("locked")
+            client.prepare_run(replace(_request(), operation_id="render", run_name="rendering"))
+            deadline = monotonic() + 30
+            while not entered.exists() and monotonic() < deadline:
+                sleep(0.02)
+            assert entered.exists(), daemon.operation("render")
+            client.prepare_run(replace(_request(), operation_id="pin", run_name="pin",
+                                       preparation_profile="shared-container", execution=_execution()))
+            deadline = monotonic() + 10
+            while not preparation_path_is_retained(image) and monotonic() < deadline:
+                sleep(0.02)
+            assert preparation_path_is_retained(image), daemon.operation("pin")
+            admitted = client.submit(LocalDaemonAdmissionRequest("ordinary", ordinary.run_uri))
+            assert client.cancel("ordinary").cancellation_operation_id is not None
+            assert client.wait("ordinary", timeout_seconds=10).state.value == "CANCELLED", admitted
+            client.cancel_preparation("pin")
+            assert daemon.wait_operation("pin", timeout=10).operation.state == "cancelled"
+            assert not (service.daemon.run_store_root / "locked").exists()
+            assert not release.exists()
+        release.touch()
+        done = daemon.wait_operation("locked", timeout=30).operation
+        assert done.state == "applied", done
+        assert client.prepare_run(locked) == done
+        assert reads["locked"] == applied["locked"] == 1
+        assert daemon.wait_operation("render", timeout=30).operation.state == "applied"
+    finally:
+        release.touch()
         daemon.stop()

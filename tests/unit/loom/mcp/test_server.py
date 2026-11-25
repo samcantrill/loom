@@ -272,7 +272,7 @@ def test_fetch_shares_deadline_across_pages_chunks_and_items(download_root, monk
             assert expected == "owner-one"
             calls.append((operation, deadline))
             now[0] += 1
-            declaration = payload["locator"]["commit_id"]
+            declaration = ("a" if payload["locator"]["commit_id"] == "first" else "b") * 64
             if operation == "describe_artifact":
                 return {
                     "outcome": "available", "declaration": declaration,
@@ -285,7 +285,7 @@ def test_fetch_shares_deadline_across_pages_chunks_and_items(download_root, monk
             assert operation == "read_artifact_chunk"
             return {
                 "outcome": "available", "declaration": declaration,
-                "offset": payload["offset"],
+                "offset": payload["offset"], "member": payload["member"], "locator": payload["locator"],
                 "data": base64.b64encode(b"x" * payload["length"]).decode(),
             }
 
@@ -311,7 +311,7 @@ def test_fetch_shares_deadline_across_pages_chunks_and_items(download_root, monk
     assert len(calls) == min(budget, 8)
     assert list(destination.glob(".loom-fetch-*")) == []
     assert destination.exists() is (budget > 2)
-    for index, commit in enumerate(("first", "second")):
+    for index, commit in enumerate(("a" * 64, "b" * 64)):
         assert (destination / commit).exists() is (index < successes)
         if index < successes:
             assert (destination / commit / "data").read_bytes() == b"x" * (256 * 1024 + 1)

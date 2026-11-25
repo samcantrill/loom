@@ -366,20 +366,31 @@ def test_probe_qualifies_source_once_and_reuses_it_for_promotion(tmp_path, monke
     assert checked == [(qualified[0].client, qualified[1].client, "profile")]
 
 
-def test_upgrade_dispatches_every_slot_before_waiting_or_download(tmp_path, monkeypatch):
-    names = ("first", "second", "third")
+def test_upgrade_dispatches_every_slot_before_waiting_or_download(tmp_path, check_gate, monkeypatch):
+    from threading import Event
+
+    names = ("first", *(f"agent-{index}" for index in range(2, 9)))
     operation = SimpleNamespace(
         directory=tmp_path, inventory=object(), observation=None,
         intent={"operation_id": "upgrade", "timeout_seconds": 30,
                 "agents": {name: {} for name in names},
                 "declarations": {name: {"resident_profiles": [{"gpu_devices": ["gpu"]}]}
                                  for name in names}},
-        maintenance=lambda *args: None,
-        settled=lambda: pytest.fail("pending GPU cannot reopen admission"),
+        gate=check_gate.observe, maintenance=check_gate.authorize,
+        settled=lambda **kw: pytest.fail("pending GPU cannot reopen admission"),
     )
     prepared, dispatched, observed = {}, set(), set()
+    storage_published = Event()
+    write = upgrades.atomic
 
-    def prepare(op, name, kind, identity):
+    def publish(path, value):
+        write(path, value)
+        if path.name == upgrades._check_identity(operation, "first", "storage") + "-result.json":
+            storage_published.set()
+
+    monkeypatch.setattr(upgrades, "atomic", publish)
+
+    def prepare(op, name, kind, identity, **kw):
         prepared[identity] = (name, kind)
         return {"operation_id": identity, "authorization": {}}
 
@@ -388,8 +399,10 @@ def test_upgrade_dispatches_every_slot_before_waiting_or_download(tmp_path, monk
         if _dispatch_only:
             dispatched.add(operation_id)
             return {"outcome": "waiting"}
-        assert len(dispatched) == 9
+        assert len(dispatched) == 24
         observed.add(operation_id)
+        if prepared[operation_id] == ("first", "cpu"):
+            assert storage_published.wait(timeout=5), "later completed check was never published"
         pending = prepared[operation_id] == ("first", "gpu")
         return {
             "outcome": "waiting" if pending else "passed",
@@ -404,25 +417,67 @@ def test_upgrade_dispatches_every_slot_before_waiting_or_download(tmp_path, monk
     monkeypatch.setattr(upgrades, "self_test", check)
     with pytest.raises(upgrades._Waiting, match="checks pending"):
         upgrades._run_checks(operation)
-    assert observed == dispatched and len(dispatched) == 9
-    assert len(read(tmp_path / "checks.json")) == 9
+    assert observed == dispatched and len(dispatched) == 24
+    assert len(read(tmp_path / "checks.json")) == 24
     results = [read(path) for path in tmp_path.glob("check-*-result.json")]
-    assert sum(row["outcome"] == "passed" for row in results) == 8
-    assert len(operation.check_observations) == 9
+    assert sum(row["outcome"] == "passed" for row in results) == 23
+    assert len(operation.check_observations) == 24
     pending = [row for row in operation.check_observations.values() if row["outcome"] == "waiting"]
     assert pending[0]["checks"]["gpu"]["code"] == "waiting_for_capacity"
 
 
-def test_upgrade_finishes_other_observations_after_one_check_error(tmp_path, monkeypatch):
+@pytest.mark.parametrize("stalls", [False, True])
+def test_upgrade_spends_remaining_watch_time_on_growing_transfer(tmp_path, check_gate, monkeypatch, stalls):
+    operation = SimpleNamespace(
+        directory=tmp_path, inventory=object(), observation=None,
+        intent={"operation_id": "upgrade", "timeout_seconds": 30, "agents": {"agent": {}},
+                "declarations": {"agent": {"resident_profiles": [{}]}}},
+        gate=check_gate.observe, maintenance=check_gate.authorize, settled=lambda **kwargs: None,
+    )
+    kinds = {}
+    turns = {"cpu": 0, "storage": 0}
+
+    def prepare(owner, name, kind, identity, **kwargs):
+        kinds[identity] = kind
+        return {"operation_id": identity, "authorization": {}}
+
+    def check(inventory, *, operation_id, _dispatch_only, timeout_seconds, **kwargs):
+        kind = kinds[operation_id]
+        if _dispatch_only:
+            return {"outcome": "waiting", "checks": {kind: {"disposition": "accepted"}}}
+        turns[kind] += 1
+        if turns[kind] == 1:
+            assert 0 < timeout_seconds <= 10.0
+        else:
+            assert 10.0 < timeout_seconds <= 30.0
+        if kind == "storage" and (stalls or turns[kind] < 3):
+            progress = 4096 if stalls else 4096 * turns[kind]
+            return {"outcome": "waiting", "checks": {kind: {"outcome": "waiting",
+                    "code": "publication_deadline_exceeded", "transfer": {"received_bytes": progress}}}}
+        return {"outcome": "passed", "checks": {kind: {"outcome": "passed"}}}
+
+    monkeypatch.setattr(upgrades, "_prepare_attempt", prepare)
+    monkeypatch.setattr(upgrades, "self_test", check)
+    if stalls:
+        with pytest.raises(upgrades._Waiting, match="checks pending"):
+            upgrades._run_checks(operation)
+        assert turns == {"cpu": 1, "storage": 2}
+    else:
+        upgrades._run_checks(operation)
+        assert turns == {"cpu": 1, "storage": 3}
+    assert len(read(tmp_path / "checks.json")) == 2
+
+
+def test_upgrade_finishes_other_observations_after_one_check_error(tmp_path, check_gate, monkeypatch):
     operation = SimpleNamespace(
         directory=tmp_path, inventory=object(), observation=None,
         intent={"operation_id": "upgrade", "timeout_seconds": 30,
                 "agents": {"agent": {}},
                 "declarations": {"agent": {"resident_profiles": [{}]}}},
-        maintenance=lambda *args: None,
+        gate=check_gate.observe, maintenance=check_gate.authorize,
     )
     identities = {}
-    def prepare(op, name, kind, identity):
+    def prepare(op, name, kind, identity, **kw):
         identities[kind] = identity
         return {"operation_id": identity, "authorization": {}}
     def check(inventory, *, operation_id, timeout_seconds, _dispatch_only, _wait):
@@ -434,3 +489,248 @@ def test_upgrade_finishes_other_observations_after_one_check_error(tmp_path, mon
     with pytest.raises(OSError, match="temporary observation"):
         upgrades._run_checks(operation)
     assert read(tmp_path / (identities["storage"] + "-result.json"))["outcome"] == "passed"
+
+
+def test_check_watcher_detaches_while_storage_owns_worker_and_resumes_same_ids(tmp_path, check_gate, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    operation = SimpleNamespace(
+        directory=tmp_path, inventory=object(), observation=None,
+        intent={"operation_id": "upgrade", "timeout_seconds": 0.8,
+                "agents": {"agent": {}}, "declarations": {"agent": {"resident_profiles": [{}]}}},
+        gate=check_gate.observe, maintenance=check_gate.authorize, settled=lambda **kw: None,
+    )
+    ids, submitted, storage_calls = {}, [], []
+    entered, release, finished = Event(), Event(), Event()
+
+    def prepare(op, name, kind, identity, **kw):
+        ids[kind] = identity
+        return {"operation_id": identity, "authorization": {}}
+
+    def check(inventory, *, operation_id, timeout_seconds, _dispatch_only, _wait):
+        if _dispatch_only:
+            submitted.append(operation_id)
+            return {"outcome": "waiting", "checks": {"probe": {
+                "operation_id": operation_id, "outcome": "waiting", "disposition": "accepted",
+            }}}
+        if operation_id == ids["storage"]:
+            storage_calls.append(operation_id)
+            entered.set()
+            assert release.wait(8)
+            finished.set()
+        return {"outcome": "passed"}
+
+    monkeypatch.setattr(upgrades, "_prepare_attempt", prepare)
+    monkeypatch.setattr(upgrades, "self_test", check)
+    with ThreadPoolExecutor(max_workers=1) as caller:
+        try:
+            first = caller.submit(upgrades._run_checks, operation)
+            assert entered.wait(3)
+            with pytest.raises(upgrades._Waiting):
+                first.result(timeout=3)
+            assert not finished.is_set()
+            assert read(tmp_path / (ids["cpu"] + "-result.json"))["outcome"] == "passed"
+            assert operation.check_observations[ids["storage"]]["operation_id"] == ids["storage"]
+            with pytest.raises(upgrades._Waiting):
+                caller.submit(upgrades._run_checks, operation).result(timeout=3)
+            assert storage_calls == [ids["storage"]]
+            assert set(submitted) == set(ids.values()) and len(submitted) == 2
+        finally:
+            release.set()
+        assert finished.wait(3)
+        upgrades._run_checks(operation)
+    assert all(row["outcome"] == "passed" for row in operation.check_observations.values())
+    assert len(submitted) == 2
+
+
+def test_check_preparation_uses_fair_slice_and_reports_later_checks(tmp_path, check_gate, monkeypatch):
+    from threading import Event
+    import time
+
+    op = SimpleNamespace(
+        directory=tmp_path, inventory=object(),
+        intent={"operation_id": "budget", "agents": {"slow": {}, "fast": {}},
+                "declarations": {name: {"resident_profiles": [{}]} for name in ("slow", "fast")},
+                "timeout_seconds": 1.6},
+        gate=check_gate.observe, maintenance=check_gate.authorize, settled=lambda **kw: None,
+    )
+    slow = upgrades._check_identity(op, "slow", "cpu")
+    ready = False
+    def prepare(op, name, check, identity, *, deadline, revision):
+        if identity == slow and not ready:
+            budget = deadline - time.monotonic()
+            assert 0 < budget < 0.3
+            Event().wait(budget)
+            raise upgrades._Waiting("slow preparation")
+        return {"operation_id": identity, "authorization": {"slot": [name, check]}}
+
+    def step(inventory, *, operation_id, _dispatch_only, **opts):
+        if _dispatch_only:
+            return {"checks": {"check": {"disposition": "accepted"}}}
+        return {"outcome": "passed"}
+
+    monkeypatch.setattr(upgrades, "_prepare_attempt", prepare)
+    monkeypatch.setattr(upgrades, "self_test", step)
+    with pytest.raises(upgrades._Waiting, match="slow preparation"):
+        upgrades._run_checks(op)
+    assert op.check_observations[slow]["checks"]["cpu"]["disposition"] == "pending"
+    assert sum(row["outcome"] == "passed" for row in op.check_observations.values()) == 3
+    ready = True
+    upgrades._run_checks(op)
+    assert len(check_gate.checks) == 4
+    assert {row["outcome"] for row in op.check_observations.values()} == {"passed"}
+
+
+def test_uncertain_grant_fences_next_revision_and_reconciles_live_owner(tmp_path, check_gate, monkeypatch):
+    lost = []
+    def grant(key, action, authorization, **budget):
+        result = check_gate.authorize(key, action, authorization, **budget)
+        if not lost:
+            lost.append(key.removeprefix("authorize-"))
+            raise upgrades.CoordinatorClientError("unavailable", operation="operator_maintenance_control",
+                                                  boundary="transport", mutation_outcome="unknown")
+        return result
+
+    op = SimpleNamespace(
+        directory=tmp_path, inventory=object(),
+        intent={"operation_id": "window", "agents": {"worker": {}},
+                "declarations": {"worker": {"resident_profiles": [{}]}}, "timeout_seconds": 10},
+        gate=check_gate.observe, maintenance=grant, settled=lambda **kw: None,
+    )
+    monkeypatch.setattr(upgrades, "_prepare_attempt", lambda op, name, check, identity, **kw: {
+        "operation_id": identity, "authorization": {"check": check},
+    })
+    dispatch = []
+    def step(inventory, *, operation_id, _dispatch_only, **options):
+        if _dispatch_only:
+            dispatch.append(operation_id)
+            return {"checks": {"probe": {"disposition": "accepted"}}}
+        return {"outcome": "passed"}
+    monkeypatch.setattr(upgrades, "self_test", step)
+    with pytest.raises(upgrades.CoordinatorClientError):
+        upgrades._run_checks(op)
+    assert list(check_gate.checks) == lost and not dispatch
+    assert len(op.check_observations) == 2
+    binding = check_gate.checks[lost[0]]
+    check_gate.checks[lost[0]] = {"check": "another-binding"}
+    with pytest.raises(upgrades.QueueConflictError, match="authorization changed"):
+        upgrades._run_checks(op)
+    assert not dispatch
+    check_gate.checks[lost[0]] = binding
+    upgrades._run_checks(op)
+    assert set(dispatch) == set(check_gate.checks) and len(dispatch) == 2
+
+
+def test_gate_grant_can_outlast_one_of_twenty_four_preparation_slices(tmp_path, monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(upgrades, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    grants = {}
+    def gate(**kwargs):
+        return {"revision": len(grants), "checks": dict(grants)}
+    def authorize(key, action, authorization, *, deadline, revision):
+        clock[0] += 1.6  # Protected inventory and release recheck before the RPC.
+        if clock[0] >= deadline:
+            raise upgrades._Waiting("grant budget elapsed")
+        assert revision == len(grants)
+        identity = key.removeprefix("authorize-")
+        assert identity not in grants
+        grants[identity] = authorization
+        return {"gate": gate()}
+    def prepare(op, name, check, identity, *, deadline, revision):
+        return {"operation_id": identity, "authorization": {"identity": identity}}
+    monkeypatch.setattr(upgrades, "_prepare_attempt", prepare)
+    op = SimpleNamespace(directory=tmp_path, gate=gate, maintenance=authorize)
+    slots = {str(i): (str(i), str(i), "cpu") for i in range(24)}
+    attempts = {}
+    first, _ = upgrades._authorize_check_slots(op, slots, attempts, 60.0, lambda: None)
+    assert 0 < len(first) < 24
+    second, errors = upgrades._authorize_check_slots(op, slots, attempts, clock[0] + 60, lambda: None)
+    assert not errors and set(second) == set(slots) == set(grants)
+
+
+def test_outstanding_gpu_probe_gets_budget_before_eleven_retained_profiles(tmp_path, monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(upgrades, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    names = [str(n) for n in range(12)]
+    op = SimpleNamespace(receipts=tmp_path, check_observations={})
+    for name in names:
+        key = tmp_path / (name + "-gpu-capability")
+        key.mkdir()
+        upgrades.atomic(key / "receipt.json", {"outcome": "passed"})
+    # A failed predecessor with a selected successor still needs a physical turn.
+    upgrades.atomic(tmp_path / "11-gpu-capability" / "successors.json", [{"step_key": "11-retry"}])
+    observed = []
+    def probe(op, name, declaration, deadline):
+        if name == "11":
+            clock[0] += 5.0
+            assert clock[0] < deadline
+        observed.append(name)
+    monkeypatch.setattr(upgrades, "_gpu_capability", probe)
+    pending, passed = upgrades._gpu_checks_to_observe(op, names)
+    assert not upgrades._observe_gpu_checks(op, dict.fromkeys(names), pending, 60)
+    assert observed == ["11"]
+    assert all(row["outcome"] == "passed" for row in op.check_observations.values())
+    assert not upgrades._observe_gpu_checks(op, dict.fromkeys(names), passed, 60, final=True)
+    assert observed == ["11", *names[:-1]]
+
+
+def test_full_transfer_budget_preserves_a_status_slot_with_24_pending_checks(tmp_path):
+    from threading import Event
+    from time import monotonic
+    from loom.fleet._check_workers import completed_steps
+
+    identities = [str(index) for index in range(24)]
+    transfers = set(identities[:3])
+    records = {key: {} for key in identities}
+    entered = {key: Event() for key in identities[:2]}
+    peer_finished = Event()
+    deadline = monotonic() + 4
+    def advance(key, dispatch, step_end):
+        if key in entered:
+            assert step_end == deadline
+            entered[key].set()
+            assert peer_finished.wait(2)
+        elif key == "3":
+            assert all(event.wait(2) for event in entered.values())
+            peer_finished.set()
+        return "passed"
+    jobs = completed_steps(tmp_path, records, identities, transfers=transfers, dispatch=False,
+                           deadline=deadline, advance=advance, started=lambda: None)
+    assert {key for key, job in jobs if job.result() == "passed"} == set(identities)
+    assert peer_finished.is_set()
+
+
+def test_gpu_receipt_does_not_spend_download_budget_and_changed_final_profile_blocks(tmp_path, check_gate, monkeypatch):
+    op = SimpleNamespace(
+        directory=tmp_path, receipts=tmp_path / "steps", inventory=object(), observation=None,
+        intent={"operation_id": "final-profile", "agents": {"host": {}},
+                "declarations": {"host": {"resident_profiles": [{}]}},
+                "gpu_qualification": "nonexclusive", "timeout_seconds": 5},
+        gate=check_gate.observe, maintenance=check_gate.authorize,
+        settled=lambda **kw: pytest.fail("changed profile must withhold settlement"),
+    )
+    path=op.receipts / "host-gpu-capability"
+    path.mkdir(parents=True)
+    upgrades.atomic(path / "receipt.json", {"outcome": "passed", "device_uuid": "original"})
+    monkeypatch.setattr(upgrades, "_check_kinds", lambda *args: ("cpu", "storage", "gpu"))
+    monkeypatch.setattr(upgrades, "_prepare_attempt", lambda op, name, kind, key, **kw:
+                        {"operation_id": key, "authorization": {"kind":kind}})
+    complete = False
+    def observe(inventory, *, operation_id, _dispatch_only, **kw):
+        if _dispatch_only:
+            return {"checks":{"native":{"disposition":"accepted"}}}
+        return {"outcome":"passed" if complete else "waiting"}
+    monkeypatch.setattr(upgrades, "self_test", observe)
+    confirmations = []
+    def confirm(op, name, declaration, deadline):
+        confirmations.append(name)
+        raise upgrades.QueueConflictError("retained host intent differs")
+    monkeypatch.setattr(upgrades, "_gpu_capability", confirm)
+    with pytest.raises(upgrades._Waiting, match="checks pending"):
+        upgrades._run_checks(op)
+    assert not confirmations and op.check_observations["host:gpu-capability"]["device_uuid"] == "original"
+    complete = True
+    with pytest.raises(upgrades.QueueConflictError, match="retained host intent differs"):
+        upgrades._run_checks(op)
+    assert confirmations == ["host"]

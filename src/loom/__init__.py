@@ -25,12 +25,14 @@ def run(
     deployment: "str | Path",
     wait: bool = True,
     timeout_seconds: float | None = None,
+    expected_coordinator_id: str | None = None,
 ) -> "RunOutcome":
-    """Lazily start selected services, accept a native RunRequest and observe it."""
+    """Start selected services, optionally pinning their owner, and observe the exact run."""
     from loom._run import run as managed_run
 
     return managed_run(
-        request, deployment=deployment, wait=wait, timeout_seconds=timeout_seconds
+        request, deployment=deployment, wait=wait, timeout_seconds=timeout_seconds,
+        expected_coordinator_id=expected_coordinator_id,
     )
 
 

@@ -226,9 +226,16 @@ def test_production_sweep_advances_through_original_population_with_saturated_lo
             return load(admission)
 
         monkeypatch.setattr(execution, "load_context", slow_first_two)
+        bulk = daemon._result_verifications.bulk
+        occupied = [bulk.submit(str(i), "occupied", release.wait, 15) for i in range(2)]
+        assert all(future is not None for future in occupied)
+        off_page = ("run", initial[-1].run_uri)
+        with bulk.offering(off_page):
+            assert bulk.submit("pending", "inspect", lambda: None) is None
         assert {row.admission_id for row in daemon.reconcile_once()} == {
             row.admission_id for row in initial[:2]
         }
+        assert bulk.scopes(off_page) == {off_page}
         assert all(entered.wait(2) for entered in both_entered)
         late = client.submit(LocalDaemonAdmissionRequest("late", uris[-1]))
         assert daemon.reconcile_once() == ()
@@ -268,6 +275,7 @@ def test_production_sweep_advances_through_original_population_with_saturated_lo
 
 @pytest.mark.parametrize("change", ["cancel", "scheduling"])
 def test_preparation_is_discarded_when_its_authorization_changes(tmp_path, monkeypatch, change):
+    from concurrent.futures import CancelledError
     from loom.queue import CoordinatorSchedulingReload
 
     monkeypatch.setattr(LocalDaemon, "_serve", lambda self: self._stop.wait())
@@ -300,7 +308,8 @@ def test_preparation_is_discarded_when_its_authorization_changes(tmp_path, monke
                 CoordinatorSchedulingReload("reload", status.scheduling_epoch, "test stale preparation"))
             assert receipt["state"] == "applied"
         release.set()
-        pending.result(2)
+        with pytest.raises(CancelledError, match="superseded before binding"):
+            pending.result(2)
         daemon.reconcile_once()
         execution = daemon._execution
         assert execution is not None
@@ -311,11 +320,14 @@ def test_preparation_is_discarded_when_its_authorization_changes(tmp_path, monke
         daemon.stop()
 
 
-def test_cancellation_wins_while_start_authority_is_blocked(tmp_path, monkeypatch):
+@pytest.mark.parametrize("boundary", ["authority", "delivery_decode"])
+def test_cancellation_wins_while_start_authority_is_blocked(tmp_path, monkeypatch, boundary):
     from dataclasses import replace
+    import json
     from loom.queue.agent_sessions import AgentRegistration
-    from loom.queue._remote_stage_execution import REMOTE_EXECUTION_CAPABILITY, REGULAR_FILE_RELAY_CAPABILITY
+    from loom.queue._remote_stage_execution import REMOTE_EXECUTION_CAPABILITY, REGULAR_FILE_RELAY_CAPABILITY, _ResidentAssignmentBundle
     from tests.unit.loom.queue.test_agent_sessions import _TEST_RETIREMENT_VERIFIER
+    from tests.unit.loom.queue.test_remote_stage_execution import _profile, _request
 
     monkeypatch.setattr(LocalDaemon, "_serve", lambda self: self._stop.wait())
     root = tmp_path / "runs"
@@ -357,7 +369,26 @@ def test_cancellation_wins_while_start_authority_is_blocked(tmp_path, monkeypatc
             assert release.wait(10)
             return True
 
-        monkeypatch.setattr(daemon._execution, "remote_start_permit", blocked_authority)
+        if boundary == "delivery_decode":
+            bundle = replace(_request(_profile(tmp_path)), assignment_id="assignment-permit")
+            with daemon._connection() as conn:
+                conn.execute(
+                    "INSERT INTO agent_deliveries(assignment_id, session_id, availability_revision, "
+                    "coordinator_epoch, request_json, state) VALUES (?, ?, ?, ?, ?, 'DELIVERED')",
+                    (bundle.assignment_id, session.session_id, session.availability_revision,
+                     session.coordinator_epoch, json.dumps(bundle.to_dict())),
+                )
+                conn.commit()
+            decode = _ResidentAssignmentBundle.from_remote_dict
+
+            def paused_decode(value):
+                blocked_authority()
+                return decode(value)
+
+            monkeypatch.setattr(_ResidentAssignmentBundle, "from_remote_dict", staticmethod(paused_decode))
+            monkeypatch.setattr(daemon._execution, "remote_start_permit", lambda *_a, **_kw: pytest.fail("cancelled"))
+        else:
+            monkeypatch.setattr(daemon._execution, "remote_start_permit", blocked_authority)
         permit = executor.submit(_view(daemon).start_permit, session.session_id, "assignment-permit", fence="fence-permit")
         assert entered.wait(2)
         cancelled = executor.submit(client.cancel, "permit").result(2)
@@ -478,3 +509,65 @@ def test_slow_worker_preparation_cannot_reserve_after_authorization_changes(tmp_
     finally:
         release.set()
         daemon.stop()
+
+
+def test_qualification_timings_retain_every_request_identity(monkeypatch):
+    from loom.queue import _phase_timing as timing
+
+    captured = []
+    monkeypatch.setenv("LOOM_QUALIFICATION_TIMINGS", "all")
+    monkeypatch.setattr(timing, "log_phases", captured.append)
+    for sequence in range(1, 4):
+        payload = {"renewal": {"session_id": "session", "offer_id": "offer", "sequence": sequence}}
+        with timing.request_phases(), timing.phase("renew", operation_id=timing.request_identity(payload)):
+            pass
+    assert [entry["spans"][0]["operation_id"] for entry in captured] == [
+        "session:offer:1", "session:offer:2", "session:offer:3",
+    ]
+
+def test_waiting_admission_reads_before_a_long_run_takes_its_next_slice():
+    from types import SimpleNamespace
+    from loom.queue._bulk_operations import BulkOperations
+    from loom.queue._run_observations import RunObservationPending, RunObservations
+
+    readers = RunObservations(lambda: None)
+    bulk = BulkOperations(lambda: None)
+    entered = {key: Event() for key in ("held", "long", "new")}
+    release = {key: Event() for key in entered}
+    calls = []
+    admissions = {key: SimpleNamespace(admission_id=key, run_uri=key, revision=1) for key in entered}
+    epochs = ("daemon", "policy")
+
+    def read(key):
+        calls.append(key)
+        entered[key].set()
+        assert release[key].wait(5)
+        return object()
+
+    def steps():
+        yield
+        yield
+        return object()
+
+    def advance(key):
+        with pytest.raises(RunObservationPending):
+            readers.advance(admissions[key], epochs, (None, SimpleNamespace(open_run=read)), steps, bulk)
+
+    try:
+        advance("held")
+        advance("long")
+        assert entered["held"].wait(5) and entered["long"].wait(5)
+        advance("new")
+        assert not entered["new"].is_set()
+        first_read = readers._current["long"].read
+        release["long"].set()
+        first_read.result(timeout=5)
+        assert [job.admission.admission_id for job in readers.completed()] == ["long"]
+        advance("long")
+        assert entered["new"].wait(5)
+        assert calls.count("long") == 1
+    finally:
+        for unblock in release.values():
+            unblock.set()
+        readers.close()
+        bulk.close()

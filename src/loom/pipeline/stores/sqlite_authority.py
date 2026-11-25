@@ -1561,11 +1561,20 @@ class SQLitePerRunAuthorityStore:
                 "SELECT attempt_id, state FROM managed_attempt_bindings WHERE assignment_id = ?",
                 (assignment_id,),
             ).fetchone()
-            if (
-                row is None
-                or row["attempt_id"] != attempt_id
-                or row["state"] != "bound"
-            ):
+            if row is None:
+                # A reservation can outlive a lost bind reply. An effective
+                # cancellation fences a never-bound prepared attempt as well.
+                prepared = conn.execute(
+                    "SELECT 1 FROM prepared_attempt_receipts WHERE attempt_id = ?",
+                    (attempt_id,),
+                ).fetchone()
+                other = conn.execute(
+                    "SELECT 1 FROM managed_attempt_bindings WHERE attempt_id = ?",
+                    (attempt_id,),
+                ).fetchone()
+                if prepared is None or other is not None or not _cancellation_covers(conn, attempt_id):
+                    raise AuthorityStoreError("only the same ungranted binding may unbind")
+            elif row["attempt_id"] != attempt_id or row["state"] != "bound":
                 raise AuthorityStoreError("only the same ungranted binding may unbind")
             conn.execute(
                 "INSERT INTO managed_attempt_unbind_receipts "
@@ -2586,6 +2595,22 @@ class SQLitePerRunAuthorityStore:
                 for name, artifact in artifacts
             )
             return OutputCommit(commit=commit, artifact_facts=facts)
+
+    def _read_committed_artifact(
+        self, run_uri: str, stage_name: str, commit_id: str, output_name: str,
+    ) -> ArtifactRef | None:
+        """Resolve one original output through the retained commit and fact indexes."""
+        self._bind_run_uri(run_uri)
+        with self._read_connection_for_run(run_uri) as conn:
+            _raise_for_schema(conn)
+            _require_run_status(conn)
+            row = conn.execute(
+                "SELECT f.artifact_json FROM commits AS c JOIN artifact_facts AS f "
+                "ON f.commit_id = c.commit_id AND f.stage_name = c.stage_name "
+                "WHERE c.commit_id = ? AND c.stage_name = ? AND f.artifact_name = ?",
+                (commit_id, stage_name, output_name),
+            ).fetchone()
+            return None if row is None else ArtifactRef.from_dict(_json_loads(row["artifact_json"]))
 
     def list_output_commits(
         self, run_uri: str, *, stage_name: str | None = None
@@ -4235,13 +4260,21 @@ def _require_run_status(conn: sqlite3.Connection) -> RunStatus:
     return RunStatus(cast(str, row["status"]))
 
 
-def _require_no_cancellation_epoch(conn: sqlite3.Connection, *, attempt_id: str | None = None) -> None:
-    """Fence lifecycle creation while the effective cancellation settles."""
+def _cancellation_covers(conn: sqlite3.Connection, attempt_id: str | None) -> bool:
+    if conn.execute("SELECT 1 FROM cancellation_epochs WHERE id = 1").fetchone() is None:
+        return False
+    return attempt_id is None or conn.execute(
+        "SELECT 1 FROM action_producers WHERE attempt_id = ? AND active = 1",
+        (attempt_id,),
+    ).fetchone() is None
 
-    if conn.execute("SELECT 1 FROM cancellation_epochs WHERE id = 1").fetchone():
-        if attempt_id is not None and conn.execute("SELECT 1 FROM action_producers WHERE attempt_id = ? AND active = 1", (attempt_id,)).fetchone():
-            return
+
+def _require_no_cancellation_epoch(conn: sqlite3.Connection, *, attempt_id: str | None = None) -> None:
+    """Fence lifecycle creation while effective cancellation settles."""
+
+    if _cancellation_covers(conn, attempt_id):
         raise AuthorityStoreError("run cancellation epoch is effective")
+
 
 
 def _update_run_timing(

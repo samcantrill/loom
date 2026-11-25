@@ -397,7 +397,7 @@ def test_existing_candidate_conflicts_never_create_duplicate(
 
 
 @pytest.mark.parametrize("bound", [False, True])
-def test_cancellation_scope_with_second_contender(tmp_path, bound):
+def test_cancellation_scope_with_second_contender(tmp_path, bound, monkeypatch):
     from threading import Event
 
     service = _reconciled_service(tmp_path)
@@ -417,6 +417,21 @@ def test_cancellation_scope_with_second_contender(tmp_path, bound):
     if not bound:
         daemon._preparations._reconcile_lock.acquire()
     daemon.start()
+    sampled, allow_sample = Event(), Event()
+    observed_groups = []
+    assignments = daemon._execution.coordinator
+    read_releases = assignments.child_assignments_released
+
+    def hold_group(uris):
+        released = read_releases(uris)
+        if bound and daemon.operation("first").state == "cancelled":
+            observed_groups.append(set(uris))
+            if not sampled.is_set():
+                sampled.set()
+                assert allow_sample.wait(75)
+        return released
+
+    monkeypatch.setattr(assignments, "child_assignments_released", hold_group)
     try:
         first, second = _reconciled_request("first"), _reconciled_request("second")
         daemon.start_run(first, principal_id="caller")
@@ -428,7 +443,19 @@ def test_cancellation_scope_with_second_contender(tmp_path, bound):
         if not bound:
             daemon._preparations._reconcile_lock.release()
         release.set()
+        if bound:
+            assert sampled.wait(40)
+            # A later caller can prepare and bind the same target while its
+            # earlier control is verifying the children it previously saw.
+            daemon.start_run(_reconciled_request("late-child"), principal_id="caller")
+            contender = daemon.wait_operation("late-child", timeout=50).operation
+            late_child = daemon._admission(_result(contender)["preparation_admission_id"])
+            assert late_child.run_uri not in observed_groups[0]
+            assert daemon.operation(control.operation_id).state == "pending"
+            allow_sample.set()
         settled = daemon.wait_operation(control.operation_id, timeout=40).operation
+        if bound:
+            assert late_child.run_uri in observed_groups[-1]
         assert settled.state == "applied", settled.to_dict()
         first_result = daemon.wait_operation("first", timeout=40).operation
         second_result = daemon.wait_operation("second", timeout=45).operation
@@ -442,6 +469,7 @@ def test_cancellation_scope_with_second_contender(tmp_path, bound):
             else _result(first_result)["binding"] is None
         )
     finally:
+        allow_sample.set()
         release.set()
         if daemon._preparations._reconcile_lock.locked():
             daemon._preparations._reconcile_lock.release()

@@ -19,11 +19,11 @@ def test_timing_delivery_failure_preserves_resolution(monkeypatch, failed):
         raise OSError("audit storage unavailable")
 
     owner.execution = SimpleNamespace(
-        _authority_for_run=lambda uri: object(),
         _event_observers=SimpleNamespace(defer_emit=unavailable),
     )
 
     def resolve(*args):
+        yield from ()
         timings = args[-1]
         for phase in ("reuse_lookup", "reuse_authority_read"):
             with timings.measure(phase):
@@ -33,12 +33,16 @@ def test_timing_delivery_failure_preserves_resolution(monkeypatch, failed):
         return result
 
     monkeypatch.setattr(owner, "_resolve", resolve)
-    args = (SimpleNamespace(run_uri="file:///runs/example"), None, None,
-            SimpleNamespace(stage_name="fit"), None, BackendRevision(1, "same"))
+    authority = SimpleNamespace(defer_event=lambda observers, uri, **fact: observers.defer_emit(authority, uri, **fact))
+    args = (SimpleNamespace(run_uri="file:///runs/example"), None, authority,
+            SimpleNamespace(stage_name="fit"), None, BackendRevision(1, "same"), object())
+    steps = owner.resolve_steps(*args)
     if failed:
         with pytest.raises(RuntimeError) as observed:
-            owner.resolve(*args)
+            next(steps)
         assert observed.value is error
     else:
-        assert owner.resolve(*args) is result
+        with pytest.raises(StopIteration) as settled:
+            next(steps)
+        assert settled.value.value is result
     assert emitted[0]["event_type"] == "stage.reuse_timing"

@@ -83,7 +83,10 @@ Capability/authentication failures retain native error codes and details.
 
 Status separates declarations, native session/capacity, service manager, owner,
 installation and storage. Each native observation retains its owner, timestamp,
-revision, freshness and availability. There is no atomic fleet snapshot. Without
+revision, freshness and availability. After observing coordinator status, Fleet
+reads up to four agents concurrently using separate pinned operator clients.
+The complete report retains inventory order and includes individual failures.
+There is no atomic fleet snapshot. Without
 a connection, status reports unavailable native observations, not an empty fleet.
 It can exit successfully while hosts are unhealthy. Status and plan never hash
 release wheels or workload images; plan is a preview, not a reservation.
@@ -832,9 +835,34 @@ eligible hosts from progressing, and failed attempts still require explicit retr
 Exact check-retry replay recognizes the retained successor after completion even
 when ordinary admission has already reopened.
 
-Upgrade continuations observe checks without waiting for each run to finish;
-each observation has a bounded transport budget. Standalone self-tests retain
-their waiting behavior. A failed check can therefore be reported while another
+During check dispatch and observation, the controller publishes completed
+results as they arrive. Each native check retains its operation ID and reports
+whether submission is pending, uncertain, accepted, or rejected. An observer
+can detach with an active download. That worker continues to occupy its slot
+until it exits. A continuation can attach to the same check. The observation
+budget starts at entry to the check phase. A check whose preparation times out
+keeps its original ID. A lost permission reply is reconciled against the live
+maintenance gate before any subsequent revision-dependent grant. Independent check preparation
+uses a per-check slice. Each serialized grant can use the remaining grant-phase
+budget for protected input validation and its native exchange. The controller
+attempts native dispatch before probing a nonexclusive GPU over SSH. A storage transfer reports retained byte counts and `publication_deadline_exceeded`
+when its observation allowance expires. An earlier timeout of the range exchange
+can retry the same offset within that allowance. An exhausted transport attempt
+or refused capacity has its own pending code. Every check receives a short initial
+observation. A returning storage check can then use the remaining caller budget.
+When short reads and transfers are both waiting, one worker remains available
+for short reads. Retained turn counts rotate the next observer toward checks
+that have had fewer opportunities. Concurrent
+checks in the same controller share at most four range workers per coordinator.
+Each check retains its own authorization, scratch ranges and final digest. A round
+with no new transfer bytes returns its pending receipts. A partly
+completed observation round retains its passed checks. A sealed GPU capability
+receipt remains visible throughout download. Before restoration the controller
+confirms the live profile and exact request for each retained GPU result, current
+native settlement, and the existing host identity and policy checks.
+Standalone
+self-tests use their caller's deadline for native requests and can return the
+last known check state when another observer holds the receipt lock. A failed check can therefore be reported while another
 already-dispatched check is still running. Retry and repair still require native
 settlement, and explicit deferral preserves every dispatched attempt's history.
 
@@ -865,10 +893,22 @@ retain their stronger global-settlement ordering.
 Candidate qualification is retained against the upgrade intent. Waiting
 continuations inspect current roots, owners, capabilities and declarations without
 repeating full preparation. Runtime replacement and workload activation still
-verify their mutable inputs. Successful self-tests retain verified artifact
-contents for the exact publication; current assignment/agent and release evidence
-is reobserved. A new publication or attempt requires fresh verification, including
-the complete 65 MiB storage payload.
+verify their mutable inputs. Each check stores its verified report and storage
+evidence in a separate owner-private receipt. The receipt binds the native
+operation, coordinator, client credential, exact output locator and publication.
+Later observations reselect the authorized output and refresh assignment, agent
+and release evidence. An intervening pending observation preserves verification.
+
+An interrupted download can reuse validated ranges in the check's private
+temporary directory. A changed binding or missing scratch starts a fresh
+transfer under the original operation. The client reads up to four 256 KiB
+ranges at once and checks the declared hash in file order. With HTTPS, each
+reusable connection negotiates before its first range. The server authenticates
+and authorizes every request. When a peer closes the connection after negotiation,
+the client uses the existing individual request path. The storage check also
+verifies all 65 MiB against its independent byte pattern. Verification survives
+scratch cleanup. Ordinary artifact fetches clean their temporary downloads on
+interruption.
 
 An apply invocation can retain its own preview qualification only when the
 bound intent matches its host, root, declaration, runtime, profile and image

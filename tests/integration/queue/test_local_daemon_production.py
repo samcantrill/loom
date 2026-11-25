@@ -1035,7 +1035,7 @@ def test_mixed_owner_cancellation_waits_for_every_owner_before_final_cas(
         execution._cancel(admission, scoped, ("build",)).state
         is LocalDaemonAdmissionState.CANCELLING
     )
-    assert calls == ["slurm", "local", "remote"]
+    assert calls == ["remote", "local", "slurm"]
     assert authority.open_run(run_uri).status is RunStatus.RUNNING
 
     monkeypatch.setattr(
@@ -1062,7 +1062,7 @@ def test_daemon_reconciles_cancelling_and_wait_does_not_treat_it_as_terminal(
     def reconcile_admission(
         _self: LocalDaemonExecution,
         admission: LocalDaemonAdmission,
-        *, prepared_intent=None,
+        *, prepared_context=None,
     ) -> LocalDaemonExecutionOutcome:
         if admission.state is LocalDaemonAdmissionState.CANCELLING:
             saw_cancelling.set()
@@ -1350,6 +1350,196 @@ def test_connected_active_cancellation_withholds_output_commit(
         assert str(tmp_path) not in json.dumps(request)
     finally:
         server.stop()
+        daemon.stop()
+
+
+@pytest.mark.parametrize("cancel_before_peer", [True, False])
+def test_paused_run_observation_allows_peer_completion_and_fences_cancelled_run(tmp_path, monkeypatch, cancel_before_peer):
+    from loom.queue._coordinator_run_authority import _ScopedCoordinatorAuthority
+
+    config = _daemon_config(tmp_path, cpu_capacity=1)
+    held_uri = _persist_sleep_run(tmp_path / "runs", run_name="held-read", stage_name="held", seconds=0.01)
+    peer_uri = _persist_sleep_run(tmp_path / "runs", run_name="peer-read", stage_name="peer", seconds=0.01)
+    captured, release = Event(), Event()
+    open_run = _ScopedCoordinatorAuthority.open_run
+
+    def slow_read(authority, uri):
+        snapshot = open_run(authority, uri)
+        if uri == held_uri:
+            captured.set()
+            assert release.wait(30)
+        return snapshot
+
+    monkeypatch.setattr(_ScopedCoordinatorAuthority, "open_run", slow_read)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+    try:
+        client.submit(LocalDaemonAdmissionRequest("held-read", held_uri))
+        assert captured.wait(10)
+        if cancel_before_peer:
+            assert client.cancel("held-read").cancellation_operation_id is not None
+        client.submit(LocalDaemonAdmissionRequest("peer-read", peer_uri))
+        assert client.wait("peer-read", timeout_seconds=10).state is LocalDaemonAdmissionState.SUCCEEDED
+        assert _supervisor_launch_count(config) == 1
+        if not cancel_before_peer:
+            assert client.cancel("held-read").cancellation_operation_id is not None
+        release.set()
+        assert client.wait("held-read", timeout_seconds=10).state is LocalDaemonAdmissionState.CANCELLED
+        assert _supervisor_launch_count(config) == 1
+    finally:
+        release.set()
+        daemon.stop()
+
+
+def test_held_audit_append_allows_peer_to_finish_before_same_run_snapshot(tmp_path, monkeypatch):
+    config = _daemon_config(tmp_path, cpu_capacity=1)
+    held = _persist_sleep_run(tmp_path / "runs", run_name="held-audit", stage_name="held", seconds=0.01)
+    peer = _persist_sleep_run(tmp_path / "runs", run_name="peer-audit", stage_name="peer", seconds=0.01)
+    store = SQLitePerRunAuthorityStore(held)
+    entered, release = Event(), Event()
+    append = store.append_audit_event
+
+    def write(uri, event):
+        entered.set()
+        assert release.wait(30)
+        return append(uri, event)
+
+    monkeypatch.setattr(store, "append_audit_event", write)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+    try:
+        daemon._event_observers.emit(store, held, event_type="run.started", revision=store.open_run(held).revision)
+        assert entered.wait(10)
+        client.submit(LocalDaemonAdmissionRequest("held-audit", held))
+        client.submit(LocalDaemonAdmissionRequest("peer-audit", peer))
+        assert client.wait("peer-audit", timeout_seconds=10).state is LocalDaemonAdmissionState.SUCCEEDED
+        assert _supervisor_launch_count(config) == 1
+        release.set()
+        assert client.wait("held-audit", timeout_seconds=10).state is LocalDaemonAdmissionState.SUCCEEDED
+        assert _supervisor_launch_count(config) == 2
+        assert sum(row.event_type == "run.started" for row in store.list_audit_events(held)) == 1
+    finally:
+        release.set()
+        daemon.stop()
+
+
+def test_reload_discards_captured_run_observation_before_projecting_ready_work(tmp_path, monkeypatch):
+    from loom.queue import CoordinatorSchedulingReload
+    from loom.queue._coordinator_run_authority import _ScopedCoordinatorAuthority
+
+    config = replace(_daemon_config(tmp_path), agent_policy=AgentPolicyConfig(principals=(
+        TransportPrincipalPolicy("operator-cert", "operator", "operator", actions=("scheduling_reload",)),
+    )))
+    uri = _persist_sleep_run(tmp_path / "runs", run_name="reload", stage_name="held", seconds=0.01)
+    entered = [Event(), Event()]
+    release = [Event(), Event()]
+    open_run = _ScopedCoordinatorAuthority.open_run
+    reads = []
+
+    def observe(authority, run_uri):
+        result = open_run(authority, run_uri)
+        index = len(reads)
+        reads.append(result)
+        if index < len(entered):
+            entered[index].set()
+            assert release[index].wait(20)
+        return result
+
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config, trusted_scheduling_loader=lambda: config)
+    status = daemon.start()
+    try:
+        execution = daemon._execution
+        assert execution is not None
+        offered = []
+        retain = execution._ready_preparations.retain_run
+
+        def record_projection(run_uri, eligible):
+            if run_uri == uri:
+                offered.append(eligible)
+            retain(run_uri, eligible)
+
+        monkeypatch.setattr(_ScopedCoordinatorAuthority, "open_run", observe)
+        monkeypatch.setattr(execution._ready_preparations, "retain_run", record_projection)
+        client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+        client.submit(LocalDaemonAdmissionRequest("reload-read", uri))
+        assert entered[0].wait(10)
+        operator = daemon.operator_view(LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR))
+        assert operator.reload_scheduling(CoordinatorSchedulingReload("read-reload", status.scheduling_epoch, "test"))["state"] == "applied"
+        release[0].set()
+        assert entered[1].wait(10)
+        assert offered == []
+        release[1].set()
+        assert client.wait("reload-read", timeout_seconds=10).state is LocalDaemonAdmissionState.SUCCEEDED
+        assert _supervisor_launch_count(config) == 1
+    finally:
+        for signal in release:
+            signal.set()
+        daemon.stop()
+
+
+@pytest.mark.parametrize("route", ["managed", "slurm"])
+def test_held_ready_dispatch_read_allows_peer_to_finish_before_cancelled_candidate_returns(tmp_path, monkeypatch, route):
+    from contextvars import ContextVar
+    from loom.queue._coordinator_run_authority import _ScopedCoordinatorAuthority
+
+    config = _daemon_config(tmp_path)
+    runner = None
+    if route == "slurm":
+        from tests.integration.queue.test_slurm_ready_stage import _profile, _persist_rejected_slurm_run
+        from loom.pipeline.executors.slurm.commands import FakeSlurmCommandRunner
+        runner = FakeSlurmCommandRunner()
+        profile = _profile(runner, capability_path=tmp_path / "capability")
+        config = replace(config, slurm_profiles=(profile,))
+        held = _persist_rejected_slurm_run(tmp_path / "runs", profile)
+    else:
+        held = _persist_sleep_run(tmp_path / "runs", run_name="held-dispatch", stage_name="held", seconds=0.01)
+    peer = _persist_sleep_run(tmp_path / "runs", run_name="peer-dispatch", stage_name="peer", seconds=0.01)
+    in_selection = ContextVar("in_selection", default=False)
+    captured, release = Event(), Event()
+    open_run = _ScopedCoordinatorAuthority.open_run
+
+    def observe(authority, uri):
+        snapshot = open_run(authority, uri)
+        if uri == held and in_selection.get():
+            captured.set()
+            assert release.wait(25)
+        return snapshot
+
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        execution = daemon._execution
+        assert execution is not None
+        schedule = execution.schedule_once
+
+        def select(*args, **kwargs):
+            token = in_selection.set(True)
+            try:
+                return schedule(*args, **kwargs)
+            finally:
+                in_selection.reset(token)
+
+        monkeypatch.setattr(_ScopedCoordinatorAuthority, "open_run", observe)
+        monkeypatch.setattr(execution, "schedule_once", select)
+        client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+        client.submit(LocalDaemonAdmissionRequest("held-dispatch", held))
+        assert captured.wait(10)
+        client.submit(LocalDaemonAdmissionRequest("peer-dispatch", peer))
+        assert client.wait("peer-dispatch", timeout_seconds=10).state is LocalDaemonAdmissionState.SUCCEEDED
+        assert client.cancel("held-dispatch").cancellation_operation_id is not None
+        release.set()
+        assert client.wait("held-dispatch", timeout_seconds=10).state is LocalDaemonAdmissionState.CANCELLED
+        assert _supervisor_launch_count(config) == 1
+        if runner is not None:
+            assert not any(call[0] == "sbatch" for call in runner.calls)
+    finally:
+        release.set()
         daemon.stop()
 
 
@@ -1790,6 +1980,70 @@ def test_daemon_global_priority_preempts_earlier_lower_priority_admission(
         daemon.stop()
 
 
+def test_one_ready_slot_is_awarded_in_priority_order_after_both_workspaces_finish(tmp_path, monkeypatch):
+    from threading import current_thread
+    from loom.queue import local_daemon_execution as execution_module
+
+    root = tmp_path / "runs"
+    uris = {name: _persist_sleep_run(root, run_name=name + "-run", stage_name=name)
+            for name in ("low", "high")}
+    config = LocalDaemonConfig(
+        coordinator_root=tmp_path / "coordinator", agent_root=tmp_path / "agent",
+        run_store_root=root, resident_worker_launch_profile=_launch_profile(), cpu_capacity=1,
+        admission_priority_resolver=lambda uri: 10 if uri == uris["high"] else 0,
+    )
+    staged = {name: Event() for name in uris}
+    release = Event()
+    original = execution_module._prepare_local_workspace
+
+    def hold_staged(**kwargs):
+        workspace = original(**kwargs)
+        staged[workspace.assignment.stage_name].set()
+        assert release.wait(20)
+        return workspace
+
+    monkeypatch.setattr(execution_module, "_prepare_local_workspace", hold_staged)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+        execution = daemon._execution
+        assert execution is not None
+        reserve = execution.coordinator.reserve
+        committed = []
+
+        def lose_first_reply(assignment, *args, **kwargs):
+            receipt = reserve(assignment, *args, **kwargs)
+            if assignment.assignment_id not in {item[0] for item in committed}:
+                committed.append((assignment.assignment_id, assignment.stage_name, current_thread()))
+                if len(committed) == 1:
+                    raise OSError("lost the execution commit reply")
+            return receipt
+
+        monkeypatch.setattr(execution.coordinator, "reserve", lose_first_reply)
+        with daemon._reconcile_guard:
+            for name, uri in uris.items():
+                client.submit(LocalDaemonAdmissionRequest(name, uri))
+        assert all(event.wait(15) for event in staged.values())
+        with daemon._reconcile_guard:
+            assert not committed
+            futures = [execution._ready_preparations._pending[uri, name].phases["local-workspace"].future
+                       for name, uri in uris.items()]
+            release.set()
+            for future in futures:
+                future.result(timeout=5)
+        for name in ("high", "low"):
+            assert client.wait(name, timeout_seconds=25).state is LocalDaemonAdmissionState.SUCCEEDED
+        assert [(name, owner) for _, name, owner in committed] == [("high", daemon._thread), ("low", daemon._thread)]
+        with sqlite3.connect(config.execution_database) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM coordinator_assignments WHERE state = 'released'").fetchone() == (2,)
+        _wait_for_supervisor_launch_count(config, expected=2)
+    finally:
+        release.set()
+        daemon.stop()
+
+
 def test_admission_recovery_backoff_is_scoped_and_owner_progress_wakes_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1867,6 +2121,41 @@ def test_admission_recovery_backoff_is_scoped_and_owner_progress_wakes_it(
         daemon.stop()
 
 
+def test_a_slow_authority_admission_bind_allows_an_independent_run_to_finish(tmp_path, monkeypatch):
+    run_root = tmp_path / "runs"
+    slow = _persist_sleep_run(run_root, run_name="binding", stage_name="blocked", seconds=0.1)
+    peer = _persist_sleep_run(run_root, run_name="peer", stage_name="independent", seconds=0.1)
+    config = _daemon_config(tmp_path)
+    entered, proceed = Event(), Event()
+    bind = SQLitePerRunAuthorityStore.bind_coordinator_admission
+
+    def delayed(store, uri, request):
+        if uri == slow:
+            entered.set()
+            assert proceed.wait(40)
+        return bind(store, uri, request)
+
+    monkeypatch.setattr(SQLitePerRunAuthorityStore, "bind_coordinator_admission", delayed)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        client = daemon.client_view(LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT))
+        client.submit(LocalDaemonAdmissionRequest("blocked-bind", slow))
+        assert entered.wait(10)
+        client.submit(LocalDaemonAdmissionRequest("healthy-peer", peer))
+        assert client.wait("healthy-peer", timeout_seconds=25).state is LocalDaemonAdmissionState.SUCCEEDED
+        assert not proceed.is_set()
+        assert client.cancel("blocked-bind").cancellation_operation_id
+        proceed.set()
+        assert client.wait("blocked-bind", timeout_seconds=20).state is LocalDaemonAdmissionState.CANCELLED
+        with sqlite3.connect(config.execution_database) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM coordinator_assignments WHERE run_uri=?", (slow,)).fetchone() == (0,)
+    finally:
+        proceed.set()
+        daemon.stop()
+
+
 def test_admission_reconciliation_failure_does_not_stop_other_runs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1932,6 +2221,45 @@ def test_admission_reconciliation_failure_does_not_stop_other_runs(
         assert not status.scheduling_ready
         assert daemon._service_error is None
     finally:
+        daemon.stop()
+
+
+def test_cpu_admission_finishes_during_coordinator_gpu_sample(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loom.queue.gpu.occupancy import (
+        GpuOccupancyPolicy, GpuProcessObservation, NvidiaSmiGpuProcessObserver,
+    )
+
+    entered, resume = Event(), Event()
+
+    def observe(observer: NvidiaSmiGpuProcessObserver):
+        entered.set()
+        assert resume.wait(20)
+        return {
+            uuid: GpuProcessObservation(uuid, True, False, "available")
+            for uuid in observer.selected_uuids
+        }
+
+    monkeypatch.setattr(NvidiaSmiGpuProcessObserver, "observe", observe)
+    uri = _persist_sleep_run(tmp_path / "runs", run_name="cpu-job", stage_name="cpu", seconds=0.01)
+    config = LocalDaemonConfig(
+        tmp_path / "coordinator", tmp_path / "agent", tmp_path / "runs",
+        _launch_profile(), cpu_capacity=1,
+        gpu_devices=(ConfiguredGpuDevice(GpuDeviceDescriptor("gpu-0", "model", 1024), "GPU-private"),),
+        gpu_occupancy_policy=GpuOccupancyPolicy(0.1, 2, 0.1),
+    )
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        assert entered.wait(5)
+        client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+        receipt = client.submit(LocalDaemonAdmissionRequest("cpu-job", uri))
+        assert client.wait(receipt.queue_item_id, timeout_seconds=10).state is LocalDaemonAdmissionState.SUCCEEDED
+        assert daemon.status().local_resource_status[0].reason_code == "observation_unavailable"
+    finally:
+        resume.set()
         daemon.stop()
 
 
@@ -2788,6 +3116,55 @@ def test_daemon_reconciles_skip_without_creating_an_assignment(
         daemon.stop()
 
 
+def test_controller_skip_read_yields_to_peer_and_cancellation(tmp_path, monkeypatch):
+    from loom.pipeline import orchestration
+    from loom.pipeline.planning import PlanAction
+    from loom.queue._coordinator_run_authority import _ScopedCoordinatorAuthority
+
+    run_root = tmp_path / "runs"
+    _, uri, _ = _persist_single_stage_run(run_root, skip=True)
+    authority = SQLitePerRunAuthorityStore(uri)
+    authority.create_run(uri, status=RunStatus.RUNNING)
+    peer = _persist_sleep_run(run_root, run_name="peer", stage_name="fast", seconds=0.01)
+    selected, captured, release = Event(), Event(), Event()
+    evaluate = orchestration.evaluate_attempt_readiness
+    open_run = _ScopedCoordinatorAuthority.open_run
+
+    def note_action(*args, **kwargs):
+        decision = evaluate(*args, **kwargs)
+        if decision is not None and decision.action is PlanAction.SKIP:
+            selected.set()
+        return decision
+
+    def observe(store, run_uri):
+        result = open_run(store, run_uri)
+        if run_uri == uri and selected.is_set() and not captured.is_set():
+            captured.set()
+            assert release.wait(30)
+        return result
+
+    monkeypatch.setattr(orchestration, "evaluate_attempt_readiness", note_action)
+    monkeypatch.setattr(_ScopedCoordinatorAuthority, "open_run", observe)
+    config = _daemon_config(tmp_path, cpu_capacity=1)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+        client.submit(LocalDaemonAdmissionRequest("held-skip", uri))
+        assert captured.wait(10)
+        client.submit(LocalDaemonAdmissionRequest("peer", peer))
+        assert client.wait("peer", timeout_seconds=10).state is LocalDaemonAdmissionState.SUCCEEDED
+        assert client.cancel("held-skip").cancellation_operation_id is not None
+        release.set()
+        assert client.wait("held-skip", timeout_seconds=10).state is LocalDaemonAdmissionState.CANCELLED
+        assert all(stage.status is not StageStatus.SKIPPED for stage in authority.open_run(uri).stages)
+        assert _supervisor_launch_count(config) == 1
+    finally:
+        release.set()
+        daemon.stop()
+
+
 @pytest.mark.parametrize("reported", [False, True])
 def test_daemon_projects_stage_failure_to_authority_run_and_admission(
     tmp_path: Path,
@@ -3273,19 +3650,19 @@ def test_stage_cancellation_finalizes_run_and_repairs_legacy_admissions_on_resta
     authority.create_run(run_uri, status=RunStatus.RUNNING)
     config = _daemon_config(tmp_path)
     LocalDaemon.initialize(config)
-    original_projection = LocalDaemonExecution._terminal_outcome
+    original_projection = LocalDaemonExecution._terminal_steps
 
     def project_like_previous_version(
         self, admission, plan, snapshot, scoped, **policy
     ):
         if any(stage.status is StageStatus.CANCELLED for stage in snapshot.stages):
             return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.CANCELLED)
-        return original_projection(self, admission, plan, snapshot, scoped, **policy)
+        return (yield from original_projection(self, admission, plan, snapshot, scoped, **policy))
 
     with monkeypatch.context() as legacy:
         if legacy_projection:
             legacy.setattr(
-                LocalDaemonExecution, "_terminal_outcome", project_like_previous_version
+                LocalDaemonExecution, "_terminal_steps", project_like_previous_version
             )
         daemon = LocalDaemon(config)
         daemon.start()
@@ -3304,9 +3681,31 @@ def test_stage_cancellation_finalizes_run_and_repairs_legacy_admissions_on_resta
         finally:
             daemon.stop()
 
+    from loom.queue._coordinator_run_authority import _ScopedCoordinatorAuthority
+
+    captured, release = Event(), Event()
+    if legacy_projection:
+        open_run = _ScopedCoordinatorAuthority.open_run
+
+        def pause_legacy_read(scoped, uri):
+            result = open_run(scoped, uri)
+            if uri == run_uri:
+                captured.set()
+                assert release.wait(25)
+            return result
+
+        monkeypatch.setattr(_ScopedCoordinatorAuthority, "open_run", pause_legacy_read)
     replacement = LocalDaemon(config)
     replacement.start()
     try:
+        if legacy_projection:
+            assert captured.wait(10)
+            peer = _persist_sleep_run(tmp_path / "runs", run_name="legacy-peer", stage_name="peer", seconds=0.01)
+            client = replacement.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+            client.submit(LocalDaemonAdmissionRequest("legacy-peer", peer))
+            assert client.wait("legacy-peer", timeout_seconds=10).state is LocalDaemonAdmissionState.SUCCEEDED
+            assert authority.open_run(run_uri).status is RunStatus.RUNNING
+            release.set()
         deadline = time.monotonic() + 10
         while authority.open_run(run_uri).status is not RunStatus.CANCELLED:
             assert time.monotonic() < deadline
@@ -3330,6 +3729,7 @@ def test_stage_cancellation_finalizes_run_and_repairs_legacy_admissions_on_resta
             == ()
         )
     finally:
+        release.set()
         replacement.stop()
 
 
@@ -3865,7 +4265,9 @@ def test_blocked_resident_input_inspection_allows_peer_dispatch_and_cancellation
     second_uri = _persist_sleep_run(run_root, run_name="peer-input", stage_name="peer")
     config = LocalDaemonConfig(
         coordinator_root=tmp_path / "coordinator", agent_root=tmp_path / "agent",
-        run_store_root=run_root, resident_worker_launch_profile=_launch_profile(), cpu_capacity=2,
+        run_store_root=run_root, resident_worker_launch_profile=_launch_profile(),
+        cpu_capacity=2 if cancel_inspection else 1,
+        admission_priority_resolver=lambda uri: 10 if uri == first_uri else 0,
     )
     entered, release = Event(), Event()
     original = _ResidentAssignmentWorkspace.persist_request

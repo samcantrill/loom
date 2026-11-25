@@ -21,6 +21,16 @@ def selected_capture(path: Path):
     )
 
 
+def wait_for_callbacks(daemon):
+    """Terminal execution and best-effort observation have independent owners."""
+    from time import monotonic, sleep
+
+    deadline = monotonic() + 10
+    while any(daemon._event_observers.backlog().values()):
+        assert monotonic() < deadline, daemon._event_observers.backlog()
+        sleep(0.01)
+
+
 def captured_events(path: Path, run_uri: str):
     """Read callbacks for one exact run, excluding factory construction records."""
     rows = [json.loads(line) for line in path.read_text().splitlines()]

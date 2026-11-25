@@ -149,13 +149,13 @@ def test_slow_and_broken_callback_do_not_hold_lifecycle():
 
 
 @pytest.mark.parametrize("outcome,code", [("failed", "check_failed"), ("unsupported", "native_refusal")])
-def test_only_confirmed_failed_checks_are_labelled_failed(tmp_path, monkeypatch, outcome, code):
+def test_only_confirmed_failed_checks_are_labelled_failed(tmp_path, check_gate, monkeypatch, outcome, code):
     observation = Observation(None, "resume")
     operation = SimpleNamespace(
         directory=tmp_path, observation=observation, inventory=object(),
         intent={"agents": {"worker": {}}, "timeout_seconds": 1,
                 "declarations": {"worker": {"resident_profiles": [{}]}}},
-        maintenance=lambda *args: None,
+        gate=check_gate.observe, maintenance=check_gate.authorize,
     )
     atomic(tmp_path / "checks.json", {
         "worker:" + kind: [{"operation_id": "check-" + kind, "authorization": {}}]

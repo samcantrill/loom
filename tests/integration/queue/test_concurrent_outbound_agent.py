@@ -104,6 +104,7 @@ def _service(
     threaded_supervisor=False,
     shared=False,
     gpu: bool | int = False,
+    gpu_policy=None,
     cpu=2,
     memory=0,
     container=None,
@@ -240,7 +241,7 @@ def _service(
                 if gpu or memory
                 else ResidentProviderFactory(capacity=cpu)
             ),
-            gpu_occupancy_policy=GpuOccupancyPolicy(3600, 7200, 0.1) if gpu else None,
+            gpu_occupancy_policy=(gpu_policy or GpuOccupancyPolicy(3600, 7200, 0.1)) if gpu else None,
             max_concurrent_assignments=ceiling,
         )
         LocalDaemonAgentHttpClient.initialize_agent_root(client_config)
@@ -2204,91 +2205,200 @@ def test_restart_recovers_rejected_next_poll_without_losing_queued_work(monkeypa
         assert len(_rows(case.database, "SELECT admission_id FROM managed_admissions WHERE queue_item_id = 'queued-through-rejection'")) == 1
 
 
-def test_indeterminate_poll_replays_exact_bytes_before_due_offer_and_next_poll(
+def test_unchanged_offer_renews_during_delayed_poll_and_exact_replays(
     monkeypatch,
 ):
-    entered, unblock, control_progress, replayed = Event(), Event(), Event(), Event()
+    from datetime import datetime, timedelta, timezone
+
+    entered, unblock, replayed = Event(), Event(), Event()
     original = transport._dispatch
     exchange = transport._exchange_agent_request
-    requests = []
-    held_request = []
-    active_polls = []
-    clock_offset = [0.0]
-    monkeypatch.setattr(deployment, "monotonic", lambda: monotonic() + clock_offset[0])
+    requests, renewals = [], []
+    offset = [0]
+    start = datetime.now(timezone.utc)
+    monkeypatch.setattr(deployment, "monotonic", lambda: monotonic() + offset[0])
+
+    def clock():
+        return (start + timedelta(seconds=offset[0])).isoformat().replace("+00:00", "Z")
 
     def record(config, operation, body, role, connection, keep_alive, **kwargs):
         requests.append((operation, body))
         return exchange(config, operation, body, role, connection, keep_alive, **kwargs)
 
+    lost = Event()
+
     def dispatch(view, operation, value):
-        if operation != "poll":
-            if operation in {"assignment_control", "control_wait"} and entered.is_set():
-                control_progress.set()
-            return original(view, operation, value)
-        active_polls.append(value)
-        assert len(active_polls) == 1
-        try:
-            result = original(view, operation, value)
+        result = original(view, operation, value)
+        if operation == "renew":
+            if not lost.is_set():
+                lost.set()
+                raise ConnectionError("renewal accepted, reply lost")
+            renewals.append(result)
+        if operation == "poll":
             if not entered.is_set():
-                held_request.append(dict(value))
                 entered.set()
-                assert unblock.wait(20)
-                raise ConnectionError("lost response after exact poll committed")
-            if dict(value) == held_request[0]:
-                replayed.set()
-            return result
-        finally:
-            active_polls.remove(value)
+                assert unblock.wait(30)
+                raise ConnectionError("poll committed, reply lost")
+            replayed.set()
+        return result
 
     monkeypatch.setattr(transport, "_exchange_agent_request", record)
     monkeypatch.setattr(transport, "_dispatch", dispatch)
-    with _service(monkeypatch) as case:
+    with _service(monkeypatch, clock=clock) as case:
         try:
-            assert entered.wait(10)
-            assert control_progress.wait(5)
-            first = next(
-                index
-                for index, (operation, _) in enumerate(requests)
-                if operation == "poll"
-            )
-            assert not any(
-                operation in {"offer", "renew"}
-                for operation, _ in requests[first + 1 :]
-            )
-            clock_offset[0] = deployment._OUTBOUND_OFFER_TTL_SECONDS
+            assert entered.wait(10), case.failures
+            offer_id, expiry = _rows(case.database, "SELECT offer_id, expires_at FROM agent_offers")[0]
+            for sequence in range(1, 5):
+                offset[0] += 12
+                _eventually(lambda: len(renewals) == sequence)
+                receipt = renewals[-1]
+                assert receipt["state"] == "renewed"
+                assert receipt["offer_id"] == offer_id and receipt["sequence"] == sequence
+                assert datetime.fromisoformat(receipt["accepted_at"]) < datetime.fromisoformat(expiry)
+                expiry = receipt["expires_at"]
+                assert _rows(case.agent_root / "control.sqlite",
+                    "SELECT sequence, state FROM agent_poll_state_local") == [(1, "PENDING")]
+            assert len([body for op, body in requests if op == "poll"]) == 1
+            attempts = [body for op, body in requests if op == "renew"]
+            assert len(attempts) == 5 and attempts[0] == attempts[1]
+            assert len([body for op, body in requests if op == "offer"]) == 1
             unblock.set()
             assert replayed.wait(10), case.failures
-            _eventually(
-                lambda: len([item for item in requests if item[0] == "poll"]) >= 3
-            )
-            polls = [
-                (index, body)
-                for index, (operation, body) in enumerate(requests)
-                if operation == "poll"
-            ]
-            assert polls[0][1] == polls[1][1]
-            assert polls[2][1] != polls[1][1]
-            assert any(
-                operation in {"offer", "renew"}
-                for operation, _ in requests[polls[1][0] + 1 : polls[2][0]]
-            )
-            assert not any(
-                operation in {"offer", "renew"}
-                for operation, _ in requests[polls[0][0] + 1 : polls[1][0]]
-            )
+            _eventually(lambda: len([body for op, body in requests if op == "poll"]) >= 3)
+            polls = [body for op, body in requests if op == "poll"]
+            assert polls[0] == polls[1]
+            assert json.loads(polls[2])["sequence"] == 2
         finally:
             unblock.set()
+
+
+def test_drain_applies_while_resource_maintenance_samples_gpu(monkeypatch):
+    arm, sampling, resume = Event(), Event(), Event()
+    applied_samples = []
+    apply = GpuOccupancyMonitor._apply_snapshot
+
+    def observe(observer):
+        if arm.is_set():
+            sampling.set()
+            assert resume.wait(20)
+        return {"GPU-private": GpuProcessObservation("GPU-private", True, False, "available")}
+
+    def remember(monitor, snapshot):
+        applied_samples.append(snapshot)
+        return apply(monitor, snapshot)
+
+    monkeypatch.setattr(NvidiaSmiGpuProcessObserver, "observe", observe)
+    monkeypatch.setattr(GpuOccupancyMonitor, "_apply_snapshot", remember)
+    with _service(monkeypatch, gpu=True, gpu_policy=GpuOccupancyPolicy(0.25, 1, 0.1)) as case:
+        try:
+            arm.set()
+            assert sampling.wait(10), case.failures
+            before = len(applied_samples)
+            session = json.loads(_rows(case.agent_root / "control.sqlite", "SELECT value_json FROM agent_sessions_local")[0][0])
+            case.operator.control_agent(AgentControl(
+                "drain-during-sample", AgentControlKind.DRAIN, "agent-a", session["session_id"],
+                session["config_revision"], None, False, "settle during maintenance",
+            ))
+            _eventually(lambda: _rows(case.database,
+                "SELECT operation_id FROM agent_controls WHERE operation_id = 'drain-during-sample' AND acknowledged = 1"))
+            assert _rows(case.agent_root / "control.sqlite",
+                "SELECT value FROM root_metadata WHERE key = 'availability_state'") == [("drained",)]
+        finally:
+            resume.set()
+    assert len(applied_samples) == before
+
+
+@pytest.mark.parametrize("uncertain_renewal", [False, True])
+def test_gpu_change_defers_offer_replacement_until_held_poll_settles(monkeypatch, uncertain_renewal):
+    held, release, occupied, deferred = Event(), Event(), Event(), Event()
+    lost, let_reply_fail = Event(), Event()
+    original = transport._dispatch
+    requests = []
+
+    def observe(observer):
+        busy = occupied.is_set()
+        return {"GPU-private": GpuProcessObservation(
+            "GPU-private", True, busy, "externally_occupied" if busy else "available",
+        )}
+
+    from loom.queue._agent_progress import _cooperative, _steps
+    refresh = LocalDaemonAgentHttpClient.refresh_resource_offer
+
+    @_cooperative
+    def observed_refresh(client, **kwargs):
+        result = yield from _steps(refresh, client, **kwargs)
+        if client._defer_offer_until_poll_settles:
+            deferred.set()
+        return result
+
+    def dispatch(view, operation, value):
+        requests.append(operation)
+        if operation == "renew" and uncertain_renewal and held.is_set() and not lost.is_set():
+            lost.set()
+            assert let_reply_fail.wait(10)
+            raise ConnectionError("unconfirmed renewal, capacity now occupied")
+        result = original(view, operation, value)
+        if operation == "poll" and not held.is_set():
+            held.set()
+            assert release.wait(20)
+        return result
+
+    monkeypatch.setattr(NvidiaSmiGpuProcessObserver, "observe", observe)
+    monkeypatch.setattr(LocalDaemonAgentHttpClient, "refresh_resource_offer", observed_refresh)
+    monkeypatch.setattr(transport, "_dispatch", dispatch)
+    with _service(monkeypatch, gpu=True, gpu_policy=GpuOccupancyPolicy(0.25, 1, 0.1)) as case:
+        try:
+            assert held.wait(10)
+            if uncertain_renewal:
+                assert lost.wait(5)
+            before_change = requests.count("renew")
+            occupied.set()
+            let_reply_fail.set()
+            assert deferred.wait(5), case.failures
+            boundary = len(requests)
+            assert requests.count("offer") == 1
+            assert requests.count("renew") == before_change
+            assert _rows(case.agent_root / "control.sqlite",
+                "SELECT sequence, state FROM agent_poll_state_local") == [(1, "PENDING")]
+            release.set()
+            _eventually(lambda: requests.count("offer") == 2)
+            assert [op for op in requests[boundary:] if op in {"offer", "renew", "poll"}][0] == "offer"
+            current = _eventually(lambda: _rows(case.database,
+                "SELECT offer_json FROM agent_offers WHERE current = 1 AND availability_revision != 'availability-1'"))
+            from loom.queue.agent_sessions import AgentOffer
+            offer = AgentOffer.from_value(json.loads(current[0][0]))
+            assert not offer.gpu_atoms
+            assert offer.resource_status[0].reason_code == "external_process_detected"
+        finally:
+            let_reply_fail.set()
+            release.set()
 
 
 @pytest.mark.parametrize("shared", [False, True])
 def test_drain_retains_late_poll_delivery_and_settles_it_without_fresh_admission(
     monkeypatch, shared,
 ):
-    entered, unblock = Event(), Event()
+    from loom.queue._agent_progress import _cooperative, _steps
+
+    entered, unblock, drain_received, checked = (Event() for _ in range(4))
     original = transport._dispatch
-    assignment = []
+    refresh = LocalDaemonAgentHttpClient.refresh_resource_offer
+    assignment, capacity_after_drain = [], []
+    offset = [0]
+    monkeypatch.setattr(deployment, "monotonic", lambda: monotonic() + offset[0])
+
+    @_cooperative
+    def observe_refresh(client, **kwargs):
+        result = yield from _steps(refresh, client, **kwargs)
+        if drain_received.is_set():
+            checked.set()
+        return result
+
+    monkeypatch.setattr(LocalDaemonAgentHttpClient, "refresh_resource_offer", observe_refresh)
 
     def dispatch(view, operation, value):
+        if drain_received.is_set() and operation in {"renew", "offer"}:
+            capacity_after_drain.append(operation)
         result = original(view, operation, value)
         if (
             operation == "poll"
@@ -2332,6 +2442,10 @@ def test_drain_retains_late_poll_delivery_and_settles_it_without_fresh_admission
             ))
             assert _rows(case.agent_root / "control.sqlite",
                 "SELECT state FROM agent_poll_state_local") == [("PENDING",)]
+            drain_received.set()
+            offset[0] += 10
+            assert checked.wait(5), case.failures
+            assert not capacity_after_drain
             unblock.set()
             assert (
                 case.client.wait("late", timeout_seconds=30).state
@@ -2465,11 +2579,48 @@ def test_control_receipts_survive_lost_reply_from_reconnecting_client(
             _release_gate(gate)
 
 
+def test_delayed_release_receipt_allows_drain_and_preserves_newer_session(monkeypatch):
+    held, resume = Event(), Event()
+    dispatch = transport._dispatch
+
+    def delay_release(view, operation, value):
+        receipt = dispatch(view, operation, value)
+        if operation == "release":
+            held.set()
+            assert resume.wait(25)
+        return receipt
+
+    monkeypatch.setattr(transport, "_dispatch", delay_release)
+    with _service(monkeypatch) as case:
+        control = case.agent_root / "control.sqlite"
+        try:
+            _submit(case, "completed")
+            assert held.wait(20), case.failures
+            pending = _rows(control, "SELECT request_json FROM agent_mutation_intents WHERE operation = 'release'")
+            assert len(pending) == 1 and "retirement_secret" not in pending[0][0]
+            session = json.loads(_rows(control, "SELECT value_json FROM agent_sessions_local")[0][0])
+            case.operator.control_agent(AgentControl(
+                "drain-before-release-reply", AgentControlKind.DRAIN, "agent-a", session["session_id"],
+                session["config_revision"], None, False, "drain while release is in flight",
+            ))
+            _eventually(lambda: _rows(case.database,
+                "SELECT operation_id FROM agent_controls WHERE operation_id = 'drain-before-release-reply' AND acknowledged = 1"))
+            drained = _rows(control, "SELECT value_json FROM agent_sessions_local")
+            assert json.loads(drained[0][0])["availability_revision"] != session["availability_revision"]
+            resume.set()
+            _eventually(lambda: not _rows(control, "SELECT 1 FROM agent_mutation_intents WHERE operation = 'release'"))
+            assert _rows(control, "SELECT value_json FROM agent_sessions_local") == drained
+            assert not _rows(control, "SELECT 1 FROM agent_session_references WHERE reference_kind = 'delivery' AND resolved = 0")
+        finally:
+            resume.set()
+
+
 def test_lost_release_blocks_new_availability_but_not_control_receipts(monkeypatch):
     entered, unblock, observed = Event(), Event(), Event()
     dispatch = transport._dispatch
     exchange = transport._exchange_agent_request
     requests = []
+    lost_dispatch = []
 
     def record(config, operation, body, role, connection, keep_alive, **kwargs):
         requests.append((operation, body))
@@ -2478,6 +2629,7 @@ def test_lost_release_blocks_new_availability_but_not_control_receipts(monkeypat
     def lose_release(view, operation, value):
         result = dispatch(view, operation, value)
         if operation == "release" and not entered.is_set():
+            lost_dispatch.append(next(i for i in reversed(range(len(requests))) if requests[i][0] == "release"))
             entered.set()
             assert unblock.wait(20)
             raise ConnectionError("release committed but reply was lost")
@@ -2523,10 +2675,12 @@ def test_lost_release_blocks_new_availability_but_not_control_receipts(monkeypat
                 for index, (operation, body) in enumerate(requests)
                 if operation == "release"
             ]
-            assert releases[0][1] == releases[1][1]
+            lost = lost_dispatch[0]
+            replay, body = next((index, body) for index, body in releases if index > lost)
+            assert body == requests[lost][1]
             assert not any(
                 operation in {"offer", "renew", "poll"}
-                for operation, _ in requests[releases[0][0] + 1 : releases[1][0]]
+                for operation, _ in requests[lost + 1 : replay]
             )
             assert _rows(
                 case.agent_root / "journal.sqlite",
@@ -2643,6 +2797,120 @@ def test_drain_running_publishing_and_late_delivery_settles_entire_population(
             _release_gate(gate)
 
 
+def test_machine_cancel_records_peer_containment_and_release_before_restart(monkeypatch):
+    from loom.queue import _agent_assignment
+    from loom.queue._agent_progress import _cooperative, _delay, _steps
+
+    hold_poll, poll_waiting, settle_poll = Event(), Event(), Event()
+    stop_a, stop_b, send_a = Event(), Event(), Event()
+    contain_a, prove_a, settle_workers = Event(), Event(), Event()
+    dispatch = transport._dispatch
+    rpc = AgentProcessSupervisorClient._call
+    worker_result = _agent_assignment._settle_supervised_worker_result
+    apply_control = LocalDaemonAgentHttpClient._apply_assignment_control
+    ids = []
+
+    def exchange(view, operation, value):
+        result = dispatch(view, operation, value)
+        if operation == "poll" and hold_poll.is_set() and not settle_poll.is_set():
+            poll_waiting.set()
+            assert settle_poll.wait(20)
+        return result
+
+    def supervisor_rpc(client, operation, value):
+        if ids and operation == "request_stop":
+            if value["assignment_id"] == ids[0]:
+                stop_a.set()
+                assert send_a.wait(20)
+            result = rpc(client, operation, value)
+            if value["assignment_id"] == ids[1]:
+                stop_b.set()
+            return result
+        if ids and operation == "contain" and value["assignment_id"] == ids[0] and not prove_a.is_set():
+            contain_a.set()
+            raise supervisor_module.AgentProcessSupervisorError(supervisor_module._PENDING_OBSERVATION)
+        return rpc(client, operation, value)
+
+    def delayed_execution_observer(client, workspace, launch, receipt):
+        # Prove the machine control itself records B, even if B's ordinary
+        # execution view has yet to observe exit.
+        while ids and not settle_workers.is_set():
+            client._control_checkpoint()
+            yield from _delay(0.01)
+        return (yield from worker_result(client, workspace, launch, receipt))
+
+    @_cooperative
+    def delayed_assignment_command(client, control):
+        while ids and not settle_workers.is_set():
+            client._control_checkpoint()
+            yield from _delay(0.01)
+        return (yield from _steps(apply_control, client, control))
+
+    monkeypatch.setattr(LocalDaemonAgentHttpClient, "_apply_assignment_control", delayed_assignment_command)
+    monkeypatch.setattr(transport, "_dispatch", exchange)
+    monkeypatch.setattr(AgentProcessSupervisorClient, "_call", supervisor_rpc)
+    monkeypatch.setattr(_agent_assignment, "_settle_supervised_worker_result", delayed_execution_observer)
+    with _service(monkeypatch, ceiling=3, cpu=3, memory=3 * 1024**3) as case:
+        gates = []
+        journal = case.agent_root / "control.sqlite"
+        command_id = "drain-both-workers"
+        command_sql = "SELECT acknowledged, effect_json FROM agent_controls_local WHERE operation_id = ?"
+        try:
+            for name in ("first", "second"):
+                gate, _, _ = _submit_gated(case, name)
+                gates.append(gate)
+                _eventually(lambda: (gate / "build.started").exists())
+            ids.extend(sorted(row[0] for row in _running(case)))
+            assert len(ids) == 2
+            hold_poll.set()
+            assert poll_waiting.wait(15)
+            session = json.loads(_rows(journal, "SELECT value_json FROM agent_sessions_local")[0][0])
+            case.operator.control_agent(AgentControl(
+                command_id, AgentControlKind.DRAIN, "agent-a", session["session_id"],
+                session["config_revision"], None, True, "contain both workers",
+            ))
+            assert stop_a.wait(10)
+            assert stop_b.wait(10)
+            # The pending poll prevents full control application. B already
+            # received its native stop while the first early IPC is still held.
+            assert _rows(journal, command_sql, (command_id,)) == [(0, None)]
+            send_a.set()
+            settle_poll.set()
+            assert contain_a.wait(10)
+            workspaces = [case.agent_root / "assignments" / identity for identity in ids]
+            peer_result = workspaces[1] / "worker-result.json"
+            _eventually(peer_result.is_file)
+            assert json.loads(peer_result.read_bytes())["status"] == "CANCELLED"
+            assert not (workspaces[0] / "worker-result.json").exists()
+            settle_workers.set()
+            _eventually(lambda: _rows(
+                case.database, "SELECT state FROM remote_assignments WHERE assignment_id = ?", (ids[1],)
+            ) == [("RELEASED",)])
+            case.stop.set()
+            case.thread.join(15)
+            assert not case.thread.is_alive(), case.failures
+            assert _rows(journal, command_sql, (command_id,)) == [(0, None)]
+            prove_a.set()
+            case.stop.clear()
+            case.thread = Thread(target=case.serve)
+            case.thread.start()
+            _eventually(lambda: _rows(journal, "SELECT acknowledged FROM agent_controls_local "
+                "WHERE operation_id = ?", (command_id,)) == [(1,)])
+            assert json.loads(_rows(journal, command_sql, (command_id,))[0][1])["code"] == "applied"
+            _eventually(lambda: _rows(case.database,
+                "SELECT COUNT(*) FROM remote_assignments WHERE state = 'RELEASED'") == [(2,)])
+            assert json.loads((workspaces[0] / "worker-result.json").read_bytes())["status"] == "CANCELLED"
+            assert _rows(case.agent_root / "supervisor/supervisor.sqlite",
+                         "SELECT COUNT(*) FROM launches") == [(2,)]
+        finally:
+            send_a.set()
+            settle_poll.set()
+            settle_workers.set()
+            prove_a.set()
+            for gate in gates:
+                _release_gate(gate)
+
+
 @pytest.mark.parametrize("restart_epoch", [False, True])
 def test_lost_release_orders_other_completion_and_preserves_local_stop(
     monkeypatch, restart_epoch
@@ -2651,16 +2919,19 @@ def test_lost_release_orders_other_completion_and_preserves_local_stop(
     dispatch = transport._dispatch
     stop_request = AgentProcessSupervisorClient.request_stop
     requests = []
+    held_request = []
     ids = {}
 
     def exchange(view, operation, value):
-        requests.append((operation, dict(value)))
+        request = (operation, dict(value))
+        requests.append(request)
         result = dispatch(view, operation, value)
         if (
             operation == "release"
             and value["assignment_id"] == ids.get("a")
             and not held.is_set()
         ):
+            held_request.append(request)
             held.set()
             assert release.wait(40)
             raise ConnectionError("lost accepted release")
@@ -2692,20 +2963,20 @@ def test_lost_release_orders_other_completion_and_preserves_local_stop(
                 )[0][0]
             _release_gate(gates[0])
             assert held.wait(20)
-            first_release = next(
-                index
-                for index, (operation, _) in enumerate(requests)
-                if operation == "release"
-            )
+            # Negotiated proof preparation can return HTTP 202 before commit.
+            # The lost reply is the specific attempt paused after durable release.
+            committed_release = next(i for i, request in enumerate(requests) if request is held_request[0])
             offset[0] += deployment._OUTBOUND_OFFER_TTL_SECONDS
             _release_gate(gates[1])
             assert committed_b.wait(20)
             case.client.cancel("c")
             assert stopped_c.wait(5)
-            assert not any(
-                operation in {"release", "offer", "renew", "poll"}
-                for operation, _ in requests[first_release + 1 :]
-            )
+            premature = [
+                (operation, value.get("assignment_id"), value.get("sequence"))
+                for operation, value in requests[committed_release + 1:]
+                if operation in {"release", "offer", "renew", "poll"}
+            ]
+            assert not premature, premature
             if restart_epoch:
                 case.daemon.stop()
                 case.daemon.start()
@@ -2737,16 +3008,15 @@ def test_lost_release_orders_other_completion_and_preserves_local_stop(
             assert len(a_releases) >= 2 and all(
                 value == a_releases[0] for value in a_releases
             )
-            local = json.loads(
-                _rows(
-                    case.agent_root / "control.sqlite",
-                    "SELECT value_json FROM agent_sessions_local",
-                )[0][0]
-            )
-            assert _rows(
-                case.database,
-                "SELECT coordinator_epoch, availability_revision FROM agent_sessions",
-            ) == [(local["coordinator_epoch"], local["availability_revision"])]
+            def releases_settled():
+                local_path = case.agent_root / "control.sqlite"
+                if _rows(local_path, "SELECT 1 FROM agent_session_references WHERE reference_kind = 'delivery' AND resolved = 0"):
+                    return False
+                local = json.loads(_rows(local_path, "SELECT value_json FROM agent_sessions_local")[0][0])
+                return _rows(case.database, "SELECT coordinator_epoch, availability_revision FROM agent_sessions") == [
+                    (local["coordinator_epoch"], local["availability_revision"])
+                ]
+            _eventually(releases_settled)
             if restart_epoch:
                 assert (
                     len(
@@ -3751,3 +4021,125 @@ def test_accept_conflict_recovers_cancellation_after_observation_budget(monkeypa
             accept_release.set()
             control_release.set()
             _release_gate(peer)
+
+
+def test_fresh_start_permit_while_sender_and_receiver_transfer_slots_are_occupied(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Lock
+    from loom.queue._agent_progress import _cooperative, _delay, _Spawn, _steps
+
+    one, two, four, release = Event(), Event(), Event(), Event()
+    running = Event()
+    chunk = {}
+    guard = Lock()
+    occupied = 0
+    dispatch = transport._dispatch
+    permit = LocalDaemonAgentHttpClient.start_permit
+
+    def hold_output(view, operation, value):
+        nonlocal occupied
+        result = dispatch(view, operation, value)
+        if operation == "output" and not release.is_set():
+            with guard:
+                if not chunk:
+                    chunk.update(value)
+                assert chunk == value
+                occupied += 1
+                if occupied == 1:
+                    one.set()
+                if occupied == 2:
+                    two.set()
+                if occupied == 4:
+                    four.set()
+            try:
+                assert release.wait(30)
+            finally:
+                with guard:
+                    occupied -= 1
+        return result
+
+    @_cooperative
+    def permit_during_transfers(client, session_id, assignment_id, *, fence):
+        if chunk and chunk["assignment_id"] != assignment_id and not release.is_set():
+            # Replaying the exact accepted chunk takes the service manager's
+            # second bulk sender slot. Two independent clients fill the receiver.
+            replay = yield _Spawn(_steps(client._call, "output", dict(chunk)))
+            while not four.is_set() and not release.is_set():
+                yield from _delay(0.01)
+            result = yield from _steps(permit, client, session_id, assignment_id, fence=fence)
+            assert result and not replay.complete
+            running.set()
+            return result
+        return (yield from _steps(permit, client, session_id, assignment_id, fence=fence))
+
+    monkeypatch.setattr(transport, "_dispatch", hold_output)
+    monkeypatch.setattr(LocalDaemonAgentHttpClient, "start_permit", permit_during_transfers)
+    with _service(monkeypatch, ceiling=2) as case, ThreadPoolExecutor(max_workers=2) as extra:
+        try:
+            _submit(case, "uploading")
+            assert one.wait(20), case.retries
+            uri, _ = _submit(case, "starting")
+            assert two.wait(20), case.retries
+            futures = [extra.submit(transport._exchange_agent_request, case.config.client, "output",
+                                    json.dumps(chunk).encode(), "agent", None, False) for _ in range(2)]
+            assert four.wait(5)
+            assert running.wait(5), case.retries
+            assert _rows(case.database, "SELECT start_permitted FROM remote_assignments WHERE run_uri=?", (uri,)) == [(1,)]
+            assert occupied == 4
+        finally:
+            release.set()
+        for future in futures:
+            future.result(5)
+        for name in ("uploading", "starting"):
+            assert case.client.wait(name, timeout_seconds=20).state is LocalDaemonAdmissionState.SUCCEEDED
+
+
+def test_prepared_permit_yields_on_busy_writer_and_rechecks_cancellation(monkeypatch):
+    from loom.queue.agent_sessions import AgentSessionService
+
+    prepared, writer_held = Event(), Event()
+    yielded_twice, final_check, resume = Event(), Event(), Event()
+    calls, busy = [], []
+    prepare = AgentSessionService.prepare_start_permit
+
+    def pause_preparation(service, session_id, assignment_id, *, fence):
+        finish = prepare(service, session_id, assignment_id, fence=fence)
+        calls.append(assignment_id)
+        prepared.set()
+        assert writer_held.wait(10)
+
+        def finish_after_writer(wait):
+            assert not wait
+            if yielded_twice.is_set():
+                final_check.set()
+                assert resume.wait(10)
+            try:
+                return finish(wait)
+            except sqlite3.OperationalError as exc:
+                assert exc.sqlite_errorcode & 255 == sqlite3.SQLITE_BUSY
+                busy.append(assignment_id)
+                if len(busy) == 2:
+                    yielded_twice.set()
+                raise
+        return finish_after_writer
+
+    monkeypatch.setattr(AgentSessionService, "prepare_start_permit", pause_preparation)
+    with _service(monkeypatch) as case:
+        try:
+            uri, _ = _submit(case, "cancel-prepared")
+            assert prepared.wait(15)
+            with sqlite3.connect(case.database) as writer:
+                writer.execute("BEGIN IMMEDIATE")
+                writer_held.set()
+                assert yielded_twice.wait(4), case.failures
+                assert final_check.wait(4)
+                writer.rollback()
+            assert case.client.cancel("cancel-prepared").cancellation_operation_id
+            resume.set()
+            assert case.client.wait("cancel-prepared", timeout_seconds=25).state is LocalDaemonAdmissionState.CANCELLED
+            assert _rows(case.database, "SELECT start_permitted FROM remote_assignments WHERE run_uri=?", (uri,)) == [(0,)]
+            assert len(calls) == 1
+            assert len(busy) >= 2 and set(busy) == set(calls)
+        finally:
+            writer_held.set()
+            resume.set()

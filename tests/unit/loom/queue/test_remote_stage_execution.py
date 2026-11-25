@@ -707,6 +707,51 @@ def test_workspace_joins_actual_launch_controls_without_rewriting_worker_bytes(
     assert workspace.retain_outputs().to_dict() == report.to_dict()
 
 
+def test_event_acknowledgements_change_each_row_once_across_restart(tmp_path):
+    workspace = _ResidentAssignmentWorkspace(tmp_path, "event-history")
+    with sqlite3.connect(workspace._db) as conn:
+        conn.executemany(
+            "INSERT INTO events(sequence, event_id, payload_json) VALUES (?, ?, '{}')",
+            ((i, f"event-{i}") for i in range(1, 1025)),
+        )
+        conn.execute("CREATE TABLE updated(value INTEGER)")
+        conn.execute("INSERT INTO updated VALUES (0)")
+        conn.execute("CREATE TRIGGER count_updates AFTER UPDATE ON events BEGIN UPDATE updated SET value = value + 1; END")
+    assert len(workspace.pending_events(through=1000, limit=32)) == 32
+    for i in range(1, 1025):
+        workspace.acknowledge_event(i)
+    workspace.acknowledge_event(1024)
+    with pytest.raises(QueueConflictError, match="gap"):
+        workspace.acknowledge_event(1025)
+    with sqlite3.connect(workspace._db) as conn:
+        assert conn.execute("SELECT value FROM updated").fetchone()[0] == 1024
+        conn.execute("DROP TRIGGER count_updates")
+        conn.execute("DROP TABLE updated")
+    reopened = _ResidentAssignmentWorkspace(tmp_path, "event-history")
+    assert reopened.last_event_sequence() == 1024
+    assert reopened.pending_events() == ()
+
+
+def test_terminal_event_relay_includes_events_arriving_during_last_exchange(tmp_path):
+    from types import SimpleNamespace
+    from loom.queue.agent_session_transport import LocalDaemonAgentHttpClient
+
+    workspace = _ResidentAssignmentWorkspace(tmp_path, "event-handoff")
+    workspace.record_event(1, "first", {})
+    sent = []
+
+    def send(session_id, assignment_id, *, sequence, event_id, payload):
+        sent.append(event_id)
+        if event_id == "first":
+            workspace.append_event("last", {"kind": "timing"})
+        return {"assignment_id": assignment_id, "acknowledged_sequence": sequence}
+
+    client = SimpleNamespace(_assignment_call=lambda sid, aid, operation: operation(), report_event=send, _supports_event_batch=False)
+    LocalDaemonAgentHttpClient._flush_workspace_events(client, "session", workspace, final=True)
+    assert sent == ["first", "last"]
+    assert workspace.pending_events() == ()
+
+
 def test_input_replay_and_event_sequence_are_durable_and_exact(tmp_path: Path) -> None:
     profile = _profile(tmp_path)
     request = _request(profile)

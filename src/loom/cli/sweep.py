@@ -98,6 +98,8 @@ def register_subparser(
     )
     run.add_argument("--deployment", required=True, metavar="CONFIG")
     run.add_argument("--no-wait", action="store_true")
+    run.add_argument("--max-in-flight", type=int, default=1, metavar="N",
+                     help="maximum outstanding trials for a waiting sweep (default 1)")
     run.add_argument("--timeout", type=float, default=None)
     _add_output_options(run)
     run.set_defaults(handler=handle_run)
@@ -157,6 +159,7 @@ def handle_run(namespace: argparse.Namespace) -> int:
         overrides=tuple(namespace.override or ()),
         deployment=namespace.deployment,
         wait=not namespace.no_wait,
+        max_in_flight=namespace.max_in_flight,
         timeout_seconds=namespace.timeout,
     )
     failed = _enum_value(getattr(result.result, "status", "")) == "failed"
@@ -250,6 +253,7 @@ def build_sweep_run_result(
     overlays: Sequence[str | Path] = (),
     overrides: Sequence[str] = (),
     wait: bool = True,
+    max_in_flight: int = 1,
     timeout_seconds: float | None = None,
 ) -> SweepRunCliResult:
     """Compose serialized trial intent; preparation happens at the selected service."""
@@ -279,6 +283,7 @@ def build_sweep_run_result(
             deployment=deployment,
             sweep_dir=sweep_dir,
             wait=wait,
+            max_in_flight=max_in_flight,
             timeout_seconds=timeout_seconds,
         )
         return SweepRunCliResult(sweep_id=plan.sweep_id, result=result)

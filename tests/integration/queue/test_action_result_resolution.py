@@ -52,6 +52,96 @@ def test_producer_reconciliation_opens_authority_once_per_pass(tmp_path, monkeyp
         daemon.stop()
 
 
+def test_peer_run_finishes_while_final_producer_proof_is_blocked(tmp_path, monkeypatch):
+    from threading import Event
+
+    service = _text_service(tmp_path, qualify_actions=True)
+    LocalDaemon.initialize_deployment(service.daemon)
+    daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
+    daemon.start()
+    entered, release = Event(), Event()
+    try:
+        assert daemon._execution is not None
+        resolver = daemon._execution._action_resolution
+        assert resolver is not None
+        original = resolver._checked_result_outputs
+
+        def hold(claim, result, **kwargs):
+            # Production's final source check follows successful byte verification.
+            if not kwargs and claim["owner_node"] == "author" and not entered.is_set():
+                entered.set()
+                assert release.wait(100)
+            return original(claim, result, **kwargs)
+
+        monkeypatch.setattr(resolver, "_checked_result_outputs", hold)
+        first = _start(daemon, "blocked-producer")
+        assert entered.wait(40)
+        path = tmp_path / "projects" / "pipeline.yaml"
+        config = json.loads(path.read_text())
+        config["pipeline"]["stages"][0]["config"]["value"] = "independent source"
+        path.write_text(json.dumps(config))
+        peer = _start(daemon, "peer-producer")
+        assert daemon._wait(peer["queue_item_id"], timeout_seconds=50).state.value == "SUCCEEDED"
+        assert not release.is_set()
+        release.set()
+        assert daemon._wait(first["queue_item_id"], timeout_seconds=40).state.value == "SUCCEEDED"
+    finally:
+        release.set()
+        daemon.stop()
+
+
+def test_consumer_final_source_read_allows_peer_completion_and_cancellation(tmp_path, monkeypatch):
+    from collections.abc import Mapping
+    from threading import Event
+
+    service = _text_service(tmp_path, qualify_actions=True)
+    LocalDaemon.initialize_deployment(service.daemon)
+    daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
+    daemon.start()
+    verdict_seen, entered, release = Event(), Event(), Event()
+    try:
+        first = _start(daemon, "consumer-proof-source")
+        assert daemon._wait(first["queue_item_id"], timeout_seconds=50).state.value == "SUCCEEDED"
+        resolver = daemon._execution._action_resolution
+        original_check = resolver._checked_result_outputs
+        original_verify = daemon._preparations.verify_action_result
+        source_uri = first["prepared_run"]["run_uri"]
+
+        def verify(**kwargs):
+            response = original_verify(**kwargs)
+            if isinstance(response, Mapping) and response["failure_code"] is None:
+                verdict_seen.set()
+            return response
+
+        def check(claim, result, **kwargs):
+            if verdict_seen.is_set() and claim["owner_run_uri"] == source_uri and not entered.is_set():
+                entered.set()
+                assert release.wait(100)
+            return original_check(claim, result, **kwargs)
+
+        monkeypatch.setattr(daemon._preparations, "verify_action_result", verify)
+        monkeypatch.setattr(resolver, "_checked_result_outputs", check)
+        _rename_graph(tmp_path)
+        consumer = _start(daemon, "held-consumer")
+        assert entered.wait(55)
+        path = tmp_path / "projects" / "pipeline.yaml"
+        config = json.loads(path.read_text())
+        config["pipeline"]["stages"][0]["config"]["value"] = "independent consumer peer"
+        path.write_text(json.dumps(config))
+        peer = _start(daemon, "consumer-proof-peer")
+        assert daemon._wait(peer["queue_item_id"], timeout_seconds=55).state.value == "SUCCEEDED"
+        daemon.cancel_run_operation("held-consumer", principal_id="caller")
+        assert not release.is_set()
+        release.set()
+        assert daemon._wait(consumer["queue_item_id"], timeout_seconds=45).state.value == "CANCELLED"
+        consumer_uri = consumer["prepared_run"]["run_uri"]
+        stages = service.daemon.coordinator_authority_factory(consumer_uri).open_run(consumer_uri).stages
+        assert all(stage.result_binding is None for stage in stages)
+    finally:
+        release.set()
+        daemon.stop()
+
+
 def test_native_fresh_generation_replay_and_default_target_are_distinct(tmp_path):
     service = _text_service(tmp_path, qualify_actions=True)
     LocalDaemon.initialize_deployment(service.daemon)
@@ -145,6 +235,12 @@ def test_renamed_graph_reuses_original_producers_without_attempts(tmp_path):
         original_uri = first["prepared_run"]["run_uri"]
         authority = service.daemon.coordinator_authority_factory
         assert authority is not None
+        # A terminal admission can be observed before its own audit append.
+        # Compare full revisions only after that original event has committed.
+        _until(lambda: any(
+            event.event_type == "run.completed"
+            for event in authority(original_uri).list_audit_events(original_uri)
+        ))
         before = authority(original_uri).open_run(original_uri)
         path = tmp_path / "projects" / "pipeline.yaml"
         config = json.loads(path.read_text())
@@ -244,8 +340,16 @@ def _rename_graph(tmp_path):
 
 @pytest.mark.parametrize("cancel_final", [False, True])
 def test_shared_producer_survives_original_graph_cancel_and_reopen(
-    tmp_path, cancel_final
+    tmp_path, cancel_final, monkeypatch
 ):
+    from loom.queue._action_result_resolution import ActionResultResolution
+
+    recovered = []
+    recover = ActionResultResolution.reconcile_cancellations
+    def count_recovery(owner):
+        recovered.append(owner)
+        return recover(owner)
+    monkeypatch.setattr(ActionResultResolution, "reconcile_cancellations", count_recovery)
     service = _text_service(tmp_path, qualify_actions=True, delay=30)
     LocalDaemon.initialize_deployment(service.daemon)
     daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
@@ -350,5 +454,6 @@ def test_shared_producer_survives_original_graph_cancel_and_reopen(
                 if stage.stage_name == "count-renamed"
             ).attempts
         assert daemon._execution.coordinator.list_run_live_states(original_uri) == ()
+        assert len(recovered) == 2  # Once per service startup across both graphs.
     finally:
         daemon.stop()
