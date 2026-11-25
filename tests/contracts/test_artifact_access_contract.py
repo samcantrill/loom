@@ -159,6 +159,43 @@ def test_fetch_expiry_during_verification_prevents_publication(tmp_path, monkeyp
     assert list(destination.iterdir()) == []
 
 
+@pytest.mark.parametrize("external_state_root", [False, True])
+def test_ranges_read_the_named_original_fact_and_reauthorize_every_offset(tmp_path, monkeypatch, external_state_root):
+    from loom.pipeline.stores.coordinator_authority import EmbeddedCoordinatorAuthorityFactory, embedded_coordinator_authority
+    from loom.queue import _output_selection
+
+    daemon, authority, uri = fixture(tmp_path)
+    if external_state_root:
+        state = tmp_path / "authority-state"
+        state.mkdir(mode=0o700)
+        factory = EmbeddedCoordinatorAuthorityFactory(state, tmp_path)
+        authority = factory._store(uri)
+        authority.create_run(uri)
+        daemon.config.coordinator_authority_factory = factory
+    else:
+        daemon.config.coordinator_authority_factory = embedded_coordinator_authority
+    original, _ = local_ref(uri, b"first-data", name="original.bin")
+    current, _ = local_ref(uri, b"successor", name="successor.bin")
+    from loom.pipeline.status import StageStatus
+    from loom.pipeline.transition_policy import TransitionIntent
+
+    locator = publish(authority, uri, original)
+    authority.transition_stage(uri, "produce", from_status=StageStatus.SUCCEEDED,
+                               to_status=StageStatus.STALE, intent=TransitionIntent.RESUME)
+    publish(authority, uri, current)
+    client = LocalClient(daemon)
+    monkeypatch.setattr(SQLitePerRunAuthorityStore, "open_run", lambda *_: pytest.fail("full run read for exact artifact"))
+    monkeypatch.setattr(SQLitePerRunAuthorityStore, "list_output_commits", lambda *a, **kw: pytest.fail("historical scan"))
+    description = client.describe_artifact(locator, scope=SCOPE)
+    assert description["outcome"] == "available"
+    options = dict(scope=SCOPE, declaration=description["declaration"], member=description["primary"], length=4)
+    assert client.read_artifact_chunk(locator, offset=0, **options)["data"] == "Zmlycw=="
+    for wrong in (replace(locator, stage_name="other"), replace(locator, output_name="other"), replace(locator, commit_id="other")):
+        assert client.describe_artifact(wrong, scope=SCOPE)["outcome"] == "unavailable"
+    monkeypatch.setattr(_output_selection, "authorized_run", lambda *args: False)
+    assert client.read_artifact_chunk(locator, offset=4, **options)["outcome"] == "unavailable"
+
+
 @pytest.mark.parametrize("backend", ["embedded", "authenticated"])
 def test_local_exact_preview_corruption_legacy_and_authorization(tmp_path, backend):
     daemon, authority, uri = fixture(tmp_path, backend)

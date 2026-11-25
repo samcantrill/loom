@@ -16,9 +16,9 @@ from loom.io.uris import uri_to_path
 from loom.io.errors import UnsupportedURIError
 from loom.pipeline.stores.errors import ArtifactStoreError
 from loom.pipeline.stores import shared_artifacts as shared
-from loom.runs.outputs import OutputLocator, OutputSelection
+from loom.runs.outputs import OutputLocator
 from loom.runs.query import RunQuery
-from ._output_selection import _rows
+from ._output_selection import artifact_for_locator
 
 ARTIFACT_OPERATIONS = frozenset(
     {"describe_artifact", "read_artifact_chunk", "read_artifact"}
@@ -100,18 +100,9 @@ def _resolve(
     daemon: Any, value: dict[str, Any], *, verify: bool
 ) -> tuple[Path, dict[str, Any]]:
     locator = value["locator"]
-    rows = _rows(
-        daemon,
-        OutputSelection(locator=locator, scope=value["scope"]),
-        locator.run_uri,
-        commits=False,
-    )
-    selected = next((r for r in rows if r["outcome"] == "selected"), None)
-    if selected is None:
+    ref = artifact_for_locator(daemon, locator, value["scope"])
+    if ref is None:
         raise AccessFailure("unavailable")
-    from loom.artifacts import ArtifactRef
-
-    ref = ArtifactRef.from_dict(selected["artifact"])
     binding = shared.binding(ref.metadata)
     if binding is not None:
         roots = daemon.config.coordinator_shared_roots

@@ -9,6 +9,7 @@ import hashlib
 import json
 from typing import Any, cast
 
+from loom.artifacts import ArtifactRef
 from loom.pipeline.stores.authority import AuthorityStoreError
 from loom.pipeline.stores.errors import StoreError
 from loom.runs._query_page import QueryPage, _bytes
@@ -109,6 +110,28 @@ def _equal(left: Any, right: Any) -> bool:
         type(left) in (int, float) and type(right) in (int, float)
     )
     return same and left == right
+
+
+def artifact_for_locator(daemon: Any, locator: OutputLocator, scope: Any) -> ArtifactRef | None:
+    """Read the named original output with the current request's scope and owner."""
+    from loom.pipeline.stores.coordinator_authority import _embedded_artifact_reader
+
+    open_selected = _embedded_artifact_reader(daemon.config.coordinator_authority_factory)
+    if open_selected is not None:
+        # An exact locator already names the original producer. A consumer's
+        # binding alone cannot name a commit owned by this producer's database.
+        if not authorized_run(daemon, locator.run_uri, scope):
+            return None
+        try:
+            store = open_selected(locator.run_uri)
+            return store._read_committed_artifact(
+                locator.run_uri, locator.stage_name, locator.commit_id, locator.output_name,
+            )
+        except _READ_ERRORS:
+            return None
+    rows = _rows(daemon, OutputSelection(locator=locator, scope=scope), locator.run_uri, commits=False)
+    selected = next((row for row in rows if row["outcome"] == "selected"), None)
+    return None if selected is None else ArtifactRef.from_dict(selected["artifact"])
 
 
 def _rows(

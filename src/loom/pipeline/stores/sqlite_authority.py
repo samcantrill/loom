@@ -2596,6 +2596,22 @@ class SQLitePerRunAuthorityStore:
             )
             return OutputCommit(commit=commit, artifact_facts=facts)
 
+    def _read_committed_artifact(
+        self, run_uri: str, stage_name: str, commit_id: str, output_name: str,
+    ) -> ArtifactRef | None:
+        """Resolve one original output through the retained commit and fact indexes."""
+        self._bind_run_uri(run_uri)
+        with self._read_connection_for_run(run_uri) as conn:
+            _raise_for_schema(conn)
+            _require_run_status(conn)
+            row = conn.execute(
+                "SELECT f.artifact_json FROM commits AS c JOIN artifact_facts AS f "
+                "ON f.commit_id = c.commit_id AND f.stage_name = c.stage_name "
+                "WHERE c.commit_id = ? AND c.stage_name = ? AND f.artifact_name = ?",
+                (commit_id, stage_name, output_name),
+            ).fetchone()
+            return None if row is None else ArtifactRef.from_dict(_json_loads(row["artifact_json"]))
+
     def list_output_commits(
         self, run_uri: str, *, stage_name: str | None = None
     ) -> tuple[OutputCommit, ...]:
