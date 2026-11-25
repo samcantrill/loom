@@ -2045,7 +2045,9 @@ def test_definite_slurm_rejection_restarts_after_every_release_arrow(
                 cluster: str | None,
             ) -> str:
                 nonlocal injected
-                if state == "rejected" and not injected:
+                # Keep the simulated owner down if an in-flight callback retries
+                # the write before the test has inspected the crash boundary.
+                if state == "rejected":
                     injected = True
                     raise OSError("crash after rejected submission")
                 return original_record(
