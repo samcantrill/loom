@@ -55,6 +55,24 @@ from loom.pipeline.stores.sqlite_authority import (
 pytestmark = pytest.mark.unit
 
 
+def test_revision_status_observes_existing_run_without_building_snapshot(tmp_path, monkeypatch):
+    from loom.pipeline.stores import sqlite_authority
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("revision and status should not materialize stages or attempts")
+
+    monkeypatch.setattr(sqlite_authority, "_snapshot", unexpected)
+    uri = path_to_run_uri(tmp_path / "run")
+    authority = SQLitePerRunAuthorityStore(uri)
+    with pytest.raises(AuthoritySchemaError, match="missing"):
+        authority.read_revision_status(uri)
+    assert not _authority_database_path(uri).exists()
+    created = authority.create_run(uri)
+    assert authority.read_revision_status(uri) == (created, RunStatus.CREATED)
+    planned = authority.transition_run(uri, from_status=RunStatus.CREATED, to_status=RunStatus.PLANNED)
+    assert authority.read_revision_status(uri) == (planned.revision, RunStatus.PLANNED)
+
+
 def test_explicit_sqlite_policy_survives_authority_restart(tmp_path):
     from loom._sqlite_policy import SQLitePolicy
     from loom.pipeline.stores.coordinator_authority import (

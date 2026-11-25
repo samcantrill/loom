@@ -166,16 +166,38 @@ def test_slurm_ack_replays_budget_outcome_before_releasing_gpu(tmp_path, monkeyp
     from loom.pipeline.status import StageStatus
     from loom.queue.local_daemon import LocalDaemonAdmissionState
 
-    admission = SimpleNamespace(state=LocalDaemonAdmissionState.CANCELLED)
+    admission = SimpleNamespace(state=LocalDaemonAdmissionState.CANCELLED, run_uri=assignment.run_uri)
     execution._daemon_owner = lambda: SimpleNamespace(_connection=connection, admission_for_run_uri=lambda _: admission)
     stage = SimpleNamespace(stage_name=assignment.stage_name, status=StageStatus.CANCELLED)
-    execution._authority_store = lambda _: SimpleNamespace(open_run=lambda _: SimpleNamespace(stages=[stage]))
+    from threading import get_ident
+    from concurrent.futures import ThreadPoolExecutor
     from loom.queue._continuation import ContinuationConflict
-    from loom.queue._slurm_retry import reconcile
+    from loom.queue._preparation_operations import _AuthorityJobPending
 
-    assert reconcile(execution, assignment.run_uri) == ContinuationConflict(
-        "slurm_recovery_retention_budget_exceeded"
-    )
+    scheduling_thread = get_ident()
+    reads = []
+
+    def open_run(_uri):
+        assert get_ident() != scheduling_thread
+        return SimpleNamespace(stages=[stage])
+
+    execution._authority_store = lambda _: SimpleNamespace(open_run=open_run)
+
+    def defer_snapshot(assignments, read):
+        assert assignments == (assignment.assignment_id,)
+        reads.append(read)
+        raise _AuthorityJobPending
+
+    def settle(observe):
+        return LocalDaemonExecution.settle_continuation(
+            execution, admission, accepted_at="2026-01-01T00:00:00Z", observe_snapshot=observe,
+        )
+
+    with pytest.raises(_AuthorityJobPending):
+        settle(defer_snapshot)
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        snapshot = worker.submit(reads[0]).result(timeout=5)
+    assert settle(lambda _assignments, _read: snapshot) == ContinuationConflict("slurm_recovery_retention_budget_exceeded")
     with connection() as conn:
         assert conn.execute("SELECT resolved FROM agent_coordinator_references").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM agent_receipts").fetchone()[0] == 1

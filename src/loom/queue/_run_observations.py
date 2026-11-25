@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from time import monotonic
 from typing import TYPE_CHECKING, Any
 
+from ._completion_inbox import CompletionInbox
+
 if TYPE_CHECKING:
     from loom.pipeline.stores.read_models import AuthoritativeRunSnapshot
     from ._bulk_operations import BulkOperations
@@ -57,8 +59,9 @@ class RunObservations:
         self._current: OrderedDict[str, RunObservation] = OrderedDict()
         self._retiring: dict[str, Future[Any]] = {}
         self._waiting: dict[str, Callable[[], Any]] = {}
-        self._wake = wake
         self._before_read = before_read
+        self._completed = CompletionInbox[tuple[str, int, Epochs]](wake, maximum=None)
+        self._ready: dict[str, None] = {}
 
     def pending_runs(self) -> frozenset[str]:
         return frozenset(job.admission.run_uri for job in self._current.values())
@@ -79,17 +82,23 @@ class RunObservations:
         for identity in tuple(self._waiting)[:max(0, self._workers - occupied)]:
             job = self._current[identity]
             job.read = self._executor.submit(self._waiting.pop(identity))
-            job.read.add_done_callback(lambda _: self._wake())
+            token = identity, job.admission.revision, job.epochs
+            job.read.add_done_callback(lambda _, owner=token: self._completed.post(owner))
 
     def completed(self) -> tuple[RunObservation, ...]:
         self._retiring = {key: read for key, read in self._retiring.items() if not read.done()}
         self._start_reads()
-        ready = tuple(job for job in self._current.values() if job.read is not None and job.read.done())
-        if len(ready) > self._workers:
-            self._wake()
-        return ready[:self._workers]
+        for identity, revision, epochs in self._completed.take(self._admissions):
+            job = self._current.get(identity)
+            if (job is not None and job.admission.revision == revision and job.epochs == epochs
+                and job.read is not None and job.read.done()):
+                self._ready[identity] = None
+        # Retain an offered completion until its owner actually consumes it.
+        # A retry deadline or interrupted scheduler turn can defer application.
+        return tuple(self._current[identity] for identity in self._ready)
 
     def discard(self, identity: str, bulk: BulkOperations) -> None:
+        self._ready.pop(identity, None)
         job = self._current.pop(identity, None)
         if job is None:
             return
@@ -123,6 +132,7 @@ class RunObservations:
                 raise RunObservationPending()
             self._current[identity] = RunObservation(admission, epochs, context, create())
         job = self._current[identity]
+        self._ready.pop(identity, None)
         if identity in self._waiting:
             raise RunObservationPending()
         scope = ("run", admission.run_uri)
@@ -170,6 +180,7 @@ class RunObservations:
             job.steps.close()
         self._executor.shutdown(wait=True, cancel_futures=True)
         self._current.clear()
+        self._ready.clear()
         self._waiting.clear()
         self._retiring.clear()
 
@@ -199,6 +210,10 @@ class DispatchObservations:
         self._retiring: dict[str, Future[tuple[float, AuthoritativeRunSnapshot | Exception]]] = {}
         self._wake = wake
 
+    def requested_runs(self) -> set[str]:
+        """Only a read demanded by dispatch owns a continuation of its context."""
+        return {read.admission.run_uri for read in self._reads.values() if read.requested}
+
     def _discard(self, identity: str) -> None:
         read = self._reads.pop(identity)
         if not read.future.cancel() and not read.future.done():
@@ -214,9 +229,18 @@ class DispatchObservations:
             ):
                 self._discard(key)
 
+    def snapshot_for_preparation(self, admission: LocalDaemonAdmission, epochs: Epochs) -> AuthoritativeRunSnapshot | None:
+        """Borrow a completed read for host-independent IO, leaving dispatch its fresh check."""
+        read = self._reads.get(admission.admission_id)
+        if (read is None or read.admission.revision != admission.revision or read.epochs != epochs
+            or not read.future.done()):
+            return None
+        _, result = read.future.result()
+        return None if isinstance(result, Exception) else result
+
     def _start(
         self, admission: LocalDaemonAdmission, epochs: Epochs, load: Callable[[], AuthoritativeRunSnapshot],
-        *, requested: bool,
+        *, requested: bool, notify: Callable[[], None] | None = None,
     ) -> None:
         identity = admission.admission_id
         if identity in self._retiring or len(self._reads) >= 32:
@@ -237,10 +261,11 @@ class DispatchObservations:
         read = _DispatchRead(admission, epochs, future)
         self._reads[identity] = read
         if requested:
-            read.notify_when_ready(self._wake)
+            read.notify_when_ready(notify or self._wake)
 
     def poll(
         self, admission: LocalDaemonAdmission, epochs: Epochs, load: Callable[[], AuthoritativeRunSnapshot],
+        *, notify: Callable[[], None] | None = None,
     ) -> AuthoritativeRunSnapshot | None:
         identity = admission.admission_id
         read = self._reads.get(identity)
@@ -248,10 +273,10 @@ class DispatchObservations:
             self._discard(identity)
             read = None
         if read is None:
-            self._start(admission, epochs, load, requested=True)
+            self._start(admission, epochs, load, requested=True, notify=notify)
             return None
         if not read.future.done():
-            read.notify_when_ready(self._wake)
+            read.notify_when_ready(notify or self._wake)
             return None
         del self._reads[identity]
         _, result = read.future.result()

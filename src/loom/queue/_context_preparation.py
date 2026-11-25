@@ -18,12 +18,14 @@ type PreparedAdmissionContext = tuple["ManagedLocalIntent", "_ScopedCoordinatorA
 type ContextLoader = Callable[["LocalDaemonAdmission", tuple[str | None, str | None]], PreparedAdmissionContext]
 
 
-@dataclass(frozen=True)
+@dataclass
 class PendingContext:
     admission: LocalDaemonAdmission
     epochs: tuple[str | None, str | None]
     future: Future[PreparedAdmissionContext]
     for_dispatch: bool
+    fresh_load: bool = True
+    invalidated: bool = False
 
     def result(self) -> PreparedAdmissionContext:
         return self.future.result()
@@ -50,6 +52,9 @@ class ContextPreparations:
         self._interval = minimum_interval
         now = monotonic()
         invalidated_runs = set(invalidated)
+        for item in self._pending.values():
+            if item.admission.run_uri in invalidated_runs:
+                item.invalidated = True
         # These entries only suppress repeat filesystem loads until their
         # deadline. Expire them independently of which admission page is read.
         for identity, (_, _, deadline, run_uri) in tuple(self._next_load.items()):
@@ -57,29 +62,36 @@ class ContextPreparations:
                 del self._next_load[identity]
 
     def has_capacity(self) -> bool:
-        return len(self._pending) < 2
+        return sum(item.fresh_load for item in self._pending.values()) < 2
 
     def try_submit(
         self, admission: LocalDaemonAdmission, epochs: tuple[str | None, str | None],
         load: ContextLoader,
-        *, for_dispatch: bool = False,
+        *, for_dispatch: bool = False, resume: bool = False,
+        continuation: PreparedAdmissionContext | None = None,
     ) -> bool:
         """Account for one admission, deferring it only when both slots are occupied."""
         identity = admission.admission_id
         if identity in self._pending:
             return True
         previous = self._next_load.get(identity)
-        if (not for_dispatch and previous is not None
+        if (not (for_dispatch or resume) and previous is not None
             and previous[:2] == (admission.revision, epochs) and monotonic() < previous[2]):
             return True
-        if not self.has_capacity():
+        if continuation is None and not self.has_capacity():
             return False
         # READY work gets first access to a freed slot. Keep the other slot
         # available for admissions that still need their initial reconciliation.
         if for_dispatch and any(item.for_dispatch for item in self._pending.values()):
             return False
-        future = self._workers.submit(copy_context().run, _load_context, load, admission, epochs)
-        self._pending[identity] = PendingContext(admission, epochs, future, for_dispatch)
+        if continuation is None:
+            future = self._workers.submit(copy_context().run, _load_context, load, admission, epochs)
+        else:
+            future = Future()
+            future.set_result(continuation)
+        self._pending[identity] = PendingContext(
+            admission, epochs, future, for_dispatch, fresh_load=continuation is None,
+        )
         future.add_done_callback(lambda _future: self._wake())
         return True
 
@@ -87,10 +99,11 @@ class ContextPreparations:
         completed = tuple(item for item in self._pending.values() if item.future.done())
         for item in completed:
             del self._pending[item.admission.admission_id]
-            self._next_load[item.admission.admission_id] = (
-                item.admission.revision, item.epochs, monotonic() + self._interval, item.admission.run_uri,
-            )
-        return completed
+            if item.fresh_load and not item.invalidated:
+                self._next_load[item.admission.admission_id] = (
+                    item.admission.revision, item.epochs, monotonic() + self._interval, item.admission.run_uri,
+                )
+        return tuple(item for item in completed if not item.invalidated)
 
     def next_delay(self) -> float | None:
         now = monotonic()

@@ -75,6 +75,7 @@ def reconcile_admission(
         }:
             return outcome
         self._ready_preparations.retain_run(admission.run_uri, set())
+        self._scheduling_waits.retain(admission.run_uri, set())
         self._orchestration_after.pop(admission.admission_id, None)
         if self._action_resolution is not None:
             yield from self._action_resolution.producer_steps(admission.run_uri, scoped_authority)
@@ -164,6 +165,7 @@ def _reconcile_admission_steps(
         if not cancelling and not self._failure_policy_allows_new_work(intent, snapshot):
             eligible.clear()
         self._ready_preparations.retain_run(admission.run_uri, eligible)
+        self._scheduling_waits.retain(admission.run_uri, eligible)
         terminal = None if cancelling else (yield from self._terminal_steps(
             admission,
             intent.plan,
@@ -241,6 +243,10 @@ def _reconcile_admission_steps(
     ))
     if terminal is not None:
         return terminal
+    if not cancelling and self.daemon is not None and (
+        self.config.remote_profiles or self.config.container_capabilities
+    ):
+        self._observed_ready[admission.admission_id] = snapshot
     if cancelling:
         return (yield from self._cancel_steps(admission, scoped_authority, intent.plan.stage_order))
     if slurm_in_flight or any(
@@ -294,6 +300,61 @@ def _settled_terminal_outcome(
             "action result settlement remains in flight",
         )
     return terminal
+
+
+def _advance_ready_inputs(self, record, admission, context, epochs, *, anticipated):
+    """Start host-independent IO only for a currently owned, bound READY attempt."""
+    if record.placement.route.kind is not ExecutionRouteKind.MANAGED_AGENT:
+        # A Slurm submit agent preflights its offer and GPU budget before any
+        # preparation-report IO. Its route resumes through the same selector.
+        return
+    profiles = (*self.config.remote_profiles, *self.config.container_capabilities)
+    remote = any(_profile_satisfies_requirement(profile, record.execution_requirement) for profile in profiles)
+    if anticipated and not remote:
+        return
+    key = (record.run_uri, record.stage_name)
+    if anticipated and not self._ready_preparations.can_anticipate(key):
+        return
+    intent, _ = context
+    if not anticipated:
+        owned, prepared = self._ready_preparations.request_for_descriptors(key, record.stage_work_id)
+        if owned:
+            if prepared is not None and remote:
+                self._prepared_input_descriptors(record, prepared)
+            return
+    snapshot = (self._observed_ready.get(admission.admission_id)
+                or self.dispatch_observations.snapshot_for_preparation(admission, epochs))
+    if (snapshot is None or snapshot.revision.sequence < record.authority_revision.sequence
+        or not self._failure_policy_allows_new_work(intent, snapshot)
+        or not any(stage.stage_name == record.stage_name and stage.status is StageStatus.PENDING
+                   and any(a.attempt_id == record.attempt_id for a in stage.attempts)
+                   for stage in snapshot.stages)):
+        return
+    if anticipated:
+        self._prepared_ready_request(record, snapshot, intent, speculative=True)
+    else:
+        self._prepared_ready_request(record, snapshot, intent)
+
+
+def resume_ready_inputs(self, work_ids, admissions, epochs):
+    """Revisit exact prerequisites ahead of discovery. The global policy still places work."""
+    from loom.pipeline.orchestration import SchedulingProjectionState
+    for work_id in work_ids:
+        record = self.stage_work_store.find_stage_work(work_id)
+        if record is None or record.scheduling_state is not SchedulingProjectionState.READY:
+            continue
+        admissions.include({record.admission_id})
+        admission = admissions.get(record.admission_id)
+        context = self._cycle_contexts.get(record.admission_id)
+        if (admission is None or context is None or self._cycle_context_epochs.get(record.admission_id) != epochs
+            or self._cycle_context_revisions.get(record.admission_id) != admission.revision
+            or self._attempt_cancel_requested(record.run_uri, record.attempt_id)):
+            continue
+        try:
+            _advance_ready_inputs(self, record, admission, context, epochs, anticipated=False)
+        except Exception:
+            # The selected route owns the durable decision about a failed preparation.
+            continue
 
 
 def _schedule_window(
@@ -369,6 +430,13 @@ def _schedule_window(
             >= context[0].max_parallel_stages
         ):
             exhausted_admissions.add(record.admission_id)
+            self._scheduling_waits.record(record.run_uri, record.stage_name, "reservation")
+        elif daemon is not None:
+            try:
+                _advance_ready_inputs(self, record, admission, context, epochs, anticipated=True)
+            except Exception:
+                # Route-specific eligibility will report/retry the exact preparation.
+                pass
     remote_targets = self._remote_candidates()
     local_candidate = (
         self._candidate_for_dispatch()
@@ -390,6 +458,7 @@ def _schedule_window(
             try:
                 observed[identity] = self.dispatch_observations.poll(
                     admission, epochs, lambda: authority.open_run(admission.run_uri),
+                    notify=lambda: self._ready_continuations.post(record.stage_work_id),
                 )
             except Exception as error:
                 with self.daemon._state_guard():
@@ -400,6 +469,7 @@ def _schedule_window(
                 observed[identity] = None
         snapshot = observed[identity]
         if snapshot is None:
+            self._scheduling_waits.record(record.run_uri, record.stage_name, "preparation")
             exhausted_admissions.add(identity)
             return None
         if snapshot.revision.sequence < record.authority_revision.sequence:
@@ -497,6 +567,7 @@ def _schedule_window(
                 cast(str, record.placement.route.profile_configuration_fingerprint),
             )
             if not profile.available:
+                self._scheduling_waits.record(record.run_uri, record.stage_name, "host_eligibility")
                 if waiting_outcomes is not None and admission.admission_id in waiting_outcomes:
                     waiting_outcomes[admission.admission_id] = LocalDaemonExecutionOutcome(
                         LocalDaemonAdmissionState.WAITING, "slurm_route_unavailable_or_unmappable",
@@ -529,8 +600,11 @@ def _schedule_window(
                 outcome is not None
                 and outcome.state is LocalDaemonAdmissionState.ACTIVE
             ):
+                self._scheduling_waits.clear(record.run_uri, record.stage_name)
                 return admission.admission_id, outcome
         if selected_id is None:
+            for pending in managed_records:
+                self._scheduling_waits.record(pending.run_uri, pending.stage_name, "host_eligibility")
             return None
         record = _stage_work(self.stage_work_store, selected_id)
         admission = admissions.get(record.admission_id)
@@ -568,6 +642,7 @@ def _schedule_window(
         if remote_target is not None:
             eligible = self._remote_eligible(intent=intent, snapshot=snapshot, record=record)
             if eligible is None:
+                self._scheduling_waits.record(record.run_uri, record.stage_name, "request_preparation")
                 excluded_work.add(record.stage_work_id)
                 continue
             if not eligible:
@@ -600,6 +675,7 @@ def _schedule_window(
         if not started:
             excluded_work.add(record.stage_work_id)
             continue
+        self._scheduling_waits.clear(record.run_uri, record.stage_name)
         return admission.admission_id, LocalDaemonExecutionOutcome(
             LocalDaemonAdmissionState.ACTIVE,
             "assignment was durably accepted",

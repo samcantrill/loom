@@ -2395,25 +2395,24 @@ def test_owner_store_validation_is_once_per_operation_not_cached_across_operatio
         execution = daemon._execution
         assert execution is not None
         counts = Counter()
-        stores = (
-            execution.stage_work_store, execution.coordinator,
-            execution.slurm_submissions, execution.slurm_assignments, execution.journal,
-        )
-        for store in stores:
-            assert store is not None
-            owner = type(store)
-            original = owner._open_existing
+        # Count SQLite opens themselves. Stage work, native assignments,
+        # SLURM submission projection, binding and status share a snapshot.
+        original = sqlite3.connect
 
-            def counted(self, original=original, name=owner.__name__):
-                counts[name] += 1
-                return original(self)
+        def counted(database, *args, **kwargs):
+            counts[str(database)] += 1
+            return original(database, *args, **kwargs)
 
-            monkeypatch.setattr(owner, "_open_existing", counted)
-        expected = {type(store).__name__: 1 for store in stores}
+        monkeypatch.setattr(sqlite3, "connect", counted)
+        expected = {
+            config.execution_database.resolve().as_uri() + "?mode=ro": 1,
+            config.execution_database.resolve().as_uri() + "?mode=rw": 1,
+            config.agent_journal.resolve().as_uri() + "?mode=rw": 1,
+        }
         execution.open_owner_stores()
         assert counts == expected
         execution.open_owner_stores()
-        assert counts == {name: 2 for name in expected}
+        assert counts == {path: 2 * n for path, n in expected.items()}
     finally:
         daemon.stop()
 

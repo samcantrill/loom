@@ -965,6 +965,24 @@ stderr. `control_application` and its nested probes include the existing control
 operation ID. These diagnostics contain no request bodies or environment values,
 and observation/write failures do not change native outcomes or acknowledgements.
 
+Each process queues up to 256 phase records for one background stderr writer.
+HTTP timing records report `active_nanoseconds` separately from
+`idle_nanoseconds` measured during change-notification waits. Work polls and
+control waits return that measurement to the agent in the optional
+`X-Loom-Idle-Nanoseconds` header. Peers without the header count the full
+exchange as active. Failed operations and operations with at least one second
+of active work are selected, along with one in 64 ordinary operations.
+`LOOM_QUALIFICATION_TIMINGS=all` selects every operation. Each written record
+carries cumulative process-local `omitted_records` and
+`omitted_qualification_records` counts for full queues and failed writes.
+The coordinator also exposes these counts through the operator status
+observation's `phase_diagnostics` field, including while stderr is blocked.
+
+On its next start, a tmux-managed service sends combined stdout and stderr to
+a pipe reader that owns and rotates `service.log` at 16 MiB, keeping three
+numbered backups. An existing oversized log becomes the first backup at the
+next write. Systemd-user services use their journal's retention policy.
+
 Operator RPC spans identify both host and native action (`rpc_<action>`). The
 classified span is nested inside `host_rpc`; it must not be added to the aggregate
 as extra elapsed time. Request bodies and credentials are not recorded.

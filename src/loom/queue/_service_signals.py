@@ -4,6 +4,7 @@ from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from typing import Literal
 
+from ._phase_timing import idle_wait
 from .errors import QueueServiceError
 import sqlite3
 from threading import Condition
@@ -25,7 +26,7 @@ class _ChangeSignal:
             self._condition.notify_all()
 
     def wait_for_change(self, observed: int, timeout: float) -> None:
-        with self._condition:
+        with self._condition, idle_wait():
             self._condition.wait_for(
                 lambda: self._closed or self._generation != observed,
                 timeout=timeout,

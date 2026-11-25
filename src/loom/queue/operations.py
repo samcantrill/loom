@@ -94,6 +94,7 @@ class OperatorObservation:
 
 
 def _coordinator_observation(daemon: LocalDaemon) -> OperatorObservation:
+    from ._phase_diagnostics import diagnostics
     from ._maintenance import MAINTENANCE_CAPABILITY, SUBMITTED_CHECK_CAPABILITY
     status = daemon.status()
     with daemon._connection() as conn:
@@ -114,6 +115,7 @@ def _coordinator_observation(daemon: LocalDaemon) -> OperatorObservation:
             "configuration_revision": metadata.get("active_configuration_revision"),
             "configuration_fingerprint": daemon.config.active_configuration_fingerprint,
             "lifecycle_observers": lifecycle_backlog,
+            "phase_diagnostics": diagnostics.counts(),
             "scheduling_fingerprint": metadata.get("scheduling_fingerprint"),
             "capabilities": [OPERATOR_CAPABILITY, MAINTENANCE_CAPABILITY, SUBMITTED_CHECK_CAPABILITY, CONDITIONAL_CONTROL_CAPABILITY, "quiescent-profile-promotion-v2", "quiescent-source-promotion-v1", "quiescent-configuration-retirement-v1", "quiescent-coordinator-retirement-v1", "quiescent-container-policy-addition-v1", "quiescent-publication-budget-increase-v1", GPU_POLICY_CONTRACTION_CAPABILITY, GPU_POLICY_EXPANSION_CAPABILITY],
         },
