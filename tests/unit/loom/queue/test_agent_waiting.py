@@ -960,6 +960,53 @@ def test_retirement_notifies_at_withdrawal_even_if_later_proof_fails(
         )
 
 
+@pytest.mark.parametrize("reader", ["agent", "coordinator", "observation"])
+def test_lifetime_owner_scan_allows_renewal_and_refuses_new_work(waiting_owner, monkeypatch, reader):
+    from loom.queue import local_daemon_execution
+    from loom.queue.agent_sessions import AgentOfferRenewal
+
+    daemon, session, _, target, _ = waiting_owner
+    view = _view(daemon)
+    entered, resume = Event(), Event()
+    inspect = local_daemon_execution.local_daemon_owner_work_is_retained
+
+    def paused(*args, **kw):
+        retained = inspect(*args, **kw)
+        assert not retained
+        entered.set()
+        assert resume.wait(5)
+        return retained
+
+    monkeypatch.setattr(local_daemon_execution, "local_daemon_owner_work_is_retained", paused)
+    with daemon._connection() as conn:
+        offer_id = conn.execute("SELECT offer_id FROM agent_offers WHERE current=1").fetchone()[0]
+    with ThreadPoolExecutor() as pool:
+        if reader == "agent":
+            decision = pool.submit(view.service_lifetime, session.session_id, session.coordinator_epoch,
+                                   "generation", "observe")
+        elif reader == "coordinator":
+            decision = pool.submit(daemon._lifetime.retire_if_idle)
+        else:
+            decision = pool.submit(daemon._lifetime.observe, session.agent_root_id)
+        try:
+            assert entered.wait(3)
+            renewal = AgentOfferRenewal(session.session_id, offer_id, session.availability_revision, 1)
+            assert pool.submit(view.renew_offer, renewal).result(2)["state"] == "renewed"
+            pool.submit(target).result(2)
+        finally:
+            resume.set()
+        outcome = decision.result(3)
+    if reader == "agent":
+        assert outcome["state"] == "retained"
+    elif reader == "coordinator":
+        assert outcome is False
+    else:
+        assert outcome["retained"] and not outcome["retiring"]
+    assert not daemon._lifetime.retiring
+    with daemon._connection() as conn:
+        assert conn.execute("SELECT state FROM agent_sessions").fetchone()[0] == "ACTIVE"
+
+
 def test_command_lifetime_withdrawal_wakes_poll(waiting_owner, monkeypatch):
     daemon, session, request, target, poll = waiting_owner
     ready = _observe_sleep(monkeypatch)

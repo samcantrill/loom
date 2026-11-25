@@ -4762,17 +4762,21 @@ class AgentSessionService:
             raise QueueServiceError("remote execution owner is unavailable")
         return execution
 
-    @_serialized_session_operation
     def service_lifetime(
         self, session_id: str, coordinator_epoch: str, generation: str, action: str
     ) -> Mapping[str, PlainData]:
         """Authorize this process generation's retirement from accepted work."""
-        rule, policy_revision = self._authorize("retire")
         daemon = self._daemon
-        if coordinator_epoch != daemon._epoch or action not in {"observe", "closed"}:
-            raise QueueConflictError("service retirement generation is stale")
         _identifier(generation, "service generation")
-        with daemon._connection() as conn:
+        if action not in {"observe", "closed"}:
+            raise QueueConflictError("service retirement generation is stale")
+        inspected = False
+        idle_owners = None
+
+        def transition(conn):
+            rule, _ = self._authorize("retire")
+            if coordinator_epoch != daemon._epoch:
+                raise QueueConflictError("service retirement generation is stale")
             session = _session_from_row(
                 conn.execute(
                     "SELECT * FROM agent_sessions WHERE session_id = ?", (session_id,)
@@ -4815,7 +4819,9 @@ class AgentSessionService:
                     state = "authorized"
                 elif session.state is not AgentSessionState.ACTIVE:
                     raise QueueConflictError("service retirement session is not active")
-                elif daemon._lifetime.retained():
+                elif not inspected:
+                    return None
+                elif daemon._lifetime.retained_at(conn, idle_owners):
                     state = "retained"
                 else:
                     if not _coordinator_references_empty(conn, session_id):
@@ -4841,8 +4847,15 @@ class AgentSessionService:
                 "INSERT INTO daemon_metadata(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (key, _canonical_json(result)),
             )
-            conn.commit()
-        if state == "authorized":
+            return result
+
+        result = short_write(daemon, transition)
+        if result is None:
+            idle_owners = daemon._lifetime.sample_idle_owners()
+            inspected = True
+            result = short_write(daemon, transition)
+            assert result is not None
+        if result["state"] == "authorized":
             daemon._poll_waiters.notify(session_id)
         return result
 

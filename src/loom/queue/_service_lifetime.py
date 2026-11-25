@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import json
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 from pathlib import Path
 
 from loom._sqlite_policy import SQLitePolicy, connect_existing
 
+from ._coordinator_transactions import short_write
 from .errors import QueueServiceError
 
 if TYPE_CHECKING:
@@ -22,6 +23,14 @@ if TYPE_CHECKING:
 
 class ServiceRetiring(QueueServiceError):
     """Acceptance lost the serialized race to clean retirement; reconnect."""
+
+
+class _OwnerGeneration(NamedTuple):
+    coordinator_id: str
+    coordinator_epoch: str | None
+    scheduling_epoch: str | None
+    agent_id: str | None
+    reference_revision: int
 
 
 class CoordinatorLifetime:
@@ -36,7 +45,7 @@ class CoordinatorLifetime:
             raise ServiceRetiring("coordinator is retiring; reconnect")
 
     def attach(self, attachment_id: str, expires_at: float) -> dict[str, object]:
-        with self.daemon._cycle_lock, self.daemon._connection() as conn:
+        def apply(conn):
             self.require_accepting()
             if expires_at <= time.time() or expires_at > time.time() + 300:
                 raise QueueServiceError("startup attachment expiry is invalid")
@@ -45,101 +54,133 @@ class CoordinatorLifetime:
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 ("startup-attachment:" + attachment_id, json.dumps(expires_at)),
             )
-            conn.commit()
+        short_write(self.daemon, apply)
         return {"attachment_id": attachment_id, "expires_at": expires_at}
 
     def release(self, attachment_id: str) -> dict[str, object]:
-        with self.daemon._cycle_lock, self.daemon._connection() as conn:
+        def apply(conn):
             conn.execute(
                 "DELETE FROM daemon_metadata WHERE key = ?",
                 ("startup-attachment:" + attachment_id,),
             )
-            conn.commit()
+        short_write(self.daemon, apply)
         return {"attachment_id": attachment_id, "released": True}
 
-    def retained(self) -> bool:
-        """Called under the application cycle lock, including during retirement."""
+    def _scope(self) -> _OwnerGeneration:
+        daemon = self.daemon
+        if daemon._service_error is not None:
+            raise QueueServiceError("service reconciliation is unavailable")
+        return _OwnerGeneration(
+            daemon._require_started(), daemon._epoch, daemon._scheduling_epoch,
+            daemon._agent_id, daemon._scheduling_reference_revision,
+        )
+
+    def sample_idle_owners(self) -> _OwnerGeneration | None:
+        """Check the physical stores without holding a coordinator guard."""
         from .local_daemon_execution import local_daemon_owner_work_is_retained
 
         daemon = self.daemon
-        daemon._require_started()
-        if daemon._service_error is not None:
-            raise QueueServiceError("service reconciliation is unavailable")
+        with daemon._state_guard():
+            scope = self._scope()
+            config = daemon.config
         with daemon._connection() as conn:
-            # Terminal preparation-only history and publication pins do not retain
-            # services. Run continuations stay pending until exact admission.
             if _retained_coordinator_operations(conn):
-                return True
-            for row in conn.execute(
-                "SELECT key, value FROM daemon_metadata WHERE key LIKE 'startup-attachment:%'"
-            ):
-                if float(json.loads(row["value"])) > time.time():
-                    return True
-                conn.execute("DELETE FROM daemon_metadata WHERE key = ?", (row["key"],))
-            conn.commit()
-        return local_daemon_owner_work_is_retained(
-            daemon.config,
-            coordinator_id=daemon._require_started(),
-            agent_id=daemon._agent_id,
+                return None
+        if local_daemon_owner_work_is_retained(config, coordinator_id=scope.coordinator_id, agent_id=scope.agent_id):
+            return None
+        return scope
+
+    def retained_at(self, conn, idle_owners: _OwnerGeneration | None) -> bool:
+        """Resolve a sample under the final coordinator transaction."""
+        scope = self._scope()
+        if idle_owners != scope or _retained_coordinator_operations(conn):
+            return True
+        conn.execute(
+            "DELETE FROM daemon_metadata WHERE key LIKE 'startup-attachment:%' "
+            "AND json_extract(value, '$') <= ?", (time.time(),),
+        )
+        return False
+
+    def observe(self, agent_root_id=None) -> dict:
+        sample = self.sample_idle_owners()
+
+        def read(conn):
+            result = {"coordinator_id": self.daemon._require_started(), "coordinator_epoch": self.daemon._epoch,
+                      "retiring": self.retiring, "retained": self.retained_at(conn, sample),
+                      "cleanup_blocked": self.cleanup_blocked}
+            if agent_root_id is not None:
+                row = conn.execute("SELECT value FROM daemon_metadata WHERE key=?",
+                                   ("service-agent:" + agent_root_id,)).fetchone()
+                result["agent"] = None if row is None else json.loads(row[0])
+            return result
+
+        return short_write(self.daemon, read)
+
+    def retained(self) -> bool:
+        sample = self.sample_idle_owners()
+        return short_write(self.daemon, lambda conn: self.retained_at(conn, sample))
+
+    def _can_retire(self, conn, sample) -> bool:
+        return not self.retained_at(conn, sample) and not (
+            conn.execute("SELECT 1 FROM daemon_metadata WHERE key LIKE 'service-agent:%' "
+                         "AND json_extract(value, '$.state') != 'closed' LIMIT 1").fetchone()
+            or conn.execute("SELECT 1 FROM agent_coordinator_references WHERE resolved=0 LIMIT 1").fetchone()
         )
 
+    def _fence(self, accepted: bool) -> None:
+        if accepted:
+            self.retiring = True
+
     def retire_if_idle(self) -> bool:
-        with self.daemon._cycle_lock:
+        with self.daemon._state_guard():
             if self.retiring:
                 return True
-            if self.retained():
-                return False
-            with self.daemon._connection() as conn:
-                if (
-                    conn.execute(
-                        "SELECT 1 FROM daemon_metadata WHERE key LIKE 'service-agent:%' AND json_extract(value, '$.state') != 'closed' LIMIT 1"
-                    ).fetchone()
-                    is not None
-                ):
-                    return False
-            self.retiring = True
-            return True
+        sample = self.sample_idle_owners()
+        return short_write(self.daemon, lambda conn: self.retiring or self._can_retire(conn, sample),
+                           committed=self._fence)
 
     def retire_explicit(self, operation_id: str, coordinator_id: str) -> dict:
         """Atomically fence new acceptance and retain an operator removal receipt."""
         from .errors import QueueConflictError
-        from .retirement import _identifiers, _save, retirement_receipt
+        from .retirement import _identifiers
 
         _identifiers(operation_id, coordinator_id)
         daemon = self.daemon
-        with daemon._cycle_lock:
+        def prior_receipt(conn):
             if daemon._require_started() != coordinator_id:
                 raise QueueConflictError("retirement coordinator identity changed")
-            root = daemon.config.coordinator_root
-            prior = retirement_receipt(root)
+            prior = conn.execute("SELECT value FROM root_metadata WHERE key='role_retirement'").fetchone()
             if prior is not None:
-                if prior["operation_id"] != operation_id:
-                    raise QueueConflictError(
-                        "another retirement operation owns this role"
-                    )
-                return prior
+                receipt = json.loads(prior[0])
+                if receipt["operation_id"] != operation_id:
+                    raise QueueConflictError("another retirement operation owns this role")
+                return receipt
             if daemon.config.agent_root is not None:
-                raise QueueConflictError(
-                    "retire a pure coordinator; embedded agents require separate recovery"
-                )
-            with daemon._connection() as conn:
-                if conn.execute(
-                    "SELECT 1 FROM agent_sessions WHERE state NOT IN ('RETIRED_CLEAN','REPLACED') LIMIT 1"
-                ).fetchone():
-                    raise QueueConflictError("coordinator still has unretired agents")
-            if not self.retire_if_idle():
-                raise QueueConflictError(
-                    "coordinator has retained work or startup attachments"
-                )
-            receipt = {
-                "role": "coordinator",
-                "state": "retired",
-                "operation_id": operation_id,
-                "coordinator_id": coordinator_id,
-                "root_id": coordinator_id,
-            }
-            _save(root, receipt, sqlite_policy=self.daemon.config.sqlite_policy)
+                raise QueueConflictError("retire a pure coordinator; embedded agents require separate recovery")
+            return None
+
+        with daemon._connection() as conn, daemon._state_guard():
+            prior = prior_receipt(conn)
+            if prior is not None:
+                return prior
+        sample = self.sample_idle_owners()
+
+        def apply(conn):
+            prior = prior_receipt(conn)
+            if prior is not None:
+                return prior
+            if conn.execute("SELECT 1 FROM agent_sessions WHERE state NOT IN "
+                            "('RETIRED_CLEAN','REPLACED') LIMIT 1").fetchone():
+                raise QueueConflictError("coordinator still has unretired agents")
+            if not self._can_retire(conn, sample):
+                raise QueueConflictError("coordinator has retained work or startup attachments")
+            receipt = {"role": "coordinator", "state": "retired", "operation_id": operation_id,
+                       "coordinator_id": coordinator_id, "root_id": coordinator_id}
+            conn.execute("INSERT INTO root_metadata(key,value) VALUES ('role_retirement',?)",
+                         (json.dumps(receipt, sort_keys=True),))
             return receipt
+
+        return short_write(daemon, apply, committed=lambda _: self._fence(True))
 
 
 def record_process(

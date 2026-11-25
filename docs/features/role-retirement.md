@@ -39,11 +39,13 @@ loom queue daemon-retire --endpoint /LOCAL/daemon.sock \
 ```
 
 The same operation is `CoordinatorOperatorClient.retire`. It requires the existing
-local-owner `scheduling_reload` authorization. Under the application cycle lock,
-it checks all accepted-work owners, startup attachments and remote sessions,
-then permanently fences new acceptance and registration. This is not a status
-snapshot followed by a later unguarded shutdown. Embedded local agents are not
-supported by this operator removal surface.
+local-owner `scheduling_reload` authorization and a pure coordinator. It
+inspects physical owner stores outside the coordinator lock. The final control
+transaction checks the sampled owner generation, accepted work, live startup
+attachments, unresolved references and session retirement. It commits the
+native receipt and fences acceptance and registration before releasing the
+coordinator guard. Work accepted during the physical inspection keeps the
+service available.
 
 `CoordinatorOperatorClient.agent_retirement_ready(agent_id, session_id)` requires
 the existing scoped drain authorization and observes coordinator-side references

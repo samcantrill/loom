@@ -722,12 +722,7 @@ def dispatch_control(
         elif operation == "startup_release":
             result = daemon._lifetime.release(cast(str, value["attachment_id"]))
         elif operation == "service_lifetime":
-            with daemon._cycle_lock:
-                result = {"coordinator_id": daemon._require_started(), "coordinator_epoch": daemon._epoch, "retiring": daemon._lifetime.retiring, "retained": daemon._lifetime.retained(), "cleanup_blocked": daemon._lifetime.cleanup_blocked}
-                if value["agent_root_id"] is not None:
-                    with daemon._connection() as conn:
-                        row = conn.execute("SELECT value FROM daemon_metadata WHERE key = ?", ("service-agent:" + cast(str, value["agent_root_id"]),)).fetchone()
-                    result["agent"] = None if row is None else json.loads(row[0])
+            result = daemon._lifetime.observe(value["agent_root_id"])
         elif operation == "status":
             result = view.status()
         elif operation == "admissions":
