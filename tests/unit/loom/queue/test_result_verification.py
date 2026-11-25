@@ -56,20 +56,20 @@ def test_audits_have_no_backlog_and_close_retains_running_capacity():
     pool = ResultVerifications(woke.set)
     calls = []
 
-    def verify(outputs):
-        calls.append(outputs)
+    def verify():
+        calls.append(True)
         entered.wait(timeout=10)
         assert release.wait(timeout=10)
 
     try:
         for identity in ("first", "second", "excess", "first"):
-            pool.submit({"claim_id": identity}, ("epoch", "schedule"), {}, {}, verify)
+            pool.submit({"claim_id": identity}, ("epoch", "schedule"), {}, verify)
         entered.wait(timeout=10)
         assert len(calls) == 2
         assert pool.completed() == ()
         pool.close()
         assert pool.running()
-        pool.submit({"claim_id": "after-close"}, (None, None), {}, {}, verify)
+        pool.submit({"claim_id": "after-close"}, (None, None), {}, verify)
         release.set()
         # Wait for both actual workers, without manufacturing capacity on close.
         for item in tuple(pool._pending.values()):
@@ -89,13 +89,13 @@ def test_worker_failure_is_returned_to_owner_without_mutating_parent_timings():
     parent_spans = []
     pool = ResultVerifications(woke.set)
 
-    def verify(outputs):
+    def verify():
         with phase("publication_inventory_hash"):
             raise OSError("unreadable companion")
 
     try:
         with observe_phases(parent_spans.append):
-            pool.submit({"claim_id": "failed"}, ("epoch", "schedule"), {}, {}, verify)
+            pool.submit({"claim_id": "failed"}, ("epoch", "schedule"), {}, verify)
         assert woke.wait(timeout=10)
         completed, = pool.completed()
         with pytest.raises(OSError, match="unreadable companion"):
@@ -190,14 +190,14 @@ def test_delayed_proof_rechecks_demand_epochs_and_authority(tmp_path, monkeypatc
 
     monkeypatch.setattr(resolver, "_checked_result_outputs", check_authority)
 
-    def verify(outputs):
+    def verify():
         entered.set()
         assert release.wait(timeout=10)
         if change == "corrupt":
             raise OSError("companion became unreadable")
 
     try:
-        pool.submit(captured, ("epoch", "schedule"), {"commit": "original"}, {}, verify)
+        pool.submit(captured, ("epoch", "schedule"), {"commit": "original"}, verify)
         assert entered.wait(timeout=10)
         if change in {"cancel", "shared_cancel"}:
             store.detach_graph("run-a", "cancel-a")
@@ -265,10 +265,10 @@ def test_report_and_result_consumers_share_actual_io_capacity():
     try:
         report = pool.bulk.submit("preparation", "report_hydration", blocked)
         assert report is not None
-        pool.submit({"claim_id": "producer"}, (None, None), {}, {}, verify)
+        pool.submit({"claim_id": "producer"}, (None, None), {}, verify)
         entered.wait(timeout=10)
         assert pool.bulk.submit("excess-report", "report_hydration", blocked) is None
-        pool.submit({"claim_id": "excess-producer"}, (None, None), {}, {}, verify)
+        pool.submit({"claim_id": "excess-producer"}, (None, None), {}, verify)
         release.set()
         assert report.result(timeout=10) == "hydrated"
         for item in tuple(pool._pending.values()):

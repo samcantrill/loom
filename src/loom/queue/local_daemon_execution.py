@@ -1630,7 +1630,8 @@ class LocalDaemonExecution:
         """Observe completed exact assignment work before scheduling again."""
 
         if self._action_resolution is not None:
-            self._action_resolution.reconcile_cancellations()
+            # Live requests detach demands in their acceptance transaction.
+            # Startup repairs retained cancellations before workers resume.
             self._action_resolution.discard_terminal_contexts()
             self._action_resolution.complete_verifications()
 

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, cast
 
 from loom.pipeline.orchestration import READY_WINDOW_LIMIT, RunOrchestrator, SubmittedContainerRequirement
 from .submitted_execution import SubmittedContainerCapability
+from loom.pipeline.planning import PlanAction
 from loom.pipeline.runtime import ExecutionRouteKind
 from loom.pipeline.status import StageStatus
 from loom.scheduling import PolicyDecisionState
@@ -26,8 +27,7 @@ from ._phase_timing import phase
 
 if TYPE_CHECKING:
     from loom.pipeline.orchestration import ManagedExecutionRequirement, SQLiteStageWorkStore, StageWorkRecord
-    from loom.pipeline.planning import AttemptReadiness, StagePlan
-    from loom.pipeline.stores.read_models import AuthoritativeRunSnapshot, BackendRevision
+    from loom.pipeline.stores.read_models import AuthoritativeRunSnapshot
     from ._context_preparation import PreparedAdmissionContext
     from ._coordinator_run_authority import _ScopedCoordinatorAuthority
     from .local_daemon import LocalDaemonAdmission
@@ -109,9 +109,14 @@ def _drive_run_steps[T](
     steps: ObservationSteps[T], authority: _ScopedCoordinatorAuthority, run_uri: str,
 ) -> T:
     try:
-        next(steps)
+        request = next(steps)
         while True:
-            steps.send(authority.open_run(run_uri))
+            try:
+                result = authority.open_run(run_uri) if request is None else request()
+            except Exception as error:
+                request = steps.throw(error)
+            else:
+                request = steps.send(result)
     except StopIteration as settled:
         return settled.value
     finally:
@@ -168,18 +173,13 @@ def _reconcile_admission_steps(
         ))
         if terminal is not None and not cancelling:
             return terminal
-        def resolve_ready(stage_plan: StagePlan, readiness: AttemptReadiness, revision: BackendRevision) -> BackendRevision | None:
-            if cancelling:
-                return None if action_resolver is not None and action_resolver.store.producer_needed(admission.run_uri, stage_plan.stage_name) else revision
-            return None if action_resolver is None else action_resolver.resolve(admission, intent, scoped_authority, stage_plan, readiness, revision, snapshot)
-
         steps = orchestrator._ready_steps(
             admission_id=admission.admission_id,
             plan=intent.plan,
             authority_snapshot=snapshot,
             placements=placements,
             execution_requirements=intent.execution_requirements,
-            ready_action=resolve_ready,
+            resolve_ready=cancelling or action_resolver is not None,
             ready_at=snapshot_time,
             run_priority=admission.run_priority,
             enqueue_sequence=admission.enqueue_sequence,
@@ -196,6 +196,15 @@ def _reconcile_admission_steps(
                     except StopIteration:
                         break
                 action_revision = None
+                if readiness.action is PlanAction.RUN:
+                    if cancelling:
+                        if action_resolver is None or not action_resolver.store.producer_needed(admission.run_uri, stage_plan.stage_name):
+                            action_revision = expected
+                    elif action_resolver is not None:
+                        action_revision = yield from action_resolver.resolve_steps(
+                            admission, intent, scoped_authority, stage_plan, readiness, expected, snapshot,
+                        )
+                    continue
                 if cancelling:
                     continue
                 # The planner's original stage facts remain valid only through

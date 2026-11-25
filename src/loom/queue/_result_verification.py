@@ -6,7 +6,6 @@ from concurrent.futures import Future
 from dataclasses import dataclass
 from typing import Any
 
-from loom.artifacts import ArtifactRef
 from loom.serialization import PlainData
 
 from ._bulk_operations import BulkOperations
@@ -30,14 +29,13 @@ class ResultVerifications:
         self._closed = False
 
     def submit(self, claim: Mapping[str, Any], epochs: tuple[str | None, str | None],
-               result: Mapping[str, PlainData], outputs: Mapping[str, ArtifactRef],
-               verify: Callable[[Mapping[str, ArtifactRef]], None]) -> None:
+               result: Mapping[str, PlainData], verify: Callable[[], None]) -> None:
         identity = claim["claim_id"]
         if (self._closed or identity in self._pending or identity in self._applying
                 or len(self._pending) + len(self._applying) >= 2):
             return
         future = self.bulk.submit(
-            identity, "action_result_byte_verification", verify, dict(outputs)
+            identity, "action_result_byte_verification", verify
         )
         if future is None:
             return

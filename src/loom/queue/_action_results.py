@@ -360,7 +360,9 @@ class ActionResults:
             return tuple(
                 dict(row)
                 for row in conn.execute(
-                    "SELECT * FROM action_claims WHERE owner_run_uri = ?", (run_uri,)
+                    "SELECT c.* FROM action_demands d JOIN action_claims c ON c.claim_id = d.claim_id "
+                    "WHERE d.run_uri = ? AND c.owner_run_uri = d.run_uri AND c.owner_node = d.node",
+                    (run_uri,),
                 )
             )
 

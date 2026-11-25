@@ -967,15 +967,19 @@ class RunOrchestrator:
             admission_id=admission_id, plan=plan, authority_snapshot=authority_snapshot,
             placements=placements, execution_requirements=execution_requirements,
             ready_at=ready_at, run_priority=run_priority, enqueue_sequence=enqueue_sequence,
-            max_work_items=max_work_items, after_stage=after_stage, ready_action=ready_action,
+            max_work_items=max_work_items, after_stage=after_stage, resolve_ready=ready_action is not None,
         )
+        revision = None
         try:
             while True:
                 try:
-                    stage, readiness, _ = next(steps)
+                    stage, readiness, expected = steps.send(revision)
                 except StopIteration as settled:
                     return settled.value
-                if controller_action is not None:
+                revision = None
+                if readiness.action is PlanAction.RUN and ready_action is not None:
+                    revision = ready_action(stage, readiness, expected)
+                elif controller_action is not None:
                     controller_action(stage, readiness)
         finally:
             steps.close()
@@ -993,7 +997,7 @@ class RunOrchestrator:
         enqueue_sequence: int = 0,
         max_work_items: int = 256,
         after_stage: str | None = None,
-        ready_action: ReadyActionHandler | None = None,
+        resolve_ready: bool = False,
     ) -> Generator[tuple[StagePlan, AttemptReadiness, BackendRevision], BackendRevision | None, tuple[StageWorkRecord, ...]]:
         admission_id = _non_empty(admission_id, "admission_id")
         _integer(ready_at, "ready_at", minimum=0)
@@ -1103,8 +1107,8 @@ class RunOrchestrator:
                 if committed is not None:
                     current_revision = _advance_revision_cursor(current_revision, committed)
                 continue
-            if ready_action is not None and prior_intent is None:
-                resolved_revision = ready_action(stage_plan, readiness, current_revision)
+            if resolve_ready and prior_intent is None:
+                resolved_revision = yield stage_plan, readiness, current_revision
                 if resolved_revision is not None:
                     current_revision = _advance_revision_cursor(current_revision, resolved_revision)
                     continue

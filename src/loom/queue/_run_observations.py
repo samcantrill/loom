@@ -7,7 +7,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from contextvars import copy_context
 from dataclasses import dataclass, field
 from time import monotonic
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from loom.pipeline.stores.read_models import AuthoritativeRunSnapshot
@@ -18,7 +18,9 @@ if TYPE_CHECKING:
 
 
 type Epochs = tuple[str | None, str | None]
-type ObservationSteps[T] = Generator[None, "AuthoritativeRunSnapshot", T]
+# A bare yield requests the fresh run snapshot and its audit safe point.
+# A callable requests only its original operation, preserving the revision window.
+type ObservationSteps[T] = Generator[Callable[[], Any] | None, Any, T]
 type RunSteps = ObservationSteps["LocalDaemonExecutionOutcome"]
 type TerminalSteps = ObservationSteps["LocalDaemonExecutionOutcome | None"]
 
@@ -34,7 +36,7 @@ class RunObservation:
     context: PreparedAdmissionContext
     steps: RunSteps
     seen: set[tuple[tuple[str, ...], str, str]] = field(default_factory=set)
-    read: Future[AuthoritativeRunSnapshot] | None = None
+    read: Future[Any] | None = None
 
     def result(self) -> PreparedAdmissionContext:
         return self.context
@@ -53,8 +55,8 @@ class RunObservations:
     def __init__(self, wake: Callable[[], None], before_read: Callable[[str], Future[bool] | None] | None = None) -> None:
         self._executor = ThreadPoolExecutor(max_workers=self._workers, thread_name_prefix="loom-run-observation")
         self._current: OrderedDict[str, RunObservation] = OrderedDict()
-        self._retiring: dict[str, Future[AuthoritativeRunSnapshot]] = {}
-        self._waiting: dict[str, Callable[[], AuthoritativeRunSnapshot]] = {}
+        self._retiring: dict[str, Future[Any]] = {}
+        self._waiting: dict[str, Callable[[], Any]] = {}
         self._wake = wake
         self._before_read = before_read
 
@@ -127,9 +129,14 @@ class RunObservations:
         try:
             with bulk.offering(scope, across_turns=job.seen):
                 if job.read is None:
-                    next(job.steps)
+                    request = next(job.steps)
                 elif job.read.done():
-                    job.steps.send(job.read.result())
+                    try:
+                        result = job.read.result()
+                    except Exception as error:
+                        request = job.steps.throw(error)
+                    else:
+                        request = job.steps.send(result)
                 else:
                     raise RunObservationPending()
         except StopIteration as settled:
@@ -146,11 +153,13 @@ class RunObservations:
         # peers get a turn before this run requests its next observation.
         captured = copy_context()
         job.read = None
-        audit = self._before_read(admission.run_uri) if self._before_read is not None else None
+        audit = self._before_read(admission.run_uri) if request is None and self._before_read is not None else None
         def load():
             if audit is not None:
                 audit.result()
-            return captured.run(job.context[1].open_run, admission.run_uri)
+            if request is None:
+                return captured.run(job.context[1].open_run, admission.run_uri)
+            return captured.run(request)
         self._waiting[identity] = load
         self._current.move_to_end(identity)
         self._start_reads()
