@@ -9,7 +9,7 @@ from hashlib import sha256
 import logging
 from threading import Lock
 from time import monotonic
-from typing import Any, cast
+from typing import Any, NamedTuple, cast
 
 from loom.pipeline.event_sinks import (
     EventObserverLinkRecord,
@@ -70,8 +70,14 @@ def parse_event_sinks(value: object) -> tuple[Mapping[str, object], ...]:
     return tuple(specs)
 
 
+class _Callback(NamedTuple):
+    run_uri: str
+    future: Future["_ObserverContext"]
+    queued_at: float
+
+
 class LifecycleObservers:
-    """One process's explicit callbacks; no history replay or delivery queue."""
+    """Run-ordered audit facts and process-local callback delivery."""
 
     def __init__(self, specs: Sequence[Mapping[str, object]] = ()) -> None:
         self._specs = tuple(specs)
@@ -79,11 +85,11 @@ class LifecycleObservers:
         self._started = False
         self._lock = Lock()
         self._run_guards = PublicationGuards()
-        self._observations: dict[str, deque[tuple[Any, dict[str, Any]]]] = {}
-        self._deliveries: deque[tuple[str, Future[_ObserverContext]]] = deque()
+        self._observations: dict[str, deque[tuple[Any, dict[str, Any], float]]] = {}
+        self._deliveries: deque[_Callback] = deque()
         self._worker: ThreadPoolExecutor | None = None
         self._wake: Callable[[], None] | None = None
-        self._flushing = False
+        self._applying_since: float | None = None
 
     def enable_delivery(self, wake: Callable[[], None]) -> None:
         self._wake = wake
@@ -91,10 +97,17 @@ class LifecycleObservers:
 
     def backlog(self) -> dict[str, int]:
         with self._lock:
+            now = monotonic()
+            # Each run queue is FIFO. Its head is sufficient even for verbose runs.
+            oldest = min((queue[0][2] for queue in self._observations.values()), default=now)
+            oldest = min(oldest, min((item.queued_at for item in self._deliveries), default=now))
+            if self._applying_since is not None:
+                oldest = min(oldest, self._applying_since)
             return {
+                "oldest_pending_ms": int((now - oldest) * 1000),
                 "pending_facts": sum(len(queue) for queue in self._observations.values()),
                 "pending_callbacks": len(self._deliveries),
-                "applying": int(self._flushing),
+                "applying": int(self._applying_since is not None),
             }
 
     def close_delivery(self) -> None:
@@ -105,7 +118,7 @@ class LifecycleObservers:
         while True:
             self.flush_prepared()
             with self._lock:
-                waiting = next((future for _, future in self._deliveries if not future.done()), None)
+                waiting = next((item.future for item in self._deliveries if not item.future.done()), None)
                 if not self._observations and not self._deliveries:
                     break
             if waiting is not None:
@@ -153,23 +166,23 @@ class LifecycleObservers:
             selected = None
             with self._lock:
                 completed = next((entry for entry in self._deliveries
-                                  if entry[1].done() and (run_uri is None or entry[0] == run_uri)), None)
+                                  if entry.future.done() and (run_uri is None or entry.run_uri == run_uri)), None)
                 if completed is not None:
                     self._deliveries.remove(completed)
+                    self._applying_since = completed.queued_at
                 else:
                     uri = next(iter(self._observations), None) if run_uri is None else run_uri
                     if len(self._deliveries) >= 16 or uri not in self._observations:
                         break
                     assert uri is not None
                     queue = self._observations.pop(uri)
-                    store, fact = queue.popleft()
+                    store, fact, self._applying_since = queue.popleft()
                     selected = (store, uri, fact)
                     if queue:
                         self._observations[uri] = queue
-                self._flushing = True
             try:
                 if completed is not None:
-                    self._apply_callback_evidence(completed[1].result())
+                    self._apply_callback_evidence(completed.future.result())
                 elif selected is not None:
                     store, uri, fact = selected
                     self._emit_at_safe_point(store, uri, **fact)
@@ -177,16 +190,16 @@ class LifecycleObservers:
                 _LOG.exception("native lifecycle observation failed")
             finally:
                 with self._lock:
-                    self._flushing = False
+                    self._applying_since = None
             if monotonic() >= deadline:
                 break
         with self._lock:
             return bool((self._observations and len(self._deliveries) < 16)
-                        or any(future.done() for _, future in self._deliveries))
+                        or any(item.future.done() for item in self._deliveries))
 
     def defer_emit(self, store: Any, run_uri: str, **fact: Any) -> None:
         with self._lock:
-            self._observations.setdefault(run_uri, deque()).append((store, fact))
+            self._observations.setdefault(run_uri, deque()).append((store, fact, monotonic()))
 
     def emit(self, store: Any, run_uri: str, **fact: Any) -> None:
         # Standalone publication has no coordinator worker or readiness window.
@@ -243,7 +256,8 @@ class LifecycleObservers:
             else:
                 future = self._worker.submit(self._deliver, store, record, event, deferred=True)
                 with self._lock:
-                    self._deliveries.append((run_uri, future))
+                    queued_at = self._applying_since
+                    self._deliveries.append(_Callback(run_uri, future, monotonic() if queued_at is None else queued_at))
                 wake = self._wake
                 if wake is not None:
                     future.add_done_callback(lambda _: wake())

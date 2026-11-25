@@ -120,7 +120,10 @@ def test_slow_audit_yields_between_runs_and_preserves_run_order(monkeypatch):
     assert observed == [(uri, seq) for seq in range(3) for uri in ("a", "b")]
 
 
-def test_blocked_sink_allows_independent_run_mutation_and_bounds_callback_work(tmp_path):
+def test_blocked_sink_allows_independent_run_mutation_and_bounds_callback_work(tmp_path, monkeypatch):
+    import loom.queue._lifecycle_observers as module
+    now = [10.0]
+    monkeypatch.setattr(module, "monotonic", lambda: now[0])
     from loom.pipeline.status import RunStatus
 
     owner = LifecycleObservers()
@@ -145,6 +148,8 @@ def test_blocked_sink_allows_independent_run_mutation_and_bounds_callback_work(t
             owner.emit(store, a, event_type="stage.planned", revision=revision, identity=str(seq))
         owner.flush_prepared()
         assert entered.wait(3)
+        now[0] += 2.5
+        assert owner.backlog()["oldest_pending_ms"] == 2500
         assert 0 < owner.backlog()["pending_callbacks"] <= 16
         assert owner.backlog()["pending_facts"] > 0
         authority = owner.authority(peer, b)
@@ -160,6 +165,7 @@ def test_blocked_sink_allows_independent_run_mutation_and_bounds_callback_work(t
     finally:
         release.set()
         owner.close_delivery()
+    assert owner.backlog()["oldest_pending_ms"] == 0
     audit = [event.event_id for event in store.list_audit_events(a)]
     assert len(audit) == 24 and audit == [event_id for uri, event_id in received if uri == a]
     assert any(uri == b for uri, _ in received)
