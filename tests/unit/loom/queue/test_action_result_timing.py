@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from loom.pipeline.stores.read_models import BackendRevision
+from loom.pipeline.stores.read_models import AuthoritativeRunSnapshot, BackendRevision
 from loom.queue._action_result_resolution import ActionResultResolution
 
 
@@ -34,8 +34,9 @@ def test_timing_delivery_failure_preserves_resolution(monkeypatch, failed):
 
     monkeypatch.setattr(owner, "_resolve", resolve)
     authority = SimpleNamespace(defer_event=lambda observers, uri, **fact: observers.defer_emit(authority, uri, **fact))
+    unused_snapshot = object.__new__(AuthoritativeRunSnapshot)
     args = (SimpleNamespace(run_uri="file:///runs/example"), None, authority,
-            SimpleNamespace(stage_name="fit"), None, BackendRevision(1, "same"), object())
+            SimpleNamespace(stage_name="fit"), None, BackendRevision(1, "same"), unused_snapshot)
     steps = owner.resolve_steps(*args)
     if failed:
         with pytest.raises(RuntimeError) as observed:

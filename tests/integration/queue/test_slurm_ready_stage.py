@@ -626,7 +626,9 @@ def _exercise_mixed_route_run(
         artifact_store=LocalArtifactStore(run_store.local_artifact_root(run_uri)),
         persist=True,
     )
-    retry = {"retry": {"enabled": True, "max_attempts": 2}} if bootstrap_failure == "retry" else None
+    retry: dict[str, PlainData] | None = (
+        {"retry": {"enabled": True, "max_attempts": 2}} if bootstrap_failure == "retry" else None
+    )
     run_store.write_runtime_metadata(
         run_uri,
         {
@@ -992,7 +994,8 @@ def _exercise_mixed_route_run(
             settled = execution.slurm_assignments.read(assignment_id)
             assert settled.report is None and settled.fence is None and not settled.start_consumed
             train = next(s for s in authority.open_run(run_uri).stages if s.stage_name == "train")
-            assert train.attempts[0].reason.code == "worker.slurm_bootstrap_failed"
+            reason = train.attempts[0].reason
+            assert reason is not None and reason.code == "worker.slurm_bootstrap_failed"
             decision, = authority.list_retry_decisions(run_uri, stage_name="train")
             assert decision.should_retry is (bootstrap_failure == "retry")
             if bootstrap_failure == "retry":

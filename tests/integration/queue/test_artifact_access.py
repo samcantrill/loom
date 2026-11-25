@@ -201,17 +201,22 @@ def test_https_transfer_reuses_authenticated_ranges_and_renegotiates_on_change(t
 
             tls = client._transport
             assert isinstance(tls, HttpsControlTransport)
-            options = dict(scope=SCOPE, declaration=result["items"][0]["declaration"],
-                           member="result.json", offset=0, length=1,
-                           expected_coordinator_id=daemon._coordinator_id)
+            declaration = result["items"][0]["declaration"]
+            assert isinstance(declaration, str)
+
+            def read_first_chunk():
+                return client.read_artifact_chunk(
+                    locator, scope=SCOPE, declaration=declaration, member="result.json",
+                    offset=0, length=1, expected_coordinator_id=daemon._coordinator_id,
+                )
             directory = tmp_path / "tls"
             with tls.range_reads():
-                assert client.read_artifact_chunk(locator, **options)["outcome"] == "available"
+                assert read_first_chunk()["outcome"] == "available"
                 previous = calls[-1][0]
                 for extension in ("crt", "key"):
                     (directory / ("other." + extension)).write_bytes((directory / ("query." + extension)).read_bytes())
                 with pytest.raises(CoordinatorClientError):
-                    client.read_artifact_chunk(locator, **options)
+                    read_first_chunk()
                 assert calls[-1][1] == "handshake" and calls[-1][0] != previous
 
 

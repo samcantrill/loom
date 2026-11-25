@@ -248,9 +248,11 @@ def test_independent_assignment_controls_can_apply_and_acknowledge_out_of_order(
             second, "never_started", None,
         )
         # The late-receipt path must also skip a live owner at the head.
-        assert journal.next_unacknowledged_assignment_control(owned=lambda key: key == "b")[0] == second
+        late = journal.next_unacknowledged_assignment_control(owned=lambda key: key == "b")
+        assert late is not None and late[0] == second
         journal.acknowledge_assignment_control(second.operation_id)
-        assert journal.next_unacknowledged_assignment_control()[0] == first
+        next_control = journal.next_unacknowledged_assignment_control()
+        assert next_control is not None and next_control[0] == first
         assert journal.next_unacknowledged_assignment_control(assignment_id="b") is None
     finally:
         journal.close()

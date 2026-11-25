@@ -102,7 +102,10 @@ def test_consumer_final_source_read_allows_peer_completion_and_cancellation(tmp_
     try:
         first = _start(daemon, "consumer-proof-source")
         assert daemon._wait(first["queue_item_id"], timeout_seconds=50).state.value == "SUCCEEDED"
-        resolver = daemon._execution._action_resolution
+        execution = daemon._execution
+        assert execution is not None
+        resolver = execution._action_resolution
+        assert resolver is not None
         original_check = resolver._checked_result_outputs
         original_verify = daemon._preparations.verify_action_result
         source_uri = first["prepared_run"]["run_uri"]
@@ -135,7 +138,9 @@ def test_consumer_final_source_read_allows_peer_completion_and_cancellation(tmp_
         release.set()
         assert daemon._wait(consumer["queue_item_id"], timeout_seconds=45).state.value == "CANCELLED"
         consumer_uri = consumer["prepared_run"]["run_uri"]
-        stages = service.daemon.coordinator_authority_factory(consumer_uri).open_run(consumer_uri).stages
+        factory = service.daemon.coordinator_authority_factory
+        assert factory is not None
+        stages = factory(consumer_uri).open_run(consumer_uri).stages
         assert all(stage.result_binding is None for stage in stages)
     finally:
         release.set()

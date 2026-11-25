@@ -1,15 +1,17 @@
 """Scheduler IO yields without moving HTTP/session mutations to a worker."""
 
+from collections.abc import Mapping
 from threading import Event, Thread, get_ident
 from types import SimpleNamespace
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from loom.queue._agent_progress import _run_manager, _steps, _delay
 from loom.queue.agent_session_transport import LocalDaemonAgentHttpClient
 from loom.queue._slurm_result_transport import SlurmEffectPending
+from loom.serialization import PlainData
 
 pytestmark = pytest.mark.unit
 
@@ -422,11 +424,12 @@ def test_paged_agent_publishes_45_shared_results_after_lost_commit_and_restart(t
             raise SlurmRequestUncertain("lost commit reply")
         return {"acknowledged": True}
 
-    def acknowledge(evidence):
+    def acknowledge(evidence: Mapping[str, PlainData]) -> Mapping[str, PlainData]:
         exchange = receipts.exchange(client, binding, evidence)
         try:
             next(exchange)
         except StopIteration as done:
+            assert isinstance(done.value, Mapping)
             return done.value
         view = SimpleNamespace(complete=True, error=None, value=None)
         try:
@@ -434,6 +437,7 @@ def test_paged_agent_publishes_45_shared_results_after_lost_commit_and_restart(t
         except SlurmRequestUncertain as exc:
             view.error = exc
         exchange.send(view)
+        raise AssertionError("A newly spawned receipt must yield pending")
 
     try:
         for index in range(45):
@@ -458,9 +462,13 @@ def test_paged_agent_publishes_45_shared_results_after_lost_commit_and_restart(t
                 declared[owner] = report.to_dict()
             tasks.append(task)
         assert sum(call[0] == "sbatch" for call in runner.calls) == 45
-        deadline = monotonic() + 60
-        while any(transport.path.exists() for transport, *_ in publications.values()):
-            assert monotonic() < deadline, (len(declared), len(committed), lost, restarted)
+        outstanding = len(publications)
+        progress_deadline = monotonic() + 60
+        while remaining := sum(transport.path.exists() for transport, *_ in publications.values()):
+            if remaining < outstanding:
+                outstanding = remaining
+                progress_deadline = monotonic() + 60
+            assert monotonic() < progress_deadline, (remaining, len(declared), len(committed), lost, restarted)
             for start in range(0, len(tasks), 16):
                 binding["cursor"] = str(start)
                 agent.replay_pending(acknowledge)
@@ -502,7 +510,7 @@ def test_compute_release_page_unblocks_the_owners_containment_receipt():
             operation.send(SimpleNamespace(complete=True, value={"disposition": "pending"}, error=None))
     with pytest.raises(SlurmEffectPending):
         next(receipts.exchange(client, binding, {"assignment_id": "0", "sequence": 2}))
-    LocalDaemonAgentHttpClient.drive_slurm_jobs(client)
+    LocalDaemonAgentHttpClient.drive_slurm_jobs(cast(LocalDaemonAgentHttpClient, client))
     # A fresh compute-release task retired this owner's obsolete commit request.
     operation = receipts.exchange(client, binding, {"assignment_id": "0", "sequence": 2})
     next(operation)

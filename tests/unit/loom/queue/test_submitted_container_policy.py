@@ -1,5 +1,6 @@
 """Stable host authorization and assignment-owned submitted container launches."""
 
+from collections.abc import Mapping
 from typing import Any, cast
 
 from dataclasses import replace
@@ -227,7 +228,9 @@ def test_concurrent_launches_share_only_the_mounted_image_snapshot(tmp_path, mon
         pytest.skip("requires an image on a mounted kernel snapshot")
     source = Path(source_name)
     policy, execution, _, _ = _submitted(tmp_path)
-    root = {**policy.shared_roots["workloads"], "host_path": str(source.parent)}
+    workload = policy.shared_roots["workloads"]
+    assert isinstance(workload, Mapping)
+    root = {**workload, "host_path": str(source.parent)}
     selected = replace(execution.image, location={**execution.image.location, "path": source.name},
                        size_bytes=source.stat().st_size, sha256=hashlib.sha256(source.read_bytes()).hexdigest())
     original = physical._copy_verified

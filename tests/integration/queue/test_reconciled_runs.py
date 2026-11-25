@@ -419,7 +419,9 @@ def test_cancellation_scope_with_second_contender(tmp_path, bound, monkeypatch):
     daemon.start()
     sampled, allow_sample = Event(), Event()
     observed_groups = []
-    assignments = daemon._execution.coordinator
+    execution = daemon._execution
+    assert execution is not None
+    assignments = execution.coordinator
     read_releases = assignments.child_assignments_released
 
     def hold_group(uris):
@@ -443,6 +445,7 @@ def test_cancellation_scope_with_second_contender(tmp_path, bound, monkeypatch):
         if not bound:
             daemon._preparations._reconcile_lock.release()
         release.set()
+        late_child = None
         if bound:
             assert sampled.wait(40)
             # A later caller can prepare and bind the same target while its
@@ -455,6 +458,7 @@ def test_cancellation_scope_with_second_contender(tmp_path, bound, monkeypatch):
             allow_sample.set()
         settled = daemon.wait_operation(control.operation_id, timeout=40).operation
         if bound:
+            assert late_child is not None
             assert late_child.run_uri in observed_groups[-1]
         assert settled.state == "applied", settled.to_dict()
         first_result = daemon.wait_operation("first", timeout=40).operation

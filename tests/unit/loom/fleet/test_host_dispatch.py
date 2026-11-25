@@ -56,6 +56,7 @@ def test_all_hosts_dispatch_before_ack_with_parent_receipts_and_exact_replay(tmp
         if host == 'first':
             assert peer_persisted.wait(5)
             status = ssh.operation_status(op.inventory, op.intent["operation_id"])
+            assert status is not None
             assert status["steps"]["second-workload-stage"]["native_outcome"] == "applied"
             assert status["steps"]["first-workload-stage"]["native_outcome"] == "unknown"
         elif host == 'second':
@@ -285,8 +286,10 @@ def test_native_capture_allows_independent_request_and_excludes_shared_mutation(
     with (admin / "native.lock").open("a") as shared, (first / "capture.lock").open("a") as owner:
         fcntl.flock(shared, fcntl.LOCK_SH)
         fcntl.flock(owner, fcntl.LOCK_EX)
-        assert native("second", "upgrade-check-capture")["native_outcome"] == "applied"
-        assert native("second", "upgrade-check-capture")["bindings"] == {"ok": True}
+        initial = native("second", "upgrade-check-capture")
+        assert initial is not None and initial["native_outcome"] == "applied"
+        repeated = native("second", "upgrade-check-capture")
+        assert repeated is not None and repeated["bindings"] == {"ok": True}
         with pytest.raises(BlockingIOError):
             native("first", "upgrade-check-capture")
         with pytest.raises(BlockingIOError):

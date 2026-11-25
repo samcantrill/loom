@@ -1238,7 +1238,9 @@ def test_running_preparation_cancellation_waits_for_native_resource_release(
     LocalDaemon.initialize_deployment(service.daemon)
     daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
     daemon.start()
-    assignments = daemon._execution.coordinator
+    execution = daemon._execution
+    assert execution is not None
+    assignments = execution.coordinator
     read_releases = assignments.child_assignments_released
     sample_read, allow_sample = Event(), Event()
     rechecked, allow_recheck = Event(), Event()
@@ -1871,6 +1873,7 @@ def test_preparation_rechecks_slurm_identity_after_an_off_guard_read(tmp_path, m
     sampled, resume = Event(), Event()
     try:
         execution = daemon._execution
+        assert execution is not None
         fixture_root = tmp_path / "reservation"
         fixture_root.mkdir()
         fixture = ReservationFixture(fixture_root)
@@ -1892,6 +1895,7 @@ def test_preparation_rechecks_slurm_identity_after_an_off_guard_read(tmp_path, m
         monkeypatch.setattr(store, "has_operation", pause)
         def reserve(candidate, options):
             record = fixture.work.find_stage_work(candidate.stage_work_id)
+            assert record is not None
             store.reserve(candidate, **{**options, "max_reserved_gpus": None},
                           _reservation_transaction=lambda: execution._reservation_transaction(
                               record, (daemon._epoch, daemon._scheduling_epoch), slurm_operation_id=candidate.operation_id,
@@ -1934,7 +1938,9 @@ def test_run_cancellation_yields_to_peer_reads_and_replays_without_external_prob
     sampled, resume = Event(), Event()
     try:
         accepted = daemon.start_run(RunRequest(_request(), "target"), principal_id="caller")
-        original = daemon._execution.slurm_assignments.has_operation
+        execution = daemon._execution
+        assert execution is not None
+        original = execution.slurm_assignments.has_operation
         probed = []
 
         def lookup(identity):
@@ -1948,7 +1954,7 @@ def test_run_cancellation_yields_to_peer_reads_and_replays_without_external_prob
             contended.set()
             assert retry.wait(8)
 
-        monkeypatch.setattr(daemon._execution.slurm_assignments, "has_operation", lookup)
+        monkeypatch.setattr(execution.slurm_assignments, "has_operation", lookup)
         monkeypatch.setattr(_coordinator_transactions, "sleep", wait_to_retry)
         with ThreadPoolExecutor(max_workers=2) as workers:
             try:

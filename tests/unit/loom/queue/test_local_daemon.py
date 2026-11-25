@@ -2772,6 +2772,7 @@ def test_dispatch_discards_a_provider_observation_from_before_scheduling_reload(
     release = [Event(), Event()]
     try:
         execution = daemon._execution
+        assert execution is not None
         original = execution._inspect_local_offer
         samples = []
 
@@ -2785,14 +2786,18 @@ def test_dispatch_discards_a_provider_observation_from_before_scheduling_reload(
 
         monkeypatch.setattr(execution, "_inspect_local_offer", observe)
         assert execution._candidate_for_dispatch() is None and started[0].wait(5)
-        old = execution._pending_offer[1]
+        pending_offer = execution._pending_offer
+        assert pending_offer is not None
+        old = pending_offer[1]
         operator = daemon.operator_view(LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR))
         assert operator.reload_scheduling(CoordinatorSchedulingReload("offer-reload", status.scheduling_epoch, "test"))["state"] == "applied"
         assert execution._candidate_for_dispatch() is None
         release[0].set()
         old.result(timeout=5)
         assert execution._candidate_for_dispatch() is None and started[1].wait(5)
-        current = execution._pending_offer[1]
+        pending_offer = execution._pending_offer
+        assert pending_offer is not None
+        current = pending_offer[1]
         assert execution._candidate_for_dispatch() is None
         release[1].set()
         current.result(timeout=5)
