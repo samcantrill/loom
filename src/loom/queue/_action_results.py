@@ -459,8 +459,10 @@ def attach_action_fence(
     attempt_id: str,
     assignment_id: str,
     fencing_token: str,
+    *,
+    allow_settling: bool = False,
 ) -> None:
-    """Join a native grant without opening a nested coordinator write transaction."""
+    """Retain an exact grant without changing ownership or reviving a settling claim."""
     row = conn.execute(
         "SELECT claim_id, state, assignment_id, fencing_token FROM action_claims WHERE owner_run_uri = ? AND attempt_id = ?",
         (run_uri, attempt_id),
@@ -469,7 +471,7 @@ def attach_action_fence(
         return
     if (row[2], row[3]) == (assignment_id, fencing_token):
         return
-    if row[1] != "owned" or (row[2], row[3]) != (None, None):
+    if (row[1] != "owned" and not (allow_settling and row[1] == "settling")) or (row[2], row[3]) != (None, None):
         raise QueueConflictError("action producer fence conflicts")
     conn.execute(
         "UPDATE action_claims SET assignment_id = ?, fencing_token = ?, revision = revision + 1 WHERE claim_id = ?",

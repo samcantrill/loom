@@ -11,13 +11,16 @@ from ._coordinator_run_progress import (
     LocalDaemonExecutionOutcome as LocalDaemonExecutionOutcome,
     _profile_satisfies_requirement,
 )
+from ._ready_window import ReadyWindowScheduler
 from ._coordinator_run_authority import _ScopedCoordinatorAuthority as _ScopedCoordinatorAuthority
 
-from ._action_results import action_attempt_cancelled, action_attempt_needed, attach_action_fence
+from ._action_results import action_attempt_cancelled, action_attempt_needed
 from ._continuation import ContinuationConflict, ContinuationPending
 from ._embedded_recovery import EmbeddedRecovery
 from ._recovery_retry import RecoveryWorkers, _RecoveryRetry
 from ._run_observations import DispatchObservations, ObservationSteps, RunObservations, RunSteps, TerminalSteps
+from ._slurm_bootstrap import SlurmBootstrapLifecycle
+from ._slurm_bootstrap_settlement import SlurmBootstrapSettlement
 from ._slurm_admission import SlurmAdmissionDeferred
 from . import _slurm_retry
 
@@ -27,6 +30,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+from functools import partial
 import hashlib
 import json
 from pathlib import Path
@@ -1373,7 +1377,11 @@ class LocalDaemonExecution:
         self.stage_work_store = SQLiteStageWorkStore(
             config.execution_database, _allow_initialize=False
         , sqlite_policy=config.sqlite_policy)
-        self._read_ready_window = self.stage_work_store._scheduling_window_reader()
+        self._ready_windows = ReadyWindowScheduler(
+            self.stage_work_store._scheduling_window_reader(),
+            lambda: self._daemon_owner()._accepted_snapshot()[1],
+            lambda: self._daemon_owner()._wake.set(),
+        )
         initial_planners = self._scheduling.active_planners()
         configured_providers = tuple(config.agent_resource_providers or ())
         self.providers = (
@@ -1405,6 +1413,20 @@ class LocalDaemonExecution:
         )
         self._embedded_recovery = EmbeddedRecovery(self)
         self.open_owner_stores()
+        self._bootstrap_settlement = SlurmBootstrapSettlement(
+            self.slurm_assignments, self.slurm_submissions,
+            lambda: self.config.connect_database(self.config.control_database),
+            self._recovery_retains_assignment,
+        )
+        self._bootstrap = SlurmBootstrapLifecycle(
+            settlement=self._bootstrap_settlement,
+            profile_for=self._slurm_profile,
+            authority_for=self._remote_authority,
+            accepted_time=lambda: self._daemon_owner()._accepted_snapshot()[0],
+            shared_roots=lambda: self.config.coordinator_shared_roots,
+            hold_publication=lambda identity: self._daemon_owner()._publication_guards.hold(identity),
+            finalize_result=self._slurm_finalize_record,
+        )
         self.supervisor = None
         if config.agent_root is not None:
             profile = config.resident_worker_launch_profile
@@ -1510,13 +1532,6 @@ class LocalDaemonExecution:
         self._slurm_storage_futures: dict[str, tuple[Future[None], _SlurmRetentionRequired | _SlurmPublicationRequired]] = {}
         self._pending_local_assignment_reconciliation: dict[str, str] = {}
         self._local_assignment_retries: dict[str, _RecoveryRetry] = {}
-        self._ready_scan_after: StageWorkRecord | None = None
-        self._ready_scan_boundary: tuple[int, int] | None = None
-        self._last_dispatch_enqueue: int | None = None
-        self._prefer_gpu_dispatch = True
-        self._gpu_scan_after: StageWorkRecord | None = None
-        self._gpu_scan_boundary: tuple[int, int] | None = None
-        self._last_gpu_dispatch_enqueue: int | None = None
         self._cycle_contexts: dict[
             str, tuple[ManagedLocalIntent, _ScopedCoordinatorAuthority]
         ] = {}
@@ -2279,7 +2294,9 @@ class LocalDaemonExecution:
         waiting_outcomes: dict[str, LocalDaemonExecutionOutcome] | None = None,
     ) -> tuple[str, LocalDaemonExecutionOutcome] | None:
         """Select and durably start one assignment from the global ready window."""
-        return _run_progress.schedule_once(self, admissions, waiting_outcomes=waiting_outcomes)
+        return self._ready_windows.select(
+            admissions, lambda page: _run_progress._schedule_window(self, admissions, page, waiting_outcomes=waiting_outcomes),
+        )
 
     def advance(self, admission: LocalDaemonAdmission) -> LocalDaemonExecutionOutcome:
         """Compatibility wrapper for one-admission embedded callers."""
@@ -2350,7 +2367,7 @@ class LocalDaemonExecution:
             "assignment": record.assignment.to_dict(),
             "request": dict(record.request),
             "expected_sequence": record.agent_sequence,
-            "cancel_requested": facts.cancelled,
+            "cancel_requested": facts.cancelled and not self._bootstrap_settlement.needs_cancel_receipt(record),
             "job_id": record.job_id,
             "cluster": record.cluster,
             "compute_release_requested": record.compute_release_requested,
@@ -2601,6 +2618,8 @@ class LocalDaemonExecution:
                     and not self._attempt_cancel_requested(assignment.run_uri, assignment.attempt_id)
                 ):
                     raise QueueConflictError("SLURM live assignment cannot release")
+            if self._bootstrap_settlement.needs_cancel_receipt(record):
+                raise QueueConflictError("SLURM release awaits exact bootstrap authority receipt")
         self.slurm_assignments.accept_agent_evidence(
             assignment.assignment_id, sequence, evidence
         )
@@ -2752,6 +2771,7 @@ class LocalDaemonExecution:
                     # capability. An interrupted retry decision replays on this receipt.
                     self._record_bootstrap_retry(record)
                 self.slurm_assignments.release(assignment.assignment_id)
+                self._bootstrap_settlement.forget(assignment.assignment_id)
                 with self.config.connect_database(self.config.control_database) as conn:
                     conn.execute(
                         "UPDATE agent_coordinator_references SET resolved=1 WHERE reference_kind='assignment' AND reference_id=?",
@@ -2759,7 +2779,8 @@ class LocalDaemonExecution:
                     )
         return {
             "sequence": sequence,
-            "cancel_requested": self._attempt_cancel_requested(assignment.run_uri, assignment.attempt_id),
+            "cancel_requested": self._attempt_cancel_requested(assignment.run_uri, assignment.attempt_id)
+            and not self._bootstrap_settlement.needs_cancel_receipt(record),
         }
 
     def _perform_slurm_storage(self, continuation):
@@ -3017,20 +3038,21 @@ class LocalDaemonExecution:
         authority: _ScopedCoordinatorAuthority,
     ) -> ObservationSteps[tuple[bool, str | None]]:
         steps = self._slurm_record_steps(run_uri, authority)
-        snapshot = None
+        # Measure each local slice without including time in the observation pool.
         try:
+            with phase("coordinator.reconcile_slurm_run"):
+                request = next(steps)
             while True:
-                # Attribute scheduler work to this phase. The authority worker
-                # measures its own read while the scheduler serves other runs.
-                with phase("coordinator.reconcile_slurm_run"):
-                    try:
-                        if snapshot is None:
-                            next(steps)
-                        else:
-                            steps.send(snapshot)
-                    except StopIteration as settled:
-                        return settled.value
-                snapshot = yield
+                try:
+                    result = yield request
+                except Exception as error:
+                    with phase("coordinator.reconcile_slurm_run"):
+                        request = steps.throw(error)
+                else:
+                    with phase("coordinator.reconcile_slurm_run"):
+                        request = steps.send(result)
+        except StopIteration as settled:
+            return settled.value
         finally:
             steps.close()
 
@@ -3055,8 +3077,21 @@ class LocalDaemonExecution:
             if self._recovery_retains_assignment(assignment_id):
                 diagnostic = diagnostic or "slurm_guarded_recovery_pending"
                 continue
-            if record.state == "accepted" and self._claim_failed_slurm_bootstrap(record, authority):
-                record = self.slurm_assignments.read(assignment_id)
+            if record.state == "accepted" and record.bootstrap_incarnation is not None:
+                if (self._bootstrap_settlement.needs_cancel_receipt(record)
+                        and self._attempt_cancel_requested(run_uri, record.assignment.attempt_id)):
+                    yield partial(self._bootstrap_settlement.settle_cancel_binding, record, authority,
+                                  self._bootstrap_failure(record))
+                    record = self.slurm_assignments.read(assignment_id)
+                if self._bootstrap_settlement.needs_observation(assignment_id):
+                    yield partial(self._bootstrap_settlement.recover_grant, record, authority)
+                    record = self.slurm_assignments.read(assignment_id)
+                failure = self._bootstrap_failure(record)
+                if failure is not None:
+                    # The exact operation finishes its local projection on the worker
+                    # even if the scheduling slice is invalidated during the RPC.
+                    yield partial(self._bootstrap_settlement.claim_failure, record, authority, *failure)
+                    record = self.slurm_assignments.read(assignment_id)
             if record.state == "bootstrap_failed":
                 self.slurm_assignments.advance(assignment_id, expected="bootstrap_failed", next_state="terminal")
                 record = self.slurm_assignments.read(assignment_id)
@@ -3103,60 +3138,21 @@ class LocalDaemonExecution:
             in_flight = True
         return in_flight, diagnostic
 
+    def _bootstrap_failure(self, record: SlurmStageRecord) -> tuple[LifecycleReason, str] | None:
+        policy = self.config.slurm_terminal_recovery
+        if policy is None or not policy.enabled:
+            return None
+        reason = self._bootstrap_settlement.failure_reason(record)
+        if reason is None:
+            return None
+        now = self._terminal_accepted_time()
+        return None if now is None else (reason, now)
+
     def _claim_failed_slurm_bootstrap(
         self, record: SlurmStageRecord, authority: _ScopedCoordinatorAuthority,
     ) -> bool:
-        from loom.pipeline.executors.slurm.history import operation_job_name
-
-        policy = self.config.slurm_terminal_recovery
-        if (policy is None or not policy.enabled or record.bootstrap_incarnation is None
-            or record.fence is not None or record.start_consumed or record.process_execution_id is not None
-            or record.report_present):
-            return False
-        assignment = record.assignment
-        submission = self.slurm_submissions.find(assignment.operation_id)
-        if (submission is None or submission.scheduler_source != "sacct"
-            or submission.scheduler_state not in {"FAILED", "TIMEOUT", "CANCELLED"}
-            or submission.accounting_identity is None):
-            return False
-        physical = submission.accounting_identity
-        if ((submission.job_id, submission.cluster) != (record.job_id, record.cluster)
-            or (physical.job_id, physical.cluster, physical.job_name) != (
-                record.job_id, record.cluster, operation_job_name(assignment.operation_id))):
-            return False
-        now = self._terminal_accepted_time()
-        if now is None:
-            return False
-        facts: dict[str, PlainData] = {
-            "assignment_id": assignment.assignment_id, "incarnation": record.bootstrap_incarnation,
-            "accounting": physical.to_dict(), "scheduler_state": submission.scheduler_state,
-        }
-        reason = LifecycleReason(code="worker.slurm_bootstrap_failed",
-                                 message="SLURM job ended before its worker was granted execution",
-                                 detail=facts)
-        with self.config.connect_database(self.config.control_database) as conn:
-            # The grant owner takes this same lock. The authority CAS also
-            # arbitrates a grant that survived a crash before local projection.
-            conn.execute("BEGIN IMMEDIATE")
-            fresh = self.slurm_assignments.read(assignment.assignment_id)
-            if (fresh.state != "accepted" or fresh.bootstrap_incarnation != record.bootstrap_incarnation
-                or fresh.job_id != record.job_id or fresh.cluster != record.cluster
-                or fresh.fence is not None or fresh.start_consumed or fresh.process_execution_id is not None
-                or fresh.report_present):
-                return False
-            if action_attempt_cancelled(conn, assignment.run_uri, assignment.attempt_id):
-                snapshot = authority.open_run(assignment.run_uri)
-                if not any(attempt.attempt_id == assignment.attempt_id and attempt.reason == reason
-                           for stage in snapshot.stages if stage.stage_name == assignment.stage_name
-                           for attempt in stage.attempts):
-                    return False
-            if not authority.fail_prepared_attempt(
-                assignment.run_uri, assignment_id=assignment.assignment_id,
-                attempt_id=assignment.attempt_id, reason=reason,
-            ):
-                return False
-            self.slurm_assignments.claim_failed_bootstrap(fresh, facts, now)
-        return True
+        failure = self._bootstrap_failure(record)
+        return failure is not None and self._bootstrap_settlement.claim_failure(record, authority, *failure)
 
     def _record_bootstrap_retry(self, record: SlurmStageRecord) -> None:
         assignment = record.assignment
@@ -4818,6 +4814,11 @@ class LocalDaemonExecution:
         authority_for_run = replacement.coordinator_authority_factory
         if authority_for_run is None:
             raise QueueConflictError("replacement coordinator authority is unavailable")
+        if retained:
+            # Removed profiles can still own work from the previous epoch.
+            from loom.pipeline.stores.coordinator_authority import require_slurm_authority_compatibility
+
+            require_slurm_authority_compatibility(authority_for_run)
         return _CoordinatorReloadPlan(
             scheduling=_build_scheduling_epoch(
                 epoch_id=scheduling_epoch,
@@ -5311,6 +5312,16 @@ class LocalDaemonExecution:
         # advance its own retained operation while the other owners settle.
         remote_pending = self._fan_out_remote_cancellation(admission.run_uri, operation_id)
         local_pending = self._fan_out_local_cancellation(admission.run_uri, authority)
+        for record in self.slurm_assignments.list_run_unreleased(admission.run_uri):
+            if (self._bootstrap_settlement.needs_cancel_receipt(record)
+                    and not self._recovery_retains_assignment(record.assignment.assignment_id)
+                    and self._attempt_cancel_requested(admission.run_uri, record.assignment.attempt_id)):
+                yield partial(self._bootstrap_settlement.settle_cancel_binding, record, authority,
+                              self._bootstrap_failure(record))
+            record = self.slurm_assignments.read(record.assignment.assignment_id)
+            if record.state == "bootstrap_failed":
+                self.slurm_assignments.advance(record.assignment.assignment_id,
+                                               expected="bootstrap_failed", next_state="terminal")
         slurm_pending = self._fan_out_slurm_cancellation(admission.run_uri)
         settling = remote_pending or local_pending or slurm_pending
         snapshot = yield
@@ -6872,43 +6883,11 @@ class LocalDaemonExecution:
         incarnation: str,
         capability: str,
     ) -> SlurmStageRecord:
-        retained = self.slurm_assignments.read_operation(operation_id)
-        profile = self._slurm_profile(
-            retained.assignment.profile_id,
-            retained.assignment.profile_configuration_fingerprint,
+        return self._bootstrap.slurm_register(
+            principal_id=principal_id, credential_id=credential_id, operation_id=operation_id,
+            request_digest=request_digest, job_id=job_id, cluster=cluster,
+            incarnation=incarnation, capability=capability,
         )
-        self._require_slurm_profile_principal(profile, principal_id, credential_id)
-        if (
-            retained.assignment.profile_id != profile.profile_id
-            or retained.assignment.profile_descriptor != profile.descriptor
-            or retained.assignment.profile_configuration_fingerprint
-            != profile.configuration_fingerprint
-            or retained.assignment.request_digest != request_digest
-        ):
-            raise QueueConflictError("SLURM bootstrap profile conflicts")
-        # A rejected capability must not associate or conflict a scheduler
-        # handle.  The assignment store owns proof, binding, consumption, and
-        # replay in one transaction; only that proof can cross the submission
-        # mutation boundary below.
-        submission_before = self.slurm_submissions.read(operation_id)
-        if submission_before.job_id is not None and (
-            submission_before.job_id != job_id or submission_before.cluster != cluster
-        ):
-            raise QueueConflictError("SLURM bootstrap job handle conflicts")
-        registered = self.slurm_assignments.register_bootstrap(
-            operation_id,
-            request_digest=request_digest,
-            job_id=job_id,
-            cluster=cluster,
-            incarnation=incarnation,
-            capability=capability,
-            accepted_time=(
-                self._daemon_owner()._accepted_snapshot()[0]
-                if profile.job_private_file_provider.delivery_kind == "user_private_file_v1"
-                else None
-            ),
-        )
-        return registered
 
     def slurm_input_chunk(
         self,
@@ -6920,11 +6899,9 @@ class LocalDaemonExecution:
         transfer_id: str,
         offset: int,
     ) -> tuple[bytes, bool]:
-        self._slurm_authorized_record(
-            principal_id, credential_id, assignment_id, incarnation
-        )
-        return self.slurm_assignments.read_input_chunk(
-            assignment_id, incarnation, transfer_id, offset
+        return self._bootstrap.slurm_input_chunk(
+            principal_id=principal_id, credential_id=credential_id, assignment_id=assignment_id,
+            incarnation=incarnation, transfer_id=transfer_id, offset=offset,
         )
 
     def slurm_inputs_ready(
@@ -6935,10 +6912,10 @@ class LocalDaemonExecution:
         assignment_id: str,
         incarnation: str,
     ) -> bool:
-        self._slurm_authorized_record(
-            principal_id, credential_id, assignment_id, incarnation
+        return self._bootstrap.slurm_inputs_ready(
+            principal_id=principal_id, credential_id=credential_id, assignment_id=assignment_id,
+            incarnation=incarnation,
         )
-        return self.slurm_assignments.mark_input_ready(assignment_id, incarnation)
 
     def slurm_grant(
         self,
@@ -6948,63 +6925,10 @@ class LocalDaemonExecution:
         assignment_id: str,
         incarnation: str,
     ) -> str:
-        record = self._slurm_authorized_record(
-            principal_id, credential_id, assignment_id, incarnation
+        return self._bootstrap.slurm_grant(
+            principal_id=principal_id, credential_id=credential_id, assignment_id=assignment_id,
+            incarnation=incarnation,
         )
-        if not record.input_ready:
-            raise QueueConflictError("SLURM grant requires durable inputs")
-        if record.fence is None and record.state != "accepted":
-            raise QueueConflictError("SLURM grant requires a live accepted assignment")
-        fence = record.fence
-        if fence is None:
-            with self.config.connect_database(self.config.control_database) as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                current = self.slurm_assignments.read(assignment_id)
-                if current.fence is None and current.state != "accepted":
-                    raise QueueConflictError("SLURM grant requires a live accepted assignment")
-                if action_attempt_cancelled(conn, record.assignment.run_uri, record.assignment.attempt_id):
-                    raise QueueConflictError("SLURM assignment run is cancelling")
-                authority = self._remote_authority(record.assignment.run_uri)
-                granted = authority.grant_prepared_attempt(
-                    record.assignment.run_uri,
-                    assignment_id=assignment_id,
-                    attempt_id=record.assignment.attempt_id,
-                )
-                fence = granted.fencing_token
-                attach_action_fence(conn, record.assignment.run_uri, record.assignment.attempt_id, assignment_id, fence)
-                self.slurm_assignments.mark_granted(assignment_id, incarnation, fence)
-                conn.commit()
-        from ._shared_staging_continuation import WIRE as staging_wire, finish_grant_continuation, requested
-        if requested(record.delivery) or staging_wire in record.delivery.worker_metadata:
-            # A grant reply can cause a container to bind this directory before
-            # start permission. Finish the handoff before exposing that reply.
-            with self._daemon_owner()._publication_guards.hold(assignment_id):
-                def live_owner():
-                    current = self._slurm_authorized_record(
-                        principal_id, credential_id, assignment_id, incarnation,
-                    )
-                    if (current.delivery != record.delivery or current.fence != fence
-                        or current.state != "granted" or current.start_consumed):
-                        raise QueueConflictError("staging continuation grant is no longer live")
-                    with self.config.connect_database(self.config.control_database) as conn:
-                        if action_attempt_cancelled(conn, current.assignment.run_uri, current.assignment.attempt_id):
-                            raise QueueConflictError("staging continuation grant is cancelled")
-                    granted = self._remote_authority(current.assignment.run_uri).grant_prepared_attempt(
-                        current.assignment.run_uri, assignment_id=assignment_id,
-                        attempt_id=current.assignment.attempt_id,
-                    )
-                    if granted.fencing_token != fence:
-                        raise QueueConflictError("staging continuation grant fence conflicts")
-                    from ._shared_publication import identity
-                    return identity(current.delivery, agent_id=current.assignment.agent_id, fence=fence)
-
-                finish_grant_continuation(
-                    record.delivery, self.config.coordinator_shared_roots,
-                    agent_id=record.assignment.agent_id, fence=fence,
-                    connection=lambda: self.config.connect_database(self.config.control_database),
-                    require_live_owner=live_owner,
-                )
-        return fence
 
     def slurm_start_permit(
         self,
@@ -7016,33 +6940,10 @@ class LocalDaemonExecution:
         fence: str,
         request_id: str | None = None,
     ) -> bool:
-        record = self._slurm_authorized_record(
-            principal_id, credential_id, assignment_id, incarnation
+        return self._bootstrap.slurm_start_permit(
+            principal_id=principal_id, credential_id=credential_id, assignment_id=assignment_id,
+            incarnation=incarnation, fence=fence, request_id=request_id,
         )
-        if record.fence != fence or record.state not in {
-            "granted",
-            "running",
-            "terminal",
-            "logical_released",
-            "released",
-        }:
-            raise QueueConflictError("SLURM start permit fence conflicts")
-        with self.config.connect_database(self.config.control_database) as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            if action_attempt_cancelled(conn, record.assignment.run_uri, record.assignment.attempt_id):
-                conn.commit()
-                return False
-            if request_id is not None and record.state != "granted":
-                conn.commit()
-                return False
-            from ._shared_staging_continuation import WIRE as staging_wire, requested, require_grant_continuation
-            if requested(record.delivery) or staging_wire in record.delivery.worker_metadata:
-                require_grant_continuation(
-                    record.delivery, conn, agent_id=record.assignment.agent_id, fence=fence,
-                )
-            permitted = self.slurm_assignments.consume_start(assignment_id, request_id=request_id)
-            conn.commit()
-            return permitted
 
     def slurm_started(
         self,
@@ -7054,24 +6955,9 @@ class LocalDaemonExecution:
         fence: str,
         process_execution_id: str,
     ) -> None:
-        _safe_identifier(process_execution_id, "SLURM process execution ID")
-        record = self._slurm_authorized_record(
-            principal_id, credential_id, assignment_id, incarnation
-        )
-        authority = self._remote_authority(record.assignment.run_uri)
-        granted = authority.grant_prepared_attempt(
-            record.assignment.run_uri,
-            assignment_id=assignment_id,
-            attempt_id=record.assignment.attempt_id,
-        )
-        if granted.fencing_token != fence:
-            raise QueueConflictError("SLURM execution fence conflicts")
-        authority.confirm_execution_started(record.assignment.run_uri, fence=granted)
-        self.slurm_assignments.mark_running(
-            assignment_id,
-            incarnation,
-            fence,
-            process_execution_id,
+        return self._bootstrap.slurm_started(
+            principal_id=principal_id, credential_id=credential_id, assignment_id=assignment_id,
+            incarnation=incarnation, fence=fence, process_execution_id=process_execution_id,
         )
 
     def slurm_declare_report(
@@ -7084,10 +6970,10 @@ class LocalDaemonExecution:
         fence: str,
         report: _RemoteExecutionReport,
     ) -> None:
-        self._slurm_authorized_record(
-            principal_id, credential_id, assignment_id, incarnation
+        return self._bootstrap.slurm_declare_report(
+            principal_id=principal_id, credential_id=credential_id, assignment_id=assignment_id,
+            incarnation=incarnation, fence=fence, report=report,
         )
-        self.slurm_assignments.declare_report(assignment_id, incarnation, fence, report)
 
     def slurm_output_chunk(
         self,
@@ -7101,15 +6987,9 @@ class LocalDaemonExecution:
         data: bytes,
         final: bool,
     ) -> int:
-        self._slurm_authorized_record(
-            principal_id, credential_id, assignment_id, incarnation
-        )
-        return self.slurm_assignments.write_output_chunk(
-            assignment_id,
-            incarnation,
-            transfer_id,
-            offset,
-            data,
+        return self._bootstrap.slurm_output_chunk(
+            principal_id=principal_id, credential_id=credential_id, assignment_id=assignment_id,
+            incarnation=incarnation, transfer_id=transfer_id, offset=offset, data=data,
             final=final,
         )
 
@@ -7122,11 +7002,10 @@ class LocalDaemonExecution:
         incarnation: str,
         fence: str,
     ) -> None:
-        with self._daemon_owner()._publication_guards.hold(assignment_id):
-            record = self._slurm_authorized_record(
-                principal_id, credential_id, assignment_id, incarnation
-            )
-            self._slurm_finalize_record(record, fence)
+        return self._bootstrap.slurm_commit_result(
+            principal_id=principal_id, credential_id=credential_id, assignment_id=assignment_id,
+            incarnation=incarnation, fence=fence,
+        )
 
     def _slurm_finalize_record(
         self, record: SlurmStageRecord, fence: str, *,
@@ -7135,13 +7014,16 @@ class LocalDaemonExecution:
         assignment_id = record.assignment.assignment_id
         incarnation = cast(str, record.bootstrap_incarnation)
         authority = self._remote_authority(record.assignment.run_uri)
-        granted = authority.grant_prepared_attempt(
-            record.assignment.run_uri,
-            assignment_id=assignment_id,
-            attempt_id=record.assignment.attempt_id,
-        )
-        if granted.fencing_token != fence:
-            raise QueueConflictError("SLURM terminal fence conflicts")
+        def require_terminal_fence() -> ExecutionFence:
+            observed = authority.read_prepared_binding(
+                record.assignment.run_uri, assignment_id=assignment_id,
+                attempt_id=record.assignment.attempt_id,
+            )
+            if observed.fence is None or observed.fence.fencing_token != fence or record.fence != fence:
+                raise QueueConflictError("SLURM terminal fence conflicts")
+            return observed.fence
+
+        granted = require_terminal_fence()
         shared_outputs = None
         if record.report is not None and record.report.output_kind == "shared":
             from ._shared_publication import prepare_publication, accept_publication
@@ -7161,12 +7043,7 @@ class LocalDaemonExecution:
                 )
             # Verification may perform substantial storage IO. Reauthorize the
             # same attempt before publishing, including a concurrent cancellation.
-            current = authority.grant_prepared_attempt(
-                record.assignment.run_uri, assignment_id=assignment_id,
-                attempt_id=record.assignment.attempt_id,
-            )
-            if current.fencing_token != fence:
-                raise QueueConflictError("SLURM publication fence conflicts")
+            require_terminal_fence()
             assert publication is not None  # A prepared publication owns shared outputs.
             shared_outputs = accept_publication(publication)
         report, outputs = self.slurm_assignments.committed_result(
@@ -7263,37 +7140,11 @@ class LocalDaemonExecution:
         assignment_id: str,
         incarnation: str,
     ) -> None:
-        self._slurm_authorized_record(
-            principal_id, credential_id, assignment_id, incarnation
+        return self._bootstrap.slurm_release(
+            principal_id=principal_id, credential_id=credential_id, assignment_id=assignment_id,
+            incarnation=incarnation,
         )
-        record = self.slurm_assignments.read(assignment_id)
-        if record.state == "terminal":
-            self.slurm_assignments.advance(
-                assignment_id, expected="terminal", next_state="logical_released"
-            )
 
-    def _slurm_authorized_record(
-        self,
-        principal_id: str,
-        credential_id: str | None,
-        assignment_id: str,
-        incarnation: str,
-    ) -> SlurmStageRecord:
-        record = self.slurm_assignments.read(assignment_id)
-        profile = self._slurm_profile(
-            record.assignment.profile_id,
-            record.assignment.profile_configuration_fingerprint,
-        )
-        self._require_slurm_profile_principal(profile, principal_id, credential_id)
-        if (
-            record.assignment.profile_id != profile.profile_id
-            or record.assignment.profile_descriptor != profile.descriptor
-            or record.bootstrap_incarnation != incarnation
-        ):
-            raise QueueConflictError("SLURM bootstrap authorization conflicts")
-        if record.terminal_observation is not None and record.terminal_observation.get("phase") == "bootstrap":
-            raise QueueConflictError("SLURM bootstrap already failed before execution")
-        return record
 
     def _slurm_profile_for_principal(
         self, principal_id: str, credential_id: str | None
@@ -7329,17 +7180,6 @@ class LocalDaemonExecution:
             None,
         )
 
-    @staticmethod
-    def _require_slurm_profile_principal(
-        profile: SlurmReadyStageProfile,
-        principal_id: str,
-        credential_id: str | None,
-    ) -> None:
-        if (
-            profile.bootstrap_principal_id != principal_id
-            or profile.credential_reference != credential_id
-        ):
-            raise QueueServiceError("SLURM bootstrap principal is not authorized")
 
     def _remote_assignment_record(self, assignment_id: str) -> sqlite3.Row:
         with self.config.connect_database(self.config.control_database) as conn:
@@ -7450,16 +7290,6 @@ def _cancelled_stage_attempts(snapshot: AuthoritativeRunSnapshot, stage_name: st
     )
 
 
-def _safe_identifier(value: object, field: str) -> str:
-    allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.:@+"
-    if (
-        not isinstance(value, str)
-        or not value
-        or len(value) > 160
-        or any(char not in allowed for char in value)
-    ):
-        raise QueueServiceError(f"{field} is invalid")
-    return value
 
 
 def _slurm_state_diagnostic(state: str) -> str | None:

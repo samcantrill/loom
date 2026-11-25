@@ -1,5 +1,6 @@
-"""SLURM grants join the native action claim in the existing control transaction."""
+"""Slurm grant projection preserves exact shared-action demand during cancellation."""
 
+import sqlite3
 from types import SimpleNamespace
 
 import pytest
@@ -8,14 +9,14 @@ from loom.pipeline.stores.authority import (
     ActionProducerBinding,
     CancellationEpochRequest,
 )
-from loom.queue.local_daemon_execution import LocalDaemonExecution
+from tests.support.slurm_bootstrap import registered_bootstrap
 from tests.unit.loom.queue.test_action_results import _store
 from tests.integration.authority.test_action_result_binding import _consumer
 from tests.integration.authority.test_action_producer_cancellation import _prepare
 
 
-@pytest.mark.parametrize("request_id", [None, "live-request"])
-def test_slurm_shared_grant_and_start_use_exact_live_demand(tmp_path, monkeypatch, request_id):
+@pytest.mark.parametrize("request_id, interrupted", [(None, False), ("live-request", False), ("live-request", True)])
+def test_slurm_shared_grant_and_start_use_exact_live_demand(tmp_path, request_id, interrupted):
     actions = _store(tmp_path)
     with actions.connection() as conn:
         conn.execute(
@@ -56,34 +57,32 @@ def test_slurm_shared_grant_and_start_use_exact_live_demand(tmp_path, monkeypatc
     record = SimpleNamespace(
         input_ready=True,
         fence=None,
-        state="inputs_ready",
+        state="accepted",
         assignment=SimpleNamespace(run_uri=uri, attempt_id="producer-1"),
     )
     from tests.unit.loom.queue.test_remote_stage_execution import _profile, _request
     record.delivery = _request(_profile(tmp_path))
-    execution = object.__new__(LocalDaemonExecution)
-    monkeypatch.setattr(
-        execution,
-        "config",
-        SimpleNamespace(control_database=tmp_path / "actions.sqlite",
-                        connect_database=lambda path: actions.connection()),
-        raising=False,
-    )
-    monkeypatch.setattr(execution, "_slurm_authorized_record", lambda *args: record)
-    monkeypatch.setattr(execution, "_remote_authority", lambda run_uri: authority)
     consumed = []
 
     def mark_granted(assignment_id, incarnation, fence):
+        if interrupted and not consumed_projection:
+            consumed_projection.append(fence)
+            raise OSError("projection interrupted")
         record.fence, record.state = fence, "granted"
 
-    monkeypatch.setattr(
-        execution,
-        "slurm_assignments",
-        SimpleNamespace(
-            mark_granted=mark_granted,
-            consume_start=lambda assignment_id, **kwargs: consumed.append(assignment_id) or True,
-        ),
-        raising=False,
+    consumed_projection: list[str] = []
+
+    def grant(*args, **kwargs):
+        fence = authority.grant_prepared_attempt(*args, **kwargs)
+        if interrupted:
+            actions.detach_graph("run://consumer", "cancel-final")
+        return fence
+
+    execution = registered_bootstrap(
+        record, assignment_id="slurm-assignment", incarnation="incarnation",
+        connect=lambda: sqlite3.connect(tmp_path / "actions.sqlite"),
+        authority_for=lambda _: SimpleNamespace(grant_prepared_attempt=grant), mark_granted=mark_granted,
+        consume_start=lambda assignment_id, **kwargs: consumed.append(assignment_id) or True,
     )
     request = dict(
         principal_id="slurm-agent",
@@ -91,6 +90,26 @@ def test_slurm_shared_grant_and_start_use_exact_live_demand(tmp_path, monkeypatc
         assignment_id="slurm-assignment",
         incarnation="incarnation",
     )
+    if interrupted:
+        with pytest.raises(OSError, match="projection interrupted"):
+            execution.slurm_grant(**request)
+        assert actions.claim(claim_id)["fencing_token"] == consumed_projection[0]
+        assert record.fence is None
+        assert actions.claim(claim_id)["state"] == "settling"
+        # The authority won before the final demand detached. A fresh
+        # coordinator must restore its fence without reviving that claim.
+        restarted = registered_bootstrap(
+            record, assignment_id="slurm-assignment", incarnation="incarnation",
+            connect=lambda: sqlite3.connect(tmp_path / "actions.sqlite"), authority_for=lambda _: authority,
+            mark_granted=mark_granted, consume_start=lambda *a, **kw: pytest.fail("cancelled start"),
+        )
+        assert restarted.settlement.needs_observation("slurm-assignment")
+        retained = restarted.settlement.assignments.read("slurm-assignment")
+        restarted.settlement.recover_grant(retained, authority)
+        assert record.fence == consumed_projection[0]
+        assert actions.claim(claim_id)["state"] == "settling"
+        assert not restarted.slurm_start_permit(**request, fence=consumed_projection[0], request_id=request_id)
+        return
     fence = execution.slurm_grant(**request)
     assert actions.claim(claim_id)["fencing_token"] == fence
     assert actions.claim(claim_id)["assignment_id"] == "slurm-assignment"

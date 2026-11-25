@@ -1194,7 +1194,7 @@ class SQLiteSlurmStageAssignments:
         self, record: SlurmStageRecord, identity: Mapping[str, PlainData], observed_at: str,
     ) -> None:
         """Journal the authoritative unstarted failure before retry evaluation and release."""
-        observation = {"identity": dict(identity), "first_observed_at": observed_at, "phase": "bootstrap"}
+        observation = {"identity": thaw_plain_data(identity), "first_observed_at": observed_at, "phase": "bootstrap"}
         with self._transaction() as conn:
             changed = conn.execute(
                 f"UPDATE {_ASSIGNMENT_TABLE} SET state='bootstrap_failed', terminal_observation_json=? "
@@ -1236,20 +1236,14 @@ class SQLiteSlurmStageAssignments:
             self._incarnation(row, incarnation)
             if not bool(row["input_ready"]):
                 raise QueueConflictError("SLURM grant requires durable inputs")
-            if row["fence"] is not None and str(row["fence"]) != fence:
-                raise QueueConflictError("SLURM grant fence conflicts")
             state = str(row["state"])
-            if state not in {
-                "accepted",
-                "granted",
-                "running",
-                "terminal",
-                "logical_released",
-                "released",
-            }:
+            if row["fence"] is not None:
+                if str(row["fence"]) != fence:
+                    raise QueueConflictError("SLURM grant fence conflicts")
+                return state
+            if state != "accepted":
                 raise QueueConflictError("SLURM assignment cannot be granted")
-            if state == "accepted":
-                state = "granted"
+            state = "granted"
             conn.execute(
                 f"UPDATE {_ASSIGNMENT_TABLE} SET state = ?, fence = ? "
                 "WHERE assignment_id = ?",
@@ -1317,6 +1311,14 @@ class SQLiteSlurmStageAssignments:
                 (operation_id,),
             ).fetchone()
             return None if row is None else self._record(row)
+
+    def unresolved_bootstrap_grants(self) -> tuple[str, ...]:
+        """A prior coordinator could have issued a grant for these exact owners."""
+        with _connect(self.path, sqlite_policy=self._sqlite_policy, require_existing=True) as conn:
+            return tuple(row[0] for row in conn.execute(
+                f"SELECT assignment_id FROM {_ASSIGNMENT_TABLE} WHERE state='accepted' "
+                "AND input_ready=1 AND bootstrap_incarnation IS NOT NULL AND fence IS NULL"
+            ))
 
     def list_run_unreleased(self, run_uri: str) -> tuple[SlurmStageRecord, ...]:
         with _connect(self.path, sqlite_policy=self._sqlite_policy, require_existing=True) as conn:

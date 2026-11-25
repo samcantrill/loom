@@ -1195,7 +1195,11 @@ def test_cpu_only_agent_resources_skip_nvidia_discovery(tmp_path: Path) -> None:
     }
     source = _write_protected(source, payload)
 
-    service = load_outbound_agent_service_config(source)
+    class NoDiscovery:
+        def get_inventory(self) -> LocalGpuInventory:
+            pytest.fail("a CPU-only declaration must skip GPU discovery")
+
+    service = load_outbound_agent_service_config(source, _gpu_inventory_provider=NoDiscovery())
 
     assert service.client.resource_inventory is not None
     assert service.client.capacity_profile.cpu_capacity == 4
@@ -1234,7 +1238,6 @@ def test_outbound_resource_identity_uses_effective_capacity_values(
 @pytest.mark.parametrize("selection,requires_reload", (("0", True), ("GPU-a", False)))
 def test_selected_gpu_restart_distinguishes_index_from_uuid(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
     selection: str,
     requires_reload: bool,
 ) -> None:
@@ -1244,9 +1247,11 @@ def test_selected_gpu_restart_distinguishes_index_from_uuid(
             LocalGpuDevice("GPU-b", "GPU-b", host_index=1, model="b", vram_bytes=1024),
         )
     )
-    monkeypatch.setattr(
-        NvidiaSmiGpuInventoryProvider, "discover", lambda _self: observed
-    )
+    class Inventory:
+        def get_inventory(self) -> LocalGpuInventory:
+            return observed
+
+    inventory = Inventory()
     source = _agent_config(tmp_path)
     payload = json.loads(source.read_text())
     payload["resources"] = {
@@ -1255,7 +1260,7 @@ def test_selected_gpu_restart_distinguishes_index_from_uuid(
         "gpu": {"provider": "nvidia", "devices": selection},
     }
     _write_protected(source, payload)
-    first = load_outbound_agent_service_config(source)
+    first = load_outbound_agent_service_config(source, _gpu_inventory_provider=inventory)
     LocalDaemonAgentHttpClient.initialize_agent_root(first.client)
     client = _open_outbound_agent(first.client)
     try:
@@ -1270,7 +1275,7 @@ def test_selected_gpu_restart_distinguishes_index_from_uuid(
             LocalGpuDevice("GPU-a", "GPU-a", host_index=1, model="a", vram_bytes=1024),
         )
     )
-    changed = load_outbound_agent_service_config(source)
+    changed = load_outbound_agent_service_config(source, _gpu_inventory_provider=inventory)
     assert changed.immutable_fingerprint == first.immutable_fingerprint
     if requires_reload:
         assert changed.active_fingerprint != first.active_fingerprint
@@ -3398,8 +3403,7 @@ def test_outbound_transport_budgets_are_read_without_probes_and_bind_policy(tmp_
 
 
 def test_retained_slurm_jobs_allow_only_a_transport_timing_reload(tmp_path, monkeypatch):
-    from types import SimpleNamespace
-    from typing import Any
+    from loom.queue._agent_role_reload import AgentRoleReload
 
     from loom.pipeline.executors.slurm import FakeSlurmCommandRunner
     from loom.queue import deployment
@@ -3414,14 +3418,13 @@ def test_retained_slurm_jobs_allow_only_a_transport_timing_reload(tmp_path, monk
 
     _write_protected(source, payload)
     previous = load_outbound_agent_service_config(source).client
-    owner: Any = SimpleNamespace(_config=previous, _slurm_agent=object(), _profiles={}, _retained_profiles={})
-    owner._slurm_transport_only_reload = lambda replacement: LocalDaemonAgentHttpClient._slurm_transport_only_reload(owner, replacement)
+    role = AgentRoleReload(previous, {}, {}, slurm_enabled=True)
 
     payload["transport_policy"] = {"connect_timeout_seconds": 10, "response_timeout_seconds": 60}
     _write_protected(source, payload)
     selected = load_outbound_agent_service_config(source).client
     assert selected.active_configuration_fingerprint != previous.active_configuration_fingerprint
-    LocalDaemonAgentHttpClient._validate_reload_config(owner, selected, retained_work=True)
+    role.validate(selected, retained_work=True)
 
     # Reconnect and registration values live outside AgentTlsClientConfig and
     # must still invalidate the proof that only the request timeout changed.
@@ -3429,7 +3432,7 @@ def test_retained_slurm_jobs_allow_only_a_transport_timing_reload(tmp_path, monk
     _write_protected(source, payload)
     changed = load_outbound_agent_service_config(source).client
     with pytest.raises(QueueConflictError, match="retained work"):
-        LocalDaemonAgentHttpClient._validate_reload_config(owner, changed, retained_work=True)
+        role.validate(changed, retained_work=True)
 
 
 def test_cached_role_rechecks_include_environment_and_protection(tmp_path, monkeypatch):
