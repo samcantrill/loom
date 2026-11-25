@@ -22,8 +22,11 @@ The coordinator reads the preparation child's authority revision and status on a
 bounded I/O worker. An embedded authority observes both in one SQLite query.
 An authenticated authority supplies the same facts through its snapshot. When a
 same-run retry has Slurm allocation history, a worker loads the stage and attempt
-snapshot before the coordinator checks release and recovery evidence. Other
-admissions can prepare and execute while one read waits. The coordinator checks
+snapshot. If the allocation needs guarded recovery, a worker validates its exact
+identity and attempt revision. The recovery journal accepts the request only while
+the requesting operation and target admission still own it. Recovery workers then
+check containment evidence and competing worker results before closing the attempt.
+Other admissions can prepare and execute while an authority read waits. The coordinator checks
 the operation, child admission revision and coordinator epochs before consuming
 an observation. The publisher checks the child revision again under its publication
 guard. If the target was published before the coordinator recorded the receipt,

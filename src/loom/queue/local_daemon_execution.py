@@ -3031,20 +3031,23 @@ class LocalDaemonExecution:
         authority: _ScopedCoordinatorAuthority,
     ) -> ObservationSteps[tuple[bool, str | None]]:
         steps = self._slurm_record_steps(run_uri, authority)
-        snapshot = None
+        advance = steps.send
+        value = None
         try:
             while True:
-                # Attribute scheduler work to this phase. The authority worker
-                # measures its own read while the scheduler serves other runs.
+                # Attribute scheduler work to this phase and run each requested
+                # observation or guarded recovery on its original bounded worker.
                 with phase("coordinator.reconcile_slurm_run"):
                     try:
-                        if snapshot is None:
-                            next(steps)
-                        else:
-                            steps.send(snapshot)
+                        request = advance(value)
                     except StopIteration as settled:
                         return settled.value
-                snapshot = yield
+                try:
+                    value = yield request
+                except Exception as error:
+                    advance, value = steps.throw, error
+                else:
+                    advance = steps.send
         finally:
             steps.close()
 
@@ -3308,16 +3311,25 @@ class LocalDaemonExecution:
             requested_outcome="failed", consider_retry=False,
             reason="Exact terminal Slurm accounting; result absent after grace period",
         )
-        self._daemon_owner()._admit_guarded_recovery(request, "loom:terminal-recovery")
+        daemon = self._daemon_owner()
+        admission = daemon.admission_for_run_uri(assignment.run_uri)
+        from .local_daemon import _RecoveryNotAccepted
+
+        try:
+            yield daemon._scheduled_recovery(request, "loom:terminal-recovery", admission)
+        except _RecoveryNotAccepted:
+            return None
         return "slurm_terminal_recovery_pending"
 
     def settle_continuation(
         self, admission: LocalDaemonAdmission, *, accepted_at: str,
         observe_snapshot: _slurm_retry.ObserveRetrySnapshot | None = None,
+        admit_recovery: _slurm_retry.AdmitRetryRecovery | None = None,
     ) -> ContinuationPending | ContinuationConflict | None:
         """Collect provider evidence before verifying and freezing a target revision."""
         unresolved = _slurm_retry.reconcile(
-            self, admission.run_uri, accepted_at=accepted_at, observe_snapshot=observe_snapshot,
+            self, admission.run_uri, accepted_at=accepted_at,
+            observe_snapshot=observe_snapshot, admit_recovery=admit_recovery,
         )
         if unresolved is not None:
             return unresolved

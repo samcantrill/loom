@@ -172,7 +172,7 @@ def test_slurm_ack_replays_budget_outcome_before_releasing_gpu(tmp_path, monkeyp
     from threading import get_ident
     from concurrent.futures import ThreadPoolExecutor
     from loom.queue._continuation import ContinuationConflict
-    from loom.queue._preparation_operations import _AuthorityReadPending
+    from loom.queue._preparation_operations import _AuthorityJobPending
 
     scheduling_thread = get_ident()
     reads = []
@@ -186,14 +186,14 @@ def test_slurm_ack_replays_budget_outcome_before_releasing_gpu(tmp_path, monkeyp
     def defer_snapshot(assignments, read):
         assert assignments == (assignment.assignment_id,)
         reads.append(read)
-        raise _AuthorityReadPending
+        raise _AuthorityJobPending
 
     def settle(observe):
         return LocalDaemonExecution.settle_continuation(
             execution, admission, accepted_at="2026-01-01T00:00:00Z", observe_snapshot=observe,
         )
 
-    with pytest.raises(_AuthorityReadPending):
+    with pytest.raises(_AuthorityJobPending):
         settle(defer_snapshot)
     with ThreadPoolExecutor(max_workers=1) as worker:
         snapshot = worker.submit(reads[0]).result(timeout=5)

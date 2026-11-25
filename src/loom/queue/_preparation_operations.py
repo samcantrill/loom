@@ -64,6 +64,7 @@ if TYPE_CHECKING:
         LocalDaemonAdmissionRequest,
         LocalDaemonConfig,
         LocalDaemonOperation,
+        RecoverUnknownAssignment,
     )
 
 
@@ -224,8 +225,8 @@ class PreparationCallbacks(Protocol):
     ) -> ManagedLocalPreparationReceipt: ...
 
 
-class _AuthorityReadPending(Exception):
-    """Resume this operation once its bounded authority observation is available."""
+class _AuthorityJobPending(Exception):
+    """Resume this operation once its bounded authority job finishes."""
 
 
 class _PublicationChildChanged(Exception):
@@ -427,7 +428,7 @@ class CoordinatorPreparations:
         self._reconcile_lock = Lock()
         self._cursor = 0
         self._cancel_cursor = 0
-        self._authority_reads: dict[
+        self._authority_jobs: dict[
             str, dict[str, tuple[tuple[object, ...], Future[Any]]]
         ] = {}
         self._child_release_checks: dict[str, tuple[_ChildReleaseScope, Future[bool]]] = {}
@@ -973,7 +974,7 @@ class CoordinatorPreparations:
                 if row is None:
                     self.daemon._result_verifications.bulk.discard(scope)
                     if owner == "preparation":
-                        self._authority_reads.pop(operation_id, None)
+                        self._authority_jobs.pop(operation_id, None)
                 else:
                     selected[operation_id] = row
         selected.update(page_rows)
@@ -1145,16 +1146,16 @@ class CoordinatorPreparations:
         try:
             with bulk.offering(scope):
                 self._advance_owned(row)
-        except _AuthorityReadPending:
+        except _AuthorityJobPending:
             # A second observation may depend on the first. Retain both until
             # the scheduler can reach the waiting action.
             return
         except Exception:
-            self._authority_reads.pop(operation_id, None)
+            self._authority_jobs.pop(operation_id, None)
             raise
-        if operation_id in self._authority_reads and not bulk.scopes(scope):
+        if operation_id in self._authority_jobs and not bulk.scopes(scope):
             # Once the action runs, its completion needs a fresh observation.
-            self._authority_reads.pop(operation_id, None)
+            self._authority_jobs.pop(operation_id, None)
 
     def _advance_owned(self, row: sqlite3.Row) -> None:
         from .local_daemon import LocalDaemonAdmissionRequest, LocalDaemonAdmissionState
@@ -1594,7 +1595,8 @@ class CoordinatorPreparations:
                 admission_identity = (admission.admission_id, admission.intent_digest, admission.revision)
                 outcome = execution.settle_continuation(
                     admission, accepted_at=row["accepted_at"],
-                    observe_snapshot=lambda assignments, read: self._observe_authority(
+                    admit_recovery=partial(self._admit_slurm_retry_recovery, row, admission, report_token.child),
+                    observe_snapshot=lambda assignments, read: self._await_authority(
                         row, uri, "preparation_slurm_retry_authority_read", (*admission_identity, assignments), read,
                     ),
                 )
@@ -1634,7 +1636,7 @@ class CoordinatorPreparations:
                     candidate = self._capture_candidate_async(row, config, uri, admission, report, report_token)
                     if candidate is None:
                         return
-                except _AuthorityReadPending:
+                except _AuthorityJobPending:
                     raise
                 except Exception:
                     self._fail(row, "candidate_unavailable", conflict=True)
@@ -1697,34 +1699,57 @@ class CoordinatorPreparations:
             self._child_token(row, config, admission),
         )
 
-    def _observe_authority[T](
-        self, row: sqlite3.Row, uri: str, action: str, identity: tuple[object, ...], read: Callable[[], T],
+    def _admit_slurm_retry_recovery(
+        self, row: sqlite3.Row, admission: LocalDaemonAdmission, child: _ChildIdentity, recovery: RecoverUnknownAssignment,
+    ) -> Mapping[str, PlainData]:
+        operation_id = str(row["operation_id"])
+        claim = self._publication_token(row)
+
+        def preparation_current(conn: sqlite3.Connection) -> bool:
+            current = conn.execute(
+                "SELECT p.* FROM preparation_operations AS p JOIN managed_admissions AS child "
+                "ON child.admission_id=p.child_admission_id WHERE p.operation_id=? AND p.state=? "
+                "AND p.cancellation_requested=0 AND child.admission_id=? AND child.intent_digest=? AND child.revision=?",
+                (operation_id, row["state"], child.admission_id, child.intent_digest, child.admission_revision),
+            ).fetchone()
+            return current is not None and self._publication_token(current) == claim
+
+        job = self.daemon._scheduled_recovery(
+            recovery, f"coordinator:{self.daemon._require_started()}", admission, preparation_current=preparation_current,
+        )
+        return self._await_authority(
+            row, recovery.run_uri, "preparation_slurm_recovery_admission",
+            (admission.admission_id, admission.revision, child, recovery), job,
+        )
+
+    def _await_authority[T](
+        self, row: sqlite3.Row, uri: str, action: str, identity: tuple[object, ...], work: Callable[[], T],
     ) -> T:
         operation_id = str(row["operation_id"])
-        reads = self._authority_reads.setdefault(operation_id, {})
+        jobs = self._authority_jobs.setdefault(operation_id, {})
         key = (*self._publication_token(row), row["state"], row["cancellation_requested"], uri, *identity)
-        previous = reads.get(action)
+        previous = jobs.get(action)
         if previous is not None and previous[0] == key:
             future = previous[1]
             if not future.done():
-                raise _AuthorityReadPending
+                raise _AuthorityJobPending
             try:
                 return future.result()
             except Exception:
-                del reads[action]
+                del jobs[action]
                 raise
         future = self.daemon._result_verifications.bulk.submit(
-            operation_id, action, read,
+            operation_id, action, work,
         )
         if future is not None:
-            reads[action] = key, future
-        raise _AuthorityReadPending
+            jobs[action] = key, future
+        raise _AuthorityJobPending
 
     def _child_token(
         self, row: sqlite3.Row, config: LocalDaemonConfig, admission: LocalDaemonAdmission,
     ) -> _ChildIdentity:
         identity = (admission.admission_id, admission.intent_digest, admission.revision)
-        revision, status = self._observe_authority(
+        revision, status = self._await_authority(
             row, admission.run_uri, "preparation_child_authority_read", identity,
             partial(_read_revision_status, config, admission.run_uri),
         )
@@ -1737,7 +1762,7 @@ class CoordinatorPreparations:
         operation_id = str(row["operation_id"])
         assert self.callbacks is not None
         admission_identity = _candidate_admission(None if admission is None else admission.to_dict())
-        revision, _ = self._observe_authority(
+        revision, _ = self._await_authority(
             row, uri, "preparation_candidate_authority_read", (admission_identity, report_token),
             partial(_read_revision_status, config, uri),
         )

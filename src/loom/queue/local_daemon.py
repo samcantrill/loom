@@ -2163,7 +2163,7 @@ class LocalDaemon:
         self._result_verifications = ResultVerifications(self._wake.set)
         self._preparations._verification_reports.clear()
         self._preparations._reports.clear()
-        self._preparations._authority_reads.clear()
+        self._preparations._authority_jobs.clear()
         self._resuming_runs: dict[str, None] = {}
         self._preparations._publications.clear()
         self._preparations._ready_publications.clear()
@@ -3538,8 +3538,32 @@ class LocalDaemon:
             raise QueueConflictError("provider recovery operation namespace is reserved")
         return self._admit_guarded_recovery(request, principal.subject)
 
+    def _scheduled_recovery(
+        self, request: RecoverUnknownAssignment, principal_id: str, admission: LocalDaemonAdmission,
+        *, preparation_current: Callable[[sqlite3.Connection], bool] | None = None,
+    ) -> Callable[[], Mapping[str, PlainData]]:
+        """Capture scheduling ownership before a worker validates the recovery."""
+        from functools import partial
+
+        epochs = self._epoch, self._scheduling_epoch
+
+        def current(conn: sqlite3.Connection) -> bool:
+            if epochs != (self._epoch, self._scheduling_epoch):
+                return False
+            owner = conn.execute(
+                "SELECT 1 FROM managed_admissions WHERE admission_id=? AND run_uri=? "
+                "AND revision=? AND cancellation_operation_id IS ? "
+                "AND (SELECT value FROM daemon_metadata WHERE key='scheduling_epoch') = ?",
+                (admission.admission_id, request.run_uri, admission.revision,
+                 admission.cancellation_operation_id, epochs[1]),
+            ).fetchone()
+            return owner is not None and (preparation_current is None or preparation_current(conn))
+
+        return partial(self._admit_guarded_recovery, request, principal_id, current=current)
+
     def _admit_guarded_recovery(
         self, request: RecoverUnknownAssignment, principal_id: str,
+        *, current: Callable[[sqlite3.Connection], bool] | None = None,
     ) -> Mapping[str, PlainData]:
         """Use the same intent, containment evidence and close journal for both owners."""
         encoded = json.dumps(request.to_dict(), sort_keys=True, separators=(",", ":"))
@@ -3574,6 +3598,8 @@ class LocalDaemon:
                     except QueueConflictError as exc:
                         raise _RecoveryNotAccepted(str(exc)) from exc
                     conn.execute("BEGIN IMMEDIATE")
+                    if current is not None and not current(conn):
+                        raise _RecoveryNotAccepted("scheduled recovery owner changed during validation")
                     raced = conn.execute(
                         "SELECT recovery_id FROM recovery_operations "
                         "WHERE recovery_id = ? OR (state IN ('pending', 'evidence_confirmed', 'closed') "
@@ -3607,7 +3633,12 @@ class LocalDaemon:
                         ),
                     )
                     conn.commit()
-            result = self._advance_recovery(execution, request, recorded_at)
+            if current is None:
+                result = self._advance_recovery(execution, request, recorded_at)
+            else:
+                # From this commit the existing recovery workers own containment,
+                # ordinary-winner checks and close, including after restart.
+                result = {"recovery_id": request.recovery_id, "state": "pending", "evidence": "PENDING"}
         self._wake.set()
         return freeze_plain_data(result, path="recovery receipt")
 
