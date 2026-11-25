@@ -2797,6 +2797,120 @@ def test_drain_running_publishing_and_late_delivery_settles_entire_population(
             _release_gate(gate)
 
 
+def test_machine_cancel_records_peer_containment_and_release_before_restart(monkeypatch):
+    from loom.queue import _agent_assignment
+    from loom.queue._agent_progress import _cooperative, _delay, _steps
+
+    hold_poll, poll_waiting, settle_poll = Event(), Event(), Event()
+    stop_a, stop_b, send_a = Event(), Event(), Event()
+    contain_a, prove_a, settle_workers = Event(), Event(), Event()
+    dispatch = transport._dispatch
+    rpc = AgentProcessSupervisorClient._call
+    worker_result = _agent_assignment._settle_supervised_worker_result
+    apply_control = LocalDaemonAgentHttpClient._apply_assignment_control
+    ids = []
+
+    def exchange(view, operation, value):
+        result = dispatch(view, operation, value)
+        if operation == "poll" and hold_poll.is_set() and not settle_poll.is_set():
+            poll_waiting.set()
+            assert settle_poll.wait(20)
+        return result
+
+    def supervisor_rpc(client, operation, value):
+        if ids and operation == "request_stop":
+            if value["assignment_id"] == ids[0]:
+                stop_a.set()
+                assert send_a.wait(20)
+            result = rpc(client, operation, value)
+            if value["assignment_id"] == ids[1]:
+                stop_b.set()
+            return result
+        if ids and operation == "contain" and value["assignment_id"] == ids[0] and not prove_a.is_set():
+            contain_a.set()
+            raise supervisor_module.AgentProcessSupervisorError(supervisor_module._PENDING_OBSERVATION)
+        return rpc(client, operation, value)
+
+    def delayed_execution_observer(client, workspace, launch, receipt):
+        # Prove the machine control itself records B, even if B's ordinary
+        # execution view has yet to observe exit.
+        while ids and not settle_workers.is_set():
+            client._control_checkpoint()
+            yield from _delay(0.01)
+        return (yield from worker_result(client, workspace, launch, receipt))
+
+    @_cooperative
+    def delayed_assignment_command(client, control):
+        while ids and not settle_workers.is_set():
+            client._control_checkpoint()
+            yield from _delay(0.01)
+        return (yield from _steps(apply_control, client, control))
+
+    monkeypatch.setattr(LocalDaemonAgentHttpClient, "_apply_assignment_control", delayed_assignment_command)
+    monkeypatch.setattr(transport, "_dispatch", exchange)
+    monkeypatch.setattr(AgentProcessSupervisorClient, "_call", supervisor_rpc)
+    monkeypatch.setattr(_agent_assignment, "_settle_supervised_worker_result", delayed_execution_observer)
+    with _service(monkeypatch, ceiling=3, cpu=3, memory=3 * 1024**3) as case:
+        gates = []
+        journal = case.agent_root / "control.sqlite"
+        command_id = "drain-both-workers"
+        command_sql = "SELECT acknowledged, effect_json FROM agent_controls_local WHERE operation_id = ?"
+        try:
+            for name in ("first", "second"):
+                gate, _, _ = _submit_gated(case, name)
+                gates.append(gate)
+                _eventually(lambda: (gate / "build.started").exists())
+            ids.extend(sorted(row[0] for row in _running(case)))
+            assert len(ids) == 2
+            hold_poll.set()
+            assert poll_waiting.wait(15)
+            session = json.loads(_rows(journal, "SELECT value_json FROM agent_sessions_local")[0][0])
+            case.operator.control_agent(AgentControl(
+                command_id, AgentControlKind.DRAIN, "agent-a", session["session_id"],
+                session["config_revision"], None, True, "contain both workers",
+            ))
+            assert stop_a.wait(10)
+            assert stop_b.wait(10)
+            # The pending poll prevents full control application. B already
+            # received its native stop while the first early IPC is still held.
+            assert _rows(journal, command_sql, (command_id,)) == [(0, None)]
+            send_a.set()
+            settle_poll.set()
+            assert contain_a.wait(10)
+            workspaces = [case.agent_root / "assignments" / identity for identity in ids]
+            peer_result = workspaces[1] / "worker-result.json"
+            _eventually(peer_result.is_file)
+            assert json.loads(peer_result.read_bytes())["status"] == "CANCELLED"
+            assert not (workspaces[0] / "worker-result.json").exists()
+            settle_workers.set()
+            _eventually(lambda: _rows(
+                case.database, "SELECT state FROM remote_assignments WHERE assignment_id = ?", (ids[1],)
+            ) == [("RELEASED",)])
+            case.stop.set()
+            case.thread.join(15)
+            assert not case.thread.is_alive(), case.failures
+            assert _rows(journal, command_sql, (command_id,)) == [(0, None)]
+            prove_a.set()
+            case.stop.clear()
+            case.thread = Thread(target=case.serve)
+            case.thread.start()
+            _eventually(lambda: _rows(journal, "SELECT acknowledged FROM agent_controls_local "
+                "WHERE operation_id = ?", (command_id,)) == [(1,)])
+            assert json.loads(_rows(journal, command_sql, (command_id,))[0][1])["code"] == "applied"
+            _eventually(lambda: _rows(case.database,
+                "SELECT COUNT(*) FROM remote_assignments WHERE state = 'RELEASED'") == [(2,)])
+            assert json.loads((workspaces[0] / "worker-result.json").read_bytes())["status"] == "CANCELLED"
+            assert _rows(case.agent_root / "supervisor/supervisor.sqlite",
+                         "SELECT COUNT(*) FROM launches") == [(2,)]
+        finally:
+            send_a.set()
+            settle_poll.set()
+            settle_workers.set()
+            prove_a.set()
+            for gate in gates:
+                _release_gate(gate)
+
+
 @pytest.mark.parametrize("restart_epoch", [False, True])
 def test_lost_release_orders_other_completion_and_preserves_local_stop(
     monkeypatch, restart_epoch
@@ -2805,16 +2919,19 @@ def test_lost_release_orders_other_completion_and_preserves_local_stop(
     dispatch = transport._dispatch
     stop_request = AgentProcessSupervisorClient.request_stop
     requests = []
+    held_request = []
     ids = {}
 
     def exchange(view, operation, value):
-        requests.append((operation, dict(value)))
+        request = (operation, dict(value))
+        requests.append(request)
         result = dispatch(view, operation, value)
         if (
             operation == "release"
             and value["assignment_id"] == ids.get("a")
             and not held.is_set()
         ):
+            held_request.append(request)
             held.set()
             assert release.wait(40)
             raise ConnectionError("lost accepted release")
@@ -2846,20 +2963,20 @@ def test_lost_release_orders_other_completion_and_preserves_local_stop(
                 )[0][0]
             _release_gate(gates[0])
             assert held.wait(20)
-            first_release = next(
-                index
-                for index, (operation, _) in enumerate(requests)
-                if operation == "release"
-            )
+            # Negotiated proof preparation can return HTTP 202 before commit.
+            # The lost reply is the specific attempt paused after durable release.
+            committed_release = next(i for i, request in enumerate(requests) if request is held_request[0])
             offset[0] += deployment._OUTBOUND_OFFER_TTL_SECONDS
             _release_gate(gates[1])
             assert committed_b.wait(20)
             case.client.cancel("c")
             assert stopped_c.wait(5)
-            assert not any(
-                operation in {"release", "offer", "renew", "poll"}
-                for operation, _ in requests[first_release + 1 :]
-            )
+            premature = [
+                (operation, value.get("assignment_id"), value.get("sequence"))
+                for operation, value in requests[committed_release + 1:]
+                if operation in {"release", "offer", "renew", "poll"}
+            ]
+            assert not premature, premature
             if restart_epoch:
                 case.daemon.stop()
                 case.daemon.start()

@@ -4,7 +4,7 @@ from __future__ import annotations
 from loom._sqlite_policy import SQLitePolicy, connect_existing
 from .gpu.occupancy import GpuOccupancyPolicy
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
 from dataclasses import replace
 
@@ -1265,6 +1265,14 @@ class _RemoteAgentJournal:
             raise QueueServiceError("agent control effect is invalid")
         return AgentControlEffect.from_value(value)
 
+    @staticmethod
+    def control_refusal(control: AgentControl, session: AgentSession, hold_id: str | None) -> str | None:
+        if session.config_revision != control.expected_config_revision:
+            return "stale_revision"
+        if control.kind.value == "resume" and control.startup_hold_id != hold_id:
+            return "startup_hold"
+        return None
+
     def prepare_control(
         self,
         control: AgentControl,
@@ -1318,10 +1326,7 @@ class _RemoteAgentJournal:
             session = self.session(control.expected_session_id)
             hold = conn.execute("SELECT value FROM root_metadata WHERE key='startup_hold_id'").fetchone()
             hold_id = None if hold is None else str(hold[0])
-            refused = (
-                "stale_revision" if session.config_revision != control.expected_config_revision else
-                "startup_hold" if control.kind.value == "resume" and control.startup_hold_id != hold_id else None
-            )
+            refused = self.control_refusal(control, session, hold_id)
             if refused is not None:
                 effect = AgentControlEffect(
                     control.operation_id,
@@ -1537,14 +1542,25 @@ class _RemoteAgentJournal:
             conn.commit()
         return None
 
-    def next_received_assignment_control(self) -> AgentAssignmentControl | None:
-        """Read intent retained by receipt handling before its physical effect."""
+    def _next_assignment_control_row(
+        self, *, completed: bool, assignment_id: str | None, owned: Callable[[str], bool] | None,
+    ):
+        result_filter = "IS NOT NULL" if completed else "IS NULL"
+        owner_filter = "" if assignment_id is None else " AND assignment_id = ?"
         with self._connection() as conn:
-            row = conn.execute(
-                "SELECT request_json FROM remote_assignment_controls_local "
-                "WHERE acknowledged = 0 AND result_code IS NULL ORDER BY operation_id LIMIT 1"
-            ).fetchone()
-        return None if row is None else AgentAssignmentControl.from_value(json.loads(str(row[0])))
+            rows = conn.execute(
+                "SELECT assignment_id, request_json, result_code, evidence_json FROM remote_assignment_controls_local "
+                f"WHERE acknowledged = 0 AND result_code {result_filter}{owner_filter} ORDER BY operation_id",
+                () if assignment_id is None else (assignment_id,),
+            )
+            return next((row for row in rows if owned is None or owned(str(row["assignment_id"]))), None)
+
+    def next_received_assignment_control(
+        self, *, assignment_id: str | None = None, owned: Callable[[str], bool] | None = None,
+    ) -> AgentAssignmentControl | None:
+        """Read the next eligible intent before its physical effect."""
+        row = self._next_assignment_control_row(completed=False, assignment_id=assignment_id, owned=owned)
+        return None if row is None else AgentAssignmentControl.from_value(json.loads(str(row["request_json"])))
 
     def record_assignment_control_result(
         self,
@@ -1589,14 +1605,9 @@ class _RemoteAgentJournal:
             conn.commit()
 
     def next_unacknowledged_assignment_control(
-        self,
+        self, *, assignment_id: str | None = None, owned: Callable[[str], bool] | None = None,
     ) -> tuple[AgentAssignmentControl, str, Mapping[str, PlainData] | None] | None:
-        with self._connection() as conn:
-            row = conn.execute(
-                "SELECT request_json, result_code, evidence_json FROM "
-                "remote_assignment_controls_local WHERE acknowledged = 0 "
-                "AND result_code IS NOT NULL ORDER BY operation_id LIMIT 1"
-            ).fetchone()
+        row = self._next_assignment_control_row(completed=True, assignment_id=assignment_id, owned=owned)
         if row is None:
             return None
         request = json.loads(str(row["request_json"]))

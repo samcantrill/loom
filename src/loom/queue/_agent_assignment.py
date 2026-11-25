@@ -789,7 +789,13 @@ def _settle_supervised_worker_result(
         yield from _steps(self.poll_assignment_control, launch.session_id)
     result_path = workspace.root / "worker-result.json"
     if not result_path.is_file():
-        if workspace.assignment_id in self._cancelled_assignments:
+        if self._pending_machine_stop(workspace.assignment_id):
+            contained = yield from _steps(supervisor.contain, launch, checkpoint=self._control_checkpoint)
+            self._observe_supervisor_ownership(contained)
+            if contained.launch != launch or contained.state is not SupervisorLaunchState.CONTAINED:
+                return False
+            self._record_contained_cancellation(workspace)
+        elif workspace.assignment_id in self._cancelled_assignments:
             self._record_contained_cancellation(workspace)
         else:
             result = _managed_root_failed_worker_result(
@@ -807,7 +813,7 @@ def _settle_supervised_worker_result(
                     separators=(",", ":"),
                     allow_nan=False,
                 ).encode(), durability=workspace.durable_files)
-    contained = (yield from _steps(supervisor.contain, launch))
+    contained = (yield from _steps(supervisor.contain, launch, checkpoint=self._control_checkpoint))
     self._observe_supervisor_ownership(contained)
     if contained.state is not SupervisorLaunchState.CONTAINED:
         return False
@@ -1033,6 +1039,7 @@ def _complete_remote_result_and_release(
     self._next_resource_maintenance = 0
     self._cancelled_assignments.discard(request.assignment_id)
     self._received_cancellations.discard(request.assignment_id)
+    self._machine_stop_requested.discard(request.assignment_id)
     self._joined_starts.discard(request.assignment_id)
     return freeze_plain_data(
         {

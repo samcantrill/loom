@@ -159,7 +159,7 @@ from ._coordinator_control import (
     error_envelope,
 )
 from ._coordinator_transport import https_connection
-from ._agent_progress import _Progress, _cooperative, _steps, _external, _delay, _Gate, _serialized, _owns_assignment
+from ._agent_progress import _Progress, _cooperative, _steps, _external, _delay, _Gate, _serialized, _owns_assignment, _current_assignment_id, _gather
 from ._agent_progress import _bound_exchanges, _exchange_deadline, _ExternalDeadline
 from .local_daemon import (
     AdmissionNotFoundError,
@@ -925,6 +925,7 @@ class LocalDaemonAgentHttpClient:
         self._supports_lifecycle = False
         self._epoch_reconciliation_pending = False
         self._mutation_gate = _Gate()
+        self._agent_control_gate = _Gate()
         self._suspend_requested: Callable[[], bool] | None = None
         self._slurm_agent = (
             AgentSlurmJobs(
@@ -1004,6 +1005,7 @@ class LocalDaemonAgentHttpClient:
                 else ()
             )
             self._received_cancellations: set[str] = set()
+            self._machine_stop_requested: set[str] = set()
             if self._journal is not None:
                 self._journal.recover_pending_reload(config)
             self._drained = (
@@ -1390,8 +1392,28 @@ class LocalDaemonAgentHttpClient:
                 yield from _delay(0.01)
 
     @_cooperative
-    @_serialized("_mutation_gate")
+    @_serialized("_agent_control_gate")
     def poll_control(self, session_id: str) -> Generator[_Progress, Any, AgentControl | None]:
+        journal = self._require_journal()
+        received = yield from self._mutation_gate.run(self._prepare_next_control(session_id))
+        if received is None:
+            return None
+        control, effect = received
+        if effect is None:
+            contained = True
+            if control.cancel_active:
+                contained = yield from _steps(self._cancel_active_assignments)
+            effect = yield from self._mutation_gate.run(
+                self._finish_agent_control(control, contained)
+            )
+        journal.session(session_id)
+        yield from _steps(self._call, "control_ack", {"session_id": session_id, "effect": effect.value()})
+        journal.acknowledge_control(control.operation_id)
+        return control
+
+    def _prepare_next_control(
+        self, session_id: str,
+    ) -> Generator[_Progress, Any, tuple[AgentControl, AgentControlEffect | None] | None]:
         journal = self._require_journal()
         if self._service_progress and journal.pending_poll() is not None:
             self._service_control_due = True
@@ -1399,107 +1421,76 @@ class LocalDaemonAgentHttpClient:
         yield from _steps(self._replay_pending_resource_mutation, session_id)
         pending = journal.next_unacknowledged_control()
         if pending is not None:
-            control, effect = pending
-            if control.expected_session_id != session_id:
-                raise QueueConflictError(
-                    "retained agent control belongs to another session"
-                )
-            (yield from _steps(self._call,
-                "control_ack",
-                {"session_id": session_id, "effect": effect.value()},
-            ))
-            journal.acknowledge_control(control.operation_id)
-            return control
-        received = journal.next_received_control(session_id)
-        if received is not None:
-            raw = received.value()
-        elif self._service_progress:
-            return None
-        else:
-            result = (yield from _steps(self._call, "control", {"session_id": session_id}))
+            if pending[0].expected_session_id != session_id:
+                raise QueueConflictError("retained agent control belongs to another session")
+            return pending
+        control = journal.next_received_control(session_id)
+        if control is None:
+            if self._service_progress:
+                return None
+            result = yield from _steps(self._call, "control", {"session_id": session_id})
             raw = result.get("control")
-        if raw is None:
-            return None
-        if not isinstance(raw, Mapping):
-            raise QueueServiceError("agent control response is invalid")
-        control = AgentControl.from_value(raw)
-        effect = journal.replayed_control_effect(control)
-        prepared_reload: _PreparedAgentReload | None = None
-        prepared_error: str | None = None
-        cancellation_prepared = False
-        if effect is None and control.kind.value == "reload":
-            with self._control_lock:
-                if control.cancel_active:
-                    cancellation_prepared = True
-                    if not (yield from _steps(self._cancel_active_assignments)):
-                        prepared_error = "unknown_work"
-                if prepared_error is None:
-                    if self._trusted_config_loader is None:
-                        prepared_error = "reload_unavailable"
-                    else:
-                        try:
-                            prepared_reload = self._prepare_agent_reload()
-                        except (QueueError, OSError, TypeError, ValueError):
-                            prepared_error = "reload_rejected"
-        if effect is None:
-            effect = journal.prepare_control(
-                control,
-                replacement_fingerprint=(
-                    None
-                    if prepared_reload is None
-                    else prepared_reload.active_fingerprint
-                ),
+            if raw is None:
+                return None
+            if not isinstance(raw, Mapping):
+                raise QueueServiceError("agent control response is invalid")
+            control = AgentControl.from_value(raw)
+        if control.expected_session_id != session_id:
+            raise QueueConflictError("agent control belongs to another session")
+        effect = journal.prepare_control(control)
+        if effect is None and control.kind.value in {"drain", "reload", "promote"}:
+            self._drained = True
+        return control, effect
+
+    def _finish_agent_control(
+        self, control: AgentControl, contained: bool,
+    ) -> Generator[_Progress, Any, AgentControlEffect]:
+        from ._phase_timing import phase
+        journal = self._require_journal()
+        # Physical results belong to each exact launch. Recheck the command
+        # after returning to the mutation gate before changing session state.
+        if control.cancel_active:
+            current_effect = journal.prepare_control(control)
+            if current_effect is not None:
+                return current_effect
+        with phase("control_application", operation_id=control.operation_id):
+            effect = yield from _steps(
+                self._apply_agent_control, control,
+                prepared_error=None if contained else "unknown_work",
+                cancellation_prepared=True,
             )
-        if effect is None:
-            from ._phase_timing import phase
-            with phase("control_application", operation_id=control.operation_id):
-                effect = (yield from _steps(self._apply_agent_control,
-                    control,
-                    prepared_reload=prepared_reload,
-                    prepared_error=prepared_error,
-                    cancellation_prepared=cancellation_prepared,
-                ))
-            journal.record_control_effect(control, effect)
-        (yield from _steps(self._call,
-            "control_ack",
-            {"session_id": session_id, "effect": effect.value()},
-        ))
-        journal.acknowledge_control(control.operation_id)
-        return control
+        journal.record_control_effect(control, effect)
+        return effect
 
     @_cooperative
     def _apply_agent_control(
         self,
         control: AgentControl,
         *,
-        prepared_reload: _PreparedAgentReload | None = None,
         prepared_error: str | None = None,
         cancellation_prepared: bool = False,
     ) -> Generator[_Progress, Any, AgentControlEffect]:
         """Apply an inert command using only trusted owner-local configuration."""
 
+        if control.cancel_active and not cancellation_prepared:
+            if not (yield from _steps(self._cancel_active_assignments)):
+                prepared_error = "unknown_work"
         session = self._require_journal().session(control.expected_session_id)
         with self._control_lock:
             if control.kind.value in {"drain", "reload", "promote"}:
                 self._drained = True
             if prepared_error is not None:
                 return self._unchanged_control_effect(control, session, prepared_error)
-            if (
-                control.cancel_active
-                and not cancellation_prepared
-                and not (yield from _steps(self._cancel_active_assignments))
-            ):
-                return self._unchanged_control_effect(control, session, "unknown_work")
             if control.kind.value == "promote":
                 from ._profile_promotion import apply
                 return apply(self, control)
             if control.kind.value == "reload":
-                if prepared_reload is None and self._trusted_config_loader is None:
+                if self._trusted_config_loader is None:
                     return self._unchanged_control_effect(
                         control, session, "reload_unavailable"
                     )
                 try:
-                    plan = prepared_reload or self._prepare_agent_reload()
+                    plan = self._prepare_agent_reload()
                 except (QueueError, OSError, TypeError, ValueError):
                     return self._unchanged_control_effect(
                         control, session, "reload_rejected"
@@ -1941,31 +1932,76 @@ class LocalDaemonAgentHttpClient:
         self._runtime_provider_key = None
         self._providers = {}
 
+    def _control_checkpoint(self) -> None:
+        _raise_if_application_suspended(self._suspend_requested)
+
     @_cooperative
-    def _cancel_active_assignments(self) -> Generator[_Progress, Any, bool]:
+    def _cancel_active_assignments(self, *, request_only: bool = False) -> Generator[_Progress, Any, bool]:
         journal = self._journal
         supervisor = self._supervisor
-        if journal is None or supervisor is None:
+        if journal is None:
             return True
-        all_contained = True
-        for _, assignment_id in journal.unresolved_assignment_references():
-            workspace = self._assignment_workspace(assignment_id)
-            encoded_launch = workspace.supervisor_launch_json()
-            if encoded_launch is None:
-                continue
+        references = journal.unresolved_assignment_references()
+        if not references:
+            return True
+        for _, assignment_id in references:
+            self._received_cancellations.add(assignment_id)
+            self._machine_stop_requested.add(assignment_id)
+
+        if supervisor is None:
+            return False
+
+        def stop(session_id: str, assignment_id: str):
+            root = cast(Path, self._config.agent_root)
+            read_launch = _ResidentAssignmentWorkspace.read_supervisor_launch_json
+            encoded = read_launch(root, assignment_id)
             try:
-                launch = _launch_from_value(json.loads(encoded_launch))
-                (yield from _steps(supervisor.request_stop_wait, launch))
-                receipt = (yield from _steps(supervisor.contain, launch))
+                if encoded is None:
+                    if request_only:
+                        return True
+                    # Race a grant/start against a permanent no-start decision
+                    # in the native supervisor. A launch that won has its own proof.
+                    if (yield from _external("stop", supervisor.reject_unstarted_assignment, assignment_id)):
+                        return True
+                    encoded = read_launch(root, assignment_id)
+                    if encoded is None:
+                        return False
+                launch = _launch_from_value(json.loads(encoded))
+                if launch.session_id != session_id or launch.assignment_id != assignment_id:
+                    return False
+                if request_only:
+                    yield from supervisor._control_exchange("request_stop", launch, background=self._service_progress)
+                    return True
+                yield from _steps(supervisor.request_stop_wait, launch, checkpoint=self._control_checkpoint)
+                receipt = yield from _steps(supervisor.contain, launch, checkpoint=self._control_checkpoint)
+                if receipt.launch != launch or read_launch(root, assignment_id) != encoded:
+                    return False
                 self._observe_supervisor_ownership(receipt)
+                if receipt.state is not SupervisorLaunchState.CONTAINED:
+                    return False
+                # The execution view may have independently finished and released.
+                if self._execution_journal.find_state(assignment_id) is not AssignmentState.RELEASED:
+                    self._record_contained_cancellation(self._assignment_workspace(assignment_id))
+                return True
+            except _ManagedApplicationSuspended:
+                raise
             except (AgentProcessSupervisorError, QueueError, ValueError):
-                all_contained = False
-                continue
-            if receipt.state is not SupervisorLaunchState.CONTAINED:
-                all_contained = False
-                continue
-            self._record_contained_cancellation(workspace)
-        return all_contained
+                return False
+
+        return all((yield from _gather(stop(*reference) for reference in references)))
+
+    def _pending_machine_stop(self, assignment_id: str) -> bool:
+        if assignment_id in self._machine_stop_requested:
+            return True
+        # Recovery can observe the worker's exit before the service resumes
+        # application of a machine control retained by the previous process.
+        journal = self._require_journal()
+        session = journal.active_session()
+        if session is None:
+            return False
+        control = journal.next_received_control(session.session_id)
+        return (control is not None and control.cancel_active
+                and journal.control_refusal(control, session, journal.startup_hold_id()) is None)
 
     def _record_contained_cancellation(
         self, workspace: _ResidentAssignmentWorkspace
@@ -2079,20 +2115,18 @@ class LocalDaemonAgentHttpClient:
         """Apply an owned control, or settle a released assignment's late receipt."""
         journal = self._require_journal()
 
-        def owned(control: AgentAssignmentControl) -> bool:
+        def owned(assignment_id: str) -> bool:
             if released_only:
                 return (
                     self._execution_journal is not None
-                    and self._execution_journal.find_state(control.assignment_id)
-                    is AssignmentState.RELEASED
+                    and self._execution_journal.find_state(assignment_id) is AssignmentState.RELEASED
                 )
-            return not self._service_progress or _owns_assignment(control.assignment_id)
+            return not self._service_progress or _owns_assignment(assignment_id)
 
-        pending = journal.next_unacknowledged_assignment_control()
+        assignment_id = _current_assignment_id() if self._service_progress and not released_only else None
+        pending = journal.next_unacknowledged_assignment_control(assignment_id=assignment_id, owned=owned)
         if pending is not None:
             control, code, evidence = pending
-            if not owned(control):
-                return None
             if control.session_id != session_id:
                 raise QueueConflictError(
                     "retained assignment control belongs to another session"
@@ -2101,7 +2135,7 @@ class LocalDaemonAgentHttpClient:
                 self._cancelled_assignments.add(control.assignment_id)
             (yield from _steps(self._acknowledge_assignment_control, session_id, control, code, evidence))
             return control
-        received = journal.next_received_assignment_control()
+        received = journal.next_received_assignment_control(assignment_id=assignment_id, owned=owned)
         if received is None:
             if self._service_progress or released_only:
                 return None
@@ -2117,7 +2151,7 @@ class LocalDaemonAgentHttpClient:
         if control.session_id != session_id:
             raise QueueConflictError("retained assignment control belongs to another session")
         self._received_cancellations.add(control.assignment_id)
-        if not owned(control):
+        if not owned(control.assignment_id):
             journal.prepare_assignment_control(control)
             return None
         prior = journal.prepare_assignment_control(control)
@@ -2225,13 +2259,25 @@ class LocalDaemonAgentHttpClient:
                     # Release already proved containment and returned claims.
                     # A late command cannot change its committed result.
                     return "terminal", None
-                (yield from _steps(self._supervisor.request_stop_wait, launch))
-                contained = (yield from _steps(self._supervisor.contain, launch))
-                self._observe_supervisor_ownership(contained)
             except (AgentProcessSupervisorError, QueueError, ValueError):
                 return "unknown", None
+            supervisor = self._supervisor
+        try:
+            yield from _steps(supervisor.request_stop_wait, launch, checkpoint=self._control_checkpoint)
+            contained = yield from _steps(supervisor.contain, launch, checkpoint=self._control_checkpoint)
+        except _ManagedApplicationSuspended:
+            raise
+        except (AgentProcessSupervisorError, QueueError, ValueError):
+            return "unknown", None
+        with self._control_lock:
+            if (contained.launch != launch or workspace.supervisor_launch_json() != encoded_launch
+                    or journal.read_grant_fence(control.assignment_id) != control.fence):
+                return "unknown", None
+            self._observe_supervisor_ownership(contained)
             if contained.state is not SupervisorLaunchState.CONTAINED:
                 return "unknown", None
+            if journal.read_state(control.assignment_id) is AssignmentState.RELEASED:
+                return "terminal", None
             self._record_contained_cancellation(workspace)
             target_agent_id = self._runtime_agent_id
             if target_agent_id is None:
@@ -2651,7 +2697,7 @@ class LocalDaemonAgentHttpClient:
                     and launch.assignment_id == control.assignment_id
                     and launch.execution_fence == control.fence
                     and control.process_execution_id in {None, launch.process_execution_id}):
-                    yield from _external("control", self._supervisor.request_stop, launch)
+                    yield from self._supervisor._control_exchange("request_stop", launch, background=self._service_progress)
         # Native drain preparation fences polls, so it must wait for exact poll
         # settlement. Receipt of a late delivery is never replaced by withdrawal.
         if self._closed or (not waiting and journal.pending_poll() is not None):
@@ -2667,13 +2713,10 @@ class LocalDaemonAgentHttpClient:
                 raise QueueConflictError("received control belongs to another session")
             journal.retain_control(control)
             self._service_control_due = True
-            if control.cancel_active:
-                for _, assignment_id in journal.unresolved_assignment_references():
-                    self._received_cancellations.add(assignment_id)
-                    encoded = _ResidentAssignmentWorkspace.read_supervisor_launch_json(
-                        cast(Path, self._config.agent_root), assignment_id)
-                    if encoded is not None and self._supervisor is not None:
-                        yield from _external("control", self._supervisor.request_stop, _launch_from_value(json.loads(encoded)))
+            current = journal.session(session.session_id)
+            if (control.cancel_active and journal.replayed_control_effect(control) is None
+                and journal.control_refusal(control, current, journal.startup_hold_id()) is None):
+                yield from _steps(self._cancel_active_assignments, request_only=True)
 
     def _assignment_workspace(self, assignment_id: str) -> _ResidentAssignmentWorkspace:
         policy = self._config.sqlite_policy

@@ -9,7 +9,7 @@ import json
 import pytest
 
 from loom.queue import LocalDaemonPrincipal, LocalDaemonRole
-from loom.queue.agent_sessions import AgentControl, AgentControlKind
+from loom.queue.agent_sessions import AgentAssignmentControl, AgentControl, AgentControlKind
 from loom.queue import agent_session_transport as transport
 from loom.queue.agent_session_transport import (
     AgentTlsClientConfig, LocalDaemonAgentHttpClient, _RemoteAgentJournal, _decode,
@@ -228,5 +228,58 @@ def test_current_client_preserves_receipts_when_wait_envelope_is_full(tmp_path, 
         assert journal.received_control_ids(session.session_id) == ids
         assert journal.next_received_control(session.session_id) == control
         assert journal.next_unacknowledged_control() is None
+    finally:
+        client.close()
+
+
+def test_independent_assignment_controls_can_apply_and_acknowledge_out_of_order(tmp_path):
+    journal, session = _delivery_journal(tmp_path / "agent")
+    try:
+        first, second = (
+            AgentAssignmentControl(f"stop-{key}", session.session_id, key, None, None)
+            for key in ("a", "b")
+        )
+        for control in (first, second):
+            journal.prepare_assignment_control(control)
+        assert journal.next_received_assignment_control(assignment_id="b") == second
+        for control in (first, second):
+            journal.record_assignment_control_result(control, "never_started", None)
+        assert journal.next_unacknowledged_assignment_control(assignment_id="b") == (
+            second, "never_started", None,
+        )
+        # The late-receipt path must also skip a live owner at the head.
+        assert journal.next_unacknowledged_assignment_control(owned=lambda key: key == "b")[0] == second
+        journal.acknowledge_assignment_control(second.operation_id)
+        assert journal.next_unacknowledged_assignment_control()[0] == first
+        assert journal.next_unacknowledged_assignment_control(assignment_id="b") is None
+    finally:
+        journal.close()
+
+
+def test_stale_machine_reload_cannot_send_early_stops(tmp_path, monkeypatch):
+    journal, session = _delivery_journal(tmp_path / "agent")
+    control = replace(control_for(session), kind=AgentControlKind.RELOAD, cancel_active=True,
+                      expected_config_revision="retired-config")
+    client = LocalDaemonAgentHttpClient(AgentTlsClientConfig(
+        "https://localhost:9443", tmp_path / "ca.pem", tmp_path / "agent.pem", tmp_path / "agent.key",
+    ))
+    client._journal = journal
+    client._service_progress = True
+    effects = []
+
+    def exchange(operation, payload):
+        if operation == "control_wait":
+            return {"control": control.value(), "assignment_control": None}
+        assert operation == "control_ack"
+        effects.append(payload["effect"])
+        return {}
+
+    monkeypatch.setattr(client, "_call", exchange)
+    monkeypatch.setattr(client, "_cancel_active_assignments", lambda **_: pytest.fail("stale stop"))
+    try:
+        assert list(client._receive_service_controls()) == []
+        assert client.poll_control(session.session_id) == control
+        assert [effect["code"] for effect in effects] == ["stale_revision"]
+        assert not journal.availability_drained()
     finally:
         client.close()

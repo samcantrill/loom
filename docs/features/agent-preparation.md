@@ -1279,6 +1279,20 @@ it revokes continuation for that agent's exact affected attempts even when other
 graphs still need them. Those consumers observe the unsuccessful producer; Loom
 does not silently replace it. This differs from cancelling one graph's demand.
 
+The outbound agent retains the machine command when it arrives. Each retained
+assignment can receive its own supervisor stop while a work poll is settling.
+The agent withdraws capacity before joining containment. Stop delivery and
+containment use separate bounded IPC workers. Concurrent requests for the same
+operation and launch share an in-flight exchange. The assignment's result can
+be recorded and its providers released while another launch is still waiting.
+If a worker already wrote its result, that result remains authoritative.
+
+The machine command stays unacknowledged while a containment observation is
+pending. Stopping the agent at that boundary preserves the control and exact
+launch identities. On restart the agent rejoins the supervisor, records any
+missing result after positive containment, and revalidates the command against
+the current session before acknowledging its effect.
+
 ## Durable remote recovery
 
 Remote worker environment and launch construction errors are reported as failed

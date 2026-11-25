@@ -8,8 +8,8 @@ private queue application infrastructure; pipeline execution never imports it.
 
 from __future__ import annotations
 
-from collections.abc import Generator
-from concurrent.futures import CancelledError
+from collections.abc import Callable, Generator
+from concurrent.futures import CancelledError, Future
 from loom._sqlite_policy import connect_existing, initialize_database
 from loom.pipeline.stores.atomic import atomic_write_text, atomic_write_bytes
 from ._storage_policy import StoragePolicy, parse_storage_policy
@@ -43,7 +43,7 @@ from loom.fingerprints import hash_mapping
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.pipeline.runtime._resource_controls import _validated_resource_controls
 from ._process_group import OwnedProcessGroup, require_group_wait_support
-from ._agent_progress import _Progress, _cooperative, _delay, _external, _steps
+from ._agent_progress import _Progress, _Spawn, _cooperative, _delay, _external, _steps
 from ._phase_timing import log_phases, observe_phases, phase
 from ._submitted_container_policy import SubmittedContainerPolicy
 from .submitted_execution import SubmittedContainerCapability, SubmittedContainerExecution
@@ -1916,6 +1916,8 @@ class AgentProcessSupervisorClient(_SupervisorControlClient):
     def __init__(
         self, agent_root: Path, configuration: SupervisorLaunchConfiguration
     ) -> None:
+        self._pending_control: dict[tuple[str, str], Future[SupervisorReceipt]] = {}
+        self._pending_control_lock = RLock()
         self._configuration = configuration
         super().__init__(agent_root, configuration.agent_id, configuration.fingerprint)
 
@@ -1947,25 +1949,62 @@ class AgentProcessSupervisorClient(_SupervisorControlClient):
     def request_stop(self, launch: ResidentWorkerLaunch) -> SupervisorReceipt:
         return _receipt_from_value(self._call("request_stop", _launch_value(launch)))
 
+    def _control_exchange(self, operation: str, launch: ResidentWorkerLaunch, *, background: bool = False):
+        """Coalesce a single physical attempt from the receipt and execution views."""
+        key = (operation, launch.spec_digest)
+        with self._pending_control_lock:
+            pending = self._pending_control.get(key)
+            new = pending is None
+            if pending is None:
+                pending = Future()
+                self._pending_control[key] = pending
+
+        def send():
+            try:
+                if operation == "request_stop":
+                    receipt = yield from _external("stop", self.request_stop, launch)
+                else:
+                    raw = yield from _external("contain", self._call, "contain", _launch_value(launch))
+                    receipt = _receipt_from_value(raw)
+                pending.set_result(receipt)
+            except Exception as error:
+                pending.set_exception(error)
+            finally:
+                with self._pending_control_lock:
+                    del self._pending_control[key]
+
+        if new:
+            if background:
+                yield _Spawn(send())
+            else:
+                yield from send()
+        if not background:
+            while not pending.done():
+                yield from _delay(0.01)
+            return pending.result()
+        return None
+
     @_cooperative
-    def request_stop_wait(self, launch: ResidentWorkerLaunch) -> Generator[_Progress, Any, SupervisorReceipt]:
+    def request_stop_wait(self, launch: ResidentWorkerLaunch, *, checkpoint: Callable[[], None] | None = None) -> Generator[_Progress, Any, SupervisorReceipt]:
         """Join stop dispatch for synchronous callers, without claiming containment."""
-        return (yield from _steps(self._join, "request_stop", launch))
+        return (yield from _steps(self._join, "request_stop", launch, checkpoint=checkpoint))
 
     @_cooperative
-    def contain(self, launch: ResidentWorkerLaunch) -> Generator[_Progress, Any, SupervisorReceipt]:
-        return (yield from _steps(self._join, "contain", launch))
+    def contain(self, launch: ResidentWorkerLaunch, *, checkpoint: Callable[[], None] | None = None) -> Generator[_Progress, Any, SupervisorReceipt]:
+        return (yield from _steps(self._join, "contain", launch, checkpoint=checkpoint))
 
     @_cooperative
-    def _join(self, operation: str, launch: ResidentWorkerLaunch) -> Generator[_Progress, Any, SupervisorReceipt]:
+    def _join(self, operation: str, launch: ResidentWorkerLaunch, *, checkpoint: Callable[[], None] | None = None) -> Generator[_Progress, Any, SupervisorReceipt]:
         # Each exchange is bounded; only the synchronous caller joins a slow
         # effect. The service's reserved request handlers never wait for it.
         while True:
+            if checkpoint is not None:
+                checkpoint()
             try:
                 if operation == "query":
                     receipt = yield from _external("control", self.query, launch)
-                elif operation == "request_stop":
-                    receipt = yield from _external("control", self.request_stop, launch)
+                elif operation in {"request_stop", "contain"}:
+                    receipt = yield from self._control_exchange(operation, launch)
                 else:
                     receipt = _receipt_from_value((yield from _external("bulk", self._call, operation, _launch_value(launch))))
             except AgentProcessSupervisorError as exc:

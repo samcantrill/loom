@@ -7,7 +7,7 @@ inline. A submitted operation owns its slot until its actual call returns.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Iterable
 from contextlib import contextmanager
 from contextvars import ContextVar
 from concurrent.futures import Future, ThreadPoolExecutor, wait, FIRST_COMPLETED
@@ -204,16 +204,39 @@ def _set_assignment_owner(assignment_id: str) -> None:
         view.assignment_id = assignment_id
 
 
+def _current_assignment_id() -> str | None:
+    view = _owner.get()
+    return view.assignment_id if isinstance(view, _View) else None
+
+
 def _owns_assignment(assignment_id: str) -> bool:
     view = _owner.get()
     return not isinstance(view, _View) or view.assignment_id == assignment_id
+
+
+def _gather[R](operations: Iterable[Generator[_Progress, Any, R]]) -> Generator[_Progress, Any, list[R]]:
+    """Drive independent operations on the same state owner and bounded sender pools."""
+    def collect():
+        children = []
+        for operation in operations:
+            children.append((yield _Spawn(operation)))
+        while any(not child.complete for child in children):
+            yield from _delay(0.01)
+        for child in children:
+            if child.error is not None:
+                raise child.error
+        return [child.value for child in children]
+
+    if isinstance(_owner.get(), _View):
+        return (yield from collect())
+    return _run_manager(collect(), _steps(lambda: None))
 
 
 def _run_manager(
     primary: Generator[_Progress, Any, Any], controls: Generator[_Progress, Any, Any]
 ) -> Any:
     """Rotate ready views with no executor queue beyond the occupied slots."""
-    budgets = {"bulk": 2, "lifecycle": 2, "control": 2, "poll": 1, "control_wait": 1, "slurm": 1, "slurm_http": 2}
+    budgets = {"bulk": 2, "lifecycle": 2, "control": 2, "poll": 1, "control_wait": 1, "stop": 2, "contain": 2, "slurm": 1, "slurm_http": 2}
     pools = {
         lane: ThreadPoolExecutor(
             max_workers=limit, thread_name_prefix=f"loom-agent-{lane}"
