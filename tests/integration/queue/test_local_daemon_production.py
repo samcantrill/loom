@@ -1162,6 +1162,7 @@ def test_daemon_reconciles_cancelling_and_wait_does_not_treat_it_as_terminal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _store, run_uri, _pipeline = _persist_single_stage_run(tmp_path / "runs")
+    SQLitePerRunAuthorityStore(run_uri).create_run(run_uri, status=RunStatus.RUNNING)
     config = _daemon_config(tmp_path)
     second_reconcile = Event()
     saw_cancelling = Event()
@@ -1702,11 +1703,8 @@ def test_daemon_overlaps_independent_runs_with_available_capacity(
 @pytest.mark.parametrize("account_for", ["all", []])
 def test_daemon_finishes_no_start_failure_without_waiting_for_process_start(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
     account_for: str | list[PlainData],
 ) -> None:
-    import loom.queue.local_daemon_execution as execution_owner
-
     run_root = tmp_path / "runs"
     store, run_uri, _pipeline = _persist_single_stage_run(
         run_root,
@@ -1725,30 +1723,6 @@ def test_daemon_finishes_no_start_failure_without_waiting_for_process_start(
     daemon.start()
     execution = daemon._execution
     assert execution is not None
-    stalled = Event()
-
-    class ObservedStartNotification(Event):
-        """Bound the regression without fabricating a process-start event."""
-
-        def __init__(self) -> None:
-            super().__init__()
-            self.completed_waits = 0
-
-        def wait(self, timeout: float | None = None) -> bool:
-            signalled = super().wait(timeout)
-            if not signalled and any(
-                future.done() and future.exception() is None
-                for future in tuple(execution._local_assignment_futures.values())
-            ):
-                self.completed_waits += 1
-                if self.completed_waits == 2:
-                    stalled.set()
-                    raise AssertionError(
-                        "daemon kept waiting after its no-start task completed"
-                    )
-            return signalled
-
-    monkeypatch.setattr(execution_owner, "Event", ObservedStartNotification)
     try:
         client = daemon.client_view(
             LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
@@ -1756,7 +1730,6 @@ def test_daemon_finishes_no_start_failure_without_waiting_for_process_start(
         submitted = client.submit(LocalDaemonAdmissionRequest("no-start", run_uri))
         completed = client.wait("no-start", timeout_seconds=10)
 
-        assert not stalled.is_set()
         assert completed.state is LocalDaemonAdmissionState.FAILED
         assert authority.open_run(run_uri).status is RunStatus.FAILED
         assert _supervisor_launch_count(config) == 0

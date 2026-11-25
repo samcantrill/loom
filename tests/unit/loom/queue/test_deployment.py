@@ -3435,6 +3435,7 @@ def test_retained_slurm_jobs_allow_only_a_transport_timing_reload(tmp_path, monk
         role.validate(changed, retained_work=True)
 
 
+@pytest.mark.optional_dependency
 def test_cached_role_rechecks_include_environment_and_protection(tmp_path, monkeypatch):
     import weave
     from loom.queue.deployment import _load_protected_config

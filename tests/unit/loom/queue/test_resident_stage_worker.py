@@ -57,7 +57,7 @@ def test_resident_main_passes_outer_boundary_containment_owner(
         finished_at="2026-10-19T00:00:01Z", executor_name="local",
         executor_metadata={"existing": "kept"},
     )
-    ticks = iter(((0, 1) if shared else ()) + (1, 3, 5, 8, 10, 17))
+    ticks = iter((0, 1) + ((1, 2) if shared else ()) + (2, 4, 5, 8, 10, 17))
     monkeypatch.setattr(phase_timing, "monotonic", lambda: next(ticks))
 
     def reopen_workspace(_agent_root, _assignment_id, *, _allow_initialize):
@@ -96,7 +96,7 @@ def test_resident_main_passes_outer_boundary_containment_owner(
         actual.append((span["action"], span["elapsed_nanoseconds"]))
         assert span["outcome"] == "complete"
     assert len(validations) == int(shared)
-    assert actual == ([("worker_input_qualification", 1_000_000_000)] if shared else []) + [
+    assert actual == [("guest_assignment_read", 1_000_000_000)] + ([("worker_input_qualification", 1_000_000_000)] if shared else []) + [
         ("input_materialization", 2_000_000_000), ("preparation_materialization", 3_000_000_000), ("worker_execution", 7_000_000_000),
     ]
     assert "native_timings" not in result.executor_metadata

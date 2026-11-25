@@ -6,6 +6,7 @@ from typing import Any, cast
 
 from loom.queue import _coordinator_run_progress as progress
 from loom.queue._ready_window import ReadyWindowReader, ReadyWindowScheduler
+from loom.queue._scheduling_waits import SchedulingWaits
 from loom.queue.local_daemon import LocalDaemonAdmissionState
 
 
@@ -57,7 +58,7 @@ def test_ready_gpu_work_waits_for_its_prepared_context_then_dispatches(monkeypat
     admission: Any = SimpleNamespace(admission_id="gpu-run", run_uri="file:///gpu", cancellation_operation_id=None)
     record: Any = SimpleNamespace(
         admission_id=admission.admission_id, run_uri=admission.run_uri,
-        attempt_id="fit-1", stage_work_id="fit-work",
+        attempt_id="fit-1", stage_work_id="fit-work", stage_name="fit",
         placement=SimpleNamespace(route=SimpleNamespace(
             kind=ExecutionRouteKind.SLURM, profile_id="gpu", profile_configuration_fingerprint="profile",
         )),
@@ -80,6 +81,7 @@ def test_ready_gpu_work_waits_for_its_prepared_context_then_dispatches(monkeypat
         _daemon_owner=lambda: SimpleNamespace(_accepted_snapshot=lambda: ("revision", "time")),
         _attempt_cancel_requested=lambda *args: False,
         _cycle_contexts={}, _admission_context=open_context,
+        _scheduling_waits=SchedulingWaits(),
         cancellation_operation=lambda identity: None,
         _remote_candidates=lambda: {}, agent_id=None,
         config=SimpleNamespace(resident_worker_launch_profile=None, control_database=None,

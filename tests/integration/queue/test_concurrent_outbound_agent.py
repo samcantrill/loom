@@ -783,8 +783,8 @@ def test_restart_does_not_admit_with_unavailable_request_or_changed_config(
         return opening(config, **kwargs)
 
     @_cooperative
-    def assessment(client):
-        result = yield from _steps(qualify, client)
+    def assessment(client, **options):
+        result = yield from _steps(qualify, client, **options)
         if armed.is_set() and not result:
             rejected.set()
         return result
@@ -1008,7 +1008,7 @@ def test_recovery_rejects_newer_unknown_observation_during_other_owner_query(
         return (yield from external(lane, function, *args, **kwargs))
 
     @_cooperative
-    def assessment(client):
+    def assessment(client, **options):
         if armed.is_set() and not allow_fresh.is_set():
             while len(client._joined_starts) < 2 or assessed.is_set():
                 if client._suspend_requested() or allow_fresh.is_set():
@@ -1022,12 +1022,12 @@ def test_recovery_rejects_newer_unknown_observation_during_other_owner_query(
             while not driver_waiting.is_set() and not client._suspend_requested():
                 yield from _delay(0.01)
             before = client._admission_inventory()
-            result = yield from _steps(qualify, client)
+            result = yield from _steps(qualify, client, **options)
             if applied_unknown.is_set() and not assessed.is_set():
                 outcomes.append((result, before == client._admission_inventory()))
                 assessed.set()
             return result
-        return (yield from _steps(qualify, client))
+        return (yield from _steps(qualify, client, **options))
 
     def tracked(config, operation, *args, **kwargs):
         if applied_unknown.is_set() and not allow_fresh.is_set():
@@ -1158,11 +1158,11 @@ def test_recovery_rechecks_inventory_after_preparation_completes_during_proof(
         return result
 
     @_cooperative
-    def assessment(client):
+    def assessment(client, **options):
         if crashed.is_set():
             while not client._joined_starts and not client._suspend_requested():
                 yield from _delay(0.01)
-        result = yield from _steps(qualify, client)
+        result = yield from _steps(qualify, client, **options)
         if prepared.is_set() and not release.is_set() and len(changed_snapshots) >= 2:
             assert changed_snapshots[0] != changed_snapshots[-1]
             assert not result
@@ -1347,6 +1347,9 @@ def test_thirty_two_live_workers_fair_observation_and_five_renewal_cycles(monkey
             assert {pool._thread_name_prefix: pool._max_workers for pool in pools} == {
                 "loom-agent-bulk": 2,
                 "loom-agent-control": 2,
+                "loom-agent-lifecycle": 2,
+                "loom-agent-stop": 2,
+                "loom-agent-contain": 2,
                 "loom-agent-poll": 1,
                 "loom-agent-control_wait": 1,
                 "loom-agent-slurm": 1,
@@ -1754,10 +1757,10 @@ def test_qualification_rejection_settles_saved_launch_without_starting_on_restar
     with _service(monkeypatch, shared=True, threaded_supervisor=True) as case:
         challenge = case.root / "shared/challenge"
 
-        def unavailable(owner, launch):
+        def unavailable(owner, launch, **options):
             challenge.write_bytes(b"changed after delivery")
             try:
-                return qualify(owner, launch)
+                return qualify(owner, launch, **options)
             finally:
                 challenge.write_bytes(b"publication")
 
@@ -3686,8 +3689,8 @@ def test_recovery_population_proof_while_its_driver_is_paused(monkeypatch, bound
         return (yield from _steps(recovery, client, references, **kwargs))
 
     @_cooperative
-    def observed(client):
-        result = yield from _steps(qualify, client)
+    def observed(client, **options):
+        result = yield from _steps(qualify, client, **options)
         if held.is_set() and not resume.is_set():
             outcomes.append(result)
             assessed.set()
@@ -3737,6 +3740,17 @@ def test_recovery_population_proof_while_its_driver_is_paused(monkeypatch, bound
         monkeypatch.setattr(
             LocalDaemonAgentHttpClient, "_qualify_service_admission", observed
         )
+        if boundary == "closure":
+            # A journaled release suppresses offers before population sampling.
+            pending_release = _RemoteAgentJournal.pending_release_assignment
+
+            def observe_pending(journal, session_id):
+                assignment_id = pending_release(journal, session_id)
+                if assignment_id is not None and held.is_set() and not resume.is_set():
+                    assessed.set()
+                return assignment_id
+
+            monkeypatch.setattr(_RemoteAgentJournal, "pending_release_assignment", observe_pending)
         monkeypatch.setattr(transport, "_exchange_agent_request", tracked)
         uri, _ = _submit(case, "fresh")
         case.stop.clear()

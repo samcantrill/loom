@@ -245,10 +245,27 @@ def remote_work(remote_owner: _RemoteWork) -> _RemoteWork:
     return work
 
 
+@pytest.mark.parametrize("negotiated", [False, True], ids=["synchronous", "pending-replay"])
 def test_stop_finishes_cancellation_that_prevents_worker_launch(
     remote_owner: _RemoteWork,
     monkeypatch: pytest.MonkeyPatch,
+    negotiated: bool,
 ) -> None:
+    from loom.queue.agent_sessions import AgentSessionService, LIFECYCLE_CAPABILITY
+
+    # An older coordinator replies to the permit synchronously. A negotiated
+    # HTTP 202 is a durable replay boundary at which an agent may stop.
+    if not negotiated:
+        handshake = AgentSessionService.handshake
+
+        def synchronous(service):
+            result = dict(handshake(service))
+            capabilities = result["capabilities"]
+            assert isinstance(capabilities, (tuple, list))
+            result["capabilities"] = [value for value in capabilities if value != LIFECYCLE_CAPABILITY]
+            return result
+        monkeypatch.setattr(AgentSessionService, "handshake", synchronous)
+
     work = remote_owner
     permit_entered, allow_permit = Event(), Event()
     original_permit = LocalDaemonAgentHttpClient.start_permit
@@ -273,6 +290,9 @@ def test_stop_finishes_cancellation_that_prevents_worker_launch(
     service.thread.join(timeout=3)
     assert not service.thread.is_alive(), service.errors
     assert service.errors == []
+    if negotiated:
+        assert work.launches() == ()
+        work.start_agent()  # Reopen the retained assignment and settle the denied permit.
     assert coordinator.wait("lifecycle", timeout_seconds=10).state is (
         LocalDaemonAdmissionState.CANCELLED
     )

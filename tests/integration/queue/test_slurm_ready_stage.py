@@ -1256,6 +1256,13 @@ def _exercise_mixed_route_run(
             execution = daemon._execution
             assert execution is not None
             assert execution.slurm_assignments.read(assignment_id).process_execution_id is None
+        if automatic_recovery or (guarded_recovery and accounting_history):
+            # The bootstrap permit can arrive before the asynchronous scheduler
+            # has published the exact accounting incarnation used for recovery.
+            deadline = time.monotonic() + 25
+            while execution.slurm_submissions.read(record.assignment.operation_id).accounting_identity is None:
+                assert time.monotonic() < deadline, daemon.status()
+                time.sleep(.01)
         if automatic_recovery:
             import loom.queue._agent_slurm as agent_module
             from loom.pipeline.executors.slurm.ready_stage import SlurmContainmentReceipt
@@ -1434,14 +1441,6 @@ def _exercise_mixed_route_run(
             return
         recovery_receipt = None
         if guarded_recovery:
-            if accounting_history:
-                # The asynchronous scheduler must establish the exact accounting
-                # incarnation before injected terminal evidence can authorize
-                # recovery. A bootstrap grant alone does not establish it.
-                deadline = time.monotonic() + 15
-                while execution.slurm_submissions.read(record.assignment.operation_id).accounting_identity is None:
-                    assert time.monotonic() < deadline, daemon.status()
-                    time.sleep(.01)
             before_recovery = authority.open_run(run_uri)
             train = next(
                 item for item in before_recovery.stages if item.stage_name == "train"
@@ -2184,6 +2183,7 @@ def _exercise_slow_retry_validation(daemon, client, run_uri, monkeypatch, bounda
                                       False if request.recovery_id == recovery_ids[0] else resume(owner, execution, request, row))
             release.set()
             deadline = time.monotonic() + 45
+            rows = []
             while time.monotonic() < deadline:
                 with daemon._connection() as conn:
                     rows = conn.execute("SELECT recovery_id, state FROM recovery_operations").fetchall()
@@ -2195,6 +2195,7 @@ def _exercise_slow_retry_validation(daemon, client, run_uri, monkeypatch, bounda
         daemon.start()
         assert daemon.start_run(requested, principal_id="caller").operation_id == accepted.operation_id
         deadline = time.monotonic() + 30
+        rows = []
         while time.monotonic() < deadline:
             with daemon._connection() as conn:
                 rows = conn.execute("SELECT recovery_id, state FROM recovery_operations").fetchall()
