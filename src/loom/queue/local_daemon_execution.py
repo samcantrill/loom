@@ -3031,7 +3031,7 @@ class LocalDaemonExecution:
         authority: _ScopedCoordinatorAuthority,
     ) -> ObservationSteps[tuple[bool, str | None]]:
         steps = self._slurm_record_steps(run_uri, authority)
-        advance = steps.send
+        pending_error: Exception | None = None
         value = None
         try:
             while True:
@@ -3039,15 +3039,15 @@ class LocalDaemonExecution:
                 # observation or guarded recovery on its original bounded worker.
                 with phase("coordinator.reconcile_slurm_run"):
                     try:
-                        request = advance(value)
+                        request = steps.send(value) if pending_error is None else steps.throw(pending_error)
                     except StopIteration as settled:
                         return settled.value
                 try:
                     value = yield request
                 except Exception as error:
-                    advance, value = steps.throw, error
+                    pending_error = error
                 else:
-                    advance = steps.send
+                    pending_error = None
         finally:
             steps.close()
 
