@@ -16,7 +16,7 @@ from ._coordinator_run_authority import _ScopedCoordinatorAuthority as _ScopedCo
 from ._action_results import action_attempt_cancelled, action_attempt_needed, attach_action_fence
 from ._continuation import ContinuationConflict, ContinuationPending
 from ._embedded_recovery import EmbeddedRecovery
-from ._recovery_retry import _RecoveryRetry
+from ._recovery_retry import RecoveryWorkers, _RecoveryRetry
 from ._slurm_admission import SlurmAdmissionDeferred
 from . import _slurm_retry
 
@@ -1463,6 +1463,8 @@ class LocalDaemonExecution:
         # executing.  These tasks are deliberately keyed by assignment ID:
         # assignment identity, rather than admission identity, is the durable
         # launch/result boundary.
+        self.recovery_workers = RecoveryWorkers(lambda: self._daemon_owner()._wake.set(), "loom-recovery")
+        self.admission_retry_workers = RecoveryWorkers(lambda: self._daemon_owner()._wake.set(), "loom-admission-retry")
         self._offer_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="loom-local-offer")
         self._local_capacity_generation = 0
         self._pending_offer: tuple[tuple[str | None, str | None, int], Future[_LocalCapacityObservation]] | None = None
@@ -1517,6 +1519,8 @@ class LocalDaemonExecution:
     def close(self) -> None:
         """Stop only assignment observers after their durable owners settle."""
 
+        self.admission_retry_workers.close()
+        self.recovery_workers.close()
         self._offer_worker.shutdown(wait=True, cancel_futures=True)
         self._pending_offer = None
         self._cycle_local_offer = None

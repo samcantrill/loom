@@ -78,7 +78,7 @@ from ._remote_stage_execution import GpuDeviceDescriptor, ResidentProfileDescrip
 from ._preparation_policy import PreparationPolicy
 from .submitted_execution import SubmittedContainerCapability
 from .errors import QueueConflictError, QueueServiceError, QueueStorageError, _AcceptedTimeError
-from ._admission_scan import AdmissionScan, SchedulingAdmissions, ensure_scan_index
+from ._admission_scan import AdmissionScan, SchedulingAdmissions, ensure_scan_index, ensure_retry_index
 from ._service_signals import _ChangeConnection, _ChangeSignal, _KeyedWaiters, _ServiceSignal, write_status
 from ._recovery_retry import _RecoveryRetry
 
@@ -1726,6 +1726,8 @@ class LocalDaemon:
         from ._coordinator_gpu import CoordinatorGpuSamples
 
         self._gpu_samples = CoordinatorGpuSamples(self._wake.set)
+        self._admission_retry_cursor: str | None = None
+        self._continuation_retries: dict[str, _RecoveryRetry] = {}
         self._admission_scan = AdmissionScan()
         self._retirement_after = None
         self._contexts = ContextPreparations(self._wake.set)
@@ -1955,6 +1957,7 @@ class LocalDaemon:
                 conn.execute("BEGIN IMMEDIATE")
                 ensure_agent_lookup_indexes(conn)
                 ensure_scan_index(conn)
+                ensure_retry_index(conn)
                 _ensure_recovery_assignment_index(conn)
                 _ensure_preparation_child_index(conn)
                 retained = conn.execute("SELECT value FROM root_metadata WHERE key = 'assignment_payload_root_id'").fetchone()
@@ -2147,6 +2150,8 @@ class LocalDaemon:
         from ._coordinator_gpu import CoordinatorGpuSamples
 
         self._gpu_samples = CoordinatorGpuSamples(self._wake.set)
+        self._admission_retry_cursor = None
+        self._continuation_retries.clear()
         self._admission_scan = AdmissionScan()
         self._retirement_after = None
         self._contexts = ContextPreparations(self._wake.set)
@@ -2798,7 +2803,7 @@ class LocalDaemon:
         if checked != (execution, epochs) and not execution.owner_stores_ready(epochs):
             return ()
         self._resume_pending_admission_retries(execution)
-        self._resume_pending_recoveries(execution)
+        self._resume_pending_recoveries(execution, background=True)
         execution.begin_cycle()
         self._repair_cancelled_admissions(execution)
         with self._connection() as conn:
@@ -3667,7 +3672,21 @@ class LocalDaemon:
             conn.commit()
         return result
 
-    def _resume_pending_recoveries(self, execution: "LocalDaemonExecution") -> None:
+    def _resume_pending_recoveries(self, execution: LocalDaemonExecution, *, background: bool = False) -> None:
+        from functools import partial
+
+        workers = execution.recovery_workers if background else None
+        if workers is not None:
+            for identity, assignment_id, state, future in workers.completed(self.config.poll_interval_seconds):
+                try:
+                    applied = future.result()
+                except Exception as error:
+                    self._pace_recovery_failure(identity, assignment_id, state, error)
+                else:
+                    if applied:
+                        self._recovery_retries.pop(identity, None)
+            if workers.full():
+                return
         with self._connection() as conn:
             rows = tuple(
                 conn.execute(
@@ -3681,7 +3700,7 @@ class LocalDaemon:
         deadline = time.monotonic() + 0.25
         scanned = 0
         for row in rows:
-            if scanned and time.monotonic() >= deadline:
+            if (workers is not None and workers.full()) or (scanned and time.monotonic() >= deadline):
                 break
             scanned += 1
             self._recovery_cursor = str(row["recovery_id"])
@@ -3692,28 +3711,35 @@ class LocalDaemon:
             retry = self._recovery_retries.get(request.recovery_id)
             if retry is not None and not retry.ready(progress):
                 continue
-            with self._publication_guards.try_hold("recovery:" + request.recovery_id) as acquired:
-                if not acquired:
-                    continue
+            apply = partial(self._resume_recovery, execution, request, row)
+            if workers is not None:
+                workers.submit(request.recovery_id, request.assignment_id, progress, apply)
+            else:
                 try:
-                    if row["state"] == "closed":
-                        execution.reconcile_closed_slurm_recovery(
-                            request, json.loads(str(row["evidence_json"]))
-                        )
-                    else:
-                        self._advance_recovery(execution, request, str(row["recorded_at"]))
+                    if apply():
+                        self._recovery_retries.pop(request.recovery_id, None)
                 except Exception as error:
-                    if request.recovery_id not in self._recovery_retries and len(self._recovery_retries) >= 256:
-                        self._recovery_retries.pop(next(iter(self._recovery_retries)))
-                    retry = self._recovery_retries.setdefault(request.recovery_id, _RecoveryRetry())
-                    retry.failed(error, operation_id=request.recovery_id,
-                                 assignment_id=request.assignment_id, state=progress)
-                else:
-                    self._recovery_retries.pop(request.recovery_id, None)
+                    self._pace_recovery_failure(request.recovery_id, request.assignment_id, progress, error)
         if scanned == len(rows) and len(rows) < 32:
             self._recovery_cursor = None
-        elif rows:
+        elif rows and (workers is None or not workers.full()):
             self._wake.set()
+
+    def _resume_recovery(self, execution: LocalDaemonExecution, request: RecoverUnknownAssignment, row: sqlite3.Row) -> bool:
+        with self._publication_guards.try_hold("recovery:" + request.recovery_id) as acquired:
+            if not acquired:
+                return False
+            if row["state"] == "closed":
+                execution.reconcile_closed_slurm_recovery(request, json.loads(str(row["evidence_json"])))
+            else:
+                self._advance_recovery(execution, request, str(row["recorded_at"]))
+            return True
+
+    def _pace_recovery_failure(self, identity: str, assignment_id: str, state: object, error: Exception) -> None:
+        if identity not in self._recovery_retries and len(self._recovery_retries) >= 256:
+            self._recovery_retries.pop(next(iter(self._recovery_retries)))
+        retry = self._recovery_retries.setdefault(identity, _RecoveryRetry())
+        retry.failed(error, operation_id=identity, assignment_id=assignment_id, state=state)
 
     def _recovery_fences_ordinary_terminal(self, assignment_id: str) -> bool:
         """A provider-driven retry lets an arriving worker result race the close."""
@@ -5022,6 +5048,7 @@ def _initialize_coordinator_schema(conn: sqlite3.Connection) -> None:
         "evidence_json TEXT, result_json TEXT NOT NULL)"
     )
     ensure_scan_index(conn)
+    ensure_retry_index(conn)
     _ensure_recovery_assignment_index(conn)
     conn.execute(
         "CREATE TABLE time_recoveries ("

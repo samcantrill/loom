@@ -320,13 +320,25 @@ def test_prepared_native_failed_admission_explicit_retry(
                     client.submit(request)
                 server.stop()
                 daemon.stop()
-                monkeypatch.setattr(
-                    LocalDaemonExecution, "resume_failed_admission", resume
-                )
+                replay_entered, allow_replay = Event(), Event()
+
+                def pause_background_replay(self, *args, **kwargs):
+                    replay_entered.set()
+                    assert allow_replay.wait(10)
+                    return resume(self, *args, **kwargs)
+
+                monkeypatch.setattr(LocalDaemonExecution, "resume_failed_admission", pause_background_replay)
                 daemon = LocalDaemon(service.daemon)
                 server = LocalDaemonSocketServer(daemon, service.daemon.endpoint)
                 daemon.start()
                 server.start()
+                with ThreadPoolExecutor(max_workers=1) as controls:
+                    try:
+                        assert replay_entered.wait(5)
+                        controls.submit(daemon.reconcile_once).result(timeout=5)
+                        assert daemon._admission(admitted.admission_id).state.value == "FAILED"
+                    finally:
+                        allow_replay.set()
 
         def submit_retry():
             with CoordinatorClient.from_unix_socket(

@@ -832,6 +832,55 @@ def test_recovery_persists_exact_evidence_before_close_and_replays_it(
         replacement_operator.recover_unknown(replace(request, reason="changed replay"))
 
 
+def test_second_recovery_settles_while_first_authority_observation_remains_held(tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    entered, release = Event(), Event()
+    try:
+        execution = daemon._execution
+        assert execution is not None
+
+        def winner(request):
+            if request.recovery_id == "recovery-a":
+                entered.set()
+                assert release.wait(10)
+            return True
+
+        monkeypatch.setattr(execution, "recovery_has_ordinary_winner", winner)
+        with sqlite3.connect(config.control_database) as conn:
+            for name in ("a", "b"):
+                request = RecoverUnknownAssignment(
+                    recovery_id="recovery-" + name, run_uri="file:///run-" + name, stage_name="train",
+                    attempt=1, stage_work_id="work-" + name, assignment_id="assignment-" + name,
+                    process_execution_id="process-" + name, execution_fence="fence-" + name,
+                    target=ManagedRecoveryTarget("agent-1", "session-1"), expected_state_version=7,
+                    requested_outcome="failed", consider_retry=False, reason="retained recovery",
+                )
+                conn.execute(
+                    "INSERT INTO recovery_operations VALUES (?, 'operator', ?, 'fixture', "
+                    "'2026-11-17T00:00:00Z', 'pending', NULL, '{}')",
+                    (request.recovery_id, json.dumps(request.to_dict())),
+                )
+        daemon._wake.set()
+        assert entered.wait(5)
+        deadline = time.monotonic() + 5
+        while True:
+            observed = daemon._wake.snapshot()
+            with sqlite3.connect(config.control_database) as conn:
+                states = dict(conn.execute("SELECT recovery_id, state FROM recovery_operations"))
+            if states["recovery-b"] == "superseded":
+                break
+            assert time.monotonic() < deadline
+            daemon._wake.wait_for_change(observed, max(0, deadline - time.monotonic()))
+        assert states["recovery-a"] == "pending" and not release.is_set()
+        daemon.reconcile_once()
+    finally:
+        release.set()
+        daemon.stop()
+
+
 def test_recovery_pages_skip_busy_and_failed_owners_without_starving_later_rows(tmp_path, monkeypatch):
     config = _config(tmp_path)
     LocalDaemon.initialize(config)

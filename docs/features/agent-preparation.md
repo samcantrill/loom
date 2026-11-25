@@ -1836,6 +1836,12 @@ local reservation, finished assignment, or scheduling reload invalidates the
 previous capacity generation. Samples older than 30 seconds are withdrawn.
 The provider still checks its physical claim at preparation.
 
+During service, each retained recovery and failed-admission retry gets a bounded
+worker attempt on its original identity. A slow authority observation or retry
+replay leaves reconciliation turns available. The owner rechecks the retained
+operation before acting and applies its original receipt. Exclusive startup can
+drive recovery synchronously before the coordinator accepts work.
+
 Slow coordinator cycles (at least one second) emit bounded local phase timings
 to the existing service stderr log, including admission reconciliation. The
 existing diagnostic collector caps its span list; no remote reporting is added.

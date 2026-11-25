@@ -353,20 +353,68 @@ def _apply_admission_retry(
 def _resume_pending_admission_retries(
     self: LocalDaemon, execution: LocalDaemonExecution
 ) -> None:
-    with self._connection() as conn:
-        pending = tuple(
-            conn.execute(
-                "SELECT key, value FROM daemon_metadata "
-                "WHERE key LIKE 'admission-retry:%' AND json_extract(value, '$.state') = 'pending'"
-            )
-        )
-    for row in pending:
+    from functools import partial
+    from ._admission_scan import PENDING_ADMISSION_RETRY
+    from ._recovery_retry import _RecoveryRetry
+
+    workers = execution.admission_retry_workers
+    for key, admission_id, state, future in workers.completed(self.config.poll_interval_seconds):
         try:
-            record = json.loads(str(row["value"]))
-            admission = self._admission(record["admission_id"])
-            with self._publication_guards.hold("admission:" + admission.run_uri):
-                _apply_admission_retry(self, str(row["key"]), record, execution)
-        except Exception:
-            self._record_admission_health(
-                json.loads(str(row["value"]))["admission_id"], "unavailable"
-            )
+            applied = future.result()
+        except Exception as error:
+            with self._connection() as conn:
+                pending = conn.execute(f"SELECT 1 FROM daemon_metadata WHERE key=? AND {PENDING_ADMISSION_RETRY}",
+                                       (key,)).fetchone()
+            if pending is None:
+                self._continuation_retries.pop(key, None)
+                continue
+            self._record_admission_health(admission_id, "unavailable")
+            if key not in self._continuation_retries and len(self._continuation_retries) >= 256:
+                self._continuation_retries.pop(next(iter(self._continuation_retries)))
+            retry = self._continuation_retries.setdefault(key, _RecoveryRetry())
+            retry.failed(error, operation_id=key, state=state)
+        else:
+            if applied:
+                self._continuation_retries.pop(key, None)
+    if workers.full():
+        return
+    after = self._admission_retry_cursor
+    continuation = "" if after is None else "AND key > ?"
+    with self._connection() as conn:
+        rows = conn.execute(
+            f"SELECT key, value FROM daemon_metadata WHERE {PENDING_ADMISSION_RETRY} "
+            f"{continuation} ORDER BY key LIMIT 32", () if after is None else (after,),
+        ).fetchall()
+    for row in rows:
+        if workers.full():
+            return
+        key = str(row["key"])
+        self._admission_retry_cursor = key
+        record = json.loads(str(row["value"]))
+        admission_id = str(record["admission_id"])
+        state = record["failed_revision"]
+        retry = self._continuation_retries.get(key)
+        if retry is not None and not retry.ready(state):
+            continue
+        workers.submit(key, admission_id, state, partial(_resume_one_admission_retry, self, execution, key, admission_id))
+    if len(rows) < 32:
+        self._admission_retry_cursor = None
+    elif not workers.full():
+        self._wake.set()
+
+
+def _resume_one_admission_retry(
+    self: LocalDaemon, execution: LocalDaemonExecution, key: str, admission_id: str,
+) -> bool:
+    admission = self._admission(admission_id)
+    with self._publication_guards.try_hold("admission:" + admission.run_uri) as acquired:
+        if not acquired:
+            return False
+        with self._connection() as conn:
+            row = conn.execute("SELECT value FROM daemon_metadata WHERE key=?", (key,)).fetchone()
+        if row is None:
+            raise QueueConflictError("retained admission retry is missing")
+        record = json.loads(str(row["value"]))
+        if record["state"] == "pending":
+            _apply_admission_retry(self, key, record, execution)
+        return True

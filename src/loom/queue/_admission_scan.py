@@ -14,6 +14,15 @@ _PRIORITY_ORDER = "run_priority DESC, enqueue_sequence, admission_id"
 _PAGE_SIZE = 32
 
 
+# Other metadata keys can contain plain text rather than a JSON document.
+PENDING_ADMISSION_RETRY = "CASE WHEN key GLOB 'admission-retry:*' THEN json_extract(value, '$.state') END = 'pending'"
+
+
+def ensure_retry_index(conn: sqlite3.Connection) -> None:
+    conn.execute(f"CREATE INDEX IF NOT EXISTS pending_admission_retries ON daemon_metadata(key) "
+                 f"WHERE {PENDING_ADMISSION_RETRY}")
+
+
 def ensure_scan_index(conn: sqlite3.Connection) -> None:
     conn.execute(f"CREATE INDEX IF NOT EXISTS managed_admissions_active_order "
                  f"ON managed_admissions ({_PRIORITY_ORDER}) WHERE {_ACTIVE}")

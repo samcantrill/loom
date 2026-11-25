@@ -1,5 +1,8 @@
 """Process-local pacing; durable operation records still own recovery identity."""
 
+from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
+from contextvars import copy_context
 from dataclasses import dataclass
 import json
 import logging
@@ -64,3 +67,40 @@ class _RecoveryRetry:
             self.signature = signature
             self.reported_at = now
         return delay
+
+class RecoveryWorkers:
+    """Two physical recovery attempts, deduplicated until their results are consumed."""
+
+    def __init__(self, wake: Callable[[], None], name: str) -> None:
+        self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix=name)
+        self._pending: dict[str, tuple[str, object, Future[bool]]] = {}
+        self._wake = wake
+        self._not_before: dict[str, tuple[object, float]] = {}
+
+    def full(self) -> bool:
+        return len(self._pending) >= 2
+
+    def submit(self, identity: str, owner_id: str, state: object, apply: Callable[[], bool]) -> None:
+        paced = self._not_before.get(identity)
+        if identity in self._pending or (paced is not None and paced[0] == state and monotonic() < paced[1]):
+            return
+        future = self._executor.submit(copy_context().run, apply)
+        self._pending[identity] = owner_id, state, future
+        future.add_done_callback(lambda _: self._wake())
+
+    def completed(self, interval: float) -> list[tuple[str, str, object, Future[bool]]]:
+        now = monotonic()
+        for identity, (_, deadline) in tuple(self._not_before.items()):
+            if now >= deadline:
+                del self._not_before[identity]
+        ready = [(identity, owner_id, state, future)
+                 for identity, (owner_id, state, future) in self._pending.items() if future.done()]
+        for identity, _, state, _ in ready:
+            del self._pending[identity]
+            self._not_before[identity] = state, now + interval
+        return ready
+
+    def close(self) -> None:
+        self._executor.shutdown(wait=True, cancel_futures=True)
+        self._pending.clear()
+        self._not_before.clear()
