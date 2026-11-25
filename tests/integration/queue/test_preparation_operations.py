@@ -1226,6 +1226,26 @@ def test_running_preparation_cancellation_waits_for_native_resource_release(
     LocalDaemon.initialize_deployment(service.daemon)
     daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
     daemon.start()
+    assignments = daemon._execution.coordinator
+    read_releases = assignments.child_assignments_released
+    sample_read, allow_sample = Event(), Event()
+    rechecked, allow_recheck = Event(), Event()
+    scans = []
+    # The outer run control collects its group after its own child has settled.
+    sampled_index = 2 if run_intent else 1
+
+    def pause_sample(uris):
+        value = read_releases(uris)
+        scans.append((uris, value))
+        if len(scans) == sampled_index:
+            sample_read.set()
+            assert allow_sample.wait(20)
+        elif len(scans) == sampled_index + 1:
+            rechecked.set()
+            assert allow_recheck.wait(20)
+        return value
+
+    monkeypatch.setattr(assignments, "child_assignments_released", pause_sample)
     server = LocalDaemonSocketServer(daemon, service.daemon.endpoint)
     server.start()
     connection = None
@@ -1245,6 +1265,17 @@ def test_running_preparation_cancellation_waits_for_native_resource_release(
             cancellation = client.cancel_run_operation("prepare-1") if run_intent else client.cancel_preparation("prepare-1")
             assert cancellation.state == "pending"
             assert release_entered.wait(25)
+            from loom.queue.local_daemon import _request_admission_cancellation
+            with daemon._connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                before = conn.execute(
+                    "SELECT state, revision, cancellation_operation_id FROM managed_admissions WHERE admission_id=?",
+                    (child.admission_id,),
+                ).fetchone()
+                assert before[0] in {"CANCELLATION_REQUESTED", "CANCELLING"}
+                replay = _request_admission_cancellation(conn, child.queue_item_id, principal_id="repeat-observer")
+                assert (replay.state.value, replay.revision, replay.cancellation_operation_id) == tuple(before)
+                conn.commit()
             observation = client.wait_operation("prepare-1", timeout_seconds=0)
             assert observation.operation.state == "pending"
             assert client.operation(cancellation.operation_id).state == "pending"
@@ -1257,7 +1288,27 @@ def test_running_preparation_cancellation_waits_for_native_resource_release(
                     == 1
                 )
             assert not (service.daemon.run_store_root / "target-1").exists()
+            with sqlite3.connect(service.daemon.execution_database) as writer:
+                writer.execute("BEGIN IMMEDIATE")
+                assert not read_releases((child.run_uri,))
             allow_release.set()
+            try:
+                assert sample_read.wait(20)
+                assert scans[-1] == ((child.run_uri,), True)
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    pool.submit(daemon.reconcile_once).result(timeout=4)
+                # A real new reference commits during the physical-owner read.
+                # Keep its own capture from starting before its cancellation.
+                with daemon._preparations._reconcile_lock:
+                    client.prepare_run(replace(_request(), operation_id="peer-proof", run_name="peer-proof"))
+                    client.cancel_preparation("peer-proof")
+                allow_sample.set()
+                assert rechecked.wait(15)
+                observed = client.operation(cancellation.operation_id)
+                assert observed.state == "pending"
+            finally:
+                allow_sample.set()
+                allow_recheck.set()
             cancelled = client.wait_operation("prepare-1", timeout_seconds=25).operation
             assert cancelled.state == "cancelled"
             if run_intent:
@@ -1278,6 +1329,8 @@ def test_running_preparation_cancellation_waits_for_native_resource_release(
             )
             assert len(client.admissions().admissions) == 1
     finally:
+        allow_sample.set()
+        allow_recheck.set()
         allow_release.set()
         if connection is not None:
             connection.close()

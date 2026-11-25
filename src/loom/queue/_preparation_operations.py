@@ -7,7 +7,7 @@ proof, and never holds the daemon's cycle lock during capture or publication.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from concurrent.futures import Future
 from dataclasses import dataclass, replace
 import hashlib
@@ -52,6 +52,7 @@ from .preparation import (
 )
 
 if TYPE_CHECKING:
+    from ._managed_local import SQLiteCoordinatorAssignments
     from ._publication_guards import PublicationGuards
     from .managed_local_preparation import ManagedLocalPreparationReceipt
     from .local_daemon import (
@@ -67,6 +68,21 @@ PREPARATION_RUN_PREFIX = "loom-preparation-"
 _MAX_RESULT_BYTES = 64 * 1024
 _TERMINAL = frozenset({"applied", "failed", "cancelled", "conflict"})
 _LOGGER = logging.getLogger(__name__)
+
+
+_TERMINAL_CHILD_STATES = frozenset({"SUCCEEDED", "FAILED", "CANCELLED"})
+
+
+@dataclass(frozen=True, slots=True)
+class _ChildReleaseScope:
+    coordinator: SQLiteCoordinatorAssignments
+    operation_id: str
+    principal_id: str
+    target_name: str | None
+    epoch: str | None
+    scheduling_epoch: str | None
+    reference_revision: int
+    children: tuple[tuple[str, str, int], ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -368,6 +384,7 @@ class CoordinatorPreparations:
         self._reconcile_lock = Lock()
         self._cursor = 0
         self._cancel_cursor = 0
+        self._child_release_checks: dict[str, tuple[_ChildReleaseScope, Future[bool]]] = {}
         self._verification_reports: dict[str, _PendingVerificationReport] = {}
         self._reports: dict[str, tuple[tuple[object, ...], Future[PreparationReport]]] = {}
         self._target_retries: dict[str, float] = {}
@@ -1222,26 +1239,10 @@ class CoordinatorPreparations:
                 )
                 conn.commit()
             row = self._read(operation_id)
-        admission = self.daemon._admission(str(row["child_admission_id"]))
-        terminal = {
-            LocalDaemonAdmissionState.SUCCEEDED,
-            LocalDaemonAdmissionState.FAILED,
-            LocalDaemonAdmissionState.CANCELLED,
-        }
         if row["cancellation_requested"] and row["state"] == "pending":
-            admission = self.daemon._cancel(
-                child_name, principal_id=str(row["principal_id"])
-            )
-            execution = self.daemon._execution
-            assert execution is not None
-            with self.daemon._state_guard():
-                released = (
-                    execution.coordinator.run_active_assignment_count(admission.run_uri)
-                    == 0
-                )
-            if admission.state in terminal and released:
-                self._store_result(_operation(operation_id, "cancelled", None, result))
+            self._advance_child_release(operation_id, self._cancel_child)
             return
+        admission = self.daemon._admission(str(row["child_admission_id"]))
         if admission.state in {
             LocalDaemonAdmissionState.FAILED,
             LocalDaemonAdmissionState.CANCELLED,
@@ -2118,81 +2119,154 @@ class CoordinatorPreparations:
                                (reconciliation["superseded_by"],)).fetchone()
         return _mapping(json.loads(receipt[0])["cancelled_admission"])
 
-    def _reconcile_cancellations(self) -> None:
-        from .local_daemon import LocalDaemonAdmissionState
+    def _advance_child_release(
+        self, operation_id: str,
+        transition: Callable[[sqlite3.Connection, str, _ChildReleaseScope | None], _ChildReleaseScope | None],
+    ) -> None:
+        """Only a completed read with the current membership can settle the control."""
+        pending = self._child_release_checks.get(operation_id)
+        proof = None
+        completed = pending is not None and pending[1].done()
+        if pending is not None and completed:
+            from ._managed_local import ManagedLocalError
+            try:
+                if pending[1].result():
+                    proof = pending[0]
+            except (ManagedLocalError, sqlite3.Error, OSError):
+                # The bulk timing records the failed read. Its durable operation
+                # stays pending and an unavailable owner is sampled again.
+                pass
+            if proof is None:
+                self._target_retries[operation_id] = monotonic() + 0.1
+        try:
+            needed = short_write(
+                self.daemon, lambda conn: transition(conn, operation_id, proof),
+                wait_for_writer=False,
+            )
+        except sqlite3.OperationalError as exc:
+            if (getattr(exc, "sqlite_errorcode", 0) & 255) != sqlite3.SQLITE_BUSY:
+                raise
+            return
+        if pending is not None:
+            if needed is not None and not completed:
+                return
+            # The bulk owner still accounts for a running physical read if
+            # the control was superseded while the sample was outstanding.
+            del self._child_release_checks[operation_id]
+        if needed is None or not self._target_retry_ready(operation_id):
+            return
+        future = self.daemon._result_verifications.bulk.submit(
+            operation_id, "preparation_child_release", needed.coordinator.child_assignments_released,
+            tuple(child[1] for child in needed.children),
+        )
+        if future is not None:
+            self._child_release_checks[operation_id] = (needed, future)
 
+    def _child_release_scope(
+        self, conn: sqlite3.Connection, target: sqlite3.Row, *, all_children: bool,
+    ) -> tuple[bool, _ChildReleaseScope | None]:
+        """A claimed dispatch can still be between submission and recording its child ID."""
+        if all_children:
+            where = "p.target_name = ? AND p.principal_id = ?"
+            params = (target["target_name"], target["principal_id"])
+        else:
+            where = "p.operation_id = ?"
+            params = (target["operation_id"],)
+        rows = conn.execute(
+            "SELECT p.child_admission_id, a.run_uri, a.revision, a.state "
+            "FROM preparation_operations p LEFT JOIN managed_admissions a "
+            "ON a.admission_id = p.child_admission_id WHERE " + where +
+            " AND (p.child_admission_id IS NOT NULL OR "
+            "(p.dispatch_claimed = 1 AND p.state IN ('pending','applying'))) "
+            "ORDER BY p.child_admission_id", params,
+        ).fetchall()
+        if not rows:
+            return True, None
+        execution = self.daemon._execution
+        if execution is None or any(row[3] not in _TERMINAL_CHILD_STATES for row in rows):
+            return False, None
+        return False, _ChildReleaseScope(
+            execution.coordinator, target["operation_id"], target["principal_id"], target["target_name"],
+            self.daemon._epoch, self.daemon._scheduling_epoch, self.daemon._scheduling_reference_revision,
+            tuple((str(row[0]), str(row[1]), int(row[2])) for row in rows),
+        )
+
+    def _cancel_child(self, conn, operation_id, proof):
+        from .local_daemon import _request_admission_cancellation
+
+        target = conn.execute(
+            "SELECT * FROM preparation_operations WHERE operation_id=?", (operation_id,),
+        ).fetchone()
+        if target["state"] != "pending" or not target["cancellation_requested"] or target["child_admission_id"] is None:
+            return None
+        _request_admission_cancellation(conn, target["child_name"], principal_id=target["principal_id"])
+        _, scope = self._child_release_scope(conn, target, all_children=False)
+        if scope is not None and proof == scope:
+            write_status(conn, "operation",
+                         "UPDATE preparation_operations SET state='cancelled', result_code=NULL WHERE operation_id=?",
+                         (operation_id,))
+            return None
+        return scope
+
+    def _reconcile_cancellations(self) -> None:
         with self.daemon._connection() as conn:
             rows = conn.execute(
-                "SELECT rowid AS sequence, * FROM preparation_cancellations "
+                "SELECT rowid, operation_id FROM preparation_cancellations "
                 "WHERE rowid > ? AND state IN ('pending', 'applying') ORDER BY rowid LIMIT 32",
                 (self._cancel_cursor,),
             ).fetchall()
         if not rows:
             self._cancel_cursor = 0
-            return
-        for control in rows:
-            self._cancel_cursor = int(control["sequence"])
-            with self.daemon._state_guard():
-                target = self._read(str(control["target_operation_id"]))
-                target_result = _mapping(json.loads(str(target["result_json"])))
-                result = _mapping(json.loads(str(control["result_json"])))
-                state = "pending"
-                bound = "binding" not in target_result or target_result["binding"] is not None
-                if bound and target_result["admission"] is None and target["target_name"] is not None and "reconciliation" in _mapping(json.loads(str(target["selected_json"]))):
-                    from .local_daemon import AdmissionNotFoundError
-                    try:
-                        target_result["admission"] = self.daemon.admission_for_queue_item(str(target["queue_item_id"])).to_dict()
-                    except AdmissionNotFoundError:
-                        pass
-                reconciliation = _mapping(json.loads(target["selected_json"])).get("reconciliation", {})
-                if isinstance(reconciliation, Mapping) and reconciliation.get("superseded_by"):
-                    with self.daemon._connection() as conn:
-                        original = self._superseded_admission(conn, reconciliation)
-                    result["admission"] = original
-                    result["native_cancellation_operation_id"] = original["cancellation_operation_id"]
-                    result["native_control"] = {key: original[key] for key in ("admission_id", "state", "revision")}
-                    state = "applied"
-                    bound = False
-                elif target_result["admission"] is not None:
-                    result["admission"] = target_result["admission"]
-                    admission = self.daemon._cancel(
-                        str(target["queue_item_id"]),
-                        principal_id=str(target["principal_id"]),
-                    )
-                    result["native_cancellation_operation_id"] = (
-                        admission.cancellation_operation_id
-                    )
-                    # Native terminal admission is published only after release.
-                    if admission.state in {
-                        LocalDaemonAdmissionState.SUCCEEDED,
-                        LocalDaemonAdmissionState.FAILED,
-                        LocalDaemonAdmissionState.CANCELLED,
-                    }:
-                        state = "applied"
-                    result["native_control"] = {
-                        "admission_id": admission.admission_id,
-                        "state": admission.state.value,
-                        "revision": admission.revision,
-                    }
-                elif target["state"] in _TERMINAL:
-                    state = "applied"
-                if bound and state == "applied" and target["target_name"] is not None:
-                    with self.daemon._connection() as conn:
-                        children = conn.execute("SELECT child_admission_id FROM preparation_operations WHERE target_name = ? AND principal_id = ? AND child_admission_id IS NOT NULL",
-                                                (target["target_name"], target["principal_id"])).fetchall()
-                    for child in children:
-                        owned = self.daemon._admission(str(child["child_admission_id"]))
-                        execution = self.daemon._execution
-                        if owned.state not in {LocalDaemonAdmissionState.SUCCEEDED, LocalDaemonAdmissionState.FAILED, LocalDaemonAdmissionState.CANCELLED} or (execution is not None and execution.coordinator.run_active_assignment_count(owned.run_uri)):
-                            state = "pending"
-                            break
-                projected = _operation(
-                    str(control["operation_id"]), state, None, result
-                )
-                with self.daemon._connection() as conn:
-                    write_status(
-                        conn, "operation",
-                        "UPDATE preparation_cancellations SET state = ?, result_json = ? WHERE operation_id = ?",
-                        (state, _json(projected.result), control["operation_id"]),
-                    )
-                    conn.commit()
+        for sequence, operation_id in rows:
+            self._cancel_cursor = sequence
+            with self.daemon._result_verifications.bulk.offering(("cancel", operation_id)):
+                self._advance_child_release(operation_id, self._project_cancellation)
+
+    def _project_cancellation(self, conn, operation_id, proof):
+        from .local_daemon import _admission_from_row, _request_admission_cancellation
+
+        control = conn.execute(
+            "SELECT * FROM preparation_cancellations WHERE operation_id=?", (operation_id,),
+        ).fetchone()
+        if control["state"] in _TERMINAL:
+            return None
+        target = conn.execute(
+            "SELECT * FROM preparation_operations WHERE operation_id=?", (control["target_operation_id"],),
+        ).fetchone()
+        target_result = _mapping(json.loads(target["result_json"]))
+        result = _mapping(json.loads(control["result_json"]))
+        bound = "binding" not in target_result or target_result["binding"] is not None
+        reconciliation = _mapping(json.loads(target["selected_json"])).get("reconciliation")
+        if bound and target_result["admission"] is None and target["target_name"] is not None and reconciliation is not None:
+            row = conn.execute("SELECT * FROM managed_admissions WHERE queue_item_id=?", (target["queue_item_id"],)).fetchone()
+            if row is not None:
+                target_result["admission"] = _admission_from_row(row).to_dict()
+        state = "pending"
+        if isinstance(reconciliation, Mapping) and reconciliation.get("superseded_by"):
+            original = self._superseded_admission(conn, reconciliation)
+            result["admission"] = original
+            result["native_cancellation_operation_id"] = original["cancellation_operation_id"]
+            result["native_control"] = {key: original[key] for key in ("admission_id", "state", "revision")}
+            state = "applied"
+            bound = False
+        elif target_result["admission"] is not None:
+            result["admission"] = target_result["admission"]
+            admission = _request_admission_cancellation(conn, target["queue_item_id"], principal_id=target["principal_id"])
+            result["native_cancellation_operation_id"] = admission.cancellation_operation_id
+            result["native_control"] = {"admission_id": admission.admission_id,
+                                        "state": admission.state.value, "revision": admission.revision}
+            if admission.state.value in _TERMINAL_CHILD_STATES:
+                state = "applied"
+        elif target["state"] in _TERMINAL:
+            state = "applied"
+        needed = None
+        if bound and state == "applied" and target["target_name"] is not None:
+            empty, scope = self._child_release_scope(conn, target, all_children=True)
+            if not empty and (scope is None or scope != proof):
+                state, needed = "pending", scope
+        if control["state"] != state or json.loads(control["result_json"]) != result:
+            projected = _operation(operation_id, state, None, result)
+            write_status(conn, "operation",
+                         "UPDATE preparation_cancellations SET state=?, result_json=? WHERE operation_id=?",
+                         (state, _json(projected.result), operation_id))
+        return needed

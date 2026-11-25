@@ -2840,7 +2840,7 @@ class SQLiteCoordinatorAssignments:
     def list_run_live_states(self, run_uri: str) -> tuple[tuple[str, str], ...]:
         """Return coordinator-owned nonterminal assignment facts for cancellation."""
 
-        with self._transaction() as conn:
+        with self._transaction(read_only=True) as conn:
             return tuple(
                 (str(row["assignment_id"]), str(row["state"]))
                 for row in conn.execute(
@@ -2855,7 +2855,7 @@ class SQLiteCoordinatorAssignments:
 
         if not isinstance(run_uri, str) or not run_uri:
             raise ManagedLocalError("run URI is required")
-        with self._transaction() as conn:
+        with self._transaction(read_only=True) as conn:
             has_slurm_assignments = (
                 conn.execute(
                     "SELECT 1 FROM sqlite_schema WHERE type = 'table' "
@@ -2868,6 +2868,18 @@ class SQLiteCoordinatorAssignments:
                 run_uri,
                 has_slurm_assignments=has_slurm_assignments,
             )
+
+    def child_assignments_released(self, run_uris: Sequence[str]) -> bool:
+        """Read physical release across native and SLURM owners in a single snapshot."""
+        with self._transaction(read_only=True) as conn:
+            row = conn.execute(
+                "WITH children AS (SELECT value FROM json_each(?)) "
+                "SELECT NOT EXISTS (SELECT 1 FROM coordinator_assignments "
+                "WHERE run_uri IN children AND state != 'released') "
+                "AND NOT EXISTS (SELECT 1 FROM slurm_stage_assignments "
+                "WHERE run_uri IN children AND state != 'released')", (json.dumps(run_uris),),
+            ).fetchone()
+        return bool(row[0])
 
     def retained_scheduling_descriptors(
         self,
@@ -3240,7 +3252,7 @@ class SQLiteCoordinatorAssignments:
             return cast(str, row["state"])
 
     @contextmanager
-    def _transaction(self):
+    def _transaction(self, *, read_only: bool = False):
         if not self.path.is_file():
             if not self._allow_initialize:
                 raise ManagedLocalError("coordinator assignment store is missing")
@@ -3249,7 +3261,7 @@ class SQLiteCoordinatorAssignments:
             self.path, sqlite_policy=self._sqlite_policy, require_existing=not self._allow_initialize
         ) as conn:
             conn.row_factory = sqlite3.Row
-            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("BEGIN" if read_only and not self._allow_initialize else "BEGIN IMMEDIATE")
             if not self._allow_initialize:
                 _require_coordinator_assignment_schema(conn)
                 try:

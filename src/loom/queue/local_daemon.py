@@ -1945,13 +1945,16 @@ class LocalDaemon:
             from .retirement import require_unretired
             require_unretired(self.config.coordinator_root)
             require_storage_upgrade_ready(self.config.coordinator_root, entering=True)
+            from .local_daemon_execution import ensure_child_release_indexes
             from .slurm_ready_stage import ensure_slurm_page_index
             with self.config.connect_database(self.config.execution_database) as execution_conn:
                 ensure_slurm_page_index(execution_conn)
+                ensure_child_release_indexes(execution_conn)
             with self._connection() as conn:
                 conn.execute("BEGIN IMMEDIATE")
                 ensure_agent_lookup_indexes(conn)
                 _ensure_recovery_assignment_index(conn)
+                _ensure_preparation_child_index(conn)
                 retained = conn.execute("SELECT value FROM root_metadata WHERE key = 'assignment_payload_root_id'").fetchone()
                 selected = self.config.assignment_payload_root_id
                 if retained is not None and retained[0] != selected:
@@ -2153,6 +2156,7 @@ class LocalDaemon:
         self._preparations._publications.clear()
         self._preparations._ready_publications.clear()
         self._preparations._children.clear()
+        self._preparations._child_release_checks.clear()
         self._preparations._captures.clear()
         self._preparations._images.clear()
         self._preparations._candidates.clear()
@@ -4995,6 +4999,11 @@ def _initialize_coordinator_schema(conn: sqlite3.Connection) -> None:
     initialize_action_results(conn)
 
 
+def _ensure_preparation_child_index(conn: sqlite3.Connection) -> None:
+    conn.execute("CREATE INDEX IF NOT EXISTS preparation_target_children "
+                 "ON preparation_operations(target_name, principal_id, child_admission_id)")
+
+
 def _initialize_preparation_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE TABLE preparation_operations ("
@@ -5014,6 +5023,7 @@ def _initialize_preparation_schema(conn: sqlite3.Connection) -> None:
         "REFERENCES preparation_operations(operation_id), state TEXT NOT NULL, "
         "result_code TEXT, result_json TEXT NOT NULL)"
     )
+    _ensure_preparation_child_index(conn)
 
 
 def _validate_coordinator_schema(conn: sqlite3.Connection) -> None:
@@ -5177,6 +5187,13 @@ def _request_admission_cancellation(
         LocalDaemonAdmissionState.FAILED,
         LocalDaemonAdmissionState.CANCELLED,
     }:
+        return admission
+    if (
+        admission.cancellation_operation_id and admission.cancellation_principal_id
+        and admission.state in {LocalDaemonAdmissionState.CANCELLATION_REQUESTED, LocalDaemonAdmissionState.CANCELLING}
+    ):
+        # The intent and graph detachment committed together. Re-observing
+        # that intent preserves progress and its original principal/revision.
         return admission
     operation_id = admission.cancellation_operation_id or (
         request_operation_id or f"authority-cancel-{uuid4()}"

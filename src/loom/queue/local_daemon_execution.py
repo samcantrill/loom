@@ -718,6 +718,14 @@ def _coordinator_capacity(config: LocalDaemonConfig) -> tuple[CapacityAtom, ...]
     ) + tuple(gpu_atoms)
 
 
+def ensure_child_release_indexes(conn: sqlite3.Connection) -> None:
+    """Scope cancellation probes to the child's live native and SLURM rows."""
+    conn.execute("CREATE INDEX IF NOT EXISTS coordinator_unreleased_run "
+                 "ON coordinator_assignments(run_uri) WHERE state != 'released'")
+    conn.execute("CREATE INDEX IF NOT EXISTS slurm_unreleased_run "
+                 "ON slurm_stage_assignments(run_uri) WHERE state != 'released'")
+
+
 def initialize_local_daemon_owner_stores(
     config: LocalDaemonConfig,
     *,
@@ -737,6 +745,8 @@ def initialize_local_daemon_owner_stores(
         config.execution_database, config.slurm_transfer_root,
         sqlite_policy=config.sqlite_policy, schema_version=config.slurm_schema_version,
     )._initialize()
+    with config.connect_database(config.execution_database) as conn:
+        ensure_child_release_indexes(conn)
     _bind_owner_store(
         config.execution_database, role="coordinator", stable_id=coordinator_id
     , sqlite_policy=config.sqlite_policy)
@@ -5817,10 +5827,12 @@ class LocalDaemonExecution:
                     )
                 if (offer_id, availability_revision) != (target.offer_id, target.scheduling_availability_revision):
                     raise ManagedLocalError("assignment capacity projection changed during preparation")
+            # A second owner can commit a reservation before this control
+            # transaction returns. Invalidate outstanding physical-owner reads.
+            daemon._scheduling_reference_revision += 1
             with phase("scheduling_commit"):
                 yield
             conn.commit()
-            daemon._scheduling_reference_revision += 1
 
     def _worker_preparation_token(self, record, intent, snapshot) -> tuple[object, ...]:
         daemon = self._daemon_owner()
@@ -6289,6 +6301,7 @@ class LocalDaemonExecution:
                 # its CAS revision after comparing all stage scheduling facts.
                 # Reservation still checks current capacity/offer ownership.
                 decision_receipt["stage_work_revision"] = current.projection_revision
+                daemon._scheduling_reference_revision += 1
                 yield
                 daemon._activate_admission(admission.admission_id)
                 daemon._wake.set()

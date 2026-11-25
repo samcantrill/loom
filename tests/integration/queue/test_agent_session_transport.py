@@ -4719,6 +4719,12 @@ def test_same_run_local_and_remote_stages_overlap(tmp_path: Path, monkeypatch, s
                         assert abort_entered.wait(20)
                         assert remote.result(timeout=20).get("state") == "RELEASED"
                         workers.submit(daemon.reconcile_once).result(timeout=5)
+                        # The pending diagnostic is part of current progress.
+                        # Repeating the public control must preserve it and its revision.
+                        settling = coordinator.cancel("mixed-item")
+                        assert settling.state is LocalDaemonAdmissionState.CANCELLING
+                        assert settling.blocked_reason
+                        assert coordinator.cancel("mixed-item") == settling
                         with pytest.raises(TimeoutError):
                             coordinator.wait("mixed-item", timeout_seconds=0.1)
                         assert authority.open_run(run_uri).status is RunStatus.RUNNING
