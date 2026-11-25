@@ -480,3 +480,33 @@ def test_paged_agent_publishes_45_shared_results_after_lost_commit_and_restart(t
         assert sum(call[0] == "sbatch" for call in runner.calls) == 45
     finally:
         agent.close()
+
+
+def test_compute_release_page_unblocks_the_owners_containment_receipt():
+    from loom.queue._agent_slurm_progress import SlurmAcknowledgements
+
+    receipts = SlurmAcknowledgements()
+    binding = {"session_id": "s", "coordinator_epoch": "e"}
+    agent = SimpleNamespace(
+        observation_policy=None, begin_reconciliation=lambda *args: None,
+        replay_pending=lambda **kwargs: None, step=lambda *args, **kwargs: None,
+    )
+    client = SimpleNamespace(
+        _slurm_agent=agent, _service_progress=False, _drained=False, _slurm_cursor=None,
+        _slurm_acknowledgements=receipts,
+        active_session=lambda: SimpleNamespace(**binding),
+        _call=lambda *args: {"tasks": [{"assignment": {"assignment_id": "0"}, "compute_release_requested": True}]},
+    )
+    for number in range(32):
+        operation = receipts.exchange(client, binding, {"assignment_id": str(number), "result_operation": "commit"})
+        next(operation)
+        with pytest.raises(SlurmEffectPending):
+            operation.send(SimpleNamespace(complete=True, value={"disposition": "pending"}, error=None))
+    with pytest.raises(SlurmEffectPending):
+        next(receipts.exchange(client, binding, {"assignment_id": "0", "sequence": 2}))
+    LocalDaemonAgentHttpClient.drive_slurm_jobs(client)
+    # A fresh compute-release task retired this owner's obsolete commit request.
+    operation = receipts.exchange(client, binding, {"assignment_id": "0", "sequence": 2})
+    next(operation)
+    with pytest.raises(SlurmEffectPending):
+        operation.send(SimpleNamespace(complete=True, value={"sequence": 2}, error=None))
