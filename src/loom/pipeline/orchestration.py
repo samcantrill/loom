@@ -789,6 +789,19 @@ class SQLiteStageWorkStore:
             for row in rows
         )
 
+    def ready_ids(self, stage_work_ids: set[str]) -> set[str]:
+        """Return the READY subset of the supplied retained work identities."""
+        if not stage_work_ids:
+            return set()
+        with self._read_connection() as conn:
+            # Drive primary-key probes from the supplied IDs. An IN filter
+            # with a READY predicate can scan the entire ready-window index.
+            return {str(row[0]) for row in conn.execute(
+                "SELECT s.stage_work_id FROM json_each(?) AS ids CROSS JOIN stage_work AS s "
+                "ON s.stage_work_id = ids.value WHERE s.scheduling_state = 'ready'",
+                (json.dumps(tuple(stage_work_ids)),),
+            )}
+
     def find_stage_work(self, stage_work_id: str) -> StageWorkRecord | None:
         """Read the selected durable record without materializing the ready backlog."""
         with self._read_connection() as conn:

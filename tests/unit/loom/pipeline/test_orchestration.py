@@ -1017,6 +1017,11 @@ def test_ready_window_preserves_fifo_admission_order_after_restart(
         "older",
         "newer",
     ]
+    older, newer = reopened.ready_window()
+    assert reopened.ready_ids({older.stage_work_id, "removed"}) == {older.stage_work_id}
+    reopened.create_or_refresh(replace(newer, scheduling_state=SchedulingProjectionState.DECIDED,
+                                       scheduling_diagnostics={"assignment_id": "assigned"}))
+    assert reopened.ready_ids({older.stage_work_id, newer.stage_work_id}) == {older.stage_work_id}
 
 
 def test_stage_work_hard_cut_requires_durable_global_order_fields() -> None:

@@ -1722,7 +1722,7 @@ scheduling turn visits at most four ordinary pages of 256 records, continuing on
 cycle if the prefix remains blocked. Cursor keys contain the full ordering key,
 so releasing an earlier row does not shift an offset and skip work. Completing
 a sweep or restarting the coordinator returns to the priority head. Each sweep
-captures the accepted ready timestamp and largest eligible admission sequence;
+captures the accepted ready timestamp and the admission enqueue high-water mark;
 later stages and admissions cannot extend it indefinitely. The admission bound
 also excludes new admissions sharing the captured timestamp's whole second.
 Successful dispatch resets the boundary together with the cursor. No saved work
@@ -1815,9 +1815,11 @@ Already projected READY work is not restricted to the current reconciliation
 batch. Dispatch reloads exact retained intent for an eligible ACTIVE/WAITING run
 when needed, checks cancellation and current authority, and retains the existing
 transactional reservation checks. This keeps reconciliation throughput separate
-from GPU dispatch opportunities. The current implementation still reads active
-admission metadata for the global eligibility view; the bound applies to heavy
-run reconciliation, not total metadata cardinality.
+from GPU dispatch opportunities. Discovery reads a page of at most 32 active admissions plus one lookahead
+from the retained priority index. Dispatch loads current admissions by the
+identities in its ready-stage page. Each turn checks a bounded set of outstanding
+preparation tickets against their exact owners. Off-page admissions keep their
+tickets until their owners retire or withdraw them.
 
 Background owner-store validation and admission binding use bounded workers.
 Explicit reconciliation still reports an unavailable owner. Each reservation

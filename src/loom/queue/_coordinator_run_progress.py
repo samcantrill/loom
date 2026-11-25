@@ -15,6 +15,7 @@ from .submitted_execution import SubmittedContainerCapability
 from loom.pipeline.runtime import ExecutionRouteKind
 from loom.pipeline.status import StageStatus
 from loom.scheduling import PolicyDecisionState
+from ._admission_scan import SchedulingAdmissions
 from ._managed_local import ManagedLocalError
 from ._remote_stage_execution import ResidentProfileDescriptor
 from .errors import QueueServiceError
@@ -248,7 +249,7 @@ def schedule_once(
     A complete sweep restarts at the priority head, as does process restart.
     Cursor state is only an optimization: durable reservation remains authority.
     """
-    if not admissions:
+    if not admissions and not (isinstance(admissions, SchedulingAdmissions) and admissions.enqueue_through):
         self._ready_scan_after = None
         self._ready_scan_boundary = None
         self._gpu_scan_after = self._gpu_scan_boundary = None
@@ -256,7 +257,8 @@ def schedule_once(
     if self._ready_scan_boundary is None:
         _, snapshot_time = self._daemon_owner()._accepted_snapshot()
         self._ready_scan_boundary = (
-            snapshot_time, max(row.enqueue_sequence for row in admissions.values()),
+            snapshot_time, (admissions.enqueue_through if isinstance(admissions, SchedulingAdmissions)
+                            else max(row.enqueue_sequence for row in admissions.values())),
         )
     if self._prefer_gpu_dispatch:
         outcome = _schedule_gpu_opportunity(self, admissions, waiting_outcomes)
@@ -332,6 +334,12 @@ def _schedule_window(
                        if not action_attempt_cancelled(conn, record.run_uri, record.attempt_id))
     if not window:
         return None
+    if isinstance(admissions, SchedulingAdmissions):
+        admissions.include({record.admission_id for record in window})
+        admissions.visited_dispatch.update(
+            ("dispatch", record.run_uri, record.stage_work_id) for record in window
+            if record.admission_id in self._cycle_contexts
+        )
     if self.daemon is not None:
         # READY projections outlive an admission sweep. Revalidate their retained
         # intent through the same bounded context loader before allocating work.
@@ -555,7 +563,6 @@ def _schedule_window(
         if not started:
             excluded_work.add(record.stage_work_id)
             continue
-        self._remote_preflights.pop((record.run_uri, record.stage_name), None)
         return admission.admission_id, LocalDaemonExecutionOutcome(
             LocalDaemonAdmissionState.ACTIVE,
             "assignment was durably accepted",

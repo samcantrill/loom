@@ -38,21 +38,20 @@ class ContextPreparations:
         self._workers = ThreadPoolExecutor(max_workers=2, thread_name_prefix="loom-context")
         self._pending: dict[str, PendingContext] = {}
         self._wake = wake
-        self._next_load: dict[str, tuple[int, tuple[str | None, str | None], float]] = {}
+        self._next_load: dict[str, tuple[int, tuple[str | None, str | None], float, str]] = {}
         self._interval = 0.0
 
     def begin_cycle(
-        self, admissions: Iterable[LocalDaemonAdmission],
-        *, minimum_interval: float = 0.0, invalidated: Iterable[str] = (),
+        self, *, minimum_interval: float = 0.0, invalidated: Iterable[str] = (),
     ) -> None:
         self._interval = minimum_interval
-        active = {item.admission_id: item.run_uri for item in admissions}
+        now = monotonic()
         invalidated_runs = set(invalidated)
-        for identity in self._next_load.keys() - active.keys():
-            del self._next_load[identity]
-        for identity, run_uri in active.items():
-            if run_uri in invalidated_runs:
-                self._next_load.pop(identity, None)
+        # These entries only suppress repeat filesystem loads until their
+        # deadline. Expire them independently of which admission page is read.
+        for identity, (_, _, deadline, run_uri) in tuple(self._next_load.items()):
+            if deadline <= now or run_uri in invalidated_runs:
+                del self._next_load[identity]
 
     def has_capacity(self) -> bool:
         return len(self._pending) < 2
@@ -86,7 +85,7 @@ class ContextPreparations:
         for item in completed:
             del self._pending[item.admission.admission_id]
             self._next_load[item.admission.admission_id] = (
-                item.admission.revision, item.epochs, monotonic() + self._interval,
+                item.admission.revision, item.epochs, monotonic() + self._interval, item.admission.run_uri,
             )
         return completed
 

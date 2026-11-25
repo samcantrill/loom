@@ -78,6 +78,7 @@ from ._remote_stage_execution import GpuDeviceDescriptor, ResidentProfileDescrip
 from ._preparation_policy import PreparationPolicy
 from .submitted_execution import SubmittedContainerCapability
 from .errors import QueueConflictError, QueueServiceError, QueueStorageError, _AcceptedTimeError
+from ._admission_scan import AdmissionScan, SchedulingAdmissions, ensure_scan_index
 from ._service_signals import _ChangeConnection, _ChangeSignal, _KeyedWaiters, _ServiceSignal, write_status
 from ._recovery_retry import _RecoveryRetry
 
@@ -1721,12 +1722,12 @@ class LocalDaemon:
         self._cycle_lock = RLock()
         self._scheduling_reference_revision = 0
         self._reconcile_guard = RLock()
-        from ._admission_scan import AdmissionScan
         from ._context_preparation import ContextPreparations
         from ._coordinator_gpu import CoordinatorGpuSamples
 
         self._gpu_samples = CoordinatorGpuSamples(self._wake.set)
         self._admission_scan = AdmissionScan()
+        self._retirement_after = None
         self._contexts = ContextPreparations(self._wake.set)
         from ._result_verification import ResultVerifications
 
@@ -1953,6 +1954,7 @@ class LocalDaemon:
             with self._connection() as conn:
                 conn.execute("BEGIN IMMEDIATE")
                 ensure_agent_lookup_indexes(conn)
+                ensure_scan_index(conn)
                 _ensure_recovery_assignment_index(conn)
                 _ensure_preparation_child_index(conn)
                 retained = conn.execute("SELECT value FROM root_metadata WHERE key = 'assignment_payload_root_id'").fetchone()
@@ -2141,12 +2143,12 @@ class LocalDaemon:
         self._contexts.close()
         self._gpu_samples.close()
         self._result_verifications.close()
-        from ._admission_scan import AdmissionScan
         from ._context_preparation import ContextPreparations
         from ._coordinator_gpu import CoordinatorGpuSamples
 
         self._gpu_samples = CoordinatorGpuSamples(self._wake.set)
         self._admission_scan = AdmissionScan()
+        self._retirement_after = None
         self._contexts = ContextPreparations(self._wake.set)
         from ._result_verification import ResultVerifications
 
@@ -2800,55 +2802,27 @@ class LocalDaemon:
         execution.begin_cycle()
         self._repair_cancelled_admissions(execution)
         with self._connection() as conn:
-            admissions = tuple(
-                _admission_from_row(row)
-                for row in conn.execute(
-                    "SELECT * FROM managed_admissions "
-                    "WHERE state NOT IN (?, ?, ?, ?) "
-                    "ORDER BY run_priority DESC, enqueue_sequence, admission_id",
-                    (
-                        LocalDaemonAdmissionState.SUCCEEDED.value,
-                        LocalDaemonAdmissionState.FAILED.value,
-                        LocalDaemonAdmissionState.CANCELLED.value,
-                        LocalDaemonAdmissionState.BLOCKED.value,
-                    ),
-                )
-            )
-        self._result_verifications.bulk.retain(
-            ("run",), {("run", admission.run_uri) for admission in admissions},
-        )
-        active_run_uris = {admission.run_uri for admission in admissions}
+            enqueue_through = int(conn.execute(
+                "SELECT COALESCE(MAX(enqueue_sequence), 0) FROM managed_admissions"
+            ).fetchone()[0])
+            admissions = tuple(_admission_from_row(row) for row in self._admission_scan.page(conn, enqueue_through))
+        self._retire_inactive_scheduling_owners(execution)
         bulk = self._result_verifications.bulk
-        bulk.retain(("dispatch",), {
-            scope for scope in bulk.scopes(("dispatch",)) if scope[1] in active_run_uris
-        })
         with self._state_guard():
             epochs = (self._epoch, self._scheduling_epoch)
             invalidated = tuple(self._context_invalidations)
             self._context_invalidations.clear()
+        self._contexts.begin_cycle(minimum_interval=self.config.poll_interval_seconds, invalidated=invalidated)
         prepared = {item.admission.admission_id: item for item in self._contexts.completed()}
-        self._contexts.begin_cycle(
-            admissions,
-            minimum_interval=self.config.poll_interval_seconds, invalidated=invalidated,
-        )
-
-        schedulable: dict[str, LocalDaemonAdmission] = {
-            row.admission_id: row for row in admissions
-            if row.state in {LocalDaemonAdmissionState.ACTIVE, LocalDaemonAdmissionState.WAITING}
-            and row.cancellation_operation_id is None
-            and row.run_uri not in self._admission_retries
-        }
+        schedulable = SchedulingAdmissions(enqueue_through, self._lookup_schedulable_admissions)
         waiting_outcomes: dict[str, LocalDaemonExecutionOutcome] = {}
-        active_runs = {admission.run_uri for admission in admissions}
-        with self._state_guard():
-            for run_uri in self._admission_retries.keys() - active_runs:
-                del self._admission_retries[run_uri]
-        for admission in admissions:
-            preparation = prepared.get(admission.admission_id)
-            if preparation is None:
-                continue
+        for preparation in sorted(prepared.values(), key=lambda item: AdmissionScan.key(item.admission)):
+            admission = preparation.admission
             with self._state_guard():
-                current = self._admission(admission.admission_id)
+                try:
+                    current = self._admission(admission.admission_id)
+                except AdmissionNotFoundError:
+                    continue
                 epochs = (self._epoch, self._scheduling_epoch)
             if preparation.epochs != epochs or preparation.admission.revision != current.revision:
                 self._wake.set()
@@ -2926,9 +2900,13 @@ class LocalDaemon:
         # launch at most that many assignments, but a larger pipeline is
         # never rejected merely for having more stages.
         started_admissions: set[str] = set()
-        with bulk.visiting({("dispatch", admission.run_uri) for admission in schedulable.values()}):
+        with bulk.visiting(schedulable.visited_dispatch):
             if time_healthy:
-                for _ in range(256):
+                dispatch_deadline = time.monotonic() + 0.1
+                for turn in range(256):
+                    if turn and time.monotonic() >= dispatch_deadline:
+                        self._wake.set()
+                        break
                     if epochs != (self._epoch, self._scheduling_epoch):
                         self._wake.set()
                         break
@@ -2979,6 +2957,50 @@ class LocalDaemon:
         return tuple(
             self._admission(admission.admission_id) for admission in visited
         )
+
+    def _lookup_schedulable_admissions(self, identities: set[str]) -> dict[str, LocalDaemonAdmission]:
+        placeholders = ",".join("?" for _ in identities)
+        with self._connection() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM managed_admissions WHERE admission_id IN ({placeholders}) "
+                "AND state IN ('ACTIVE','WAITING') AND cancellation_operation_id IS NULL", tuple(identities),
+            ).fetchall()
+        with self._state_guard():
+            return {row["admission_id"]: _admission_from_row(row) for row in rows
+                    if row["run_uri"] not in self._admission_retries}
+
+    def _retire_inactive_scheduling_owners(self, execution: LocalDaemonExecution) -> None:
+        """Retire bounded, positively checked owners independently of discovery pages."""
+        from heapq import nsmallest
+
+        bulk = self._result_verifications.bulk
+        scopes = bulk.scopes(("run",)) | bulk.scopes(("dispatch",))
+        with self._state_guard():
+            scopes.update(("retry", run_uri) for run_uri in self._admission_retries)
+        after = self._retirement_after
+        page = nsmallest(33, (scope for scope in scopes if after is None or scope > after))
+        self._retirement_after = page[31] if len(page) > 32 else None
+        if not page:
+            return
+        page = page[:32]
+        uris = {scope[1] for scope in page}
+        placeholders = ",".join("?" for _ in uris)
+        with self._connection() as conn:
+            active = {row[0] for row in conn.execute(
+                f"SELECT run_uri FROM managed_admissions WHERE coordinator_id=? AND run_uri IN ({placeholders}) "
+                "AND state NOT IN ('SUCCEEDED','FAILED','CANCELLED','BLOCKED')",
+                (self._coordinator_id, *uris),
+            )}
+        dispatch_ids = {scope[2] for scope in page if scope[0] == "dispatch" and scope[1] in active}
+        ready = execution.stage_work_store.ready_ids(dispatch_ids)
+        for scope in page:
+            if scope[1] in active and (scope[0] != "dispatch" or scope[2] in ready):
+                continue
+            if scope[0] == "retry":
+                with self._state_guard():
+                    self._admission_retries.pop(scope[1], None)
+            else:
+                bulk.discard(scope)
 
     def _serve(self) -> None:
         from ._phase_timing import reported_phases
@@ -4998,6 +5020,7 @@ def _initialize_coordinator_schema(conn: sqlite3.Connection) -> None:
         "recorded_at TEXT NOT NULL, state TEXT NOT NULL, "
         "evidence_json TEXT, result_json TEXT NOT NULL)"
     )
+    ensure_scan_index(conn)
     _ensure_recovery_assignment_index(conn)
     conn.execute(
         "CREATE TABLE time_recoveries ("

@@ -226,9 +226,16 @@ def test_production_sweep_advances_through_original_population_with_saturated_lo
             return load(admission)
 
         monkeypatch.setattr(execution, "load_context", slow_first_two)
+        bulk = daemon._result_verifications.bulk
+        occupied = [bulk.submit(str(i), "occupied", release.wait, 15) for i in range(2)]
+        assert all(future is not None for future in occupied)
+        off_page = ("run", initial[-1].run_uri)
+        with bulk.offering(off_page):
+            assert bulk.submit("pending", "inspect", lambda: None) is None
         assert {row.admission_id for row in daemon.reconcile_once()} == {
             row.admission_id for row in initial[:2]
         }
+        assert bulk.scopes(off_page) == {off_page}
         assert all(entered.wait(2) for entered in both_entered)
         late = client.submit(LocalDaemonAdmissionRequest("late", uris[-1]))
         assert daemon.reconcile_once() == ()
@@ -268,6 +275,7 @@ def test_production_sweep_advances_through_original_population_with_saturated_lo
 
 @pytest.mark.parametrize("change", ["cancel", "scheduling"])
 def test_preparation_is_discarded_when_its_authorization_changes(tmp_path, monkeypatch, change):
+    from concurrent.futures import CancelledError
     from loom.queue import CoordinatorSchedulingReload
 
     monkeypatch.setattr(LocalDaemon, "_serve", lambda self: self._stop.wait())
@@ -300,7 +308,8 @@ def test_preparation_is_discarded_when_its_authorization_changes(tmp_path, monke
                 CoordinatorSchedulingReload("reload", status.scheduling_epoch, "test stale preparation"))
             assert receipt["state"] == "applied"
         release.set()
-        pending.result(2)
+        with pytest.raises(CancelledError, match="superseded before binding"):
+            pending.result(2)
         daemon.reconcile_once()
         execution = daemon._execution
         assert execution is not None

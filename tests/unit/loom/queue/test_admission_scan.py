@@ -51,8 +51,8 @@ def test_slow_cycle_diagnostics_are_bounded_and_cannot_change_lifecycle_result(m
 
     diagnostics = []
     expected = (row(1),)
-    from threading import RLock
-    owner: Any = SimpleNamespace(_reconcile_once=lambda: expected, _reconcile_guard=RLock())
+    from threading import RLock, current_thread
+    owner: Any = SimpleNamespace(_reconcile_once=lambda checked: expected, _reconcile_guard=RLock(), _thread=current_thread())
     ticks = iter([0.0, 0.0, 2.0, 2.0])
     monkeypatch.setattr(_phase_timing, "monotonic", lambda: next(ticks))
     monkeypatch.setattr(_phase_timing, "log_phases", diagnostics.append)
@@ -77,3 +77,35 @@ def test_scan_resumes_at_first_admission_refused_for_capacity():
     assert scan.take([late, *initial], accept) == tuple(initial[2:34])
     assert scan.take([late, *initial], accept) == (initial[34],)
     assert scan.take([late, *initial], accept)[0] is late
+
+def test_retained_database_seeks_past_deleted_cursor_and_limits_materialized_rows():
+    import sqlite3
+    from loom.queue._admission_scan import ensure_scan_index
+
+    with sqlite3.connect(":memory:") as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute("CREATE TABLE managed_admissions (admission_id TEXT PRIMARY KEY, "
+                     "enqueue_sequence INTEGER UNIQUE, run_priority INTEGER, state TEXT)")
+        conn.executemany("INSERT INTO managed_admissions VALUES (?, ?, ?, ?)", (
+            (str(index), index, 5 if index < 8000 else 0, "ACTIVE" if index < 8034 else "SUCCEEDED")
+            for index in range(12000)
+        ))
+        ensure_scan_index(conn)
+        scan = AdmissionScan()
+        assert len(scan.page(conn, 11999)) == 33
+        scan.after = (-5, 7969, "7969")
+        conn.execute("DELETE FROM managed_admissions WHERE enqueue_sequence=7969")
+        conn.execute("INSERT INTO managed_admissions VALUES ('late', 12000, 10, 'ACTIVE')")
+        steps = []
+        conn.set_progress_handler(lambda: (steps.append(None), 0)[1], 100)
+        page = scan.page(conn, 12000)
+        conn.set_progress_handler(None, 0)
+        assert [item["enqueue_sequence"] for item in page] == list(range(7970, 8003))
+        assert len(steps) < 20  # Both queries seek past the preceding 7,970 rows.
+        def project(db_row):
+            return SimpleNamespace(**dict(db_row))
+        assert len(scan.take([project(item) for item in page], accept)) == 32
+        remaining = [project(item) for item in scan.page(conn, 12000)]
+        assert [item.enqueue_sequence for item in scan.take(remaining, accept)] == list(range(8002, 8034))
+        assert scan.high_water is None
+        assert scan.page(conn, 12000)[0]["admission_id"] == "late"
