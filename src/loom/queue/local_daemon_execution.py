@@ -17,6 +17,7 @@ from ._action_results import action_attempt_cancelled, action_attempt_needed, at
 from ._continuation import ContinuationConflict, ContinuationPending
 from ._embedded_recovery import EmbeddedRecovery
 from ._recovery_retry import RecoveryWorkers, _RecoveryRetry
+from ._run_observations import RunObservations, RunSteps, TerminalSteps
 from ._slurm_admission import SlurmAdmissionDeferred
 from . import _slurm_retry
 
@@ -1488,6 +1489,7 @@ class LocalDaemonExecution:
         from ._input_validation import InputValidationPool
         from ._ready_preparation import ReadyPreparationPool
         self._ready_preparations = ReadyPreparationPool(lambda: self._daemon_owner()._wake.set())
+        self.run_observations = RunObservations(lambda: self._daemon_owner()._wake.set())
         self._input_validations = InputValidationPool(
             lambda: self._daemon_owner()._wake.set(),
         )
@@ -1519,6 +1521,7 @@ class LocalDaemonExecution:
     def close(self) -> None:
         """Stop only assignment observers after their durable owners settle."""
 
+        self.run_observations.close()
         self.admission_retry_workers.close()
         self.recovery_workers.close()
         self._offer_worker.shutdown(wait=True, cancel_futures=True)
@@ -4951,7 +4954,7 @@ class LocalDaemonExecution:
             for stage in snapshot.stages
         )
 
-    def _terminal_outcome(
+    def _terminal_steps(
         self,
         admission: LocalDaemonAdmission,
         plan: ExecutionPlan,
@@ -4959,7 +4962,7 @@ class LocalDaemonExecution:
         authority: _ScopedCoordinatorAuthority,
         *,
         continue_independent: bool = False,
-    ) -> LocalDaemonExecutionOutcome | None:
+    ) -> TerminalSteps:
         if snapshot.status is RunStatus.SUCCEEDED:
             return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.SUCCEEDED)
         if snapshot.status in {RunStatus.FAILED, RunStatus.INTERRUPTED}:
@@ -4981,7 +4984,7 @@ class LocalDaemonExecution:
                 admission.queue_item_id,
                 principal_id=f"coordinator:{self.coordinator_id}",
             )
-            return self._cancel(requested, authority, plan.stage_order)
+            return (yield from self._cancel_steps(requested, authority, plan.stage_order))
         terminal_failures = tuple(
             stage_facts[name]
             for name in run_stages
@@ -5107,6 +5110,16 @@ class LocalDaemonExecution:
         authority: _ScopedCoordinatorAuthority,
         stage_names: Sequence[str],
     ) -> LocalDaemonExecutionOutcome:
+        return _run_progress._drive_run_steps(
+            self._cancel_steps(admission, authority, stage_names), authority, admission.run_uri,
+        )
+
+    def _cancel_steps(
+        self,
+        admission: LocalDaemonAdmission,
+        authority: _ScopedCoordinatorAuthority,
+        stage_names: Sequence[str],
+    ) -> RunSteps:
         operation_id = (
             admission.cancellation_operation_id
             or self.cancellation_operation(admission.admission_id)
@@ -5118,7 +5131,7 @@ class LocalDaemonExecution:
         # A terminal authority fact wins a late client request.  Installing a
         # cancellation epoch against it is neither needed nor generally a
         # valid authority mutation.
-        before = authority.open_run(admission.run_uri)
+        before = yield
         terminal = {
             RunStatus.SUCCEEDED: LocalDaemonAdmissionState.SUCCEEDED,
             RunStatus.FAILED: LocalDaemonAdmissionState.FAILED,
@@ -5151,7 +5164,7 @@ class LocalDaemonExecution:
         local_pending = self._fan_out_local_cancellation(admission.run_uri, authority)
         slurm_pending = self._fan_out_slurm_cancellation(admission.run_uri)
         settling = remote_pending or local_pending or slurm_pending
-        snapshot = authority.open_run(admission.run_uri)
+        snapshot = yield
         if snapshot.status is RunStatus.CANCELLED:
             return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.CANCELLED)
         terminal = {

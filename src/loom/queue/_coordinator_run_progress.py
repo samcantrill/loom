@@ -16,6 +16,7 @@ from loom.pipeline.runtime import ExecutionRouteKind
 from loom.pipeline.status import StageStatus
 from loom.scheduling import PolicyDecisionState
 from ._admission_scan import SchedulingAdmissions
+from ._run_observations import RunObservationPending, RunSteps
 from ._managed_local import ManagedLocalError
 from ._remote_stage_execution import ResidentProfileDescriptor
 from .errors import QueueServiceError
@@ -60,11 +61,25 @@ def reconcile_admission(
     intent, scoped_authority = (self._admission_context(admission, prepared_intent=prepared_intent)
                                if prepared_context is None else prepared_context)
     self._cycle_contexts[admission.admission_id] = (intent, scoped_authority)
-    if self.daemon is None:
-        outcome = _reconcile_admission(self, admission, intent, scoped_authority)
+    def steps() -> RunSteps:
+        return _reconcile_admission_steps(self, admission, intent, scoped_authority)
+
+    if self.daemon is not None and prepared_context is not None:
+        if admission.state is LocalDaemonAdmissionState.PENDING_AUTHORITY and admission.cancellation_operation_id is None:
+            # Binding succeeded. Activation changes the admission revision, so
+            # a read started with the pre-activation revision could never apply.
+            self.admission_activated(admission.admission_id)
+            self.daemon._wake.set()
+            raise RunObservationPending()
+        outcome = self.run_observations.advance(
+            admission, (self.daemon._epoch, self.daemon._scheduling_epoch),
+            prepared_context, steps, self.daemon._result_verifications.bulk,
+        )
+    elif self.daemon is None:
+        outcome = _drive_run_steps(steps(), scoped_authority, admission.run_uri)
     else:
         with self.daemon._result_verifications.bulk.offering(("run", admission.run_uri)):
-            outcome = _reconcile_admission(self, admission, intent, scoped_authority)
+            outcome = _drive_run_steps(steps(), scoped_authority, admission.run_uri)
     if outcome.state not in {
         LocalDaemonAdmissionState.SUCCEEDED,
         LocalDaemonAdmissionState.FAILED,
@@ -87,16 +102,29 @@ def reconcile_admission(
     )
 
 
-def _reconcile_admission(
+def _drive_run_steps(
+    steps: RunSteps, authority: _ScopedCoordinatorAuthority, run_uri: str,
+) -> LocalDaemonExecutionOutcome:
+    try:
+        next(steps)
+        while True:
+            steps.send(authority.open_run(run_uri))
+    except StopIteration as settled:
+        return settled.value
+    finally:
+        steps.close()
+
+
+def _reconcile_admission_steps(
     self: LocalDaemonExecution,
     admission: LocalDaemonAdmission,
     intent: ManagedLocalIntent,
     scoped_authority: _ScopedCoordinatorAuthority,
-) -> LocalDaemonExecutionOutcome:
+) -> RunSteps:
     action_resolver = self._action_resolution
     cancelling = admission.cancellation_operation_id is not None or self.cancellation_operation(admission.admission_id) is not None
     if cancelling:
-        outcome = self._cancel(admission, scoped_authority, intent.plan.stage_order)
+        outcome = yield from self._cancel_steps(admission, scoped_authority, intent.plan.stage_order)
         if action_resolver is None or not any(action_resolver.store.producer_needed(admission.run_uri, node) for node in intent.plan.stage_order):
             self._ready_preparations.retain_run(admission.run_uri, set())
             return outcome
@@ -113,7 +141,7 @@ def _reconcile_admission(
         owner_id=self.coordinator_id,
     )
     _decision_as_of, snapshot_time = self._daemon_owner()._accepted_snapshot()
-    snapshot = scoped_authority.open_run(admission.run_uri)
+    snapshot = yield
     eligible = {
         stage.stage_name for stage in snapshot.stages
         if stage.status is StageStatus.PENDING
@@ -127,14 +155,14 @@ def _reconcile_admission(
         slurm_in_flight, slurm_diagnostic = self._reconcile_slurm_run(
             admission.run_uri, scoped_authority
         )
-    snapshot = scoped_authority.open_run(admission.run_uri)
-    terminal = None if cancelling else self._terminal_outcome(
+    snapshot = yield
+    terminal = None if cancelling else (yield from self._terminal_steps(
         admission,
         intent.plan,
         snapshot,
         scoped_authority,
         continue_independent=intent.continue_independent,
-    )
+    ))
     if terminal is not None and not cancelling:
         return terminal
     def resolve_ready(stage_plan: StagePlan, readiness: AttemptReadiness, revision: BackendRevision) -> BackendRevision | None:
@@ -170,23 +198,22 @@ def _reconcile_admission(
     else:
         self._orchestration_after[admission.admission_id] = orchestrator.next_stage
         self._daemon_owner()._wake.set()
-    snapshot = scoped_authority.open_run(admission.run_uri)
     with phase("coordinator.reconcile_slurm_run"):
         slurm_in_flight, slurm_diagnostic = self._reconcile_slurm_run(
             admission.run_uri, scoped_authority
         )
-    snapshot = scoped_authority.open_run(admission.run_uri)
-    terminal = None if cancelling else self._terminal_outcome(
+    snapshot = yield
+    terminal = None if cancelling else (yield from self._terminal_steps(
         admission,
         intent.plan,
         snapshot,
         scoped_authority,
         continue_independent=intent.continue_independent,
-    )
+    ))
     if terminal is not None:
         return terminal
     if cancelling:
-        return self._cancel(admission, scoped_authority, intent.plan.stage_order)
+        return (yield from self._cancel_steps(admission, scoped_authority, intent.plan.stage_order))
     if slurm_in_flight or any(
         stage.status in {StageStatus.SUBMITTED, StageStatus.RUNNING}
         for stage in snapshot.stages
@@ -352,6 +379,8 @@ def _schedule_window(
             if admission is not None and self._cycle_context_revisions.get(identity) != admission.revision:
                 self.discard_dispatch_context(identity)
             if admission is not None and self._cycle_context_epochs.get(identity) != epochs:
+                if self.run_observations.awaiting_read(admission, epochs, daemon._result_verifications.bulk):
+                    continue
                 if not daemon._contexts.try_submit(admission, epochs, self.prepare_admission_context, for_dispatch=True):
                     break
         admissions = {key: value for key, value in admissions.items()

@@ -1353,6 +1353,101 @@ def test_connected_active_cancellation_withholds_output_commit(
         daemon.stop()
 
 
+@pytest.mark.parametrize("cancel_before_peer", [True, False])
+def test_paused_run_observation_allows_peer_completion_and_fences_cancelled_run(tmp_path, monkeypatch, cancel_before_peer):
+    from loom.queue._coordinator_run_authority import _ScopedCoordinatorAuthority
+
+    config = _daemon_config(tmp_path, cpu_capacity=1)
+    held_uri = _persist_sleep_run(tmp_path / "runs", run_name="held-read", stage_name="held", seconds=0.01)
+    peer_uri = _persist_sleep_run(tmp_path / "runs", run_name="peer-read", stage_name="peer", seconds=0.01)
+    captured, release = Event(), Event()
+    open_run = _ScopedCoordinatorAuthority.open_run
+
+    def slow_read(authority, uri):
+        snapshot = open_run(authority, uri)
+        if uri == held_uri:
+            captured.set()
+            assert release.wait(30)
+        return snapshot
+
+    monkeypatch.setattr(_ScopedCoordinatorAuthority, "open_run", slow_read)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+    try:
+        client.submit(LocalDaemonAdmissionRequest("held-read", held_uri))
+        assert captured.wait(10)
+        if cancel_before_peer:
+            assert client.cancel("held-read").cancellation_operation_id is not None
+        client.submit(LocalDaemonAdmissionRequest("peer-read", peer_uri))
+        assert client.wait("peer-read", timeout_seconds=10).state is LocalDaemonAdmissionState.SUCCEEDED
+        assert _supervisor_launch_count(config) == 1
+        if not cancel_before_peer:
+            assert client.cancel("held-read").cancellation_operation_id is not None
+        release.set()
+        assert client.wait("held-read", timeout_seconds=10).state is LocalDaemonAdmissionState.CANCELLED
+        assert _supervisor_launch_count(config) == 1
+    finally:
+        release.set()
+        daemon.stop()
+
+
+def test_reload_discards_captured_run_observation_before_projecting_ready_work(tmp_path, monkeypatch):
+    from loom.queue import CoordinatorSchedulingReload
+    from loom.queue._coordinator_run_authority import _ScopedCoordinatorAuthority
+
+    config = replace(_daemon_config(tmp_path), agent_policy=AgentPolicyConfig(principals=(
+        TransportPrincipalPolicy("operator-cert", "operator", "operator", actions=("scheduling_reload",)),
+    )))
+    uri = _persist_sleep_run(tmp_path / "runs", run_name="reload", stage_name="held", seconds=0.01)
+    entered = [Event(), Event()]
+    release = [Event(), Event()]
+    open_run = _ScopedCoordinatorAuthority.open_run
+    reads = []
+
+    def observe(authority, run_uri):
+        result = open_run(authority, run_uri)
+        index = len(reads)
+        reads.append(result)
+        if index < len(entered):
+            entered[index].set()
+            assert release[index].wait(20)
+        return result
+
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config, trusted_scheduling_loader=lambda: config)
+    status = daemon.start()
+    try:
+        execution = daemon._execution
+        assert execution is not None
+        offered = []
+        retain = execution._ready_preparations.retain_run
+
+        def record_projection(run_uri, eligible):
+            if run_uri == uri:
+                offered.append(eligible)
+            retain(run_uri, eligible)
+
+        monkeypatch.setattr(_ScopedCoordinatorAuthority, "open_run", observe)
+        monkeypatch.setattr(execution._ready_preparations, "retain_run", record_projection)
+        client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+        client.submit(LocalDaemonAdmissionRequest("reload-read", uri))
+        assert entered[0].wait(10)
+        operator = daemon.operator_view(LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR))
+        assert operator.reload_scheduling(CoordinatorSchedulingReload("read-reload", status.scheduling_epoch, "test"))["state"] == "applied"
+        release[0].set()
+        assert entered[1].wait(10)
+        assert offered == []
+        release[1].set()
+        assert client.wait("reload-read", timeout_seconds=10).state is LocalDaemonAdmissionState.SUCCEEDED
+        assert _supervisor_launch_count(config) == 1
+    finally:
+        for signal in release:
+            signal.set()
+        daemon.stop()
+
+
 def test_daemon_overlaps_independent_runs_with_available_capacity(
     tmp_path: Path,
 ) -> None:
@@ -3411,19 +3506,19 @@ def test_stage_cancellation_finalizes_run_and_repairs_legacy_admissions_on_resta
     authority.create_run(run_uri, status=RunStatus.RUNNING)
     config = _daemon_config(tmp_path)
     LocalDaemon.initialize(config)
-    original_projection = LocalDaemonExecution._terminal_outcome
+    original_projection = LocalDaemonExecution._terminal_steps
 
     def project_like_previous_version(
         self, admission, plan, snapshot, scoped, **policy
     ):
         if any(stage.status is StageStatus.CANCELLED for stage in snapshot.stages):
             return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.CANCELLED)
-        return original_projection(self, admission, plan, snapshot, scoped, **policy)
+        return (yield from original_projection(self, admission, plan, snapshot, scoped, **policy))
 
     with monkeypatch.context() as legacy:
         if legacy_projection:
             legacy.setattr(
-                LocalDaemonExecution, "_terminal_outcome", project_like_previous_version
+                LocalDaemonExecution, "_terminal_steps", project_like_previous_version
             )
         daemon = LocalDaemon(config)
         daemon.start()

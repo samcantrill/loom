@@ -36,7 +36,7 @@ class BulkOperations:
         self._offering: tuple[tuple[str, ...], set[tuple[tuple[str, ...], str, str]]] | None = None
 
     @contextmanager
-    def offering(self, scope: tuple[str, ...]) -> Iterator[None]:
+    def offering(self, scope: tuple[str, ...], *, across_turns: set[tuple[tuple[str, ...], str, str]] | None = None) -> Iterator[None]:
         """Refresh waiters only when their owner actually revisits its operation.
 
         Waiting retains identity only, never a callable, arguments or hydrated
@@ -45,15 +45,19 @@ class BulkOperations:
         if self._visiting is not None:
             self._visiting.add(scope)
         previous = self._offering
-        seen: set[tuple[tuple[str, ...], str, str]] = set()
+        seen: set[tuple[tuple[str, ...], str, str]] = set() if across_turns is None else across_turns
         self._offering = (scope, seen)
         try:
             yield
         finally:
             self._offering = previous
-            for key in tuple(self._waiting):
-                if key[0] == scope and key not in seen:
-                    del self._waiting[key]
+            if across_turns is None:
+                self.finish_offering(scope, seen)
+
+    def finish_offering(self, scope: tuple[str, ...], seen: set[tuple[tuple[str, ...], str, str]]) -> None:
+        for key in tuple(self._waiting):
+            if key[0] == scope and key not in seen:
+                del self._waiting[key]
 
     def scopes(self, prefix: tuple[str, ...]) -> set[tuple[str, ...]]:
         return {key[0] for key in self._waiting if key[0][:len(prefix)] == prefix}

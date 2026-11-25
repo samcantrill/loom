@@ -81,6 +81,7 @@ from .errors import QueueConflictError, QueueServiceError, QueueStorageError, _A
 from ._admission_scan import AdmissionScan, SchedulingAdmissions, ensure_scan_index, ensure_retry_index
 from ._service_signals import _ChangeConnection, _ChangeSignal, _KeyedWaiters, _ServiceSignal, write_status
 from ._recovery_retry import _RecoveryRetry
+from ._run_observations import RunObservation, RunObservationPending
 
 if TYPE_CHECKING:
     from ._preparation_operations import PreparationCallbacks
@@ -2818,8 +2819,11 @@ class LocalDaemon:
             invalidated = set(self._context_invalidations)
             self._context_invalidations.clear()
         execution.invalidate_dispatch_contexts(invalidated)
+        execution.run_observations.invalidate(invalidated, bulk)
         self._contexts.begin_cycle(minimum_interval=self.config.poll_interval_seconds, invalidated=invalidated)
-        prepared = {item.admission.admission_id: item for item in self._contexts.completed()}
+        prepared = {item.admission.admission_id: item for item in (
+            *self._contexts.completed(), *execution.run_observations.completed(),
+        )}
         schedulable = SchedulingAdmissions(enqueue_through, self._lookup_schedulable_admissions)
         waiting_outcomes: dict[str, LocalDaemonExecutionOutcome] = {}
         for preparation in sorted(prepared.values(), key=lambda item: AdmissionScan.key(item.admission)):
@@ -2828,9 +2832,12 @@ class LocalDaemon:
                 try:
                     current = self._admission(admission.admission_id)
                 except AdmissionNotFoundError:
+                    execution.run_observations.discard(admission.admission_id, bulk)
                     continue
                 epochs = (self._epoch, self._scheduling_epoch)
             if preparation.epochs != epochs or preparation.admission.revision != current.revision:
+                if isinstance(preparation, RunObservation):
+                    execution.run_observations.discard(admission.admission_id, bulk)
                 self._wake.set()
                 continue
             admission = current
@@ -2840,9 +2847,11 @@ class LocalDaemon:
             if retry is not None and not retry.ready(progress):
                 continue
             try:
-                context = preparation.future.result()  # completed() only returns done futures
+                context = preparation.result()
                 execution._cycle_context_epochs[admission.admission_id] = preparation.epochs
                 outcome = execution.reconcile_admission(admission, prepared_context=context)
+            except RunObservationPending:
+                continue
             except QueueConflictError:
                 bulk.discard(("run", admission.run_uri))
                 bulk.discard(("dispatch", admission.run_uri))
@@ -2953,10 +2962,14 @@ class LocalDaemon:
             retry = self._admission_retries.get(admission.run_uri)
             if retry is not None and not retry.ready((admission.revision, epochs[1])):
                 return True
+            if execution.run_observations.awaiting_read(admission, epochs, bulk):
+                return True
+            if not execution.run_observations.can_start(admission.admission_id):
+                return False
             return self._contexts.try_submit(admission, epochs, execution.prepare_admission_context)
 
         visited = self._admission_scan.take(admissions, visit)
-        if self._admission_scan.high_water is not None and self._contexts.has_capacity():
+        if self._admission_scan.high_water is not None and self._contexts.has_capacity() and execution.run_observations.has_capacity():
             self._wake.set()
         # Reconciliation is an internal operation; retain its bounded
         # nonterminal work result without rebuilding public detail/status.

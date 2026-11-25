@@ -25,6 +25,9 @@ class PendingContext:
     future: Future[PreparedAdmissionContext]
     for_dispatch: bool
 
+    def result(self) -> PreparedAdmissionContext:
+        return self.future.result()
+
 
 class ContextPreparations:
     """Two actual operations with no executor backlog.
