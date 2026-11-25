@@ -13,6 +13,42 @@ from loom.queue._result_verification import ResultVerifications
 pytestmark = pytest.mark.unit
 
 
+def test_one_producer_snapshot_settles_peers_and_skips_a_retried_claim(tmp_path):
+    from types import SimpleNamespace
+
+    from loom.pipeline.status import RunStatus, StageStatus
+    from loom.queue._action_result_resolution import ActionResultResolution
+    from tests.unit.loom.queue.test_action_results import _store
+
+    store = _store(tmp_path)
+    owner = object.__new__(ActionResultResolution)
+    owner.store = store
+    claims = {}
+    for node in ("fit", "score"):
+        claims[node] = store.select(
+            run_uri="owner", node=node, scope={"principal": "one"},
+            identity={"digest": node}, attempt_id=node + "-1",
+        )["claim"]
+    releases = []
+    authority = SimpleNamespace(release_action_producer=lambda uri, binding: releases.append(binding.attempt_id))
+    observation = owner.producer_steps("owner", authority)
+    assert next(observation) is None
+    store.fail(claims["fit"]["claim_id"], {"code": "producer_failed"})
+    retry = store.select(
+        run_uri="owner", node="fit", scope={"principal": "one"},
+        identity={"digest": "fit"}, attempt_id="fit-2", retry_authorized=True,
+    )["claim"]
+    snapshot: Any = SimpleNamespace(
+        status=RunStatus.FAILED,
+        stages=[SimpleNamespace(stage_name=node, status=StageStatus.FAILED) for node in claims],
+    )
+    with pytest.raises(StopIteration):
+        observation.send(snapshot)
+    assert store.claim(retry["claim_id"]) == retry
+    assert store.claim(claims["score"]["claim_id"])["state"] == "failed"
+    assert releases == ["score-1"]
+
+
 def test_audits_have_no_backlog_and_close_retains_running_capacity():
     entered = Barrier(3)
     release = Event()

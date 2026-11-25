@@ -11,6 +11,31 @@ from loom.queue.local_daemon_execution import LocalDaemonExecution, _SlurmRetent
 from loom.queue.errors import QueueConflictError
 
 
+@pytest.mark.parametrize("changed", ["record", "recovery"])
+def test_slurm_report_observation_discards_superseded_evidence(changed):
+    assignment = SimpleNamespace(assignment_id="A")
+    original = SimpleNamespace(assignment=assignment, state="running", report={"status": "succeeded"}, fence="first")
+    record = original
+    recovering = False
+    execution = object.__new__(LocalDaemonExecution)
+    owner: Any = execution
+    owner._slurm_agent = None
+    owner.slurm_assignments = SimpleNamespace(
+        list_run_unreleased=lambda uri: (original,), read=lambda identity: record,
+    )
+    owner._recovery_retains_assignment = lambda identity: recovering
+    owner._reconcile_slurm_terminal_assignment = lambda *args: pytest.fail("superseded terminal report applied")
+    steps = owner._reconcile_slurm_steps("run", None)
+    assert next(steps) is None
+    if changed == "record":
+        record = SimpleNamespace(assignment=assignment, state="terminal", report=original.report, fence="first")
+    else:
+        recovering = True
+    with pytest.raises(StopIteration) as done:
+        steps.send(object())
+    assert done.value.value == (True, None)
+
+
 def test_storage_pending_deduplicates_and_allows_peer_commit(monkeypatch):
     import loom.queue.local_daemon_execution as module
 
@@ -58,6 +83,20 @@ def test_storage_pending_deduplicates_and_allows_peer_commit(monkeypatch):
             reply = LocalDaemonExecution.acknowledge_slurm_pending(owner, 'agent', 'root', evidence)
             assert reply['disposition'] == 'pending'
             assert started.wait(5)
+            # The embedded submit agent also replays its durable outbox when
+            # reconciling another run. It must share the already running seal.
+            replies = []
+            owner.agent_id = "agent"
+            owner._slurm_agent = SimpleNamespace(
+                replay_pending=lambda ack: replies.append(ack(evidence)),
+            )
+            owner.slurm_assignments.list_run_unreleased = lambda uri: ()
+            owner.acknowledge_slurm_pending = MethodType(LocalDaemonExecution.acknowledge_slurm_pending, owner)
+            owner._slurm_record_steps = MethodType(LocalDaemonExecution._slurm_record_steps, owner)
+            with pytest.raises(StopIteration) as done:
+                next(LocalDaemonExecution._reconcile_slurm_steps(owner, "peer-run", None))
+            assert done.value.value == (False, None)
+            assert replies[0]['disposition'] == 'pending' and not release.is_set()
             for _ in range(20):
                 assert LocalDaemonExecution.acknowledge_slurm_pending(owner, 'agent', 'root', evidence)['disposition'] == 'pending'
             peer = LocalDaemonExecution.acknowledge_slurm_pending(

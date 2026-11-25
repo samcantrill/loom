@@ -145,6 +145,12 @@ def test_renamed_graph_reuses_original_producers_without_attempts(tmp_path):
         original_uri = first["prepared_run"]["run_uri"]
         authority = service.daemon.coordinator_authority_factory
         assert authority is not None
+        # A terminal admission can be observed before its own audit append.
+        # Compare full revisions only after that original event has committed.
+        _until(lambda: any(
+            event.event_type == "run.completed"
+            for event in authority(original_uri).list_audit_events(original_uri)
+        ))
         before = authority(original_uri).open_run(original_uri)
         path = tmp_path / "projects" / "pipeline.yaml"
         config = json.loads(path.read_text())

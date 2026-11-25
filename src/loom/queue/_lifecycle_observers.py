@@ -18,6 +18,7 @@ from loom.pipeline.event_sinks import (
     EventSinkRegistry,
 )
 from loom.pipeline.events import EventScope, PipelineEvent, PipelineEventRecord
+from loom.pipeline.stores.authority import StatusTransition
 from loom.pipeline.stores.read_models import AuthoritativeRunSnapshot, BackendRevision
 from loom.serialization import PlainData
 from ._publication_guards import PublicationGuards
@@ -325,39 +326,31 @@ class LifecycleObservers:
         after: AuthoritativeRunSnapshot,
     ) -> None:
         if before.status != after.status:
-            name = _NAMES.get(after.status.name, after.status.name.lower())
-            if after.status.name == "PLANNED" and before.status.name not in {
-                "CREATED",
-                "PLANNED",
-            }:
-                name = "opened"
-            self.defer_emit(
-                store,
-                after.run_uri,
-                event_type=f"run.{name}",
-                revision=after.revision,
-                payload={
-                    "previous_status": before.status.value,
-                    "status": after.status.value,
-                },
-            )
+            self.transition(store, StatusTransition(after.run_uri, after.status, after.revision, before.status))
         old = {stage.stage_name: stage for stage in before.stages}
         for stage in after.stages:
             previous = old.get(stage.stage_name)
-            if previous is not None and previous.status == stage.status:
-                continue
-            name = _NAMES.get(stage.status.name, stage.status.name.lower())
-            self.defer_emit(
-                store,
-                after.run_uri,
-                event_type=f"stage.{name}",
-                revision=stage.revision,
-                stage_name=stage.stage_name,
-                payload={
-                    "status": stage.status.value,
-                    "reason": None if stage.reason is None else stage.reason.to_dict(),
-                },
-            )
+            if previous is None or previous.status != stage.status:
+                self.transition(store, StatusTransition(
+                    after.run_uri, stage.status, stage.revision, None if previous is None else previous.status,
+                    stage.stage_name, stage.reason,
+                ))
+
+    def transition(self, store: Any, receipt: StatusTransition) -> None:
+        previous, status = receipt.previous_status, receipt.status
+        if previous == status:
+            return
+        name = _NAMES.get(status.name, status.name.lower())
+        if receipt.stage_name is None:
+            if status.name == "PLANNED" and previous is not None and previous.name not in {"CREATED", "PLANNED"}:
+                name = "opened"
+            payload = {"previous_status": None if previous is None else previous.value, "status": status.value}
+            scope = "run"
+        else:
+            payload = {"status": status.value, "reason": None if receipt.reason is None else receipt.reason.to_dict()}
+            scope = "stage"
+        self.defer_emit(store, receipt.run_uri, event_type=f"{scope}.{name}", stage_name=receipt.stage_name,
+                        revision=receipt.revision, payload=payload)
 
 
 def _project_event(run_uri: str, event: PipelineEvent) -> None:
@@ -435,6 +428,10 @@ class _ObservedAuthority:
 
         def commit(*args: Any, **kwargs: Any) -> Any:
             with self._observers._run_guards.hold(self._run_uri):
+                if name in {"transition_run", "transition_stage"}:
+                    receipt = method(*args, **kwargs)
+                    self._observers.transition(self._store, receipt)
+                    return receipt
                 if name == "ensure_prepared_attempt":
                     # This operation only prepares one PENDING attempt. Its
                     # durable receipt already carries the exact stage/revision;

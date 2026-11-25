@@ -18,8 +18,9 @@ if TYPE_CHECKING:
 
 
 type Epochs = tuple[str | None, str | None]
-type RunSteps = Generator[None, "AuthoritativeRunSnapshot", "LocalDaemonExecutionOutcome"]
-type TerminalSteps = Generator[None, "AuthoritativeRunSnapshot", "LocalDaemonExecutionOutcome | None"]
+type ObservationSteps[T] = Generator[None, "AuthoritativeRunSnapshot", T]
+type RunSteps = ObservationSteps["LocalDaemonExecutionOutcome"]
+type TerminalSteps = ObservationSteps["LocalDaemonExecutionOutcome | None"]
 
 
 class RunObservationPending(Exception):

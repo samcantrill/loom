@@ -6,7 +6,7 @@ accept new work, select placement, own processes or replace per-run authority.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .errors import QueueConflictError
 
@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from loom.pipeline.stores.authority import ExecutionFence, PreparedAttemptRequest, StatusTransition
     from loom.pipeline.stores.read_models import AuthoritativeRunSnapshot, LifecycleReason
     from .coordinator_authority import CoordinatorAuthorityStore
+    from ._lifecycle_observers import LifecycleObservers
 
 
 class _ScopedCoordinatorAuthority:
@@ -52,6 +53,10 @@ class _ScopedCoordinatorAuthority:
     def _run(self, run_uri: str) -> None:
         if run_uri != self._run_uri:
             raise QueueConflictError("scoped authority run conflicts")
+
+    def defer_event(self, observers: LifecycleObservers, run_uri: str, **fact: Any) -> None:
+        self._run(run_uri)
+        observers.defer_emit(self._store, run_uri, **fact)
 
     def open_run(self, run_uri: str) -> AuthoritativeRunSnapshot:
         from ._phase_timing import phase

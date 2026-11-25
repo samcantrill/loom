@@ -17,7 +17,7 @@ from loom.pipeline.status import StageStatus
 from loom.scheduling import PolicyDecisionState
 from ._admission_scan import SchedulingAdmissions
 from ._recovery_retry import _RecoveryRetry
-from ._run_observations import RunObservationPending, RunSteps
+from ._run_observations import ObservationSteps, RunObservationPending, RunSteps
 from ._managed_local import ManagedLocalError
 from ._remote_stage_execution import ResidentProfileDescriptor
 from .errors import QueueServiceError
@@ -65,8 +65,27 @@ def reconcile_admission(
     intent, scoped_authority = (self._admission_context(admission, prepared_intent=prepared_intent)
                                if prepared_context is None else prepared_context)
     self._cycle_contexts[admission.admission_id] = (intent, scoped_authority)
+
     def steps() -> RunSteps:
-        return _reconcile_admission_steps(self, admission, intent, scoped_authority)
+        outcome = yield from _reconcile_admission_steps(self, admission, intent, scoped_authority)
+        if outcome.state not in {
+            LocalDaemonAdmissionState.SUCCEEDED,
+            LocalDaemonAdmissionState.FAILED,
+            LocalDaemonAdmissionState.CANCELLED,
+        }:
+            return outcome
+        self._ready_preparations.retain_run(admission.run_uri, set())
+        self._orchestration_after.pop(admission.admission_id, None)
+        if self._action_resolution is not None:
+            yield from self._action_resolution.producer_steps(admission.run_uri, scoped_authority)
+        slurm_in_flight, slurm_diagnostic = yield from self._reconcile_slurm_steps(admission.run_uri, scoped_authority)
+        return _settled_terminal_outcome(
+            self,
+            admission.run_uri,
+            outcome,
+            slurm_in_flight=slurm_in_flight,
+            slurm_diagnostic=slurm_diagnostic,
+        )
 
     if self.daemon is not None and prepared_context is not None:
         if admission.state is LocalDaemonAdmissionState.PENDING_AUTHORITY and admission.cancellation_operation_id is None:
@@ -75,40 +94,20 @@ def reconcile_admission(
             self.admission_activated(admission.admission_id)
             self.daemon._wake.set()
             raise RunObservationPending()
-        outcome = self.run_observations.advance(
+        return self.run_observations.advance(
             admission, (self.daemon._epoch, self.daemon._scheduling_epoch),
             prepared_context, steps, self.daemon._result_verifications.bulk,
         )
     elif self.daemon is None:
-        outcome = _drive_run_steps(steps(), scoped_authority, admission.run_uri)
+        return _drive_run_steps(steps(), scoped_authority, admission.run_uri)
     else:
         with self.daemon._result_verifications.bulk.offering(("run", admission.run_uri)):
-            outcome = _drive_run_steps(steps(), scoped_authority, admission.run_uri)
-    if outcome.state not in {
-        LocalDaemonAdmissionState.SUCCEEDED,
-        LocalDaemonAdmissionState.FAILED,
-        LocalDaemonAdmissionState.CANCELLED,
-    }:
-        return outcome
-    self._ready_preparations.retain_run(admission.run_uri, set())
-    self._orchestration_after.pop(admission.admission_id, None)
-    if self._action_resolution is not None:
-        self._action_resolution.reconcile_producers(admission.run_uri)
-    with phase("coordinator.reconcile_slurm_run"):
-        slurm_in_flight, slurm_diagnostic = self._reconcile_slurm_run(
-            admission.run_uri, scoped_authority
-        )
-    return _settled_terminal_outcome(self,
-        admission.run_uri,
-        outcome,
-        slurm_in_flight=slurm_in_flight,
-        slurm_diagnostic=slurm_diagnostic,
-    )
+            return _drive_run_steps(steps(), scoped_authority, admission.run_uri)
 
 
-def _drive_run_steps(
-    steps: RunSteps, authority: _ScopedCoordinatorAuthority, run_uri: str,
-) -> LocalDaemonExecutionOutcome:
+def _drive_run_steps[T](
+    steps: ObservationSteps[T], authority: _ScopedCoordinatorAuthority, run_uri: str,
+) -> T:
     try:
         next(steps)
         while True:
@@ -134,7 +133,7 @@ def _reconcile_admission_steps(
             return outcome
     else:
         if action_resolver is not None:
-            action_resolver.reconcile_producers(admission.run_uri)
+            yield from action_resolver.producer_steps(admission.run_uri, scoped_authority)
         if admission.state is LocalDaemonAdmissionState.PENDING_AUTHORITY:
             self.admission_activated(admission.admission_id)
 
@@ -149,10 +148,7 @@ def _reconcile_admission_steps(
     # 32-stage slice yields to other admissions for a fresh authority snapshot.
     for _ in range(READY_WINDOW_LIMIT // _STAGES_PER_TURN):
         _decision_as_of, snapshot_time = self._daemon_owner()._accepted_snapshot()
-        with phase("coordinator.reconcile_slurm_run"):
-            slurm_in_flight, slurm_diagnostic = self._reconcile_slurm_run(
-                admission.run_uri, scoped_authority
-            )
+        slurm_in_flight, slurm_diagnostic = yield from self._reconcile_slurm_steps(admission.run_uri, scoped_authority)
         snapshot = yield
         eligible = {
             stage.stage_name for stage in snapshot.stages
@@ -175,31 +171,47 @@ def _reconcile_admission_steps(
         def resolve_ready(stage_plan: StagePlan, readiness: AttemptReadiness, revision: BackendRevision) -> BackendRevision | None:
             if cancelling:
                 return None if action_resolver is not None and action_resolver.store.producer_needed(admission.run_uri, stage_plan.stage_name) else revision
-            return None if action_resolver is None else action_resolver.resolve(admission, intent, scoped_authority, stage_plan, readiness, revision)
+            return None if action_resolver is None else action_resolver.resolve(admission, intent, scoped_authority, stage_plan, readiness, revision, snapshot)
 
-        with phase("coordinator.orchestrate_ready"):
-            orchestrator.reconcile(
-                admission_id=admission.admission_id,
-                plan=intent.plan,
-                authority_snapshot=snapshot,
-                placements=placements,
-                execution_requirements=intent.execution_requirements,
-                ready_action=resolve_ready,
-                ready_at=snapshot_time,
-                run_priority=admission.run_priority,
-                enqueue_sequence=admission.enqueue_sequence,
-                max_work_items=_STAGES_PER_TURN,
-                after_stage=self._orchestration_after.get(admission.admission_id),
-                controller_action=None if cancelling else lambda stage_plan, readiness: (
-                    self._apply_controller_action(
-                        scoped_authority,
-                        admission.run_uri,
-                        stage_plan,
-                        readiness,
-                        admission=admission,
-                    )
-                ),
-            )
+        steps = orchestrator._ready_steps(
+            admission_id=admission.admission_id,
+            plan=intent.plan,
+            authority_snapshot=snapshot,
+            placements=placements,
+            execution_requirements=intent.execution_requirements,
+            ready_action=resolve_ready,
+            ready_at=snapshot_time,
+            run_priority=admission.run_priority,
+            enqueue_sequence=admission.enqueue_sequence,
+            max_work_items=_STAGES_PER_TURN,
+            after_stage=self._orchestration_after.get(admission.admission_id),
+        )
+        action_revision = None
+        superseded = False
+        try:
+            while True:
+                with phase("coordinator.orchestrate_ready"):
+                    try:
+                        stage_plan, readiness, expected = steps.send(action_revision)
+                    except StopIteration:
+                        break
+                action_revision = None
+                if cancelling:
+                    continue
+                # The planner's original stage facts remain valid only through
+                # its own prior commits. Recompute on any intervening revision.
+                current = yield
+                if current.revision != expected:
+                    superseded = True
+                    break
+                action_revision = self._apply_controller_action(
+                    scoped_authority, admission.run_uri, stage_plan, readiness,
+                    admission=admission, snapshot=current,
+                )
+        finally:
+            steps.close()
+        if superseded:
+            continue
         previous = self._orchestration_after.get(admission.admission_id)
         if orchestrator.next_stage is None:
             self._orchestration_after.pop(admission.admission_id, None)
@@ -209,10 +221,7 @@ def _reconcile_admission_steps(
         if (cancelling or orchestrator.next_stage is None or orchestrator.next_stage == order[-1]
             or (previous is not None and order.index(orchestrator.next_stage) <= order.index(previous))):
             break
-    with phase("coordinator.reconcile_slurm_run"):
-        slurm_in_flight, slurm_diagnostic = self._reconcile_slurm_run(
-            admission.run_uri, scoped_authority
-        )
+    slurm_in_flight, slurm_diagnostic = yield from self._reconcile_slurm_steps(admission.run_uri, scoped_authority)
     snapshot = yield
     terminal = None if cancelling else (yield from self._terminal_steps(
         admission,

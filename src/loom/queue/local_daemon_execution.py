@@ -17,7 +17,7 @@ from ._action_results import action_attempt_cancelled, action_attempt_needed, at
 from ._continuation import ContinuationConflict, ContinuationPending
 from ._embedded_recovery import EmbeddedRecovery
 from ._recovery_retry import RecoveryWorkers, _RecoveryRetry
-from ._run_observations import DispatchObservations, RunObservations, RunSteps, TerminalSteps
+from ._run_observations import DispatchObservations, ObservationSteps, RunObservations, RunSteps, TerminalSteps
 from ._slurm_admission import SlurmAdmissionDeferred
 from . import _slurm_retry
 
@@ -3004,17 +3004,39 @@ class LocalDaemonExecution:
         )
         self._release_slurm_assignment(record.assignment.assignment_id)
 
-    def _reconcile_slurm_run(
+    def _reconcile_slurm_steps(
         self,
         run_uri: str,
         authority: _ScopedCoordinatorAuthority,
-    ) -> tuple[bool, str | None]:
+    ) -> ObservationSteps[tuple[bool, str | None]]:
+        steps = self._slurm_record_steps(run_uri, authority)
+        snapshot = None
+        try:
+            while True:
+                # Attribute scheduler work to this phase. The authority worker
+                # measures its own read while the scheduler serves other runs.
+                with phase("coordinator.reconcile_slurm_run"):
+                    try:
+                        if snapshot is None:
+                            next(steps)
+                        else:
+                            steps.send(snapshot)
+                    except StopIteration as settled:
+                        return settled.value
+                snapshot = yield
+        finally:
+            steps.close()
+
+    def _slurm_record_steps(
+        self, run_uri: str, authority: _ScopedCoordinatorAuthority,
+    ) -> ObservationSteps[tuple[bool, str | None]]:
         if self._slurm_agent is not None and self.agent_id is not None:
-            self._slurm_agent.replay_pending(
-                lambda evidence: self.acknowledge_slurm_agent(
-                    cast(str, self.agent_id), cast(str, self.agent_id), evidence
-                )
-            )
+            agent_id = self.agent_id
+            # Replay can carry the final provider-release proof. Use the
+            # same retained storage worker as the authenticated session.
+            acknowledge = (self.acknowledge_slurm_pending if self.slurm_assignments.schema_version >= 5
+                           else self.acknowledge_slurm_agent)
+            self._slurm_agent.replay_pending(lambda evidence: acknowledge(agent_id, agent_id, evidence))
         records = self.slurm_assignments.list_run_unreleased(run_uri)
         if not records:
             return False, None
@@ -3026,8 +3048,13 @@ class LocalDaemonExecution:
             if self._recovery_retains_assignment(assignment_id):
                 diagnostic = diagnostic or "slurm_guarded_recovery_pending"
                 continue
-            if self._reconcile_slurm_terminal_assignment(record, authority):
-                record = self.slurm_assignments.read(assignment_id)
+            if record.state in {"granted", "running"} and record.report is not None and record.fence is not None:
+                snapshot = yield
+                if self.slurm_assignments.read(assignment_id) != record or self._recovery_retains_assignment(assignment_id):
+                    in_flight = True
+                    continue
+                if self._reconcile_slurm_terminal_assignment(record, authority, snapshot):
+                    record = self.slurm_assignments.read(assignment_id)
             if record.state in {"logical_released", "terminal", "rejected"}:
                 try:
                     if record.state == "rejected":
@@ -3059,7 +3086,7 @@ class LocalDaemonExecution:
             record = self.slurm_assignments.read(assignment_id)
             if record.state == "released":
                 continue
-            terminal_diagnostic = self._reconcile_terminal_without_report(record, authority)
+            terminal_diagnostic = yield from self._terminal_without_report_steps(record)
             diagnostic = diagnostic or terminal_diagnostic
             in_flight = True
         return in_flight, diagnostic
@@ -3127,7 +3154,10 @@ class LocalDaemonExecution:
     def _reconcile_terminal_without_report(
         self, record: SlurmStageRecord, authority: _ScopedCoordinatorAuthority,
     ) -> str | None:
-        """Initiate the existing guarded owner, never infer scientific success."""
+        return _run_progress._drive_run_steps(self._terminal_without_report_steps(record), authority, record.assignment.run_uri)
+
+    def _terminal_without_report_steps(self, record: SlurmStageRecord) -> ObservationSteps[str | None]:
+        """Initiate the existing guarded owner from current report and accounting evidence."""
         if self.config.slurm_terminal_recovery is None or not self.config.slurm_terminal_recovery.enabled:
             return None
         identity = self._terminal_accounting_identity(record)
@@ -3155,7 +3185,11 @@ class LocalDaemonExecution:
             prior = conn.execute("SELECT state FROM recovery_operations WHERE recovery_id=?", (recovery_id,)).fetchone()
         if prior is not None:
             return "slurm_terminal_recovery_" + str(prior[0])
-        snapshot = authority.open_run(assignment.run_uri)
+        snapshot = yield
+        if (self.slurm_assignments.read(assignment.assignment_id) != record
+            or self._terminal_accounting_identity(record) != identity or self._terminal_result_probe(record) is None
+            or self._recovery_retains_assignment(assignment.assignment_id)):
+            return None
         attempt = next((
             attempt for stage in snapshot.stages if stage.stage_name == assignment.stage_name
             for attempt in stage.attempts if attempt.attempt_id == assignment.attempt_id
@@ -3196,6 +3230,7 @@ class LocalDaemonExecution:
         self,
         record: SlurmStageRecord,
         authority: _ScopedCoordinatorAuthority,
+        snapshot: AuthoritativeRunSnapshot,
     ) -> bool:
         """Mirror exact authority terminal evidence before provider release.
 
@@ -3213,7 +3248,6 @@ class LocalDaemonExecution:
         fence = record.fence
         if report is None or fence is None:
             return False
-        snapshot = authority.open_run(record.assignment.run_uri)
         stage = next(
             (
                 item
@@ -4884,8 +4918,8 @@ class LocalDaemonExecution:
         readiness: AttemptReadiness,
         *,
         admission: LocalDaemonAdmission,
-    ) -> None:
-        snapshot = authority.open_run(run_uri)
+        snapshot: AuthoritativeRunSnapshot,
+    ) -> BackendRevision | None:
         current = next(
             (
                 stage
@@ -4902,8 +4936,8 @@ class LocalDaemonExecution:
                 raise QueueConflictError(
                     "reused stage is not terminal in authority truth"
                 )
-            self._event_observers.defer_emit(
-                self._authority_for_run(run_uri),
+            authority.defer_event(
+                self._event_observers,
                 run_uri,
                 event_type="stage.reused",
                 stage_name=stage_plan.stage_name,
@@ -4926,7 +4960,7 @@ class LocalDaemonExecution:
             raise QueueConflictError(
                 "skipped stage conflicts with authority lifecycle truth"
             )
-        authority.transition_stage(
+        transition = authority.transition_stage(
             run_uri,
             stage_plan.stage_name,
             from_status=None if current is None else current.status,
@@ -4939,6 +4973,7 @@ class LocalDaemonExecution:
                 },
             ),
         )
+        return transition.revision
 
     def _failure_policy_allows_new_work(
         self, intent: ManagedLocalIntent, snapshot: AuthoritativeRunSnapshot
@@ -5163,7 +5198,7 @@ class LocalDaemonExecution:
             )
         if self._action_resolution is not None:
             self._action_resolution.detach_graph(admission.run_uri, operation_id)
-            self._action_resolution.reconcile_producers(admission.run_uri)
+            yield from self._action_resolution.producer_steps(admission.run_uri, authority)
         cancellation_request = CancellationEpochRequest(
             operation_id=operation_id,
             coordinator_id=self.coordinator_id,
@@ -5222,7 +5257,7 @@ class LocalDaemonExecution:
                 "cancellation finalization did not reach a terminal authority state",
             )
         if self._action_resolution is not None:
-            self._action_resolution.reconcile_producers(admission.run_uri)
+            yield from self._action_resolution.producer_steps(admission.run_uri, authority)
         return LocalDaemonExecutionOutcome(final)
 
     def _fan_out_local_cancellation(

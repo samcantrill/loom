@@ -98,6 +98,33 @@ def test_swallowed_failure_record_write_is_diagnostic_and_not_scientific(
     assert store.read_event_sink_failures(uri) == ()
 
 
+def test_status_mutations_emit_exact_receipts_without_run_snapshot(tmp_path, monkeypatch):
+    from loom.pipeline.status import RunStatus, StageStatus
+    from loom.pipeline.stores.read_models import LifecycleReason
+
+    uri = (tmp_path / "run").as_uri()
+    store = SQLitePerRunAuthorityStore(uri)
+    store.create_run(uri)
+    observers = LifecycleObservers()
+    scoped = observers.authority(store, uri)
+    def unexpected_snapshot(*args):
+        pytest.fail("transition already returned its committed identity and revision")
+    monkeypatch.setattr(store, "open_run", unexpected_snapshot)
+    reason = LifecycleReason("plan.not_selected")
+    run = scoped.transition_run(uri, from_status=RunStatus.CREATED, to_status=RunStatus.RUNNING)
+    stage = scoped.transition_stage(uri, "skip", from_status=None, to_status=StageStatus.SKIPPED,
+                                    expected_revision=run.revision, reason=reason)
+    while observers.flush_prepared():
+        pass
+    records = store.list_audit_events(uri)
+    assert [(r.event_type, r.occurred_at, r.payload["status"]) for r in records] == [
+        ("run.started", run.revision.created_at, "RUNNING"),
+        ("stage.skipped", stage.revision.created_at, "SKIPPED"),
+    ]
+    assert records[0].payload["previous_status"] == "CREATED"
+    assert records[1].payload["reason"] == reason.to_dict()
+
+
 def test_slow_audit_yields_between_runs_and_preserves_run_order(monkeypatch):
     import loom.queue._lifecycle_observers as module
 

@@ -19,7 +19,6 @@ def test_timing_delivery_failure_preserves_resolution(monkeypatch, failed):
         raise OSError("audit storage unavailable")
 
     owner.execution = SimpleNamespace(
-        _authority_for_run=lambda uri: object(),
         _event_observers=SimpleNamespace(defer_emit=unavailable),
     )
 
@@ -33,8 +32,9 @@ def test_timing_delivery_failure_preserves_resolution(monkeypatch, failed):
         return result
 
     monkeypatch.setattr(owner, "_resolve", resolve)
-    args = (SimpleNamespace(run_uri="file:///runs/example"), None, None,
-            SimpleNamespace(stage_name="fit"), None, BackendRevision(1, "same"))
+    authority = SimpleNamespace(defer_event=lambda observers, uri, **fact: observers.defer_emit(authority, uri, **fact))
+    args = (SimpleNamespace(run_uri="file:///runs/example"), None, authority,
+            SimpleNamespace(stage_name="fit"), None, BackendRevision(1, "same"), object())
     if failed:
         with pytest.raises(RuntimeError) as observed:
             owner.resolve(*args)

@@ -3116,6 +3116,55 @@ def test_daemon_reconciles_skip_without_creating_an_assignment(
         daemon.stop()
 
 
+def test_controller_skip_read_yields_to_peer_and_cancellation(tmp_path, monkeypatch):
+    from loom.pipeline import orchestration
+    from loom.pipeline.planning import PlanAction
+    from loom.queue._coordinator_run_authority import _ScopedCoordinatorAuthority
+
+    run_root = tmp_path / "runs"
+    _, uri, _ = _persist_single_stage_run(run_root, skip=True)
+    authority = SQLitePerRunAuthorityStore(uri)
+    authority.create_run(uri, status=RunStatus.RUNNING)
+    peer = _persist_sleep_run(run_root, run_name="peer", stage_name="fast", seconds=0.01)
+    selected, captured, release = Event(), Event(), Event()
+    evaluate = orchestration.evaluate_attempt_readiness
+    open_run = _ScopedCoordinatorAuthority.open_run
+
+    def note_action(*args, **kwargs):
+        decision = evaluate(*args, **kwargs)
+        if decision is not None and decision.action is PlanAction.SKIP:
+            selected.set()
+        return decision
+
+    def observe(store, run_uri):
+        result = open_run(store, run_uri)
+        if run_uri == uri and selected.is_set() and not captured.is_set():
+            captured.set()
+            assert release.wait(30)
+        return result
+
+    monkeypatch.setattr(orchestration, "evaluate_attempt_readiness", note_action)
+    monkeypatch.setattr(_ScopedCoordinatorAuthority, "open_run", observe)
+    config = _daemon_config(tmp_path, cpu_capacity=1)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+        client.submit(LocalDaemonAdmissionRequest("held-skip", uri))
+        assert captured.wait(10)
+        client.submit(LocalDaemonAdmissionRequest("peer", peer))
+        assert client.wait("peer", timeout_seconds=10).state is LocalDaemonAdmissionState.SUCCEEDED
+        assert client.cancel("held-skip").cancellation_operation_id is not None
+        release.set()
+        assert client.wait("held-skip", timeout_seconds=10).state is LocalDaemonAdmissionState.CANCELLED
+        assert all(stage.status is not StageStatus.SKIPPED for stage in authority.open_run(uri).stages)
+        assert _supervisor_launch_count(config) == 1
+    finally:
+        release.set()
+        daemon.stop()
+
+
 @pytest.mark.parametrize("reported", [False, True])
 def test_daemon_projects_stage_failure_to_authority_run_and_admission(
     tmp_path: Path,

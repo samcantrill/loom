@@ -7,7 +7,7 @@ from loom._sqlite_policy import SQLitePolicy, connect_existing, initialize_datab
 import hashlib
 import json
 import sqlite3
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
@@ -963,6 +963,38 @@ class RunOrchestrator:
         controller_action: ControllerActionHandler | None = None,
         ready_action: ReadyActionHandler | None = None,
     ) -> tuple[StageWorkRecord, ...]:
+        steps = self._ready_steps(
+            admission_id=admission_id, plan=plan, authority_snapshot=authority_snapshot,
+            placements=placements, execution_requirements=execution_requirements,
+            ready_at=ready_at, run_priority=run_priority, enqueue_sequence=enqueue_sequence,
+            max_work_items=max_work_items, after_stage=after_stage, ready_action=ready_action,
+        )
+        try:
+            while True:
+                try:
+                    stage, readiness, _ = next(steps)
+                except StopIteration as settled:
+                    return settled.value
+                if controller_action is not None:
+                    controller_action(stage, readiness)
+        finally:
+            steps.close()
+
+    def _ready_steps(
+        self,
+        *,
+        admission_id: str,
+        plan: ExecutionPlan,
+        authority_snapshot: AuthoritativeRunSnapshot,
+        placements: Mapping[str, ResolvedStagePlacement],
+        execution_requirements: Mapping[str, ManagedExecutionRequirement],
+        ready_at: int,
+        run_priority: int = 0,
+        enqueue_sequence: int = 0,
+        max_work_items: int = 256,
+        after_stage: str | None = None,
+        ready_action: ReadyActionHandler | None = None,
+    ) -> Generator[tuple[StagePlan, AttemptReadiness, BackendRevision], BackendRevision | None, tuple[StageWorkRecord, ...]]:
         admission_id = _non_empty(admission_id, "admission_id")
         _integer(ready_at, "ready_at", minimum=0)
         _integer(max_work_items, "max_work_items", minimum=1)
@@ -1067,8 +1099,9 @@ class RunOrchestrator:
             ):
                 continue
             if readiness.action is not PlanAction.RUN:
-                if controller_action is not None:
-                    controller_action(stage_plan, readiness)
+                committed = yield stage_plan, readiness, current_revision
+                if committed is not None:
+                    current_revision = _advance_revision_cursor(current_revision, committed)
                 continue
             if ready_action is not None and prior_intent is None:
                 resolved_revision = ready_action(stage_plan, readiness, current_revision)
