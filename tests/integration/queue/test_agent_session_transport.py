@@ -4529,9 +4529,16 @@ def test_two_remote_agents_execute_two_globally_selected_runs(
         daemon.stop()
 
 
-@pytest.mark.parametrize("scenario", ["execution", "cancel-pregrant", "restart-before-coordinator-release", "lost-committed-grant"])
+@pytest.mark.parametrize("scenario", [
+    "execution", "cancel-pregrant", "restart-before-coordinator-release",
+    "lost-committed-grant", "cancel-before-bind", "restart-after-committed-bind",
+])
 def test_same_run_local_and_remote_stages_overlap(tmp_path: Path, monkeypatch, scenario: str) -> None:
     cancel_pregrant = scenario != "execution"
+    binding_pause = scenario in {"cancel-before-bind", "restart-after-committed-bind"}
+    expects_abort = cancel_pregrant and not binding_pause and scenario != "lost-committed-grant"
+    bound_identity = {}
+    unbind_attempted = Event()
     credentials = _credentials(tmp_path / "tls")
     descriptor = ResidentProfileDescriptor(
         "resident-1", "revision-1", "project-1", "environment-1", "executor-1"
@@ -4570,6 +4577,8 @@ def test_same_run_local_and_remote_stages_overlap(tmp_path: Path, monkeypatch, s
     if cancel_pregrant:
         from threading import current_thread
         scoped = local_daemon_execution._ScopedCoordinatorAuthority
+        bind = scoped.bind_prepared_attempt
+        unbind = scoped.unbind_prepared_attempt
         grant = scoped.grant_prepared_attempt
         abort = AtomResourceProvider.abort
 
@@ -4589,7 +4598,28 @@ def test_same_run_local_and_remote_stages_overlap(tmp_path: Path, monkeypatch, s
                 assert allow_abort.wait(40)
             return abort(provider, command)
 
-        monkeypatch.setattr(scoped, "grant_prepared_attempt", hold_local_grant)
+        if binding_pause:
+            def hold_local_binding(owner, uri, **kwargs):
+                if current_thread().name.startswith("loom-local-assignment") and not grant_entered.is_set():
+                    bound_identity.update(kwargs)
+                    if scenario == "restart-after-committed-bind":
+                        bind(owner, uri, **kwargs)
+                    grant_entered.set()
+                    assert allow_grant.wait(40)
+                    if scenario == "restart-after-committed-bind":
+                        raise OSError("authority committed the local bind before the reply was lost")
+                return bind(owner, uri, **kwargs)
+
+            def interrupt_unbind(owner, uri, **kwargs):
+                if scenario == "restart-after-committed-bind" and kwargs == bound_identity:
+                    unbind_attempted.set()
+                    raise OSError("authority unavailable until restart")
+                return unbind(owner, uri, **kwargs)
+
+            monkeypatch.setattr(scoped, "bind_prepared_attempt", hold_local_binding)
+            monkeypatch.setattr(scoped, "unbind_prepared_attempt", interrupt_unbind)
+        else:
+            monkeypatch.setattr(scoped, "grant_prepared_attempt", hold_local_grant)
         monkeypatch.setattr(AtomResourceProvider, "abort", hold_abort)
     daemon.start()
     release_attempted = Event()
@@ -4663,7 +4693,7 @@ def test_same_run_local_and_remote_stages_overlap(tmp_path: Path, monkeypatch, s
         coordinator = daemon.client_view(
             LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT)
         )
-        if cancel_pregrant and scenario != "lost-committed-grant":
+        if expects_abort:
             call = agent._call
 
             def wait_for_local_abort(operation, payload, **kwargs):
@@ -4714,8 +4744,13 @@ def test_same_run_local_and_remote_stages_overlap(tmp_path: Path, monkeypatch, s
                         while monotonic() < deadline and not conn.execute("SELECT 1 FROM remote_assignment_controls").fetchone():
                             sleep(0.01)
                         assert conn.execute("SELECT COUNT(*) FROM remote_assignment_controls").fetchone() == (1,)
+                    if binding_pause:
+                        assert remote.result(timeout=20).get("state") == "RELEASED"
+                        assert coordinator.cancel("mixed-item").state is LocalDaemonAdmissionState.CANCELLING
+                        with sqlite3.connect(config.agent_journal) as conn:
+                            assert conn.execute("SELECT COUNT(*) FROM assignments").fetchone() == (0,)
                     allow_grant.set()
-                    if scenario != "lost-committed-grant":
+                    if expects_abort:
                         assert abort_entered.wait(20)
                         assert remote.result(timeout=20).get("state") == "RELEASED"
                         workers.submit(daemon.reconcile_once).result(timeout=5)
@@ -4743,7 +4778,17 @@ def test_same_run_local_and_remote_stages_overlap(tmp_path: Path, monkeypatch, s
                 assert conn.execute(
                     "SELECT state FROM coordinator_assignments WHERE agent_id=?", (config.machine_id,)
                 ).fetchone() == ("accepted",)
+        if scenario == "restart-after-committed-bind":
+            assert unbind_attempted.wait(20)
+            with sqlite3.connect(config.execution_database) as conn:
+                assert conn.execute(
+                    "SELECT state FROM coordinator_assignments WHERE assignment_id=?",
+                    (bound_identity["assignment_id"],),
+                ).fetchone() == ("reserved",)
+        if scenario in {"restart-before-coordinator-release", "restart-after-committed-bind"}:
             daemon.stop()
+            if scenario == "restart-after-committed-bind":
+                monkeypatch.setattr(scoped, "unbind_prepared_attempt", unbind)
             daemon = LocalDaemon(config)
             daemon.start()
             coordinator = daemon.client_view(LocalDaemonPrincipal("integration-client", LocalDaemonRole.CLIENT))
@@ -4757,6 +4802,12 @@ def test_same_run_local_and_remote_stages_overlap(tmp_path: Path, monkeypatch, s
                 assert conn.execute(
                     "SELECT state, grant_fence IS NOT NULL, process_execution_id FROM assignments"
                 ).fetchall() == [("released", 1, None)]
+        if binding_pause:
+            authority.bind_prepared_attempt(run_uri, **bound_identity)
+            with pytest.raises(ValueError, match="not bound"):
+                authority.grant_prepared_attempt(run_uri, **bound_identity)
+            with sqlite3.connect(config.agent_journal) as conn:
+                assert conn.execute("SELECT COUNT(*) FROM assignments").fetchone() == (0,)
         if cancel_pregrant:
             with sqlite3.connect(config.execution_database) as conn:
                 assert conn.execute(

@@ -1626,14 +1626,21 @@ class AuthorityRepository:
                 "WHERE run_uri = ? AND assignment_id = ?",
                 (run_uri, assignment_id),
             ).fetchone()
-            if (
-                row is None
-                or row["attempt_id"] != attempt_id
-                or row["state"] != "bound"
-            ):
-                raise AuthorityRepositoryError(
-                    "only the same ungranted binding may unbind"
-                )
+            if row is None:
+                # A reservation can outlive a lost bind reply. An effective
+                # cancellation fences a never-bound prepared attempt as well.
+                prepared = conn.execute(
+                    "SELECT 1 FROM prepared_attempt_receipts WHERE run_uri = ? AND attempt_id = ?",
+                    (run_uri, attempt_id),
+                ).fetchone()
+                other = conn.execute(
+                    "SELECT 1 FROM managed_attempt_bindings WHERE run_uri = ? AND attempt_id = ?",
+                    (run_uri, attempt_id),
+                ).fetchone()
+                if prepared is None or other is not None or not _repository_cancellation_covers(conn, run_uri, attempt_id):
+                    raise AuthorityRepositoryError("only the same ungranted binding may unbind")
+            elif row["attempt_id"] != attempt_id or row["state"] != "bound":
+                raise AuthorityRepositoryError("only the same ungranted binding may unbind")
             conn.execute(
                 "INSERT INTO managed_attempt_unbind_receipts "
                 "(run_uri, assignment_id, attempt_id) VALUES (?, ?, ?)",
@@ -5940,17 +5947,23 @@ def _audit_event_from_row(row: sqlite3.Row) -> PipelineEventRecord:
     return PipelineEventRecord.from_dict(_json_loads(cast(str, row["event_json"])))
 
 
+def _repository_cancellation_covers(conn: sqlite3.Connection, run_uri: str, attempt_id: str | None) -> bool:
+    if conn.execute("SELECT 1 FROM cancellation_epochs WHERE run_uri = ?", (run_uri,)).fetchone() is None:
+        return False
+    return attempt_id is None or conn.execute(
+        "SELECT 1 FROM action_producers WHERE run_uri = ? AND attempt_id = ? AND active = 1",
+        (run_uri, attempt_id),
+    ).fetchone() is None
+
+
 def _require_no_repository_cancellation_epoch(
     conn: sqlite3.Connection, run_uri: str, *, attempt_id: str | None = None,
 ) -> None:
     """Fence lifecycle creation while effective cancellation settles."""
 
-    if conn.execute(
-        "SELECT 1 FROM cancellation_epochs WHERE run_uri = ?", (run_uri,)
-    ).fetchone():
-        if attempt_id is not None and conn.execute("SELECT 1 FROM action_producers WHERE run_uri = ? AND attempt_id = ? AND active = 1", (run_uri, attempt_id)).fetchone():
-            return
+    if _repository_cancellation_covers(conn, run_uri, attempt_id):
         raise AuthorityRepositoryError("run cancellation epoch is effective")
+
 
 
 def _managed_terminal_digest(

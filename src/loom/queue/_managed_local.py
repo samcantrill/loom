@@ -3749,15 +3749,15 @@ def run_managed_local_assignment(
             max_parallel_stages=max_parallel_stages,
             decision_receipt=decision_receipt,
         )
-        authority.bind_prepared_attempt(
-            assignment.run_uri,
-            assignment_id=assignment.assignment_id,
-            attempt_id=assignment.attempt_id,
-        )
-        coordinator.advance(
-            assignment.assignment_id, expected="reserved", next_state="bound"
-        )
-        journal.persist_request(assignment, delivered.to_dict())
+    authority.bind_prepared_attempt(
+        assignment.run_uri,
+        assignment_id=assignment.assignment_id,
+        attempt_id=assignment.attempt_id,
+    )
+    coordinator.advance(
+        assignment.assignment_id, expected="reserved", next_state="bound"
+    )
+    journal.persist_request(assignment, delivered.to_dict())
     if journal.read_state(assignment.assignment_id) is AssignmentState.START_FAILED:
         retained_fence = journal.read_grant_fence(assignment.assignment_id)
         if retained_fence is None:

@@ -1846,16 +1846,24 @@ class LocalDaemonExecution:
             ordinary_mutation_frozen=self._ordinary_mutation_frozen,
             on_grant=None if self._action_resolution is None else self._action_resolution.attach_fence,
         )
+        coordinator_state = self.coordinator.state(assignment.assignment_id)
+        journal_state = self.journal.find_state(assignment.assignment_id)
         if (
-            self.coordinator.state(assignment.assignment_id) in {"bound", "accepted"}
-            and self.journal.find_state(assignment.assignment_id) in _PREGRANT_CANCELLATION_STATES
-            and self.journal.read_grant_fence(assignment.assignment_id) is None
+            coordinator_state in {"reserved", "bound", "accepted"}
+            and (journal_state is None or journal_state in _PREGRANT_CANCELLATION_STATES)
+            and (journal_state is None or self.journal.read_grant_fence(assignment.assignment_id) is None)
             and self._run_cancellation_operation(assignment.run_uri) is not None
             and self._install_run_cancellation_if_requested(
                 assignment.run_uri, scoped_authority, intent.plan.stage_order,
                 attempt_id=assignment.attempt_id,
             )
         ):
+            if journal_state is None:
+                self._settle_unjournaled_reservation(
+                    scoped_authority, assignment.run_uri, assignment.assignment_id,
+                    assignment.attempt_id, coordinator_state,
+                )
+                return True
             try:
                 scoped_authority.unbind_prepared_attempt(
                     assignment.run_uri, assignment_id=assignment.assignment_id,
@@ -1865,7 +1873,7 @@ class LocalDaemonExecution:
                 # A grant can commit immediately before cancellation and lose
                 # its reply. Recover its original fence through the ordinary
                 # grant/replay path below. An effective epoch fences new work.
-                if self.journal.read_state(assignment.assignment_id) is not AssignmentState.ACCEPTED:
+                if journal_state is not AssignmentState.ACCEPTED:
                     raise
             else:
                 state = self.journal.cancel_pregrant(assignment.assignment_id, self.providers)
@@ -5151,8 +5159,6 @@ class LocalDaemonExecution:
         grant, launch, unknown state, or failed containment remains settling.
         """
 
-        if self.journal is None:
-            return False
         settling = False
         for assignment_id, coordinator_state in self.coordinator.list_run_live_states(
             run_uri
@@ -5163,10 +5169,11 @@ class LocalDaemonExecution:
                     or settling
                 )
                 continue
-            if self._action_attempt_needed(run_uri, self._attempt_id(assignment_id)):
+            attempt_id = self._attempt_id(assignment_id)
+            if self._action_attempt_needed(run_uri, attempt_id):
                 settling = True
                 continue
-            journal_state = self.journal.find_state(assignment_id)
+            journal_state = None if self.journal is None else self.journal.find_state(assignment_id)
             if journal_state is None and self.daemon is not None and self._remote_delivery_retained(assignment_id):
                 # A remote delivery has a separate agent journal and release owner.
                 settling = True
@@ -5176,19 +5183,25 @@ class LocalDaemonExecution:
                 # A local observer owns that transition until its call returns.
                 settling = True
                 continue
-            if coordinator_state == "reserved" and journal_state is None:
-                self.coordinator.cancellation_release_unstarted(assignment_id)
-                continue
-            if coordinator_state not in {"bound", "accepted"}:
+            if coordinator_state not in {"reserved", "bound", "accepted"}:
                 settling = True
                 continue
             if journal_state is None:
-                authority.unbind_prepared_attempt(
-                    run_uri,
-                    assignment_id=assignment_id,
-                    attempt_id=self._attempt_id(assignment_id),
-                )
-                self.coordinator.cancellation_release_pregrant(assignment_id)
+                # The same bounded stop workers cover embedded and undelivered
+                # outbound reservations. An unavailable authority on one run
+                # must leave the scheduler free to dispatch its peers' stops.
+                if len(self._pregrant_aborts) < _PREGRANT_WORKERS:
+                    future = self._pregrant_abort_workers.submit(
+                        self._settle_unjournaled_reservation, authority, run_uri,
+                        assignment_id, attempt_id, coordinator_state,
+                    )
+                    self._pregrant_aborts.add(assignment_id)
+                    self._local_assignment_futures[assignment_id] = future
+                    if self.daemon is not None:
+                        future.add_done_callback(
+                            lambda done, daemon=self.daemon: daemon._wake.set() if done.exception() is None else None
+                        )
+                settling = True
                 continue
             if (journal_state in _PREGRANT_CANCELLATION_STATES
                 and assignment_id not in self._pending_local_assignment_reconciliation):
@@ -5200,6 +5213,16 @@ class LocalDaemonExecution:
                     self.daemon._wake.set()
             settling = True
         return settling
+
+    def _settle_unjournaled_reservation(
+        self, authority: _ScopedCoordinatorAuthority, run_uri: str,
+        assignment_id: str, attempt_id: str, coordinator_state: str,
+    ) -> None:
+        authority.unbind_prepared_attempt(run_uri, assignment_id=assignment_id, attempt_id=attempt_id)
+        if coordinator_state == "reserved":
+            self.coordinator.cancellation_release_unstarted(assignment_id)
+        else:
+            self.coordinator.cancellation_release_pregrant(assignment_id)
 
     def _attempt_id(self, assignment_id: str) -> str:
         """Read the immutable authority attempt identity from the coordinator owner."""
@@ -6303,10 +6326,7 @@ class LocalDaemonExecution:
                         scheduling_diagnostics=record.scheduling_diagnostics,
                     ) != record
                     or current.scheduling_state is not SchedulingProjectionState.READY
-                    or self._install_cancellation_if_requested(
-                        admission, authority, intent.plan.stage_order,
-                        attempt_id=assignment.attempt_id,
-                    )
+                    or self._attempt_cancel_requested(record.run_uri, assignment.attempt_id)
                 ):
                     raise CancelledError("local preparation superseded before reservation")
                 # Projection refreshes (including another stage's authority
@@ -6316,8 +6336,8 @@ class LocalDaemonExecution:
                 decision_receipt["stage_work_revision"] = current.projection_revision
                 daemon._scheduling_reference_revision += 1
                 yield
-                daemon._activate_admission(admission.admission_id)
-                daemon._wake.set()
+            daemon._activate_admission(admission.admission_id)
+            daemon._wake.set()
 
         def observe_and_finalize() -> None:
             run_managed_local_assignment(

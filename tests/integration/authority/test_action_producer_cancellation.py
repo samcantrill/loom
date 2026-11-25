@@ -82,6 +82,30 @@ def test_exact_producer_continues_but_final_detach_revokes_start(
 
 
 @pytest.mark.parametrize("backend", ["embedded", "authenticated"])
+def test_cancellation_settles_a_reserved_attempt_without_a_bind_reply(tmp_path, backend):
+    uri, authority, _, _ = _consumer(tmp_path, backend)
+    attempt = _prepare(authority, uri, "reserved").attempt.attempt_id
+    protected = _prepare(authority, uri, "shared").attempt.attempt_id
+    authority.bind_action_producer(uri, ActionProducerBinding("live-claim", "shared", protected))
+    outstanding = _prepare(authority, uri, "other").attempt.attempt_id
+    authority.bind_prepared_attempt(uri, assignment_id="other-owner", attempt_id=outstanding)
+    with pytest.raises(ValueError, match="ungranted binding"):
+        authority.unbind_prepared_attempt(uri, assignment_id="reserved", attempt_id=attempt)
+    authority.install_cancellation_epoch(uri, CancellationEpochRequest(
+        operation_id="cancel", coordinator_id="coordinator", run_uri=uri,
+        stage_names=("reserved", "shared", "other"),
+    ))
+    for assignment, rejected in (("shared", protected), ("wrong-owner", outstanding)):
+        with pytest.raises(ValueError, match="ungranted binding"):
+            authority.unbind_prepared_attempt(uri, assignment_id=assignment, attempt_id=rejected)
+    authority.unbind_prepared_attempt(uri, assignment_id="reserved", attempt_id=attempt)
+    authority.unbind_prepared_attempt(uri, assignment_id="reserved", attempt_id=attempt)
+    authority.bind_prepared_attempt(uri, assignment_id="reserved", attempt_id=attempt)
+    with pytest.raises(ValueError, match="not bound"):
+        authority.grant_prepared_attempt(uri, assignment_id="reserved", attempt_id=attempt)
+
+
+@pytest.mark.parametrize("backend", ["embedded", "authenticated"])
 def test_failed_run_settles_exact_unstarted_producer_for_retry(tmp_path, backend):
     uri, authority, _, _ = _consumer(tmp_path, backend)
     binding = ActionProducerBinding("abandoned", "producer", "producer-1")
