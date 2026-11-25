@@ -1156,10 +1156,10 @@ def test_storage_check_resumes_ranges_and_recovers_published_verification(fleet,
     monkeypatch.setattr(_artifact_fetch, "_publish", publish)
     monkeypatch.setattr(_artifact_ranges, "_save", save_chunk)
     monkeypatch.setattr(CoordinatorClient, "read_artifact_chunk", read_chunk)
-    first = self_test(inventory, deployment=deployment, checks=("storage",),
-                      operator_connection=inventory.path.parent / "operator.json",
-                      config="pipeline.yaml", timeout_seconds=90)
-    identity = first["operation_id"]
+    identity = "storage-resume"
+    self_test(inventory, deployment=deployment, checks=("storage",), _prepare_id=identity,
+              operator_connection=inventory.path.parent / "operator.json", config="pipeline.yaml")
+    first = self_test(inventory, operation_id=identity, timeout_seconds=90)
 
     def advance_until(condition, result):
         end = time.monotonic() + 180
@@ -1178,6 +1178,64 @@ def test_storage_check_resumes_ranges_and_recovers_published_verification(fleet,
     assert len(retained_offsets) >= 8
     reads.clear()
     interrupt_ranges = expired = False
+    # Recover this real native transfer inside a 24-slot controller round.
+    # The other 23 slots use deterministic receipts to isolate scheduling.
+    from loom.fleet import upgrades
+
+    names = ("worker", *(f"fixture-{i}" for i in range(7)))
+    attempts, grants = {}, {}
+    for name in names:
+        for kind in ("cpu", "storage", "gpu"):
+            key = identity if (name, kind) == ("worker", "storage") else name + "-" + kind
+            grants[key] = {"fixture": key}
+            attempts[name + ":" + kind] = [{"operation_id": key, "authorization": grants[key]}]
+    controller = SimpleNamespace(
+        directory=inventory.path.parent / "watcher", inventory=inventory,
+        intent={"operation_id": "watcher", "agents": dict.fromkeys(names, {}),
+                "timeout_seconds": 3, "declarations": dict.fromkeys(names, {
+                    "resident_profiles": [{"gpu_devices": ["gpu"]}]})},
+        gate=lambda **kw: {"revision": 1, "checks": grants}, settled=lambda **kw: None,
+    )
+    controller.directory.mkdir()
+    upgrades.atomic(controller.directory / "checks.json", attempts)
+    paused, release, returned = Event(), Event(), Event()
+
+    def pause_range(path, data):
+        save_chunk(path, data)
+        if len(data) == _artifact_ranges.CHUNK_BYTES and not paused.is_set():
+            paused.set()
+            assert release.wait(15), "watcher failed to detach from its storage worker"
+
+    def step(selected, *, operation_id, timeout_seconds, _dispatch_only, _wait):
+        if operation_id == identity:
+            try:
+                return self_test(selected, operation_id=identity, timeout_seconds=timeout_seconds,
+                                 _dispatch_only=_dispatch_only, _wait=_wait)
+            finally:
+                if paused.is_set():
+                    returned.set()
+        if _dispatch_only:
+            return {"checks": {"fixture": {"outcome": "waiting", "disposition": "accepted"}}}
+        return {"outcome": "passed", "checks": {"fixture": {"outcome": "passed"}}}
+
+    monkeypatch.setattr(upgrades, "self_test", step)
+    monkeypatch.setattr(_artifact_ranges, "_save", pause_range)
+    try:
+        end = time.monotonic() + 60
+        while not paused.is_set():
+            with pytest.raises(upgrades._Waiting):
+                upgrades._run_checks(controller)
+            assert time.monotonic() < end
+        assert not returned.is_set()
+        assert len(controller.check_observations) == 24
+        assert sum(row["outcome"] == "passed" for row in controller.check_observations.values()) == 23
+        assert controller.check_observations[identity]["operation_id"] == identity
+        partial = upgrades.read(controller.directory / "checks.json")
+        assert sum(rows[-1].get("passed_this_round", False) for rows in partial.values()) == 23
+    finally:
+        release.set()
+    assert returned.wait(15)
+    monkeypatch.setattr(_artifact_ranges, "_save", save_chunk)
     interrupt_publication = True
     second = self_test(inventory, operation_id=identity, timeout_seconds=90)
     second = advance_until(lambda: bool(published), second)
@@ -1202,6 +1260,8 @@ def test_storage_check_resumes_ranges_and_recovers_published_verification(fleet,
     (directory / "result.json").unlink()
     monkeypatch.setattr(_check_artifacts, "fetch_artifacts", lambda *a, **k: pytest.fail("repeated verified transfer"))
     assert finish(inventory, identity)["outcome"] == "passed"
+    upgrades._run_checks(controller)
+    assert {row["outcome"] for row in controller.check_observations.values()} == {"passed"}
     with sqlite3.connect(daemon.config.control_database) as db:
         assert db.execute("SELECT COUNT(*) FROM managed_admissions").fetchone() == original_admissions
         queue_item = final["checks"]["storage"]["native"]["admission"]["queue_item_id"]

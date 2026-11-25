@@ -12,7 +12,7 @@ pytestmark = pytest.mark.unit
 
 @pytest.mark.parametrize("outcome", ["passed", "failed"])
 @pytest.mark.parametrize("mode", ["resident", "submitted", "selected", "selected-retry"])
-def test_upgrade_uses_host_capability_and_keeps_cpu_storage_checks(tmp_path, monkeypatch, outcome, mode):
+def test_upgrade_uses_host_capability_and_keeps_cpu_storage_checks(tmp_path, check_gate, monkeypatch, outcome, mode):
     profile = {"profile_id": "selected"}
     execution = None
     declarations = {"worker": {"resident_profiles": [{"descriptor": profile}]}}
@@ -49,7 +49,7 @@ def test_upgrade_uses_host_capability_and_keeps_cpu_storage_checks(tmp_path, mon
         directory=tmp_path,
         receipts=tmp_path / "steps",
         inventory=None,
-        operator=SimpleNamespace(observe_agent=lambda name: SimpleNamespace(
+        operator=SimpleNamespace(observe_agent=lambda name, *, deadline: SimpleNamespace(
             availability="available", freshness="current",
             value={"offer": offer},
         )),
@@ -61,9 +61,9 @@ def test_upgrade_uses_host_capability_and_keeps_cpu_storage_checks(tmp_path, mon
             "gpu_qualification": "nonexclusive",
             "timeout_seconds": 20,
         },
-        call=lambda name, action, **kw: calls.append((name, action, kw)) or {"outcome": outcome},
-        maintenance=lambda *args: None,
-        settled=lambda: settled.append(True),
+        call=lambda name, action, *, deadline, **kw: calls.append((name, action, kw)) or {"outcome": outcome},
+        gate=check_gate.observe, maintenance=check_gate.authorize,
+        settled=lambda **kw: settled.append(True),
     )
     monkeypatch.setattr(upgrades, "phase", lambda *args: None)
     monkeypatch.setattr(upgrades, "_attempts", lambda op: {})
@@ -78,7 +78,7 @@ def test_upgrade_uses_host_capability_and_keeps_cpu_storage_checks(tmp_path, mon
         }])
         retry = {"_step_key": "worker-gpu-capability-retry"}
 
-    def prepare(op, name, check, identity):
+    def prepare(op, name, check, identity, **kw):
         prepared.append(check)
         return {"operation_id": identity, "authorization": {}}
 

@@ -839,7 +839,14 @@ During check dispatch and observation, the controller publishes completed
 results as they arrive. Each native check retains its operation ID and reports
 whether submission is pending, uncertain, accepted, or rejected. An observer
 can detach with an active download. That worker continues to occupy its slot
-until it exits. A continuation can attach to the same check. Standalone
+until it exits. A continuation can attach to the same check. The observation
+budget starts at entry to the check phase. A check whose preparation times out
+keeps its original ID. A lost permission reply is reconciled against the live
+maintenance gate before any subsequent revision-dependent grant. The controller
+attempts native dispatch before probing a nonexclusive GPU over SSH. A partly
+completed observation round retains its passed checks, and restoration requires
+current native settlement and the existing host identity and policy checks.
+Standalone
 self-tests use their caller's deadline for native requests and can return the
 last known check state when another observer holds the receipt lock. A failed check can therefore be reported while another
 already-dispatched check is still running. Retry and repair still require native

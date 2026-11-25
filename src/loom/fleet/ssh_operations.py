@@ -499,7 +499,7 @@ class _Operation:
         if verify_release(self.inventory.runtime_release) != self.intent["release"]:
             raise QueueConflictError("immutable service bundle changed")
 
-    def _prepare_call(self, name, action, *, _step_key=None, **values):
+    def _prepare_call(self, name, action, *, _step_key=None, deadline=None, **values):
         self.recheck_composed()
         key = (
             name
@@ -556,7 +556,8 @@ class _Operation:
             return directory, request, response
         pending_inputs = {}
         if (directory / "dispatch.json").exists() and action != "install":
-            response = ssh(row["host"], {**request, "action": "receipt"})
+            response = ssh(row["host"], {**request, "action": "receipt"},
+                           **({"deadline": deadline} if deadline is not None else {}))
             if response is not None and "pending_publication" in response:
                 candidate = json.dumps(
                     response["pending_publication"]["after"], sort_keys=True
@@ -587,12 +588,13 @@ class _Operation:
         self.accept_update(name, response, directory)
         return response
 
-    def call(self, name, action, **values):
-        directory, request, retained = self._prepare_call(name, action, **values)
+    def call(self, name, action, *, deadline=None, **values):
+        budget = {"deadline": deadline} if deadline is not None else {}
+        directory, request, retained = self._prepare_call(name, action, **budget, **values)
         if retained is not None:
             return retained
         try:
-            response = ssh(self.intent["hosts"][name]["host"], request)
+            response = ssh(self.intent["hosts"][name]["host"], request, **budget)
         except (SshUnavailable, QueueConflictError) as exc:
             response = exc
         return self._finish_call(name, directory, request, response)

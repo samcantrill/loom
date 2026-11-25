@@ -360,8 +360,9 @@ class _Upgrade(sshops._Operation):
         super().recheck(pending_inputs)
         _check_selection(self)
 
-    def observe_gate(self):
-        gate = cast(dict[str, Any], thaw_plain_data(self.operator.observe_maintenance()))
+    def observe_gate(self, *, deadline=None):
+        budget = {"deadline": deadline} if deadline is not None else {}
+        gate = cast(dict[str, Any], thaw_plain_data(self.operator.observe_maintenance(**budget)))
         binding = _maintenance_binding(self.intent)
         if self.observation is not None:
             if gate["state"] == "open":
@@ -370,8 +371,8 @@ class _Upgrade(sshops._Operation):
                 self.observation.gate(True)
         return gate
 
-    def gate(self):
-        gate = self.observe_gate()
+    def gate(self, *, deadline=None):
+        gate = self.observe_gate(deadline=deadline)
         binding = _maintenance_binding(self.intent)
         if (
             gate["state"] != "closed"
@@ -400,7 +401,7 @@ class _Upgrade(sshops._Operation):
         atomic(directory / "receipt.json", result)
         return result
 
-    def maintenance(self, key, action, check=None):
+    def maintenance(self, key, action, check=None, *, deadline=None, revision=None):
         path = self.receipts / key / "intent.json"
         fresh = not (self.receipts / key / "dispatch.json").exists()
         if action in {"close", "open"}:
@@ -414,7 +415,7 @@ class _Upgrade(sshops._Operation):
                 "maintenance_id": binding["operation_id"],
                 "maintenance_intent_digest": binding["target_intent_digest"],
                 "action": action,
-                "expected_revision": self.observe_gate()["revision"],
+                "expected_revision": self.observe_gate(deadline=deadline)["revision"] if revision is None else revision,
                 "check": check,
             }
         )
@@ -428,6 +429,7 @@ class _Upgrade(sshops._Operation):
                 expected_coordinator_id=self.intent["check_selection"][
                     "coordinator_id"
                 ],
+                **({"deadline": deadline} if deadline is not None else {}),
             ),
         )
         if action == "open" and fresh and self.observation is not None:
@@ -548,9 +550,9 @@ class _Upgrade(sshops._Operation):
         if errors:
             raise errors[0]
 
-    def settled(self):
+    def settled(self, *, deadline=None):
         phase(self, "settling")
-        gate = self.gate()
+        gate = self.gate(**({"deadline": deadline} if deadline is not None else {}))
         if not gate.get("settled"):
             raise _Waiting(
                 "native settlement: "
@@ -802,7 +804,7 @@ def _preflight_checks(operation):
     operation.call_many(preparations)
 
 
-def _prepare_attempt(operation, name, check, identity, previous=None):
+def _prepare_attempt(operation, name, check, identity, previous=None, *, deadline=None, revision=None):
     path = operation.inventory.path.parent / "checks" / identity / "intent.json"
     binding = _maintenance_binding(operation.intent)
     if path.exists():
@@ -831,6 +833,12 @@ def _prepare_attempt(operation, name, check, identity, previous=None):
             export_connection_deployment(
                 replace(deployment, preparation_profile=chosen), selected_path
             )
+        budget = {}
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise _Waiting("check preparation pending: " + identity)
+            budget["timeout_seconds"] = remaining
         intent = self_test(
             operation.inventory,
             deployment=selected_path,
@@ -844,6 +852,7 @@ def _prepare_attempt(operation, name, check, identity, previous=None):
             else Path(operation.intent["env_file"]),
             _prepare_id=identity,
             _maintenance_binding=binding,
+            **budget,
         )
     if intent["agent_id"] != name or set(intent["requests"]) != {check}:
         raise QueueConflictError("check attempt identity conflicts")
@@ -880,7 +889,7 @@ def _prepare_attempt(operation, name, check, identity, previous=None):
         "operation_id": identity,
         "slot": [name, check],
         "request_digest": digest(intent["requests"][check]),
-        "expected_gate_revision": operation.gate()["revision"],
+        "expected_gate_revision": operation.gate()["revision"] if revision is None else revision,
         "authorization": {
             "request": intent["requests"][check],
             "principal_id": principals[0]["principal_id"],
@@ -895,65 +904,118 @@ def _prepare_attempt(operation, name, check, identity, previous=None):
     }
 
 
+def _gpu_capability(operation, name, declaration, deadline):
+    observed = operation.operator.observe_agent(name, deadline=deadline)
+    if observed.availability != "available" or observed.freshness != "current":
+        raise _Waiting("current GPU capability profile required: " + name)
+    selection = _check_selection(operation)
+    execution = _check_execution(selection)
+    if execution is None:
+        policy = {"resident_profile_id": declaration["resident_profiles"][0]["descriptor"]["profile_id"]}
+    else:
+        declarations = operation.intent.get("target_declarations", operation.intent["declarations"])
+        chosen = _check_profile(declarations, name, load_deployment(selection["deployment"]), execution)
+        policy = declarations["coordinator"]["preparation"]["profiles"][chosen]
+    from .self_tests import selected_check_profile
+
+    profile = selected_check_profile(policy, thaw_plain_data(observed.value), execution)
+    successors = _gpu_check_successors(operation, name)
+    result = operation.call(name, "gpu-capability", profile=profile, deadline=deadline,
+        **({"_step_key": successors[-1]["step_key"]} if successors else {}),
+        **({"execution": execution.to_dict()} if execution is not None else {}))
+    operation.check_observations[name + ":gpu-capability"] = result
+    if result.get("outcome") != "passed":
+        raise QueueConflictError("GPU capability failed: " + str(result))
+
+
+def _authorize_check_slots(operation, slots, attempts, deadline, save_attempts):
+    active, errors = [], []
+    if not slots:
+        return active, errors
+    # The grant mutation is revision-conditional. Preserve a single writer.
+    # Existing grants are confirmed from the live owned gate in one read.
+    now = time.monotonic()
+    setup_end = now + max(0, deadline - now) / 2
+    gate = operation.gate(deadline=setup_end)
+    missing = sum(key not in gate["checks"] for key in slots)
+    grant_uncertain = False
+    # Recover a pending revision-conditional request before authorizing
+    # another check. An unseen grant may already have consumed the revision.
+    ordered = sorted(slots, key=lambda key: not (
+        operation.directory / "steps" / ("authorize-" + key) / "intent.json"
+    ).is_file())
+    for identity in ordered:
+        slot, name, check = slots[identity]
+        grant = gate["checks"].get(identity)
+        if grant is not None and slot in attempts:
+            if grant != attempts[slot][-1]["authorization"]:
+                raise QueueConflictError("maintenance check authorization changed: " + identity)
+            active.append(identity)
+            continue
+        now = time.monotonic()
+        step_end = now + max(0, setup_end - now) / max(1, missing)
+        missing -= 1
+        if now >= step_end or grant_uncertain:
+            continue
+        try:
+            if slot not in attempts:
+                attempts[slot] = [_prepare_attempt(operation, name, check, identity,
+                    deadline=step_end, revision=gate["revision"])]
+                save_attempts()
+            authorization = attempts[slot][-1]["authorization"]
+            if grant is None:
+                # An uncertain or lost grant reply fences later writes to
+                # this gate revision. Already confirmed grants can proceed.
+                grant_uncertain = True
+                result = operation.maintenance("authorize-" + identity, "authorize",
+                    authorization, deadline=step_end, revision=gate["revision"])
+                if (result["gate"]["revision"] <= gate["revision"]
+                        or result["gate"]["checks"].get(identity) != authorization):
+                    raise QueueConflictError("maintenance check grant changed: " + identity)
+                gate["revision"] = result["gate"]["revision"]
+                grant_uncertain = False
+            elif authorization != grant:
+                raise QueueConflictError("maintenance check authorization changed: " + identity)
+            active.append(identity)
+        except (_Waiting, CoordinatorClientError) as exc:
+            errors.append(exc)
+
+    return active, errors
+
+
 def _run_checks(operation):
+    deadline = time.monotonic() + operation.intent["timeout_seconds"]
     phase(operation, "checking")
     operation.check_observations = {}
     attempts = _attempts(operation)
-    active = []
     deferred = _deferred_checks(operation).get("agents", ())
-    for name, declaration in operation.intent.get("target_declarations", operation.intent["declarations"]).items():
-        if name == "coordinator" or name not in operation.intent["agents"]:
-            continue
-        if name in deferred:
+    declarations = operation.intent.get("target_declarations", operation.intent["declarations"])
+    slots, capabilities = {}, []
+    for name, declaration in declarations.items():
+        if name == "coordinator" or name not in operation.intent["agents"] or name in deferred:
             continue
         for check in _check_kinds(operation, name, declaration):
             if check == "gpu" and operation.intent.get("gpu_qualification") == "nonexclusive":
-                observed = operation.operator.observe_agent(name)
-                if observed.availability != "available" or observed.freshness != "current":
-                    raise _Waiting("current GPU capability profile required: " + name)
-                selection = _check_selection(operation)
-                execution = _check_execution(selection)
-                if execution is None:
-                    policy = {"resident_profile_id": declaration["resident_profiles"][0]["descriptor"]["profile_id"]}
-                else:
-                    declarations = operation.intent.get("target_declarations", operation.intent["declarations"])
-                    chosen = _check_profile(declarations, name, load_deployment(selection["deployment"]), execution)
-                    policy = declarations["coordinator"]["preparation"]["profiles"][chosen]
-                from .self_tests import selected_check_profile
-
-                profile = selected_check_profile(policy, thaw_plain_data(observed.value), execution)
-                successors = _gpu_check_successors(operation, name)
-                result = operation.call(name, "gpu-capability", profile=profile,
-                    **({"_step_key": successors[-1]["step_key"]} if successors else {}),
-                    **({"execution": execution.to_dict()} if execution is not None else {}))
-                operation.check_observations[name + ":gpu-capability"] = result
-                if result.get("outcome") != "passed":
-                    raise QueueConflictError("GPU capability failed: " + str(result))
+                capabilities.append(name)
+                operation.check_observations[name + ":gpu-capability"] = {"outcome": "waiting"}
                 continue
             slot = name + ":" + check
-            if slot not in attempts:
-                identity = _check_identity(operation, name, check)
-                attempts[slot] = [_prepare_attempt(operation, name, check, identity)]
-                atomic(operation.directory / "checks.json", attempts)
-            attempt = attempts[slot][-1]
-            identity = attempt["operation_id"]
-            operation.maintenance(
-                "authorize-" + identity, "authorize", attempt["authorization"]
-            )
-            active.append(identity)
+            attempt = attempts[slot][-1] if slot in attempts else {}
+            identity = attempt.get("operation_id") or _check_identity(operation, name, check)
+            slots[identity] = (slot, name, check)
+            operation.check_observations[identity] = attempt.get("last_observation") or {
+                "outcome": "waiting", "operation_id": identity,
+                "checks": attempt.get("dispatch_checks", {check: {
+                    "operation_id": identity, "disposition": "pending", "outcome": "waiting",
+                }}),
+            }
 
-    if not active:
-        operation.settled()
-        return
-    deadline = time.monotonic() + operation.intent["timeout_seconds"]
+    def save_attempts():
+        atomic(operation.directory / "checks.json", attempts)
+
+    active, errors = _authorize_check_slots(operation, slots, attempts, deadline, save_attempts)
     inventory = operation.inventory
     records = {row[-1]["operation_id"]: row[-1] for row in attempts.values()}
-    for identity in active:
-        record = records[identity]
-        operation.check_observations[identity] = record.get("last_observation") or {
-            "outcome": "waiting", "operation_id": identity,
-            "checks": record.get("dispatch_checks", {}),
-        }
 
     def advance(identity, dispatch, step_end) -> dict[str, Any]:
         remaining = step_end - time.monotonic()
@@ -962,19 +1024,17 @@ def _run_checks(operation):
         return self_test(inventory, operation_id=identity, timeout_seconds=remaining,
                          _dispatch_only=dispatch, _wait=False)
 
-    def save_attempts():
-        atomic(operation.directory / "checks.json", attempts)
-
-    def steps(selected, dispatch):
+    def steps(selected, dispatch, end):
         return completed_steps(operation.directory, records, selected, dispatch=dispatch,
-                               deadline=deadline, advance=advance, started=save_attempts)
+                               deadline=end, advance=advance, started=save_attempts)
 
-    errors = []
     # Dispatch gets the first opportunity for every selected slot. Accepted and
     # rejected receipts belong to an immutable attempt, and survive detachment.
     dispatch = [key for key in active if not records[key].get("dispatch_settled")]
     dispatched = set()
-    for identity, future in steps(dispatch, True):
+    now = time.monotonic()
+    dispatch_end = now + max(0, deadline - now) / 2
+    for identity, future in steps(dispatch, True, dispatch_end):
         try:
             dispatch_result = future.result()
         except Exception as exc:
@@ -989,13 +1049,27 @@ def _run_checks(operation):
         if not records[identity].get("last_observation"):
             operation.check_observations[identity]["checks"] = rows
         save_attempts()
-    if errors:
-        raise errors[0]
-    if set(dispatch) - dispatched:
-        raise _Waiting("check dispatch pending: " + ", ".join(sorted(set(dispatch) - dispatched)))
+    # The native dispatch pass has run. Bound direct GPU reads and the
+    # receipt lookup/replay by the same deadline, leaving time for native
+    # observations even if a capability host uses its entire share.
+    for index, name in enumerate(capabilities):
+        now = time.monotonic()
+        if now >= deadline:
+            break
+        step_end = now + (deadline - now) / (1 + len(capabilities) - index)
+        try:
+            _gpu_capability(operation, name, declarations[name], step_end)
+        except (sshops.SshUnavailable, _Waiting, CoordinatorClientError, QueueConflictError) as exc:
+            errors.append(exc)
 
-    failures, waiting = [], set(active)
-    for identity, future in steps(active, False):
+    first_pass = all(records[key].get("dispatch_turns") for key in dispatch)
+    eligible = [key for key in active if first_pass and (key not in dispatch or key in dispatched)]
+    waiting = set(slots) - set(eligible)
+    failures = []
+    for identity in eligible:
+        if not records[identity].get("passed_this_round"):
+            waiting.add(identity)
+    for identity, future in steps([key for key in eligible if key in waiting], False, deadline):
         try:
             result = future.result()
         except Exception as exc:
@@ -1012,6 +1086,8 @@ def _run_checks(operation):
         }
         records[identity]["last_observation"] = observation
         operation.check_observations[identity] = observation
+        if result["outcome"] == "passed":
+            records[identity]["passed_this_round"] = True
         save_attempts()
         if result["outcome"] in {"failed", "unsupported"}:
             failures.append((identity, result["outcome"]))
@@ -1026,9 +1102,17 @@ def _run_checks(operation):
         )
     if errors:
         raise errors[0]
+    waiting.update(name + ":gpu-capability" for name in capabilities
+                   if operation.check_observations[name + ":gpu-capability"]["outcome"] != "passed")
     if waiting:
         raise _Waiting("checks pending: " + ", ".join(sorted(waiting)))
-    operation.settled()
+    operation.settled(deadline=deadline)
+    # Fresh invocations after settlement reobserve the checks. A partial
+    # round across detachments retains exact, verified predecessors.
+    for key in active:
+        records[key].pop("passed_this_round", None)
+    if active:
+        save_attempts()
 
 
 def _release_publication_hold(operation):

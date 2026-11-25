@@ -366,7 +366,7 @@ def test_probe_qualifies_source_once_and_reuses_it_for_promotion(tmp_path, monke
     assert checked == [(qualified[0].client, qualified[1].client, "profile")]
 
 
-def test_upgrade_dispatches_every_slot_before_waiting_or_download(tmp_path, monkeypatch):
+def test_upgrade_dispatches_every_slot_before_waiting_or_download(tmp_path, check_gate, monkeypatch):
     from threading import Event
 
     names = ("first", *(f"agent-{index}" for index in range(2, 9)))
@@ -376,8 +376,8 @@ def test_upgrade_dispatches_every_slot_before_waiting_or_download(tmp_path, monk
                 "agents": {name: {} for name in names},
                 "declarations": {name: {"resident_profiles": [{"gpu_devices": ["gpu"]}]}
                                  for name in names}},
-        maintenance=lambda *args: None,
-        settled=lambda: pytest.fail("pending GPU cannot reopen admission"),
+        gate=check_gate.observe, maintenance=check_gate.authorize,
+        settled=lambda **kw: pytest.fail("pending GPU cannot reopen admission"),
     )
     prepared, dispatched, observed = {}, set(), set()
     storage_published = Event()
@@ -390,7 +390,7 @@ def test_upgrade_dispatches_every_slot_before_waiting_or_download(tmp_path, monk
 
     monkeypatch.setattr(upgrades, "atomic", publish)
 
-    def prepare(op, name, kind, identity):
+    def prepare(op, name, kind, identity, **kw):
         prepared[identity] = (name, kind)
         return {"operation_id": identity, "authorization": {}}
 
@@ -426,16 +426,16 @@ def test_upgrade_dispatches_every_slot_before_waiting_or_download(tmp_path, monk
     assert pending[0]["checks"]["gpu"]["code"] == "waiting_for_capacity"
 
 
-def test_upgrade_finishes_other_observations_after_one_check_error(tmp_path, monkeypatch):
+def test_upgrade_finishes_other_observations_after_one_check_error(tmp_path, check_gate, monkeypatch):
     operation = SimpleNamespace(
         directory=tmp_path, inventory=object(), observation=None,
         intent={"operation_id": "upgrade", "timeout_seconds": 30,
                 "agents": {"agent": {}},
                 "declarations": {"agent": {"resident_profiles": [{}]}}},
-        maintenance=lambda *args: None,
+        gate=check_gate.observe, maintenance=check_gate.authorize,
     )
     identities = {}
-    def prepare(op, name, kind, identity):
+    def prepare(op, name, kind, identity, **kw):
         identities[kind] = identity
         return {"operation_id": identity, "authorization": {}}
     def check(inventory, *, operation_id, timeout_seconds, _dispatch_only, _wait):
@@ -449,7 +449,7 @@ def test_upgrade_finishes_other_observations_after_one_check_error(tmp_path, mon
     assert read(tmp_path / (identities["storage"] + "-result.json"))["outcome"] == "passed"
 
 
-def test_check_watcher_detaches_while_storage_owns_worker_and_resumes_same_ids(tmp_path, monkeypatch):
+def test_check_watcher_detaches_while_storage_owns_worker_and_resumes_same_ids(tmp_path, check_gate, monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Event
 
@@ -457,12 +457,12 @@ def test_check_watcher_detaches_while_storage_owns_worker_and_resumes_same_ids(t
         directory=tmp_path, inventory=object(), observation=None,
         intent={"operation_id": "upgrade", "timeout_seconds": 0.8,
                 "agents": {"agent": {}}, "declarations": {"agent": {"resident_profiles": [{}]}}},
-        maintenance=lambda *args: None, settled=lambda: None,
+        gate=check_gate.observe, maintenance=check_gate.authorize, settled=lambda **kw: None,
     )
     ids, submitted, storage_calls = {}, [], []
     entered, release, finished = Event(), Event(), Event()
 
-    def prepare(op, name, kind, identity):
+    def prepare(op, name, kind, identity, **kw):
         ids[kind] = identity
         return {"operation_id": identity, "authorization": {}}
 
@@ -500,3 +500,81 @@ def test_check_watcher_detaches_while_storage_owns_worker_and_resumes_same_ids(t
         upgrades._run_checks(operation)
     assert all(row["outcome"] == "passed" for row in operation.check_observations.values())
     assert len(submitted) == 2
+
+
+def test_check_preparation_uses_fair_slice_and_reports_later_checks(tmp_path, check_gate, monkeypatch):
+    from threading import Event
+    import time
+
+    op = SimpleNamespace(
+        directory=tmp_path, inventory=object(),
+        intent={"operation_id": "budget", "agents": {"slow": {}, "fast": {}},
+                "declarations": {name: {"resident_profiles": [{}]} for name in ("slow", "fast")},
+                "timeout_seconds": 1.6},
+        gate=check_gate.observe, maintenance=check_gate.authorize, settled=lambda **kw: None,
+    )
+    slow = upgrades._check_identity(op, "slow", "cpu")
+    ready = False
+    def prepare(op, name, check, identity, *, deadline, revision):
+        if identity == slow and not ready:
+            budget = deadline - time.monotonic()
+            assert 0 < budget < 0.3
+            Event().wait(budget)
+            raise upgrades._Waiting("slow preparation")
+        return {"operation_id": identity, "authorization": {"slot": [name, check]}}
+
+    def step(inventory, *, operation_id, _dispatch_only, **opts):
+        if _dispatch_only:
+            return {"checks": {"check": {"disposition": "accepted"}}}
+        return {"outcome": "passed"}
+
+    monkeypatch.setattr(upgrades, "_prepare_attempt", prepare)
+    monkeypatch.setattr(upgrades, "self_test", step)
+    with pytest.raises(upgrades._Waiting, match="slow preparation"):
+        upgrades._run_checks(op)
+    assert op.check_observations[slow]["checks"]["cpu"]["disposition"] == "pending"
+    assert sum(row["outcome"] == "passed" for row in op.check_observations.values()) == 3
+    ready = True
+    upgrades._run_checks(op)
+    assert len(check_gate.checks) == 4
+    assert {row["outcome"] for row in op.check_observations.values()} == {"passed"}
+
+
+def test_uncertain_grant_fences_next_revision_and_reconciles_live_owner(tmp_path, check_gate, monkeypatch):
+    lost = []
+    def grant(key, action, authorization, **budget):
+        result = check_gate.authorize(key, action, authorization, **budget)
+        if not lost:
+            lost.append(key.removeprefix("authorize-"))
+            raise upgrades.CoordinatorClientError("unavailable", operation="operator_maintenance_control",
+                                                  boundary="transport", mutation_outcome="unknown")
+        return result
+
+    op = SimpleNamespace(
+        directory=tmp_path, inventory=object(),
+        intent={"operation_id": "window", "agents": {"worker": {}},
+                "declarations": {"worker": {"resident_profiles": [{}]}}, "timeout_seconds": 10},
+        gate=check_gate.observe, maintenance=grant, settled=lambda **kw: None,
+    )
+    monkeypatch.setattr(upgrades, "_prepare_attempt", lambda op, name, check, identity, **kw: {
+        "operation_id": identity, "authorization": {"check": check},
+    })
+    dispatch = []
+    def step(inventory, *, operation_id, _dispatch_only, **options):
+        if _dispatch_only:
+            dispatch.append(operation_id)
+            return {"checks": {"probe": {"disposition": "accepted"}}}
+        return {"outcome": "passed"}
+    monkeypatch.setattr(upgrades, "self_test", step)
+    with pytest.raises(upgrades.CoordinatorClientError):
+        upgrades._run_checks(op)
+    assert list(check_gate.checks) == lost and not dispatch
+    assert len(op.check_observations) == 2
+    binding = check_gate.checks[lost[0]]
+    check_gate.checks[lost[0]] = {"check": "another-binding"}
+    with pytest.raises(upgrades.QueueConflictError, match="authorization changed"):
+        upgrades._run_checks(op)
+    assert not dispatch
+    check_gate.checks[lost[0]] = binding
+    upgrades._run_checks(op)
+    assert set(dispatch) == set(check_gate.checks) and len(dispatch) == 2
