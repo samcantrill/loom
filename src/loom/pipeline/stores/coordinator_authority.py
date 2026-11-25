@@ -635,6 +635,18 @@ class AuthenticatedCoordinatorAuthority:
             COORDINATOR_UNBIND_ATTEMPT_PATH, run_uri, assignment_id, attempt_id
         )
 
+    def fail_prepared_attempt(
+        self, run_uri: str, *, assignment_id: str, attempt_id: str, reason: LifecycleReason,
+    ) -> bool:
+        result = self._call(
+            f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/attempts/fail-unstarted", run_uri,
+            body={**_attempt_pair_body(assignment_id, attempt_id), "reason": reason.to_dict()},
+        )
+        failed = _body_required(result, "failed")
+        if type(failed) is not bool:
+            raise ValueError("invalid unstarted failure receipt")
+        return failed
+
     def grant_prepared_attempt(
         self, run_uri: str, *, assignment_id: str, attempt_id: str
     ) -> ExecutionFence:

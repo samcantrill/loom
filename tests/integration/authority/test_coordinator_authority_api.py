@@ -747,3 +747,29 @@ def test_annotation_routes_refuse_retired_import_fields_without_effects(tmp_path
     assert authority.read_run_annotations(RUN_URI) is None
     assert authority.list_run_notes(RUN_URI).notes == ()
     assert authority.open_run(RUN_URI).to_dict() == before
+
+
+@pytest.mark.parametrize("grant_first", [False, True])
+def test_unstarted_failure_receipt_arbitrates_against_grant(tmp_path, grant_first):
+    from loom.pipeline.stores.read_models import LifecycleReason
+
+    repository, authority = _authority(tmp_path)
+    revision = repository.admit_run(RUN_URI)
+    authority.bind_coordinator_admission(RUN_URI, CoordinatorAdmissionRequest(
+        operation_id="admit-1", coordinator_id="coordinator-1", run_uri=RUN_URI, intent_digest="intent-1",
+    ))
+    prepared = authority.ensure_prepared_attempt(RUN_URI, _prepared_request(revision))
+    binding = dict(assignment_id="assignment-1", attempt_id=prepared.attempt.attempt_id)
+    authority.bind_prepared_attempt(RUN_URI, **binding)
+    reason = LifecycleReason(code="worker.slurm_bootstrap_failed", detail={"job_id": "1200"})
+    if grant_first:
+        fence = authority.grant_prepared_attempt(RUN_URI, **binding)
+        assert not authority.fail_prepared_attempt(RUN_URI, **binding, reason=reason)
+        assert authority.grant_prepared_attempt(RUN_URI, **binding) == fence
+    else:
+        assert authority.fail_prepared_attempt(RUN_URI, **binding, reason=reason)
+        before = authority.open_run(RUN_URI)
+        assert authority.fail_prepared_attempt(RUN_URI, **binding, reason=reason)
+        assert authority.open_run(RUN_URI) == before
+        assert before.stages[0].attempts[0].reason == reason
+        assert before.stages[0].status is StageStatus.FAILED

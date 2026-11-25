@@ -102,6 +102,15 @@ class _ScopedCoordinatorAuthority:
             run_uri, assignment_id=assignment_id, attempt_id=attempt_id
         )
 
+    def fail_prepared_attempt(
+        self, run_uri: str, *, assignment_id: str, attempt_id: str, reason: LifecycleReason,
+    ) -> bool:
+        self._run(run_uri)
+        self._require_ordinary_mutation(assignment_id)
+        return self._store.fail_prepared_attempt(
+            run_uri, assignment_id=assignment_id, attempt_id=attempt_id, reason=reason,
+        )
+
     def grant_prepared_attempt(
         self, run_uri: str, *, assignment_id: str, attempt_id: str
     ):

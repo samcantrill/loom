@@ -57,6 +57,7 @@ _ROUTES = {
     "/cancellation/finalize": AuthorityMutationOperation.FINALIZE_CANCELLATION,
     "/attempts/prepare": AuthorityMutationOperation.ENSURE_PREPARED_ATTEMPT,
     "/attempts/bind": AuthorityMutationOperation.BIND_PREPARED_ATTEMPT,
+    "/attempts/fail-unstarted": AuthorityMutationOperation.FAIL_PREPARED_ATTEMPT,
     "/attempts/unbind": AuthorityMutationOperation.UNBIND_PREPARED_ATTEMPT,
     "/attempts/grant": AuthorityMutationOperation.GRANT_PREPARED_ATTEMPT,
     "/attempts/start": AuthorityMutationOperation.CONFIRM_EXECUTION_STARTED,

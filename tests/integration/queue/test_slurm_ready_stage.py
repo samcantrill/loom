@@ -499,6 +499,7 @@ def _exercise_mixed_route_run(
     provider_retry_state: str | None = None,
     provider_retry_winner: str | None = None,
     prestart_failure: bool = False,
+    bootstrap_failure: str | None = None,
     replayable_start: bool = False,
     recovery_terminal_state: str | None = None,
     native_failure: bool = False,
@@ -625,11 +626,13 @@ def _exercise_mixed_route_run(
         artifact_store=LocalArtifactStore(run_store.local_artifact_root(run_uri)),
         persist=True,
     )
+    retry = {"retry": {"enabled": True, "max_attempts": 2}} if bootstrap_failure == "retry" else None
     run_store.write_runtime_metadata(
         run_uri,
         {
             "executor": "local",
             "stages": {name: {"executor": "local"} for name in pipeline.stage_names},
+            **({"reliability": retry} if retry else {}),
         },
     )
     run_store.write_config_snapshot(
@@ -644,6 +647,7 @@ def _exercise_mixed_route_run(
         pipeline=pipeline,
         execution_requirements=_execution_requirements(pipeline),
         slurm_profiles=(profile,),
+        options={"run_uri": run_uri, "executor": "local", "reliability": retry} if retry else None,
     )
     authority = SQLitePerRunAuthorityStore(run_uri)
     authority.create_run(run_uri, status=RunStatus.RUNNING)
@@ -773,7 +777,8 @@ def _exercise_mixed_route_run(
         # accepted operation rather than preparing or submitting it again.
         daemon.stop()
         fresh_runner = FakeSlurmCommandRunner(
-            scripted_results={"sbatch": [AssertionError("must not submit")]},
+            scripted_results=None if bootstrap_failure == "retry" else {"sbatch": [AssertionError("must not submit")]},
+            starting_job_id=1201,
             command_policy=command_policy,
         )
         profile = _profile(
@@ -923,6 +928,88 @@ def _exercise_mixed_route_run(
                 capability=base64.b64encode(b"different-capability-material").decode(),
             )
         assignment_id = cast(str, registration["assignment_id"])
+        if bootstrap_failure is not None:
+            scoped = execution._remote_authority(run_uri)
+            record_retry = type(execution)._record_bootstrap_retry
+            def after_provider_release(owner, failed):
+                assert owner.slurm_assignments.read(assignment_id).compute_released_at is not None
+                return record_retry(owner, failed)
+            monkeypatch.setattr(type(execution), "_record_bootstrap_retry", after_provider_release)
+            assert execution._slurm_agent is not None
+            deadline = time.monotonic() + 25
+            while execution.slurm_submissions.read(record.assignment.operation_id).accounting_identity is None:
+                assert time.monotonic() < deadline
+                time.sleep(.01)
+            with daemon._cycle_lock, execution._slurm_agent._lock:
+                current = execution.slurm_assignments.read(assignment_id)
+                assert not execution._claim_failed_slurm_bootstrap(current, scoped)
+                history_state[0] = "FAILED"
+                while execution._slurm_agent._commands.contains(record.assignment.operation_id):
+                    assert time.monotonic() < deadline
+                    execution._drive_local_slurm(current)
+                    time.sleep(.01)
+                _agent_observation(
+                    execution, record.assignment.operation_id, expected_job_id="1200",
+                    scheduler_state="FAILED", scheduler_source="sacct",
+                    observed_at="2030-01-01T00:00:01+00:00",
+                )
+                if bootstrap_failure == "grant_won":
+                    # Crash window between the authority CAS and the local projection.
+                    assert view.inputs_ready(assignment_id, incarnation)
+                    granted = scoped.grant_prepared_attempt(
+                        run_uri, assignment_id=assignment_id, attempt_id=record.assignment.attempt_id,
+                    )
+                    assert not execution._claim_failed_slurm_bootstrap(current, scoped)
+                    assert view.grant(assignment_id, incarnation) == granted.fencing_token
+                    return
+                if bootstrap_failure == "cancelling":
+                    with monkeypatch.context() as patch:
+                        patch.setattr("loom.queue.local_daemon_execution.action_attempt_cancelled", lambda *args: True)
+                        assert not execution._claim_failed_slurm_bootstrap(current, scoped)
+                    assert execution.slurm_assignments.read(assignment_id).state == "accepted"
+                    return
+                if bootstrap_failure == "authority_first":
+                    # Lose the coordinator projection after the authority unbind commits.
+                    with monkeypatch.context() as patch:
+                        def interrupt(*args):
+                            raise OSError("projection lost")
+                        patch.setattr(execution.slurm_assignments, "claim_failed_bootstrap", interrupt)
+                        with pytest.raises(OSError, match="projection lost"):
+                            execution._claim_failed_slurm_bootstrap(current, scoped)
+                else:
+                    assert execution._claim_failed_slurm_bootstrap(current, scoped)
+                    with pytest.raises(QueueConflictError, match="already failed"):
+                        view.grant(assignment_id, incarnation)
+            daemon.stop()
+            daemon = LocalDaemon(reopened_config, clock=clock)
+            daemon.start()
+            execution = daemon._execution
+            assert execution is not None
+            deadline = time.monotonic() + 25
+            while execution.slurm_assignments.read(assignment_id).state != "released":
+                assert time.monotonic() < deadline, daemon.status()
+                time.sleep(.02)
+            settled = execution.slurm_assignments.read(assignment_id)
+            assert settled.report is None and settled.fence is None and not settled.start_consumed
+            train = next(s for s in authority.open_run(run_uri).stages if s.stage_name == "train")
+            assert train.attempts[0].reason.code == "worker.slurm_bootstrap_failed"
+            decision, = authority.list_retry_decisions(run_uri, stage_name="train")
+            assert decision.should_retry is (bootstrap_failure == "retry")
+            if bootstrap_failure == "retry":
+                assert decision.next_attempt == 2
+                while True:
+                    active = execution.slurm_assignments.list_run_unreleased(run_uri)
+                    if any(job.job_id and job.assignment.attempt == 2 for job in active):
+                        break
+                    assert time.monotonic() < deadline, daemon.status()
+                    time.sleep(.02)
+                assert all(job.assignment.assignment_id != assignment_id for job in active)
+                assert all(job.job_id == "1201" for job in active)
+                assert sum(call[0] == "sbatch" for call in runner.calls) == 1
+                assert sum(call[0] == "sbatch" for call in fresh_runner.calls) == 1
+            else:
+                assert sum(call[0] == "sbatch" for call in runner.calls) == 1
+            return
         delivery = SlurmStageDelivery.from_dict(registration["delivery"])
         assert (
             delivery.to_dict()
@@ -3007,4 +3094,12 @@ def test_automatic_terminal_recovery_survives_grace_and_pending_restart(tmp_path
     _exercise_mixed_route_run(
         tmp_path, monkeypatch, accounting_history=True, automatic_recovery=True,
         recovery_terminal_state="TIMEOUT", prestart_failure=prestart, late_terminal_result=late_result,
+    )
+
+
+@pytest.mark.parametrize("boundary", ["claimed", "authority_first", "grant_won", "cancelling", "retry"])
+def test_failed_registered_job_before_grant(tmp_path, monkeypatch, boundary):
+    _exercise_mixed_route_run(
+        tmp_path, monkeypatch, accounting_history=True, automatic_recovery=True,
+        bootstrap_failure=boundary,
     )

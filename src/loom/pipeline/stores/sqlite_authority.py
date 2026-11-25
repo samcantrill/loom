@@ -1546,6 +1546,17 @@ class SQLitePerRunAuthorityStore:
     def unbind_prepared_attempt(
         self, run_uri: str, *, assignment_id: str, attempt_id: str
     ) -> None:
+        self._unbind_prepared_attempt(run_uri, assignment_id, attempt_id, None)
+
+    def fail_prepared_attempt(
+        self, run_uri: str, *, assignment_id: str, attempt_id: str, reason: LifecycleReason,
+    ) -> bool:
+        """Settle only the exact still-bound attempt. A grant that already won is preserved."""
+        return self._unbind_prepared_attempt(run_uri, assignment_id, attempt_id, reason)
+
+    def _unbind_prepared_attempt(
+        self, run_uri: str, assignment_id: str, attempt_id: str, reason: LifecycleReason | None,
+    ) -> bool:
         self._bind_run_uri(run_uri)
         with self._transaction(run_uri) as conn:
             receipt = conn.execute(
@@ -1556,17 +1567,44 @@ class SQLitePerRunAuthorityStore:
             if receipt is not None:
                 if receipt["attempt_id"] != attempt_id:
                     raise AuthorityStoreError("assignment unbind conflicts")
-                return
+                if reason is None:
+                    return True
+                attempt = conn.execute(
+                    "SELECT status, reason_json FROM attempts WHERE attempt_id = ?",
+                    (attempt_id,),
+                ).fetchone()
+                return (attempt is not None and attempt["status"] == StageStatus.FAILED.value
+                        and attempt["reason_json"] == _json_dumps(reason.to_dict()))
             row = conn.execute(
                 "SELECT attempt_id, state FROM managed_attempt_bindings WHERE assignment_id = ?",
                 (assignment_id,),
             ).fetchone()
+            if (reason is not None and row is not None and row["attempt_id"] == attempt_id
+                and row["state"] in {"granted", "running", "terminal"}):
+                return False
             if (
                 row is None
                 or row["attempt_id"] != attempt_id
                 or row["state"] != "bound"
             ):
                 raise AuthorityStoreError("only the same ungranted binding may unbind")
+            if reason is not None:
+                _require_no_cancellation_epoch(conn, attempt_id=attempt_id)
+                attempt = conn.execute(
+                    "SELECT stage_name, status FROM attempts WHERE attempt_id = ?",
+                    (attempt_id,),
+                ).fetchone()
+                if attempt is None or attempt["status"] != StageStatus.PENDING.value:
+                    raise AuthorityStoreError("unstarted failure requires the bound pending attempt")
+                revision = self._next_revision(conn)
+                conn.execute(
+                    "UPDATE attempts SET status = ?, revision_sequence = ?, reason_json = ? "
+                    "WHERE attempt_id = ?",
+                    (StageStatus.FAILED.value, revision.sequence, _json_dumps(reason.to_dict()), attempt_id),
+                )
+                _upsert_stage(conn, stage_name=attempt["stage_name"], status=StageStatus.FAILED,
+                              revision=revision, reason=reason)
+                _touch_run(conn, revision=revision)
             conn.execute(
                 "INSERT INTO managed_attempt_unbind_receipts "
                 "(assignment_id, attempt_id) VALUES (?, ?)",
@@ -1576,6 +1614,7 @@ class SQLitePerRunAuthorityStore:
                 "DELETE FROM managed_attempt_bindings WHERE assignment_id = ?",
                 (assignment_id,),
             )
+            return True
 
     def grant_prepared_attempt(
         self, run_uri: str, *, assignment_id: str, attempt_id: str
