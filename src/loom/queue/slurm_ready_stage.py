@@ -894,6 +894,7 @@ class SQLiteSlurmStageAssignments:
             ("unknown", "accepted"),
             ("unknown", "conflict"),
             ("accepted", "granted"),
+            ("bootstrap_failed", "terminal"),
             ("granted", "running"),
             ("granted", "terminal"),
             ("running", "terminal"),
@@ -1054,7 +1055,7 @@ class SQLiteSlurmStageAssignments:
                 "released",
             }:
                 return current
-            if current in {"conflict", "rejected"}:
+            if current in {"conflict", "rejected", "bootstrap_failed"}:
                 return current
             if row["job_id"] is not None and (
                 str(row["job_id"]) != job_id
@@ -1188,6 +1189,23 @@ class SQLiteSlurmStageAssignments:
             # Materialize its delivery after the write transaction ends.
             return self._record(row)
         return self.read(assignment.assignment_id)
+
+    def claim_failed_bootstrap(
+        self, record: SlurmStageRecord, identity: Mapping[str, PlainData], observed_at: str,
+    ) -> None:
+        """Journal the authoritative unstarted failure before retry evaluation and release."""
+        observation = {"identity": dict(identity), "first_observed_at": observed_at, "phase": "bootstrap"}
+        with self._transaction() as conn:
+            changed = conn.execute(
+                f"UPDATE {_ASSIGNMENT_TABLE} SET state='bootstrap_failed', terminal_observation_json=? "
+                "WHERE assignment_id=? AND state='accepted' AND job_id=? AND cluster=? "
+                "AND bootstrap_incarnation=? AND capability_consumed=1 AND fence IS NULL "
+                "AND start_consumed=0 AND process_execution_id IS NULL AND report_json IS NULL",
+                (_json(observation), record.assignment.assignment_id, record.job_id, record.cluster,
+                 record.bootstrap_incarnation),
+            ).rowcount
+            if changed != 1:
+                raise QueueConflictError("SLURM bootstrap failure no longer matches the accepted job")
 
     def mark_input_ready(self, assignment_id: str, incarnation: str) -> bool:
         """Return false until the registered job has the agent's submission acknowledgement."""

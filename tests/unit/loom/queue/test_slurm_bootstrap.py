@@ -351,7 +351,10 @@ def _exercise_bootstrap(tmp_path, monkeypatch, pending_responses, durable_files,
         assert actions == ["register", "inputs_ready", "inputs_ready", "inputs_ready"]
         assert captured == {}
         (diagnostic,) = config.workspace_root.glob("bootstrap-failure-*.json")
-        assert json.loads(diagnostic.read_text())["offline_grant"] is False
+        marker = json.loads(diagnostic.read_text())
+        assert marker["offline_grant"] is False
+        assert marker["last_completed"] == "inputs_staged"
+        assert marker["awaiting"] == "submission_ack"
     else:
         run_slurm_bootstrap(
             operation_id="operation-1", request_digest="digest-1", config=config

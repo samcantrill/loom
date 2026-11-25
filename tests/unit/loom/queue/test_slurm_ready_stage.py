@@ -171,12 +171,12 @@ def test_strict_registration_replay_after_failed_sync(tmp_path, monkeypatch):
     assert (workspace.root / "registration.json").read_bytes() == before
 
 
-def _shared_slurm_workspace(tmp_path):
+def _shared_slurm_workspace(tmp_path, *, assignment_id="assignment-1"):
     from dataclasses import fields, replace
     from tests.unit.loom.queue.test_remote_stage_execution import _shared_publication_workspace
     from loom.queue.slurm_ready_stage import SlurmBootstrapWorkspace, SlurmStageDelivery
 
-    resident, profile, _launch, result = _shared_publication_workspace(tmp_path)
+    resident, profile, _launch, result = _shared_publication_workspace(tmp_path, assignment_id=assignment_id)
     request = resident.request()
     from loom.queue._remote_stage_execution import ResidentProfileDescriptor
     assert isinstance(request.profile, ResidentProfileDescriptor)

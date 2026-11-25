@@ -377,6 +377,20 @@ response; empty history still leaves execution unresolved. Legacy observations
 that expose only `unavailable` cannot distinguish empty from failed queries and
 back off conservatively. Inconclusive containment checks also back off.
 
+The submit agent keeps each completed HTTP acknowledgement until its assignment
+collects it. New requests wait when the 32 outstanding slots or eight active
+HTTP slots are full. Consumed replies have a separate bounded cache. On a fresh
+fenced task the agent can reuse an identical, locally applied scheduler receipt
+at the coordinator's exact sequence while driving result publication.
+
+With automatic terminal recovery enabled, a registered bootstrap whose job
+ends in `FAILED`, `TIMEOUT` or `CANCELLED` before its grant can settle from
+matching `sacct` accounting. The authority arbitrates this failure against the
+grant for that assignment and attempt. The provider confirms containment and
+credential revocation before Loom evaluates the stage's retry policy. The
+attempt carries the reason `worker.slurm_bootstrap_failed`. Bootstrap deadline
+files record the last completed phase and the operation still awaited.
+
 An available fenced result is delivered before a due scheduler observation and
 while observations are deferred, including while drained. Result acceptance does
 not release an assignment without the existing containment/revocation protocol.
