@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Event
 from time import monotonic, sleep
 from uuid import uuid4
 from typing import TYPE_CHECKING, Any, cast
@@ -36,6 +38,17 @@ class _Trial:
     request: RunRequest
     available: AvailableDeployment
     last: dict[str, Any]
+    attachment_released: bool = False
+
+    def release(self, deadline: float | None) -> None:
+        from loom.queue.errors import QueueError
+
+        if not self.attachment_released:
+            try:
+                self.available.release(deadline)
+            except QueueError:
+                pass
+            self.attachment_released = True
 
 
 def _close(available: AvailableDeployment, deadline: float | None) -> None:
@@ -74,6 +87,7 @@ def run_waiting_window(
     _validate_run_selection(template, selection)
     deadline = monotonic() + timeout if timeout is not None else None
     observing = False
+    detached = Event()
     tried: set[str] = set()
     active: dict[str, _Trial] = {}
     cleaning: dict[str, tuple[_Trial, RunObservation, float]] = {}
@@ -171,53 +185,48 @@ def run_waiting_window(
             _close(available, deadline)
             raise
 
-    def advance(trial: _Trial) -> tuple[bool, bool]:
-        # A single passive pass per owner. The lower-level iterator also lets
-        # Ctrl-C escape to the invocation rather than consuming it as a run wait.
-        observed: RunObservation | None = None
-        for observed in trial.available.client._run_observation_steps(
-            trial.request.preparation.operation_id,
-            trial.available.description,
-            deadline=deadline,
-        ):
-            pass
-        assert observed is not None
-        row = cast(dict[str, Any], observed.to_dict())
-        terminal = _terminal(row)
-        blocked = (row.get("admission") or {}).get("state") == "BLOCKED"
-        if row != trial.last:
-            _update_state(
-                root, lambda runs: _record_observation(runs[trial.trial_id], row)
-            )
-            trial.last = row
-        if terminal or blocked:
-            # Release the same startup attachment that protected this send.
-            # Other accepted operations and their attachments protect their own roles.
-            try:
-                trial.available.release(deadline)
-            except QueueError:
+    def read_trial(trial: _Trial) -> RunObservation | None:
+        # Each trial's passive read has its own client. Only this worker can
+        # replace it if the run-owned service retired after physical release.
+        observed = None
+        try:
+            for observed in trial.available.client._run_observation_steps(
+                trial.request.preparation.operation_id, trial.available.description, deadline=deadline,
+            ):
                 pass
-            if terminal:
-                cleanup_end = monotonic() + selection.startup_seconds
-                cleaning[trial.trial_id] = (
-                    trial,
-                    observed,
-                    min(cleanup_end, deadline) if deadline is not None else cleanup_end,
-                )
-            else:
-                outcome = _run_outcome(
-                    trial.available, observed, wait=False, deadline=deadline
-                )
-                _update_state(
-                    root,
-                    lambda runs: _record_observation(
-                        runs[trial.trial_id], row, outcome.cleanup
-                    ),
-                )
-                trial.available.client.close()
-            del active[trial.trial_id]
-        return terminal, blocked
+        except CoordinatorClientError as exc:
+            if exc.code not in {"unavailable", "deadline_exceeded"} or expired() or detached.is_set():
+                raise
+            previous = trial.available
+            trial.release(deadline)
+            trial.available = ensure_available(
+                selection, attachment_id="observe-" + uuid4().hex,
+                expected_coordinator_id=previous.connection_id, deadline=deadline,
+            )
+            trial.attachment_released = False
+            previous.client.close()
+            return None
+        assert observed is not None
+        return observed
 
+    def cleanup_step(trial: _Trial, observation: RunObservation, end: float):
+        trial.release(end)
+        return _cleanup_step(trial.available, observation, end)
+
+    def close_after(trial: _Trial, pending: Future | None) -> None:
+        # A detached caller can return while the transport is unwinding.
+        # The worker that closes the client waits for its physical owner.
+        if pending is not None:
+            wait((pending,))
+        try:
+            trial.release(monotonic() + selection.startup_seconds)
+        finally:
+            trial.available.client.close()
+
+    readers = ThreadPoolExecutor(max_workers=min(limit, 8), thread_name_prefix="sweep-read")
+    cleaners = ThreadPoolExecutor(max_workers=min(limit, 2), thread_name_prefix="sweep-cleanup")
+    reads: dict[str, Future[RunObservation | None]] = {}
+    cleanup_steps: dict[str, Future] = {}
     try:
         while not expired():
             while len(active) < limit and not expired():
@@ -243,38 +252,46 @@ def run_waiting_window(
             if not (active or cleaning) or expired():
                 return
             completed = False
-            for trial in tuple(active.values()):
+            for trial_id, trial in tuple(active.items()):
+                if trial_id not in reads:
+                    reads[trial_id] = readers.submit(read_trial, trial)
+                if not reads[trial_id].done():
+                    continue
+                future = reads.pop(trial_id)
                 try:
-                    terminal, blocked = advance(trial)
+                    observed = future.result()
                 except CoordinatorClientError as exc:
                     if exc.code not in {"unavailable", "deadline_exceeded"}:
                         raise
-                    if expired():
-                        return
-                    # A run-owned service may retire between the last physical
-                    # release and our final read. Reopen only the bound owner.
-                    previous = trial.available
-                    _close(previous, deadline)
-                    try:
-                        trial.available = ensure_available(
-                            selection,
-                            attachment_id="observe-" + uuid4().hex,
-                            expected_coordinator_id=previous.connection_id,
-                            deadline=deadline,
-                        )
-                    except CoordinatorClientError as reopen_error:
-                        if reopen_error.code in {"unavailable", "deadline_exceeded"}:
-                            return
-                        raise
+                    # Keep the uncertain slot in the manifest. Healthy peers
+                    # can still settle and refill their own slots.
+                    readers.submit(close_after, trial, None)
+                    del active[trial_id]
                     continue
-                if blocked or expired():
+                if observed is None:
+                    continue
+                row = cast(dict[str, Any], observed.to_dict())
+                if row != trial.last:
+                    _update_state(root, lambda runs: _record_observation(runs[trial_id], row))
+                    trial.last = row
+                if (row.get("admission") or {}).get("state") == "BLOCKED":
+                    outcome = _run_outcome(trial.available, observed, wait=False, deadline=deadline)
+                    _update_state(root, lambda runs: _record_observation(runs[trial_id], row, outcome.cleanup))
                     return
-                completed |= terminal
+                if _terminal(row):
+                    end = monotonic() + selection.startup_seconds
+                    cleaning[trial_id] = trial, observed, min(end, deadline) if deadline is not None else end
+                    del active[trial_id]
+                    completed = True
             # A newly free slot goes to the next trial before terminal cleanup.
             if completed:
                 continue
             for trial_id, (finished, observed, end) in tuple(cleaning.items()):
-                cleanup = _cleanup_step(finished.available, observed, end)
+                if trial_id not in cleanup_steps:
+                    cleanup_steps[trial_id] = cleaners.submit(cleanup_step, finished, observed, end)
+                if not cleanup_steps[trial_id].done():
+                    continue
+                cleanup = cleanup_steps.pop(trial_id).result()
                 if cleanup is not None:
                     outcome = _role_outcome(finished.available, observed, cleanup)
                     _update_state(
@@ -292,7 +309,16 @@ def run_waiting_window(
                     else min(0.1, max(0, deadline - monotonic()))
                 )
     finally:
-        for trial in active.values():
-            _close(trial.available, deadline)
-        for finished, _, _ in cleaning.values():
-            finished.available.client.close()
+        detached.set()
+        for trial_id, trial in active.items():
+            pending = reads.get(trial_id)
+            if pending is not None:
+                pending.cancel()
+            readers.submit(close_after, trial, pending)
+        for trial_id, (trial, _, _) in cleaning.items():
+            pending = cleanup_steps.get(trial_id)
+            if pending is not None:
+                pending.cancel()
+            cleaners.submit(close_after, trial, pending)
+        readers.shutdown(wait=False)
+        cleaners.shutdown(wait=False)

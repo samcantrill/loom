@@ -267,6 +267,7 @@ def _records(root) -> dict[str, Any]:
 
 def test_waiting_window_refills_while_first_trial_is_running(tmp_path, monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
     import time
     from loom import _run
 
@@ -293,15 +294,28 @@ def test_waiting_window_refills_while_first_trial_is_running(tmp_path, monkeypat
     root = tmp_path / "sweep"
     send = _run._start_exact
     sent = []
+    status_entered, allow_status = Event(), Event()
 
     def start(available, request, **kwargs):
         trial = request.preparation.run_name
+        if trial == "trial-0001":
+            native_call = available.client._native_call
+
+            def delayed_reply(operation, *args, **kwargs):
+                reply = native_call(operation, *args, **kwargs)
+                if operation == "operation":
+                    status_entered.set()
+                    assert allow_status.wait(75)
+                return reply
+
+            monkeypatch.setattr(available.client, "_native_call", delayed_reply)
         if trial == "trial-0002":
             end = time.monotonic() + 35
             while not (marker / "produce.started").exists():
                 assert time.monotonic() < end, "first worker failed to start"
                 time.sleep(0.05)
         if trial == "trial-0003":
+            assert status_entered.is_set() and not allow_status.is_set()
             rows = _records(root)
             assert rows["trial-0002"]["observation"]["admission"]["state"] == "SUCCEEDED"
             assert not (marker / "release").exists()
@@ -326,6 +340,7 @@ def test_waiting_window_refills_while_first_trial_is_running(tmp_path, monkeypat
             assert (marker / "produce.started").exists()
             assert _records(root)["trial-0003"]["observation"]["admission"]["state"] == "SUCCEEDED"
         finally:
+            allow_status.set()
             marker.mkdir(exist_ok=True)
             (marker / "release").touch()
         assert future.result(timeout=30).succeeded_count == 3

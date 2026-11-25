@@ -64,7 +64,10 @@ admission frees its slot while the caller continues to collect the native
 per-role cleanup result. Concurrent invocations reuse the same trial identities.
 
 With a wider waiting window, `--timeout` bounds the invocation. The deployment's
-observation limit starts after the initial submissions. A deadline, interruption
+observation limit starts after the initial submissions. Trials use independent
+status reads. A later terminal receipt can free its slot while an earlier
+request is outstanding. Closing the observer lets each pending read release
+its client when the exchange returns. A deadline, interruption
 or blocked admission detaches the observer. The manifest preserves each accepted
 operation and each intent awaiting confirmation. Explicitly run the same sweep
 to resume. The status field `metadata.submission_state` on each trial distinguishes

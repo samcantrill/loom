@@ -656,6 +656,82 @@ def test_two_waiting_callers_count_the_same_uncertain_slot(tmp_path, monkeypatch
     assert len(ids) == 3
 
 
+def test_wider_window_detaches_with_an_active_read_and_resumes_same_trials(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from loom import _run, deployment
+
+    template = _template()
+    plan = plan_sweep(ManualSweepSpec(
+        sweep_id="detach-window", run_uri_root="file:///runs", trials=tuple(
+            ManualTrialSpec(overrides={"pipeline.name": name}) for name in ("a", "b", "c")
+        ),
+    ))
+    selection = SimpleNamespace(source=template.preparation.source, preparation_profile="local",
+                                startup_seconds=4, wait_seconds=0.8)
+    monkeypatch.setattr(deployment, "load_deployment", lambda _: selection)
+    entered, allow, closed = Event(), Event(), Event()
+    requests = {}
+
+    def observation(request, state):
+        row = _outcome(request, state).observation.to_dict()
+        row["connection"] = {"coordinator_id": "owner"}
+        return SimpleNamespace(to_dict=lambda: row, operation=SimpleNamespace(state="applied"),
+                               admission=SimpleNamespace(state=state))
+
+    def start(available, request, **kwargs):
+        op = request.preparation.operation_id
+        assert op not in requests
+        requests[op] = request
+        return observation(request, "ACTIVE")
+
+    def open_trial(*args, attachment_id, **kwargs):
+        original_read = False
+
+        def read(op, connection, **kwargs):
+            nonlocal original_read
+            request = requests[op]
+            if request.preparation.run_name == "trial-0001" and attachment_id == op:
+                original_read = True
+                entered.set()
+                assert allow.wait(6)
+            yield observation(request, "SUCCEEDED" if allow.is_set() else "ACTIVE")
+
+        def close():
+            if original_read:
+                assert allow.is_set()
+                closed.set()
+
+        return SimpleNamespace(connection_id="owner", roles={}, description=SimpleNamespace(coordinator_id="owner"),
+                               selection=selection, release=lambda end: None,
+                               client=SimpleNamespace(_run_observation_steps=read, close=close))
+
+    monkeypatch.setattr(deployment, "ensure_available", open_trial)
+    monkeypatch.setattr(_run, "_start_exact", start)
+    monkeypatch.setattr(_run, "_cleanup_step", lambda *args: {"coordinator": {"state": "persistent/borrowed"}})
+
+    def invoke():
+        return run_sweep(plan, request_template=template, deployment="selection.json",
+                         sweep_dir=tmp_path, max_in_flight=2)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        watcher = pool.submit(invoke)
+        try:
+            assert entered.wait(3)
+            watcher.result(timeout=3)
+            assert not closed.is_set()
+            saved = _records(tmp_path)
+            assert set(saved) == {"trial-0001", "trial-0002"}
+            assert all(r["observation"]["admission"]["state"] == "ACTIVE" for r in saved.values())
+        finally:
+            allow.set()
+        assert closed.wait(3)
+    assert _records(tmp_path) == saved
+    selection.wait_seconds = None
+    assert invoke().succeeded_count == 3
+    assert len(requests) == 3
+
+
 @pytest.mark.parametrize("window", [0, -1, 1.5, True])
 def test_invalid_window_precedes_sweep_persistence(tmp_path, window):
     with pytest.raises(SweepProtocolError, match="positive integer"):
