@@ -122,6 +122,7 @@ def test_installed_runtime_upgrade(case):
         for name, row in before["hosts"].items()
     } == selected["source_releases"]
     if slurm:
+        assert before["sequence"][-1] == "revoke checks and preserve the closed gate"
         assert before["gate"]["maintenance_id"] == selected["maintenance_id"]
         assert before["gate"]["state"] == "closed" and before["gate"]["settled"] and not before["gate"]["checks"]
         assert set(before["slurm"]) == set(before["hosts"])

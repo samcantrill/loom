@@ -326,15 +326,14 @@ def preview(
         "candidate": "isolated installation and native probe required before gate closure",
         "recover_retained_results": recover_retained_results,
         "sequence": ([
-            "prepare candidate", "close admission", "conditional drain",
+            "prepare candidate", "verify the original closed gate" if binding else "close admission", "conditional drain",
             "prove durable contained results", "stop and replace communication runtimes",
             "replay retained results while drained", "resume agents",
             "wait admitted DAGs", "authorize exact checks",
             "wait checks and release", "conditional policy restoration",
-            "revoke checks and reopen",
         ] if recover_retained_results else [
             "prepare candidate",
-            "close admission",
+            "verify the original closed gate" if binding else "close admission",
             "wait admitted work and native settlement",
             "conditional drain",
             "stop and replace",
@@ -342,8 +341,7 @@ def preview(
             "authorize exact checks",
             "wait checks and release",
             "conditional policy restoration",
-            "revoke checks and reopen",
-        ]),
+        ]) + ["revoke checks and preserve the closed gate" if binding else "revoke checks and reopen"],
         "irreversible": "first service stop/replacement intent",
         "required_capabilities": list(REQUIRED_CAPABILITIES),
     }
@@ -919,11 +917,8 @@ def _prepare_attempt(operation, name, check, identity, previous=None, *, deadlin
 
     preparation_resources = resources("cpu")
     if "slurm_profile" in intent:
-        alias = intent["requests"][check]["preparation"]["preparation_profile"]
-        options = declaration["preparation"]["profiles"][alias].get("runtime_options", {})
-        override = options.get("stage_options", {}).get("prepare", {}).get("resources")
-        if override is not None:
-            preparation_resources = ResourceRequest.from_dict(override).to_dict()
+        capture = read(operation.receipts / ("coordinator-upgrade-check-capture-" + name) / "receipt.json")
+        preparation_resources = capture["preparation_resources"][check]
     return {
         "maintenance_id": binding["operation_id"],
         "target_intent_digest": binding["target_intent_digest"],

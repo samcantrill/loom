@@ -212,3 +212,17 @@ def test_maintenance_child_binds_exact_slurm_route(tmp_path, monkeypatch, mismat
             _maintenance._check_target(check, intent, preparation_child=True)
     else:
         _maintenance._check_target(check, intent, preparation_child=True)
+
+
+def test_preparation_grant_uses_the_native_planners_for_authored_resource_units():
+    from loom.fleet._check_preflight import _slurm_preparation_resources
+    from loom.pipeline.resources import ResourceRequest
+    from loom.queue.local_daemon import _default_scheduling_components
+
+    options = {"executor": "local", "stage_options": {"prepare": {"resources": {
+        "entries": {"memory": {"kind": "memory", "amount": 16384, "unit": "MiB"}},
+    }}}}
+    result = ResourceRequest.from_dict(_slurm_preparation_resources(options, _default_scheduling_components()))
+    assert result.entries["cpu"].amount == 1
+    assert result.entries["memory"].amount == 16384 * 1024**2
+    assert result.entries["memory"].unit == "B"

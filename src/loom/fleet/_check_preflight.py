@@ -13,6 +13,22 @@ from loom.fleet._timing import timed
 from loom.queue.errors import QueueConflictError
 
 
+def _slurm_preparation_resources(options, components):
+    """Use the child stage's native planners to bind canonical demand including units."""
+    from loom.pipeline.resources import ResourceEntry, ResourceRequest
+    from loom.pipeline.runtime.metadata import resolve_run_runtime
+    from loom.pipeline.runtime.options import RunOptions
+    from loom.pipeline.runtime.placement import StagePlacementPolicy, resolve_stage_placement
+
+    runtime = resolve_run_runtime(RunOptions.from_dict(options), stage_ids=("prepare",))["prepare"]
+    placement = resolve_stage_placement(
+        authored=ResourceRequest({"cpu": ResourceEntry("cpu", 1, "count")}),
+        runtime=cast(ResourceRequest, runtime.resources), resource_policy=runtime.resource_policy,
+        policy=StagePlacementPolicy(), planners={p.resource_kind: p for p in components.planners},
+    )
+    return placement.resource_request.to_dict()
+
+
 @timed("check_preflight_capture")
 def capture(request):
     """Capture the selected check through the target coordinator's native policy."""
@@ -33,11 +49,16 @@ def capture(request):
         raise QueueConflictError("candidate check preparation is disabled")
     bindings = {}
     captures = {}
+    preparation_resources = {}
     for check, raw in request["checks"].items():
         selected = PrepareRunRequest.from_dict(raw)
         if selected.run_name is None:
             raise QueueConflictError("check preflight requires a named target")
         profile = cast(Mapping[str, PlainData], policy.select(selected)["profile"])
+        if profile.get("execution_route"):
+            preparation_resources[check] = _slurm_preparation_resources(
+                profile["runtime_options"], service.daemon.scheduling_components,
+            )
         processor = (selected.execution.project_integration if selected.execution is not None
                      else cast(Mapping[str, PlainData] | None, profile.get("project_processor")))
         source = policy.source_roots[selected.source.root]
@@ -71,7 +92,7 @@ def capture(request):
             project_preparation=project,
             shared_scope=cast(Mapping[str, PlainData] | None, profile.get("shared_scope")),
         ).to_dict()
-    return {"bindings": bindings}
+    return {"bindings": bindings, **({"preparation_resources": preparation_resources} if preparation_resources else {})}
 
 
 @timed("check_preflight")
