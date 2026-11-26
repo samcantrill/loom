@@ -128,7 +128,7 @@ class SchedulingWaits:
                 ready_revision = attempt.ready_revision
                 if offer is not None and attempt.offer == offer:
                     attempt.confirm(offer, attempt.expires_ns, available, monotonic_ns())
-                self._finish(key, "reserved", assignment)
+                self._finish(key, "reserved", assignment, available=available)
             if offer is not None:
                 # A committed claim consumes this capacity observation for all peers.
                 for peer in self._attempts.values():
@@ -139,12 +139,13 @@ class SchedulingWaits:
                   assignment_id=assignment, offer_id=offer, projection_revision=record.projection_revision,
                   ready_projection_revision=ready_revision, request_available_ns=available)
 
-    def _finish(self, key: tuple[str, str], outcome: str, assignment: str | None) -> None:
+    def _finish(self, key: tuple[str, str], outcome: str, assignment: str | None, *, available: int | None = None) -> None:
         attempt = self._attempts.pop(key)
         attempt.transition("finished", monotonic_ns())
         summary: dict[str, PlainData] = {
             "stage_work_id": attempt.work_id, "attempt_id": attempt.attempt_id,
             "projection_revision": attempt.projection_revision,
+            "ready_projection_revision": attempt.ready_revision, "request_available_ns": available,
             "admission_id": attempt.admission_id, "assignment_id": assignment,
             "run_uri": key[0], "stage_name": key[1], "result": outcome,
             "eligible_request_ready_ns": attempt.eligible_request_ready_ns,

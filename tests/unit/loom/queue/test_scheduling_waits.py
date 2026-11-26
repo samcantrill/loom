@@ -78,9 +78,12 @@ def test_release_before_acceptance_reopens_the_same_attempt(monkeypatch):
     owner.reserved(first, "released-before-delivery", None, None)
     owner.ready(first)
     owner.ready(reopened)
-    owner.reserved(reopened, "accepted", None, None)
+    refreshed = _record("same", revision=4)
+    owner.ready(refreshed)
+    owner.reserved(refreshed, "accepted", None, 88)
     summaries = cast(list[dict], owner.summaries(first.run_uri))
     assert [(row["projection_revision"], row["assignment_id"]) for row in summaries] == [
-        (1, "released-before-delivery"), (3, "accepted"),
+        (1, "released-before-delivery"), (4, "accepted"),
     ]
+    assert [(s["ready_projection_revision"], s["request_available_ns"]) for s in summaries] == [(1, None), (3, 88)]
     assert events.count("attempt_ready") == 2
