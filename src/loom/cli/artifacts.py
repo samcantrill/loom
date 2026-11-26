@@ -34,7 +34,7 @@ def register_subparser(
     from .queue import _add_client_connection_arguments
     for action in ("describe", "read", "fetch"):
         native = actions.add_parser(action, help=f"{action} exact native artifacts")
-        _add_client_connection_arguments(native)
+        _add_client_connection_arguments(native, observation=True)
         _add_output_options(native)
         native.add_argument("--request", required=True, help="JSON native request; fetch uses selections and destination")
         native.set_defaults(handler=handle_access)
@@ -69,8 +69,20 @@ def handle_access(namespace: argparse.Namespace) -> int:
     except (ValueError, TypeError) as exc:
         raise _queue_cli_error(control_error("invalid_request", operation, {})) from exc
     except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
-    return _emit_daemon_payload(namespace, result)
+        raise _queue_cli_error(exc, namespace) from exc
+    if output_format_from_namespace(namespace) is OutputFormat.JSON:
+        return _emit_daemon_payload(namespace, result)
+
+    from ._terminal import fields
+
+    metadata = tuple(key for key in result if key != "content")
+    print("\n".join(fields(result, metadata)))
+    if "content" in result:
+        content = result["content"]
+        # Byte previews are base64. Text previews retain their own line endings.
+        preview = json.dumps(content, ensure_ascii=False) if result["format"] == "json" else content
+        sys.stdout.write("content:\n" + preview)
+    return int(ExitCode.SUCCESS)
 
 
 def handle_list(namespace: argparse.Namespace) -> int:

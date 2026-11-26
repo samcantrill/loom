@@ -231,8 +231,8 @@ assignment ownership. Revoking it does not prove process containment; normal
 fencing, terminal-winner behavior and release checks still apply. Only trusted
 coordinator mutations bind/release this permission. Current per-run SQLite and
 authority-service schemas retain result bindings and producer permissions
-together. Coordinator control schema 19 retains claims, demands and detachments;
-only its complete current schema is admitted, without offline upgrades. See [action lifecycle](agent-preparation.md#verified-action-results-across-graphs).
+together. Coordinator control schema 20 retains claims, demands and detachments.
+Startup requires the complete current schema. See [action lifecycle](agent-preparation.md#verified-action-results-across-graphs).
 
 ## 2. Core Position
 

@@ -767,3 +767,101 @@ def test_bootstrap_upgrade_remaps_only_existing_exact_profile_authorization(root
         assert storage_upgrade(request)["state"] == "eligible"
         assert storage_upgrade(request, action="apply")["state"] == "ready"
         _validate_deployment_binding(new_c.daemon)
+
+
+def _schema_19(database: Path) -> None:
+    with closing(sqlite3.connect(database)) as conn, conn:
+        conn.execute("ALTER TABLE managed_admissions DROP COLUMN admitted_by")
+        conn.execute("PRAGMA user_version=19")
+
+
+def test_stopped_admission_upgrade_retains_work_and_only_proven_creators(root, monkeypatch):
+    from loom.cli.main import main
+    from loom.queue import local_daemon
+    from loom.queue._preparation_operations import PREPARATION_RUN_PREFIX
+    from tests.unit.loom.queue.test_current_storage import current_config
+
+    config = current_config(root)
+    identity = _open_root(config.coordinator_root, role="coordinator")
+    database = config.control_database
+    _schema_19(database)
+
+    def child(operation_or_generation):
+        return PREPARATION_RUN_PREFIX + hashlib.sha256(operation_or_generation.encode()).hexdigest()
+
+    prior = child("managed")
+    ambiguous = child("managed:verify:1")
+    current = child("managed:verify:2")
+    # The same native queue identity can be both a retained generation and
+    # another valid operation's base ID. No principal wins by row order.
+    rows = [("managed", "alice", current, 1, 2),
+            ("managed:verify:1", "bob", ambiguous, 1, 0),
+            ("observer", "bob", child("observer"), 0, 0)]
+    with closing(sqlite3.connect(database)) as conn, conn:
+        for operation, principal, name, claimed, generation in rows:
+            conn.execute(
+                "INSERT INTO preparation_operations(operation_id, principal_id, kind, queue_item_id, "
+                "intent_digest, request_json, selected_json, target_name, child_name, dispatch_claimed, "
+                "state, result_json) VALUES (?,?,'run','shared','digest','{}',?,'shared',?,?,'applied',?)",
+                (operation, principal, json.dumps({"reconciliation": {"verification_generation": generation}}),
+                 name, claimed, json.dumps({"admission": {"admission_id": "shared"}})),
+            )
+        for seq, item in enumerate([prior, ambiguous, current, "shared", "direct"], 1):
+            conn.execute(
+                "INSERT INTO managed_admissions(admission_id, queue_item_id, coordinator_id, run_uri, "
+                "intent_digest, execution_owner, state, accepted_at, authority_operation_id, run_priority, "
+                "enqueue_sequence) VALUES (?,?,?,?,'digest','managed-stage','WAITING','2026-01-01T00:00:00Z',?,0,?)",
+                (item, item, identity, (root / item).as_uri(), "bind-" + item, seq),
+            )
+        original = list(conn.execute("SELECT * FROM managed_admissions ORDER BY enqueue_sequence"))
+
+    def upgrade(coordinator_id=identity):
+        return upgrade_module.upgrade_admission_creators(config.coordinator_root, expected_coordinator_id=coordinator_id)
+
+    with pytest.raises(QueueError, match="stopped upgrade"):
+        LocalDaemon(config).start()
+    with _acquire_lock(config.coordinator_root), pytest.raises(QueueError, match="locked"):
+        upgrade()
+    with pytest.raises(QueueError, match="identity changed"):
+        upgrade("another-coordinator")
+
+    validate = local_daemon._validate_coordinator_schema
+
+    def interrupted(conn, *, version=20):
+        if version == 20:
+            raise sqlite3.OperationalError("interrupted backfill")
+        validate(conn, version=version)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(local_daemon, "_validate_coordinator_schema", interrupted)
+        with pytest.raises(QueueError, match="interrupted backfill"):
+            upgrade()
+    with closing(sqlite3.connect(database)) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone() == (19,)
+        assert list(conn.execute("SELECT * FROM managed_admissions ORDER BY enqueue_sequence")) == original
+
+    stdout, stderr = io.StringIO(), io.StringIO()
+    assert main(["queue", "storage-upgrade", "admissions", "--coordinator-root", str(config.coordinator_root),
+                 "--expected-coordinator-id", identity, "--format", "json"],
+                stdout=stdout, stderr=stderr) == 0, stderr.getvalue()
+    result = json.loads(stdout.getvalue())["result"]
+    assert result == {"coordinator_id": identity, "previous_version": 19, "storage_version": 20,
+                      "attributed": 2, "unknown": 3}
+    assert upgrade() == {**result, "previous_version": 20}
+    assert _open_root(config.coordinator_root, role="coordinator") == identity
+    with closing(sqlite3.connect(database)) as conn:
+        migrated = list(conn.execute("SELECT * FROM managed_admissions ORDER BY enqueue_sequence"))
+        assert [row[:-1] for row in migrated] == original
+        assert [row[-1] for row in migrated] == ["alice", None, "alice", None, None]
+
+
+def test_cohort_upgrade_from_schema_19_preserves_restorable_source(root):
+    request, coordinator, _, _, _ = _cohort(root)
+    _schema_19(coordinator.daemon.control_database)
+    assert storage_upgrade(request)["state"] == "eligible"
+    assert storage_upgrade(request, action="apply")["state"] == "ready"
+    assert _open_root(coordinator.daemon.coordinator_root, role="coordinator")
+    assert storage_upgrade(request, action="restore")["state"] == "restored"
+    with closing(sqlite3.connect(coordinator.daemon.control_database)) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone() == (19,)
+        assert "admitted_by" not in {row[1] for row in conn.execute("PRAGMA table_info(managed_admissions)")}

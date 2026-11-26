@@ -230,6 +230,14 @@ def test_concurrent_reconciled_publication_and_verified_reuse(tmp_path):
             _result(one)["admission"]["admission_id"]
             == _result(two)["admission"]["admission_id"]
         )
+        with daemon._connection() as conn:
+            assert conn.execute(
+                "SELECT admitted_by FROM managed_admissions WHERE admission_id=?",
+                (_result(one)["admission"]["admission_id"],),
+            ).fetchone()[0] == "caller"
+            assert {row[0] for row in conn.execute(
+                "SELECT operation_id FROM preparation_operations WHERE kind='run' AND principal_id='caller'"
+            )} == {"submission-a", "submission-b"}
         assert any(
             _result(item)["verification_report_ref"] is not None for item in (one, two)
         )

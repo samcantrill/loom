@@ -458,12 +458,13 @@ preparation does not prevent other work from running. Published target stages
 retain their normal software requirements and authored placement; they do not
 inherit the child's preparation-only constraints.
 
-Coordinator roots use schema 19. Child input and report schemas are version 10;
+Coordinator roots use schema 20. Child input and report schemas are version 10;
 input receipts and the public preparation-operation projection remain version 1.
 Worker control roots use schema 12, with preparation-capable installations
 advertising `preparation-input-v2`. Only complete current schemas reopen; older
 or incomplete roots are refused without column repair or evidence backfill.
-Settle unsupported installations with their original owner and preserve receipts
+A stopped schema 19 coordinator can use the [admission upgrade](queue.md#stopped-storage-upgrades).
+Settle other unsupported installations with their original owner and preserve receipts
 before creating fresh current roots. Current roots preserve restart/replay.
 Then qualify participating installations, configure the allowed sources/profiles
 and worker mappings, and enable preparation through the protected role settings.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -57,7 +58,8 @@ def register_subparser(
     for name, handler in (("follow", handle_follow), ("cancel", handle_cancel), ("explain", handle_explain)):
         operation = actions.add_parser(name, help=f"{name} an existing native run operation")
         operation.add_argument("--operation-id", required=True)
-        operation.add_argument("--deployment", required=True, metavar="PATH")
+        selected = os.environ.get("LOOM_DEPLOYMENT") if name != "cancel" else None
+        operation.add_argument("--deployment", default=selected, required=not selected, metavar="PATH")
         operation.add_argument("--timeout-seconds", type=float)
         _add_output_options(operation)
         operation.set_defaults(handler=handler)
@@ -66,7 +68,8 @@ def register_subparser(
 
     logs = actions.add_parser("logs", help="read bounded authorized native stage logs")
     logs.add_argument("--operation-id", required=True)
-    logs.add_argument("--deployment", required=True, metavar="PATH")
+    selected = os.environ.get("LOOM_DEPLOYMENT")
+    logs.add_argument("--deployment", default=selected, required=not selected, metavar="PATH")
     logs.add_argument("--stage", required=True)
     logs.add_argument("--stream", choices=("stdout", "stderr", "both"), default="both")
     logs.add_argument("--tail", type=_positive_int, default=100)
@@ -76,13 +79,13 @@ def register_subparser(
     from .queue import _add_client_connection_arguments
 
     lineage = actions.add_parser("lineage", help="trace retained native dependency evidence")
-    _add_client_connection_arguments(lineage)
+    _add_client_connection_arguments(lineage, observation=True)
     _add_output_options(lineage)
     lineage.add_argument("--query", required=True, help="native lineage query JSON object")
     lineage.set_defaults(handler=handle_lineage)
 
     outputs = actions.add_parser("outputs", help="select exact committed output metadata")
-    _add_client_connection_arguments(outputs)
+    _add_client_connection_arguments(outputs, observation=True)
     _add_output_options(outputs)
     outputs.add_argument("--selection", default="{}", help="native output selection JSON object")
     outputs.add_argument("--run-uri", action="append")
@@ -90,16 +93,19 @@ def register_subparser(
     outputs.add_argument("--history", choices=("current", "all"))
     outputs.add_argument("--limit", type=int)
     outputs.add_argument("--cursor")
+    outputs.add_argument("--wide", action="store_true", help="show unabridged output metadata")
     outputs.set_defaults(handler=handle_outputs)
 
     for action in ("search", "submissions", "jobs", "fields", "tags"):
         query_parser = actions.add_parser(action, help="query native run discovery")
-        _add_client_connection_arguments(query_parser)
+        _add_client_connection_arguments(query_parser, observation=True)
         _add_output_options(query_parser)
         query_parser.add_argument("--query", default='{"schema_version":1}', help="structured query JSON object")
         query_parser.add_argument("--scope", choices=("managed", "collection"))
         query_parser.add_argument("--limit", type=int)
         query_parser.add_argument("--cursor")
+        if action in {"search", "submissions", "jobs"}:
+            query_parser.add_argument("--wide", action="store_true", help="show full identifiers and values")
         query_parser.add_argument("--tag", action="append", type=_required_key_value, default=[])
         query_parser.add_argument("--entity", choices=("runs", "submissions", "jobs"), default="runs")
         query_parser.add_argument("--key", help="literal tag key whose values to discover")
@@ -107,7 +113,7 @@ def register_subparser(
 
     context_parser = actions.add_parser("context", help="read native submission context and annotations")
     context_parser.add_argument("run_uri")
-    _add_client_connection_arguments(context_parser)
+    _add_client_connection_arguments(context_parser, observation=True)
     _add_output_options(context_parser)
     context_parser.set_defaults(handler=handle_context)
 
@@ -125,7 +131,7 @@ def register_subparser(
     notes.add_argument("--mutation-id")
     notes.add_argument("--limit", type=int, default=50)
     notes.add_argument("--cursor")
-    _add_client_connection_arguments(notes)
+    _add_client_connection_arguments(notes, observation=True)
     _add_output_options(notes)
     notes.set_defaults(handler=handle_annotations)
 
@@ -256,7 +262,7 @@ def handle_lineage(namespace: argparse.Namespace) -> int:
     except (ValueError, TypeError) as exc:
         raise _queue_cli_error(control_error("invalid_request", "trace_lineage", {})) from exc
     except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
+        raise _queue_cli_error(exc, namespace) from exc
     return _emit_daemon_payload(namespace, result.to_dict())
 
 
@@ -279,7 +285,7 @@ def handle_outputs(namespace: argparse.Namespace) -> int:
     except (ValueError, TypeError) as exc:
         raise _queue_cli_error(control_error("invalid_request", "select_outputs", {})) from exc
     except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
+        raise _queue_cli_error(exc, namespace) from exc
     return _emit_daemon_payload(namespace, result.to_dict())
 
 
@@ -317,7 +323,7 @@ def handle_query(namespace: argparse.Namespace) -> int:
     except (ValueError, TypeError) as exc:
         raise _queue_cli_error(control_error("invalid_request", operation, {})) from exc
     except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
+        raise _queue_cli_error(exc, namespace) from exc
     return _emit_daemon_payload(namespace, result.to_dict() if hasattr(result, "to_dict") else result)
 
 
@@ -330,7 +336,7 @@ def handle_context(namespace: argparse.Namespace) -> int:
         with _daemon_client(namespace) as client:
             result = client.get_run_context(namespace.run_uri)
     except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
+        raise _queue_cli_error(exc, namespace) from exc
     return _emit_daemon_payload(namespace, result.to_dict())
 
 
@@ -357,7 +363,7 @@ def handle_annotations(namespace: argparse.Namespace) -> int:
     except (ValueError, TypeError) as exc:
         raise _queue_cli_error(control_error("invalid_request", operation, payload)) from exc
     except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
+        raise _queue_cli_error(exc, namespace) from exc
     return _emit_daemon_payload(namespace, result.to_dict())
 
 

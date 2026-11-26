@@ -300,6 +300,8 @@ def test_coordinator_client_unix_handshake_and_identity_guard(tmp_path: Path) ->
         assert description.coordinator_id == daemon._coordinator_id
         assert description.capabilities == (
             "daemon-control-v1",
+            "agent-offer-capacity-v1",
+            "queue-list-v1",
             "operator-observations-v1",
             "conditional-agent-control-v1",
             "quiescent-profile-promotion-v2",

@@ -5,6 +5,7 @@ import argparse
 from collections.abc import Mapping
 import json
 import math
+import os
 import signal
 import sys
 import time
@@ -19,11 +20,13 @@ from loom.serialization import PlainData
 if TYPE_CHECKING:
     from collections.abc import Mapping
     from loom.coordinator import CoordinatorClient
+    from loom.queue.local_daemon import LocalDaemonAdmission
 QUEUE_PREFLIGHT_SCHEMA_VERSION = "loom.cli.queue.preflight.v1"
 QUEUE_STATUS_SCHEMA_VERSION = "loom.cli.queue.status.v1"
 QUEUE_CANCEL_SCHEMA_VERSION = "loom.cli.queue.cancel.v1"
 QUEUE_DRAIN_SCHEMA_VERSION = "loom.cli.queue.drain.v1"
 QUEUE_SLURM_DRIVE_SCHEMA_VERSION = "loom.cli.queue.slurm-drive.v1"
+QUEUE_LIST_SCHEMA_VERSION = "loom.cli.queue.list.v1"
 LOCAL_DAEMON_SCHEMA_VERSION = "loom.cli.queue.local-daemon.v5"
 _AGENT_RELOAD_RECEIPT_WAIT_SECONDS = 10.0
 _AGENT_RELOAD_RECEIPT_POLL_SECONDS = 0.05
@@ -38,8 +41,11 @@ def register_subparser(
         dest="queue_command", metavar="QUEUE_COMMAND"
     )
     upgrade = queue_subparsers.add_parser("storage-upgrade", help="inspect or execute a stopped same-root storage upgrade")
-    upgrade.add_argument("action", choices=("inspect", "apply", "resume", "restore"))
-    upgrade.add_argument("--request", required=True, type=Path)
+    upgrade.add_argument("action", choices=("inspect", "apply", "resume", "restore", "admissions"))
+    target = upgrade.add_mutually_exclusive_group(required=True)
+    target.add_argument("--request", type=Path, help="protected cohort request for inspect, apply, resume or restore")
+    target.add_argument("--coordinator-root", type=Path, help="stopped native coordinator root for admissions")
+    upgrade.add_argument("--expected-coordinator-id", help="required native coordinator identity for admissions")
     upgrade.set_defaults(handler=handle_storage_upgrade)
     _add_output_options(upgrade)
     daemon_check = queue_subparsers.add_parser(
@@ -164,7 +170,7 @@ def register_subparser(
         ("daemon-cancel", "cancel one admitted run", handle_daemon_cancel),
     ):
         daemon_client = queue_subparsers.add_parser(command, help=help_text)
-        _add_client_connection_arguments(daemon_client)
+        _add_client_connection_arguments(daemon_client, observation=command in {"daemon-status", "daemon-wait"})
         if command == "daemon-status":
             daemon_client.add_argument("--operator", action="store_true")
         if command != "daemon-status":
@@ -203,31 +209,44 @@ def register_subparser(
     cancel_run.add_argument("operation_id", metavar="OPERATION_ID")
     _add_output_options(cancel_run)
     cancel_run.set_defaults(handler=handle_daemon_cancel_run)
+    listing = queue_subparsers.add_parser("list", help="list live queue admission summaries")
+    _add_client_connection_arguments(listing, observation=True)
+    selection = listing.add_mutually_exclusive_group()
+    selection.add_argument("--all", dest="include_terminal", action="store_true", help="include terminal history")
+    selection.add_argument("--state", action="append", metavar="STATE", help="select an admission state (repeatable)")
+    listing.add_argument("-u", "--user", dest="principal", metavar="PRINCIPAL", help="authenticated admission creator")
+    listing.add_argument("--wide", action="store_true", help="include full admission IDs and acceptance times")
+    listing.add_argument("--limit", type=int, default=100, help="maximum rows on one page (1–100)")
+    listing.add_argument("--cursor", help="continue the same queue selection")
+    _add_output_options(listing)
+    listing.set_defaults(handler=handle_queue_list)
     admissions = queue_subparsers.add_parser(
         "daemon-admissions", help="list bounded managed admissions"
     )
-    _add_client_connection_arguments(admissions)
+    _add_client_connection_arguments(admissions, observation=True)
     admissions.add_argument("--limit", type=int, default=100)
     admissions.add_argument("--cursor")
+    admissions.add_argument("--wide", action="store_true", help="show full identifiers")
     admissions.set_defaults(handler=handle_daemon_admissions)
     _add_output_options(admissions)
     admission = queue_subparsers.add_parser(
         "daemon-admission", help="inspect one managed admission"
     )
-    _add_client_connection_arguments(admission)
+    _add_client_connection_arguments(admission, observation=True)
     admission.add_argument("admission_id")
     admission.set_defaults(handler=handle_daemon_admission)
     _add_output_options(admission)
     agents = queue_subparsers.add_parser("daemon-agents", help="list bounded agents")
-    _add_client_connection_arguments(agents)
+    _add_client_connection_arguments(agents, observation=True)
     agents.add_argument("--limit", type=int, default=100)
     agents.add_argument("--cursor")
+    agents.add_argument("--wide", action="store_true", help="show full identifiers")
     agents.set_defaults(handler=handle_daemon_agents)
     _add_output_options(agents)
     agent = queue_subparsers.add_parser(
         "daemon-agent", help="inspect one managed agent"
     )
-    _add_client_connection_arguments(agent)
+    _add_client_connection_arguments(agent, observation=True)
     agent.add_argument("agent_id")
     agent.add_argument("--operator", action="store_true")
     agent.set_defaults(handler=handle_daemon_agent)
@@ -235,7 +254,7 @@ def register_subparser(
     operation = queue_subparsers.add_parser(
         "daemon-operation", help="inspect one durable operation"
     )
-    _add_client_connection_arguments(operation)
+    _add_client_connection_arguments(operation, observation=True)
     operation.add_argument("operation_id")
     operation.add_argument("--operator", action="store_true")
     operation.set_defaults(handler=handle_daemon_operation)
@@ -243,13 +262,13 @@ def register_subparser(
     operation_wait = queue_subparsers.add_parser(
         "daemon-operation-wait", help="wait for one durable operation"
     )
-    _add_client_connection_arguments(operation_wait)
+    _add_client_connection_arguments(operation_wait, observation=True)
     operation_wait.add_argument("operation_id")
     operation_wait.add_argument("--timeout", type=float, default=None)
     operation_wait.set_defaults(handler=handle_daemon_operation_wait)
     _add_output_options(operation_wait)
     maintenance = queue_subparsers.add_parser("daemon-maintenance", help="observe or guard native maintenance admission")
-    _add_client_connection_arguments(maintenance)
+    _add_client_connection_arguments(maintenance, observation=True)
     maintenance.add_argument("--operation-id")
     modes = maintenance.add_mutually_exclusive_group()
     modes.add_argument("--close", action="store_true")
@@ -322,17 +341,24 @@ def register_subparser(
         _add_output_options(probe)
         probe.set_defaults(handler=handler)
     assignment = queue_subparsers.add_parser("daemon-assignment", help="inspect one assignment and its release proof")
-    _add_client_connection_arguments(assignment)
+    _add_client_connection_arguments(assignment, observation=True)
     assignment.add_argument("assignment_id")
     _add_output_options(assignment)
     assignment.set_defaults(handler=handle_operator_assignment)
 
 
 def handle_storage_upgrade(namespace: argparse.Namespace) -> int:
-    from loom.queue.storage_upgrade import storage_upgrade
+    from loom.queue.storage_upgrade import storage_upgrade, upgrade_admission_creators
 
     try:
-        result = storage_upgrade(namespace.request, action=namespace.action)
+        if namespace.action == "admissions":
+            if namespace.coordinator_root is None or not namespace.expected_coordinator_id:
+                raise QueueConfigError("storage-upgrade admissions requires --coordinator-root and --expected-coordinator-id")
+            result = upgrade_admission_creators(namespace.coordinator_root, expected_coordinator_id=namespace.expected_coordinator_id)
+        else:
+            if namespace.request is None or namespace.expected_coordinator_id is not None:
+                raise QueueConfigError(f"storage-upgrade {namespace.action} requires --request")
+            result = storage_upgrade(namespace.request, action=namespace.action)
     except QueueError as exc:
         raise _queue_cli_error(exc) from exc
     except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -560,7 +586,7 @@ def handle_daemon_retire(namespace: argparse.Namespace) -> int:
         )
         _emit_daemon_payload(namespace, receipt)
     except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
+        raise _queue_cli_error(exc, namespace) from exc
     return int(ExitCode.SUCCESS)
 
 
@@ -660,7 +686,7 @@ def handle_daemon_submit(namespace: argparse.Namespace) -> int:
             LocalDaemonAdmissionRequest(namespace.queue_item_id, namespace.run_uri)
         )
     except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
+        raise _queue_cli_error(exc, namespace) from exc
     return _emit_daemon_payload(namespace, result.to_dict())
 
 
@@ -677,7 +703,7 @@ def handle_daemon_prepare(namespace: argparse.Namespace) -> int:
             QueueServiceError("prepare request file is unavailable or invalid JSON")
         ) from exc
     except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
+        raise _queue_cli_error(exc, namespace) from exc
     return _emit_daemon_payload(namespace, result.to_dict())
 
 
@@ -685,7 +711,7 @@ def handle_daemon_cancel_preparation(namespace: argparse.Namespace) -> int:
     try:
         result = _daemon_client(namespace).cancel_preparation(namespace.operation_id)
     except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
+        raise _queue_cli_error(exc, namespace) from exc
     return _emit_daemon_payload(namespace, result.to_dict())
 
 
@@ -703,7 +729,7 @@ def handle_daemon_start_run(namespace: argparse.Namespace) -> int:
             QueueServiceError("run request file is unavailable or invalid JSON")
         ) from exc
     except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
+        raise _queue_cli_error(exc, namespace) from exc
     return _emit_daemon_payload(namespace, result.to_dict())
 
 
@@ -711,7 +737,7 @@ def handle_daemon_cancel_run(namespace: argparse.Namespace) -> int:
     try:
         result = _daemon_client(namespace).cancel_run_operation(namespace.operation_id)
     except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
+        raise _queue_cli_error(exc, namespace) from exc
     return _emit_daemon_payload(namespace, result.to_dict())
 
 
@@ -719,9 +745,10 @@ def _daemon_client(namespace: argparse.Namespace) -> CoordinatorClient:
     """Select the unified native client for every coordinator client command."""
     from loom.coordinator import CoordinatorClient
 
-    if namespace.connection is not None:
+    connection = _selected_connection(namespace)
+    if connection is not None:
         return CoordinatorClient.from_connection_file(
-            namespace.connection,
+            connection,
             expected_coordinator_id=namespace.expected_coordinator_id,
         )
     return CoordinatorClient.from_unix_socket(
@@ -729,11 +756,30 @@ def _daemon_client(namespace: argparse.Namespace) -> CoordinatorClient:
     )
 
 
+def handle_queue_list(namespace: argparse.Namespace) -> int:
+    from loom.queue._coordinator_control import CoordinatorClientError
+    from loom.queue._queue_listing import CAPABILITY
+
+    try:
+        with _daemon_client(namespace) as client:
+            page = client.list_queue(states=tuple(namespace.state or ()),
+                                     include_terminal=namespace.include_terminal,
+                                     principal=namespace.principal, limit=namespace.limit, cursor=namespace.cursor)
+    except CoordinatorClientError as exc:
+        if exc.code == "unsupported_capability" and exc.ids.get("missing_capability") == CAPABILITY:
+            raise CliError("Upgrade the coordinator to a release supporting queue-list-v1.",
+                           code="cli.queue.unsupported_capability", exit_code=ExitCode.RUN_STATE) from exc
+        raise _queue_cli_error(exc, namespace) from exc
+    except QueueError as exc:
+        raise _queue_cli_error(exc, namespace) from exc
+    return _emit_daemon_payload(namespace, page, schema_version=QUEUE_LIST_SCHEMA_VERSION)
+
+
 def handle_daemon_status(namespace: argparse.Namespace) -> int:
     try:
         result = _operator_client(namespace).observe_status() if getattr(namespace, "operator", False) else _daemon_client(namespace).status()
     except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
+        raise _queue_cli_error(exc, namespace) from exc
     return _emit_daemon_payload(namespace, result.to_dict())
 
 
@@ -743,7 +789,7 @@ def handle_daemon_admissions(namespace: argparse.Namespace) -> int:
             limit=namespace.limit, cursor=namespace.cursor
         )
     except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
+        raise _queue_cli_error(exc, namespace) from exc
     return _emit_daemon_payload(namespace, result.to_dict())
 
 
@@ -751,25 +797,32 @@ def handle_daemon_admission(namespace: argparse.Namespace) -> int:
     try:
         result = _daemon_client(namespace).admission(namespace.admission_id)
     except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
+        raise _queue_cli_error(exc, namespace) from exc
     return _emit_daemon_admission_payload(namespace, result.to_dict())
 
 
 def handle_daemon_agents(namespace: argparse.Namespace) -> int:
     try:
         result = _daemon_client(namespace).agents(
-            limit=namespace.limit, cursor=namespace.cursor
+            limit=namespace.limit, cursor=namespace.cursor,
+            include_capacity=output_format_from_namespace(namespace) is OutputFormat.TEXT,
         )
     except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
+        raise _queue_cli_error(exc, namespace) from exc
     return _emit_daemon_payload(namespace, result.to_dict())
 
 
 def handle_daemon_agent(namespace: argparse.Namespace) -> int:
     try:
-        result = _operator_client(namespace).observe_agent(namespace.agent_id) if getattr(namespace, "operator", False) else _daemon_client(namespace).agent(namespace.agent_id)
+        if getattr(namespace, "operator", False):
+            result = _operator_client(namespace).observe_agent(namespace.agent_id)
+        else:
+            result = _daemon_client(namespace).agent(
+                namespace.agent_id,
+                include_capacity=output_format_from_namespace(namespace) is OutputFormat.TEXT,
+            )
     except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
+        raise _queue_cli_error(exc, namespace) from exc
     return _emit_daemon_payload(namespace, result.to_dict())
 
 
@@ -777,7 +830,7 @@ def handle_daemon_operation(namespace: argparse.Namespace) -> int:
     try:
         result = _operator_client(namespace).observe_control(namespace.operation_id) if getattr(namespace, "operator", False) else _daemon_client(namespace).operation(namespace.operation_id)
     except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
+        raise _queue_cli_error(exc, namespace) from exc
     return _emit_daemon_payload(namespace, result if isinstance(result, Mapping) else result.to_dict())
 
 
@@ -805,17 +858,27 @@ def handle_daemon_operation_wait(namespace: argparse.Namespace) -> int:
             ):
                 break
     except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
+        raise _queue_cli_error(exc, namespace) from exc
     return _emit_daemon_payload(namespace, result.to_dict())
 
 
 def handle_daemon_wait(namespace: argparse.Namespace) -> int:
     try:
-        result = _daemon_client(namespace).wait(
-            namespace.queue_item_id, timeout_seconds=namespace.timeout
-        )
+        with _daemon_client(namespace) as client:
+            if output_format_from_namespace(namespace) is OutputFormat.JSON:
+                result = client.wait(namespace.queue_item_id, timeout_seconds=namespace.timeout)
+            else:
+                from ._queue_text import format_queue_text
+
+                def progress(admission: LocalDaemonAdmission) -> None:
+                    print(format_queue_text("daemon-wait", admission.to_dict(), wide=False),
+                          file=sys.stderr, flush=True)
+
+                result = client._wait_for_terminal_admission(
+                    namespace.queue_item_id, namespace.timeout, None, progress
+                )
     except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
+        raise _queue_cli_error(exc, namespace) from exc
     return _emit_daemon_payload(namespace, result.to_dict())
 
 
@@ -823,7 +886,7 @@ def handle_daemon_cancel(namespace: argparse.Namespace) -> int:
     try:
         result = _daemon_client(namespace).cancel(namespace.queue_item_id)
     except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
+        raise _queue_cli_error(exc, namespace) from exc
     return _emit_daemon_payload(namespace, result.to_dict())
 
 
@@ -853,7 +916,7 @@ def handle_daemon_agent_control(namespace: argparse.Namespace) -> int:
                 time.sleep(_AGENT_RELOAD_RECEIPT_POLL_SECONDS)
                 result = client.control_agent(control)
     except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
+        raise _queue_cli_error(exc, namespace) from exc
     exit_code = _emit_daemon_payload(namespace, result)
     return (
         int(ExitCode.PIPELINE)
@@ -875,7 +938,7 @@ def handle_daemon_scheduling_reload(namespace: argparse.Namespace) -> int:
             )
         )
     except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
+        raise _queue_cli_error(exc, namespace) from exc
     exit_code = _emit_daemon_payload(namespace, result)
     return (
         int(ExitCode.PIPELINE)
@@ -897,7 +960,7 @@ def handle_daemon_time_recover(namespace: argparse.Namespace) -> int:
             )
         )
     except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
+        raise _queue_cli_error(exc, namespace) from exc
     return _emit_daemon_payload(namespace, result.to_dict())
 
 
@@ -913,7 +976,7 @@ def handle_daemon_replace_agent_session(namespace: argparse.Namespace) -> int:
             )
         )
     except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
+        raise _queue_cli_error(exc, namespace) from exc
     return _emit_daemon_payload(namespace, result)
 
 
@@ -939,11 +1002,13 @@ def handle_daemon_recover_unknown(namespace: argparse.Namespace) -> int:
             RecoverUnknownAssignment.from_dict(raw)
         )
     except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
+        raise _queue_cli_error(exc, namespace) from exc
     return _emit_daemon_payload(namespace, result)
 
 
-def _queue_cli_error(error: QueueError) -> CliError:
+def _queue_cli_error(error: QueueError, namespace: argparse.Namespace | None = None) -> CliError:
+    from loom.queue._coordinator_control import CoordinatorClientError
+
     exit_code = (
         ExitCode.CONFIG if isinstance(error, QueueConfigError) else ExitCode.RUN_STATE
     )
@@ -954,22 +1019,35 @@ def _queue_cli_error(error: QueueError) -> CliError:
     )
     if isinstance(error, QueueServiceError):
         code = "cli.queue.service_error"
+    message = str(error)
+    context: dict[str, object] = {"error_type": type(error).__name__}
+    selected = getattr(namespace, "selected_deployment", None)
+    if selected:
+        context["deployment"] = selected
+        if selected not in message:
+            message = f"LOOM_DEPLOYMENT {selected}: {message}"
+        if isinstance(error, CoordinatorClientError):
+            expected = error.ids.get("expected_coordinator_id")
+            observed = error.ids.get("observed_coordinator_id")
+            if isinstance(expected, str) and isinstance(observed, str) and expected != observed:
+                context.update(expected_coordinator_id=expected, observed_coordinator_id=observed)
+                message += f" (expected {expected}, observed {observed})"
     return CliError(
-        str(error),
+        message,
         code=code,
-        context={"error_type": type(error).__name__},
+        context=context,
         exit_code=exit_code,
     )
 
 
 def _emit_daemon_payload(
-    namespace: argparse.Namespace, payload: "Mapping[str, PlainData]", *, ok: bool = True,
+    namespace: argparse.Namespace, payload: Mapping[str, PlainData], *, ok: bool = True,
+    schema_version: str = LOCAL_DAEMON_SCHEMA_VERSION,
 ) -> int:
-    output_format = output_format_from_namespace(namespace)
-    if output_format is OutputFormat.JSON:
+    if output_format_from_namespace(namespace) is OutputFormat.JSON:
         sys.stdout.write(
             format_json_envelope(
-                schema_version=LOCAL_DAEMON_SCHEMA_VERSION,
+                schema_version=schema_version,
                 ok=ok,
                 warnings=[],
                 payload_name="result",
@@ -977,9 +1055,16 @@ def _emit_daemon_payload(
             )
         )
     else:
-        sys.stdout.write("local daemon:\n")
-        for key, value in payload.items():
-            sys.stdout.write(f"  {key}: {value}\n")
+        wide = getattr(namespace, "wide", False)
+        if getattr(namespace, "runs_action", None):
+            from ._discovery_text import format_discovery_text
+
+            rendered = format_discovery_text(namespace.runs_action, payload, wide=wide)
+        else:
+            from ._queue_text import format_queue_text
+
+            rendered = format_queue_text(namespace.queue_command, payload, wide=wide)
+        sys.stdout.write(rendered + "\n")
     return int(ExitCode.SUCCESS if ok else ExitCode.CONFIG)
 
 
@@ -1095,8 +1180,28 @@ def _add_output_options(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _add_client_connection_arguments(parser: argparse.ArgumentParser) -> None:
-    connection = parser.add_mutually_exclusive_group(required=True)
+def _selected_connection(namespace: argparse.Namespace) -> Path | None:
+    if namespace.connection is not None or namespace.endpoint is not None:
+        return namespace.connection
+    if (getattr(namespace, "close", False) or getattr(namespace, "open", False)
+            or getattr(namespace, "text", None) is not None or getattr(namespace, "mutation_id", None) is not None):
+        raise QueueConfigError("Select --connection or --endpoint explicitly for this mutation.")
+    selected = os.environ.get("LOOM_DEPLOYMENT")
+    if not selected:
+        raise QueueConfigError("Load the fleet shell setup or pass --connection or --endpoint.")
+    namespace.selected_deployment = selected
+    from loom.deployment import load_deployment
+    try:
+        connection = load_deployment(selected).connection
+        if connection is None:
+            raise QueueConfigError("selected deployment has no coordinator connection")
+    except (QueueError, OSError, ValueError) as exc:
+        raise QueueConfigError(f"LOOM_DEPLOYMENT {selected}: {exc}") from exc
+    return connection
+
+
+def _add_client_connection_arguments(parser: argparse.ArgumentParser, *, observation: bool = False) -> None:
+    connection = parser.add_mutually_exclusive_group(required=not observation)
     connection.add_argument("--endpoint", type=Path)
     connection.add_argument("--connection", type=Path)
     parser.add_argument("--expected-coordinator-id")
@@ -1142,8 +1247,9 @@ __all__ = [
 
 def _operator_client(namespace: argparse.Namespace):
     from loom.coordinator import CoordinatorOperatorClient
-    if namespace.connection is not None:
-        return CoordinatorOperatorClient.from_connection_file(namespace.connection, expected_coordinator_id=namespace.expected_coordinator_id)
+    connection = _selected_connection(namespace)
+    if connection is not None:
+        return CoordinatorOperatorClient.from_connection_file(connection, expected_coordinator_id=namespace.expected_coordinator_id)
     return CoordinatorOperatorClient.from_unix_socket(namespace.endpoint, expected_coordinator_id=namespace.expected_coordinator_id)
 
 
@@ -1166,7 +1272,7 @@ def handle_operator_assignment(namespace: argparse.Namespace) -> int:
     try:
         result = _operator_client(namespace).observe_assignment(namespace.assignment_id)
     except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
+        raise _queue_cli_error(exc, namespace) from exc
     return _emit_daemon_payload(namespace, result.to_dict())
 
 
@@ -1194,5 +1300,5 @@ def handle_daemon_maintenance(namespace: argparse.Namespace) -> int:
                 "action": action, "expected_revision": gate["revision"], "check": None}
             result = client.maintenance(control, expected_coordinator_id=str(gate["coordinator_id"]))
     except QueueError as exc:
-        raise _queue_cli_error(exc) from exc
+        raise _queue_cli_error(exc, namespace) from exc
     return _emit_daemon_payload(namespace, dict(result))

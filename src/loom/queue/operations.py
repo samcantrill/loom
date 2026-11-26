@@ -310,13 +310,16 @@ def inspect_native_service(
         )
 
 
+ADMISSION_STORAGE_UPGRADE_REQUIRED = "stopped_admission_storage_upgrade_required"
+
+
 def probe_upgrade_compatibility(
     root: str | Path, *, required_capabilities: tuple[str, ...] = ()
 ) -> OperatorObservation:
     """Read storage compatibility in the candidate runtime without migration.
 
-    Only the current storage contract is compatible. Workload profile
-    qualification is separate and is never inferred from storage compatibility.
+    Direct compatibility requires the current schema. A complete v19 coordinator
+    reports its required stopped admission upgrade. Workload qualification is separate and is never inferred from storage compatibility.
     """
     from .local_daemon import _COORDINATOR_SCHEMA_VERSION, _AGENT_SCHEMA_VERSION, _validate_coordinator_schema
     from .agent_sessions import validate_agent_session_schema
@@ -338,11 +341,12 @@ def probe_upgrade_compatibility(
             else _AGENT_SCHEMA_VERSION
         )
         supported = current == target
-        if supported:
+        admission_upgrade = role == "coordinator" and current == 19 and target == 20
+        if supported or admission_upgrade:
             with _readonly_root(Path(root)) as conn:
                 validate_agent_session_schema(conn, coordinator=role == "coordinator")
                 if role == "coordinator":
-                    _validate_coordinator_schema(conn)
+                    _validate_coordinator_schema(conn, version=current)
         missing = sorted(
             set(required_capabilities) - {OPERATOR_CAPABILITY, "daemon-control-v1", MAINTENANCE_CAPABILITY, SUBMITTED_CHECK_CAPABILITY, CONDITIONAL_CONTROL_CAPABILITY, "quiescent-profile-promotion-v2", "quiescent-source-promotion-v1", "quiescent-configuration-retirement-v1", "quiescent-coordinator-retirement-v1", "quiescent-container-policy-addition-v1", "quiescent-publication-budget-increase-v1", GPU_POLICY_CONTRACTION_CAPABILITY, GPU_POLICY_EXPANSION_CAPABILITY}
         )
@@ -351,6 +355,8 @@ def probe_upgrade_compatibility(
             if missing
             else None
             if supported
+            else ADMISSION_STORAGE_UPGRADE_REQUIRED
+            if admission_upgrade
             else "unsupported_storage_version"
         )
         return OperatorObservation(

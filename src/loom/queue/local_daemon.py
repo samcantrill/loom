@@ -36,13 +36,14 @@ from pathlib import Path
 import shutil
 import sqlite3
 import stat
-from threading import Event, RLock, Thread, current_thread
+from threading import BoundedSemaphore, Event, RLock, Thread, current_thread
 import time
 from typing import TYPE_CHECKING, Any, Iterator, Literal, cast
 from uuid import uuid4
 
 from loom._sqlite_inspection import inspect_sqlite_database
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
+from ._queue_listing import QueueSelection, queue_page
 from loom.timestamps import parse_timestamp, utc_timestamp
 from .operations import OperatorObservation
 from loom.pipeline.executors.slurm.ready_stage import SlurmReadyStageProfile
@@ -94,7 +95,7 @@ if TYPE_CHECKING:
     from .run import RunRequest
 
 
-_COORDINATOR_SCHEMA_VERSION = 19
+_COORDINATOR_SCHEMA_VERSION = 20
 _AGENT_SCHEMA_VERSION = 12
 # Outbound session roots and coordinator roots independently reject old forms.
 _LOCAL_DAEMON_SCHEMA_VERSION = _AGENT_SCHEMA_VERSION
@@ -1520,6 +1521,37 @@ class AgentPage:
 
 
 @dataclass(frozen=True, slots=True)
+class AgentOfferCapacity:
+    """Remaining CPU count and number of offered GPU devices in a current offer."""
+
+    cpu: int | None
+    gpu_devices_offered: int | None
+    observed_at: str
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "cpu": self.cpu,
+            "gpu_devices_offered": self.gpu_devices_offered,
+            "observed_at": self.observed_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> "AgentOfferCapacity":
+        _exact_fields(
+            data, {"cpu", "gpu_devices_offered", "observed_at"}, "agent offer capacity"
+        )
+
+        def count(key: str) -> int | None:
+            if data[key] is None:
+                return None
+            return _non_negative_int(_required_int(data, key), key)
+
+        observed_at = _required_string(data, "observed_at")
+        parse_timestamp(observed_at)
+        return cls(count("cpu"), count("gpu_devices_offered"), observed_at)
+
+
+@dataclass(frozen=True, slots=True)
 class AgentProjection:
     """Bounded current logical-agent state with the control freshness fences."""
 
@@ -1534,9 +1566,10 @@ class AgentProjection:
     capabilities: tuple[str, ...]
     available: bool
     resource_status: tuple[ResourceAvailabilityStatus, ...] = ()
+    offered_capacity: AgentOfferCapacity | None = None
 
     def to_dict(self) -> dict[str, PlainData]:
-        return {
+        data: dict[str, PlainData] = {
             "agent_id": self.agent_id,
             "session_id": self.session_id,
             "state": self.state,
@@ -1549,11 +1582,14 @@ class AgentProjection:
             "available": self.available,
             "resource_status": [item.to_dict() for item in self.resource_status],
         }
+        if self.offered_capacity is not None:
+            data["offered_capacity"] = self.offered_capacity.to_dict()
+        return data
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> "AgentProjection":
         _exact_fields(
-            data,
+            {key: value for key, value in data.items() if key != "offered_capacity"},
             {
                 "agent_id",
                 "session_id",
@@ -1572,15 +1608,20 @@ class AgentProjection:
         pools = data.get("pools")
         capabilities = data.get("capabilities")
         available = data.get("available")
+        capacity = data.get("offered_capacity")
         if (
             not isinstance(pools, list)
             or not all(isinstance(item, str) and item for item in pools)
             or not isinstance(capabilities, list)
             or not all(isinstance(item, str) and item for item in capabilities)
             or not isinstance(available, bool)
+            or ("offered_capacity" in data and (not available or not isinstance(capacity, Mapping)))
         ):
             raise QueueServiceError("agent projection is invalid")
         return cls(
+            offered_capacity=(
+                AgentOfferCapacity.from_dict(capacity) if isinstance(capacity, Mapping) else None
+            ),
             resource_status=_resource_status_from_value(data["resource_status"]),
             agent_id=_required_string(data, "agent_id"),
             session_id=_required_string(data, "session_id"),
@@ -1721,6 +1762,7 @@ class LocalDaemon:
         self._thread: Thread | None = None
         self._execution: LocalDaemonExecution | None = None
         self._cycle_lock = RLock()
+        self._job_read_slots = BoundedSemaphore(4)
         self._scheduling_reference_revision = 0
         self._reconcile_guard = RLock()
         from ._context_preparation import ContextPreparations
@@ -2476,9 +2518,14 @@ class LocalDaemon:
             clock=self._clock,
             admission_revision=admission.revision,
         )
-        if len(views) != 1 or not isinstance(views[0].get("authority"), Mapping):
+        return self._admission_detail(admission, views[0])
+
+    def _admission_detail(
+        self, admission: LocalDaemonAdmission, view: Mapping[str, PlainData],
+    ) -> LocalDaemonAdmissionDetail:
+        if not isinstance(view.get("authority"), Mapping):
             raise QueueStorageError("targeted admission owner detail is unavailable")
-        owners = dict(views[0])
+        owners = dict(view)
         if self._execution is not None:
             owners["scheduling_waits"] = self._execution._scheduling_waits.observed(admission.run_uri)
             owners["input_validation"] = self._execution._input_validations.observations(admission.run_uri)
@@ -2540,7 +2587,8 @@ class LocalDaemon:
         return _admission_from_row(row)
 
     def agents(
-        self, *, limit: int = _MAX_ADMISSION_PAGE_SIZE, cursor: str | None = None
+        self, *, limit: int = _MAX_ADMISSION_PAGE_SIZE, cursor: str | None = None,
+        include_capacity: bool = False,
     ) -> AgentPage:
         """Return a keyset-bounded session view with control fences intact."""
 
@@ -2572,10 +2620,13 @@ class LocalDaemon:
             values = (agent_id,)
         query += " ORDER BY current.agent_id LIMIT ?"
         with self._connection() as conn:
+            conn.execute("BEGIN")
             rows = tuple(conn.execute(query, (*values, limit + 1)))
+            as_of = self._clock()
             values_out = tuple(
                 _agent_projection(
-                    conn, row, coordinator_epoch=self._epoch, as_of=self._clock()
+                    conn, row, coordinator_epoch=self._epoch, as_of=as_of,
+                    include_capacity=include_capacity,
                 )
                 for row in rows[:limit]
             )
@@ -2586,9 +2637,10 @@ class LocalDaemon:
         )
         return AgentPage(values_out, next_cursor)
 
-    def agent(self, agent_id: str) -> AgentProjection:
+    def agent(self, agent_id: str, *, include_capacity: bool = False) -> AgentProjection:
         _required_string({"agent_id": agent_id}, "agent_id")
         with self._connection() as conn:
+            conn.execute("BEGIN")
             row = conn.execute(
                 "SELECT * FROM agent_sessions WHERE agent_id = ? ORDER BY "
                 "CASE WHEN state IN ('RETIRED_CLEAN', 'REPLACED') THEN 1 ELSE 0 END, "
@@ -2598,7 +2650,8 @@ class LocalDaemon:
             if row is None:
                 raise QueueServiceError("managed agent was not found")
             return _agent_projection(
-                conn, row, coordinator_epoch=self._epoch, as_of=self._clock()
+                conn, row, coordinator_epoch=self._epoch, as_of=self._clock(),
+                include_capacity=include_capacity,
             )
 
     def operation(self, operation_id: str) -> LocalDaemonOperation:
@@ -3109,6 +3162,7 @@ class LocalDaemon:
         self,
         request: LocalDaemonAdmissionRequest,
         *,
+        direct_principal: str | None = None,
         preparation_operation_id: str | None = None,
         run_operation_id: str | None = None,
         preparation_claim: tuple[object, ...] | None = None,
@@ -3116,7 +3170,7 @@ class LocalDaemon:
         from ._coordinator_admission import _submit
 
         return _submit(
-            self, request, preparation_operation_id=preparation_operation_id,
+            self, request, direct_principal=direct_principal, preparation_operation_id=preparation_operation_id,
             run_operation_id=run_operation_id, preparation_claim=preparation_claim,
         )
 
@@ -4655,11 +4709,17 @@ class LocalDaemonClientView:
 
     def submit(self, request: LocalDaemonAdmissionRequest) -> LocalDaemonAdmission:
         self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
-        return self._daemon._submit(request)
+        return self._daemon._submit(request, direct_principal=self._principal.subject)
 
     def status(self) -> DaemonStatus:
         self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
         return self._daemon.status()
+
+    def list_queue(self, selection: QueueSelection, limit: int, cursor: str | None) -> dict[str, PlainData]:
+        self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
+        coordinator_id = self._daemon._require_started()
+        with self._daemon._connection() as conn:
+            return queue_page(conn, coordinator_id, self._daemon._clock(), selection, limit, cursor)
 
     def admissions(
         self, *, limit: int = _MAX_ADMISSION_PAGE_SIZE, cursor: str | None = None
@@ -4676,14 +4736,15 @@ class LocalDaemonClientView:
         return self._daemon.admission_for_queue_item(queue_item_id)
 
     def agents(
-        self, *, limit: int = _MAX_ADMISSION_PAGE_SIZE, cursor: str | None = None
+        self, *, limit: int = _MAX_ADMISSION_PAGE_SIZE, cursor: str | None = None,
+        include_capacity: bool = False,
     ) -> AgentPage:
         self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
-        return self._daemon.agents(limit=limit, cursor=cursor)
+        return self._daemon.agents(limit=limit, cursor=cursor, include_capacity=include_capacity)
 
-    def agent(self, agent_id: str) -> AgentProjection:
+    def agent(self, agent_id: str, *, include_capacity: bool = False) -> AgentProjection:
         self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
-        return self._daemon.agent(agent_id)
+        return self._daemon.agent(agent_id, include_capacity=include_capacity)
 
     def operation(self, operation_id: str) -> LocalDaemonOperation:
         self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
@@ -5097,7 +5158,9 @@ def _ensure_recovery_assignment_index(conn: sqlite3.Connection) -> None:
     )
 
 
-def _initialize_coordinator_schema(conn: sqlite3.Connection) -> None:
+def _initialize_coordinator_schema(
+    conn: sqlite3.Connection, *, version: int = _COORDINATOR_SCHEMA_VERSION,
+) -> None:
     conn.execute(
         "CREATE TABLE daemon_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
     )
@@ -5112,8 +5175,9 @@ def _initialize_coordinator_schema(conn: sqlite3.Connection) -> None:
         "CREATE TABLE coordinator_epochs "
         "(epoch TEXT PRIMARY KEY, started_at TEXT NOT NULL)"
     )
+    creator_column = "admitted_by TEXT," if version >= 20 else ""
     conn.execute(
-        """
+        f"""
         CREATE TABLE managed_admissions (
             admission_id TEXT PRIMARY KEY,
             queue_item_id TEXT NOT NULL UNIQUE,
@@ -5130,6 +5194,7 @@ def _initialize_coordinator_schema(conn: sqlite3.Connection) -> None:
             cancellation_operation_id TEXT,
             cancellation_principal_id TEXT,
             blocked_reason TEXT,
+            {creator_column}
             UNIQUE(coordinator_id, run_uri)
         )
         """
@@ -5201,7 +5266,9 @@ def _initialize_preparation_schema(conn: sqlite3.Connection) -> None:
     _ensure_preparation_child_index(conn)
 
 
-def _validate_coordinator_schema(conn: sqlite3.Connection) -> None:
+def _validate_coordinator_schema(
+    conn: sqlite3.Connection, *, version: int = _COORDINATOR_SCHEMA_VERSION,
+) -> None:
     """Validate durable table/identity constraints against the initialization owner."""
 
     def shape(database: sqlite3.Connection, table: str) -> tuple[object, ...]:
@@ -5226,7 +5293,7 @@ def _validate_coordinator_schema(conn: sqlite3.Connection) -> None:
 
     try:
         with sqlite3.connect(":memory:") as expected:
-            _initialize_coordinator_schema(expected)
+            _initialize_coordinator_schema(expected, version=version)
             tables = tuple(
                 row[0]
                 for row in expected.execute(
@@ -5241,7 +5308,7 @@ def _validate_coordinator_schema(conn: sqlite3.Connection) -> None:
         raise QueueStorageError("coordinator control schema is invalid") from exc
 
 
-def _open_root(path: Path, *, role: str) -> str:
+def _open_root(path: Path, *, role: str, for_storage_upgrade: bool = False) -> str:
     _validate_private_directory(path)
     database = path / "control.sqlite"
     if not database.is_file():
@@ -5254,13 +5321,18 @@ def _open_root(path: Path, *, role: str) -> str:
         expected_version = (
             _COORDINATOR_SCHEMA_VERSION if role == "coordinator" else _AGENT_SCHEMA_VERSION
         )
-        if version != expected_version:
+        if role == "coordinator" and version == 19 and not for_storage_upgrade:
+            raise QueueStorageError(
+                "coordinator control schema 19 requires a stopped upgrade; "
+                "use loom queue storage-upgrade admissions --help"
+            )
+        if version != expected_version and not (for_storage_upgrade and role == "coordinator" and version == 19):
             raise QueueStorageError(
                 f"{role} daemon schema is unsupported; fresh roots are required"
             )
         validate_agent_session_schema(conn, coordinator=role == "coordinator")
         if role == "coordinator":
-            _validate_coordinator_schema(conn)
+            _validate_coordinator_schema(conn, version=version)
         values = {
             str(row[0]): str(row[1])
             for row in conn.execute("SELECT key, value FROM root_metadata")
@@ -5396,7 +5468,7 @@ def _request_admission_cancellation(
     return _admission_from_row(conn.execute("SELECT * FROM managed_admissions WHERE admission_id = ?", (admission.admission_id,)).fetchone())
 
 
-def _admission_from_row(row: sqlite3.Row) -> LocalDaemonAdmission:
+def _admission_from_row(row: sqlite3.Row | Mapping[str, Any]) -> LocalDaemonAdmission:
     return LocalDaemonAdmission(
         admission_id=str(row["admission_id"]),
         queue_item_id=str(row["queue_item_id"]),
@@ -5494,6 +5566,7 @@ def _agent_projection(
     *,
     coordinator_epoch: str | None,
     as_of: str,
+    include_capacity: bool,
 ) -> AgentProjection:
     pools = json.loads(str(row["pools_json"]))
     capabilities = json.loads(str(row["capabilities_json"]))
@@ -5502,39 +5575,38 @@ def _agent_projection(
     accepted = conn.execute(
         "SELECT value FROM daemon_metadata WHERE key = 'accepted_time_high_water'"
     ).fetchone()
-    parse_timestamp(as_of)
-    accepted_at = as_of if accepted is None else max(as_of, str(accepted["value"]))
-    offered = None
-    if (
-        accepted_at is not None
-        and coordinator_epoch is not None
-        and str(row["state"]) == "ACTIVE"
-        and str(row["coordinator_epoch"]) == coordinator_epoch
-    ):
-        offered = conn.execute(
-            "SELECT 1 FROM agent_offers WHERE session_id = ? "
-            "AND availability_revision = ? AND coordinator_epoch = ? "
-            "AND current = 1 AND expires_at >= ? LIMIT 1",
-            (
-                str(row["session_id"]),
-                str(row["availability_revision"]),
-                coordinator_epoch,
-                accepted_at,
-            ),
-        ).fetchone()
+    accepted_at = parse_timestamp(as_of)
+    if accepted is not None:
+        accepted_at = max(accepted_at, parse_timestamp(accepted["value"]))
     if not all(isinstance(item, str) and item for item in pools) or not all(
         isinstance(item, str) and item for item in capabilities
     ):
         raise QueueStorageError("agent session projection is invalid")
     latest = conn.execute(
-        "SELECT offer_id, offer_json, availability_revision FROM agent_offers WHERE session_id = ? ORDER BY rowid DESC LIMIT 1",
+        "SELECT offer_id, offer_json, accepted_at, expires_at, current FROM agent_offers "
+        "WHERE session_id = ? ORDER BY rowid DESC LIMIT 1",
         (str(row["session_id"]),),
     ).fetchone()
     statuses: tuple[ResourceAvailabilityStatus, ...] = ()
+    current = False
+    capacity = None
     if latest is not None:
-        statuses = AgentOffer.from_value(
-            json.loads(str(latest["offer_json"]))
-        ).resource_status
+        offer = AgentOffer.from_value(json.loads(latest["offer_json"]))
+        current = (
+            bool(latest["current"])
+            and row["state"] == "ACTIVE"
+            and offer.coordinator_epoch == row["coordinator_epoch"] == coordinator_epoch
+            and offer.availability_revision == row["availability_revision"]
+            and parse_timestamp(latest["expires_at"]) >= accepted_at
+        )
+        if current and include_capacity:
+            has_cpu = any(provider.descriptor.kind == "cpu" for provider in offer.provider_composition)
+            capacity = AgentOfferCapacity(
+                offer.cpu if has_cpu else None,
+                len(offer.gpu_atoms) if offer.gpu_devices else None,
+                latest["accepted_at"],
+            )
+        statuses = offer.resource_status
         renewal = conn.execute(
             "SELECT result_json FROM agent_offer_renewals WHERE session_id = ?",
             (str(row["session_id"]),),
@@ -5546,12 +5618,13 @@ def _agent_projection(
                 and "resource_status" in receipt
             ):
                 statuses = _resource_status_from_value(receipt["resource_status"])
-        if offered is None:
+        if not current:
             statuses = tuple(
                 replace(item, available=False, reason_code="observation_stale")
                 for item in statuses
             )
     return AgentProjection(
+        offered_capacity=capacity,
         resource_status=statuses,
         agent_id=str(row["agent_id"]),
         session_id=str(row["session_id"]),
@@ -5562,7 +5635,7 @@ def _agent_projection(
         coordinator_epoch=str(row["coordinator_epoch"]),
         pools=tuple(pools),
         capabilities=tuple(capabilities),
-        available=offered is not None,
+        available=current,
     )
 
 

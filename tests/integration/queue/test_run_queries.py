@@ -177,6 +177,15 @@ def test_native_query_routes_context_text_scope_and_cli(
             )
             assert len(jobs.items) == 1 and jobs.items[0]["native"]["run_uri"] == uri
             assert "job_associations" in jobs.items[0]["sources"]
+            job = jobs.items[0]
+            assert "admitted_by" not in job["native"]
+            owners = job["sources"]["job_associations"]
+            exact = cast(Any, client.admission(job["identity"]).to_dict()["owners"])
+            assert set(owners) == set(exact)
+            for supplemental in ("scheduling_waits", "input_validation", "slurm_storage", "agent_sessions"):
+                assert owners[supplemental] == exact[supplemental]
+            assert owners["admission"]["revision"] == exact["admission"]["revision"]
+            assert owners["authority"]["revision"] == job["observation"]["revision"]
             assignments = jobs.items[0]["sources"]["job_associations"]["assignment"][
                 "assignments"
             ]
@@ -349,6 +358,116 @@ def test_native_query_routes_context_text_scope_and_cli(
                     warning["code"] == "authority_unavailable"
                     for warning in unknown.warnings
                 )
+
+
+@pytest.mark.parametrize("https", [False, True])
+def test_job_page_bounds_stalled_read_and_resumes_after_last_examined(tmp_path, monkeypatch, https):
+    import sqlite3
+    from threading import Event
+    from time import monotonic
+
+    from loom.queue import _run_queries
+    from tests.integration.mcp.test_stdio import _coordinator
+
+    release = Event()
+    with _coordinator(tmp_path, https=https) as (service, daemon, _):
+        with daemon._connection() as conn:
+            for index in range(7):
+                identity = f"job-{index}"
+                conn.execute(
+                    "INSERT INTO managed_admissions "
+                    "(admission_id,queue_item_id,coordinator_id,run_uri,intent_digest,execution_owner,"
+                    "state,accepted_at,authority_operation_id,revision,run_priority,enqueue_sequence) "
+                    "VALUES (?, ?, ?, ?, 'digest', 'managed-stage', 'SUCCEEDED', ?, ?, ?, 0, ?)",
+                    (identity, identity, daemon._require_started(), (tmp_path / identity).as_uri(),
+                     "2026-01-01T00:00:00Z", f"bind-{index}", index + 1, index + 1),
+                )
+            conn.commit()
+        # A bad scheduling record in the batch must only degrade its own run.
+        with sqlite3.connect(daemon.config.execution_database) as conn:
+            conn.execute(
+                "INSERT INTO stage_work (stage_work_id,admission_id,run_uri,stage_name,attempt_id,"
+                "readiness_generation,run_priority,enqueue_sequence,ready_at,ready_order,attempt,"
+                "scheduling_state,record_json) VALUES ('w','job-6',?,'stage','a','g',0,1,1,1,1,'settled','{}')",
+                ((tmp_path / "job-6").as_uri(),),
+            )
+
+        connection = (
+            CoordinatorClient.from_connection_file(tmp_path / "client.json") if https
+            else CoordinatorClient.from_unix_socket(service.daemon.endpoint)
+        )
+        with connection as client:
+            exact = {row.admission_id: client.admission(row.admission_id)
+                     for row in client.admissions().admissions}
+            read = daemon._admission_detail
+
+            def stall(admission, view):
+                if admission.admission_id == "job-2":
+                    assert release.wait(8), "observer waited for the stalled owner"
+                return read(admission, view)
+
+            monkeypatch.setattr(daemon, "_admission_detail", stall)
+            monkeypatch.setattr(_run_queries, "_JOB_READ_SECONDS", 0.5)
+            try:
+                start = monotonic()
+                query = JobQuery(limit=5)
+                first = client.search_jobs(query)
+                assert monotonic() - start < 4
+                assert [row["identity"] for row in first.items] == ["job-0", "job-1"]
+                assert not first.complete and first.examined == 2 and first.next_cursor
+                assert {"code": "job_observation_deadline", "admission_id": "job-2"} in first.warnings
+                with pytest.raises(CoordinatorClientError) as stalled:
+                    client.search_jobs(replace(query, cursor=first.next_cursor))
+                assert stalled.value.code == "job_observation_deadline"
+                assert stalled.value.ids["admission_id"] == "job-2"
+                if https:
+                    from loom.queue.agent_session_transport import RunInspectionHttpClient, RunInspectionTlsClientConfig
+
+                    address = json.loads((tmp_path / "client.json").read_text())["transport"]["url"]
+                    tls = tmp_path / "tls"
+                    reader = RunInspectionHttpClient(RunInspectionTlsClientConfig(
+                        address, tls / "ca.crt", tls / "query.crt", tls / "query.key",
+                    ))
+                    assert reader.search_jobs(replace(query, cursor=first.next_cursor)) == {
+                        "schema_version": 1, "code": "job_observation_deadline",
+                    }
+
+                empty = client.search_jobs(JobQuery(where=Compare(Field("tags", ("keep",)), "eq", "yes")))
+                assert empty.items == () and empty.examined == 2 and empty.next_cursor
+                assert not empty.complete and any(w["code"] == "job_observation_deadline" for w in empty.warnings)
+            finally:
+                release.set()
+            rest = client.search_jobs(replace(query, cursor=first.next_cursor))
+            assert rest.next_cursor is None
+            rows = first.items + rest.items
+            assert [row["identity"] for row in rows] == sorted(exact)
+            assert rows[-1]["sources"]["job_associations"]["scheduling"]["availability"] == "unavailable"
+            assert rows[2]["sources"]["job_associations"]["scheduling"]["availability"] == "available"
+            for row in rows:
+                owners = row["sources"]["job_associations"]
+                reference = cast(Any, exact[row["identity"]].to_dict()["owners"])
+                assert set(owners) == set(reference)
+                for axis in ("authority", "scheduling", "assignment", "execution", "slurm", "admission"):
+                    assert owners[axis]["state"] == reference[axis]["state"]
+                    assert owners[axis].get("revision") == reference[axis].get("revision")
+
+
+            if not https:
+                # Two individually timely reads consume the whole observation budget.
+                elapsed = [0.0]
+
+                def measured_read(admission, view):
+                    detail = read(admission, view)
+                    elapsed[0] += 1.5
+                    return detail
+
+                monkeypatch.setattr(_run_queries, "monotonic", lambda: elapsed[0])
+                monkeypatch.setattr(_run_queries, "_JOB_READ_SECONDS", 4.0)
+                monkeypatch.setattr(_run_queries, "_JOB_PAGE_SECONDS", 3.0)
+                monkeypatch.setattr(daemon, "_admission_detail", measured_read)
+                result = collect_pages(lambda q: client.search_jobs(cast(JobQuery, q)), JobQuery(limit=7))
+                assert [p.examined for p in result.pages] == [2, 2, 2, 1]
+                assert [row["identity"] for row in result.items] == sorted(exact)
 
 
 def test_disconnected_scope_does_not_start_or_create_services(tmp_path):

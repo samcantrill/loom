@@ -240,3 +240,44 @@ def test_https_peer_closing_after_negotiation_preserves_single_range_fallback(tm
         with CoordinatorClient.from_connection_file(tmp_path / "client.json") as client:
             result = client.fetch_artifacts([{"locator": locator.to_dict()}], download_root / "fetch", scope=SCOPE)
             assert result["success_count"] == 1, result
+
+
+def test_native_cli_artifact_text_preserves_preview_and_fetched_file(tmp_path, download_root, capsys):
+    import base64
+    from loom.cli.main import main
+
+    with _coordinator(tmp_path, https=False) as (service, daemon, _):
+        uri = (daemon.config.run_store_root / "cli-artifact").as_uri()
+        authority = SQLitePerRunAuthorityStore(uri)
+        authority.create_run(uri)
+        daemon.config = replace(daemon.config, coordinator_authority_factory=lambda address: authority)
+        content = '{"nested": [0, true],\n "text": "café"}'.encode()
+        ref, _ = local_ref(uri, content)
+        locator = publish(authority, uri, ref).to_dict()
+        request = {"locator": locator, "scope": SCOPE}
+
+        def cli(action, request, *options):
+            code = main(["artifacts", action, "--endpoint", str(service.daemon.endpoint),
+                         "--request", json.dumps(request), *options])
+            captured = capsys.readouterr()
+            assert code == 0, captured.err
+            return captured.out
+
+        describe = cli("describe", request)
+        assert "outcome: available" in describe and "path: result.json" in describe
+        assert "verification: recorded_sha256" in describe and f"total bytes: {len(content)}" in describe
+        prefix = "content:\n"
+        assert cli("read", request).split(prefix, 1)[1] == content.decode()
+        assert json.loads(cli("read", {**request, "format": "json"}).split(prefix, 1)[1]) == json.loads(content)
+        bounded = cli("read", {**request, "format": "bytes", "limit": 12})
+        assert "truncated: yes" in bounded and base64.b64decode(bounded.split(prefix, 1)[1]) == content[:12]
+        assert "content" not in cli("read", {**request, "format": "json", "limit": 2})
+        target = download_root / "cli-fetched"
+        fetch_request = {"selections": [{"locator": locator}], "destination": str(target), "scope": SCOPE}
+        receipt = cli("fetch", fetch_request)
+        local_path = next(target.glob("*/result.json"))
+        assert local_path.read_bytes() == content
+        assert f"primary path: {local_path}" in receipt and "success count: 1" in receipt
+        refused = json.loads(cli("fetch", fetch_request, "--format", "json"))
+        assert refused["schema_version"] == "loom.cli.queue.local-daemon.v5"
+        assert refused["result"]["items"][0]["outcome"] == "destination_exists"

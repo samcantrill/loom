@@ -18,6 +18,7 @@ from typing import Any, cast
 from loom.serialization import PlainData, thaw_plain_data
 
 from ._phase_timing import reported_phases, qualification_timings
+from ._queue_listing import CAPABILITY as QUEUE_LIST_CAPABILITY, QueueSelection, decode_queue_page
 from ._shared_assignment import _AssignmentPayloadRootRequired
 from .errors import (
     QueueConflictError,
@@ -39,6 +40,7 @@ from .local_daemon import (
     LocalDaemonAdmissionDetail,
     LocalDaemonAdmissionRequest,
     LocalDaemonOperation,
+    LocalDaemonClientView,
     LocalDaemonPrincipal,
     LocalDaemonRole,
     OperationWaitResult,
@@ -67,6 +69,7 @@ _OPERATOR_ADMIN_MUTATIONS = frozenset({
 })
 OPERATOR_OPERATIONS = _OPERATOR_ADMIN_MUTATIONS | frozenset({"operator_agent_retirement_ready"}) | frozenset({"operator_handshake", "operator_status", "operator_agent", "operator_assignment", "operator_control", "operator_operation", "operator_maintenance", "operator_maintenance_control", "operator_maintenance_operation"})
 CONTROL_CAPABILITY = "daemon-control-v1"
+AGENT_CAPACITY_CAPABILITY = "agent-offer-capacity-v1"
 _LOGGER = logging.getLogger(__name__)
 MAX_RESPONSE_BYTES = 1_048_576
 MAX_OBSERVATION_SECONDS = 25.0
@@ -75,6 +78,7 @@ CONTROL_OPERATIONS = OPERATOR_OPERATIONS | frozenset(
         "handshake",
         "status",
         "admissions",
+        "list_queue",
         "admission",
         "admission_for_queue_item",
         "agents",
@@ -413,6 +417,8 @@ def decode_result(operation: str, value: Mapping[str, object]) -> Any:
         return LocalDaemonAdmission.from_dict(value)
     if operation == "admission":
         return LocalDaemonAdmissionDetail.from_dict(value)
+    if operation == "list_queue":
+        return decode_queue_page(value)
     if operation == "admissions":
         rows, cursor = value.get("admissions"), value.get("next_cursor")
         if not isinstance(rows, list) or any(
@@ -544,6 +550,7 @@ def validate_request(
         "cancel_run_operation": {"operation_id"},
         "cancel_preparation": {"operation_id"},
         "admissions": {"limit", "cursor"},
+        "list_queue": {"limit", "cursor", "principal", "states", "include_terminal"},
         "agents": {"limit", "cursor"},
         "admission": {"admission_id"},
         "admission_for_queue_item": {"queue_item_id"},
@@ -593,8 +600,14 @@ def validate_request(
     if operation == "service_lifetime":
         value.setdefault("agent_root_id", None)
         optional_id(value["agent_root_id"])
+    if operation in {"agent", "agents"} and "include_capacity" in value:
+        if not isinstance(value["include_capacity"], bool):
+            raise ValueError("include_capacity must be boolean")
+        fields[operation].add("include_capacity")
     if set(value) != fields[operation]:
         raise ValueError("control request fields are invalid")
+    if operation == "list_queue":
+        value["selection"] = QueueSelection.from_request(value)
     if operation == "read_run_logs":
         from ._remote_logs import validate_log_selection
         validate_log_selection(value["stage"], value["stream"], value["tail"])
@@ -661,6 +674,16 @@ def validate_request(
     return value
 
 
+def _list_page(view: LocalDaemonClientView, operation: str, value: Mapping[str, object]):
+    limit = cast(int, value["limit"])
+    cursor = cast(str | None, value["cursor"])
+    if operation == "list_queue":
+        return view.list_queue(cast(QueueSelection, value["selection"]), limit, cursor)
+    if operation == "agents":
+        return view.agents(limit=limit, cursor=cursor, include_capacity=value.get("include_capacity") is True)
+    return view.admissions(limit=limit, cursor=cursor)
+
+
 def dispatch_control(
     daemon: LocalDaemon,
     principal: LocalDaemonPrincipal,
@@ -715,8 +738,7 @@ def dispatch_control(
         view = daemon.client_view(principal)
         result: Any
         if operation in {"handshake", "operator_handshake"}:
-            status = daemon.operator_view(principal).status() if operation == "operator_handshake" else view.status()
-            result = _connection_description(daemon, status, transport)
+            result = _connection_description(daemon, transport)
         elif operation == "startup_attach":
             result = daemon._lifetime.attach(cast(str, value["attachment_id"]), cast(float, value["expires_at"]))
         elif operation == "startup_release":
@@ -725,22 +747,14 @@ def dispatch_control(
             result = daemon._lifetime.observe(value["agent_root_id"])
         elif operation == "status":
             result = view.status()
-        elif operation == "admissions":
-            result = view.admissions(
-                limit=cast(int, value["limit"]),
-                cursor=cast(str | None, value["cursor"]),
-            )
+        elif operation in {"admissions", "agents", "list_queue"}:
+            result = _list_page(view, operation, value)
         elif operation == "admission":
             result = view.admission(cast(str, value["admission_id"]))
         elif operation == "admission_for_queue_item":
             result = view.admission_for_queue_item(cast(str, value["queue_item_id"]))
-        elif operation == "agents":
-            result = view.agents(
-                limit=cast(int, value["limit"]),
-                cursor=cast(str | None, value["cursor"]),
-            )
         elif operation == "agent":
-            result = view.agent(cast(str, value["agent_id"]))
+            result = view.agent(cast(str, value["agent_id"]), include_capacity=value.get("include_capacity") is True)
         elif operation == "operation":
             result = view.operation(cast(str, value["operation_id"]))
         elif operation in WAIT_OPERATIONS:
@@ -758,6 +772,7 @@ def dispatch_control(
                 )
         elif operation in {"trace_lineage", "select_outputs", "list_output_commits", "search_runs", "search_submissions", "search_jobs", "query_fields", "tag_keys", "tag_values"}:
             from ._run_queries import query_operation
+            from loom.runs._query_page import QueryObservationDeadline
             from loom.runs.query import InvalidCursorError, QueryError
 
             try:
@@ -769,6 +784,11 @@ def dispatch_control(
                     result = lineage_operation(daemon, cast(LineageQuery, value["query"]))
                 else:
                     result = output_operation(daemon, operation, value) if operation in OUTPUT_OPERATIONS else query_operation(daemon, operation, value)
+            except QueryObservationDeadline as exc:
+                raise control_error(
+                    "job_observation_deadline", operation, payload, boundary="coordinator",
+                    ids={"admission_id": str(exc.args[0])} if exc.args else None,
+                ) from exc
             except InvalidCursorError as exc:
                 raise control_error("invalid_cursor", operation, payload, boundary="coordinator") from exc
             except QueryError as exc:
@@ -1019,7 +1039,7 @@ def _dispatch_operator(daemon: LocalDaemon, principal: LocalDaemonPrincipal, ope
     return {**result, "mutation_outcome": "applied"}
 
 
-def _connection_description(daemon: LocalDaemon, status: DaemonStatus, transport: str) -> CoordinatorConnectionDescription:
+def _connection_description(daemon: LocalDaemon, transport: str) -> CoordinatorConnectionDescription:
     from loom.runs.context import RUN_CONTEXT_LIMITS
 
     preparation = (
@@ -1030,10 +1050,12 @@ def _connection_description(daemon: LocalDaemon, status: DaemonStatus, transport
     return CoordinatorConnectionDescription(
         "1",
         transport,
-        status.coordinator_id,
-        status.coordinator_epoch,
+        daemon._require_started(),
+        daemon._epoch or "",
         (
             CONTROL_CAPABILITY,
+            AGENT_CAPACITY_CAPABILITY,
+            QUEUE_LIST_CAPABILITY,
             OPERATOR_CAPABILITY,
             CONDITIONAL_CONTROL_CAPABILITY,
             "quiescent-profile-promotion-v2", "quiescent-source-promotion-v1", "quiescent-configuration-retirement-v1", "quiescent-coordinator-retirement-v1", "quiescent-container-policy-addition-v1", "quiescent-publication-budget-increase-v1", GPU_POLICY_CONTRACTION_CAPABILITY, GPU_POLICY_EXPANSION_CAPABILITY,

@@ -1435,9 +1435,33 @@ its revision and use a fresh handshake when epoch reconciliation is needed.
 
 ### Stopped storage upgrades
 
+On the coordinator host, stop the coordinator and run the following command
+with its native root and observed stable ID. The root contains `control.sqlite`.
+
+```bash
+loom queue storage-upgrade admissions --coordinator-root "$COORDINATOR_ROOT" --expected-coordinator-id "$COORDINATOR_ID"
+```
+
+The command upgrades a complete schema 19 coordinator to schema 20, including
+coordinators with an embedded agent or queued work. It requires the protected
+root and the exclusive owner lock. Complete any interrupted cohort upgrade first. SQLite
+commits the new column, retained creator evidence and version together. A retry
+on schema 20 returns the current attributed and unknown counts. Startup on
+schema 19 reports the required upgrade.
+
+New admissions record the verified client subject, or the verified parent
+operation's subject for managed targets and preparation children. A Unix socket
+records the authenticated peer as `uid:UID`. HTTPS records the enrolled principal.
+Replay, cancellation and retry preserve the creator. For schema 19 history,
+reserved preparation children (including earlier verification generations)
+can be attributed when their dispatch evidence identifies a single principal.
+A target admission receipt can be retained by a later observer of the same run.
+Such receipts and legacy direct submissions leave the creator unknown.
+
 `loom queue storage-upgrade inspect|apply|resume|restore --request upgrade.json`
-owns explicit same-root conversion. Ordinary startup never changes a populated
-database's journal mode or schema. The first supported cohort consists of pure
+owns the protected snapshot workflow for same-root conversion. A conversion
+starting with a complete schema 19 coordinator also upgrades its admission journal.
+Ordinary startup never changes a populated database's journal mode or schema. The first supported cohort consists of pure
 coordinators and outbound agents, including resident, Slurm-only and mixed
 agents. Coordinator bundles, arbitrary old control schemas, root relocation,
 removal of an explicit storage policy and migration from legacy run-local

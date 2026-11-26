@@ -2241,13 +2241,14 @@ class CoordinatorPreparations:
         )
 
     def require_admission_claim(self, conn: sqlite3.Connection, operation_id: str,
-                                request: LocalDaemonAdmissionRequest, claim: tuple[object, ...], *, child: bool) -> None:
+                                request: LocalDaemonAdmissionRequest, claim: tuple[object, ...], *, child: bool) -> str:
         row = conn.execute("SELECT * FROM preparation_operations WHERE operation_id=?", (operation_id,)).fetchone()
         if (row is None or self._publication_token(row) != claim or row["cancellation_requested"]
                 or row["state"] != ("pending" if child else "applying")
                 or request.queue_item_id != row["child_name" if child else "queue_item_id"]
                 or (child and not row["dispatch_claimed"])):
             raise QueueConflictError("preparation admission claim changed")
+        return str(row["principal_id"])
 
     def _submit_async(self, row: sqlite3.Row, request: LocalDaemonAdmissionRequest, *,
                       child: bool = False) -> LocalDaemonAdmission | None:

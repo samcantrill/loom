@@ -129,6 +129,24 @@ before paging; collection queries do not enumerate directories or read every
 run document. Exact admission observations use `CoordinatorClient.admission(admission_id)`
 and need no discovery query.
 
+Detailed job search applies journal-owned identity, state, execution-owner and
+queue-item string filters before inspecting run metadata. Literal text filters on
+these fields use the same Unicode case folding as the typed query. It reads the
+shared scheduling and assignment journals in small groups. Each examined job
+keeps its own admission revision, run-authority snapshot, scheduling waits,
+input validation, Slurm storage and agent-session evidence when available.
+
+Job pages reserve time for transport. When a run or owner read exceeds its
+budget after earlier candidates finish, the page reports
+`job_observation_deadline`, `coverage.complete=false`, and a `next_cursor`
+after the last fully examined candidate. Resume with that cursor to retry the
+unfinished candidate. This can yield an empty continuing page for a selective
+filter. If the first candidate or candidate selection stalls, the query returns a
+`job_observation_deadline` error. Unavailable owners retain their own diagnostics
+and incomplete coverage even when the query reaches the end of the journal. A
+known Slurm job handle without a scheduler observation retains its assignment ID
+and reports `scheduler_observation_unavailable`.
+
 ### Registering and refreshing collection membership
 
 Loom run-document publication automatically registers run identity and creation
