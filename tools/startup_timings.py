@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 import json
@@ -31,11 +31,14 @@ _PHASES = {
 }
 _HANDOFF = {
     "child_return_to_prepared_target_commit": ("stage_run_returned", "prepared_target_committed"),
+    "child_return_to_admission_succeeded": ("stage_run_returned", "admission_succeeded"),
+    "child_admission_succeeded_to_prepared_target_commit": ("admission_succeeded", "prepared_target_committed"),
     "prepared_target_commit_to_target_admission": ("prepared_target_committed", "admission_committed"),
 }
 _REQUEST = ("request_preparation_queued", "request_preparation_worker_started", "worker_request_available")
 _AGENT = ("assignment_received", "supervisor_launch", "stage_run_entered", "stage_run_returned")
-_ACTIONS = {"submission_sent", "submission_acknowledged", "admission_committed", "prepared_target_committed",
+_BULK_PHASES = {"preparation_report_hydration", "preparation_target_publication", "preparation_annotation_initialization"}
+_ACTIONS = {"submission_sent", "submission_acknowledged", "admission_committed", "admission_succeeded", "prepared_target_committed",
             "attempt_ready", "attempt_scheduling_summary", "reservation_committed", *_REQUEST, *_AGENT}
 
 
@@ -99,6 +102,8 @@ class Trace:
         self.client = defaultdict(lambda: defaultdict(list))
         self.admissions = {}
         self.admitted = {}
+        self.succeeded = defaultdict(list)
+        self.bulk = defaultdict(dict)
         self.prepared = defaultdict(list)
         self.assignments = defaultdict(lambda: defaultdict(list))
         self.work = defaultdict(lambda: defaultdict(list))
@@ -106,7 +111,20 @@ class Trace:
         for record in records:
             if record.get("diagnostic") != "loom.phase_timings":
                 continue
-            for span in record.get("spans", ()):
+            # Only the worker's own record contains the FIFO capacity span and
+            # the timed operation. Nested caller spans do not establish queue time.
+            spans = record.get("spans", ())
+            operation = record.get("operation_id")
+            waits = [s for s in spans if s.get("action") == "bulk_capacity_wait"]
+            for span in spans:
+                if span.get("action") in _BULK_PHASES and operation and span.get("operation_id") == operation:
+                    child = (record.get("related") or {}).get("child_admission_id")
+                    wait = waits[0]["elapsed_nanoseconds"] / 1e9 if len(waits) == 1 else None
+                    row = {"action": span["action"], "child_admission_id": child, "started_at": span["started_at"],
+                           "worker_seconds": span["elapsed_nanoseconds"] / 1e9, "outcome": span["outcome"],
+                           "capacity_wait_seconds": wait}
+                    self.bulk[operation][tuple(row.values())] = row
+            for span in spans:
                 if span.get("action") not in _ACTIONS:
                     continue
                 e = Event.read(span)
@@ -125,6 +143,8 @@ class Trace:
                         self.client[operation][e.action].append(e)
                         if a.get("submit_method") == "prepare_run":
                             self.prepare_only.add(operation)
+                elif e.action == "admission_succeeded":
+                    self.succeeded[admission].append(e)
                 elif e.action == "admission_committed":
                     self.admitted[admission] = e
                     if operation:
@@ -198,6 +218,12 @@ def _attempt(trace, key, assignment, assigned, ready, single_cycle, error_ms):
     s = summary.attrs if summary else {}
     r = reserved.attrs if reserved else {}
     waits = s.get("wait_ns")
+    prequeue = s.get("prequeue_status", "missing")
+    selected_queue_ns = s.get("prequeue_queued_ns")
+    if prequeue == "observed" and (selected_queue_ns is None or build is None or summary is None
+                                   or build.domain != summary.domain or selected_queue_ns != queued_ns):
+        prequeue = "missing"
+    prequeue_waits = s.get("prequeue_wait_ns") if prequeue == "observed" else None
     return {
         "admission_id": admission, "stage_work_id": work_id, "attempt_id": attempt, "assignment_id": assignment,
         "stage_name": r.get("stage_name") or s.get("stage_name") or (ready.attrs.get("stage_name") if ready else None),
@@ -205,6 +231,8 @@ def _attempt(trace, key, assignment, assigned, ready, single_cycle, error_ms):
                                       r.get("ready_projection_revision", s.get("ready_projection_revision"))),
         "projection_revision": r.get("projection_revision", s.get("projection_revision")),
         "intervals": intervals, "request_queued_before_this_ready": carried,
+        "prequeue_status": prequeue,
+        "prequeue_wait_seconds": {k: v / 1e9 for k, v in prequeue_waits.items()} if prequeue_waits is not None else None,
         "wait_reason_seconds": {k: v / 1e9 for k, v in waits.items()} if waits is not None else None,
         "confirmed_eligible_request_ready_seconds": (
             s["eligible_request_ready_ns"] / 1e9 if s.get("saw_eligible_offer") else None),
@@ -247,7 +275,11 @@ def _attempts(trace, error_ms):
         for ready in ready_events:
             if ready not in matched:
                 matched.append(ready)
-                yield _attempt(trace, key, None, {}, ready, single_cycle, error_ms)
+                closed = _unique(e for e in trace.work[key].get("attempt_scheduling_summary", ())
+                                 if e.domain == ready.domain and
+                                 e.attrs.get("ready_projection_revision") == ready.attrs.get("projection_revision"))
+                details = {"attempt_scheduling_summary": [closed]} if closed else {}
+                yield _attempt(trace, key, None, details, ready, single_cycle, error_ms)
         if not placements and not ready_events:
             yield _attempt(trace, key, None, {}, None, single_cycle, error_ms)
 
@@ -267,6 +299,7 @@ def _handoff(trace, op, attempts, targets, error_ms):
                            and trace.admitted[ad].attrs.get("run_uri") == uri)
         row = {"child_admission_id": child, "target_admission_id": admitted.attrs["admission_id"] if admitted else None,
                "intervals": _measure({"prepared_target_committed": commit, "stage_run_returned": _unique(returns),
+                                      "admission_succeeded": _unique(trace.succeeded.get(child, ())),
                                       "admission_committed": admitted}, _HANDOFF, error_ms)}
         rows.append(row)
     if not rows and isinstance(op, str) and op not in trace.prepare_only:
@@ -302,6 +335,8 @@ def summarize(records, *, clock_error_ms=None, slowest=10, operation=None):
     durations, send_times, reports = [], [], []
     handoff_samples = []
     phase_samples = defaultdict(list)
+    prequeue_samples = defaultdict(list)
+    prequeue_counts = defaultdict(Counter)
     eligible = defaultdict(list)
     unknown = defaultdict(int)
     acked = ack_missing = without_target = prep_acks = 0
@@ -329,6 +364,9 @@ def summarize(records, *, clock_error_ms=None, slowest=10, operation=None):
         for role, attempts in roles.items():
             for a in attempts:
                 phase_samples[role].append(a["intervals"])
+                prequeue_counts[role][a["prequeue_status"]] += 1
+                if a["prequeue_wait_seconds"] is not None:
+                    prequeue_samples[role].append(a["prequeue_wait_seconds"])
                 if a["assignment_id"]:
                     value = a["confirmed_eligible_request_ready_seconds"]
                     if value is not None:
@@ -341,6 +379,8 @@ def summarize(records, *, clock_error_ms=None, slowest=10, operation=None):
         if operation is None or operation == op_id:
             reports.append({"operation_id": op_id, "direct_submission": isinstance(op, tuple),
                             "send_to_ack": send_time, "ack_to_first_target_entry": latency,
+                            "observed_preparation_work": sorted(trace.bulk.get(op, {}).values(),
+                                                                key=lambda row: (row["started_at"], row["action"])),
                             "attempts": roles, "handoffs": handoffs})
     reports.sort(key=lambda r: (r["ack_to_first_target_entry"] is None,
                                 -(_seconds(r["ack_to_first_target_entry"]) or 0), r["operation_id"]))
@@ -359,6 +399,12 @@ def summarize(records, *, clock_error_ms=None, slowest=10, operation=None):
             role: {**_distribution(eligible[role]), "unknown": unknown[role]} for role in ("preparation", "target")},
         "phase_distributions": {role: {name: _stats(s.get(name) for s in phase_samples[role]) for name in _PHASES}
                                 for role in ("preparation", "target")},
+        "prequeue_distributions": {
+            role: {"coverage": dict(prequeue_counts[role]),
+                   "reason_seconds": {reason: _distribution(row.get(reason, 0) for row in prequeue_samples[role])
+                                      for reason in sorted({k for row in prequeue_samples[role] for k in row})}}
+            for role in ("preparation", "target")
+        },
         "handoff_distributions": {name: _stats(s.get(name) for s in handoff_samples) for name in _HANDOFF},
         "submissions": reports if operation is not None else reports[:slowest],
         "reservations_without_admission_link": sum(

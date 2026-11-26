@@ -2135,13 +2135,13 @@ def test_validated_reports_survive_publication_capacity_wait(tmp_path, monkeypat
     bulk = daemon._result_verifications.bulk
     submit = bulk.submit
 
-    def limited(operation_id, action, function, *args):
+    def limited(operation_id, action, function, *args, **kwargs):
         if action == "preparation_target_publication" and not release.is_set():
             submissions[operation_id] += 1
             if all(submissions[r.operation_id] >= 3 for r in requests):
                 blocked.set()
             return None
-        return submit(operation_id, action, function, *args)
+        return submit(operation_id, action, function, *args, **kwargs)
 
     monkeypatch.setattr(bulk, "submit", limited)
     try:

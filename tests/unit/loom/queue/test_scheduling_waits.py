@@ -87,3 +87,65 @@ def test_release_before_acceptance_reopens_the_same_attempt(monkeypatch):
     ]
     assert [(s["ready_projection_revision"], s["request_available_ns"]) for s in summaries] == [(1, None), (3, 88)]
     assert events.count("attempt_ready") == 2
+
+
+def test_prequeue_partitions_held_reasons_and_freezes_at_first_submission(monkeypatch):
+    now = [10]
+    monkeypatch.setattr(waits, "monotonic_ns", lambda: now[0])
+    monkeypatch.setattr(waits, "milestone", lambda *args, **kwargs: None)
+    owner, work = waits.SchedulingWaits(), _record("a")
+    owner.ready(work)
+    now[0] = 21
+    owner.ready(work, scanned=True)
+    now[0] = 24
+    owner.prequeue(work, "early_retention_limit")
+    now[0] = 27
+    owner.prequeue(work, "early_retention_limit")
+    now[0] = 40
+    owner.prequeue(work, "preparation_capacity")
+    owner.queued(work, 45)
+    now[0] = 75
+    owner.prequeue(work, "unknown")
+    owner.queued(work, 81)  # a retry after the first build failed
+    now[0] = 95
+    owner.reserved(work, "assignment", None, 90)
+    summary, = cast(list[dict], owner.summaries(work.run_uri))
+    assert summary["prequeue_status"] == "observed"
+    assert (summary["prequeue_ready_ns"], summary["prequeue_queued_ns"]) == (10, 45)
+    assert summary["prequeue_wait_ns"] == {
+        "first_scan": 11, "unknown": 3, "early_retention_limit": 16, "preparation_capacity": 5,
+    }
+
+
+def test_prequeue_reopen_reuse_and_stale_notifications(monkeypatch):
+    now = [10]
+    monkeypatch.setattr(waits, "monotonic_ns", lambda: now[0])
+    monkeypatch.setattr(waits, "milestone", lambda *args, **kwargs: None)
+    owner = waits.SchedulingWaits()
+    first, reopened = _record("same"), _record("same", 3)
+    owner.ready(first)
+    owner.queued(first, 20)
+    now[0] = 40
+    owner.reserved(first, "previous", None, 25)
+    now[0] = 50
+    owner.ready(reopened, scanned=True)
+    owner.queued(first, 99)
+    owner.queued(reopened, 20)
+    owner.reserved(reopened, "next", None, 25)
+    _, carried = cast(list[dict], owner.summaries(first.run_uri))
+    assert carried["ready_projection_revision"] == 3
+    assert carried["prequeue_status"] == "reused"
+    assert carried["prequeue_queued_ns"] == 20 and carried["prequeue_wait_ns"] is None
+
+
+def test_unobserved_endpoints_do_not_report_zero_latency(monkeypatch):
+    monkeypatch.setattr(waits, "milestone", lambda *args, **kwargs: None)
+    owner = waits.SchedulingWaits()
+    cancelled, incomplete = _record("cancelled"), _record("incomplete")
+    owner.ready(cancelled)
+    owner.retain(cancelled.run_uri, set())
+    owner.ready(incomplete, scanned=True)
+    owner.reserved(incomplete, "missing-boundary", None, None)
+    summaries = cast(list[dict], owner.summaries(incomplete.run_uri))
+    assert [row["prequeue_status"] for row in summaries] == ["inapplicable", "missing"]
+    assert all(row["prequeue_wait_ns"] is None and row["prequeue_queued_ns"] is None for row in summaries)

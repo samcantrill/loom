@@ -387,37 +387,53 @@ def _schedule_gpu_opportunity(self, admissions, waiting_outcomes):
 
 
 def _advance_ready_inputs(self, record, admission, context, epochs, *, anticipated):
-    """Start host-independent IO only for a currently owned, bound READY attempt."""
+    """Advance host-independent IO; report whether this route can prepare before placement."""
     if record.placement.route.kind is not ExecutionRouteKind.MANAGED_AGENT:
         # A Slurm submit agent preflights its offer and GPU budget before any
         # preparation-report IO. Its route resumes through the same selector.
-        return
+        return False
     profiles = (*self.config.remote_profiles, *self.config.container_capabilities)
     remote = any(_profile_satisfies_requirement(profile, record.execution_requirement) for profile in profiles)
     if anticipated and not remote:
-        return
+        return False
     key = (record.run_uri, record.stage_name)
-    if anticipated and not self._ready_preparations.can_anticipate(key):
-        return
+    if anticipated:
+        wait = self._ready_preparations.anticipation_wait(key)
+        if wait is not None:
+            queued = self._ready_preparations.request_queued_ns(key, record.stage_work_id)
+            if queued is not None:
+                self._scheduling_waits.queued(record, queued)
+            else:
+                self._scheduling_waits.prequeue(record, wait)
+            return True
     intent, _ = context
     if not anticipated:
         owned, prepared = self._ready_preparations.request_for_descriptors(key, record.stage_work_id)
         if owned:
+            queued = self._ready_preparations.request_queued_ns(key, record.stage_work_id)
+            if queued is not None:
+                self._scheduling_waits.queued(record, queued)
             if prepared is not None and remote:
                 self._prepared_input_descriptors(record, prepared)
-            return
+            return True
     snapshot = (self._observed_ready.get(admission.admission_id)
                 or self.dispatch_observations.snapshot_for_preparation(admission, epochs))
-    if (snapshot is None or snapshot.revision.sequence < record.authority_revision.sequence
-        or not self._failure_policy_allows_new_work(intent, snapshot)
-        or not any(stage.stage_name == record.stage_name and stage.status is StageStatus.PENDING
-                   and any(a.attempt_id == record.attempt_id for a in stage.attempts)
-                   for stage in snapshot.stages)):
-        return
+    if snapshot is None or snapshot.revision.sequence < record.authority_revision.sequence:
+        self._scheduling_waits.prequeue(record, "snapshot_unavailable")
+        return True
+    if not self._failure_policy_allows_new_work(intent, snapshot):
+        self._scheduling_waits.prequeue(record, "run_policy")
+        return True
+    if not any(stage.stage_name == record.stage_name and stage.status is StageStatus.PENDING
+               and any(a.attempt_id == record.attempt_id for a in stage.attempts) for stage in snapshot.stages):
+        self._scheduling_waits.prequeue(record, "snapshot_unavailable")
+        return True
+    self._scheduling_waits.prequeue(record, "unknown")
     if anticipated:
         self._prepared_ready_request(record, snapshot, intent, speculative=True)
     else:
         self._prepared_ready_request(record, snapshot, intent)
+    return True
 
 
 def resume_ready_inputs(self, work_ids, admissions, epochs):
@@ -427,12 +443,15 @@ def resume_ready_inputs(self, work_ids, admissions, epochs):
         record = self.stage_work_store.find_stage_work(work_id)
         if record is None or record.scheduling_state is not SchedulingProjectionState.READY:
             continue
+        self._scheduling_waits.ready(record, scanned=True)
         admissions.include({record.admission_id})
         admission = admissions.get(record.admission_id)
         context = self._cycle_contexts.get(record.admission_id)
         if (admission is None or context is None or self._cycle_context_epochs.get(record.admission_id) != epochs
-            or self._cycle_context_revisions.get(record.admission_id) != admission.revision
-            or self._attempt_cancel_requested(record.run_uri, record.attempt_id)):
+            or self._cycle_context_revisions.get(record.admission_id) != admission.revision):
+            self._scheduling_waits.prequeue(record, "context_unavailable")
+            continue
+        if self._attempt_cancel_requested(record.run_uri, record.attempt_id):
             continue
         try:
             _advance_ready_inputs(self, record, admission, context, epochs, anticipated=False)
@@ -459,6 +478,8 @@ def _schedule_window(
         # work here is publishing a newly reconciled admission's waiting reason.
         if isinstance(admissions, SchedulingAdmissions):
             admissions.visited_dispatch.update(("dispatch", record.run_uri, record.stage_work_id) for record in page)
+        for record in page:
+            self._scheduling_waits.prequeue(record, "no_eligible_offer")
         return None
 
     decision_as_of, snapshot_time = self._daemon_owner()._accepted_snapshot()
@@ -474,7 +495,7 @@ def _schedule_window(
     # A release before agent acceptance reopens the existing projection. A
     # retry can reach dispatch before the next admission reconciliation sweep.
     for record in window:
-        self._scheduling_waits.ready(record)
+        self._scheduling_waits.ready(record, scanned=True)
     if isinstance(admissions, SchedulingAdmissions):
         admissions.include({record.admission_id for record in window})
         admissions.visited_dispatch.update(
@@ -502,15 +523,17 @@ def _schedule_window(
                       if self._cycle_context_epochs.get(key) == epochs}
     contexts = self._cycle_contexts
     exhausted_admissions: set[str] = set()
+    early_work: set[str] = set()
     for record in window:
         admission = admissions.get(record.admission_id)
-        if admission is None or record.placement.route.kind not in {
+        if record.placement.route.kind not in {
             ExecutionRouteKind.MANAGED_AGENT,
             ExecutionRouteKind.SLURM,
         }:
             continue
         context = contexts.get(record.admission_id)
-        if context is None:
+        if admission is None or context is None:
+            self._scheduling_waits.prequeue(record, "context_unavailable")
             continue
         if (
             context[0].max_parallel_stages is not None
@@ -520,12 +543,15 @@ def _schedule_window(
             exhausted_admissions.add(record.admission_id)
             self._scheduling_waits.record(record.run_uri, record.stage_name, "reservation")
             self._scheduling_waits.capacity(record, "run_parallel_limit")
+            self._scheduling_waits.prequeue(record, "run_parallel_limit")
         elif daemon is not None:
             try:
-                _advance_ready_inputs(self, record, admission, context, epochs, anticipated=True)
+                if _advance_ready_inputs(self, record, admission, context, epochs, anticipated=True):
+                    early_work.add(record.stage_work_id)
             except Exception:
                 # Route-specific eligibility will report/retry the exact preparation.
-                pass
+                self._scheduling_waits.prequeue(record, "unknown")
+                early_work.add(record.stage_work_id)
     remote_targets = self._remote_candidates()
     configured_hosts = {rule.agent_id for rule in self.config.agent_policy.agents}
     all_slots_full = (self.agent_id is None and bool(configured_hosts)
@@ -566,15 +592,18 @@ def _schedule_window(
                 observed[identity] = None
         snapshot = observed[identity]
         if snapshot is None:
+            self._scheduling_waits.prequeue(record, "snapshot_unavailable")
             self._scheduling_waits.capacity(record, "preparation")
             self._scheduling_waits.record(record.run_uri, record.stage_name, "preparation")
             exhausted_admissions.add(identity)
             return None
         if snapshot.revision.sequence < record.authority_revision.sequence:
+            self._scheduling_waits.prequeue(record, "snapshot_unavailable")
             self._scheduling_waits.capacity(record, "preparation")
             return None
         if not any(attempt.attempt_id == record.attempt_id for stage in snapshot.stages
                    if stage.stage_name == record.stage_name for attempt in stage.attempts):
+            self._scheduling_waits.prequeue(record, "snapshot_unavailable")
             self._scheduling_waits.capacity(record, "preparation")
             return None
         return snapshot
@@ -667,6 +696,7 @@ def _schedule_window(
                 cast(str, record.placement.route.profile_configuration_fingerprint),
             )
             if not profile.available:
+                self._scheduling_waits.prequeue(record, "no_eligible_offer")
                 self._scheduling_waits.record(record.run_uri, record.stage_name, "host_eligibility")
                 if waiting_outcomes is not None and admission.admission_id in waiting_outcomes:
                     waiting_outcomes[admission.admission_id] = LocalDaemonExecutionOutcome(
@@ -677,6 +707,7 @@ def _schedule_window(
             if snapshot is None:
                 continue
             if not self._failure_policy_allows_new_work(intent, snapshot):
+                self._scheduling_waits.prequeue(record, "run_policy")
                 exhausted_admissions.add(record.admission_id)
                 continue
             with _dispatch_offering(self, record, "execution"):
@@ -714,6 +745,10 @@ def _schedule_window(
                 else:
                     reason = "no_eligible_offer"
                 self._scheduling_waits.capacity(pending, reason)
+                # Capacity gates an unqueued request only when its route cannot
+                # prepare independently. Preserve the observed early IO blocker.
+                if pending.stage_work_id not in early_work:
+                    self._scheduling_waits.prequeue(pending, reason)
                 self._scheduling_waits.record(pending.run_uri, pending.stage_name, "host_eligibility")
             return None
         record = _stage_work(self.stage_work_store, selected_id)
@@ -727,6 +762,7 @@ def _schedule_window(
             excluded_work.add(record.stage_work_id)
             continue
         if not self._failure_policy_allows_new_work(intent, snapshot):
+            self._scheduling_waits.prequeue(record, "run_policy")
             self._scheduling_waits.capacity(record, "run_policy")
             exhausted_admissions.add(record.admission_id)
             continue
@@ -746,12 +782,15 @@ def _schedule_window(
             selected_profile, record.execution_requirement
         ):
             self._scheduling_waits.capacity(record, "no_eligible_offer")
+            if record.stage_work_id not in early_work:
+                self._scheduling_waits.prequeue(record, "no_eligible_offer")
             if remote_target is not None:
                 del remote_targets[candidate_id]
             else:
                 excluded_work.add(record.stage_work_id)
             continue
         if remote_target is not None:
+            self._scheduling_waits.prequeue(record, "unknown")
             eligible = self._remote_eligible(intent=intent, snapshot=snapshot, record=record)
             if eligible is None:
                 self._scheduling_waits.capacity(record, "request_preparation")
@@ -760,6 +799,8 @@ def _schedule_window(
                 continue
             if not eligible:
                 self._scheduling_waits.capacity(record, "no_eligible_offer")
+                if record.stage_work_id not in early_work:
+                    self._scheduling_waits.prequeue(record, "no_eligible_offer")
                 del remote_targets[candidate_id]
                 continue
         timing = ((remote_target[1].offer_id, remote_target[1].expires_ns)
@@ -770,6 +811,7 @@ def _schedule_window(
             )
             self._scheduling_waits.eligible(record, *timing, available)
         try:
+            self._scheduling_waits.prequeue(record, "unknown")
             with _dispatch_offering(self, record, "execution"):
                 started = self._execute(
                     admission=admission,

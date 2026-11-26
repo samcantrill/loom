@@ -4302,7 +4302,7 @@ class LocalDaemon:
         observed: LocalDaemonAdmission | None = None,
     ) -> None:
         with self._connection() as conn:
-            write_status(
+            changed = write_status(
                 conn, "admission",
                 "UPDATE managed_admissions SET state = ?, blocked_reason = ?, "
                 "revision = revision + 1 WHERE admission_id = ? AND "
@@ -4312,6 +4312,9 @@ class LocalDaemon:
                  observed is None, None if observed is None else observed.cancellation_operation_id),
             )
             conn.commit()
+        if state is LocalDaemonAdmissionState.SUCCEEDED and changed.rowcount:
+            from ._phase_timing import milestone
+            milestone("admission_succeeded", admission_id=admission_id)
 
     def _record_admission_health(self, admission_id: str, health: str) -> None:
         if health not in {"healthy", "failed", "unavailable"}:

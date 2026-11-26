@@ -4185,12 +4185,21 @@ class LocalDaemonExecution:
             produced=_produced_outputs(snapshot),
         )
         gpu = record.placement.resource_request.entries.get("gpu")
-        result, reason = self._ready_preparations.poll(
-            (record.run_uri, record.stage_name), identity, prepare,
-            work_id=record.stage_work_id, speculative=speculative,
-            attempt_id=record.attempt_id, admission_id=record.admission_id,
-            resource_class="gpu" if gpu is not None and gpu.amount > 0 else "cpu",
-        )
+        key = record.run_uri, record.stage_name
+        try:
+            result, reason = self._ready_preparations.poll(
+                key, identity, prepare, work_id=record.stage_work_id, speculative=speculative,
+                attempt_id=record.attempt_id, admission_id=record.admission_id,
+                resource_class="gpu" if gpu is not None and gpu.amount > 0 else "cpu",
+            )
+        finally:
+            queued = self._ready_preparations.request_queued_ns(key, record.stage_work_id)
+            if queued is not None:
+                self._scheduling_waits.queued(record, queued)
+        if reason == "stage_preparation_capacity":
+            self._scheduling_waits.prequeue(record, "preparation_capacity")
+        elif reason == "stage_preparation_superseded":
+            self._scheduling_waits.prequeue(record, "preparation_owner_held")
 
         if reason is not None and not speculative:
             self._scheduling_waits.record(record.run_uri, record.stage_name, "request_preparation")
@@ -4323,6 +4332,7 @@ class LocalDaemonExecution:
                 run_uri=record.run_uri,
                 attempt_id=record.attempt_id,
             )
+            self._scheduling_waits.prequeue(record, "unknown")
             worker_request, preparation_reason = self._prepared_ready_request(record, snapshot, intent)
             if worker_request is None:
                 return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.WAITING, preparation_reason)
@@ -4470,15 +4480,19 @@ class LocalDaemonExecution:
         except _ReservationBusy:
             return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.WAITING, "reservation_store_busy")
         except SlurmAdmissionDeferred as exc:
+            if exc.code == "slurm_gpu_capacity_reserved":
+                self._scheduling_waits.prequeue(record, "slurm_gpu_capacity")
             self._scheduling_waits.record(record.run_uri, record.stage_name, "reservation")
             return LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.WAITING, exc.code)
         except SlurmResourceMappingError:
+            self._scheduling_waits.prequeue(record, "no_eligible_offer")
             self._scheduling_waits.record(record.run_uri, record.stage_name, "host_eligibility")
             return LocalDaemonExecutionOutcome(
                 LocalDaemonAdmissionState.WAITING,
                 "slurm_route_unmappable",
             )
         except SlurmPlanningError as exc:
+            self._scheduling_waits.prequeue(record, "capacity_unknown")
             self._scheduling_waits.record(record.run_uri, record.stage_name, "host_eligibility")
             diagnostic = str(exc)
             return LocalDaemonExecutionOutcome(
