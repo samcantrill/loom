@@ -555,6 +555,14 @@ def test_submitted_slurm_dispatch_worker_and_shared_commit_restart(
                     assert pending_record.compute_released_at is not None
                     assert pending_record.publication_completed_at is None
                     assert pending_record.state != "released"
+                    status_client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+                    admission_id = status_client.admission_for_queue_item("submitted").admission_id
+                    owners = cast(Any, status_client.admission(admission_id).to_dict()["owners"])
+                    item, = owners["slurm_storage"]["assignments"]
+                    assert item["assignment_id"] == delivery.assignment_id
+                    assert item["compute"]["released_at"] == pending_record.compute_released_at
+                    assert item["publication"]["accepted_at"] == pending_record.publication_requested_at
+                    assert item["publication"]["completed_at"] is None
                     assert transport.path.exists()
                     if cancel_publication:
                         cancel_client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))

@@ -29,7 +29,7 @@ from ._managed_local import (
 from .run import _public_operation_id
 
 from collections import deque
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields, replace
 from enum import StrEnum
@@ -77,6 +77,7 @@ from ._recovery_retry import _RecoveryRetry
 from ._run_observations import RunObservation, RunObservationPending
 
 if TYPE_CHECKING:
+    from ._owner_journals import SlurmStorageFacts, StorageObserver
     from ._preparation_operations import PreparationCallbacks
     from .local_daemon_execution import (
         LocalDaemonExecution,
@@ -1853,8 +1854,22 @@ class LocalDaemon:
             agent_id=self._agent_id,
             clock=self._clock,
             admission_revision=admission.revision,
+            observe_storage=self._slurm_storage_observer(),
         )
         return self._admission_detail(admission, views[0])
+
+    def _slurm_storage_observer(self) -> StorageObserver | None:
+        from ._owner_journals import StorageObserver
+
+        execution = self._execution
+        if execution is None:
+            return None
+
+        def project(records: Sequence[SlurmStorageFacts]) -> dict[str, PlainData]:
+            with self._cycle_lock:
+                return execution.slurm_storage_observations(records)
+
+        return StorageObserver(execution.slurm_assignments.path, execution.slurm_assignments.schema_version, project)
 
     def _admission_detail(
         self, admission: LocalDaemonAdmission, view: Mapping[str, PlainData],
@@ -1866,8 +1881,6 @@ class LocalDaemon:
             owners["scheduling_waits"] = self._execution._scheduling_waits.observed(admission.run_uri)
             owners["scheduling_summaries"] = self._execution._scheduling_waits.summaries(admission.run_uri)
             owners["input_validation"] = self._execution._input_validations.observations(admission.run_uri)
-            with self._cycle_lock:
-                owners["slurm_storage"] = self._execution.slurm_storage_observations(admission.run_uri)
         # Extend the existing loose owner detail, not the strict inspection wire.
         assignment = owners.get("assignment")
         if isinstance(assignment, Mapping):
