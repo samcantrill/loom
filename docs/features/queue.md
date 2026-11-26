@@ -170,7 +170,7 @@ The report measures three intervals for each fresh context request.
 | --- | --- |
 | Request to loader start | First call requesting a fresh context, including a call refused for capacity, through entry on the loader thread. |
 | Loader start to available | Worker entry through successful validation and scoped authority binding. |
-| Available to first consumer | Worker completion through admission activation, the first run reconciliation step, or dispatch advancing stage preparation or selection. |
+| Available to first consumer | Worker completion through admission activation, the first run reconciliation step, or dispatch acquiring an authority observation, consuming a snapshot or queuing preparation for that stage. |
 
 Each request carries its admission ID, admission revision, coordinator and scheduling
 epochs, and a process-local request ID. A resumed consumer keeps the original ID.

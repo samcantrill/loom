@@ -390,3 +390,55 @@ def test_new_selection_reclaims_peer_only_observation_at_capacity():
         assert "0" not in owner.requested_admissions()
     finally:
         owner.close()
+
+def test_dispatch_context_advances_when_read_is_accepted_even_if_worker_is_held():
+    from threading import Event
+    from loom.queue._run_observations import DispatchObservations
+
+    gate = Event()
+    reads = DispatchObservations(lambda: None)
+    epochs = ("owner", "policy")
+    advanced = []
+    timing = SimpleNamespace(advance=advanced.append)
+    def load():
+        assert gate.wait(5)
+        return "done"
+    def poll(identity):
+        job = SimpleNamespace(admission_id=identity, revision=1)
+        return reads.poll(cast(Any, job), epochs, cast(Any, load), work_id=identity,
+                          peers=set(), timing=cast(Any, timing))
+    try:
+        assert poll("one") is None and poll("two") is None
+        assert advanced == ["dispatch_observation"] * 2
+        assert poll("refused") is None and poll("one") is None
+        assert advanced == ["dispatch_observation"] * 2
+    finally:
+        gate.set()
+        reads.close()
+
+
+def test_ready_context_advances_only_after_preparation_capacity_accepts_work(monkeypatch):
+    from loom.pipeline.runtime import ExecutionRouteKind
+
+    admission = SimpleNamespace(admission_id="admission")
+    revision = SimpleNamespace(sequence=1)
+    record = SimpleNamespace(placement=SimpleNamespace(route=SimpleNamespace(kind=ExecutionRouteKind.MANAGED_AGENT)),
+                             run_uri="run", stage_name="stage", stage_work_id="work", authority_revision=revision)
+    queued = []
+    advances = []
+    context = object(), SimpleNamespace(_context_timing=SimpleNamespace(advance=advances.append))
+    owner = SimpleNamespace(
+        config=SimpleNamespace(remote_profiles=(), container_capabilities=()),
+        _ready_preparations=SimpleNamespace(request_for_descriptors=lambda *args: (False, None),
+                                            request_queued_ns=lambda *args: next(iter(queued), None)),
+        _observed_ready={"admission": SimpleNamespace(revision=revision)},
+        _scheduling_waits=SimpleNamespace(prequeue=lambda *args: None),
+        _prepared_ready_request=lambda *args: (None, "stage_preparation_capacity"),
+    )
+    monkeypatch.setattr(progress, "_dispatch_policy_allows", lambda *args: True)
+    monkeypatch.setattr(progress, "_current_ready_attempt", lambda *args: True)
+    assert progress._advance_ready_inputs(owner, record, admission, context, ("owner", "policy"), anticipated=False)
+    assert not advances
+    owner._prepared_ready_request = lambda *args: queued.append(123)
+    assert progress._advance_ready_inputs(owner, record, admission, context, ("owner", "policy"), anticipated=False)
+    assert advances == ["stage_preparation"]

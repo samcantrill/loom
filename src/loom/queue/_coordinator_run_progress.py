@@ -72,6 +72,8 @@ def reconcile_admission(
     context = (intent, scoped_authority)
     self._cycle_contexts[admission.admission_id] = context
     timing = timing_for(context)
+    if timing is not None:
+        timing.handed_off = True
 
     def steps() -> RunSteps:
         if timing is not None:
@@ -101,8 +103,8 @@ def reconcile_admission(
         if admission.state is LocalDaemonAdmissionState.PENDING_AUTHORITY and admission.cancellation_operation_id is None:
             # Binding succeeded. Activation changes the admission revision, so
             # a read started with the pre-activation revision could never apply.
-            self.admission_activated(admission.admission_id)
-            if timing is not None:
+            activated = self.admission_activated(admission.admission_id)
+            if activated and timing is not None:
                 timing.advance("admission_activation")
             self.daemon._wake.set()
             raise RunObservationPending()
@@ -388,13 +390,15 @@ def _advance_ready_inputs(self, record, admission, context, epochs, *, anticipat
     if not _current_ready_attempt(snapshot, record):
         self._scheduling_waits.prequeue(record, "snapshot_unavailable")
         return True
-    if (timing := timing_for(context)) is not None:
-        timing.advance("stage_preparation")
     self._scheduling_waits.prequeue(record, "unknown")
     if anticipated:
         self._prepared_ready_request(record, snapshot, intent, speculative=True)
     else:
         self._prepared_ready_request(record, snapshot, intent)
+    if (timing := timing_for(context)) is not None and self._ready_preparations.request_queued_ns(
+        key, record.stage_work_id,
+    ) is not None:
+        timing.advance("stage_preparation")
     return True
 
 
@@ -547,6 +551,7 @@ def _schedule_window(
         try:
             snapshot = self.dispatch_observations.poll(
                 admission, epochs, lambda: authority.open_run(admission.run_uri),
+                timing=timing_for(contexts[identity]),
                 work_id=record.stage_work_id, peers={peer.stage_work_id for peer in window
                     if peer.admission_id == identity and peer.placement.route.kind == record.placement.route.kind},
             )
@@ -569,8 +574,6 @@ def _schedule_window(
             self._scheduling_waits.capacity(record, "snapshot_unavailable")
             exhausted_admissions.add(identity)
             return None
-        if (timing := timing_for(contexts[identity])) is not None:
-            timing.advance("stage_selection")
         return snapshot
 
     excluded_work: set[str] = set()

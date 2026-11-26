@@ -221,6 +221,7 @@ def test_admission_detail_times_actual_context_request_and_reservation_waits(tmp
         assert summary["result"] == "reserved" and summary["assignment_id"]
         assert summary["admission_id"] == admission.admission_id
         assert summary["wait_ns"]["reservation"] > 0
+        assert not daemon._activate_admission(admission.admission_id)
     finally:
         for _, release in gates.values():
             release.set()
@@ -237,7 +238,6 @@ def test_admission_detail_times_actual_context_request_and_reservation_waits(tmp
     assert any(name == "context_validation" and attrs["result"] == "cache_hit" for name, attrs in events)
     assert any(name == "context_discarded" and attrs["owner"] == "retained" and attrs["reason"]
                for name, attrs in observed)
-
 
 
 def test_requested_authority_read_completes_five_seconds_before_single_reservation(tmp_path, monkeypatch):
