@@ -406,6 +406,14 @@ def handle(namespace: argparse.Namespace) -> int:
         from ._fleet_text import format_fleet_status
 
         print(format_fleet_status(result, explain=namespace.explain))
+    elif command == "preflight":
+        from ._fleet_text import format_fleet_preflight
+
+        print(format_fleet_preflight(result, explain=namespace.explain))
+    elif command == "plan":
+        from ._fleet_text import format_fleet_plan
+
+        print(format_fleet_plan(result, explain=namespace.explain))
     elif command in {"apply", "operation", "upgrade"} and result["outcome"] != "preview":
         print(_operation_receipt(result))
     else:

@@ -29,6 +29,16 @@ observation shows its reason. Declaration and profile issues appear beneath
 the affected host. Add `--explain` for observation owners, revisions, exact UTC
 times, and evidence about target installation and storage.
 
+`fleet preflight` lists each check with its scope, result, and evidence. Failed
+checks appear first, followed by unavailable and retained observations. A
+verified runtime release covers local bundle hashes. The installation and
+storage rows report the separate target-host evidence.
+
+`fleet plan` groups the proposed actions by host in their supplied order.
+It identifies coordinator dependencies, conflicts, unavailable hosts, and the
+plan's reservation status. On either command, `--explain` adds the supporting
+evidence. Use `--format json` for the complete structured report.
+
 `init` creates owner-only directories and owner-readable/writable placeholders at
 `$XDG_CONFIG_HOME/loom/fleets/lab` (default `~/.config/loom/fleets/lab`). Complete
 the choices before preflight. Repeating init preserves populated files. A
