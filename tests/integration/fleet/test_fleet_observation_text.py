@@ -8,10 +8,12 @@ from types import SimpleNamespace
 
 import pytest
 
+from loom.cli import _terminal
 from loom.cli.main import main
 from loom.fleet import administration
 from loom.fleet import ssh_operations
 from loom.queue.operations import OperatorObservation
+from loom.timestamps import parse_timestamp
 from tests.integration.fleet.test_configuration import inventory
 from tests.integration.fleet.test_releases import bundle
 
@@ -48,6 +50,9 @@ def test_fleet_status_displays_native_freshness_and_independent_declaration_fail
     config["agents"]["gpu02"] = dict(config["agents"]["gpu01"], host="second-ssh")
     path.write_text(json.dumps(config))
     when = "2026-06-05T12:00:00Z"
+    monkeypatch.setattr(
+        _terminal, "utc_now", lambda: parse_timestamp("2026-06-05T12:00:02Z")
+    )
 
     def observation(name, value, freshness="current", reason=None):
         return OperatorObservation(
@@ -87,7 +92,7 @@ def test_fleet_status_displays_native_freshness_and_independent_declaration_fail
         ("gpu02", "ACTIVE", "retained"),
     ):
         line = next(line for line in output.splitlines() if line.startswith(name))
-        assert state in line and freshness in line
+        assert state in line and freshness in line and "2s" in line
     assert "observation_stale" in output
     assert output.index("gpu02") < output.index(
         "Declaration: invalid_or_unavailable_native_declaration"
@@ -220,3 +225,19 @@ def test_fleet_plan_preserves_host_actions_and_refusals(
     code, original = invoke("plan", path, *args, "--format", "json")
     assert code == 0 and json.loads(original) == reports[-1]
     assert len(reports) == 3
+
+
+def test_plan_declaration_failure_remains_visible_through_the_cli(tmp_path):
+    path = inventory(tmp_path)  # This fixture has no native TLS listener for SSH setup.
+    argv = ["fleet", "plan", "--fleet", str(path)]
+    output, error = io.StringIO(), io.StringIO()
+    code = main(argv, stdout=output, stderr=error)
+    diagnostic = "setup requires the native agent TLS listener"
+    assert code != 0 and diagnostic in error.getvalue()
+    assert "Reservation" not in output.getvalue()
+    structured = io.StringIO()
+    assert (
+        main([*argv, "--format", "json"], stdout=structured, stderr=io.StringIO())
+        == code
+    )
+    assert diagnostic in json.loads(structured.getvalue())["error"]["message"]
