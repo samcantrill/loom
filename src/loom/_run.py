@@ -119,6 +119,14 @@ def _cleanup_step(
             role["identity"]["lifetime"] == "run" for role in roles.values()
         ):
             own_pending = _owned_assignments_pending(available, observation, deadline)
+            if not own_pending:
+                # Our last release may have cleared the earlier global sample while
+                # reading the admissions. Only a later retained sample identifies other work.
+                retained = None
+                projection = available.client._native_call(
+                    "service_lifetime", {}, available.connection_id, deadline=deadline
+                )
+                retained, blocked = projection["retained"], projection["cleanup_blocked"]
     except CoordinatorClientError:
         pass
     for name, role in roles.items():

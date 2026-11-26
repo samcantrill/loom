@@ -87,7 +87,26 @@ def test_cleanup_returns_when_only_other_work_remains(monkeypatch):
     clock, available, observation = _case(monkeypatch, mode="other")
     result = _run._cleanup(cast(Any, available), cast(Any, observation), 0.2)
     assert result["coordinator"] == {"state": "retained-for-other-work", "evidence": {}}
-    assert clock.polls == 1 and clock.now == 0
+    assert clock.polls == 2 and clock.now == 0
+
+
+def test_cleanup_observes_last_release_between_lifetime_and_admission(monkeypatch):
+    clock, available, observation = _case(monkeypatch, mode="other")
+    original = available.client._native_call
+
+    def call(operation, payload, expected, *, deadline):
+        result = original(operation, payload, expected, deadline=deadline)
+        if operation == "service_lifetime" and clock.polls > 1:
+            result["retained"] = False
+        return result
+
+    available.client._native_call = call
+    monkeypatch.setattr(_run, "_process_receipt", lambda root: (
+        "stopped" if clock.now > 0 else "running", {},
+    ))
+    result = _run._cleanup(cast(Any, available), cast(Any, observation), 0.2)
+    assert result["coordinator"] == {"state": "stopped", "evidence": {}}
+    assert clock.now > 0
 
 
 @pytest.mark.parametrize("mode", ["pending", "unavailable"])
