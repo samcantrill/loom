@@ -259,14 +259,15 @@ def test_promote_running_build_while_peer_uses_other_worker(monkeypatch):
         return "original"
 
     try:
-        ids = {"work_id": "work-1", "attempt_id": "try-1", "admission_id": "admission"}
-        pool.poll(key, "identity-1", held, speculative=True, **ids)
+        pool.poll(key, "identity-1", held, speculative=True,
+                  work_id="work-1", attempt_id="try-1", admission_id="admission")
         assert entered.wait(10)
         assert pool.request_available_ns(key, "work-1") is None
         pool.poll(("peer", "work"), "peer", peer.set)
         assert peer.wait(10)
         assert not release.is_set()
-        pool.poll(key, "identity-1", lambda: pytest.fail("duplicate writer"), **ids)
+        pool.poll(key, "identity-1", lambda: pytest.fail("duplicate writer"),
+                  work_id="work-1", attempt_id="try-1", admission_id="admission")
         release.set()
         assert complete.wait(10)
         assert pool.request_for_descriptors(key, "work-1") == (True, "original")
