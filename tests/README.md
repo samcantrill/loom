@@ -323,8 +323,9 @@ LOOM_RUN_DISPATCH_ACCEPTANCE=1 uv run --locked --group dev pytest -q \
 ```
 
 The first test delays the selector across completed authority reads and holds
-one native delivery per synthetic agent. It checks every sibling's worker
-request and exact assignment identity across concurrent runs. The second
+one native delivery per synthetic agent. A larger case presents 115 sibling
+stages across 41 runs and twelve agents, with bounded slots and refreshed
+offers. Both check every worker request and unique accepted assignment. The restart test
 executes a prediction, two dependent scores and their joint summary with real
 local subprocesses, restarts the coordinator at fan-out, and verifies input
 commit lineage and the total launch count. Both use temporary local roots.

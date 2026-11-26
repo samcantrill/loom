@@ -6,6 +6,7 @@ from collections import Counter
 from collections.abc import Mapping
 from dataclasses import replace
 import hashlib
+import json
 import os
 from pathlib import Path
 import sqlite3
@@ -38,14 +39,18 @@ pytestmark = [
 ]
 
 
-def test_slow_selection_delivers_every_sibling_once_to_multiple_agents(tmp_path, monkeypatch):
-    # Each host offers exactly one slot. No worker can release or advertise it
-    # during this test, so every accepted delivery witnesses concurrent placement.
+@pytest.mark.parametrize(("widths", "hosts", "slots", "delay_selection"), [
+    pytest.param((3, 3), 6, 1, True, id="slow-turn"),
+    pytest.param((3,) * 33 + (2,) * 8, 12, 10, False, id="41-runs-115-stages"),
+])
+def test_selection_delivers_every_sibling_once(tmp_path, monkeypatch, widths, hosts, slots, delay_selection):
+    # Agents retain all accepted work. Each new offer reflects the exact
+    # claims it already owns and advertises only its remaining capacity.
     stages = ("score_a", "score_b", "score_c")
-    agents = [f"host-{n}" for n in range(2 * len(stages))]
+    agents = [f"host-{n}" for n in range(hosts)]
     capabilities = ("python", REMOTE_EXECUTION_CAPABILITY, REGULAR_FILE_RELAY_CAPABILITY)
     descriptor = ResidentProfileDescriptor.from_dict(_launch_profile().descriptor)
-    profile = ResidentExecutionProfile(descriptor, tmp_path, Path(sys.executable))
+    profile = ResidentExecutionProfile(descriptor, tmp_path, Path(sys.executable), cpu_capacity=slots)
     base = _daemon_config(tmp_path)
     policy = replace(base.agent_policy, agents=tuple(
         AgentPrincipalPolicy(name, name, name, ("default",), capabilities) for name in agents
@@ -53,10 +58,12 @@ def test_slow_selection_delivers_every_sibling_once_to_multiple_agents(tmp_path,
     config = replace(base, agent_root=None, resident_worker_launch_profile=None, cpu_capacity=0,
                      agent_resource_providers=(), agent_policy=policy, remote_profiles=(descriptor,),
                      poll_interval_seconds=0.1)
-    runs = [_persist_sleep_run(config.run_store_root, run_name=name, stage_name=stages[0],
-                               independent_stage_names=stages, max_parallel_stages=len(stages))
-            for name in ("run-a", "run-b")]
-    expected = Counter((uri, stage, 1) for uri in runs for stage in stages)
+    runs = {
+        _persist_sleep_run(config.run_store_root, run_name=f"run-{i}", stage_name=stages[0],
+                           independent_stage_names=stages[:width], max_parallel_stages=width): stages[:width]
+        for i, width in enumerate(widths)
+    }
+    expected = Counter((uri, stage, 1) for uri, siblings in runs.items() for stage in siblings)
     delayed = Event()
     begin_cycle = DispatchObservations.begin_cycle
 
@@ -68,7 +75,8 @@ def test_slow_selection_delivers_every_sibling_once_to_multiple_agents(tmp_path,
             delayed.set()
         return begin_cycle(owner, *args, **kwargs)
 
-    monkeypatch.setattr(DispatchObservations, "begin_cycle", slow_consumer)
+    if delay_selection:
+        monkeypatch.setattr(DispatchObservations, "begin_cycle", slow_consumer)
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config)
     daemon.start()
@@ -83,36 +91,61 @@ def test_slow_selection_delivers_every_sibling_once_to_multiple_agents(tmp_path,
                 retirement_verifier="01" * 32,
             ))
             offer = AgentOffer(session.session_id, session.coordinator_epoch, session.config_revision,
-                               session.inventory_revision, session.availability_revision, 1, 0, 120,
+                               session.inventory_revision, session.availability_revision, slots, 0, 120,
                                _resident_provider_descriptors(profile, name), resident_profiles=(descriptor,),
-                               max_concurrent_assignments=1)
+                               max_concurrent_assignments=slots)
             view.publish_offer(offer, idempotency_key="initial")
             sessions[session.session_id] = (view, offer)
         client = daemon.client_view(LocalDaemonPrincipal("submit", LocalDaemonRole.CLIENT))
         for i, uri in enumerate(runs):
             client.submit(LocalDaemonAdmissionRequest(f"submit-{i}", uri))
-        deadline = time.monotonic() + 45
+        deadline = time.monotonic() + (45 if delay_selection else 480)
+        observed = Counter()
+        claims = {sid: set() for sid in sessions}
+        published = dict.fromkeys(sessions, time.monotonic())
+        revisions = dict.fromkeys(sessions, 1)
+        store = LocalRunStore(config.run_store_root)
         with sqlite3.connect(config.control_database) as conn:
-            while True:
+            while observed != expected and time.monotonic() < deadline:
                 rows = conn.execute(
                     "SELECT a.run_uri,a.stage_name,a.attempt,a.session_id,a.assignment_id,d.request_json "
-                    "FROM remote_assignments a JOIN agent_deliveries d USING(assignment_id)"
+                    "FROM remote_assignments a JOIN agent_deliveries d USING(assignment_id) "
+                    "WHERE d.state='TARGETED' ORDER BY a.assignment_id"
                 ).fetchall()
-                if len(rows) >= len(expected) or time.monotonic() >= deadline:
-                    break
-                time.sleep(0.1)
-        assert delayed.is_set(), "the selector never revisited a demanded observation"
-        assert Counter(row[:3] for row in rows) == expected, (rows and [r[:3] for r in rows], daemon._service_error)
-        assert len({row[3] for row in rows}) == len(agents)
-        store = LocalRunStore(config.run_store_root)
-        for uri, stage, _, session_id, assignment_id, encoded in rows:
-            assert store.read_stage_worker_request(uri, stage, attempt=None) is not None
-            view, offer = sessions[session_id]
-            delivery = view.wait_for_work(session_id, offer.availability_revision, sequence=1, wait_timeout_ms=100)
-            assert delivery["result"] == "assignment"
-            request = delivery["request"]
-            assert isinstance(request, Mapping) and request["assignment_id"] == assignment_id
-            view.accept_assignment(session_id, assignment_id, request_digest=hashlib.sha256(encoded.encode()).hexdigest())
+                for uri, stage, attempt, sid, assignment_id, encoded in rows:
+                    assert store.read_stage_worker_request(uri, stage, attempt=None) is not None
+                    view, offer = sessions[sid]
+                    ack = view.wait_for_work(sid, offer.availability_revision,
+                                             sequence=len(claims[sid]) + 1, wait_timeout_ms=100)
+                    request = ack.get("request")
+                    assert ack["result"] == "assignment" and isinstance(request, Mapping)
+                    assert request["assignment_id"] == assignment_id
+                    view.accept_assignment(sid, assignment_id, request_digest=hashlib.sha256(encoded.encode()).hexdigest())
+                    claim = json.loads(encoded)["claim_id"]
+                    assert claim not in claims[sid]
+                    claims[sid].add(claim)
+                    observed[uri, stage, attempt] += 1
+                    assert observed[uri, stage, attempt] == expected[uri, stage, attempt] == 1
+                for sid, (view, offer) in sessions.items():
+                    held = tuple(sorted(claims[sid]))
+                    if offer.reflected_claim_ids == held and time.monotonic() - published[sid] < 60:
+                        continue
+                    revisions[sid] += 1
+                    revision = f"availability-{revisions[sid]}"
+                    updated = replace(offer, availability_revision=revision, cpu=slots - len(held),
+                                      capacity_atoms=(), reflected_claim_ids=held)
+                    view.publish_offer(updated, idempotency_key=revision,
+                                       expected_availability_revision=offer.availability_revision)
+                    sessions[sid] = view, updated
+                    published[sid] = time.monotonic()
+                if observed != expected:
+                    time.sleep(0.1)
+            assert not delay_selection or delayed.is_set(), "no demanded observation survived into a delayed turn"
+            assert observed == expected, (expected - observed, daemon._service_error)
+            # The two journals describe real coordinator deliveries and grants.
+            granted = conn.execute("SELECT run_uri,stage_name,attempt FROM remote_assignments WHERE state='GRANTED'")
+            assert Counter(granted) == expected
+            assert sum(bool(held) for held in claims.values()) == hosts
     finally:
         daemon.stop()
 
