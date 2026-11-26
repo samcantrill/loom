@@ -26,6 +26,7 @@ class _Wait:
 class _Attempt:
     work_id: str
     projection_revision: int
+    ready_revision: int
     attempt_id: str
     admission_id: str
     boundary: str
@@ -80,7 +81,8 @@ class SchedulingWaits:
                 return
             if previous is not None:
                 self._finish(key, "superseded", None)
-            self._attempts[key] = _Attempt(record.stage_work_id, record.projection_revision, record.attempt_id,
+            self._attempts[key] = _Attempt(record.stage_work_id, record.projection_revision,
+                                           record.projection_revision, record.attempt_id,
                                            record.admission_id, "capacity_unknown", monotonic_ns())
             if len(self._attempts) > self._limit:
                 self._finish(next(iter(self._attempts)), "observation_evicted", None)
@@ -119,12 +121,14 @@ class SchedulingWaits:
     def reserved(self, record: StageWorkRecord, assignment: str, offer: str | None,
                  available: int | None) -> None:
         key = record.run_uri, record.stage_name
+        ready_revision = None
         with self._lock:
             attempt = self._attempts.get(key)
             if attempt is not None and attempt.work_id == record.stage_work_id:
+                ready_revision = attempt.ready_revision
                 if offer is not None and attempt.offer == offer:
                     attempt.confirm(offer, attempt.expires_ns, available, monotonic_ns())
-                self._finish(key, "reserved", assignment)
+                self._finish(key, "reserved", assignment, available=available)
             if offer is not None:
                 # A committed claim consumes this capacity observation for all peers.
                 for peer in self._attempts.values():
@@ -132,14 +136,16 @@ class SchedulingWaits:
                         peer.offer = None
         milestone("reservation_committed", stage_work_id=record.stage_work_id, attempt_id=record.attempt_id,
                   admission_id=record.admission_id, run_uri=record.run_uri, stage_name=record.stage_name,
-                  assignment_id=assignment, offer_id=offer)
+                  assignment_id=assignment, offer_id=offer, projection_revision=record.projection_revision,
+                  ready_projection_revision=ready_revision, request_available_ns=available)
 
-    def _finish(self, key: tuple[str, str], outcome: str, assignment: str | None) -> None:
+    def _finish(self, key: tuple[str, str], outcome: str, assignment: str | None, *, available: int | None = None) -> None:
         attempt = self._attempts.pop(key)
         attempt.transition("finished", monotonic_ns())
         summary: dict[str, PlainData] = {
             "stage_work_id": attempt.work_id, "attempt_id": attempt.attempt_id,
             "projection_revision": attempt.projection_revision,
+            "ready_projection_revision": attempt.ready_revision, "request_available_ns": available,
             "admission_id": attempt.admission_id, "assignment_id": assignment,
             "run_uri": key[0], "stage_name": key[1], "result": outcome,
             "eligible_request_ready_ns": attempt.eligible_request_ready_ns,

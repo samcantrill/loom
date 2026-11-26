@@ -34,7 +34,7 @@ from .errors import QueueConflictError, QueueServiceError, _PreparationTargetBus
 from .run import RunRequest, _public_operation_id
 from ._maintenance import MaintenanceCheckConflict
 from ._service_lifetime import ServiceRetiring
-from ._phase_timing import PhaseTimings, phase
+from ._phase_timing import PhaseTimings, milestone, phase
 from .submitted_execution import SubmittedContainerCapability
 from .preparation import (
     CANDIDATE_DOCUMENT_ENCODING,
@@ -1675,7 +1675,10 @@ class CoordinatorPreparations:
                 result["binding"] = {"run_uri": uri, "publication_operation_id": reconciliation["publication_owner"]}
                 result["prepared_run"] = candidate["prepared_run"]
                 result["decision"] = "retry" if reconciliation["failed_revision"] is not None or reconciliation.get("cancelled_revision") is not None else "reuse" if admission is not None and admission.state.value == "SUCCEEDED" else "observe" if admission is not None else "admit_prepared"
-                self._store_result(_with_report(operation_id, "applying", None, result, report.preflight))
+                stored = self._store_result(_with_report(operation_id, "applying", None, result, report.preflight))
+                if stored:
+                    milestone("prepared_target_committed", operation_id=operation_id,
+                              child_admission_id=report_token.child.admission_id, run_uri=uri)
                 self._continue_run(self._read(operation_id))
                 return
         # Publication retains its exact identity; a cancellation accepted during
@@ -2055,6 +2058,8 @@ class CoordinatorPreparations:
                 None, result, ready.report.preflight,
             ), claim=ready.claim)
             if stored and row["kind"] == "run":
+                milestone("prepared_target_committed", operation_id=operation_id,
+                          child_admission_id=ready.child.admission_id, run_uri=prepared.run_uri)
                 self._continue_run(self._read(operation_id))
             return True
 
