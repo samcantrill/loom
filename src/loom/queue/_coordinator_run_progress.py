@@ -29,7 +29,7 @@ from ._phase_timing import phase
 if TYPE_CHECKING:
     from loom.pipeline.orchestration import ManagedExecutionRequirement, SQLiteStageWorkStore, StageWorkRecord
     from loom.pipeline.stores.read_models import AuthoritativeRunSnapshot
-    from ._context_preparation import PreparedAdmissionContext
+    from ._context_preparation import DispatchContextRetry, PreparedAdmissionContext
     from ._coordinator_run_authority import _ScopedCoordinatorAuthority
     from .local_daemon import LocalDaemonAdmission
     from .local_daemon_execution import LocalDaemonExecution, ManagedLocalIntent
@@ -405,6 +405,51 @@ def _advance_ready_inputs(self, record, admission, context, epochs, *, anticipat
     return True
 
 
+def _disabled_slurm_routes(self):
+    if self.daemon is None:
+        return set()
+    return {identity for identity, profile in self._scheduling.retained_slurm_profiles.items() if not profile.available}
+
+
+def _dispatch_route_enabled(record, disabled_routes):
+    route = record.placement.route
+    return (route.kind is not ExecutionRouteKind.SLURM
+            or (route.profile_id, route.profile_configuration_fingerprint) not in disabled_routes)
+
+
+def retry_dispatch_context(self: LocalDaemonExecution, epochs) -> None:
+    """Recheck a refused dispatch demand against its current admission and exact READY attempt."""
+    from loom.pipeline.orchestration import SchedulingProjectionState
+
+    daemon = self._daemon_owner()
+
+    def needed(admission: LocalDaemonAdmission, retry: DispatchContextRetry) -> bool | None:
+        if self.continuation_context(admission, epochs) is not None or self.run_observations.awaiting_read(
+            admission, epochs, daemon._result_verifications.bulk,
+        ):
+            return False
+        disabled = _disabled_slurm_routes(self)
+        record = self.stage_work_store.find_stage_work(retry.work_id)
+        if (record is not None and record.scheduling_state is SchedulingProjectionState.READY
+            and _dispatch_route_enabled(record, disabled)
+            and not self._attempt_cancel_requested(record.run_uri, record.attempt_id)):
+            return True
+
+        # Ownership is per admission revision. Losing one producer or witness
+        # need not cancel the siblings sharing this context.
+        from ._action_results import launchable_page
+        page, after = self.stage_work_store.ready_siblings(admission.admission_id, retry.sibling_after)
+        others = tuple(r for r in page if r.stage_work_id != retry.work_id and _dispatch_route_enabled(r, disabled))
+        if others:
+            with self.config.connect_database(self.config.control_database) as conn:
+                if launchable_page(conn, others):
+                    return True
+        retry.sibling_after = after
+        return False if after is None else None
+
+    daemon._contexts.retry_dispatch(epochs, daemon._lookup_schedulable_admissions, needed, self.prepare_admission_context)
+
+
 def resume_ready_inputs(self, work_ids, admissions, epochs):
     """Revisit exact prerequisites ahead of discovery. The global policy still places work."""
     from loom.pipeline.orchestration import SchedulingProjectionState
@@ -420,7 +465,7 @@ def resume_ready_inputs(self, work_ids, admissions, epochs):
         context = self.continuation_context(admission, epochs)
         if context is None:
             if not self.run_observations.awaiting_read(admission, epochs, self.daemon._result_verifications.bulk):
-                self.daemon._contexts.try_submit(admission, epochs, self.prepare_admission_context, for_dispatch=True)
+                self.daemon._contexts.try_submit(admission, epochs, self.prepare_admission_context, dispatch_work_id=work_id)
             self._scheduling_waits.prequeue(record, "context_unavailable")
             continue
         if self._attempt_cancel_requested(record.run_uri, record.attempt_id):
@@ -441,15 +486,9 @@ def _schedule_window(
     page: tuple[StageWorkRecord, ...], *,
     waiting_outcomes: dict[str, LocalDaemonExecutionOutcome] | None = None,
 ) -> tuple[str, LocalDaemonExecutionOutcome] | None:
-    disabled_routes = set() if self.daemon is None else {
-        identity for identity, profile in self._scheduling.retained_slurm_profiles.items() if not profile.available
-    }
-    dispatchable = {
-        record.admission_id for record in page
-        if record.placement.route.kind is not ExecutionRouteKind.SLURM
-        or (record.placement.route.profile_id, record.placement.route.profile_configuration_fingerprint) not in disabled_routes
-    }
-    if not dispatchable and not any(record.admission_id in (waiting_outcomes or {}) for record in page):
+    disabled_routes = _disabled_slurm_routes(self)
+    if (not any(_dispatch_route_enabled(record, disabled_routes) for record in page)
+        and not any(record.admission_id in (waiting_outcomes or {}) for record in page)):
         # Disabled routes cannot retain dispatch tickets. The only remaining
         # work here is publishing a newly reconciled admission's waiting reason.
         if isinstance(admissions, SchedulingAdmissions):
@@ -482,20 +521,24 @@ def _schedule_window(
     if daemon is not None:
         # READY projections outlive an admission sweep. Revalidate their retained
         # intent through the same bounded context loader before allocating work.
-        ready_admissions = dict.fromkeys(record.admission_id for record in window)
-        for identity in ready_admissions:
-            if identity not in dispatchable:
-                continue
+        ready_admissions: dict[str, str] = {}
+        for record in window:
+            if _dispatch_route_enabled(record, disabled_routes):
+                ready_admissions.setdefault(record.admission_id, record.stage_work_id)
+        for identity, work_id in ready_admissions.items():
             admission = admissions.get(identity)
             if admission is not None and self._cycle_context_revisions.get(identity) != admission.revision:
                 self.discard_dispatch_context(identity, reason="admission_revision_changed")
             if admission is not None and self._cycle_context_epochs.get(identity) != epochs:
                 if self.run_observations.awaiting_read(admission, epochs, daemon._result_verifications.bulk):
                     continue
-                if not daemon._contexts.try_submit(admission, epochs, self.prepare_admission_context, for_dispatch=True):
+                if not daemon._contexts.try_submit(admission, epochs, self.prepare_admission_context, dispatch_work_id=work_id):
                     break
+        # A refused load can end this pass before later retained rows are
+        # visited. Every context exposed to placement still needs both fences.
         admissions = {key: value for key, value in admissions.items()
-                      if self._cycle_context_epochs.get(key) == epochs}
+                      if self._cycle_context_epochs.get(key) == epochs
+                      and self._cycle_context_revisions.get(key) == value.revision}
     contexts = self._cycle_contexts
     exhausted_admissions: set[str] = set()
     active_counts: dict[str, int] = {}

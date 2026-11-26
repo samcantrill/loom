@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from contextvars import copy_context
 from dataclasses import dataclass
@@ -20,6 +20,14 @@ if TYPE_CHECKING:
 
 type PreparedAdmissionContext = tuple["ManagedLocalIntent", "_ScopedCoordinatorAuthority"]
 type ContextLoader = Callable[["LocalDaemonAdmission", tuple[str | None, str | None]], PreparedAdmissionContext]
+
+
+@dataclass(slots=True)
+class DispatchContextRetry:
+    admission: LocalDaemonAdmission
+    epochs: tuple[str | None, str | None]
+    work_id: str
+    sibling_after: tuple[str, str, str] | None = None
 
 
 @dataclass
@@ -55,10 +63,14 @@ class ContextPreparations:
     Completion callbacks only wake that owner; they never mutate durable state.
     """
 
+    _retry_limit = 256
+    _retry_batch = 8
+
     def __init__(self, wake: Callable[[], None]) -> None:
         self._workers = ThreadPoolExecutor(max_workers=2, thread_name_prefix="loom-context")
         self._pending: dict[str, PendingContext] = {}
         self._wake = wake
+        self._dispatch_retries: dict[str, DispatchContextRetry] = {}
         self._next_load: dict[str, tuple[int, tuple[str | None, str | None], float, str]] = {}
         self._interval = 0.0
         self._tracing = qualification_timings()
@@ -77,6 +89,9 @@ class ContextPreparations:
             if item.admission.run_uri in invalidated_runs:
                 item.invalidated = True
                 item.discard("run_invalidated")
+        for identity, retry in tuple(self._dispatch_retries.items()):
+            if retry.admission.run_uri in invalidated_runs:
+                del self._dispatch_retries[identity]
         for identity, ticket in tuple(self._waiting.items()):
             if ticket.admission.run_uri in invalidated_runs:
                 self._waiting.pop(identity).discard("request", "run_invalidated")
@@ -116,18 +131,77 @@ class ContextPreparations:
                 self._waiting.popitem(last=False)[1].discard("request", "observation_limit")
         return timing
 
+    def _remember_dispatch(self, retry: DispatchContextRetry) -> bool:
+        identity = retry.admission.admission_id
+        existing = self._dispatch_retries.get(identity)
+        if existing is not None:
+            existing.work_id = retry.work_id  # Refresh the witness without moving the waiter.
+            return False
+        if len(self._dispatch_retries) >= self._retry_limit:
+            # Keep older equal-priority demand. Displaced work remains in READY.
+            newest_lowest = min(reversed(self._dispatch_retries.values()), key=lambda r: r.admission.run_priority)
+            if retry.admission.run_priority <= newest_lowest.admission.run_priority:
+                return False
+            del self._dispatch_retries[newest_lowest.admission.admission_id]
+        self._dispatch_retries[identity] = retry
+        return True
+
+    def retry_dispatch(
+        self, epochs: tuple[str | None, str | None],
+        lookup: Callable[[set[str]], Mapping[str, LocalDaemonAdmission]],
+        needed: Callable[[LocalDaemonAdmission, DispatchContextRetry], bool | None], load: ContextLoader,
+    ) -> None:
+        """Give the next live waiter the freed dispatch slot, in priority/FIFO order."""
+        if not self._dispatch_retries or not self.has_capacity() or any(p.for_dispatch for p in self._pending.values()):
+            return
+        candidates = sorted((r for key, r in self._dispatch_retries.items() if key not in self._pending),
+                            key=lambda r: -r.admission.run_priority)
+        batch = candidates[:self._retry_batch]
+        if not batch:
+            return
+        current = lookup({r.admission.admission_id for r in batch})
+        for retry in batch:
+            identity = retry.admission.admission_id
+            admission = current.get(identity)
+            if retry.epochs != epochs:
+                reason = "epoch_changed"
+            elif admission is None:
+                reason = "admission_unschedulable"
+            elif retry.admission.revision != admission.revision:
+                reason = "admission_revision_changed"
+            else:
+                useful = needed(admission, retry)
+                if useful is None:
+                    self._wake()  # More sibling evidence; preserve this waiter's turn.
+                    return
+                if useful:
+                    if self._tracing:
+                        self._request_timing(admission, epochs, source="dispatch", wait_reason="available", reuse=False)
+                    self._start(admission, epochs, load, for_dispatch=True, continuation=None)
+                    return
+                reason = "dispatch_no_longer_needed"
+            del self._dispatch_retries[identity]
+            timing = self._waiting.pop(identity, None)
+            if timing is not None:
+                timing.discard("request", reason)
+        if len(batch) < len(candidates):
+            self._wake()
+
     def try_submit(
         self, admission: LocalDaemonAdmission, epochs: tuple[str | None, str | None],
         load: ContextLoader,
-        *, for_dispatch: bool = False, resume: bool = False,
+        *, dispatch_work_id: str | None = None, resume: bool = False,
         continuation: PreparedAdmissionContext | None = None,
     ) -> bool:
-        """Account for one admission, deferring it only when both slots are occupied."""
+        """Submit a load or continuation; a refused READY request retains its retry."""
         identity = admission.admission_id
+        for_dispatch = dispatch_work_id is not None
+        queued = self._dispatch_retries.get(identity)
+        if queued is not None and (queued.epochs != epochs or queued.admission.revision != admission.revision):
+            del self._dispatch_retries[identity]
         pending = self._pending.get(identity)
-        if pending is not None and (not self._tracing or (
-            pending.admission.revision == admission.revision and pending.epochs == epochs and not pending.invalidated
-        )):
+        if pending is not None and (pending.epochs == epochs and pending.admission.revision == admission.revision
+                                    and not pending.invalidated):
             return True
         previous = self._next_load.get(identity)
         if (pending is None and not (for_dispatch or resume) and previous is not None
@@ -139,19 +213,30 @@ class ContextPreparations:
             wait_reason = "workers_busy"
         elif for_dispatch and any(item.for_dispatch for item in self._pending.values()):
             wait_reason = "dispatch_slot_busy"
+        elif for_dispatch and self._dispatch_retries:
+            wait_reason = "dispatch_retry_pending"
         else:
             wait_reason = "available"
-        timing = None
         if self._tracing:
             source = "dispatch" if for_dispatch else ("resume" if resume else "discovery")
-            timing = self._request_timing(admission, epochs, source=source,
-                                          wait_reason=wait_reason, reuse=continuation is not None)
-        if pending is not None:
-            return True
+            self._request_timing(admission, epochs, source=source,
+                                 wait_reason=wait_reason, reuse=continuation is not None)
         if wait_reason != "available":
-            return False
-        if timing is not None:
-            del self._waiting[identity]
+            if dispatch_work_id is not None:
+                added = self._remember_dispatch(DispatchContextRetry(admission, epochs, dispatch_work_id))
+                if added and wait_reason == "dispatch_retry_pending":
+                    self._wake()  # The new waiter arrived after this turn serviced retries.
+            return pending is not None
+        self._start(admission, epochs, load, for_dispatch=for_dispatch, continuation=continuation)
+        return True
+
+    def _start(
+        self, admission: LocalDaemonAdmission, epochs: tuple[str | None, str | None],
+        load: ContextLoader, *, for_dispatch: bool, continuation: PreparedAdmissionContext | None,
+    ) -> None:
+        identity = admission.admission_id
+        self._dispatch_retries.pop(identity, None)  # Discovery can satisfy the same request.
+        timing = self._waiting.pop(identity, None)
         if continuation is None:
             future = self._workers.submit(copy_context().run, _load_context, load, admission, epochs, timing)
         else:
@@ -161,7 +246,6 @@ class ContextPreparations:
             admission, epochs, future, for_dispatch, fresh_load=continuation is None, timing=timing,
         )
         future.add_done_callback(lambda _future: self._wake())
-        return True
 
     def completed(self) -> tuple[PendingContext, ...]:
         completed = tuple(item for item in self._pending.values() if item.future.done())
@@ -199,6 +283,7 @@ class ContextPreparations:
             item.discard("shutdown")
         for timing in self._waiting.values():
             timing.discard("request", "shutdown")
+        self._dispatch_retries.clear()
         self._waiting.clear()
         self._workers.shutdown(wait=False, cancel_futures=True)
         self._next_load.clear()

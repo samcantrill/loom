@@ -2284,6 +2284,10 @@ class LocalDaemon:
             if isinstance(other, PendingContext):
                 other.discard("run_observation_preferred")
             prepared[identity] = observation
+        # The physical slot was released by completed(). Let its next owner
+        # load concurrently with the scheduler applying the drained results.
+        from ._coordinator_run_progress import retry_dispatch_context
+        retry_dispatch_context(execution, epochs)
         waiting_outcomes: dict[str, LocalDaemonExecutionOutcome] = {}
         for preparation in sorted(prepared.values(), key=lambda item: AdmissionScan.key(item.admission)):
             admission = preparation.admission
