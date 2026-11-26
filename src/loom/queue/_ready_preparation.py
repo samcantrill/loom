@@ -37,6 +37,7 @@ class _Pending:
     identity: str
     future: Future[Any]
     retry_at: float = 0
+    queued_ns: int | None = None
 
 
 @dataclass
@@ -84,15 +85,29 @@ class ReadyPreparationPool:
         self._closed = False
 
     def can_anticipate(self, key: tuple[str, str]) -> bool:
+        return self.anticipation_wait(key) is None
+
+    def anticipation_wait(self, key: tuple[str, str]) -> str | None:
         """Admit one early build on a free worker and retain up to four early requests."""
-        if (self._closed or self._max_workers < 2 or key in self._pending
-            or len(self._pending) >= self._capacity - 1):
-            return False
+        if key in self._pending:
+            return "preparation_owner_held"
+        if self._closed or self._max_workers < 2 or len(self._pending) >= self._capacity - 1:
+            return "preparation_capacity"
         early = [stage for stage in self._pending.values() if stage.speculative]
-        if len(early) >= 4 or any(not stage.finished() for stage in early):
-            return False
+        if any(not stage.finished() for stage in early):
+            return "early_build_pending"
+        if len(early) >= 4:
+            return "early_retention_limit"
         busy = sum(not phase.future.done() for stage in self._pending.values() for phase in stage.phases.values())
-        return busy < self._max_workers
+        return "preparation_capacity" if busy >= self._max_workers else None
+
+    def request_queued_ns(self, key: tuple[str, str], work_id: str) -> int | None:
+        """Return the actual queue stamp of the retained request for this exact work."""
+        stage = self._pending.get(key)
+        if stage is None or stage.retiring or stage.work_id != work_id:
+            return None
+        request = stage.phases.get("request")
+        return None if request is None else request.queued_ns
 
     def request_available_ns(self, key: tuple[str, str], work_id: str) -> int | None:
         """Return the monotonic completion time for the exact successful request."""
@@ -153,9 +168,11 @@ class ReadyPreparationPool:
             del stage.phases[phase]
             pending = None
         if pending is None:
+            queued_ns = None
             if phase == "request":
+                queued_ns = monotonic_ns()
                 attributes: dict[str, PlainData] = {
-                    "request_queued_ns": monotonic_ns(), "stage_work_id": work_id, "attempt_id": attempt_id,
+                    "request_queued_ns": queued_ns, "stage_work_id": work_id, "attempt_id": attempt_id,
                     "admission_id": admission_id, "run_uri": key[0], "stage_name": key[1],
                 }
                 if work_id is not None:
@@ -174,7 +191,7 @@ class ReadyPreparationPool:
             else:
                 task = prepare
             future = self._workers.submit(copy_context().run, task)
-            pending = _Pending(identity, future)
+            pending = _Pending(identity, future, queued_ns=queued_ns)
             stage.phases[phase] = pending
             notify = self._on_ready
             if stage.work_id is None or notify is None:

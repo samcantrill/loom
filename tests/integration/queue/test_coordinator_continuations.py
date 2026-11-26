@@ -33,8 +33,8 @@ def test_free_bulk_slot_revisits_waiting_owner_outside_discovery(tmp_path, monke
         bulk = daemon._result_verifications.bulk
         submit, capture, reconcile = bulk.submit, preparation._capture_owned_input, daemon._preparations.reconcile
 
-        def track_submit(operation_id, action, *args):
-            future = submit(operation_id, action, *args)
+        def track_submit(operation_id, action, *args, **kwargs):
+            future = submit(operation_id, action, *args, **kwargs)
             if action == "preparation_input_capture" and operation_id == "later" and future is None:
                 queued.set()
             return future

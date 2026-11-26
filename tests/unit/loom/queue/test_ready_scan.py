@@ -52,6 +52,8 @@ def test_ready_gpu_work_waits_for_its_prepared_context_then_dispatches(monkeypat
     from loom.pipeline.runtime import ExecutionRouteKind
     from loom.scheduling import PolicyDecisionState
     from loom.queue import _action_results
+    from loom.queue._scheduling_waits import SchedulingWaits
+    from time import monotonic_ns
 
     monkeypatch.setattr(_action_results, "action_attempt_cancelled", lambda *args: False)
 
@@ -75,6 +77,8 @@ def test_ready_gpu_work_waits_for_its_prepared_context_then_dispatches(monkeypat
     def dispatch(**selection):
         assert selection["snapshot"] is snapshot
         dispatched.append(selection["stage_work_id"])
+        owner._scheduling_waits.queued(record, monotonic_ns())
+        owner._scheduling_waits.reserved(record, "fit-assignment", None, None)
         return progress.LocalDaemonExecutionOutcome(LocalDaemonAdmissionState.ACTIVE)
 
     owner: Any = SimpleNamespace(
@@ -101,10 +105,57 @@ def test_ready_gpu_work_waits_for_its_prepared_context_then_dispatches(monkeypat
     selected = progress._schedule_window(owner, {admission.admission_id: admission}, (record,))
     assert selected is not None and selected[0] == "gpu-run"
     assert opened == [] and dispatched == ["fit-work"]
+    summary, = owner._scheduling_waits.summaries(admission.run_uri)
+    assert summary["prequeue_wait_ns"]["context_unavailable"] > 0
     owner._cycle_contexts.clear()
     admission.cancellation_operation_id = "cancel"
     assert progress._schedule_window(owner, {admission.admission_id: admission}, (record,)) is None
     assert opened == [] and dispatched == ["fit-work"]
+
+
+def test_full_slot_observation_only_explains_prequeue_wait_on_demand_only_route(monkeypatch):
+    from loom.pipeline.runtime import ExecutionRouteKind
+    from loom.queue import _action_results, _scheduling_waits
+    from loom.scheduling import PolicyDecisionState
+
+    now = [10]
+    monkeypatch.setattr(_action_results, "action_attempt_cancelled", lambda *args: False)
+    monkeypatch.setattr(_scheduling_waits, "monotonic_ns", lambda: now[0])
+    monkeypatch.setattr(_scheduling_waits, "milestone", lambda *args, **kwargs: None)
+    admission = SimpleNamespace(admission_id="run", revision=1)
+    profile = SimpleNamespace(project_fingerprint="project", environment_fingerprint="env", executor_fingerprint="exec")
+    local_profile = SimpleNamespace(project_fingerprint="local", environment_fingerprint="env", executor_fingerprint="exec")
+    records = [SimpleNamespace(
+        admission_id="run", run_uri="file:///run", attempt_id=name, stage_work_id=name, stage_name=name,
+        ready_at=1, projection_revision=1, to_work_item=lambda: None, execution_requirement=required,
+        placement=SimpleNamespace(route=SimpleNamespace(kind=ExecutionRouteKind.MANAGED_AGENT), target="host"),
+    ) for name, required in [("early", profile), ("local", local_profile)]]
+    waits = _scheduling_waits.SchedulingWaits()
+    owner: Any = SimpleNamespace(
+        daemon=SimpleNamespace(_epoch="e", _scheduling_epoch="s"),
+        _scheduling=SimpleNamespace(retained_slurm_profiles={}, kernel=lambda group: SimpleNamespace(
+            decide=lambda **kwargs: SimpleNamespace(state=PolicyDecisionState.WAIT))),
+        config=SimpleNamespace(control_database=None, connect_database=lambda _: nullcontext(None),
+            agent_policy=SimpleNamespace(agents=[SimpleNamespace(agent_id="host")]), resident_worker_launch_profile=None,
+            remote_profiles=(profile,), container_capabilities=()),
+        _daemon_owner=lambda: SimpleNamespace(_accepted_snapshot=lambda: ("decision", "utc")),
+        _cycle_contexts={"run": (SimpleNamespace(max_parallel_stages=None), None)},
+        _cycle_context_revisions={"run": 1}, _cycle_context_epochs={"run": ("e", "s")},
+        _ready_preparations=SimpleNamespace(anticipation_wait=lambda key: "early_retention_limit",
+                                            request_queued_ns=lambda key, work: None),
+        _scheduling_waits=waits, _remote_candidates=lambda: {}, _full_offer_hosts={"host"}, agent_id=None,
+    )
+    for record in records:
+        waits.ready(record)
+    now[0] = 20
+    assert progress._schedule_window(owner, {"run": admission}, tuple(records)) is None
+    now[0] = 50
+    for record in records:
+        waits.queued(record, 40)
+        waits.reserved(record, record.stage_name + "-assignment", None, None)
+    early, local = waits.summaries("file:///run")
+    assert early["prequeue_wait_ns"] == {"first_scan": 10, "unknown": 0, "early_retention_limit": 20}
+    assert local["prequeue_wait_ns"] == {"first_scan": 10, "unknown": 0, "assignment_slots_full": 20}
 
 
 def test_gpu_opportunities_alternate_with_cpu_and_failed_reservation_falls_back():

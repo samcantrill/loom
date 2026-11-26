@@ -109,6 +109,7 @@ class BulkOperations:
 
     def submit(
         self, operation_id: str, action: str, function: Callable[..., _T], *args: Any,
+        child_admission_id: str | None = None,
     ) -> Future[_T] | None:
         self.reap()
         if self._closed:
@@ -132,7 +133,7 @@ class BulkOperations:
         if key is not None:
             del self._waiting[key]
         future = self._workers.submit(
-            copy_context().run, _run, operation_id, action, function, args, queued,
+            copy_context().run, _run, operation_id, action, function, args, queued, child_admission_id,
         )
         self._active[future] = None if key is None else key[0]
         if key is None:
@@ -161,12 +162,15 @@ class BulkOperations:
 
 def _run(
     operation_id: str, action: str, function: Callable[..., _T], args: tuple[Any, ...],
-    queued: tuple[str, float],
+    queued: tuple[str, float], child_admission_id: str | None = None,
 ) -> _T:
     from ._phase_timing import reported_phases
 
     waiting_ns = round((monotonic() - queued[1]) * 1_000_000_000)
-    with reported_phases(action, operation_id=operation_id, started_monotonic=queued[1]) as timings:
+    with reported_phases(action, operation_id=operation_id, started_monotonic=queued[1],
+                         always_report=child_admission_id is not None) as timings:
+        if child_admission_id is not None:
+            timings.related["child_admission_id"] = child_admission_id
         timings.spans.append({
             "action": "bulk_capacity_wait", "started_at": queued[0],
             "elapsed_nanoseconds": waiting_ns, "outcome": "complete",
