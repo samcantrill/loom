@@ -1,6 +1,9 @@
+import json
+import sys
+
 import pytest
 
-from tools.startup_timings import summarize
+from tools.startup_timings import main, summarize
 
 
 pytestmark = pytest.mark.unit
@@ -281,3 +284,88 @@ def test_unassigned_closures_keep_unknown_and_measured_placement_coverage():
     assert observed["intervals"]["ready_to_request_queued"]["seconds"] == 7e-9
     assert observed["intervals"]["request_worker_queue"]["seconds"] == 2e-9
     assert result["prequeue_distributions"]["target"]["coverage"] == {"observed": 1, "inapplicable": 1}
+
+
+def _context(action, stamp, request=1, **attrs):
+    identity = {"admission_id": "a", "admission_revision": 2, "coordinator_epoch": "c", "scheduling_epoch": "s",
+                "context_request_id": request, "source": "dispatch"}
+    return _event(f"context_{action}", 0, ns=stamp * 1_000_000_000, **{**identity, **attrs})
+
+
+def test_context_timeline_keeps_reloads_processes_epochs_and_dropped_endpoints_separate():
+    records = [
+        _context("requested", 1, wait_reason="workers_busy"),
+        _context("loader_started", 2),
+        _context("validation", 3, result="cold_load"),
+        _context("available", 6),
+        _context("consumer_advanced", 13, consumer="dispatch"),
+        _context("discarded", 14, owner="retained", reason="revision_changed"),
+        _context("cache_evicted", 20, reason="capacity"),
+        _context("requested", 10, 2, wait_reason="dispatch_slot_busy"),
+        _context("loader_started", 14, 2),
+        _context("validation", 15, 2, result="dependencies_changed"),
+        _context("discarded", 20, 2, owner="preparation", reason="loader_error"),
+        _context("requested", 10, process_origin_ns=99, wait_reason="available"),
+        _context("available", 31, process_origin_ns=99),
+        _context("discarded", 42, process_origin_ns=99, owner="preparation", reason="revision_changed"),
+        _context("requested", 0, scheduling_epoch="new", wait_reason="available"),
+        _context("loader_started", 1, scheduling_epoch="new"),
+        _context("available", 50, admission_revision=3),
+        _context("consumer_advanced", 55, admission_revision=3, consumer="reconcile"),
+    ]
+    # A replayed log can contain the same milestone more than once in any order.
+    copied = [_context("loader_started", 32, host=None, process_origin_ns=99), *records, *reversed(records)]
+    result = summarize(copied)
+    assert result["submissions"] == []
+    report = result["context_loader"]
+    assert report["observed_requests"] == 5
+    assert report["unattributed_events"] == 1
+    assert (report["admission_revisions"], report["repeated_requests"], report["observed_reloads"]) == (2, 3, 2)
+    assert report["requests_per_revision"] == {1: 1, 4: 1}
+    assert report["loader_starts_per_revision"] == {0: 1, 3: 1}
+    assert report["validation_results"] == {"cold_load": 1, "dependencies_changed": 1}
+    assert report["initial_wait_reasons"] == {"workers_busy": 1, "dispatch_slot_busy": 1, "available": 2}
+    assert report["discard_reasons"] == {"retained": {"revision_changed": 1},
+                                         "preparation": {"loader_error": 1, "revision_changed": 1}}
+    assert report["cache_eviction_reasons"] == {"capacity": 1}
+    queue = report["interval_seconds"]["request_to_loader_start"]
+    assert queue == {"samples": 3, "unknown": 2, "p50": 1, "p95": 4, "p99": 4, "max": 4}
+    worker = report["interval_seconds"]["loader_start_to_available"]
+    assert (worker["samples"], worker["unknown"], worker["max"]) == (1, 4, 4)
+    advance = report["interval_seconds"]["available_to_first_consumer"]
+    assert (advance["samples"], advance["unknown"], advance["max"]) == (2, 3, 7)
+    by_phase = {phase: row for row in report["slow_examples"] for phase in row["slowest_for"]}
+    assert by_phase["request_to_loader_start"]["context_request_id"] == 2
+    longest = by_phase["available_to_first_consumer"]
+    assert longest["interval_seconds"]["available_to_first_consumer"] == 7
+    assert (longest["admission_id"], longest["admission_revision"], longest["process_origin_ns"]) == ("a", 2, 1)
+    assert longest["discards"] == [{"owner": "retained", "reason": "revision_changed"}]
+
+
+def test_context_only_cli_reports_population_tails_and_scopes_examples_and_revision_counts(tmp_path, monkeypatch, capsys):
+    records = []
+    for request in range(1, 101):
+        records += [_context("requested", 0, request, op="many", wait_reason="workers_busy"),
+                    _context("loader_started", request, request, op="many")]
+    records += [_event("admission_committed", 0, submit_method="submit", queue_item_id="direct", admission_id="other"),
+                _context("requested", 1, admission_id="other", wait_reason="workers_busy"),
+                _context("discarded", 2, admission_id="other", owner="request", reason="retained_reuse")]
+    path = tmp_path / "coordinator.log"
+    path.write_text("".join(f"INFO {json.dumps(r)}\n" for r in reversed(records)))
+    monkeypatch.setattr(sys, "argv", ["startup_timings.py", str(path), "--operation", "direct"])
+    main()
+    direct = json.loads(capsys.readouterr().out)["context_loader"]
+    assert direct["observed_requests"] == 101
+    queue = direct["interval_seconds"]["request_to_loader_start"]
+    assert (queue["samples"], queue["unknown"], queue["p95"], queue["p99"]) == (100, 1, 95, 99)
+    assert direct["selected_revisions"] == [{"admission_id": "other", "admission_revision": 2, "requests": 1,
+                                             "loader_starts": 0}]
+    discarded, = direct["slow_examples"]
+    assert discarded["discards"] == [{"owner": "request", "reason": "retained_reuse"}]
+    assert all(value is None for value in discarded["interval_seconds"].values())
+    assert discarded["slowest_for"] == ["discarded"]
+    many = summarize(records, operation="many")["context_loader"]
+    assert many["selected_revisions"] == [{"admission_id": "a", "admission_revision": 2, "requests": 100,
+                                           "loader_starts": 100}]
+    assert [row["context_request_id"] for row in many["slow_examples"]] == [100]
+    assert summarize(records, operation="absent")["context_loader"]["slow_examples"] == []

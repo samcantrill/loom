@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING
 from loom.pipeline.stores.local_runs import LocalRunStore
 from loom.serialization import stable_json_dumps
 
+from ._context_timing import ContextTiming, current_load
+
 if TYPE_CHECKING:
     from loom.pipeline.executors.slurm.ready_stage import SlurmReadyStageProfile
     from .local_daemon import LocalDaemonConfig
@@ -62,6 +64,7 @@ class _CapturedRunStore(LocalRunStore):
 class _Entry[T]:
     dependencies: tuple[tuple[Path, str | None], ...]
     context: T
+    timing: ContextTiming | None
 
 
 class ValidatedContextCache[T]:
@@ -91,6 +94,7 @@ class ValidatedContextCache[T]:
         slurm_profiles: Mapping[tuple[str, str], SlurmReadyStageProfile] | None,
         decode: Callable[[LocalRunStore], T],
     ) -> T:
+        timing = current_load.get()
         store = _CapturedRunStore(config.run_store_root)
         key = _authorization_key(config, run_uri, store, slurm_profiles)
         with self._lock:
@@ -105,14 +109,22 @@ class ValidatedContextCache[T]:
                 with self._lock:
                     if self._entries.get(key) is previous:
                         self._entries.move_to_end(key)
+                if timing is not None:
+                    timing.event("context_validation", result="cache_hit")
                 return previous.context
+        if timing is not None:
+            timing.event("context_validation", result="cold_load" if previous is None else "dependencies_changed")
         context = decode(store)
-        entry = _Entry(store.dependencies(), context)
+        entry = _Entry(store.dependencies(), context, timing)
         with self._lock:
+            replaced = self._entries.get(key)
             self._entries[key] = entry
             self._entries.move_to_end(key)
-            while len(self._entries) > self._max_entries:
-                self._entries.popitem(last=False)
+            evicted = self._entries.popitem(last=False)[1] if len(self._entries) > self._max_entries else None
+        if replaced is not None and replaced.timing is not None:
+            replaced.timing.event("context_cache_evicted", reason="replaced")
+        if evicted is not None and evicted.timing is not None:
+            evicted.timing.event("context_cache_evicted", reason="capacity")
         return context
 
 
