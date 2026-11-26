@@ -391,14 +391,17 @@ def _advance_ready_inputs(self, record, admission, context, epochs, *, anticipat
         self._scheduling_waits.prequeue(record, "snapshot_unavailable")
         return True
     self._scheduling_waits.prequeue(record, "unknown")
-    if anticipated:
-        self._prepared_ready_request(record, snapshot, intent, speculative=True)
-    else:
-        self._prepared_ready_request(record, snapshot, intent)
-    if (timing := timing_for(context)) is not None and self._ready_preparations.request_queued_ns(
-        key, record.stage_work_id,
-    ) is not None:
-        timing.advance("stage_preparation")
+    try:
+        if anticipated:
+            self._prepared_ready_request(record, snapshot, intent, speculative=True)
+        else:
+            self._prepared_ready_request(record, snapshot, intent)
+    finally:
+        # A queued build may already have failed by the time poll returns.
+        if (timing := timing_for(context)) is not None and self._ready_preparations.request_queued_ns(
+            key, record.stage_work_id,
+        ) is not None:
+            timing.advance("stage_preparation")
     return True
 
 

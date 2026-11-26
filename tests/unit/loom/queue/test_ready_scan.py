@@ -418,6 +418,7 @@ def test_dispatch_context_advances_when_read_is_accepted_even_if_worker_is_held(
 
 
 def test_ready_context_advances_only_after_preparation_capacity_accepts_work(monkeypatch):
+    import pytest
     from loom.pipeline.runtime import ExecutionRouteKind
 
     admission = SimpleNamespace(admission_id="admission")
@@ -441,4 +442,15 @@ def test_ready_context_advances_only_after_preparation_capacity_accepts_work(mon
     assert not advances
     owner._prepared_ready_request = lambda *args: queued.append(123)
     assert progress._advance_ready_inputs(owner, record, admission, context, ("owner", "policy"), anticipated=False)
+    assert advances == ["stage_preparation"]
+
+    def failed_after_enqueue(*args):
+        queued.append(234)
+        raise OSError("invalid retained request")
+
+    advances.clear()
+    queued.clear()
+    owner._prepared_ready_request = failed_after_enqueue
+    with pytest.raises(OSError, match="invalid retained request"):
+        progress._advance_ready_inputs(owner, record, admission, context, ("owner", "policy"), anticipated=False)
     assert advances == ["stage_preparation"]
