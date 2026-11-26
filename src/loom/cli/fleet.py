@@ -195,7 +195,7 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
             command.add_argument(
                 "--explain",
                 action="store_true",
-                help="render observation boundaries (also included by default)",
+                help="include supporting evidence for the selected hosts",
             )
             if name == "preflight":
                 command.add_argument(
@@ -402,6 +402,10 @@ def handle(namespace: argparse.Namespace) -> int:
     assert result is not None, "Fleet command returned no result"
     if namespace.output_format == "json":
         print(json.dumps(result, sort_keys=True))
+    elif command == "status":
+        from ._fleet_text import format_fleet_status
+
+        print(format_fleet_status(result, explain=namespace.explain))
     elif command in {"apply", "operation", "upgrade"} and result["outcome"] != "preview":
         print(_operation_receipt(result))
     else:

@@ -8,6 +8,36 @@ from typing import Any
 from ._terminal import age, cell, fields, page_text, table
 
 
+_MAINTENANCE_WAITS = {
+    "accepted_work_or_preparation": "Accepted work or preparation to finish",
+    "assignment_publication_or_claim_release": "Assignment publication or claim release",
+    "agent_control_settlement": "Agent controls to settle",
+    "coordinator_reconciliation_unavailable": "Coordinator reconciliation to become available",
+}
+
+
+def _maintenance(payload: Mapping[str, Any]) -> str:
+    if "gate" in payload:
+        return (
+            f"Operation {cell(payload['operation_id'])}\n"
+            f"Mutation outcome: {cell(payload['mutation_outcome'])}\n"
+            f"Admission after operation: {cell(payload['gate']['state'])}"
+        )
+    lines = [
+        table(
+            ("ADMISSION", "SETTLED", "MAINTENANCE ID"),
+            [(payload["state"], payload["settled"], payload["maintenance_id"])],
+            continuation_column=2,
+            empty="",
+        )
+    ]
+    if payload["wait_reasons"]:
+        lines.extend(("", "Waiting for:"))
+        for reason in payload["wait_reasons"]:
+            lines.append(f"  • {cell(_MAINTENANCE_WAITS.get(reason, reason))}")
+    return "\n".join(lines)
+
+
 def _admissions(page: Mapping[str, Any], *, history: bool, wide: bool) -> str:
     headers = ["STATE", "AGE"]
     if not history:
@@ -267,6 +297,8 @@ def _admission(payload: Mapping[str, Any]) -> str:
 def format_queue_text(command: str, payload: Mapping[str, Any], *, wide: bool) -> str:
     if command in {"list", "daemon-admissions"}:
         return _admissions(payload, history=command == "daemon-admissions", wide=wide)
+    if command == "daemon-maintenance":
+        return _maintenance(payload)
     if command == "daemon-status":
         return _status(payload)
     if command == "daemon-agents":

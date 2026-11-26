@@ -21,6 +21,14 @@ loom fleet plan --fleet lab --hosts coordinator,gpu01
 loom fleet preflight --fleet lab --hosts gpu01 --profile compute
 ```
 
+`fleet status` leads with the fleet qualification outcome and shows one row per
+selected host. Read coordinator health or the recorded agent session state
+alongside its evidence freshness. Observation age measures when the coordinator
+reported that evidence, including retained session records. An unavailable
+observation shows its reason. Declaration and profile issues appear beneath
+the affected host. Add `--explain` for observation owners, revisions, exact UTC
+times, and evidence about target installation and storage.
+
 `init` creates owner-only directories and owner-readable/writable placeholders at
 `$XDG_CONFIG_HOME/loom/fleets/lab` (default `~/.config/loom/fleets/lab`). Complete
 the choices before preflight. Repeating init preserves populated files. A
