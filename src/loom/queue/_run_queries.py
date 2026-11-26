@@ -306,15 +306,16 @@ def search(daemon: Any, query: RunQuery) -> QueryPage:
 
     def job_owners(candidate: dict[str, Any]):
         from .local_daemon import _admission_from_row
-        from .local_daemon_execution import _read_owner_journals
+        from ._owner_journals import read_owner_journals
 
         nonlocal batch_start, owner_view
         offset = job_indices[candidate["admission_id"]] // batch_size * batch_size
         if offset != batch_start or owner_view is None:
             uris = tuple(row["run_uri"] for row in admissions[offset:offset + batch_size])
-            owner_view = _read_owner_journals(
+            owner_view = read_owner_journals(
                 daemon.config, uris, coordinator_id=owner, agent_id=daemon._agent_id, clock=daemon._clock,
                 read_snapshot=read_snapshot,
+                observe_storage=daemon._slurm_storage_observer(),
             )
             batch_start = offset
         admission = _admission_from_row(candidate)

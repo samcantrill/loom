@@ -34,6 +34,7 @@ from loom.pipeline.execution.models import (
 from loom.pipeline.orchestration import SchedulingProjectionState, StageWorkRecord
 from loom.pipeline.planning import StageFingerprintRecord
 from loom.pipeline.resources import ResourceRequest
+from loom.pipeline.stores.read_models import BackendRevision
 from loom.pipeline.runtime._resource_controls import resource_control_records
 from loom.pipeline.runtime.resource_policy import ResourcePolicy
 from loom.pipeline.status import StageStatus
@@ -508,7 +509,7 @@ class _TaskPageSource:
 
 
 _AGENT_PAGE_FILTER = (
-    "WHERE a.state != 'released' AND json_extract(a.identity_json, '$.agent_id') = ? "
+    "WHERE a.state != 'released' AND a.state != 'reserved' AND json_extract(a.identity_json, '$.agent_id') = ? "
     "AND json_extract(a.identity_json, '$.agent_root_id') = ? AND a.assignment_id > ? "
     "ORDER BY a.assignment_id LIMIT ?"
 )
@@ -635,6 +636,7 @@ class SQLiteSlurmStageAssignments:
         max_parallel_stages: int | None,
         max_profile_outstanding: int | None,
         requested_gpu_count: int | None = None,
+        decision_revision: BackendRevision | None = None,
         max_reserved_gpus: int | None = None,
         reservation_guard: Callable[[], AbstractContextManager[None]] | None = None,
         _reservation_transaction: Callable[[], AbstractContextManager[sqlite3.Connection]] | None = None,
@@ -805,6 +807,7 @@ class SQLiteSlurmStageAssignments:
                         "assignment_id": assignment.assignment_id,
                         "target": "slurm",
                         "profile_id": assignment.profile_id,
+                        **({"decision_revision": decision_revision.to_dict()} if decision_revision else {}),
                     },
                 }
             )
@@ -1852,6 +1855,21 @@ class SQLiteSlurmStageAssignments:
             conn.execute(
                 f"UPDATE {_ASSIGNMENT_TABLE} SET compute_released_at=COALESCE(compute_released_at, ?) "
                 "WHERE assignment_id=?", (datetime.now(timezone.utc).isoformat(), assignment_id),
+            )
+
+    def release_unbound(self, assignment_id: str) -> None:
+        """Return a definitively unbound reservation and its stage to placement."""
+        from ._managed_coordinator_assignments import _reopen_stage_work
+
+        with self._transaction(terminal_for=assignment_id) as conn:
+            row = self._row(conn, assignment_id)
+            if row["state"] == "released":
+                return
+            if row["state"] != "reserved":
+                raise QueueConflictError("only an unbound SLURM reservation can be released")
+            _reopen_stage_work(conn, row["stage_work_id"], assignment_id)
+            conn.execute(
+                f"UPDATE {_ASSIGNMENT_TABLE} SET state = 'released' WHERE assignment_id = ?", (assignment_id,),
             )
 
     def release(self, assignment_id: str) -> None:

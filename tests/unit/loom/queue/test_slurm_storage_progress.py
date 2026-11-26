@@ -2,7 +2,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event, Lock
-from typing import Any
+from typing import Any, cast
 from types import SimpleNamespace, MethodType
 
 import pytest
@@ -179,25 +179,30 @@ def test_completed_publication_replay_reauthenticates_without_storage_work():
 
 
 def test_observations_distinguish_compute_release_from_pending_publication():
-    record: Any = SimpleNamespace(
-        assignment=SimpleNamespace(assignment_id='A'), compute_released_at='released-at',
+    from loom.queue._owner_journals import SlurmStorageFacts
+
+    record = SlurmStorageFacts(
+        assignment_id='A', compute_released_at='released-at', provider_released=True,
         publication_requested_at='requested-at', publication_completed_at=None, publication_cancelled_at=None,
         agent_evidence_accepted_at='accepted-at',
     )
     owner: Any = SimpleNamespace(
-        slurm_assignments=SimpleNamespace(list_run_unreleased=lambda _: [record],
-                                         agent_evidence=lambda _: (1, {'provider_released': True})),
         _slurm_chunk_futures={},
         _slurm_storage_futures={}, _slurm_storage_errors={}, _slurm_storage_retry_at={},
         _slurm_storage_progress={}, _slurm_storage_progress_lock=Lock(),
     )
-    item, = LocalDaemonExecution.slurm_storage_observations(owner, 'run')['assignments']
+    def observed_item() -> dict[str, Any]:
+        view = LocalDaemonExecution.slurm_storage_observations(owner, [record])
+        item, = cast(list[dict[str, Any]], view['assignments'])
+        return item
+
+    item = observed_item()
     assert item['compute'] == {'state': 'released', 'released_at': 'released-at'}
     assert item['publication']['state'] == 'pending'
     assert item['storage']['progress'] is None
     assert item['storage']['worker_state_consistency'] == 'process_local'
     owner._slurm_storage_errors['A'] = 'ownership conflict'
-    item, = LocalDaemonExecution.slurm_storage_observations(owner, 'run')['assignments']
+    item = observed_item()
     assert item['storage']['state'] == 'failed'
     assert item['storage']['last_error'] == 'ownership conflict'
 

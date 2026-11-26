@@ -15,7 +15,7 @@ from time import monotonic, sleep
 from urllib import error, request
 from urllib.parse import urlsplit
 
-from typing import Any
+from typing import Any, TypedDict
 
 import pytest
 from fastapi.testclient import TestClient
@@ -97,6 +97,11 @@ def _authority_factory(tmp_path, *, workspace_id: str = "workspace-a"):
 def _authority(tmp_path, *, workspace_id: str = "workspace-a"):
     repository, factory = _authority_factory(tmp_path, workspace_id=workspace_id)
     return repository, factory(RUN_URI)
+
+
+class _AttemptBinding(TypedDict):
+    assignment_id: str
+    attempt_id: str
 
 
 def _prepared_request(revision) -> PreparedAttemptRequest:
@@ -181,6 +186,47 @@ def test_scoped_adapter_preserves_receipts_fences_outputs_and_reliability(
     assert replay_revision == fact_revision
     assert authority.open_run(RUN_URI).revision == fact_revision
     assert authority.list_reliability_policy_facts(RUN_URI) == (fact,)
+
+
+@pytest.mark.parametrize("backend", ["sqlite", "service"])
+def test_new_bind_requires_the_run_revision_that_allowed_sibling_work(tmp_path, backend):
+    from loom.pipeline.stores import path_to_run_uri
+    from loom.pipeline.stores.authority import PreparedAttemptBindRejected
+    from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+
+    if backend == "sqlite":
+        uri = path_to_run_uri(tmp_path / "local")
+        authority = SQLitePerRunAuthorityStore()
+        revision = authority.create_run(uri)
+    else:
+        uri = RUN_URI
+        repository, authority = _authority(tmp_path)
+        revision = repository.admit_run(uri)
+    authority.bind_coordinator_admission(uri, CoordinatorAdmissionRequest(
+        operation_id="admit", coordinator_id="coordinator-1", run_uri=uri, intent_digest="intent",
+    ))
+    build = authority.ensure_prepared_attempt(uri, _prepared_request(revision)).attempt
+    peer = authority.ensure_prepared_attempt(uri, replace(
+        _prepared_request(build.revision), operation_id="prepare-peer", stage_name="peer",
+    )).attempt
+    selected = authority.open_run(uri)
+    binding = {"assignment_id": "peer-worker", "attempt_id": peer.attempt_id}
+    authority.bind_prepared_attempt(uri, **binding, expected_revision=selected.revision)
+    fence = authority.grant_prepared_attempt(uri, **binding)
+    failed = authority.record_managed_attempt_terminal(
+        uri, fence=fence, status=StageStatus.FAILED, reason=LifecycleReason("peer_failed"),
+    )
+    attempt = {"assignment_id": "build-worker", "attempt_id": build.attempt_id}
+    with pytest.raises(PreparedAttemptBindRejected, match="stale"):
+        authority.bind_prepared_attempt(uri, **attempt, expected_revision=selected.revision)
+    assert authority.read_prepared_binding(uri, **attempt).state is PreparedBindingState.ABSENT
+
+    # The peer's previously accepted operation replays after the same revision change.
+    authority.bind_prepared_attempt(uri, **binding, expected_revision=selected.revision)
+    assert authority.read_prepared_binding(uri, **binding).fence == fence
+    # A fresh continue-independent decision can authorize this still-pending attempt.
+    authority.bind_prepared_attempt(uri, **attempt, expected_revision=failed.revision)
+    assert authority.read_prepared_binding(uri, **attempt).state is PreparedBindingState.BOUND
 
 
 def test_scoped_adapter_rejects_workspace_and_changed_retry_payload(tmp_path) -> None:
@@ -365,7 +411,7 @@ def test_live_mutual_tls_authority_rejects_a_different_same_ca_peer(
         )
         assert allowed.open_run(RUN_URI).run_uri == RUN_URI
         prepared = allowed.ensure_prepared_attempt(RUN_URI, _prepared_request(allowed.open_run(RUN_URI).revision))
-        binding = {"assignment_id": "same-assignment", "attempt_id": prepared.attempt.attempt_id}
+        binding = _AttemptBinding(assignment_id="same-assignment", attempt_id=prepared.attempt.attempt_id)
         allowed.bind_prepared_attempt(RUN_URI, **binding)
         granted = allowed.grant_prepared_attempt(RUN_URI, **binding)
         assert allowed.read_prepared_binding(RUN_URI, **binding).fence == granted
@@ -770,14 +816,14 @@ def test_unstarted_failure_receipt_arbitrates_against_grant(
     prepared = authority.ensure_prepared_attempt(
         uri, _prepared_request(authority.open_run(uri).revision)
     )
-    binding = dict(assignment_id="assignment-1", attempt_id=prepared.attempt.attempt_id)
+    binding = _AttemptBinding(assignment_id="assignment-1", attempt_id=prepared.attempt.attempt_id)
     before = authority.open_run(uri)
     assert (
         authority.read_prepared_binding(uri, **binding).state
         is PreparedBindingState.ABSENT
     )
     # The same prepared attempt can be offered again after a declined assignment.
-    declined = {**binding, "assignment_id": "declined"}
+    declined: _AttemptBinding = {**binding, "assignment_id": "declined"}
     authority.bind_prepared_attempt(uri, **declined)
     authority.unbind_prepared_attempt(uri, **declined)
     authority.bind_prepared_attempt(uri, **binding)
@@ -921,8 +967,8 @@ def test_accounting_failure_recovers_from_existing_unbind_and_attempt_rows(
         uri, _prepared_request(authority.open_run(uri).revision)
     )
     attempt = prepared.attempt.attempt_id
-    declined = dict(assignment_id="declined", attempt_id=attempt)
-    ended = dict(assignment_id="job-owner", attempt_id=attempt)
+    declined = _AttemptBinding(assignment_id="declined", attempt_id=attempt)
+    ended = _AttemptBinding(assignment_id="job-owner", attempt_id=attempt)
     authority.bind_prepared_attempt(uri, **declined)
     authority.unbind_prepared_attempt(uri, **declined)
     authority.bind_prepared_attempt(uri, **ended)
@@ -966,8 +1012,8 @@ def test_ambiguous_legacy_failure_preserves_plain_unbind_replay(tmp_path, backen
         uri, _prepared_request(authority.open_run(uri).revision)
     )
     attempt = prepared.attempt.attempt_id
-    declined = dict(assignment_id="declined", attempt_id=attempt)
-    ended = dict(assignment_id="ended", attempt_id=attempt)
+    declined = _AttemptBinding(assignment_id="declined", attempt_id=attempt)
+    ended = _AttemptBinding(assignment_id="ended", attempt_id=attempt)
     authority.bind_prepared_attempt(uri, **declined)
     authority.unbind_prepared_attempt(uri, **declined)
     authority.bind_prepared_attempt(uri, **ended)

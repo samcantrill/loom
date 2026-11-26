@@ -59,6 +59,7 @@ from .authority import (
     PreparedAttemptReceipt,
     PreparedAttemptRequest,
     PreparedBindingObservation,
+    PreparedAttemptBindRejected,
     StatusTransition,
 )
 from .capabilities import (
@@ -1478,7 +1479,8 @@ class SQLitePerRunAuthorityStore:
             return RunStatus.CANCELLED
 
     def bind_prepared_attempt(
-        self, run_uri: str, *, assignment_id: str, attempt_id: str
+        self, run_uri: str, *, assignment_id: str, attempt_id: str,
+        expected_revision: BackendRevision | None = None,
     ) -> None:
         self._bind_run_uri(run_uri)
         _non_empty(assignment_id, "assignment_id")
@@ -1502,6 +1504,9 @@ class SQLitePerRunAuthorityStore:
                     raise AuthorityStoreError("assignment binding conflicts")
                 return
             _require_no_cancellation_epoch(conn, attempt_id=attempt_id)
+            rejection = AuthorityStoreError if expected_revision is None else PreparedAttemptBindRejected
+            if expected_revision is not None and expected_revision != _current_run_revision(conn):
+                raise PreparedAttemptBindRejected("stale authority revision for prepared binding")
             run_status = RunStatus(
                 cast(
                     str,
@@ -1519,16 +1524,20 @@ class SQLitePerRunAuthorityStore:
                 RunStatus.CANCELLED,
                 RunStatus.INTERRUPTED,
             }:
-                raise AuthorityStoreError("terminal run cannot bind prepared work")
+                raise rejection("terminal run cannot bind prepared work")
             attempt = conn.execute(
-                "SELECT stage_name, status FROM attempts WHERE attempt_id = ?",
+                "SELECT a.status FROM attempts a JOIN stages s "
+                "ON s.stage_name = a.stage_name "
+                "WHERE a.attempt_id = ? AND s.status = 'PENDING' "
+                "AND NOT EXISTS (SELECT 1 FROM attempts n WHERE "
+                "n.stage_name = a.stage_name AND n.attempt_number > a.attempt_number)",
                 (attempt_id,),
             ).fetchone()
             if (
                 attempt is None
                 or StageStatus(cast(str, attempt["status"])) is not StageStatus.PENDING
             ):
-                raise AuthorityStoreError("only a PENDING prepared attempt may bind")
+                raise rejection("only a PENDING prepared attempt may bind")
             receipt_row = conn.execute(
                 "SELECT request_json FROM prepared_attempt_receipts WHERE attempt_id = ?",
                 (attempt_id,),
@@ -1540,7 +1549,7 @@ class SQLitePerRunAuthorityStore:
             )
             for upstream_stage, commit_id in request.upstream_commits.items():
                 if _latest_stage_commit_id(conn, upstream_stage) != commit_id:
-                    raise AuthorityStoreError("prepared attempt upstream commit evidence is stale")
+                    raise rejection("prepared attempt upstream commit evidence is stale")
             if (
                 conn.execute(
                     "SELECT 1 FROM managed_attempt_bindings WHERE attempt_id = ?",
@@ -1548,7 +1557,7 @@ class SQLitePerRunAuthorityStore:
                 ).fetchone()
                 is not None
             ):
-                raise AuthorityStoreError("prepared attempt is already bound")
+                raise rejection("prepared attempt is already bound")
             conn.execute(
                 "INSERT INTO managed_attempt_bindings "
                 "(assignment_id, attempt_id, state, fence, terminal_status, terminal_digest) "

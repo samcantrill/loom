@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import replace
+import hashlib
 import importlib
 import io
 import json
@@ -615,6 +616,28 @@ def test_persisted_preprocess_train_run_completes_without_injected_runtime_objec
         assert provider.operations.count("environment") == 0
         assert provider.operations.count("release") == expected_claims
         if account_for == []:
+            # The first no-claim stage publishes a fresh offer. The next stage
+            # reuses that same capacity evidence under its original offer ID.
+            with sqlite3.connect(config.execution_database) as conn:
+                [(offer_id, availability)] = conn.execute(
+                    "SELECT offer_revision, availability_revision FROM coordinator_offers"
+                )
+                assignments = conn.execute(
+                    "SELECT identity_json, receipt_json FROM coordinator_assignments"
+                ).fetchall()
+            assert len(assignments) == 2
+            for identity_json, receipt_json in assignments:
+                identity, receipt = json.loads(identity_json), json.loads(receipt_json)
+                assert identity["offer_id"] == receipt["offer_revision"] == offer_id
+                if identity["stage_name"] == "preprocess":
+                    assert offer_id == f"offer-{identity['stage_work_id']}-{receipt['stage_work_revision']}-{availability}"
+                identity_bytes = (
+                    f"{submitted.admission_id}\0{identity['stage_work_id']}\0"
+                    f"{offer_id}\0{receipt['stage_work_revision']}"
+                ).encode("utf-8")
+                expected = "assignment-" + hashlib.sha256(identity_bytes).hexdigest()
+                assert identity["assignment_id"] == expected
+                assert identity["claim_id"] == f"claim-{expected}"
             with sqlite3.connect(config.agent_journal) as conn:
                 rows = tuple(conn.execute("SELECT state, claims_json FROM assignments"))
             assert len(rows) == 2
@@ -2060,6 +2083,48 @@ def test_daemon_global_priority_preempts_earlier_lower_priority_admission(
         daemon.stop()
 
 
+@pytest.mark.parametrize("change", ["cancel", "reload"])
+def test_prepared_local_reservation_rechecks_authorization(tmp_path, monkeypatch, change):
+    from loom.queue import CoordinatorSchedulingReload
+    from tests.unit.loom.queue.test_coordinator_responsiveness import _drive_until
+
+    monkeypatch.setattr(LocalDaemon, "_serve", lambda self: self._stop.wait())
+    config = replace(_daemon_config(tmp_path), agent_policy=AgentPolicyConfig(principals=(
+        TransportPrincipalPolicy("operator-cert", "operator", "operator", actions=("scheduling_reload",)),
+    )))
+    uri = _persist_sleep_run(config.run_store_root, run_name="prepared", stage_name="stage")
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config, trusted_scheduling_loader=lambda: config)
+    status = daemon.start()
+    try:
+        client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+        operator = daemon.operator_view(LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR))
+        execution = daemon._execution
+        assert execution is not None
+        reserve = execution.coordinator.reserve
+        attempted = Event()
+
+        def change_before_reservation(assignment, *args, **kwargs):
+            if change == "cancel":
+                assert client.cancel("prepared").cancellation_operation_id
+            else:
+                assert operator.reload_scheduling(CoordinatorSchedulingReload(
+                    "reload", status.scheduling_epoch, "change after workspace preparation",
+                ))["state"] == "applied"
+            attempted.set()
+            return reserve(assignment, *args, **kwargs)
+
+        monkeypatch.setattr(execution.coordinator, "reserve", change_before_reservation)
+        client.submit(LocalDaemonAdmissionRequest("prepared", uri))
+        _drive_until(daemon, attempted.is_set)
+        with sqlite3.connect(config.execution_database) as conn:
+            assert conn.execute("SELECT assignment_id FROM coordinator_assignments").fetchall() == []
+            assert conn.execute("SELECT assignment_id FROM coordinator_atoms").fetchall() == []
+        assert _supervisor_launch_count(config) == 0
+    finally:
+        daemon.stop()
+
+
 def test_one_ready_slot_is_awarded_in_priority_order_after_both_workspaces_finish(tmp_path, monkeypatch):
     from threading import current_thread
     from loom.queue import local_daemon_execution as execution_module
@@ -2073,11 +2138,15 @@ def test_one_ready_slot_is_awarded_in_priority_order_after_both_workspaces_finis
         admission_priority_resolver=lambda uri: 10 if uri == uris["high"] else 0,
     )
     staged = {name: Event() for name in uris}
+    staged_requests = {}
     release = Event()
     original = execution_module._prepare_local_workspace
 
     def hold_staged(**kwargs):
         workspace = original(**kwargs)
+        staged_requests[workspace.assignment.stage_name] = (
+            workspace.workspace.request(), kwargs["decision_receipt"]["stage_work_revision"],
+        )
         staged[workspace.assignment.stage_name].set()
         assert release.wait(20)
         return workspace
@@ -2092,11 +2161,24 @@ def test_one_ready_slot_is_awarded_in_priority_order_after_both_workspaces_finis
         assert execution is not None
         reserve = execution.coordinator.reserve
         committed = []
+        holding_capacity = []
+        recovered = []
+        reconcile = execution._reconcile_exact_local_assignment
+
+        def recover(assignment_id):
+            recovered.append(assignment_id)
+            return reconcile(assignment_id)
+
+        monkeypatch.setattr(execution, "_reconcile_exact_local_assignment", recover)
 
         def lose_first_reply(assignment, *args, **kwargs):
             receipt = reserve(assignment, *args, **kwargs)
             if assignment.assignment_id not in {item[0] for item in committed}:
                 committed.append((assignment.assignment_id, assignment.stage_name, current_thread()))
+                with sqlite3.connect(config.execution_database) as conn:
+                    holding_capacity.append(conn.execute(
+                        "SELECT assignment_id FROM coordinator_assignments WHERE state != 'released'"
+                    ).fetchall())
                 if len(committed) == 1:
                     raise OSError("lost the execution commit reply")
             return receipt
@@ -2108,6 +2190,13 @@ def test_one_ready_slot_is_awarded_in_priority_order_after_both_workspaces_finis
         assert all(event.wait(15) for event in staged.values())
         with daemon._reconcile_guard:
             assert not committed
+            # Refresh only the observed projection. Reservation must use the
+            # new revision for its CAS and the identity in the staged request.
+            request, staged_revision = staged_requests["high"]
+            record = execution.stage_work_store.find_stage_work(request.stage_work_id)
+            assert record is not None
+            refreshed = execution.stage_work_store.create_or_refresh(record)
+            assert refreshed.projection_revision > staged_revision
             futures = [execution._ready_preparations._pending[uri, name].phases["local-workspace"].future
                        for name, uri in uris.items()]
             release.set()
@@ -2116,7 +2205,15 @@ def test_one_ready_slot_is_awarded_in_priority_order_after_both_workspaces_finis
         for name in ("high", "low"):
             assert client.wait(name, timeout_seconds=25).state is LocalDaemonAdmissionState.SUCCEEDED
         assert [(name, owner) for _, name, owner in committed] == [("high", daemon._thread), ("low", daemon._thread)]
+        assert holding_capacity == [[(identity,)] for identity, _, _ in committed]
+        assert committed[0][0] == request.assignment_id
+        assert recovered[0] == request.assignment_id
         with sqlite3.connect(config.execution_database) as conn:
+            receipt_json, = conn.execute(
+                "SELECT receipt_json FROM coordinator_assignments WHERE assignment_id = ?",
+                (request.assignment_id,),
+            ).fetchone()
+            assert json.loads(receipt_json)["stage_work_revision"] >= refreshed.projection_revision
             assert conn.execute("SELECT COUNT(*) FROM coordinator_assignments WHERE state = 'released'").fetchone() == (2,)
         _wait_for_supervisor_launch_count(config, expected=2)
     finally:
