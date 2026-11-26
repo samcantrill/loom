@@ -471,6 +471,10 @@ def _schedule_window(
                        if not action_attempt_cancelled(conn, record.run_uri, record.attempt_id))
     if not window:
         return None
+    # A release before agent acceptance reopens the existing projection. A
+    # retry can reach dispatch before the next admission reconciliation sweep.
+    for record in window:
+        self._scheduling_waits.ready(record)
     if isinstance(admissions, SchedulingAdmissions):
         admissions.include({record.admission_id for record in window})
         admissions.visited_dispatch.update(

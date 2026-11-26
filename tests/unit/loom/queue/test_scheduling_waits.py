@@ -10,9 +10,10 @@ from loom.pipeline.orchestration import StageWorkRecord
 pytestmark = pytest.mark.unit
 
 
-def _record(work):
+def _record(work, revision=1):
     return cast(StageWorkRecord, SimpleNamespace(run_uri="file:///run", stage_name=work, stage_work_id=work,
-                admission_id="admission", attempt_id=work + "-attempt", ready_at=1))
+                admission_id="admission", attempt_id=work + "-attempt", ready_at=1,
+                projection_revision=revision))
 
 
 def test_only_confirmed_request_and_offer_overlap_counts(monkeypatch):
@@ -65,3 +66,21 @@ def test_expired_offer_unknown_and_history_bounded(monkeypatch):
     assert last["result"] == "left_ready" and last["attempt_id"] == b.attempt_id
     assert sum(name == "attempt_ready" for name, _ in events) == 2
     assert all(name != "eligible_offer_observed" for name, _ in events)
+
+
+def test_release_before_acceptance_reopens_the_same_attempt(monkeypatch):
+    events = []
+    monkeypatch.setattr(waits, "milestone", lambda action, **attrs: events.append(action))
+    owner = waits.SchedulingWaits()
+    first = _record("same")
+    reopened = _record("same", revision=3)
+    owner.ready(first)
+    owner.reserved(first, "released-before-delivery", None, None)
+    owner.ready(first)
+    owner.ready(reopened)
+    owner.reserved(reopened, "accepted", None, None)
+    summaries = cast(list[dict], owner.summaries(first.run_uri))
+    assert [(row["projection_revision"], row["assignment_id"]) for row in summaries] == [
+        (1, "released-before-delivery"), (3, "accepted"),
+    ]
+    assert events.count("attempt_ready") == 2

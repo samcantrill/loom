@@ -862,3 +862,61 @@ def test_follow_rotates_native_watches_across_pending_checks(tmp_path, monkeypat
     result = upgrades.upgrade(inventory, operation_id="window", follow=True, timeout_seconds=5)
     assert result["outcome"] == "complete"
     assert watched == [["0", "1", "2"], ["3", "4", "5"]]
+
+
+def test_follow_stalled_handshake_and_native_waits_release_workers_at_turn_deadline(tmp_path, monkeypatch):
+    from contextlib import ExitStack
+    from functools import partial
+    from time import monotonic
+
+    from loom._observer_deadline import observer_until
+    from loom.fleet import _check_workers, self_tests
+    from loom.queue._coordinator_transport import UnixControlTransport
+    from tests.unit.loom.test_coordinator import _peer
+
+    inventory = SimpleNamespace(path=tmp_path / "fleet.json")
+    targets = [
+        ("handshake", {"operation_id": "handshake"}),
+        ("prepare", {"operation_id": "prepare"}),
+        ("target", {"admission_id": "admitted", "revision": 7}),
+    ]
+    release = Event()
+    calls = []
+    call = UnixControlTransport.call
+    def transport(self, operation, payload, deadline, **options):
+        calls.append((self.endpoint.name, operation, deadline))
+        return call(self, operation, payload, deadline, **options)
+    monkeypatch.setattr(UnixControlTransport, "call", transport)
+    monkeypatch.setattr(self_tests.CoordinatorClient, "from_connection_file",
+                        self_tests.CoordinatorClient.from_unix_socket)
+    monkeypatch.chdir(tmp_path)
+    def stall(*_):
+        release.wait(5)
+
+    with ExitStack() as peers, observer_until(monotonic() + 15):
+        for name, _ in targets:
+            endpoint = Path(name + ".sock")
+            peers.enter_context(_peer(endpoint, stall, handshake=name != "handshake"))
+            directory = tmp_path / "checks" / name
+            directory.mkdir(parents=True)
+            atomic(directory / "intent.json", {"connection": str(endpoint), "coordinator_id": "coordinator-a"})
+        try:
+            end = monotonic() + 0.75
+            offered = _check_workers.wait_for_checks(
+                tmp_path, targets, end, partial(self_tests._wait_check_change, inventory),
+            )
+            assert offered == 3
+            assert {(name, op) for name, op, _ in calls} == {
+                ("handshake.sock", "handshake"),
+                ("prepare.sock", "handshake"), ("prepare.sock", "wait_operation"),
+                ("target.sock", "handshake"), ("target.sock", "wait_admission"),
+            }
+            # A new status RPC must acquire a worker even while all three peers
+            # are withholding replies and the overall follow deadline is distant.
+            status = _check_workers.rpc(("status",), lambda: "observed")
+            assert _check_workers.host_steps(tmp_path, {"short": status}, monotonic() + 1, TimeoutError) == {
+                "short": "observed",
+            }
+            assert all(bound <= end for _, _, bound in calls)
+        finally:
+            release.set()

@@ -1985,6 +1985,7 @@ def test_rejected_remote_target_unbinds_attempt_and_releases_reservation(
     daemon = LocalDaemon(config)
     daemon.start()
     rejected = []
+    original_target = local_daemon_execution._target_remote_delivery
 
     def reject_target(*args, **kwargs):
         rejected.append(kwargs["request"])
@@ -2059,6 +2060,20 @@ def test_rejected_remote_target_unbinds_attempt_and_releases_reservation(
             assert conn.execute(
                 "SELECT COUNT(*) FROM managed_attempt_unbind_receipts"
             ).fetchone()[0] == len(rejected)
+        monkeypatch.setattr(local_daemon_execution, "_target_remote_delivery", original_target)
+        deadline = monotonic() + 10
+        while True:
+            daemon.reconcile_once()
+            with sqlite3.connect(config.control_database) as conn:
+                row = conn.execute("SELECT assignment_id FROM remote_assignments").fetchone()
+            if row is not None:
+                break
+            assert monotonic() < deadline, "reopened attempt did not receive a delivery"
+            sleep(0.01)
+        summaries = cast(list[dict], daemon._execution._scheduling_waits.summaries(run_uri))
+        by_assignment = {item["assignment_id"]: item for item in summaries}
+        assert by_assignment[rejected[0].assignment_id]["projection_revision"] < by_assignment[row[0]]["projection_revision"]
+        assert by_assignment[rejected[0].assignment_id]["attempt_id"] == by_assignment[row[0]]["attempt_id"]
     finally:
         daemon.stop()
 

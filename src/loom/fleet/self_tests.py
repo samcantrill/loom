@@ -14,6 +14,7 @@ import time
 from typing import Any, cast
 from uuid import uuid4
 
+from loom._observer_deadline import observer_until
 from loom.coordinator import (
     CoordinatorClient,
     CoordinatorClientError,
@@ -386,7 +387,9 @@ def _observe_check(
 def _wait_check_change(inventory, identity, hint, deadline):
     """Wait on one immutable check's current native owner outside fleet writer ownership."""
     intent = _read(inventory.path.parent / "checks" / identity / "intent.json")
-    with CoordinatorClient.from_connection_file(
+    # The native wait duration bounds server observation. Its negotiation and
+    # transport must also release this shared worker at the end of the turn.
+    with observer_until(deadline), CoordinatorClient.from_connection_file(
         intent["connection"], expected_coordinator_id=intent["coordinator_id"],
     ) as client:
         remaining = max(0.0, deadline - time.monotonic())

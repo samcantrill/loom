@@ -25,6 +25,7 @@ class _Wait:
 @dataclass(slots=True)
 class _Attempt:
     work_id: str
+    projection_revision: int
     attempt_id: str
     admission_id: str
     boundary: str
@@ -64,7 +65,7 @@ class SchedulingWaits:
     def __init__(self) -> None:
         self._waits: OrderedDict[tuple[str, str | None], _Wait] = OrderedDict()
         self._attempts: OrderedDict[tuple[str, str], _Attempt] = OrderedDict()
-        self._finished: OrderedDict[str, dict[str, PlainData]] = OrderedDict()
+        self._finished: OrderedDict[tuple[str, int], dict[str, PlainData]] = OrderedDict()
         self._epochs: tuple[str | None, str | None] | None = None
         self._lock = Lock()
 
@@ -73,18 +74,19 @@ class SchedulingWaits:
         with self._lock:
             previous = self._attempts.get(key)
             if previous is not None and previous.work_id == record.stage_work_id:
+                previous.projection_revision = max(previous.projection_revision, record.projection_revision)
                 return
-            if record.stage_work_id in self._finished:
+            if (record.stage_work_id, record.projection_revision) in self._finished:
                 return
             if previous is not None:
                 self._finish(key, "superseded", None)
-            self._attempts[key] = _Attempt(record.stage_work_id, record.attempt_id,
+            self._attempts[key] = _Attempt(record.stage_work_id, record.projection_revision, record.attempt_id,
                                            record.admission_id, "capacity_unknown", monotonic_ns())
             if len(self._attempts) > self._limit:
                 self._finish(next(iter(self._attempts)), "observation_evicted", None)
         milestone("attempt_ready", stage_work_id=record.stage_work_id, attempt_id=record.attempt_id,
                   admission_id=record.admission_id, run_uri=record.run_uri, stage_name=record.stage_name,
-                  ready_at=record.ready_at)
+                  ready_at=record.ready_at, projection_revision=record.projection_revision)
 
     def eligible(self, record: StageWorkRecord, offer: str, expires: int, available: int | None) -> None:
         with self._lock:
@@ -137,13 +139,15 @@ class SchedulingWaits:
         attempt.transition("finished", monotonic_ns())
         summary: dict[str, PlainData] = {
             "stage_work_id": attempt.work_id, "attempt_id": attempt.attempt_id,
+            "projection_revision": attempt.projection_revision,
             "admission_id": attempt.admission_id, "assignment_id": assignment,
             "run_uri": key[0], "stage_name": key[1], "result": outcome,
             "eligible_request_ready_ns": attempt.eligible_request_ready_ns,
             "saw_eligible_offer": attempt.saw_eligible_offer, "wait_ns": dict(attempt.totals),
         }
-        self._finished[attempt.work_id] = summary
-        self._finished.move_to_end(attempt.work_id)
+        identity = (attempt.work_id, attempt.projection_revision)
+        self._finished[identity] = summary
+        self._finished.move_to_end(identity)
         if len(self._finished) > self._limit:
             self._finished.popitem(last=False)
         milestone("attempt_scheduling_summary", details=summary)
