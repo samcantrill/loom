@@ -662,7 +662,7 @@ def test_finished_worker_with_retained_publication_prevents_settlement(monkeypat
             release.set()
 
 
-@pytest.mark.parametrize("case", ["older", "capability", "wheel"])
+@pytest.mark.parametrize("case", ["older", "incomplete_predecessor", "capability", "wheel"])
 def test_candidate_probe_refuses_before_native_mutation(tmp_path, case):
     from loom.fleet._upgrade_host import inspect
     from loom.fleet.releases import verify_release
@@ -672,9 +672,14 @@ def test_candidate_probe_refuses_before_native_mutation(tmp_path, case):
     from tests.integration.fleet.test_releases import bundle as release_bundle
 
     config = current_config(tmp_path)
-    if case == "older":
+    if case in {"older", "incomplete_predecessor"}:
         with sqlite3.connect(config.control_database) as conn:
-            conn.execute("PRAGMA user_version = 18")
+            if case == "incomplete_predecessor":
+                conn.execute("ALTER TABLE managed_admissions DROP COLUMN admitted_by")
+                conn.execute("ALTER TABLE preparation_operations DROP COLUMN accepted_at")
+                conn.execute("PRAGMA user_version=19")
+            else:
+                conn.execute("PRAGMA user_version=18")
     descriptor = release_bundle(tmp_path / "candidate")
     release = verify_release(descriptor)
     installed = tmp_path / "admin/releases" / release["descriptor_sha256"] / "bundle"
@@ -696,6 +701,7 @@ def test_candidate_probe_refuses_before_native_mutation(tmp_path, case):
     }
     expected = {
         "older": "unsupported_storage_version",
+        "incomplete_predecessor": "storage_evidence_unavailable",
         "capability": "unsupported_capability",
         "wheel": "changed",
     }[case]
@@ -1298,7 +1304,10 @@ def test_runtime_upgrade_repairs_profile_after_settled_failed_check(site, tmp_pa
         assert operator.observe_maintenance()['state']=='open'
 
 
-def test_qualified_upgrade_holds_admission_until_explicit_publication_release(site, tmp_path, monkeypatch):  # noqa: F811
+@pytest.mark.parametrize("corrupt_final_range", [False, True], ids=["verified", "corrupt-final-range"])
+def test_qualified_upgrade_holds_admission_until_explicit_publication_release(
+    site, tmp_path, monkeypatch, corrupt_final_range,  # noqa: F811
+):
     inventory, base, selection = site
     inventory = bind_environments(inventory)
     authored = read(inventory.hosts[0].config)
@@ -1313,11 +1322,32 @@ def test_qualified_upgrade_holds_admission_until_explicit_publication_release(si
     options: dict[str, Any] = dict(runtime_release=target, deployment=Path(setup["deployment"]),
                    connection=Path(setup["operator_connection"]), config=selection["config"],
                    hold_admission=True)
-    result = upgrades.upgrade(inventory, operation_id="publication", apply=True, **options)
-    deadline = time.monotonic() + 240
-    while not result.get("publication_ready") and result["outcome"] == "waiting" and time.monotonic() < deadline:
-        time.sleep(0.25)
-        result = upgrades.upgrade(inventory, operation_id="publication")
+    corrupted = []
+    if corrupt_final_range:
+        import base64
+        from loom.coordinator import CoordinatorClient
+        from loom.fleet.probes import STORAGE_BYTES
+
+        read_chunk = CoordinatorClient.read_artifact_chunk
+        def damage_last_range(client, locator, **options):
+            chunk = read_chunk(client, locator, **options)
+            if (chunk["outcome"] == "available" and Path(options["member"]).name == "values.bin"
+                    and options["offset"] + options["length"] == STORAGE_BYTES):
+                data = base64.b64decode(chunk["data"])
+                corrupted.append(options["offset"])
+                return {**chunk, "data": base64.b64encode(data[:-1] + bytes([data[-1] ^ 1])).decode()}
+            return chunk
+        monkeypatch.setattr(CoordinatorClient, "read_artifact_chunk", damage_last_range)
+    result = upgrades.upgrade(inventory, operation_id="publication", apply=True, follow=True,
+                              timeout_seconds=240, **options)
+    if corrupt_final_range:
+        assert corrupted and result["outcome"] == "blocked" and result["reason_code"] == "check_failed", result
+        failed = [check for check in result["check_observations"].values() if check["outcome"] == "failed"]
+        assert len(failed) == 1 and failed[0]["checks"]["storage"]["code"] == "publication_integrity_failed"
+        with CoordinatorOperatorClient.from_connection_file(setup["operator_connection"]) as operator:
+            assert operator.observe_maintenance()["state"] == "closed"
+        assert not (upgrades.sshops._directory(inventory, "publication") / "restoring.json").exists()
+        return
     assert result.get("publication_ready") and result["outcome"] == "waiting", result
     directory = upgrades.sshops._directory(inventory, "publication")
     assert read(directory / "intent.json")["kind"] == "runtime-upgrade-publication"
@@ -1402,3 +1432,83 @@ def test_preview_compares_accepted_coordinator_identity_after_input_disappears(s
     write(inventory.hosts[0].config, authored)
     with pytest.raises(QueueConflictError, match="authored policy differs"):
         upgrades.preview(inventory, **options)
+
+
+def test_admission_schema_probe_and_stopped_forward_replacement(tmp_path, monkeypatch):
+    from loom.fleet import _host, _upgrade_host
+    from loom.fleet.releases import verify_release
+    from loom.queue import LocalDaemon
+    from loom.queue._maintenance import hold_for_startup
+    from loom.queue.deployment import load_coordinator_service_config
+    from loom.queue.errors import QueueError
+    from loom.queue.local_daemon import _acquire_lock
+    from loom.timestamps import utc_timestamp
+    from tests.integration.fleet.test_releases import bundle as release_bundle
+    from tests.unit.loom.queue.test_deployment import _coordinator_config
+    from tests.unit.loom.queue.test_storage_upgrade import _schema_19
+
+    declaration = _coordinator_config(tmp_path)
+    write(declaration, {**read(declaration), "local_agent": None})
+    service = load_coordinator_service_config(declaration)
+    config = service.daemon
+    LocalDaemon.initialize_deployment(config)
+    daemon = LocalDaemon(config)
+    owner = daemon.start().coordinator_id
+    daemon.stop()
+    _schema_19(config.control_database)
+    descriptor = release_bundle(tmp_path / "candidate")
+    release = verify_release(descriptor)
+    admin = tmp_path / "admin"
+    installed = admin / "releases" / release["descriptor_sha256"] / "bundle"
+    shutil.copytree(descriptor.parent, installed)
+    old = {"descriptor_sha256": "source"}
+    request = {
+        "admin": str(admin), "name": "coordinator", "root": str(config.deployment_root),
+        "config": str(declaration), "expected_root_id": owner, "descriptor_name": descriptor.name,
+        "release": release, "source_release": old, "required_capabilities": list(upgrades.REQUIRED_CAPABILITIES),
+    }
+    _host.atomic(admin / "active.json", old)
+    _host.atomic(admin / "service.json", {"release": old})
+    before = config.control_database.read_bytes()
+    observation = _upgrade_host.inspect(request)["compatibility"]
+    assert observation["reason"] == "stopped_admission_storage_upgrade_required"
+    assert observation["value"]["current_storage_version"] == 19
+    assert observation["value"]["target_storage_version"] == 20
+    assert not observation["value"]["compatible"]
+    with pytest.raises(QueueError, match="unsupported_capability"):
+        _upgrade_host.inspect({**request, "required_capabilities": ["missing"]})
+    with pytest.raises(QueueError, match="closed maintenance"):
+        _upgrade_host.replace(request)
+    with _acquire_lock(config.coordinator_root), pytest.raises(QueueError, match="locked"):
+        _upgrade_host.replace(request)
+    assert config.control_database.read_bytes() == before
+    with sqlite3.connect(config.control_database) as conn:
+        hold_for_startup(conn, owner, applied_at=utc_timestamp())
+
+    # The v20 journal may have committed when binding publication loses its
+    # acknowledgement. Resume the same forward operation on the current root.
+    def interrupt(path, value):
+        if path == admin / "service.json":
+            raise OSError("binding publication interrupted")
+        return _host.atomic(path, value)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(_upgrade_host, "atomic", interrupt)
+        with pytest.raises(OSError, match="publication interrupted"):
+            _upgrade_host.replace(request)
+    assert read(admin / "active.json") == old
+    assert _upgrade_host.inspect(request)["compatibility"]["value"]["compatible"]
+
+    def start(req):
+        assert read(admin / "service.json") == req
+        assert read(admin / "active.json") == release
+        restarted = LocalDaemon(config)
+        try:
+            assert restarted.start().coordinator_id == owner
+        finally:
+            restarted.stop()
+        return {"ready": True}
+
+    monkeypatch.setattr(_host, "start", start)
+    assert _upgrade_host.replace(request)["outcome"] == "applied"
+    assert _upgrade_host.replace(request)["outcome"] == "unchanged"

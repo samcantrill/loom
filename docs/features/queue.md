@@ -106,10 +106,15 @@ for a GPU or a larger search bound. Exhaustion is not infeasibility, and Stage
 
 The coordinator can start the host-independent worker request for a managed-agent
 stage in the active READY window once its durable attempt and bound inputs are
-visible. One stage can occupy the preparation pool in anticipation of selection.
-Further work uses the current placement demand. Reservation rechecks the host,
-offer, capacity, cancellation and scheduling epoch. A restart rebuilds this
-work from the durable admission and attempt.
+visible. In READY order, one of two preparation workers can build an early
+request while the other serves placement demand. The coordinator retains up to
+four early requests. As each build finishes, its completion wakes the scheduler
+and frees the worker for the next READY stage, even if the completed request
+is still waiting for a slot. Selection promotes an early build in place. Both
+resource classes keep access to preparation capacity. Reservation rechecks the
+host, offer, capacity, cancellation and scheduling epoch. Slurm checks its offer
+and GPU budget before preparation. A restart rebuilds this work from the
+durable admission and attempt.
 
 Workers notify the scheduling thread of completed run observations and READY
 prerequisites. When a bulk IO slot opens, the scheduler revisits the oldest
@@ -125,6 +130,29 @@ boundaries are `preparation` (admission or authority observation),
 `host_eligibility`, `request_preparation` and `reservation`. The coordinator
 retains observations for the most recent 288 admission/stage keys and clears
 them as work settles. Process restart begins a new observation interval.
+
+`owners.scheduling_summaries` retains the most recent 288 finished attempt
+observations across runs. Each summary identifies the admission, stage work,
+attempt, outcome and committed assignment when available. The `wait_ns`
+map accumulates monotonic time in the last observed reason. Reasons include
+`assignment_slots_full` when fresh offers establish slot exhaustion,
+`run_parallel_limit`, `no_eligible_offer` and `capacity_unknown`.
+The coordinator computes `eligible_request_ready_ns` from observations of
+the same eligible offer overlapping a completed worker request. Expiry,
+replacement, disappearance and consumption bound the interval. This is a
+lower bound because the selector does not probe every possible placement for
+measurement. A missing observation is reported as unknown. These measurements
+use the normal scheduling decisions and the bounded diagnostic writer.
+
+For a single-stage workload, run
+`python tools/startup_timings.py CLIENT_LOG COORDINATOR_LOG AGENT_LOG` with
+all participating logs. The report joins submission, admission, assignment and
+worker events, reports nearest-rank p50, p95 and maximum times in seconds, and
+counts unlinked evidence. It distinguishes the preparation child from the
+first target entry. Same-process spans use the monotonic clock. Cross-process
+differences use UTC, with uncertainty unknown unless an independently measured
+per-clock error bound is supplied using `--clock-error-ms`. A stalled or full
+diagnostic writer may omit events. Its records carry cumulative omission counts.
 
 All dependency-ready unassigned `PENDING` attempts in the bounded window may be
 projected; they consume no `max_parallel_stages` slot. The coordinator
@@ -1435,9 +1463,33 @@ its revision and use a fresh handshake when epoch reconciliation is needed.
 
 ### Stopped storage upgrades
 
+On the coordinator host, stop the coordinator and run the following command
+with its native root and observed stable ID. The root contains `control.sqlite`.
+
+```bash
+loom queue storage-upgrade admissions --coordinator-root "$COORDINATOR_ROOT" --expected-coordinator-id "$COORDINATOR_ID"
+```
+
+The command upgrades a complete schema 19 coordinator to schema 20, including
+coordinators with an embedded agent or queued work. It requires the protected
+root and the exclusive owner lock. Complete any interrupted cohort upgrade first. SQLite
+commits the new column, retained creator evidence and version together. A retry
+on schema 20 returns the current attributed and unknown counts. Startup on
+schema 19 reports the required upgrade.
+
+New admissions record the verified client subject, or the verified parent
+operation's subject for managed targets and preparation children. A Unix socket
+records the authenticated peer as `uid:UID`. HTTPS records the enrolled principal.
+Replay, cancellation and retry preserve the creator. For schema 19 history,
+reserved preparation children (including earlier verification generations)
+can be attributed when their dispatch evidence identifies a single principal.
+A target admission receipt can be retained by a later observer of the same run.
+Such receipts and legacy direct submissions leave the creator unknown.
+
 `loom queue storage-upgrade inspect|apply|resume|restore --request upgrade.json`
-owns explicit same-root conversion. Ordinary startup never changes a populated
-database's journal mode or schema. The first supported cohort consists of pure
+owns the protected snapshot workflow for same-root conversion. A conversion
+starting with a complete schema 19 coordinator also upgrades its admission journal.
+Ordinary startup never changes a populated database's journal mode or schema. The first supported cohort consists of pure
 coordinators and outbound agents, including resident, Slurm-only and mixed
 agents. Coordinator bundles, arbitrary old control schemas, root relocation,
 removal of an explicit storage policy and migration from legacy run-local

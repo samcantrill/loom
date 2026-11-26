@@ -44,7 +44,10 @@ class LocalExecutor:
             raise LocalExecutorError("capture_stdout_stderr must be a bool")
         self.capture_stdout_stderr = capture_stdout_stderr
 
-    def execute(self, request: StageExecutionRequest) -> StageExecutionResult:
+    def execute(
+        self, request: StageExecutionRequest, *,
+        stage_invocation: contextlib.AbstractContextManager[None] | None = None,
+    ) -> StageExecutionResult:
         from loom.pipeline.execution.logs import write_text_file
         from loom.pipeline.execution.models import (
             EXECUTION_FAILURE_SCHEMA_VERSION,
@@ -113,13 +116,11 @@ class LocalExecutor:
                             f"native local execution cannot enforce {', '.join(selected)}; "
                             "omit these kinds from resource_policy.enforce or use a supporting execution owner"
                         )
-            if self.capture_stdout_stderr:
-                with (
-                    contextlib.redirect_stdout(stdout_buffer),
-                    contextlib.redirect_stderr(stderr_buffer),
-                ):
-                    raw_outputs = request.stage_object.run(context, request.inputs)
-            else:
+            with (
+                contextlib.redirect_stdout(stdout_buffer) if self.capture_stdout_stderr else contextlib.nullcontext(),
+                contextlib.redirect_stderr(stderr_buffer) if self.capture_stdout_stderr else contextlib.nullcontext(),
+                stage_invocation if stage_invocation is not None else contextlib.nullcontext(),
+            ):
                 raw_outputs = request.stage_object.run(context, request.inputs)
         except EarlyStopSignal as exc:
             finished_at = utc_timestamp()

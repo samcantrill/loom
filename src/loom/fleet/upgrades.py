@@ -7,6 +7,7 @@ capacity, settlement and policy decision comes from a fresh native observation.
 from __future__ import annotations
 
 from dataclasses import replace
+from functools import partial
 import fcntl
 import hashlib
 import json
@@ -20,11 +21,11 @@ from loom.deployment import load_deployment
 from loom.fleet.configuration import protected_directory, _environment_files
 from loom.fleet._host import atomic, read, digest
 from loom.fleet import ssh_operations as sshops
-from loom.fleet._upgrade_progress import Observation, ProgressSink, phase, reason
-from loom.fleet._check_workers import completed_steps
+from loom.fleet._upgrade_progress import Observation, ProgressSink, milestone, phase, reason
+from loom.fleet._check_workers import completed_steps, wait_for_checks
 from loom.fleet._timing import bind_directory, measure, recording, timed
 from loom.fleet.releases import verify_release
-from loom.fleet.self_tests import self_test, _check_input_locations
+from loom.fleet.self_tests import self_test, _check_input_locations, _wait_check_change
 from loom.fleet.probes import probe_configuration
 from loom.queue.agent_sessions import AgentControl, AgentControlKind
 from loom.queue.deployment import load_coordinator_connection_file
@@ -1063,6 +1064,26 @@ def _transferred_bytes(observation):
     return total
 
 
+def _check_observation(identity, result):
+    rows = {}
+    for name, row in result.get("checks", {}).items():
+        if row["outcome"] == "not_requested":
+            continue
+        observation = {key: row[key] for key in (
+            "operation_id", "outcome", "code", "transfer", "native_result_observed_at",
+            "collection_started_at", "artifact_verified_at",
+        ) if key in row}
+        native = row.get("native") or {}
+        admission = native.get("admission")
+        if row["outcome"] == "waiting":
+            if admission and admission["state"] not in {"SUCCEEDED", "FAILED", "CANCELLED", "BLOCKED"}:
+                observation["wait_for"] = {"admission_id": admission["admission_id"], "revision": admission["revision"]}
+            elif admission is None and (native.get("operation") or {}).get("state") in {"pending", "applying"}:
+                observation["wait_for"] = {"operation_id": native["operation_id"]}
+        rows[name] = observation
+    return {"operation_id": identity, "outcome": result["outcome"], "checks": rows}
+
+
 def _run_checks(operation):
     deadline = cast(float, sshops.observer_end(time.monotonic() + operation.intent["timeout_seconds"]))
     phase(operation, "checking")
@@ -1097,20 +1118,35 @@ def _run_checks(operation):
     inventory = operation.inventory
     records = {row[-1]["operation_id"]: row[-1] for row in attempts.values()}
 
-    def advance(identity, dispatch, step_end) -> dict[str, Any]:
+    following = getattr(getattr(operation, "observation", None), "follow", False)
+
+    def advance(identity, kind, step_end) -> dict[str, Any]:
         remaining = step_end - time.monotonic()
         if remaining <= 0:
             return {"operation_id": identity, "outcome": "waiting", "code": "deadline_exceeded"}
         return self_test(inventory, operation_id=identity, timeout_seconds=remaining,
-                         _dispatch_only=dispatch, _wait=False)
+                         _dispatch_only=(kind == "dispatch"), _wait=False, _collect=(kind == "transfer"))
 
     def steps(selected, dispatch, end):
-        # Give every check a short first observation. A returning storage
-        # check needs enough time even to reach its first declared range.
-        transfers = {key for key in selected if not dispatch and slots[key][2] == "storage"
-                     and records[key].get("observation_turns", 0) > 0}
-        return completed_steps(operation.directory, records, selected, dispatch=dispatch, transfers=transfers,
-                               deadline=end, advance=advance, started=save_attempts)
+        def next_step(key):
+            rows = (records[key].get("last_observation") or {}).get("checks", {}).values()
+            codes = {row.get("code") for row in rows}
+            if "publication_available" in codes:
+                return "transfer"
+            if "publication_verified" in codes:
+                return "observe"
+            return None
+
+        # Continuing a bounded transfer still reselects and rebinds its output.
+        # Follow starts with short observations to pick up detached receipts.
+        transfers = {key for key in selected if not dispatch and not following and (
+            next_step(key) == "transfer" or _transferred_bytes(records[key].get("last_observation") or {})
+        )}
+        return completed_steps(
+            operation.directory, records, selected, dispatch=dispatch, transfers=transfers,
+            deadline=end, advance=advance, started=save_attempts,
+            next_step=None if dispatch else next_step, detach_transfers=following,
+        )
 
     # Dispatch gets the first opportunity for every selected slot. Accepted and
     # rejected receipts belong to an immutable attempt, and survive detachment.
@@ -1146,7 +1182,13 @@ def _run_checks(operation):
     for identity in eligible:
         if not records[identity].get("passed_this_round"):
             waiting.add(identity)
+    # Recheck passed predecessors against current authorization and output bindings
+    # before restoration, including receipts written by older controllers.
+    retained = [key for key in eligible if key not in waiting]
     selected = [key for key in eligible if key in waiting]
+    if not waiting:
+        selected, retained = retained, []
+        waiting.update(selected)
     while selected and time.monotonic() < deadline:
         progressed = False
         for identity, future in steps(selected, False, deadline):
@@ -1156,14 +1198,7 @@ def _run_checks(operation):
                 errors.append(exc)
                 continue
             atomic(operation.directory / (identity + "-result.json"), result)
-            observation = {
-                "operation_id": identity, "outcome": result["outcome"],
-                "checks": {
-                    name: {key: row.get(key) for key in ("operation_id", "outcome", "code", "transfer") if key in row}
-                    for name, row in result.get("checks", {}).items()
-                    if row["outcome"] != "not_requested"
-                },
-            }
+            observation = _check_observation(identity, result)
             previous = records[identity].get("last_observation") or {}
             if result["outcome"] == "waiting" and _transferred_bytes(observation) > _transferred_bytes(previous):
                 progressed = True
@@ -1171,6 +1206,13 @@ def _run_checks(operation):
             operation.check_observations[identity] = observation
             if result["outcome"] == "passed":
                 records[identity]["passed_this_round"] = True
+            else:
+                records[identity].pop("passed_this_round", None)
+            for field, event in (("native_result_observed_at", "last_native_check_acknowledged"),
+                                 ("artifact_verified_at", "last_artifact_verified")):
+                if all(any(row.get(field) for row in operation.check_observations[key].get("checks", {}).values())
+                       for key in slots):
+                    milestone(operation, event)
             save_attempts()
             if result["outcome"] in {"failed", "unsupported"}:
                 failures.append((identity, result["outcome"]))
@@ -1178,7 +1220,11 @@ def _run_checks(operation):
                 waiting.discard(identity)
         # Every eligible check received a bounded opportunity. A transfer
         # with new retained bytes can use the same caller's remaining budget.
-        if not progressed or failures or errors:
+        if not waiting and retained and not failures and not errors:
+            selected, retained = retained, []
+            waiting.update(selected)
+            continue
+        if not progressed or failures or errors or following:
             break
         selected = [key for key in eligible if key in waiting]
     if failures:
@@ -1474,6 +1520,7 @@ def _continue(operation):
         (name, "upgrade-replace", replacement_arguments(name))
         for name in operation.intent["agents"]
     ])
+    milestone(operation, "services_replaced")
     _capable(operation.operator)
     if not (operation.receipts / "open" / "intent.json").exists():
         operation.gate()
@@ -1535,7 +1582,7 @@ def upgrade(
     check_execution=None,
     env_file=None,
     apply=False,
-    timeout_seconds=120,
+    timeout_seconds: float = 120,
     action="resume",
     failed_check=None,
     new_check=None,
@@ -1545,6 +1592,7 @@ def upgrade(
     defer_reason=None,
     repair_agent_id=None,
     progress: ProgressSink | None = None,
+    follow: bool = False,
 ):
     """Preview/apply or continue an immutable upgrade without cancelling work.
 
@@ -1552,18 +1600,45 @@ def upgrade(
     reporting thread. Durations are local monotonic seconds for this invocation;
     observed admission closure is partial and is not service downtime. Callback
     failures/backpressure lose diagnostics without changing native execution.
-    Preview and actions other than apply/resume/abort/retry-check/retry-control
+    Following an apply/resume advances the same operation until completion, an
+    operator decision, or the overall timeout. The writer is available between
+    advances. Preview and actions other than apply/resume/abort/retry-check/retry-control
     do not support progress. See docs/fleet.md for the diagnostic stream contract.
     """
     options = locals().copy()
-    del options["progress"]
+    del options["progress"], options["follow"]
+    if follow and (operation_id is None or action != "resume"):
+        raise QueueConfigError("follow requires upgrade apply or resume")
     if progress is not None and ((not apply and operation_id is None) or
                                  (not apply and action not in {"resume", "abort", "retry-check", "retry-control"})):
         raise QueueConfigError("progress requires an applied or retained upgrade")
     observation = Observation(progress, "apply" if apply else action)
+    observation.follow = follow
     try:
         with sshops.observer_budget(timeout_seconds), recording(), measure("upgrade_continuation") as timing:
-            result = _upgrade(**options, observation=observation)
+            cursor = 0
+            deadline = cast(float, sshops.observer_end())
+            while True:
+                observation.reason = "none"
+                result = _upgrade(**options, observation=observation)
+                if (not follow or result.get("outcome") != "waiting" or result.get("publication_ready")
+                        or time.monotonic() >= deadline):
+                    break
+                # _upgrade has closed all native handles and released the writer.
+                pending = [(identity, row) for identity, check in result.get("check_observations", {}).items()
+                           for row in check.get("checks", {}).values() if row.get("outcome") == "waiting"]
+                if any(row.get("code") in {"unauthorized", "invalid_request", "conflict"} for _, row in pending):
+                    break
+                targets = [(identity, row["wait_for"]) for identity, row in pending if row.get("wait_for")]
+                if targets:
+                    cursor %= len(targets)
+                cursor += wait_for_checks(
+                    sshops._directory(inventory, operation_id), targets[cursor:] + targets[:cursor],
+                    min(deadline, time.monotonic() + 2.0), partial(_wait_check_change, inventory),
+                )
+                if time.monotonic() >= deadline:
+                    break
+                options = {"inventory": inventory, "operation_id": operation_id, "timeout_seconds": timeout_seconds}
             if result.get("outcome") == "waiting":
                 timing["outcome"] = "waiting"
             elif result.get("outcome") in {"blocked", "failed"}:
@@ -1596,7 +1671,7 @@ def _upgrade(
     check_execution=None,
     env_file=None,
     apply=False,
-    timeout_seconds=120,
+    timeout_seconds: float = 120,
     action="resume",
     failed_check=None,
     new_check=None,
@@ -1606,7 +1681,7 @@ def _upgrade(
     defer_reason=None,
     repair_agent_id=None,
     observation,
-):
+) -> dict[str, Any]:
     """Preview/apply or continue one immutable service upgrade; never cancel work."""
     if apply:
         observation.kind = "publication-budget-increase" if increase_publication_budgets else "container-policy-addition" if add_container_policies else "configuration-retirement" if retire_configuration else ("workload-upgrade" if workload_profile is not None else "runtime-upgrade")
@@ -1866,7 +1941,7 @@ def _upgrade(
         result["check_observations"] = getattr(operation, "check_observations", {})
         result["reason_code"] = observation.reason
         atomic(directory / "result.json", result)
-        return sshops.operation_status(inventory, operation_id)
+        return cast(dict[str, Any], sshops.operation_status(inventory, operation_id))
 
 
 def _control_successors(operation, key):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -43,7 +44,7 @@ def _principal(intent):
 
 
 def verify_publication(
-    client, directory, check, intent, selected, deadline
+    client, directory, check, intent, selected, deadline, *, collect=True, native_result_observed_at=None
 ) -> dict[str, Any]:
     """Return verified report facts, or a pending/failed transfer disposition.
 
@@ -73,14 +74,22 @@ def verify_publication(
                 shutil.rmtree(scratch)
             with measure("artifact_verification") as timing:
                 timing["outcome"] = "reused"
-            return previous["facts"]
+            facts = previous["facts"]
+            if "artifact_verified_at" not in facts:
+                # Earlier releases retained the binding and proof in this same
+                # atomic owner-only receipt, without an explicit time field.
+                facts["artifact_verified_at"] = datetime.fromtimestamp(receipt.stat().st_mtime, timezone.utc).isoformat()
+            return facts
 
+    if not collect:
+        return {"outcome": "waiting", "code": "publication_available"}
     _private_scratch(scratch)
     marker = scratch / "binding.json"
     if not marker.is_file() or marker.read_text() != binding:
         shutil.rmtree(scratch)
         _private_scratch(scratch)
         marker.write_text(binding)
+    started = datetime.fromtimestamp(marker.stat().st_mtime, timezone.utc).isoformat()
     with measure("artifact_download"):
         batch = fetch_artifacts(
             client,
@@ -101,6 +110,7 @@ def verify_publication(
             else "waiting",
             "code": "publication_" + fetched["outcome"],
             "transfer": fetched.get("transfer", {}),
+            "collection_started_at": started,
         }
 
     path = Path(fetched["primary_path"])
@@ -119,6 +129,9 @@ def verify_publication(
             return {"outcome": "failed", "code": "storage_result_mismatch"}
     if _principal(intent) != principal:
         return {"outcome": "waiting", "code": "check_credential_changed"}
+    facts.update(collection_started_at=started, artifact_verified_at=datetime.now(timezone.utc).isoformat())
+    if native_result_observed_at is not None:
+        facts["native_result_observed_at"] = native_result_observed_at
     atomic(receipt, {"binding": binding, "facts": facts})
     shutil.rmtree(scratch)
     return facts

@@ -425,8 +425,8 @@ def retain_submitted_image(
 ) -> None:
     """Pin the published image directory before dispatch, without reading SIF bytes.
 
-    The supervisor verifies bytes at each new physical launch. Retention checks
-    only the protected location and publication shape, outside acceptance SQL.
+    Each new physical launch requires verified bytes for its selected source.
+    Retention checks only location and publication shape, outside acceptance SQL.
     A crash after the idempotent pin leaves retained storage, never unpinned work.
     """
     from loom.pipeline.cleanup.preparation_pins import retain_preparation_path

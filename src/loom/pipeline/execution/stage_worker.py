@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from contextlib import AbstractContextManager
 from dataclasses import replace
 from pathlib import Path
 import traceback
@@ -64,6 +65,7 @@ def execute_resident_stage_worker_request(
     location_resolver: Callable[[object], object] | None = None,
     artifact_root: Path | None = None,
     shared_roots: Mapping[str, PlainData] | None = None,
+    stage_invocation: AbstractContextManager[None] | None = None,
 ) -> StageWorkerResult:
     """Execute one path-free resident request in an agent-owned workspace.
 
@@ -73,7 +75,8 @@ def execute_resident_stage_worker_request(
     An optional trusted location resolver materializes typed config/factory
     locations without changing the retained semantic fingerprint. ``artifact_root``
     optionally selects the protected assignment-owned shared output directory;
-    mutable scratch and execution records remain below ``workspace_root``.
+    mutable scratch and execution records remain below ``workspace_root``. A
+    worker can observe the call to project code with ``stage_invocation``.
     """
 
     if not isinstance(worker_request, StageWorkerRequest):
@@ -154,7 +157,8 @@ def execute_resident_stage_worker_request(
                     worker_request,
                     registry=None,
                 ),
-            )
+            ),
+            stage_invocation=stage_invocation,
         )
         if execution_result.status is StageStatus.SUCCEEDED:
             execution_result = replace(

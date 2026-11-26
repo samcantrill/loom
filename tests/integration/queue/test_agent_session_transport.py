@@ -889,7 +889,7 @@ def test_loopback_exposes_client_and_operator_views_only_to_configured_roles(
         handshake = facade.describe_connection()
         assert handshake.transport == "https"
         assert handshake.capabilities == (
-            "authenticated-application-v1", "daemon-control-v1",
+            "authenticated-application-v1", "daemon-control-v1", "agent-offer-capacity-v1", "queue-list-v1",
             "operator-observations-v1", "conditional-agent-control-v1",
             "quiescent-profile-promotion-v2", "quiescent-source-promotion-v1",
             "quiescent-configuration-retirement-v1", "quiescent-coordinator-retirement-v1",

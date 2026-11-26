@@ -23,7 +23,7 @@ from loom.fleet._host import (
     role,
 )
 from loom.queue.errors import QueueConflictError, QueueError
-from loom.queue.operations import probe_upgrade_compatibility
+from loom.queue.operations import ADMISSION_STORAGE_UPGRADE_REQUIRED, probe_upgrade_compatibility
 from loom.queue.service_upgrade import inspect_service_settlement
 from loom.fleet._timing import measure, timed
 
@@ -54,7 +54,10 @@ def _inspect(request, *, native_owner=None):
     facts = compatibility.to_dict()
     if (
         compatibility.availability != "available"
-        or not compatibility.value["compatible"]
+        or not compatibility.value["compatible"] and not (
+            role(request) == "coordinator" and request.get("retirement_declaration") is None
+            and compatibility.reason == ADMISSION_STORAGE_UPGRADE_REQUIRED
+        )
     ):
         raise QueueConflictError(
             "candidate compatibility unavailable: " + str(compatibility.reason)
@@ -226,7 +229,8 @@ def replace(request):
         }
     if owner(request)["value"]["ownership"] == "live":
         raise QueueConflictError("service must stop before replacement")
-    _, service = _inspect(request)
+    qualification, service = _inspect(request)
+    migrate_admissions = qualification["compatibility"].get("reason") == ADMISSION_STORAGE_UPGRADE_REQUIRED
     retirement_control = None
     if request.get("retirement_control") is not None:
         from loom.queue.agent_sessions import AgentControl
@@ -238,7 +242,7 @@ def replace(request):
     with service_replacement_guard(
         service, request["expected_root_id"],
         recovery_results=request.get("recovery_results"),
-        retirement_control=retirement_control,
+        retirement_control=retirement_control, allow_admission_upgrade=migrate_admissions,
     ):
         binding = admin / "service.json"
         archive = (
@@ -252,6 +256,9 @@ def replace(request):
                 raise QueueConflictError("service binding changed during replacement")
         elif binding.exists():
             keep(archive, binding.read_bytes())
+        if migrate_admissions:
+            from loom.queue.storage_upgrade import _upgrade_stopped_admissions
+            _upgrade_stopped_admissions(native_root(request), fleet_replacement=True)
         atomic(binding, request)
         if request.get("service_manager", "tmux") == "systemd-user":
             kinds = (

@@ -856,18 +856,34 @@ budget for protected input validation and its native exchange. The controller
 attempts native dispatch before probing a nonexclusive GPU over SSH. A storage transfer reports retained byte counts and `publication_deadline_exceeded`
 when its observation allowance expires. An earlier timeout of the range exchange
 can retry the same offset within that allowance. An exhausted transport attempt
-or refused capacity has its own pending code. Every check receives a short initial
-observation. A returning storage check can then use the remaining caller budget.
-When short reads and transfers are both waiting, one worker remains available
-for short reads. Retained turn counts rotate the next observer toward checks
-that have had fewer opportunities. Concurrent
-checks in the same controller share at most four range workers per coordinator.
-Each check retains its own authorization, scratch ranges and final digest. A round
-with no new transfer bytes returns its pending receipts. A partly
+or refused capacity has its own pending code. Short status reads select the
+current output through the authenticated coordinator. A new publication then
+enters a collection worker. At most two of the three controller workers can
+collect artifacts, even when a third download is ready before the next short
+read. Range reads share at most four workers per coordinator. Each check's
+exclusive receipt owner binds its partial ranges and verification to the exact
+attempt, coordinator, credential, selected locator and artifact. After
+collection, a short observation checks this binding and current native release
+and agent evidence. Earlier releases' verification receipts remain usable
+under the same binding. Retained turn counts give pending checks fair turns.
+A bounded invocation returns its pending receipts when a round makes no more
+transfer progress. A partly
 completed observation round retains its passed checks. A sealed GPU capability
 receipt remains visible throughout download. Before restoration the controller
 confirms the live profile and exact request for each retained GPU result, current
 native settlement, and the existing host identity and policy checks.
+
+Use `--follow` on `fleet upgrade --apply` or `fleet operation resume` to keep
+one observer attached to the same maintenance ID through ordinary waits. The
+invocation's `--timeout` covers the entire follow. Between advances the fleet
+writer lock is free. The observer rotates across native operation waits during
+preparation and admission revision waits once targets exist. It revisits
+terminal admissions, publication, assignment release and agent freshness at
+most two seconds after an idle observation turn. A change or finished transfer
+can wake it sooner. Interrupting or timing out leaves exact dispatch IDs and
+verified ranges available to a later resume. A blocked check, required repair,
+or explicit publication hold returns control to the operator.
+
 Standalone
 self-tests use their caller's deadline for native requests and can return the
 last known check state when another observer holds the receipt lock. A failed check can therefore be reported while another
@@ -1049,10 +1065,15 @@ reapplying policy over later controls. Completed operations report completion.
 
 ### Current storage and source capabilities
 
-Runtime replacement requires coordinator schema 19, agent schema 12 and complete
-current tables; the supervisor requires schema 6. The candidate refuses old or
-incomplete roots before schema repair or role-lock creation. There is no offline
-schema upgrader, installation adoption or manual intermediate-version bridge.
+The candidate starts coordinators on schema 20, agents on schema 12 and supervisors
+on schema 6. It refuses unsupported or incomplete roots before role-lock creation. For a complete schema 19 coordinator,
+the candidate reports the required admission upgrade during read-only qualification.
+Standard forward replacement upgrades the journal under the stopped coordinator's
+native lock, after verifying settlement, the closed maintenance gate and the
+deployment identity. If publication is interrupted after the database commit,
+resume the same Fleet operation. Configuration-retirement upgrades require
+current roots. The [stopped admission upgrade](features/queue.md#stopped-storage-upgrades)
+can also run independently.
 The source must already supply the required maintenance and conditional-control
 capabilities. Unsupported installations follow the fresh-root procedure above.
 
@@ -1227,7 +1248,7 @@ this flag. Activation is explicit in both text and JSON final-output modes.
 loom fleet upgrade --fleet lab --runtime-release /PRIVATE/release/runtime.json \
   --apply --operation-id maintenance-a --progress json --format json \
   > result.json 2> progress.jsonl
-loom fleet operation resume maintenance-a --fleet lab --progress json --format json
+loom fleet operation resume maintenance-a --fleet lab --follow --timeout 900 --progress json --format json
 loom fleet operation retry-check maintenance-a --fleet lab \
   --failed-check failed-check-a --operation-id replacement-check-a --progress json
 ```
@@ -1235,7 +1256,7 @@ loom fleet operation retry-check maintenance-a --fleet lab \
 Stdout and exit codes keep their existing meaning: one final JSON object with
 `--format json`; complete/aborted/preview exit 0, pending/running/waiting exit 2,
 and blocked outcomes exit 1. Early validation errors retain native error behavior.
-Progress is best-effort JSONL on stderr, with phase changes and at most one
+Progress is best-effort JSONL on stderr, with observed milestones, phase changes and at most one
 heartbeat every five seconds. A blocking native/SSH call keeps its phase while
 elapsed time advances. Fast phases may coalesce; this is not an audit history.
 Redirecting stderr is optional and Loom creates no progress artifact itself.
@@ -1245,7 +1266,7 @@ Every diagnostic record has exactly these fields:
 | Field | Values |
 | --- | --- |
 | `schema_version` | `1` |
-| `event` | `phase`, `heartbeat`, `result` |
+| `event` | `phase`, `heartbeat`, `result`, `services_replaced`, `last_native_check_acknowledged`, `last_artifact_verified`, `admission_reopened` |
 | `kind` | `runtime-upgrade`, `workload-upgrade`, or `unknown` before binding |
 | `action` | `apply`, `resume`, `abort`, `retry-check`, `retry-control` |
 | `phase` | `preparing`, `closing_admission`, `settling`, `draining`, `replacing`, `checking`, `restoring`, `reopening_admission`, `recovering`, `finished` |
@@ -1255,6 +1276,18 @@ Every diagnostic record has exactly these fields:
 | `phase_elapsed_seconds` | Seconds since the latest phase change |
 | `preparation_seconds` | Accumulated initial validation and pre-close candidate preparation seconds |
 | `admission_closed_seconds` | Observed closed interval seconds, or `null` without a matching live observation |
+
+The four milestone events carry the invocation-local elapsed time when Fleet
+observed each boundary. A runtime replacement reports after all selected
+services have replacement receipts. The check milestones cover selected native
+attempts. A borrowed gate stays closed and has no reopening milestone. Each
+observed milestone also appears in the operation's action timings. Per-check
+receipts associate the attempt ID with UTC observations of the acknowledged
+native result, the start of collection under the current binding, and retention
+of its verified result. A check resumed from an older verified receipt uses
+that receipt's timestamp when the original verifier omitted an explicit time.
+These are controller observations. Native acknowledgement can precede the
+observer's first read, particularly when it attaches after a gap.
 
 Records are limited to 1 KiB including newline. Durations are finite and
 nonnegative. No IDs, host labels, paths, credentials, arguments, native replies,
@@ -1285,7 +1318,7 @@ allowlisted snapshot dictionaries on an invocation-local reporting thread.
 Callbacks are diagnostic outputs, never policy inputs. A slow/broken sink can
 lose records, including the terminal record, but cannot delay native execution
 indefinitely or replace its result/exception. There is one latest snapshot and
-no event backlog. A healthy reporter stops on completion, error or interruption;
+at most four pending milestone records. A healthy reporter stops on completion, error or interruption;
 a callback blocked indefinitely may leave a daemon thread until process exit.
 Interruption preserves native recovery; resume uses the same retained operation
 and fresh local clocks. No additional observation RPC or SSH child is started

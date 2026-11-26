@@ -108,6 +108,7 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     upgrade.add_argument("--defer-checks-for", dest="defer_agents", action="append")
     upgrade.add_argument("--qualification-reason", dest="defer_reason")
     upgrade.add_argument("--format", dest="output_format", choices=("text", "json"), default="text")
+    upgrade.add_argument("--follow", action="store_true", help="continue ordinary upgrade waits until the timeout")
     upgrade.add_argument("--progress", choices=("none", "json"), default="none")
     upgrade.set_defaults(handler=handle)
     operation = commands.add_parser(
@@ -121,6 +122,7 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
         if action in {"resume", "abort", "retry-check", "retry-control"}:
             item.add_argument("--progress", choices=("none", "json"), default="none")
         if action == "resume":
+            item.add_argument("--follow", action="store_true", help="follow a retained maintenance upgrade")
             item.add_argument("--timeout", type=float, default=120, help="continuation observation budget in seconds")
         if action == "defer-checks":
             item.add_argument("--agent-id", dest="defer_agents", action="append", required=True)
@@ -247,6 +249,9 @@ def handle(namespace: argparse.Namespace) -> int:
 
     command = namespace.fleet_command
     progress = None
+    follow = getattr(namespace, "follow", False)
+    if follow and command == "upgrade" and not namespace.apply:
+        raise ValueError("follow requires --apply")
     if getattr(namespace, "progress", "none") == "json":
         if command == "upgrade" and not namespace.apply:
             raise ValueError("progress requires --apply")
@@ -291,7 +296,7 @@ def handle(namespace: argparse.Namespace) -> int:
                 from loom.fleet.upgrades import preview
                 result = preview(inventory, hold_admission=namespace.hold_admission, maintenance_id=namespace.maintenance_id, runtime_release=namespace.runtime_release, recover_retained_results=namespace.recover_retained_results, workload_profile=namespace.workload_profile, retire_configuration=namespace.retire_configuration, add_container_policies=namespace.add_container_policies, increase_publication_budgets=namespace.increase_publication_budgets, image=namespace.image, workload_inventory=namespace.workload_inventory, deployment=namespace.deployment, connection=namespace.connection, config=namespace.config, check_execution=_execution(namespace.check_execution), env_file=namespace.env_file)
             else:
-                result = upgrade(inventory, operation_id=namespace.operation_id, runtime_release=namespace.runtime_release, recover_retained_results=namespace.recover_retained_results, workload_profile=namespace.workload_profile, retire_configuration=namespace.retire_configuration, add_container_policies=namespace.add_container_policies, increase_publication_budgets=namespace.increase_publication_budgets, image=namespace.image, workload_inventory=namespace.workload_inventory, deployment=namespace.deployment, connection=namespace.connection, config=namespace.config, check_execution=_execution(namespace.check_execution), env_file=namespace.env_file, timeout_seconds=namespace.timeout, apply=True, hold_admission=namespace.hold_admission, maintenance_id=namespace.maintenance_id, defer_agents=namespace.defer_agents, defer_reason=namespace.defer_reason, progress=progress)
+                result = upgrade(inventory, operation_id=namespace.operation_id, runtime_release=namespace.runtime_release, recover_retained_results=namespace.recover_retained_results, workload_profile=namespace.workload_profile, retire_configuration=namespace.retire_configuration, add_container_policies=namespace.add_container_policies, increase_publication_budgets=namespace.increase_publication_budgets, image=namespace.image, workload_inventory=namespace.workload_inventory, deployment=namespace.deployment, connection=namespace.connection, config=namespace.config, check_execution=_execution(namespace.check_execution), env_file=namespace.env_file, timeout_seconds=namespace.timeout, apply=True, hold_admission=namespace.hold_admission, maintenance_id=namespace.maintenance_id, defer_agents=namespace.defer_agents, defer_reason=namespace.defer_reason, progress=progress, follow=follow)
         elif command in {"apply", "operation"}:
             from loom.fleet.ssh_operations import apply, operation_status
 
@@ -305,8 +310,10 @@ def handle(namespace: argparse.Namespace) -> int:
                     result = operation_status(inventory, namespace.operation_id)
                 elif intent.get("kind") in {"runtime-upgrade", "workload-upgrade", "runtime-upgrade-publication", "workload-upgrade-publication", "configuration-retirement", "configuration-retirement-publication", "container-policy-addition", "container-policy-addition-publication", "publication-budget-increase", "publication-budget-increase-publication"}:
                     from loom.fleet.upgrades import upgrade
-                    result = upgrade(inventory, operation_id=namespace.operation_id, timeout_seconds=getattr(namespace, "timeout", 120), action=namespace.operation_command, runtime_release=getattr(namespace, "runtime_release", None), deployment=getattr(namespace, "deployment", None), failed_check=getattr(namespace, "failed_check", None), new_check=getattr(namespace, "new_check", None), failed_control=getattr(namespace, "failed_control", None), new_control=getattr(namespace, "new_control", None), workload_profile=getattr(namespace, "workload_profile", None), image=getattr(namespace, "image", None), workload_inventory=getattr(namespace, "workload_inventory", None), defer_agents=getattr(namespace, "defer_agents", None), defer_reason=getattr(namespace, "defer_reason", None), repair_agent_id=getattr(namespace, "repair_agent_id", None), progress=progress)
+                    result = upgrade(inventory, operation_id=namespace.operation_id, timeout_seconds=getattr(namespace, "timeout", 120), action=namespace.operation_command, runtime_release=getattr(namespace, "runtime_release", None), deployment=getattr(namespace, "deployment", None), failed_check=getattr(namespace, "failed_check", None), new_check=getattr(namespace, "new_check", None), failed_control=getattr(namespace, "failed_control", None), new_control=getattr(namespace, "new_control", None), workload_profile=getattr(namespace, "workload_profile", None), image=getattr(namespace, "image", None), workload_inventory=getattr(namespace, "workload_inventory", None), defer_agents=getattr(namespace, "defer_agents", None), defer_reason=getattr(namespace, "defer_reason", None), repair_agent_id=getattr(namespace, "repair_agent_id", None), progress=progress, follow=follow)
                 elif namespace.operation_command == "resume":
+                    if follow:
+                        raise ValueError("follow requires a maintenance upgrade")
                     result = apply(inventory, operation_id=namespace.operation_id, resume=True, timeout_seconds=namespace.timeout)
                 else:
                     raise ValueError("abort/retry requires a maintenance upgrade")
@@ -395,6 +402,8 @@ def handle(namespace: argparse.Namespace) -> int:
     assert result is not None, "Fleet command returned no result"
     if namespace.output_format == "json":
         print(json.dumps(result, sort_keys=True))
+    elif command in {"apply", "operation", "upgrade"} and result["outcome"] != "preview":
+        print(_operation_receipt(result))
     else:
         print(
             f"Fleet {result.get('fleet', getattr(namespace, 'name', 'selection'))}: {result['outcome']}"
@@ -468,3 +477,27 @@ def handle(namespace: argparse.Namespace) -> int:
     if command == "preflight":
         return 2 if result["outcome"] == "failed" else 3
     return 0
+
+
+def _operation_receipt(result):
+    from ._terminal import cell, fields, table
+
+    lines = [f"Fleet {cell(result.get('fleet', 'selection'))}: {cell(result['outcome'])}"]
+    lines.extend(fields(result, ("operation_id", "reason", "qualification", "deployment", "operator_connection")))
+    release = result.get("release")
+    if isinstance(release, dict) and release.get("release_id"):
+        lines.append(f"Release: {cell(release['release_id'])}")
+    rows = []
+    for name, observed in result.get("checks", {}).items():
+        attempts = observed if isinstance(observed, list) else [observed]
+        for check in attempts:
+            if isinstance(check, dict) and ("outcome" in check or "operation_id" in check):
+                rows.append((name, check.get("outcome", "unknown"), check.get("code"), check.get("operation_id")))
+    if rows:
+        lines.append(table(("CHECK", "OUTCOME", "REASON", "OPERATION ID"), rows, wide=True, empty=""))
+    for step, receipt in result.get("steps", {}).items():
+        if receipt.get("native_outcome") == "unknown":
+            lines.append(f"Step {cell(step)}: unknown ({cell(receipt.get('reason'))})")
+    if result.get("next"):
+        lines.append(cell(result["next"]))
+    return "\n".join(lines)

@@ -29,6 +29,7 @@ from ._managed_local import (
     _start_failed_worker_result, _worker_environment,
 )
 from .agent_sessions import AgentSession
+from ._attempt_timing import assignment_milestone
 from ._phase_timing import PhaseTimings
 from ._remote_stage_execution import (
     _ResidentAssignmentBundle, _ResidentAssignmentWorkspace,
@@ -1027,6 +1028,7 @@ def _complete_remote_result_and_release(
                     session.session_id, request.assignment_id, fence=fence
                 ),
             ))
+        assignment_milestone("terminal_acknowledged", assignment)
     finally:
         workspace.record_timing(timings.payload())
     # The terminal assignment still accepts events before provider release.

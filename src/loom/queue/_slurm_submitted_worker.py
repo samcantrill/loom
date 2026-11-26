@@ -204,7 +204,9 @@ def main(argv: list[str] | None = None) -> int:
         os.environ[PREPARATION_INPUT_CONTEXT_ENV] = json.dumps(
             preparation, sort_keys=True, separators=(",", ":")
         )
+    from ._attempt_timing import stage_invocation
     result = execute_resident_stage_worker_request(
+        stage_invocation=stage_invocation(request, timings),
         worker_request=workspace.worker_request(shared_roots=roots),
         workspace_root=workspace.root,
         process_containment_owner=ProcessContainmentOwner.OUTER_BOUNDARY,

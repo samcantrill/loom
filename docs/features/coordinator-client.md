@@ -469,3 +469,26 @@ resumed from the reservation, including after the filesystem marker is removed.
 A failed cleanup reports zero reclaimed bytes and leaves scientific status
 unchanged. The preview reports the reservation state and operation ID after
 release begins; a completed request returns its existing receipt on replay.
+
+## Submission and stage timing
+
+The client's bounded `loom.phase_timings` diagnostics record `submission_sent`
+after negotiation, immediately before the native submission exchange.
+`submission_acknowledged` follows successful decoding of the durable reply.
+A lost reply can leave a send with no acknowledgement. A successful replay
+records its own send and acknowledgement under the original identity.
+
+For managed work, `assignment_received` identifies the delivered assignment.
+`supervisor_launch` records creation of the supervised root. In
+`executor_metadata.native_timings.spans`, `stage_run_entered` and
+`stage_run_returned` bracket the project's actual call, including a preparation
+child's call. A raised exception produces `stage_run_raised`. A construction
+failure or cancellation before invocation produces no entry. Workers return
+these guest-clock observations with their existing result. An abrupt worker
+loss can leave the invocation unobserved. `terminal_acknowledged` identifies
+acknowledgement of the result and `assignment_released` follows final release.
+
+Match observations by operation, stage-work, attempt and assignment identifiers.
+Use monotonic nanoseconds within a single process clock and UTC across clocks,
+reporting the measured clock uncertainty with cross-host differences. Diagnostic
+spans are best effort and bounded. A missing boundary leaves its interval unknown.

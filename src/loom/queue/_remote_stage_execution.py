@@ -2409,6 +2409,10 @@ class _ResidentAssignmentWorkspace:
                 (encoded,),
             )
 
+        if row["result_json"] is None:
+            from ._attempt_timing import report_worker_invocation
+            report_worker_invocation(result.executor_metadata, request.assignment_id)
+
     def persist_cancelled_before_start(self, result: StageWorkerResult) -> None:
         """Persist a cancelled outcome after the owner proves no launch occurred."""
 

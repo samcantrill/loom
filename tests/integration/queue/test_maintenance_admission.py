@@ -611,20 +611,22 @@ def test_submit_retry_refusal_and_already_accepted_retry_continuation(
     daemon = LocalDaemon(selected.daemon)
     daemon.start()
     try:
+        creator = daemon.client_view(LocalDaemonPrincipal("creator", LocalDaemonRole.CLIENT))
+        observer = daemon.client_view(LocalDaemonPrincipal("second-client", LocalDaemonRole.CLIENT))
         request = LocalDaemonAdmissionRequest("retry-queue", prepared.run_uri)
         change(daemon, "close")
         with pytest.raises(MaintenanceInProgress):
-            daemon._submit(request)
+            creator.submit(request)
         assert counts(daemon) == (0, 0)
         change(daemon, "open")
-        daemon._submit(request)
+        creator.submit(request)
         failed = daemon._wait("retry-queue", timeout_seconds=25)
         assert failed.state.value == "FAILED"
         change(daemon, "close", owner="maint-2")
-        assert daemon._submit(request) == failed
+        assert observer.submit(request) == failed
         retry = replace(request, retry_failed_revision=failed.revision)
         with pytest.raises(MaintenanceInProgress):
-            daemon._submit(retry)
+            observer.submit(retry)
         with daemon._connection() as conn:
             assert (
                 conn.execute(
@@ -642,10 +644,14 @@ def test_submit_retry_refusal_and_already_accepted_retry_continuation(
         monkeypatch.setattr(
             _coordinator_admission, "_apply_admission_retry", close_after_acceptance
         )
-        daemon._submit(retry)
+        observer.submit(retry)
         succeeded = daemon._wait("retry-queue", timeout_seconds=25)
         assert succeeded.state.value == "SUCCEEDED", succeeded
-        assert daemon._submit(retry) == succeeded
+        assert observer.submit(retry) == succeeded
+        with daemon._connection() as conn:
+            assert conn.execute(
+                "SELECT admitted_by FROM managed_admissions WHERE admission_id=?", (succeeded.admission_id,),
+            ).fetchone()[0] == "creator"
     finally:
         daemon.stop()
 

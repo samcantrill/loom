@@ -115,7 +115,7 @@ def test_upgrade_gpu_qualification_includes_native_inventory(
     def prepare(operation, name, check, identity, **kw):
         return {"operation_id": identity, "authorization": {"check": check}}
 
-    def self_test(inventory, *, operation_id, timeout_seconds, _dispatch_only, _wait):
+    def self_test(inventory, *, operation_id, timeout_seconds, _dispatch_only, _wait, _collect):
         if not _dispatch_only:
             observed.append(operation_id)
         return {"outcome": "passed"}
@@ -165,7 +165,7 @@ def test_explicit_deferred_host_retains_checks_and_native_settlement(tmp_path, c
     monkeypatch.setattr(upgrades, "_prepare_attempt", lambda operation, name, check, identity, **kw: {
         "operation_id": identity, "authorization": {"check": check},
     })
-    monkeypatch.setattr(upgrades, "self_test", lambda inventory, *, operation_id, timeout_seconds, _dispatch_only, _wait: (
+    monkeypatch.setattr(upgrades, "self_test", lambda inventory, *, operation_id, timeout_seconds, _dispatch_only, _wait, _collect: (
         (None if _dispatch_only else observed.append(operation_id)) or {"outcome": "passed"}
     ))
     # Deferral does not cancel the retained check or waive its effects settling.

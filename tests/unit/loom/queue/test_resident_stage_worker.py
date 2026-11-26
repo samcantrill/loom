@@ -34,6 +34,7 @@ def test_resident_main_passes_outer_boundary_containment_owner(
         monkeypatch.setattr(shared_execution, "assignment_scope", lambda _: {"roots": {}})
 
     class FakeWorkspace:
+        root = workspace_root
         durable_files = "strict"
 
         def request(self):

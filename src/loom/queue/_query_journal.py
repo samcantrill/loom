@@ -13,6 +13,14 @@ _OPERATION_COLUMNS = (
 )
 
 
+# Discovery's existing native projection is independent of new storage columns.
+_JOB_COLUMNS = (
+    "admission_id, queue_item_id, coordinator_id, run_uri, intent_digest, execution_owner, "
+    "state, accepted_at, authority_operation_id, revision, run_priority, enqueue_sequence, "
+    "cancellation_operation_id, cancellation_principal_id, blocked_reason"
+)
+
+
 def managed_run_exists(daemon: Any, uri: str) -> bool:
     """Test exact managed membership without loading or paging the journals."""
     with daemon._connection() as conn:
@@ -28,8 +36,8 @@ def journal_candidates(daemon: Any, query: RunQuery, owner: str) -> list[dict[st
     """Read at most 501 rows, using the public keyset and null-last ordering."""
     submissions = query.entity == "submissions"
     table = "preparation_operations" if submissions else "managed_admissions"
-    columns = _OPERATION_COLUMNS if submissions else "*"
-    fields = {"operation_id", "principal_id", "state", "kind", "queue_item_id"} if submissions else {"admission_id", "queue_item_id", "state", "run_uri"}
+    columns = _OPERATION_COLUMNS if submissions else _JOB_COLUMNS
+    fields = {"operation_id", "principal_id", "state", "kind", "queue_item_id"} if submissions else {"admission_id", "queue_item_id", "state", "run_uri", "execution_owner", "coordinator_id"}
     return ordered_rows(daemon._connection, query, owner, table, columns, fields)
 
 

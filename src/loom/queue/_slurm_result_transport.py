@@ -482,6 +482,9 @@ class SharedSlurmResult:
                 "SLURM result final acknowledgement is unavailable"
             )
 
+        from ._phase_timing import milestone
+        milestone("terminal_acknowledged", assignment_id=self.assignment_id)
+
     def cleanup(self) -> None:
         """Retire transport bytes only after the finalizer acknowledgement."""
         self._require_root()

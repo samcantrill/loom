@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from datetime import datetime, timezone
 import fcntl
 import json
 import math
@@ -13,6 +14,7 @@ import time
 from typing import Any, cast
 from uuid import uuid4
 
+from loom._observer_deadline import observer_until
 from loom.coordinator import (
     CoordinatorClient,
     CoordinatorClientError,
@@ -275,6 +277,8 @@ def _observe_check(
     deadline: float,
     *,
     wait: bool = True,
+    collect: bool | None = None,
+    native_result_observed_at: str | None = None,
 ) -> dict[str, Any]:
     request = RunRequest.from_dict(intent["requests"][check])
     identity = request.preparation.operation_id
@@ -333,8 +337,7 @@ def _observe_check(
             return _waiting("assignment_evidence_unavailable", **facts)
         assignment = cast(dict[str, Any], thaw_plain_data(matches[0].value))
         facts["assignment"] = matches[0].to_dict()
-    agent_observation = operator.observe_agent(intent["agent_id"], deadline=deadline)
-    facts["agent"] = agent_observation.to_dict()
+    facts["native_result_observed_at"] = native_result_observed_at or datetime.now(timezone.utc).isoformat()
     selected = client.select_outputs(
         OutputSelection(
             run_uris=(observed.admission.run_uri,),
@@ -347,10 +350,21 @@ def _observe_check(
     artifact = selected.items[0].get("artifact") or {}
     if "loom.shared_publication" not in (artifact.get("metadata") or {}):
         return {"outcome": "failed", "code": "shared_publication_required", **facts}
-    publication = verify_publication(client, directory, check, intent, selected.items[0], deadline)
+    publication = verify_publication(
+        client, directory, check, intent, selected.items[0], deadline, collect=collect is not False,
+        native_result_observed_at=facts["native_result_observed_at"],
+    )
     if "outcome" in publication:
         return {**facts, **publication}
     facts.update(publication)
+    if collect is True:
+        # Only a short observation under current credentials/selection closes a
+        # check. A detached collector may belong to a previous fleet observer.
+        return _waiting("publication_verified", **facts)
+    agent_observation = operator.observe_agent(intent["agent_id"], deadline=deadline)
+    facts["agent"] = agent_observation.to_dict()
+    if agent_observation.availability != "available" or agent_observation.freshness != "current":
+        return _waiting("fresh_offer_unavailable", **facts)
     report = publication["report"]
     if "slurm_profile" in intent:
         valid = (report.get("run_uri") == "loom-slurm:" + assignment["assignment_id"]
@@ -379,6 +393,22 @@ def _observe_check(
         run_uri=observed.admission.run_uri,
     )
     return {**result, **facts}
+
+
+def _wait_check_change(inventory, identity, hint, deadline):
+    """Wait on one immutable check's current native owner outside fleet writer ownership."""
+    intent = _read(inventory.path.parent / "checks" / identity / "intent.json")
+    # The native wait duration bounds server observation. Its negotiation and
+    # transport must also release this shared worker at the end of the turn.
+    with observer_until(deadline), CoordinatorClient.from_connection_file(
+        intent["connection"], expected_coordinator_id=intent["coordinator_id"],
+    ) as client:
+        remaining = max(0.0, deadline - time.monotonic())
+        if "admission_id" in hint:
+            result = client.wait_admission(hint["admission_id"], hint["revision"], remaining)
+        else:
+            result = client.wait_operation(hint["operation_id"], remaining)
+        return result.kind.value != "TIMEOUT"
 
 
 def _check_input_locations(execution):
@@ -436,6 +466,7 @@ def self_test(
     _maintenance_binding: Mapping[str, Any] | None = None,
     _dispatch_only: bool = False,
     _wait: bool = True,
+    _collect: bool | None = None,
 ) -> dict[str, Any]:
     """Run selected checks or reconnect to one protected immutable check intent.
 
@@ -692,7 +723,8 @@ def self_test(
                         if time.monotonic() >= deadline
                         else _observe_check(
                             client, operator, directory, intent, check, deadline,
-                            wait=_wait,
+                            wait=_wait, collect=_collect,
+                            native_result_observed_at=previous_results.get(check, {}).get("native_result_observed_at"),
                         )
                     )
                 except CoordinatorClientError as exc:
@@ -703,6 +735,8 @@ def self_test(
                         "code": exc.code,
                         "native_error": exc.to_dict(),
                     }
+                if "native_result_observed_at" in previous_results.get(check, {}):
+                    result["native_result_observed_at"] = previous_results[check]["native_result_observed_at"]
                 results[check] = {
                     **result,
                     "operation_id": request["preparation"]["operation_id"],

@@ -63,6 +63,7 @@ from loom.serialization import PlainData, thaw_plain_data
 from loom.serialization._diagnostic_capture import _capture_exception_details
 from loom.timestamps import utc_timestamp
 
+from ._attempt_timing import assignment_milestone
 from ._agent_process_supervisor import (
     AgentProcessSupervisorClient,
     AgentProcessSupervisorError,
@@ -1021,6 +1022,7 @@ class _ReservedLocalExecution:
                     expected="logical_released",
                     next_state="released",
                 )
+                assignment_milestone("assignment_released", assignment)
             return ManagedExecutionReceipt(
                 assignment=assignment,
                 fence=fence,
@@ -1061,6 +1063,7 @@ class _ReservedLocalExecution:
             next_state="terminal",
         )
         self.journal.acknowledge_terminal(assignment.assignment_id)
+        assignment_milestone("terminal_acknowledged", assignment)
         self.coordinator.advance(
             assignment.assignment_id,
             expected="terminal",
@@ -1104,6 +1107,7 @@ class _ReservedLocalExecution:
             expected="logical_released",
             next_state="released",
         )
+        assignment_milestone("assignment_released", assignment)
         return ManagedExecutionReceipt(
             assignment=assignment,
             fence=fence,
@@ -1127,6 +1131,7 @@ def _run_reserved_local_assignment(
         staged, coordinator, authority, journal, providers, run_store, supervisor,
         resident_launch_profile, cancellation_requested, suspend_requested, execution_started, embedded_recovery,
     )
+    assignment_milestone("assignment_received", staged.assignment)
     fence = execution.prepare_grant()
     result, expected = execution.launch_or_resume(fence)
     return execution.settle(fence, result, expected)

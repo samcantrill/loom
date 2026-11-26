@@ -830,7 +830,7 @@ def _is_run_inspection_failure(value: object) -> bool:
         and value.get("schema_version") == 1
         and isinstance(code, str)
         and code
-        in {"invalid_request", "invalid_cursor", "not_found", "unauthorized", "unavailable", "internal"}
+        in {"invalid_request", "invalid_cursor", "job_observation_deadline", "not_found", "unauthorized", "unavailable", "internal"}
         and set(value) == {"schema_version", "code"}
     )
 
@@ -840,6 +840,7 @@ def _run_inspection_http_status(value: Mapping[str, object]) -> int:
     return {
         "invalid_request": 400,
         "invalid_cursor": 400,
+        "job_observation_deadline": 504,
         "not_found": 404,
         "unauthorized": 403,
         "unavailable": 503,
@@ -3497,7 +3498,7 @@ def _agent_exchange_lane(operation: str, *, lifecycle: bool, evidence: bool = Fa
 
 _CLIENT_SHORT_OPERATIONS = frozenset({
     "handshake", "status", "cancel", "cancel_preparation", "cancel_run_operation",
-    "admissions", "admission_for_queue_item", "agents", "service_lifetime",
+    "admissions", "list_queue", "admission_for_queue_item", "agents", "service_lifetime",
     "startup_attach", "startup_release",
 })
 class _SlurmWorkCapacityError(QueueServiceError):
@@ -4422,10 +4423,13 @@ def _dispatch_application(
 
         if operation in QUERY_OPERATIONS:
             daemon._require_view_role(principal, LocalDaemonRole.QUERY)
+            from loom.runs._query_page import QueryObservationDeadline
             from loom.runs.query import InvalidCursorError
             try:
                 query_result = query_operation(daemon, operation, validate_query_request(operation, value))
                 return query_result.to_dict() if hasattr(query_result, "to_dict") else query_result
+            except QueryObservationDeadline:
+                return {"schema_version": 1, "code": "job_observation_deadline"}
             except InvalidCursorError:
                 return {"schema_version": 1, "code": "invalid_cursor"}
             except (ValueError, TypeError):

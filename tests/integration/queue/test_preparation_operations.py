@@ -1651,7 +1651,7 @@ def test_restart_reuses_capture_and_replays_a_claimed_complete_target(
         "invalid edited authoring bytes"
     )
     with sqlite3.connect(service.daemon.control_database) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 19
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 20
     assert service.daemon.agent_root is not None
     with sqlite3.connect(service.daemon.agent_root / "control.sqlite") as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
@@ -3001,3 +3001,33 @@ def test_external_target_lock_and_renderer_leave_capacity_for_image_admission_an
     finally:
         release.touch()
         daemon.stop()
+
+
+def test_direct_admission_creator_survives_replay_from_another_transport(tmp_path):
+    import os
+    from weave import compose_config
+    from tests.integration.mcp.test_stdio import _coordinator
+
+    with _coordinator(tmp_path, https=True) as (service, daemon, _):
+        local = LocalDaemonSocketServer(daemon, service.daemon.endpoint)
+        local.start()
+        try:
+            with (CoordinatorClient.from_connection_file(tmp_path / "client.json") as https,
+                  CoordinatorClient.from_unix_socket(service.daemon.endpoint) as unix):
+                descriptor = service.daemon.resident_worker_launch_profile.descriptor
+                execution = ExecutionRequirement(
+                    descriptor["project_fingerprint"], descriptor["environment_fingerprint"], descriptor["executor_fingerprint"],
+                )
+                pipeline = compose_config(tmp_path / "projects" / "pipeline.yaml")
+                creators = ((https, unix, "remote", "client"), (unix, https, "local", f"uid:{os.getuid()}"))
+                for creator, observer, name, principal in creators:
+                    prepared = prepare_managed_run(service, pipeline, name, execution_requirements={"produce": execution})
+                    request = LocalDaemonAdmissionRequest(name, prepared.run_uri)
+                    first = creator.submit(request)
+                    replayed = observer.submit(request)
+                    assert replayed.admission_id == first.admission_id
+                    assert "admitted_by" not in replayed.to_dict()
+                    page = observer.list_queue(principal=principal, include_terminal=True)
+                    assert [(row["queue_item_id"], row["admitted_by"]) for row in page["admissions"]] == [(name, principal)]
+        finally:
+            local.stop()

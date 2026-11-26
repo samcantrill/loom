@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import nullcontext
 import math
 import time
@@ -10,7 +10,9 @@ from typing import Any, Self, cast
 
 from loom.serialization import PlainData
 
+from ._queue_listing import CAPABILITY as QUEUE_LIST_CAPABILITY
 from ._coordinator_control import (
+    AGENT_CAPACITY_CAPABILITY,
     CONTROL_CAPABILITY,
     MAX_OBSERVATION_SECONDS,
     MUTATION_OPERATIONS,
@@ -25,7 +27,7 @@ from ._coordinator_control import (
     validate_request,
 )
 from . import _coordinator_transport as transport_io
-from ._phase_timing import qualification_timings, reported_phases, request_identity
+from ._phase_timing import milestone, qualification_timings, reported_phases, request_identity
 from ._coordinator_transport import ControlTransport
 from .errors import QueueError
 from .local_daemon import (
@@ -217,6 +219,10 @@ class NativeCoordinatorClient:
                     if isinstance(profile, Mapping) and profile.get("kind") == "submitted_container":
                         if SUBMITTED_CHECK_CAPABILITY not in description.capabilities:
                             raise control_error("unsupported_capability", operation, payload, ids={"missing_capability": SUBMITTED_CHECK_CAPABILITY})
+                if operation == "list_queue" and QUEUE_LIST_CAPABILITY not in description.capabilities:
+                    raise control_error("unsupported_capability", operation, payload, ids={"missing_capability": QUEUE_LIST_CAPABILITY})
+                if operation in {"agent", "agents"} and AGENT_CAPACITY_CAPABILITY not in description.capabilities:
+                    envelope.pop("include_capacity", None)
                 if operation == "read_run_logs" and "bounded-run-logs-v1" not in description.capabilities:
                     raise control_error("unsupported_capability", operation, payload, ids={"missing_capability": "bounded-run-logs-v1"})
                 requested = envelope.get("request")
@@ -264,6 +270,14 @@ class NativeCoordinatorClient:
                     else None,
                     message=str(exc),
                 ) from exc
+        submission = operation in {"start_run", "prepare_run", "submit"}
+        operation_id = queue_item_id = None
+        if submission:
+            operation_id = request_identity(envelope)
+            item = cast(Mapping[str, PlainData], envelope["request"]).get("queue_item_id")
+            queue_item_id = item if isinstance(item, str) and len(item) <= 256 else None
+            milestone("submission_sent", operation_id=operation_id,
+                      submit_method=operation, queue_item_id=queue_item_id)
         value = self._exchange(operation, envelope, bound, waiting=waiting)
         try:
             if operation in {"handshake", "operator_handshake"}:
@@ -275,6 +289,12 @@ class NativeCoordinatorClient:
                 ) or (isinstance(version, str) and version != "1"):
                     raise control_error("unsupported", operation, envelope)
             decoded = decode_result(operation, value)
+            if submission:
+                milestone(
+                    "submission_acknowledged", operation_id=operation_id, submit_method=operation,
+                    queue_item_id=queue_item_id,
+                    admission_id=decoded.admission_id if isinstance(decoded, LocalDaemonAdmission) else None,
+                )
             if operation in {"handshake", "operator_handshake"}:
                 self._last_connection = cast(CoordinatorConnectionDescription, decoded)
             return decoded
@@ -314,6 +334,21 @@ class NativeCoordinatorClient:
         return cast(
             DaemonStatus, self._native_call("status", {}, expected_coordinator_id)
         )
+
+    def list_queue(
+        self, *, states: tuple[str, ...] = (), include_terminal: bool = False,
+        principal: str | None = None, limit: int = 100, cursor: str | None = None,
+        expected_coordinator_id: str | None = None,
+    ) -> dict[str, PlainData]:
+        """Read a live page of admission summaries, in priority and enqueue order.
+
+        The default selects nonterminal admissions. A named principal selects the
+        authenticated creator. An opaque cursor continues the same selection.
+        """
+        return cast(dict[str, PlainData], self._native_call("list_queue", {
+            "states": list(states), "include_terminal": include_terminal,
+            "principal": principal, "limit": limit, "cursor": cursor,
+        }, expected_coordinator_id))
 
     def admissions(
         self,
@@ -362,23 +397,29 @@ class NativeCoordinatorClient:
         limit: int = 20,
         cursor: str | None = None,
         *,
+        include_capacity: bool = False,
         expected_coordinator_id: str | None = None,
     ) -> AgentPage:
-        """Read observed agent availability without reserving capacity."""
+        """Read observed availability and, when supported and requested, current offer totals."""
+        payload: dict[str, PlainData] = {"limit": limit, "cursor": cursor}
+        if include_capacity:
+            payload["include_capacity"] = include_capacity
         return cast(
             AgentPage,
-            self._native_call(
-                "agents", {"limit": limit, "cursor": cursor}, expected_coordinator_id
-            ),
+            self._native_call("agents", payload, expected_coordinator_id),
         )
 
     def agent(
-        self, agent_id: str, *, expected_coordinator_id: str | None = None
+        self, agent_id: str, *, include_capacity: bool = False,
+        expected_coordinator_id: str | None = None,
     ) -> AgentProjection:
         """Read one native agent projection and its freshness evidence."""
+        payload: dict[str, PlainData] = {"agent_id": agent_id}
+        if include_capacity:
+            payload["include_capacity"] = include_capacity
         return cast(
             AgentProjection,
-            self._native_call("agent", {"agent_id": agent_id}, expected_coordinator_id),
+            self._native_call("agent", payload, expected_coordinator_id),
         )
 
     def operation(
@@ -562,6 +603,12 @@ class NativeCoordinatorClient:
         expected_coordinator_id: str | None = None,
     ) -> LocalDaemonAdmission:
         """Explicitly wait for terminal admission; None allows unlimited renewal."""
+        return self._wait_for_terminal_admission(queue_item_id, timeout_seconds, expected_coordinator_id)
+
+    def _wait_for_terminal_admission(
+        self, queue_item_id: str, timeout_seconds: float | None, expected_coordinator_id: str | None,
+        on_change: Callable[[LocalDaemonAdmission], None] | None = None,
+    ) -> LocalDaemonAdmission:
         if timeout_seconds is not None and (
             isinstance(timeout_seconds, bool)
             or not isinstance(timeout_seconds, (int, float))
@@ -607,9 +654,14 @@ class NativeCoordinatorClient:
                         terminal_deadline=call_deadline,
                     ),
                 )
+                changed = (observed.admission.state, observed.admission.blocked_reason) != (
+                    admission.state, admission.blocked_reason
+                )
                 admission = observed.admission
                 if observed.kind is AdmissionWaitKind.TERMINAL:
                     return admission
+                if changed and on_change is not None:
+                    on_change(admission)
                 if deadline is not None and time.monotonic() >= deadline:
                     raise TimeoutError(
                         "managed local admission did not reach terminal state"

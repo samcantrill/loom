@@ -40,7 +40,7 @@ from ._validated_context_cache import ValidatedContextCache
 from ._phase_timing import phase
 from ._slurm_task_page import TaskFacts, read_recoveries, read_task_page
 from threading import Lock
-from time import monotonic
+from time import monotonic, monotonic_ns
 from types import MappingProxyType
 from typing import Any, cast
 
@@ -654,8 +654,7 @@ class _RemoteCandidateTarget:
     profile: ResidentProfileDescriptor | SubmittedContainerCapability
     availability_atoms: tuple[CapacityAtom, ...]
     reflected_claim_ids: tuple[str, ...]
-
-
+    expires_ns: int = 0
 
 
 def _replacement_scheduling_identities(
@@ -1524,6 +1523,7 @@ class LocalDaemonExecution:
             lambda: self._daemon_owner()._wake.set(), on_ready=self._ready_continuations.post,
         )
         self._scheduling_waits = SchedulingWaits()
+        self._full_offer_hosts: set[str] = set()
         self._observed_ready: dict[str, AuthoritativeRunSnapshot] = {}
         self.dispatch_observations = DispatchObservations(lambda: self._daemon_owner()._wake.set())
         self.run_observations = RunObservations(lambda: self._daemon_owner()._wake.set(), self._event_observers.offer_audit)
@@ -4185,12 +4185,26 @@ class LocalDaemonExecution:
         result, reason = self._ready_preparations.poll(
             (record.run_uri, record.stage_name), identity, prepare,
             work_id=record.stage_work_id, speculative=speculative,
+            attempt_id=record.attempt_id, admission_id=record.admission_id,
             resource_class="gpu" if gpu is not None and gpu.amount > 0 else "cpu",
         )
 
         if reason is not None and not speculative:
             self._scheduling_waits.record(record.run_uri, record.stage_name, "request_preparation")
         return result, reason
+
+    def _record_reservation(self, record: StageWorkRecord, assignment_id: str, offer: str | None) -> None:
+        available = self._ready_preparations.request_available_ns(
+            (record.run_uri, record.stage_name), record.stage_work_id,
+        )
+        self._scheduling_waits.reserved(record, assignment_id, offer, available)
+
+    def _local_offer_timing(self) -> tuple[str, int] | None:
+        observed = self._cycle_local_offer
+        if observed is None:
+            return None
+        return (f"local:{self._local_capacity_generation}:{observed.sampled_at}",
+                int((observed.sampled_at + 30) * 1_000_000_000))
 
     def _prepared_input_descriptors(self, record, worker_request):
         from functools import partial
@@ -4436,6 +4450,7 @@ class LocalDaemonExecution:
                     else self.config.slurm_admission.max_reserved_gpus
                 ),
             )
+            self._record_reservation(record, assignment_id, None)
             self._input_validations.discard(record.stage_work_id)
             self._sync_slurm_agent_references()
             authority.bind_prepared_attempt(
@@ -5786,9 +5801,11 @@ class LocalDaemonExecution:
             PREPARATION_STAGED_INPUT_CAPABILITY,
         )
 
+        self._full_offer_hosts.clear()
         if not (self.config.remote_profiles or self.config.container_capabilities):
             return {}
-        accepted_time, _snapshot_time = self._daemon_owner()._accepted_snapshot()
+        observed_ns = monotonic_ns()
+        accepted_time, accepted_second = self._daemon_owner()._accepted_snapshot()
         configured = {
             profile.profile_id: profile for profile in self.config.remote_profiles
         }
@@ -5834,6 +5851,7 @@ class LocalDaemonExecution:
                 outstanding.get(str(row["session_id"]), 0)
                 >= offer.max_concurrent_assignments
             ):
+                self._full_offer_hosts.add(str(row["agent_id"]))
                 continue
             # A successor observation never consumes an unresolved admission.
             # Once reflected, provider availability already excludes that claim.
@@ -5972,6 +5990,8 @@ class LocalDaemonExecution:
                     data=data,
                     atoms=kind_availability_atoms,
                 )
+            expires_ns = observed_ns + (int(parse_timestamp(row["expires_at"]).timestamp())
+                                        - accepted_second) * 1_000_000_000
             for profile in sorted(matching, key=_execution_target_id):
                 submitted = isinstance(profile, SubmittedContainerCapability)
                 candidate_id = ":".join(
@@ -6044,6 +6064,7 @@ class LocalDaemonExecution:
                         scheduling_availability_revision=scheduling_availability_revision,
                         inventory_revision=offer.inventory_revision,
                         offer=offer,
+                        expires_ns=expires_ns,
                         profile=profile,
                         availability_atoms=tuple(availability_atoms),
                         reflected_claim_ids=tuple(
@@ -6463,6 +6484,7 @@ class LocalDaemonExecution:
                 decision_receipt=decision_receipt,
                 _reservation_transaction=lambda: self._reservation_transaction(record, epochs, remote_target),
             )
+            self._record_reservation(record, assignment.assignment_id, remote_target.offer_id)
             authority.bind_prepared_attempt(
                 assignment.run_uri,
                 assignment_id=assignment.assignment_id,
@@ -6560,6 +6582,9 @@ class LocalDaemonExecution:
             self._local_assignment_retries.setdefault(assignment_id, _RecoveryRetry())
             daemon._wake.set()
             raise
+
+        observation = self._local_offer_timing()
+        self._record_reservation(record, assignment_id, observation[0] if observation else None)
 
         def observe_and_finalize() -> None:
             _run_reserved_local_assignment(
@@ -7496,6 +7521,18 @@ def build_local_daemon_owner_views(
     if not admissions:
         return ()
     run_uris = tuple(sorted({item.run_uri for item in admissions}))
+    view_for = _read_owner_journals(
+        config, run_uris, coordinator_id=coordinator_id, agent_id=agent_id, clock=clock,
+    )
+    return tuple(view_for(admission, admission_revision) for admission in admissions)
+
+
+def _read_owner_journals(
+    config: LocalDaemonConfig, run_uris: tuple[str, ...], *, coordinator_id: str,
+    agent_id: str | None, clock: Callable[[], str],
+    read_snapshot: Callable[[str], AuthoritativeRunSnapshot] | None = None,
+) -> Callable[[LocalDaemonAdmission, int], Mapping[str, PlainData]]:
+    """Read shared scheduling/assignment journals once, then inspect each run on demand."""
     run_placeholders = ",".join("?" for _ in run_uris)
     stage_work_by_run: dict[str, list[dict[str, PlainData]]] = {}
     assignments_by_run: dict[str, list[dict[str, PlainData]]] = {}
@@ -7732,8 +7769,17 @@ def build_local_daemon_owner_views(
             agent_available = False
     agent_observed_at = clock()
 
-    views: list[Mapping[str, PlainData]] = []
-    for admission in admissions:
+    def view_for(admission: LocalDaemonAdmission, admission_revision: int) -> Mapping[str, PlainData]:
+        # A malformed row in one run cannot mark a different run's journal
+        # unavailable. Recheck just the requested identity on a failed batch.
+        if len(run_uris) > 1 and (
+            not execution_available or (config.agent_root is not None and agent_id is not None and not agent_available)
+        ):
+            single = _read_owner_journals(
+                config, (admission.run_uri,), coordinator_id=coordinator_id, agent_id=agent_id, clock=clock,
+                read_snapshot=read_snapshot,
+            )
+            return single(admission, admission_revision)
         authority_view: dict[str, PlainData]
         authority_observed_at = clock()
         snapshot: AuthoritativeRunSnapshot | None = None
@@ -7743,10 +7789,12 @@ def build_local_daemon_owner_views(
             factory = config.coordinator_authority_factory
             if factory is None:
                 raise QueueServiceError("coordinator authority factory is unavailable")
-            authority = factory(admission.run_uri)
-            snapshot = authority.open_run(admission.run_uri)
+            snapshot = (
+                read_snapshot(admission.run_uri) if read_snapshot is not None
+                else factory(admission.run_uri).open_run(admission.run_uri)
+            )
             if admission.cancellation_operation_id is not None:
-                receipt = authority.read_cancellation_epoch_receipt(
+                receipt = factory(admission.run_uri).read_cancellation_epoch_receipt(
                     admission.run_uri, admission.cancellation_operation_id
                 )
                 cancellation_receipt = None if receipt is None else receipt.to_dict()
@@ -7989,8 +8037,9 @@ def build_local_daemon_owner_views(
         )
         if not isinstance(view, dict):
             raise AssertionError("local daemon owner view must be a mapping")
-        views.append(view)
-    return tuple(views)
+        return view
+
+    return view_for
 
 
 __all__ = [

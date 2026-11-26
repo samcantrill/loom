@@ -914,6 +914,9 @@ class SQLiteSlurmStageAssignments:
                 f"UPDATE {_ASSIGNMENT_TABLE} SET state = ? WHERE assignment_id = ?",
                 (next_state, assignment_id),
             )
+        if next_state == "released":
+            from ._phase_timing import milestone
+            milestone("assignment_released", assignment_id=assignment_id)
         return next_state
 
     def install_capability(
@@ -2246,6 +2249,8 @@ class SlurmBootstrapWorkspace:
             or result.attempt != delivery.attempt
         ):
             raise QueueConflictError("SLURM worker result identity conflicts")
+        from ._attempt_timing import report_worker_invocation
+        report_worker_invocation(result.executor_metadata, delivery.assignment_id)
         outputs: list[_RemoteOutputArtifact] = []
         from ._shared_publication import selected, retain
         shared = selected(delivery) is not None

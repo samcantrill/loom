@@ -394,7 +394,7 @@ def test_upgrade_dispatches_every_slot_before_waiting_or_download(tmp_path, chec
         prepared[identity] = (name, kind)
         return {"operation_id": identity, "authorization": {}}
 
-    def check(inventory, *, operation_id, timeout_seconds, _dispatch_only, _wait):
+    def check(inventory, *, operation_id, timeout_seconds, _dispatch_only, _wait, _collect):
         assert _wait is False
         if _dispatch_only:
             dispatched.add(operation_id)
@@ -480,7 +480,7 @@ def test_upgrade_finishes_other_observations_after_one_check_error(tmp_path, che
     def prepare(op, name, kind, identity, **kw):
         identities[kind] = identity
         return {"operation_id": identity, "authorization": {}}
-    def check(inventory, *, operation_id, timeout_seconds, _dispatch_only, _wait):
+    def check(inventory, *, operation_id, timeout_seconds, _dispatch_only, _wait, _collect):
         if not _dispatch_only and operation_id == identities["cpu"]:
             raise OSError("temporary observation failure")
         return {"outcome": "passed"}
@@ -508,7 +508,7 @@ def test_check_watcher_detaches_while_storage_owns_worker_and_resumes_same_ids(t
         ids[kind] = identity
         return {"operation_id": identity, "authorization": {}}
 
-    def check(inventory, *, operation_id, timeout_seconds, _dispatch_only, _wait):
+    def check(inventory, *, operation_id, timeout_seconds, _dispatch_only, _wait, _collect):
         if _dispatch_only:
             submitted.append(operation_id)
             return {"outcome": "waiting", "checks": {"probe": {
@@ -734,3 +734,189 @@ def test_gpu_receipt_does_not_spend_download_budget_and_changed_final_profile_bl
     with pytest.raises(upgrades.QueueConflictError, match="retained host intent differs"):
         upgrades._run_checks(op)
     assert confirmations == ["host"]
+
+
+def test_late_status_starts_while_two_earlier_transfers_remain_attached(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from time import monotonic
+
+    from loom.fleet._check_workers import completed_steps
+
+    entered = {name: Event() for name in ("a", "b", "c")}
+    release = Event()
+    def advance(name, kind, deadline):
+        if kind == "transfer":
+            entered[name].set()
+            assert release.wait(5)
+        return kind
+
+    def run(names, transfers=()):
+        return [future.result() for _, future in completed_steps(
+            tmp_path, {name: {} for name in names}, names, transfers=transfers,
+            dispatch=False, deadline=monotonic() + 5, advance=advance, started=lambda: None,
+        )]
+
+    with ThreadPoolExecutor(max_workers=1) as caller:
+        initial = caller.submit(run, list(entered), set(entered))
+        try:
+            assert entered["a"].wait(2) and entered["b"].wait(2)
+            assert run(["late-status"]) == ["observe"]
+            assert not entered["c"].is_set()
+        finally:
+            release.set()
+        assert initial.result(timeout=2) == ["transfer"] * 3
+
+
+def test_follow_uses_native_revision_wakes_outside_writer_for_retained_operation(tmp_path, monkeypatch):
+    from contextlib import nullcontext
+    import fcntl
+    from loom.fleet import self_tests
+
+    inventory = SimpleNamespace(path=tmp_path / "fleet.json", name="lab")
+    directory = upgrades.sshops._directory(inventory, "old-upgrade")
+    directory.mkdir(mode=0o700, parents=True)
+    # The preceding release retained no observer targets or milestone fields.
+    upgrades.atomic(directory / "intent.json", {"kind": "runtime-upgrade", "operation_id": "old-upgrade"})
+    check = tmp_path / "checks" / "old-check"
+    check.mkdir(parents=True)
+    upgrades.atomic(check / "intent.json", {"connection": "client.json", "coordinator_id": "owner"})
+    monkeypatch.setattr(upgrades, "_environment_files", lambda *args: {})
+    monkeypatch.setattr(upgrades, "_Upgrade", lambda inventory, path, intent, observation:
+                        SimpleNamespace(intent=intent, directory=path, close=lambda: None, observation=observation))
+    wakes = []
+    turns = []
+    def advance(operation):
+        turns.append(operation.intent["operation_id"])
+        if len(wakes) == 2:
+            return {"state": "complete"}
+        admission = {"state": "ACTIVE", "revision": 7, "admission_id": "admitted"} if wakes else None
+        native = {"operation_id": "old-check", "operation": {"state": "applying"}, "admission": admission}
+        operation.check_observations = {"old-check": upgrades._check_observation("old-check", {
+            "outcome": "waiting", "checks": {"storage": {"outcome": "waiting", "native": native}},
+        })}
+        raise upgrades._Waiting("native check pending")
+
+    def wake(*args):
+        # A second process may acquire this exact operation writer during a wait.
+        with (directory / "writer.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        wakes.append(args[:-1])
+        return SimpleNamespace(kind=SimpleNamespace(value="CHANGED"))
+
+    client = SimpleNamespace(wait_operation=wake, wait_admission=wake)
+    def connect(path, *, expected_coordinator_id):
+        assert (path, expected_coordinator_id) == ("client.json", "owner")
+        return nullcontext(client)
+
+    monkeypatch.setattr(self_tests.CoordinatorClient, "from_connection_file", connect)
+    monkeypatch.setattr(upgrades, "_continue", advance)
+    assert upgrades.upgrade(inventory, operation_id="old-upgrade")["outcome"] == "waiting"
+    assert not wakes
+    result = upgrades.upgrade(inventory, operation_id="old-upgrade", follow=True, timeout_seconds=5)
+    assert result["outcome"] == "complete"
+    assert wakes == [("old-check",), ("admitted", 7)]
+    assert turns == ["old-upgrade"] * 4
+
+
+def test_follow_has_one_deadline_and_returns_publication_hold_immediately(tmp_path, monkeypatch):
+    from time import monotonic
+    inventory = SimpleNamespace(path=tmp_path / "fleet.json")
+    turns = []
+    def waiting(**opts):
+        turns.append(opts["operation_id"])
+        return {"outcome": "waiting", "publication_ready": False}
+    monkeypatch.setattr(upgrades, "_upgrade", waiting)
+    now = monotonic()
+    assert upgrades.upgrade(inventory, operation_id="window", follow=True, timeout_seconds=0.05)["outcome"] == "waiting"
+    assert 0.04 <= monotonic() - now < 1 and turns == ["window"]
+    monkeypatch.setattr(upgrades, "_upgrade", lambda **opts: {"outcome": "waiting", "publication_ready": True})
+    monkeypatch.setattr(upgrades, "wait_for_checks", lambda *a: pytest.fail("explicit release required"))
+    assert upgrades.upgrade(inventory, operation_id="window", follow=True)["publication_ready"]
+    denied = {"outcome": "waiting", "check_observations": {"check": {"checks": {"cpu": {
+        "outcome": "waiting", "code": "unauthorized",
+    }}}}}
+    monkeypatch.setattr(upgrades, "_upgrade", lambda **opts: denied)
+    assert upgrades.upgrade(inventory, operation_id="window", follow=True) == denied
+
+
+
+def test_follow_rotates_native_watches_across_pending_checks(tmp_path, monkeypatch):
+    from loom.fleet._check_workers import WORKERS
+
+    inventory = SimpleNamespace(path=tmp_path / "fleet.json")
+    checks = {str(i): {"checks": {"cpu": {"outcome": "waiting", "wait_for": {"operation_id": str(i)}}}}
+              for i in range(6)}
+    watched = []
+    def watch(directory, targets, deadline, native_wait):
+        available = targets[:WORKERS]
+        watched.append([identity for identity, _ in available])
+        return len(available)
+    def advance(**options):
+        if len(watched) == 2:
+            return {"outcome": "complete"}
+        return {"outcome": "waiting", "check_observations": checks}
+
+    monkeypatch.setattr(upgrades, "wait_for_checks", watch)
+    monkeypatch.setattr(upgrades, "_upgrade", advance)
+    result = upgrades.upgrade(inventory, operation_id="window", follow=True, timeout_seconds=5)
+    assert result["outcome"] == "complete"
+    assert watched == [["0", "1", "2"], ["3", "4", "5"]]
+
+
+def test_follow_stalled_handshake_and_native_waits_release_workers_at_turn_deadline(tmp_path, monkeypatch):
+    from contextlib import ExitStack
+    from functools import partial
+    from time import monotonic
+
+    from loom._observer_deadline import observer_until
+    from loom.fleet import _check_workers, self_tests
+    from loom.queue._coordinator_transport import UnixControlTransport
+    from tests.unit.loom.test_coordinator import _peer
+
+    inventory = SimpleNamespace(path=tmp_path / "fleet.json")
+    targets = [
+        ("handshake", {"operation_id": "handshake"}),
+        ("prepare", {"operation_id": "prepare"}),
+        ("target", {"admission_id": "admitted", "revision": 7}),
+    ]
+    release = Event()
+    calls = []
+    call = UnixControlTransport.call
+    def transport(self, operation, payload, deadline, **options):
+        calls.append((self.endpoint.name, operation, deadline))
+        return call(self, operation, payload, deadline, **options)
+    monkeypatch.setattr(UnixControlTransport, "call", transport)
+    monkeypatch.setattr(self_tests.CoordinatorClient, "from_connection_file",
+                        self_tests.CoordinatorClient.from_unix_socket)
+    monkeypatch.chdir(tmp_path)
+    def stall(*_):
+        release.wait(5)
+
+    with ExitStack() as peers, observer_until(monotonic() + 15):
+        for name, _ in targets:
+            endpoint = Path(name + ".sock")
+            peers.enter_context(_peer(endpoint, stall, handshake=name != "handshake"))
+            directory = tmp_path / "checks" / name
+            directory.mkdir(parents=True)
+            atomic(directory / "intent.json", {"connection": str(endpoint), "coordinator_id": "coordinator-a"})
+        try:
+            end = monotonic() + 0.75
+            offered = _check_workers.wait_for_checks(
+                tmp_path, targets, end, partial(self_tests._wait_check_change, inventory),
+            )
+            assert offered == 3
+            assert {(name, op) for name, op, _ in calls} == {
+                ("handshake.sock", "handshake"),
+                ("prepare.sock", "handshake"), ("prepare.sock", "wait_operation"),
+                ("target.sock", "handshake"), ("target.sock", "wait_admission"),
+            }
+            # A new status RPC must acquire a worker even while all three peers
+            # are withholding replies and the overall follow deadline is distant.
+            status = _check_workers.rpc(("status",), lambda: "observed")
+            assert _check_workers.host_steps(tmp_path, {"short": status}, monotonic() + 1, TimeoutError) == {
+                "short": "observed",
+            }
+            assert all(bound <= end for _, _, bound in calls)
+        finally:
+            release.set()

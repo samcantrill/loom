@@ -203,6 +203,10 @@ def _safe(value: Any) -> Any:
     return value
 
 
+class QueryObservationDeadline(TimeoutError):
+    """A read did not complete within the page's observation budget."""
+
+
 def search_page(
     query: RunQuery,
     owner: str,
@@ -226,8 +230,19 @@ def search_page(
     examined = 0
     budget = 0
     more = False
+    deadline_report = None
     for key, candidate in pending[: QUERY_LIMITS["candidates"]]:
-        record = acquire(candidate)
+        try:
+            record = acquire(candidate)
+        except QueryObservationDeadline:
+            if examined == 0:
+                raise
+            complete = False
+            deadline_report = {
+                "code": "job_observation_deadline",
+                "admission_id": candidate["admission_id"],
+            }
+            break
         complete = complete and not record.warnings
         retained = record.warnings[: max(0, 100 - len(reports))]
         reports.extend(retained)
@@ -298,6 +313,8 @@ def search_page(
     if "source_unavailable" in diagnostics:
         complete = False
     reports.extend({"code": code, "aggregate": True} for code in sorted(diagnostics))
+    if deadline_report is not None:
+        reports.insert(0, deadline_report)
     while len(_bytes(reports)) > 64 * 1024:
         reports.pop()
         suppressed += 1

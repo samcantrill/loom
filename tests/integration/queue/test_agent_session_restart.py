@@ -2328,6 +2328,9 @@ def test_native_control_lost_reply_reconciles_same_id_and_guards_before_dispatch
             client.inspect_run(run_uri)
         assert caught.value.code == "not_found"
         assert projection_calls == []
+        submissions = []
+        monkeypatch.setattr("loom.queue._coordinator_client.milestone",
+                            lambda action, **ids: submissions.append((action, ids)))
         with pytest.raises(CoordinatorClientError) as lost:
             client.submit(request)
         assert dropped.is_set(), (lost.value.code, str(lost.value))
@@ -2338,6 +2341,11 @@ def test_native_control_lost_reply_reconciles_same_id_and_guards_before_dispatch
         replay = client.submit(request)
         assert replay.admission_id == admitted.admission_id
         assert replay.intent_digest == admitted.intent_digest
+        assert [action for action, _ in submissions] == [
+            "submission_sent", "submission_sent", "submission_acknowledged",
+        ]
+        assert all(ids["queue_item_id"] == "original-item" for _, ids in submissions)
+        assert submissions[-1][1]["admission_id"] == admitted.admission_id
         assert len(client.admissions().admissions) == 1
         detail = client.admission(admitted.admission_id).admission
         assert detail.admission_id == replay.admission_id

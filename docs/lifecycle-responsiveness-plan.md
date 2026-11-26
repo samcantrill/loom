@@ -1160,9 +1160,9 @@ makes a private copy-on-write clone when supported, or copies and hashes the
 same bounded byte stream. It substitutes only the projected Apptainer image
 operand. The retained command and assignment keep the original logical
 identity. A future coordinates overlapping consumers only when they selected
-the same pinned kernel snapshot object, root and image digest. The private
-file lives through physical use. A mutable source is checked afresh on every
-launch.
+the same pinned kernel snapshot object, root and image digest. The resident
+supervisor can also retain that private file for sequential launches under
+its bounded image budget. A mutable source is checked afresh on every launch.
 
 ```python
 with image_for_launch(selected_image, qualified_roots, assignment_id) as paths:
@@ -1177,8 +1177,11 @@ process creation took 0.001 s and reaching the guest marker and exiting took
 0.116 s. A separate baseline fresh hash took 6.986 s. These are individual
 controller measurements and neither is a fleet latency percentile. Without a
 copy-on-write clone, each independent mutable-image launch needs scratch
-space up to the full image size. Qualification exercised overlapping consumers
-on a kernel SquashFS mount. [Image owner](../src/loom/queue/_submitted_image_launch.py)
+space up to the full image size. A separate sequential-launch qualification used
+a 1,150,976-byte runnable SIF published on a read-only kernel SquashFS mount.
+Both Singularity guest commands confirmed the supervisor directory was absent
+from the guest and returned their marker from the same private SIF. The cold
+launch verified the bytes and the warm launch reused them. [Image owner](../src/loom/queue/_submitted_image_launch.py)
 [Physical command tests](../tests/unit/loom/queue/test_submitted_container_policy.py)
 
 The supervisor records `submitted_process_spawn` and `submitted_namespace_ready`.

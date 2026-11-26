@@ -13,18 +13,20 @@ from loom._observer_deadline import observer_until
 
 WORKERS = 3
 _lock = Lock()
-_active: dict[tuple, tuple[bool, Future]] = {}
+_active: dict[tuple, tuple[str, Future]] = {}
 
 
-def _offer(key, dispatch, function, args):
+def _offer(key, kind, function, args):
     with _lock:
         current = _active.get(key)
         if current:
-            return current[1] if current[0] == dispatch else None
-        if len(_active) >= WORKERS:
+            return current[1] if current[0] == kind else None
+        if len(_active) >= WORKERS or (
+            kind == "transfer" and sum(item[0] == "transfer" for item in _active.values()) >= WORKERS - 1
+        ):
             return None
         future = Future()
-        _active[key] = (dispatch, future)
+        _active[key] = (kind, future)
 
         def run():
             try:
@@ -47,10 +49,12 @@ def _offer(key, dispatch, function, args):
         return future
 
 
-def completed_steps(directory, records, selected, *, dispatch, deadline, advance, started, transfers=()):
+def completed_steps(directory, records, selected, *, dispatch, deadline, advance, started,
+                    transfers=(), next_step=None, detach_transfers=False):
     """Offer one fair turn per selected ID, yielding results before later waits."""
     count = "dispatch_turns" if dispatch else "observation_turns"
     pending = sorted(selected, key=lambda key: records[key].get(count, 0))
+    transfers = set(transfers)
     running: dict[Future, str] = {}
     while pending or running:
         left = deadline - monotonic()
@@ -65,15 +69,11 @@ def completed_steps(directory, records, selected, *, dispatch, deadline, advance
                     break
                 step_end = min(fair_end if dispatch else deadline, now + 10.0)
                 if identity in transfers:
-                    # A transfer can use this observer's remaining time. Leave
-                    # a worker for status when downloads and short reads coexist.
-                    if (any(key not in transfers for key in pending)
-                            and sum(key in transfers for key in running.values()) >= WORKERS - 1):
-                        continue
                     step_end = deadline
                 if monotonic() >= step_end:
                     break
-                future = _offer((directory, identity), dispatch, advance, (identity, dispatch, step_end))
+                kind = "dispatch" if dispatch else "transfer" if identity in transfers else "observe"
+                future = _offer((directory, identity), kind, advance, (identity, kind, step_end))
                 if future is not None:
                     pending.remove(identity)
                     running[future] = identity
@@ -81,12 +81,51 @@ def completed_steps(directory, records, selected, *, dispatch, deadline, advance
                     started()
         if not running:
             return
-        ready, _ = wait(running, timeout=max(0, deadline - monotonic()),
-                        return_when=FIRST_COMPLETED)
+        # Follow can release the fleet writer while only downloads remain.
+        # Per-check owners retain results and partial ranges.
+        timeout = max(0, deadline - monotonic())
+        if detach_transfers and all(key in transfers for key in running.values()):
+            timeout = 0
+        ready, _ = wait(running, timeout=timeout, return_when=FIRST_COMPLETED)
         if not ready:
             return
         for future in ready:
-            yield running.pop(future), future
+            identity = running.pop(future)
+            yield identity, future
+            next_kind = next_step(identity) if next_step is not None and future.exception() is None else None
+            if next_kind == "transfer" and identity not in transfers:
+                transfers.add(identity)
+                pending.insert(0, identity)
+            elif next_kind == "observe" and identity in transfers:
+                transfers.remove(identity)
+                pending.append(identity)
+
+
+def wait_for_checks(directory, targets, deadline, native_wait):
+    """Watch a fair slice outside the writer, sharing slots with unfinished downloads."""
+    with _lock:
+        watches = {future for key, (kind, future) in _active.items()
+                   if kind == "transfer" and key[0].is_relative_to(directory)}
+    offered = 0
+    for identity, hint in targets:
+        if monotonic() >= deadline:
+            break
+        future = _offer((directory, "native-wait", identity), "wait", native_wait,
+                        (identity, hint, deadline))
+        if future is None:
+            break
+        watches.add(future)
+        offered += 1
+        if offered == WORKERS:
+            break
+    if watches:
+        ready, _ = wait(watches, timeout=max(0, deadline - monotonic()), return_when=FIRST_COMPLETED)
+        if any(future.exception() is None and future.result() for future in ready):
+            return offered
+    # Terminal admissions can still await release, publication or a fresh offer.
+    # A bounded fallback also covers temporarily unavailable native waits.
+    sleep(max(0, deadline - monotonic()))
+    return offered
 
 
 @dataclass(frozen=True)
@@ -167,7 +206,7 @@ def host_steps(directory, flows, deadline, unavailable):
         progressed = False
         for name, step in tuple(queued.items()):
             if isinstance(step, _Rpc):
-                future = _offer((directory, *step.key), True, _invoke, (step, step_end))
+                future = _offer((directory, *step.key), "host", _invoke, (step, step_end))
                 if future is None:
                     continue
                 running[future] = name

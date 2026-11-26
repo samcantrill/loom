@@ -644,7 +644,7 @@ unless they already belong to that client view.
 ### Retained-root upgrade and rollout
 
 Historical design record: the current-contract cutover removes the upgrade
-command described below. Current operations require complete schema 19/12 roots;
+command described below. Current operations require complete schema 20/12 roots;
 see [downstream operations](../downstream-operations.md#current-control-roots).
 
 At the approved evidence revision, coordinator and worker roots both require

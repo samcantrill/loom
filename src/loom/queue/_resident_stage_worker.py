@@ -16,6 +16,7 @@ from loom.pipeline.execution.stage_worker import (
 )
 from loom.pipeline.stores.atomic import atomic_write_json
 
+from ._attempt_timing import stage_invocation
 from ._remote_stage_execution import _ResidentAssignmentWorkspace
 from ._phase_timing import PhaseTimings, observe_phases
 from .preparation import PREPARATION_INPUT_CONTEXT_ENV
@@ -80,6 +81,7 @@ def main(argv: list[str] | None = None) -> int:
     artifact_root = worker_artifact_root(workspace, container=container_execution)
     result = timings.call("worker_execution", execute_resident_stage_worker_request,
         worker_request=request,
+        stage_invocation=stage_invocation(retained, timings),
         location_resolver=resolver,
         artifact_root=artifact_root,
         shared_roots=shared_roots,
