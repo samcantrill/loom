@@ -154,18 +154,20 @@ class ReadyPreparationPool:
             pending = None
         if pending is None:
             if phase == "request":
-                attributes = {"stage_work_id": work_id, "attempt_id": attempt_id,
-                              "admission_id": admission_id, "run_uri": key[0], "stage_name": key[1]}
+                attributes: dict[str, PlainData] = {
+                    "request_queued_ns": monotonic_ns(), "stage_work_id": work_id, "attempt_id": attempt_id,
+                    "admission_id": admission_id, "run_uri": key[0], "stage_name": key[1],
+                }
                 if work_id is not None:
-                    milestone("request_preparation_queued", **attributes)
+                    milestone("request_preparation_queued", details=attributes)
 
                 def build_request() -> _PreparedRequest:
                     if work_id is not None:
-                        milestone("request_preparation_worker_started", **attributes)
+                        milestone("request_preparation_worker_started", details=attributes)
                     value = prepare()
                     available_ns = monotonic_ns()
                     if work_id is not None:
-                        milestone("worker_request_available", **attributes)
+                        milestone("worker_request_available", request_available_ns=available_ns, details=attributes)
                     return _PreparedRequest(value, available_ns)
 
                 task: Callable[[], Any] = build_request
