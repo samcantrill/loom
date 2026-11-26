@@ -312,3 +312,20 @@ ownership survives. Cases borrow services and retain incomplete receipts on
 failure; they never reboot hosts, cancel work or forcibly clear claims. Prepare
 separate immutable targets and fresh operation/report identities for successive
 cases. Passing this file qualifies the selected same-boot upgrade only.
+
+## Slow coordinator dispatch acceptance
+
+Run these local integration tests explicitly from the repository root.
+
+```sh
+LOOM_RUN_DISPATCH_ACCEPTANCE=1 uv run --locked --group dev pytest -q \
+  tests/integration/queue/test_dispatch_acceptance.py
+```
+
+The first test delays the selector across completed authority reads and holds
+one native delivery per synthetic agent. A larger case presents 115 sibling
+stages across 41 runs and twelve agents, with bounded slots and refreshed
+offers. Both check every worker request and unique accepted assignment. The restart test
+executes a prediction, two dependent scores and their joint summary with real
+local subprocesses, restarts the coordinator at fan-out, and verifies input
+commit lineage and the total launch count. Both use temporary local roots.
