@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from enum import StrEnum
 from typing import cast
 
@@ -55,7 +56,7 @@ from loom.pipeline.stores import (
 )
 from loom.pipeline.stores.service_authority import _pipeline_event_from_wire
 from loom.pipeline.event_sinks import EventSinkFailureRecord, EventObserverLinkRecord
-from loom.pipeline.stores.authority import ActionProducerBinding, ExecutionFence
+from loom.pipeline.stores.authority import ActionProducerBinding, ExecutionFence, PreparedAttemptBindRejected
 from loom.pipeline.stores.read_models import ActionResultBinding
 from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.serialization import PlainData
@@ -456,6 +457,11 @@ class AuthorityMutationService:
                 coordinator_principal=scoped_principal,
             )
             return accepted_authority_response(metadata, result)
+        except PreparedAttemptBindRejected as exc:
+            return rejected_authority_response(metadata, AuthorityProtocolRejection(
+                category=AuthorityProtocolErrorCategory.CONFLICT, code="prepared_attempt_bind_rejected",
+                message=str(exc), detail=_request_detail(payload),
+            ))
         except AuthorityRepositoryCompatibilityError as exc:
             return rejected_authority_response(
                 metadata,
@@ -1000,8 +1006,13 @@ class AuthorityMutationService:
     def _bind_prepared_attempt(
         self, request: AuthorityProtocolRequest
     ) -> AuthorityProtocolResult:
+        if request.expected_revision is not None:
+            decision = _required_body_value(request, "decision")
+            if not isinstance(decision, Mapping):
+                raise AuthorityMutationValidationError("binding decision must be a mapping")
+            request = replace(request, body=decision)
         self._repository.bind_prepared_attempt(
-            _required_run_uri(request),
+            _required_run_uri(request), expected_revision=request.expected_revision,
             assignment_id=_required_body_string(request, "assignment_id"),
             attempt_id=_required_body_string(request, "attempt_id"),
         )

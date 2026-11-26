@@ -189,7 +189,7 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, s
                 from loom.queue import _ready_preparation, local_daemon_execution as execution
 
                 preflight = (
-                    execution.LocalDaemonExecution._remote_eligible if scenario == "preflight_cancel"
+                    execution.LocalDaemonExecution._remote_preparation_wait if scenario == "preflight_cancel"
                     else _ready_preparation.describe_inputs
                 )
 
@@ -202,7 +202,7 @@ def test_shared_prepare_a_execute_b_without_input_relay(tmp_path, monkeypatch, s
                         preflight_finished.set()
 
                 if scenario == "preflight_cancel":
-                    monkeypatch.setattr(execution.LocalDaemonExecution, "_remote_eligible", staticmethod(held_preflight))
+                    monkeypatch.setattr(execution.LocalDaemonExecution, "_remote_preparation_wait", held_preflight)
                 else:
                     monkeypatch.setattr(_ready_preparation, "describe_inputs", held_preflight)
             remote.publish_offer(AgentOffer(session.session_id, session.coordinator_epoch, session.config_revision,

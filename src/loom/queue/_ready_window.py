@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from enum import Enum
+from time import monotonic
 from typing import TYPE_CHECKING, Protocol
 
 from loom.pipeline.orchestration import READY_WINDOW_LIMIT
@@ -26,6 +28,10 @@ type Selection = tuple[str, LocalDaemonExecutionOutcome]
 type OfferWindow = Callable[[tuple[StageWorkRecord, ...]], Selection | None]
 
 
+class ScanYield(Enum):
+    MORE = "more"
+
+
 class ReadyWindowScheduler:
     """Own the two cursors. The caller retains the final reservation decision."""
 
@@ -37,26 +43,35 @@ class ReadyWindowScheduler:
         self._ready_scan_boundary: tuple[int, int] | None = None
         self._last_dispatch_enqueue: int | None = None
         self._prefer_gpu_dispatch = True
+        self._resume_ordinary = False
         self._gpu_scan_after: StageWorkRecord | None = None
         self._gpu_scan_boundary: tuple[int, int] | None = None
         self._last_gpu_dispatch_enqueue: int | None = None
 
-    def select(self, admissions: Mapping[str, LocalDaemonAdmission], offer: OfferWindow) -> Selection | None:
+    def select(
+        self, admissions: Mapping[str, LocalDaemonAdmission], offer: OfferWindow, *, deadline: float | None = None,
+    ) -> Selection | ScanYield | None:
         if not admissions and not (isinstance(admissions, SchedulingAdmissions) and admissions.enqueue_through):
             self._ready_scan_after = self._ready_scan_boundary = None
             self._gpu_scan_after = self._gpu_scan_boundary = None
+            self._resume_ordinary = False
             return None
         if self._ready_scan_boundary is None:
             high_water = (admissions.enqueue_through if isinstance(admissions, SchedulingAdmissions)
                           else max(row.enqueue_sequence for row in admissions.values()))
             self._ready_scan_boundary = (self.clock(), high_water)
-        if self._prefer_gpu_dispatch:
+        if self._prefer_gpu_dispatch and not self._resume_ordinary:
             outcome = self._gpu_opportunity(admissions, offer, self._ready_scan_boundary)
             if outcome is not None:
                 self._ready_scan_after = self._ready_scan_boundary = None
                 self._last_dispatch_enqueue = admissions[outcome[0]].enqueue_sequence
                 self._prefer_gpu_dispatch = False
                 return outcome
+            if deadline is not None and monotonic() >= deadline:
+                self._resume_ordinary = True
+                self.wake()
+                return ScanYield.MORE
+        self._resume_ordinary = False
         for _ in range(4):
             page = self.read(
                 after=self._ready_scan_after, rotate_after=self._last_dispatch_enqueue,
@@ -72,8 +87,10 @@ class ReadyWindowScheduler:
                 self._ready_scan_after = self._ready_scan_boundary = None
                 return None
             self._ready_scan_after = page[-1]
+            if deadline is not None and monotonic() >= deadline:
+                break
         self.wake()
-        return None
+        return ScanYield.MORE
 
     def _gpu_opportunity(
         self, admissions: Mapping[str, LocalDaemonAdmission], offer: OfferWindow, boundary: tuple[int, int],

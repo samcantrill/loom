@@ -14,6 +14,7 @@ from typing import cast
 
 from loom._sqlite_policy import SQLitePolicy
 from loom.pipeline.orchestration import SchedulingProjectionState, StageWorkRecord
+from loom.pipeline.stores.read_models import BackendRevision
 from loom.scheduling import (
     CapacityAtom,
     ExactQuantity,
@@ -27,6 +28,7 @@ from ._managed_contracts import (
     ManagedAssignment,
     ManagedLocalError,
     ManagedOfferSnapshot,
+    ManagedOfferUnavailable,
     _assignment_dict,
     _assignment_from_dict,
     _capacity_atom_from_dict,
@@ -36,6 +38,42 @@ from ._managed_contracts import (
     _read_decline_reason,
     _require_sqlite_columns,
 )
+
+
+def _reopen_stage_work(conn: sqlite3.Connection, stage_work_id: str, assignment_id: str) -> None:
+    """Requeue the exact pre-start decision in its reservation owner's transaction."""
+    stage_work_row = conn.execute(
+        "SELECT record_json FROM stage_work WHERE stage_work_id = ?",
+        (stage_work_id,),
+    ).fetchone()
+    if stage_work_row is None:
+        raise ManagedLocalError("released assignment stage work is missing")
+    try:
+        stage_work = StageWorkRecord.from_dict(
+            json.loads(cast(str, stage_work_row["record_json"]))
+        )
+    except Exception as exc:
+        raise ManagedLocalError(
+            "released assignment stage work is invalid"
+        ) from exc
+    if stage_work.scheduling_state is not SchedulingProjectionState.DECIDED:
+        # A changed dependency can withdraw eligibility while a bind is in flight.
+        # Leave that newer authority projection intact.
+        return
+    if stage_work.scheduling_diagnostics.get("assignment_id") != assignment_id:
+        raise ManagedLocalError(
+            "released assignment does not own its stage-work decision"
+        )
+    reopened = replace(
+        stage_work,
+        scheduling_state=SchedulingProjectionState.READY,
+        scheduling_diagnostics={},
+        projection_revision=stage_work.projection_revision + 1,
+    )
+    conn.execute(
+        "UPDATE stage_work SET scheduling_state = ?, record_json = ? WHERE stage_work_id = ?",
+        (reopened.scheduling_state.value, _json(reopened.to_dict()), reopened.stage_work_id),
+    )
 
 
 class SQLiteCoordinatorAssignments:
@@ -193,6 +231,7 @@ class SQLiteCoordinatorAssignments:
         *,
         max_parallel_stages: int | None,
         decision_receipt: Mapping[str, PlainData],
+        decision_revision: BackendRevision | None = None,
         _reservation_transaction: Callable[[], AbstractContextManager[sqlite3.Connection]] | None = None,
     ) -> str:
         if max_parallel_stages is not None and (
@@ -308,13 +347,13 @@ class SQLiteCoordinatorAssignments:
                 (assignment.agent_id, assignment.session_id, assignment.offer_id),
             ).fetchone()
             if offer_row is None or not bool(offer_row["is_current"]):
-                raise ManagedLocalError("assignment offer is missing or stale")
+                raise ManagedOfferUnavailable("assignment offer is missing or stale")
             if claims and bool(offer_row["consumed"]):
-                raise ManagedLocalError(
+                raise ManagedOfferUnavailable(
                     "availability revision already has an unresolved admission"
                 )
             if offer_row["snapshot_revision"] != receipt_value["snapshot_revision"]:
-                raise ManagedLocalError("decision snapshot revision is stale")
+                raise ManagedOfferUnavailable("decision snapshot revision is stale")
             offer = cast(
                 Mapping[str, object],
                 json.loads(cast(str, offer_row["snapshot_json"])),
@@ -402,7 +441,7 @@ class SQLiteCoordinatorAssignments:
                 }
             }
             if not reflected_claim_ids.issubset(reflectable_claim_ids):
-                raise ManagedLocalError(
+                raise ManagedOfferUnavailable(
                     "offer reflects a claim that is not accepted and live"
                 )
             reflected_amounts: dict[tuple[str, str], Fraction] = {}
@@ -423,7 +462,7 @@ class SQLiteCoordinatorAssignments:
                 ) + reflected_amounts.get(
                     key, Fraction(0)
                 ) > configured.amount.fraction:
-                    raise ManagedLocalError(
+                    raise ManagedOfferUnavailable(
                         "offer net atoms conflict with reflected logical claims"
                     )
             for key, amount in requested.items():
@@ -479,6 +518,7 @@ class SQLiteCoordinatorAssignments:
                 scheduling_diagnostics={
                     "assignment_id": assignment.assignment_id,
                     "policy_epoch": cast(str, receipt_value["policy_epoch"]),
+                    **({"decision_revision": decision_revision.to_dict()} if decision_revision else {}),
                 },
             )
             conn.execute(
@@ -519,10 +559,17 @@ class SQLiteCoordinatorAssignments:
         self, assignment_id: str, *, reopen_offer: bool = False
     ) -> str:
         """Release a bound assignment proven to have no physical acceptance."""
+        return self._release_prestart(assignment_id, expected="bound", reopen_offer=reopen_offer)
 
+    def release_unbound(self, assignment_id: str) -> str:
+        """Requeue the exact reservation after a definitive authority bind rejection."""
+        return self._release_prestart(assignment_id, expected="reserved", reopen_offer=True)
+
+    def _release_prestart(self, assignment_id: str, *, expected: str, reopen_offer: bool) -> str:
         with self._transaction() as conn:
             row = conn.execute(
-                "SELECT state, agent_id, session_id, offer_id, stage_work_id "
+                "SELECT state, agent_id, session_id, offer_id, stage_work_id, "
+                "json_array_length(receipt_json, '$.component_descriptors') AS claim_kinds "
                 "FROM coordinator_assignments WHERE assignment_id = ?",
                 (assignment_id,),
             ).fetchone()
@@ -530,48 +577,15 @@ class SQLiteCoordinatorAssignments:
                 raise ManagedLocalError("assignment is not reserved")
             if row["state"] == "released":
                 return "released"
-            if row["state"] != "bound":
-                raise ManagedLocalError(
-                    "only an unaccepted bound assignment can be released"
-                )
+            if row["state"] != expected:
+                raise ManagedLocalError(f"only an unaccepted {expected} assignment can be released")
             conn.execute(
                 "UPDATE coordinator_assignments SET state = 'released' "
                 "WHERE assignment_id = ?",
                 (assignment_id,),
             )
-            stage_work_row = conn.execute(
-                "SELECT record_json FROM stage_work WHERE stage_work_id = ?",
-                (row["stage_work_id"],),
-            ).fetchone()
-            if stage_work_row is None:
-                raise ManagedLocalError("released assignment stage work is missing")
-            try:
-                stage_work = StageWorkRecord.from_dict(
-                    json.loads(cast(str, stage_work_row["record_json"]))
-                )
-            except Exception as exc:
-                raise ManagedLocalError(
-                    "released assignment stage work is invalid"
-                ) from exc
-            if (
-                stage_work.scheduling_state is not SchedulingProjectionState.DECIDED
-                or stage_work.scheduling_diagnostics.get("assignment_id")
-                != assignment_id
-            ):
-                raise ManagedLocalError(
-                    "released assignment does not own its stage-work decision"
-                )
-            reopened = replace(
-                stage_work,
-                scheduling_state=SchedulingProjectionState.READY,
-                scheduling_diagnostics={},
-                projection_revision=stage_work.projection_revision + 1,
-            )
-            conn.execute(
-                "UPDATE stage_work SET scheduling_state = ?, record_json = ? WHERE stage_work_id = ?",
-                (reopened.scheduling_state.value, _json(reopened.to_dict()), reopened.stage_work_id),
-            )
-            if reopen_offer:
+            _reopen_stage_work(conn, row["stage_work_id"], assignment_id)
+            if reopen_offer and row["claim_kinds"]:
                 conn.execute(
                     "UPDATE coordinator_offers SET consumed = 0 WHERE "
                     "agent_id = ? AND session_id = ? AND offer_revision = ? "
@@ -801,6 +815,22 @@ class SQLiteCoordinatorAssignments:
 
         with self._transaction() as conn:
             return _read_decline_reason(conn, "coordinator_events", assignment_id)
+
+    def prestart_remote_reservations(self, *, embedded_agent_id: str | None) -> tuple[ManagedAssignment, ...]:
+        """Find restart candidates before any outbound delivery can resume."""
+        with self._transaction(read_only=True) as conn:
+            return tuple(_assignment_from_dict(json.loads(row[0])) for row in conn.execute(
+                "SELECT identity_json FROM coordinator_assignments WHERE state IN ('reserved','bound') "
+                "AND (? IS NULL OR agent_id != ?)", (embedded_agent_id, embedded_agent_id),
+            ))
+
+    def prestart_state(self, assignment_id: str) -> str | None:
+        with self._transaction(read_only=True) as conn:
+            row = conn.execute(
+                "SELECT state FROM coordinator_assignments WHERE assignment_id=? AND state IN ('reserved','bound')",
+                (assignment_id,),
+            ).fetchone()
+            return None if row is None else str(row[0])
 
     def retained_assignments(
         self, *, agent_id: str

@@ -65,7 +65,7 @@ from loom.pipeline.stores import (
     WorkspaceIdentity,
     check_authority_schema_version,
 )
-from loom.pipeline.stores.authority import ExecutionFence
+from loom.pipeline.stores.authority import ExecutionFence, PreparedAttemptBindRejected
 from loom.pipeline.stores.reliability_facts import (
     reliability_payload_matches,
     reliability_policy_fact_key,
@@ -387,7 +387,8 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
             return receipt
 
     def bind_prepared_attempt(
-        self, run_uri: str, *, assignment_id: str, attempt_id: str
+        self, run_uri: str, *, assignment_id: str, attempt_id: str,
+        expected_revision: BackendRevision | None = None,
     ) -> None:
         state = self._require_run(run_uri)
         unbound_attempt = state.managed_unbind_receipts.get(assignment_id)
@@ -400,13 +401,16 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
             if current[0] != attempt_id:
                 raise ValueError("assignment binding conflicts")
             return
+        rejection = ValueError if expected_revision is None else PreparedAttemptBindRejected
+        if expected_revision is not None and state.revision != expected_revision:
+            raise PreparedAttemptBindRejected("stale authority revision for prepared binding")
         if state.status in {
             RunStatus.SUCCEEDED,
             RunStatus.FAILED,
             RunStatus.CANCELLED,
             RunStatus.INTERRUPTED,
         }:
-            raise ValueError("terminal run cannot bind prepared work")
+            raise rejection("terminal run cannot bind prepared work")
         attempt = next(
             (
                 item
@@ -416,8 +420,12 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
             ),
             None,
         )
-        if attempt is None or attempt.status is not StageStatus.PENDING:
-            raise ValueError("only a PENDING prepared attempt may bind")
+        if (
+            attempt is None or attempt.status is not StageStatus.PENDING
+            or state.stage_statuses[attempt.stage_name] is not StageStatus.PENDING
+            or state.attempts[attempt.stage_name][-1].attempt_id != attempt_id
+        ):
+            raise rejection("only a PENDING prepared attempt may bind")
         receipt = next(
             (
                 receipt
@@ -431,9 +439,9 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
         for upstream_stage, commit_id in receipt.request.upstream_commits.items():
             commit = state.commits.get(upstream_stage)
             if commit is None or commit.commit_id != commit_id:
-                raise ValueError("prepared attempt upstream commit evidence is stale")
+                raise rejection("prepared attempt upstream commit evidence is stale")
         if any(value[0] == attempt_id for value in state.managed_bindings.values()):
-            raise ValueError("prepared attempt is already bound")
+            raise rejection("prepared attempt is already bound")
         state.managed_bindings[assignment_id] = (attempt_id, "bound", None)
 
     def unbind_prepared_attempt(

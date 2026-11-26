@@ -48,6 +48,10 @@ class AuthorityStoreError(ValueError):
     """Raised when authoritative per-run store operations are invalid."""
 
 
+class PreparedAttemptBindRejected(AuthorityStoreError):
+    """The authority definitively rejected a new binding for this decision."""
+
+
 @dataclass(frozen=True, slots=True)
 class StatusTransition:
     run_uri: str
@@ -455,8 +459,15 @@ class PreparedAttemptExecutionAuthority(PreparedAttemptAuthority, Protocol):
     """Phase 2 expected-state admission operations for prepared attempts."""
 
     def bind_prepared_attempt(
-        self, run_uri: str, *, assignment_id: str, attempt_id: str
-    ) -> None: ...
+        self, run_uri: str, *, assignment_id: str, attempt_id: str,
+        expected_revision: BackendRevision | None = None,
+    ) -> None:
+        """Bind at the scheduling revision, or replay the exact accepted operation.
+
+        A rejected comparison leaves the assignment unbound. A transport failure
+        requires replay against the same decision before releasing capacity.
+        """
+        ...
     def unbind_prepared_attempt(
         self, run_uri: str, *, assignment_id: str, attempt_id: str
     ) -> None:

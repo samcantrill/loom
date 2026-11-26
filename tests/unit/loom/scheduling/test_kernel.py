@@ -279,6 +279,15 @@ def test_kernel_selects_a_complete_claim_deterministically() -> None:
     assert decision.selected.claims[0].atoms[0].amount == ExactQuantity(1)
 
 
+def test_profile_mismatch_preserves_host_for_other_ready_work() -> None:
+    kernel = SchedulingKernel(planners={"cpu": CpuResourcePlanner()}, policy=FifoSchedulingPolicy())
+    decision = kernel.decide(
+        work=(_work("a"), _work("b")), candidates=(_candidate("only"),), as_of=1,
+        compatible_candidates={"b": frozenset({"only"})},
+    )
+    assert (decision.stage_work_id, decision.candidate_id) == ("b", "only")
+
+
 def test_kernel_can_evaluate_mixed_epoch_work_with_exact_planner_bindings() -> None:
     old_planner = _EpochCpuPlanner("old")
     new_planner = _EpochCpuPlanner("new")

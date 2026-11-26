@@ -1,7 +1,7 @@
 """Bounded process-local observations of coordinator waits, independent of authority."""
 from __future__ import annotations
 
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from threading import Lock
@@ -68,6 +68,7 @@ class _Attempt:
     boundary: str
     since_ns: int
     prequeue: _Prequeue
+    ready_at: int
     totals: dict[str, int] = field(default_factory=dict)
     offer: str | None = None
     confirmed_ns: int = 0
@@ -126,7 +127,7 @@ class SchedulingWaits:
             self._attempts[key] = _Attempt(record.stage_work_id, record.projection_revision,
                                            record.projection_revision, record.attempt_id,
                                            record.admission_id, "capacity_unknown", now,
-                                           _Prequeue(now, now, "unknown" if scanned else "first_scan"))
+                                           _Prequeue(now, now, "unknown" if scanned else "first_scan"), record.ready_at)
             if len(self._attempts) > self._limit:
                 self._finish(next(iter(self._attempts)), "observation_evicted", None)
         milestone("attempt_ready", stage_work_id=record.stage_work_id, attempt_id=record.attempt_id,
@@ -244,6 +245,42 @@ class SchedulingWaits:
             for attempt_key in tuple(self._attempts):
                 if attempt_key[0] == run_uri and attempt_key[1] not in eligible:
                     self._finish(attempt_key, "left_ready", None)
+
+    def waiting_reasons(self, admission_ids: set[str]) -> dict[str, str]:
+        """Summarize bounded stage observations for a queue page without run-store IO."""
+        labels = {
+            "snapshot_unavailable": "awaiting authority snapshot",
+            "context_unavailable": "loading admission context",
+            "capacity_unknown": "awaiting capacity observation",
+            "request_preparation": "preparing worker request",
+            "input_descriptors": "inspecting worker inputs",
+            "attempt_preparation_error": "worker request or input preparation failed",
+            "no_eligible_offer": "no eligible offer observed",
+            "assignment_slots_full": "assignment slots full",
+            "run_parallel_limit": "run parallelism limit",
+            "unknown": "awaiting scheduling decision",
+            "first_scan": "awaiting first placement scan",
+        }
+        groups: dict[str, list[tuple[int, str, str]]] = {}
+        with self._lock:
+            for (_, stage), item in self._attempts.items():
+                if item.admission_id not in admission_ids:
+                    continue
+                reason = item.boundary
+                if item.prequeue.queued_ns is None and item.prequeue.reason not in {"unknown", "queued"}:
+                    reason = item.prequeue.reason
+                groups.setdefault(item.admission_id, []).append(
+                    (item.ready_at, stage, labels.get(reason, reason.replace("_", " ")))
+                )
+        result = {}
+        for identity, stages in groups.items():
+            _, stage, reason = min(stages)
+            summary = f"{stage}: {reason}"
+            if len(stages) > 1:
+                counts = Counter(label for _, _, label in stages)
+                summary += " (" + ", ".join(f"{n} {label}" for label, n in sorted(counts.items())) + ")"
+            result[identity] = summary
+        return result
 
     def summaries(self, run_uri: str) -> list[PlainData]:
         with self._lock:

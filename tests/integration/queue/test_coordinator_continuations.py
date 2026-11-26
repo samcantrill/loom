@@ -84,10 +84,10 @@ def test_early_requests_survive_lost_notifications_and_restart(tmp_path, monkeyp
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config)
     completed = Event()
-    work_ids = []
+    work_ids = set()
 
     def drop_notification(work_id):
-        work_ids.append(work_id)
+        work_ids.add(work_id)
         if len(work_ids) == len(runs):
             completed.set()
 
@@ -218,4 +218,113 @@ def test_admission_detail_times_actual_context_request_and_reservation_waits(tmp
     finally:
         for _, release in gates.values():
             release.set()
+        daemon.stop()
+
+
+def test_requested_authority_read_completes_five_seconds_before_single_reservation(tmp_path, monkeypatch):
+    import time
+    from loom.queue import _run_observations
+
+    config = _daemon_config(tmp_path)
+    uri = _persist_sleep_run(config.run_store_root, run_name="slow-turn", stage_name="work", seconds=0.01)
+    LocalDaemon.initialize(config)
+    owner = _run_observations.DispatchObservations
+    original = owner.begin_cycle
+    held = Event()
+    consumed = []
+    milestone = _run_observations.milestone
+
+    def slow_turn(self, *args):
+        invalidated, epochs, _, revisions, _, _ = args
+        if not held.is_set() and any(
+            read.work_ids and read.future.done() and read.epochs == epochs
+            and read.admission.run_uri not in invalidated and read.admission.revision == revisions.get(identity)
+            for identity, read in self._reads.items()
+        ):
+            held.set()
+            time.sleep(5.1)
+        return original(self, *args)
+
+    def capture(name, **attrs):
+        if name == "dispatch_observation_consumed":
+            consumed.append(attrs)
+        milestone(name, **attrs)
+
+    monkeypatch.setattr(owner, "begin_cycle", slow_turn)
+    monkeypatch.setattr(_run_observations, "milestone", capture)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+        client.submit(LocalDaemonAdmissionRequest("delayed", uri))
+        assert client.wait("delayed", timeout_seconds=30).state.value == "SUCCEEDED"
+        assert held.is_set() and _supervisor_launch_count(config) == 1
+        with sqlite3.connect(config.execution_database) as conn:
+            (work_id,), = conn.execute("SELECT stage_work_id FROM coordinator_assignments")
+        assert any(event["stage_work_id"] == work_id and event["completion_wait_ns"] >= 5_000_000_000
+                   for event in consumed)
+        assert LocalRunStore(config.run_store_root).read_stage_worker_request(uri, "work", attempt=None)
+    finally:
+        daemon.stop()
+
+
+def test_retained_input_mismatch_keeps_peer_runnable_on_only_remote_host(tmp_path, monkeypatch):
+    import time
+    from loom.queue import _ready_preparation as prep
+    from loom.queue._remote_stage_execution import REMOTE_EXECUTION_CAPABILITY, REGULAR_FILE_RELAY_CAPABILITY
+    from loom.queue.agent_sessions import AgentRegistration
+    from loom.queue.errors import QueueServiceError
+    from tests.unit.loom.queue.test_agent_sessions import _offer, _policy, _view
+
+    caps = ("python", REMOTE_EXECUTION_CAPABILITY, REGULAR_FILE_RELAY_CAPABILITY)
+    policy = _policy()
+    profile = ResidentProfileDescriptor.from_dict(_launch_profile().descriptor)
+    cfg = replace(_daemon_config(tmp_path), agent_root=None, resident_worker_launch_profile=None,
+                  cpu_capacity=0, memory_capacity_bytes=0, agent_resource_providers=(), remote_profiles=(profile,),
+                  agent_policy=replace(policy, agents=(replace(policy.agents[0], capabilities=caps),)))
+    bad, peer = (_persist_sleep_run(cfg.run_store_root, run_name=name, stage_name="work") for name in ("a", "b"))
+    store = LocalRunStore(cfg.run_store_root)
+    prepare = prep.prepare_ready_request
+    invalidated, observed = Event(), Event()
+
+    def build(**kwargs):
+        if kwargs["record"].run_uri == bad and not invalidated.is_set():
+            request = prepare(**kwargs)
+            damaged = request.to_dict()
+            damaged["metadata"]["attempt_input_evidence"] = None
+            store.write_stage_worker_request(bad, "work", damaged, attempt=request.attempt)
+            invalidated.set()
+        try:
+            return prepare(**kwargs)
+        except QueueServiceError as error:
+            if kwargs["record"].run_uri == bad and "retained input bindings" in str(error):
+                observed.set()
+            raise
+
+    monkeypatch.setattr(prep, "prepare_ready_request", build)
+    LocalDaemon.initialize(cfg)
+    daemon = LocalDaemon(cfg)
+    daemon.start()
+    try:
+        view = _view(daemon)
+        hello = view.handshake()
+        session = view.register(AgentRegistration("reg", hello["coordinator_id"], hello["coordinator_epoch"],
+                                "agent-root-a", "config-1", "inventory-1", "availability-1",
+                                ("default",), caps, retirement_verifier="01"*32))
+        offer = replace(_offer(session.session_id, session.coordinator_epoch), resident_profiles=(profile,))
+        view.publish_offer(offer, idempotency_key="offer")
+        client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+        with daemon._reconcile_guard:
+            client.submit(LocalDaemonAdmissionRequest("bad", bad))
+            client.submit(LocalDaemonAdmissionRequest("peer", peer))
+        assert observed.wait(20), daemon._service_error
+        until = time.monotonic() + 20
+        while time.monotonic() < until:
+            with sqlite3.connect(cfg.execution_database) as conn:
+                rows = conn.execute("SELECT run_uri FROM coordinator_assignments WHERE state != 'released'").fetchall()
+            if rows:
+                break
+            time.sleep(.05)
+        assert rows == [(peer,)], (rows, daemon._service_error)
+    finally:
         daemon.stop()

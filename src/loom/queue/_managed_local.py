@@ -50,10 +50,12 @@ from loom.pipeline.stores import (
     LocalRunStore,
     OutputCommit,
 )
+from loom.pipeline.stores.read_models import BackendRevision
 from loom.pipeline.stores.atomic import atomic_write_bytes
 from loom.pipeline.stores.authority import (
     ExecutionFence,
     PreparedAttemptExecutionAuthority,
+    PreparedAttemptBindRejected,
 )
 from loom.scheduling import (
     ResourceClaim,
@@ -424,6 +426,7 @@ def run_managed_local_assignment(
     cancellation_requested: Callable[[], bool] | None = None,
     suspend_requested: Callable[[], bool] | None = None,
     execution_started: Callable[[], None] | None = None,
+    decision_revision: BackendRevision | None = None,
     reservation_guard: Callable[[], AbstractContextManager[None]] | None = None,
     _reservation_transaction: Callable[[], AbstractContextManager[sqlite3.Connection]] | None = None,
     embedded_recovery: EmbeddedRecovery | None = None,
@@ -450,11 +453,11 @@ def run_managed_local_assignment(
             assignment,
             claims,
             max_parallel_stages=max_parallel_stages,
-            decision_receipt=decision_receipt,
+            decision_receipt=decision_receipt, decision_revision=decision_revision,
             _reservation_transaction=_reservation_transaction,
         )
     return _run_reserved_local_assignment(
-        prepared, coordinator=coordinator, authority=authority, journal=journal,
+        prepared, coordinator=coordinator, authority=authority, journal=journal, decision_revision=decision_revision,
         providers=providers, run_store=run_store, supervisor=supervisor,
         resident_launch_profile=resident_launch_profile, cancellation_requested=cancellation_requested,
         suspend_requested=suspend_requested, execution_started=execution_started, embedded_recovery=embedded_recovery,
@@ -477,6 +480,7 @@ class _ReservedLocalExecution:
     suspend_requested: Callable[[], bool] | None
     execution_started: Callable[[], None] | None
     embedded_recovery: EmbeddedRecovery | None
+    decision_revision: BackendRevision | None
 
     def prepare_grant(self) -> ExecutionFence:
         assignment = self.staged.assignment
@@ -484,11 +488,14 @@ class _ReservedLocalExecution:
         commands = self.staged.commands
         workspace = self.staged.workspace
         delivered = self.staged.delivered
-        self.authority.bind_prepared_attempt(
-            assignment.run_uri,
-            assignment_id=assignment.assignment_id,
-            attempt_id=assignment.attempt_id,
-        )
+        try:
+            self.authority.bind_prepared_attempt(
+                assignment.run_uri, assignment_id=assignment.assignment_id,
+                attempt_id=assignment.attempt_id, expected_revision=self.decision_revision,
+            )
+        except PreparedAttemptBindRejected:
+            self.coordinator.release_unbound(assignment.assignment_id)
+            raise
         self.coordinator.advance(
             assignment.assignment_id, expected="reserved", next_state="bound"
         )
@@ -1124,12 +1131,13 @@ def _run_reserved_local_assignment(
     supervisor: AgentProcessSupervisorClient, resident_launch_profile: ResidentWorkerLaunchProfile,
     cancellation_requested: Callable[[], bool] | None,
     suspend_requested: Callable[[], bool] | None, execution_started: Callable[[], None] | None,
-    embedded_recovery: EmbeddedRecovery | None,
+    embedded_recovery: EmbeddedRecovery | None, decision_revision: BackendRevision | None = None,
 ) -> ManagedExecutionReceipt:
     """Resume each checkpoint against the durable assignment and its retained owners."""
     execution = _ReservedLocalExecution(
         staged, coordinator, authority, journal, providers, run_store, supervisor,
         resident_launch_profile, cancellation_requested, suspend_requested, execution_started, embedded_recovery,
+        decision_revision,
     )
     assignment_milestone("assignment_received", staged.assignment)
     fence = execution.prepare_grant()
