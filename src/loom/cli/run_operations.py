@@ -99,8 +99,10 @@ def _facts(value: PlainData) -> PlainData:
 
 
 def _render_observation(observation: RunObservation, stream: TextIO) -> None:
+    from loom.timestamps import utc_timestamp
+
     state, _, _ = logical_status(observation)
-    stream.write(f"run {observation.operation_id}: {state}\n")
+    stream.write(f"{utc_timestamp()}  run {observation.operation_id}: {state}\n")
     inspection = observation.inspection
     if inspection is not None:
         payload = inspection.to_dict()

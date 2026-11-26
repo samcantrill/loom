@@ -103,6 +103,23 @@ def test_factory_is_lazy_and_connection_failure_preserves_submission_identity(
     assert not endpoint.parent.exists()
 
 
+def test_queue_list_on_old_coordinator_explains_upgrade_before_issuing_query(tmp_path: Path) -> None:
+    from io import StringIO
+
+    from loom.cli.main import main
+
+    endpoint = tmp_path / "old.sock"
+    with _peer(endpoint, lambda *_: pytest.fail("queue query reached an old server")) as requests:
+        output = StringIO()
+        result = main(["queue", "list", "--endpoint", str(endpoint), "--format", "json"],
+                      stdout=output, stderr=StringIO())
+    assert result != 0
+    error = json.loads(output.getvalue())["error"]
+    assert error["code"] == "cli.queue.unsupported_capability"
+    assert "queue-list-v1" in error["message"]
+    assert [item["operation"] for item in requests] == ["handshake"]
+
+
 def test_old_coordinator_rejects_context_before_sending_submission(tmp_path: Path) -> None:
     from loom.queue.preparation import PreparationSource, PrepareRunRequest
     from loom.runs import SubmissionContext

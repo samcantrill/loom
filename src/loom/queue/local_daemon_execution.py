@@ -7665,6 +7665,18 @@ def build_local_daemon_owner_views(
     if not admissions:
         return ()
     run_uris = tuple(sorted({item.run_uri for item in admissions}))
+    view_for = _read_owner_journals(
+        config, run_uris, coordinator_id=coordinator_id, agent_id=agent_id, clock=clock,
+    )
+    return tuple(view_for(admission, admission_revision) for admission in admissions)
+
+
+def _read_owner_journals(
+    config: LocalDaemonConfig, run_uris: tuple[str, ...], *, coordinator_id: str,
+    agent_id: str | None, clock: Callable[[], str],
+    read_snapshot: Callable[[str], AuthoritativeRunSnapshot] | None = None,
+) -> Callable[[LocalDaemonAdmission, int], Mapping[str, PlainData]]:
+    """Read shared scheduling/assignment journals once, then inspect each run on demand."""
     run_placeholders = ",".join("?" for _ in run_uris)
     stage_work_by_run: dict[str, list[dict[str, PlainData]]] = {}
     assignments_by_run: dict[str, list[dict[str, PlainData]]] = {}
@@ -7901,8 +7913,17 @@ def build_local_daemon_owner_views(
             agent_available = False
     agent_observed_at = clock()
 
-    views: list[Mapping[str, PlainData]] = []
-    for admission in admissions:
+    def view_for(admission: LocalDaemonAdmission, admission_revision: int) -> Mapping[str, PlainData]:
+        # A malformed row in one run cannot mark a different run's journal
+        # unavailable. Recheck just the requested identity on a failed batch.
+        if len(run_uris) > 1 and (
+            not execution_available or (config.agent_root is not None and agent_id is not None and not agent_available)
+        ):
+            single = _read_owner_journals(
+                config, (admission.run_uri,), coordinator_id=coordinator_id, agent_id=agent_id, clock=clock,
+                read_snapshot=read_snapshot,
+            )
+            return single(admission, admission_revision)
         authority_view: dict[str, PlainData]
         authority_observed_at = clock()
         snapshot: AuthoritativeRunSnapshot | None = None
@@ -7912,10 +7933,12 @@ def build_local_daemon_owner_views(
             factory = config.coordinator_authority_factory
             if factory is None:
                 raise QueueServiceError("coordinator authority factory is unavailable")
-            authority = factory(admission.run_uri)
-            snapshot = authority.open_run(admission.run_uri)
+            snapshot = (
+                read_snapshot(admission.run_uri) if read_snapshot is not None
+                else factory(admission.run_uri).open_run(admission.run_uri)
+            )
             if admission.cancellation_operation_id is not None:
-                receipt = authority.read_cancellation_epoch_receipt(
+                receipt = factory(admission.run_uri).read_cancellation_epoch_receipt(
                     admission.run_uri, admission.cancellation_operation_id
                 )
                 cancellation_receipt = None if receipt is None else receipt.to_dict()
@@ -8158,8 +8181,9 @@ def build_local_daemon_owner_views(
         )
         if not isinstance(view, dict):
             raise AssertionError("local daemon owner view must be a mapping")
-        views.append(view)
-    return tuple(views)
+        return view
+
+    return view_for
 
 
 __all__ = [

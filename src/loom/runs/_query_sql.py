@@ -6,25 +6,28 @@ from typing import Any
 from ._query_page import after_cursor
 from .query import QUERY_LIMITS, RunQuery, QueryError, timestamp
 
-def candidate_predicate(value: Any, fields: set[str]) -> tuple[str, list[Any]]:
+def candidate_predicate(value: Any, fields: set[str], *, text: bool = False) -> tuple[str, list[Any]]:
     """Conservative necessary condition; full typed evaluation remains authoritative.
 
     AND can use a supported subset. OR must retain every branch; NOT is left
     to the evaluator because unknown/missing facts use three-valued semantics.
-    Only journal-owned string equality is pushed down, with bound parameters.
+    Bound string predicates on journal-owned fields keep their typed semantics.
     """
     if not isinstance(value, Mapping):
         return "1", []
     kind = value.get("kind")
     if kind in {"all", "any"}:
-        parts = [candidate_predicate(term, fields) for term in value["terms"]]
+        parts = [candidate_predicate(term, fields, text=text) for term in value["terms"]]
         if not parts:
             return ("1" if kind == "all" else "0"), []
         return "(" + (" AND " if kind == "all" else " OR ").join(p[0] for p in parts) + ")", [v for p in parts for v in p[1]]
     field = value.get("field", {})
     path = field.get("path", ())
-    if (kind != "compare" or field.get("source") != "native"
-            or len(path) != 1 or path[0] not in fields):
+    if field.get("source") != "native" or len(path) != 1 or path[0] not in fields:
+        return "1", []
+    if text and kind == "contains_text":
+        return f"loom_contains_text({path[0]}, ?)", [value["text"].casefold()]
+    if kind != "compare":
         return "1", []
     values = value["value"] if value["op"] == "in" else [value["value"]]
     if value["op"] not in {"eq", "in"} or not all(isinstance(v, str) for v in values):
@@ -36,7 +39,7 @@ def ordered_rows(
     connection_factory: Any, query: RunQuery, owner: str, table: str, columns: str,
     fields: set[str], *, sql_prefix: str = "",
 ) -> list[dict[str, Any]]:
-    where, args = candidate_predicate(query.to_dict()["where"], fields)
+    where, args = candidate_predicate(query.to_dict()["where"], fields, text=query.entity == "jobs")
     last = after_cursor(query, owner)
     expressions = []
     for order in query.order_by:
@@ -75,6 +78,12 @@ def ordered_rows(
 
     # Connections and transactions never reach authority or filesystem readers.
     with connection_factory() as conn:
+        if query.entity == "jobs":
+            conn.create_function(
+                "loom_contains_text", 2,
+                lambda value, needle: isinstance(value, str) and needle in value.casefold(),
+                deterministic=True,
+            )
         conn.create_function("query_timestamp", 1, valid_timestamp, deterministic=True)
         conn.create_collation("loom_query_timestamp", compare_timestamp)
         return [dict(row) for row in conn.execute(

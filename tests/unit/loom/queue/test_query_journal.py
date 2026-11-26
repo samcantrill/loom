@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from loom.queue._query_journal import journal_candidates
-from loom.runs import AllOf, AnyOf, Compare, Field, JobQuery, Order, SubmissionQuery
+from loom.runs import AllOf, AnyOf, Compare, ContainsText, Field, JobQuery, Order, SubmissionQuery
 from loom.runs._query_page import collect_pages, search_page
 from loom.runs.query import QueryRecord, compare_keys
 
@@ -20,10 +20,14 @@ pytestmark = pytest.mark.unit
 def journal():
     conn = sqlite3.connect(":memory:", uri=True)
     conn.row_factory = sqlite3.Row
-    conn.execute("CREATE TABLE managed_admissions(admission_id TEXT PRIMARY KEY, queue_item_id TEXT, state TEXT, run_uri TEXT, accepted_at TEXT)")
+    conn.execute("""CREATE TABLE managed_admissions(
+        admission_id TEXT PRIMARY KEY, queue_item_id TEXT, state TEXT, run_uri TEXT, accepted_at TEXT,
+        coordinator_id TEXT, execution_owner TEXT, intent_digest TEXT, authority_operation_id TEXT,
+        revision INTEGER, run_priority INTEGER, enqueue_sequence INTEGER, cancellation_operation_id TEXT,
+        cancellation_principal_id TEXT, blocked_reason TEXT, admitted_by TEXT)""")
     conn.execute("CREATE TABLE preparation_operations(operation_id TEXT PRIMARY KEY, principal_id TEXT, state TEXT, kind TEXT, queue_item_id TEXT, accepted_at TEXT, result_json TEXT)")
     for i in range(1103):
-        conn.execute("INSERT INTO managed_admissions VALUES(?,?,?,?,?)", (f"a{i:04}", f"q{i}", "ACTIVE", f"file:///run/{i}", "2026-01-01T00:00:00Z"))
+        conn.execute("INSERT INTO managed_admissions(admission_id, queue_item_id, state, run_uri, accepted_at) VALUES(?,?,?,?,?)", (f"a{i:04}", f"q{i}", "ACTIVE", f"file:///run/{i}", "2026-01-01T00:00:00Z"))
         conn.execute("INSERT INTO preparation_operations VALUES(?,?,?,?,?,?,?)", (f"o{i:04}", "client", "applied", "prepare", f"q{i}", "2026-01-01T00:00:00Z", '{}'))
     conn.commit()
 
@@ -51,6 +55,34 @@ def test_journal_pages_bound_rows_and_resume_without_duplicates(journal, model, 
     assert result.complete
     assert max(sizes) == 501
     assert all(size <= 501 for size in sizes)
+
+
+def test_job_coverage_distinguishes_pending_dispatch_from_unobserved_scheduler_handle():
+    from loom.queue._run_queries import _job_warnings
+
+    owners = {
+        "slurm": {"availability": "available", "assignments": [
+            {"assignment_id": "pending", "job_id": None,
+             "submission": {"dispatch_state": "intent", "scheduler_state": None}},
+            {"assignment_id": "observed", "job_id": "200",
+             "submission": {"dispatch_state": "accepted", "scheduler_state": "PENDING"}},
+            {"assignment_id": "unobserved", "job_id": "201",
+             "submission": {"dispatch_state": "accepted", "scheduler_state": None}},
+        ]},
+    }
+    assert _job_warnings("admission", owners) == [
+        {"code": "job_associations_unavailable", "admission_id": "admission", "axis": "slurm",
+         "diagnostic": "scheduler_observation_unavailable", "assignment_id": "unobserved"},
+    ]
+
+
+def test_journal_job_text_uses_literal_unicode_case_folding_before_owner_reads(journal):
+    daemon, conn = journal
+    conn.execute("UPDATE managed_admissions SET queue_item_id='Straße_90%', admitted_by='client' WHERE admission_id='a1102'")
+    query = JobQuery(where=ContainsText(Field("native", ("queue_item_id",)), "STRASSE_90%")).checked()
+    rows = journal_candidates(daemon, query, "owner")
+    assert [row["admission_id"] for row in rows] == ["a1102"]
+    assert "admitted_by" not in rows[0]
 
 
 def test_predicates_narrow_only_supported_boolean_branches(journal):

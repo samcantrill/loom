@@ -38,7 +38,7 @@ def files(root: Path) -> dict[str, bytes]:
     }
 
 
-@pytest.mark.parametrize("version", [12, 15, 16, 17, 18, 20])
+@pytest.mark.parametrize("version", [12, 15, 16, 17, 18, 21])
 def test_coordinator_refuses_other_schema_before_owner_lock(
     tmp_path: Path, version: int
 ) -> None:
@@ -111,7 +111,7 @@ def test_current_roots_reopen_with_their_identity(tmp_path: Path) -> None:
         journal.close()
 
 
-@pytest.mark.parametrize("version", [18, 19])
+@pytest.mark.parametrize("version", [18, 20])
 def test_interrupted_coordinator_write_recovers_only_current_schema(
     tmp_path: Path, version: int
 ) -> None:

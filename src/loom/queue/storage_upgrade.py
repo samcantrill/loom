@@ -310,7 +310,7 @@ def _source_inventory(role: dict, request: dict) -> dict:
         else:
             require_storage_upgrade_ready(root)
     native_role = "coordinator" if item["role"] == "coordinator" else "local-agent"
-    identity = _open_root(root, role=native_role)
+    identity = _open_root(root, role=native_role, for_storage_upgrade=True)
     if identity != item["expected_root_id"]:
         raise QueueServiceError("storage upgrade owner identity changed")
     require_unretired(root)
@@ -490,6 +490,84 @@ def _target_file(role: dict, path: Path) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
 
 
+def _upgrade_admission_creators(conn: sqlite3.Connection) -> None:
+    """Upgrade a verified v19 coordinator in its caller's write transaction."""
+    from ._preparation_operations import PREPARATION_RUN_PREFIX
+    from .local_daemon import _validate_coordinator_schema
+
+    conn.execute("ALTER TABLE managed_admissions ADD COLUMN admitted_by TEXT")
+    # Only a claimed preparation operation could submit these reserved names.
+    # A reconciler rotates child_name on each new verification generation.
+    # Different operation IDs can generate the same historical name (':' is
+    # valid in an ID), so retain a principal only when all creators agree.
+    principals: dict[str, set[str]] = {}
+    rows = conn.execute(
+        "SELECT operation_id, principal_id, child_name, dispatch_claimed, "
+        "COALESCE(json_extract(selected_json, '$.reconciliation.verification_generation'), 0) "
+        "FROM preparation_operations"
+    )
+    for operation_id, principal, current_child, dispatched, generation in rows:
+        for previous in range(generation):
+            identity = operation_id if previous == 0 else f"{operation_id}:verify:{previous}"
+            child = PREPARATION_RUN_PREFIX + hashlib.sha256(identity.encode()).hexdigest()
+            principals.setdefault(child, set()).add(principal)
+        if dispatched and current_child.startswith(PREPARATION_RUN_PREFIX):
+            principals.setdefault(current_child, set()).add(principal)
+    # Target receipts can also be retained by an operation observing someone
+    # else's admission. They cannot establish the creator of a v19 target.
+    updates = [(next(iter(owners)), child) for child, owners in principals.items() if len(owners) == 1]
+    conn.executemany("UPDATE managed_admissions SET admitted_by=? WHERE queue_item_id=?", updates)
+    _validate_coordinator_schema(conn)
+    conn.execute("PRAGMA user_version=20")
+
+
+def _upgrade_stopped_admissions(root: Path, *, fleet_replacement: bool = False) -> dict:
+    """Commit under the native owner lock after the caller verifies root identity."""
+    from ._maintenance import _read as maintenance_gate
+    from .errors import QueueConflictError
+
+    database = root / "control.sqlite"
+    details = database.lstat()
+    if not stat.S_ISREG(details.st_mode) or details.st_uid != os.getuid() or details.st_mode & 0o077:
+        raise QueueServiceError("admission upgrade requires a private coordinator database")
+    require_storage_upgrade_ready(root)
+    try:
+        with closing(sqlite3.connect(database.as_uri() + "?mode=rw", uri=True)) as conn, conn:
+            conn.execute("PRAGMA synchronous=EXTRA")
+            conn.execute("BEGIN IMMEDIATE")
+            previous = conn.execute("PRAGMA user_version").fetchone()[0]
+            if previous == 19:
+                if fleet_replacement and maintenance_gate(conn)["state"] != "closed":
+                    raise QueueConflictError("admission upgrade for runtime replacement requires closed maintenance")
+                # Fence restoration of an older cohort snapshot before writing.
+                require_storage_upgrade_ready(root, entering=True)
+                _upgrade_admission_creators(conn)
+            elif previous != 20:
+                raise QueueServiceError("coordinator admission storage version is unsupported")
+            total, attributed = conn.execute(
+                "SELECT COUNT(*), COUNT(admitted_by) FROM managed_admissions"
+            ).fetchone()
+    except sqlite3.Error as exc:
+        raise QueueServiceError(f"coordinator admission storage upgrade failed: {exc}") from exc
+    return {"previous_version": previous, "storage_version": 20,
+            "attributed": attributed, "unknown": total - attributed}
+
+
+def upgrade_admission_creators(coordinator_root: Path, *, expected_coordinator_id: str) -> dict:
+    """Atomically migrate one stopped coordinator journal, including bundles and retained work."""
+    from .local_daemon import _acquire_lock, _open_root
+    from .retirement import require_unretired
+
+    root = coordinator_root.resolve()
+    _private_directory(root)
+    with _acquire_lock(root):
+        identity = _open_root(root, role="coordinator", for_storage_upgrade=True)
+        if identity != expected_coordinator_id:
+            raise QueueServiceError("storage upgrade coordinator identity changed")
+        require_unretired(root)
+        return {"coordinator_id": identity, **_upgrade_stopped_admissions(root)}
+
+
 def _prepare_database(role: dict, owner: dict, original: Path, candidate: Path) -> None:
     target = role["qualified"]
     with closing(sqlite3.connect(candidate, isolation_level=None)) as conn:
@@ -501,6 +579,8 @@ def _prepare_database(role: dict, owner: dict, original: Path, candidate: Path) 
             revision = int(values["active_configuration_revision"]) + 1
             updates = {"active_configuration_revision": str(revision)}
             if owner["role"] == "coordinator":
+                if conn.execute("PRAGMA user_version").fetchone()[0] == 19:
+                    _upgrade_admission_creators(conn)
                 updates.update(scheduling_fingerprint=target.active_fingerprint, scheduling_epoch="scheduling-epoch-" + str(uuid4()))
             else:
                 from ._agent_session_journal import _record_agent_declaration_binding

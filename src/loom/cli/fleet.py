@@ -395,6 +395,8 @@ def handle(namespace: argparse.Namespace) -> int:
     assert result is not None, "Fleet command returned no result"
     if namespace.output_format == "json":
         print(json.dumps(result, sort_keys=True))
+    elif command in {"apply", "operation", "upgrade"} and result["outcome"] != "preview":
+        print(_operation_receipt(result))
     else:
         print(
             f"Fleet {result.get('fleet', getattr(namespace, 'name', 'selection'))}: {result['outcome']}"
@@ -468,3 +470,27 @@ def handle(namespace: argparse.Namespace) -> int:
     if command == "preflight":
         return 2 if result["outcome"] == "failed" else 3
     return 0
+
+
+def _operation_receipt(result):
+    from ._terminal import cell, fields, table
+
+    lines = [f"Fleet {cell(result.get('fleet', 'selection'))}: {cell(result['outcome'])}"]
+    lines.extend(fields(result, ("operation_id", "reason", "qualification", "deployment", "operator_connection")))
+    release = result.get("release")
+    if isinstance(release, dict) and release.get("release_id"):
+        lines.append(f"Release: {cell(release['release_id'])}")
+    rows = []
+    for name, observed in result.get("checks", {}).items():
+        attempts = observed if isinstance(observed, list) else [observed]
+        for check in attempts:
+            if isinstance(check, dict) and ("outcome" in check or "operation_id" in check):
+                rows.append((name, check.get("outcome", "unknown"), check.get("code"), check.get("operation_id")))
+    if rows:
+        lines.append(table(("CHECK", "OUTCOME", "REASON", "OPERATION ID"), rows, wide=True, empty=""))
+    for step, receipt in result.get("steps", {}).items():
+        if receipt.get("native_outcome") == "unknown":
+            lines.append(f"Step {cell(step)}: unknown ({cell(receipt.get('reason'))})")
+    if result.get("next"):
+        lines.append(cell(result["next"]))
+    return "\n".join(lines)
