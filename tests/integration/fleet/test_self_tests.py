@@ -1207,11 +1207,11 @@ def test_storage_check_resumes_ranges_and_recovers_published_verification(fleet,
             paused.set()
             assert release.wait(15), "watcher failed to detach from its storage worker"
 
-    def step(selected, *, operation_id, timeout_seconds, _dispatch_only, _wait):
+    def step(selected, *, operation_id, timeout_seconds, _dispatch_only, _wait, _collect):
         if operation_id == identity:
             try:
                 return self_test(selected, operation_id=identity, timeout_seconds=timeout_seconds,
-                                 _dispatch_only=_dispatch_only, _wait=_wait)
+                                 _dispatch_only=_dispatch_only, _wait=_wait, _collect=_collect)
             finally:
                 if paused.is_set():
                     returned.set()

@@ -1298,7 +1298,10 @@ def test_runtime_upgrade_repairs_profile_after_settled_failed_check(site, tmp_pa
         assert operator.observe_maintenance()['state']=='open'
 
 
-def test_qualified_upgrade_holds_admission_until_explicit_publication_release(site, tmp_path, monkeypatch):  # noqa: F811
+@pytest.mark.parametrize("corrupt_final_range", [False, True], ids=["verified", "corrupt-final-range"])
+def test_qualified_upgrade_holds_admission_until_explicit_publication_release(
+    site, tmp_path, monkeypatch, corrupt_final_range,  # noqa: F811
+):
     inventory, base, selection = site
     inventory = bind_environments(inventory)
     authored = read(inventory.hosts[0].config)
@@ -1313,11 +1316,32 @@ def test_qualified_upgrade_holds_admission_until_explicit_publication_release(si
     options: dict[str, Any] = dict(runtime_release=target, deployment=Path(setup["deployment"]),
                    connection=Path(setup["operator_connection"]), config=selection["config"],
                    hold_admission=True)
-    result = upgrades.upgrade(inventory, operation_id="publication", apply=True, **options)
-    deadline = time.monotonic() + 240
-    while not result.get("publication_ready") and result["outcome"] == "waiting" and time.monotonic() < deadline:
-        time.sleep(0.25)
-        result = upgrades.upgrade(inventory, operation_id="publication")
+    corrupted = []
+    if corrupt_final_range:
+        import base64
+        from loom.coordinator import CoordinatorClient
+        from loom.fleet.probes import STORAGE_BYTES
+
+        read_chunk = CoordinatorClient.read_artifact_chunk
+        def damage_last_range(client, locator, **options):
+            chunk = read_chunk(client, locator, **options)
+            if (chunk["outcome"] == "available" and Path(options["member"]).name == "values.bin"
+                    and options["offset"] + options["length"] == STORAGE_BYTES):
+                data = base64.b64decode(chunk["data"])
+                corrupted.append(options["offset"])
+                return {**chunk, "data": base64.b64encode(data[:-1] + bytes([data[-1] ^ 1])).decode()}
+            return chunk
+        monkeypatch.setattr(CoordinatorClient, "read_artifact_chunk", damage_last_range)
+    result = upgrades.upgrade(inventory, operation_id="publication", apply=True, follow=True,
+                              timeout_seconds=240, **options)
+    if corrupt_final_range:
+        assert corrupted and result["outcome"] == "blocked" and result["reason_code"] == "check_failed", result
+        failed = [check for check in result["check_observations"].values() if check["outcome"] == "failed"]
+        assert len(failed) == 1 and failed[0]["checks"]["storage"]["code"] == "publication_integrity_failed"
+        with CoordinatorOperatorClient.from_connection_file(setup["operator_connection"]) as operator:
+            assert operator.observe_maintenance()["state"] == "closed"
+        assert not (upgrades.sshops._directory(inventory, "publication") / "restoring.json").exists()
+        return
     assert result.get("publication_ready") and result["outcome"] == "waiting", result
     directory = upgrades.sshops._directory(inventory, "publication")
     assert read(directory / "intent.json")["kind"] == "runtime-upgrade-publication"

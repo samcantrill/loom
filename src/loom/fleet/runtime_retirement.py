@@ -127,6 +127,7 @@ def continue_upgrade(operation):
     for name in intent["agents"]:
         staged = read(operation.receipts / (name + "-workload-stage") / "receipt.json")
         operation.promote_stopped(name, staged["candidate_source"], operation.runtime_arguments(name))
+    maintenance.milestone(operation, "services_replaced")
     # Reuse runtime ownership/release observations after all native conversions.
     maintenance._Upgrade.probes(operation)
     maintenance._independent_policies(operation, [

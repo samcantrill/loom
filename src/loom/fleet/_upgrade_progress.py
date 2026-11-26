@@ -2,16 +2,21 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import datetime, timezone
 import json
 import math
 import threading
 import time
 from typing import Any
 
+from ._timing import elapsed
+
 ProgressSink = Callable[[dict[str, Any]], None]
 
+_MILESTONES = {"services_replaced", "last_native_check_acknowledged", "last_artifact_verified", "admission_reopened"}
+
 _ENUMS = {
-    "event": {"phase", "heartbeat", "result"},
+    "event": {"phase", "heartbeat", "result", *_MILESTONES},
     "kind": {"runtime-upgrade", "workload-upgrade", "configuration-retirement", "container-policy-addition", "publication-budget-increase", "unknown"},
     "action": {"apply", "resume", "abort", "retry-check", "retry-control"},
     "phase": {"preparing", "closing_admission", "settling", "draining", "replacing",
@@ -58,6 +63,9 @@ class Observation:
         self.ended: float | None = None
         self.condition = threading.Condition()
         self.revision = 0
+        self.follow = False
+        self.milestones: set[str] = set()
+        self.pending_milestones: list[dict[str, Any]] = []
         self.worker: threading.Thread | None = None
         if sink is not None:
             self.worker = threading.Thread(target=self._report, name="loom-upgrade-progress", daemon=True)
@@ -81,12 +89,23 @@ class Observation:
                 self.prepared += self.clock() - self.preparing
                 self.preparing = None
 
+    def milestone(self, name):
+        with self.condition:
+            if name not in self.milestones:
+                snapshot = self.snapshot(name)
+                self.milestones.add(name)
+                elapsed(name, datetime.now(timezone.utc).isoformat(), 0.0)
+                if self.sink is not None:
+                    self.pending_milestones.append(snapshot)
+                    self.condition.notify()
+
     def gate(self, closed: bool):
         with self.condition:
             if closed and self.closed is None:
                 self.closed = self.clock()
             elif not closed and self.closed is not None and self.opened is None:
                 self.opened = self.clock()
+                self.milestone("admission_reopened")
 
     def snapshot(self, event="heartbeat") -> dict[str, Any]:
         with self.condition:
@@ -121,16 +140,20 @@ class Observation:
         try:
             while True:
                 with self.condition:
-                    while seen == self.revision and self.ended is None:
+                    while seen == self.revision and self.ended is None and not self.pending_milestones:
                         delay = heartbeat - time.monotonic()
                         if delay <= 0:
                             break
                         self.condition.wait(delay)
-                    event = "result" if self.ended is not None else "phase" if seen != self.revision else "heartbeat"
-                    if event == "heartbeat":
-                        heartbeat = time.monotonic() + 5
-                    seen = self.revision
-                    snapshot = self.snapshot(event)
+                    if self.pending_milestones:
+                        snapshot = self.pending_milestones.pop(0)
+                        event = snapshot["event"]
+                    else:
+                        event = "result" if self.ended is not None else "phase" if seen != self.revision else "heartbeat"
+                        if event == "heartbeat":
+                            heartbeat = time.monotonic() + 5
+                        seen = self.revision
+                        snapshot = self.snapshot(event)
                 # The same validation applies to Python callbacks and CLI output.
                 encode(snapshot)
                 assert self.sink is not None
@@ -151,3 +174,9 @@ def reason(operation, code):
     observer = getattr(operation, "observation", None)
     if observer is not None:
         observer.reason = code
+
+
+def milestone(operation, name):
+    observer = getattr(operation, "observation", None)
+    if observer is not None:
+        observer.milestone(name)

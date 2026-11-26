@@ -266,7 +266,10 @@ def test_existing_aggregate_artifact_bound_at_and_over_limit(tmp_path):
         replace(report, outputs=(*report.outputs, extra))
 
 
-def test_pending_commit_preserves_transport_until_exact_replay(tmp_path):
+def test_pending_commit_preserves_transport_until_exact_replay(tmp_path, monkeypatch):
+    acks = []
+    monkeypatch.setattr("loom.queue._phase_timing.milestone",
+                        lambda action, **ids: acks.append((action, ids["assignment_id"])))
     owner, identity, report, chunk = _fixture(tmp_path)
     owner.publish(identity, report, chunk)
     pending = {
@@ -278,11 +281,13 @@ def test_pending_commit_preserves_transport_until_exact_replay(tmp_path):
     }
     with pytest.raises(transport_module.SlurmEffectPending):
         owner.finish_delivery(identity, lambda _: pending)
+    assert acks == []
     assert owner.read(identity)[0] == report
     reopened = SharedSlurmResult(owner.storage, owner.assignment_id)
     assert reopened.finish_delivery(identity, lambda _: {
         "disposition": "applied", "acknowledged": True,
     })
+    assert acks == [("terminal_acknowledged", owner.assignment_id)]
     assert not owner.path.exists()
 
 

@@ -2481,6 +2481,7 @@ class LocalDaemon:
         owners = dict(views[0])
         if self._execution is not None:
             owners["scheduling_waits"] = self._execution._scheduling_waits.observed(admission.run_uri)
+            owners["scheduling_summaries"] = self._execution._scheduling_waits.summaries(admission.run_uri)
             owners["input_validation"] = self._execution._input_validations.observations(admission.run_uri)
             with self._cycle_lock:
                 owners["slurm_storage"] = self._execution.slurm_storage_observations(admission.run_uri)

@@ -296,6 +296,14 @@ def test_submitted_slurm_runs_worker_process_and_publishes_complete_output_tree(
     assert result.executor_metadata["container_runtime"] == "apptainer"
     report = workspace.retain_result(result)
     assert report.output_kind == "shared"
+    spans = cast(dict[str, Any], result.executor_metadata["native_timings"])["spans"]
+    entered, returned = (span for span in spans if span["action"].startswith("stage_run_"))
+    assert [entered["action"], returned["action"]] == ["stage_run_entered", "stage_run_returned"]
+    for span in (entered, returned):
+        assert span["attributes"]["assignment_id"] == delivery.assignment_id
+        assert span["attributes"]["stage_work_id"] == delivery.stage_work_id
+        assert span["attributes"]["attempt_id"] == delivery.attempt_id
+    assert entered["attributes"]["monotonic_ns"] <= returned["attributes"]["monotonic_ns"]
     committed = publish(delivery, report, roots, agent_id="submit-agent", fence="grant")
     primary = uri_to_path(committed["result"].uri)
     assert primary.read_bytes() == b"container-worker-output"

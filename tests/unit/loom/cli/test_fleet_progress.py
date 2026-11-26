@@ -243,3 +243,14 @@ def test_preoperation_typed_failures_keep_safe_codes(monkeypatch, exception, cod
     assert records[-1]["state"] == "error"
     assert records[-1]["reason_code"] == code
     assert "PRIVATE" not in json.dumps(records)
+
+
+@pytest.mark.optional_dependency
+@pytest.mark.parametrize("args", [["upgrade", "--apply", "--operation-id", "window", "--runtime-release", "candidate"],
+                                  ["operation", "resume", "window"]])
+def test_cli_follow_routes_only_upgrade_apply_and_resume(cli, monkeypatch, args):
+    calls = []
+    monkeypatch.setattr(upgrades, "upgrade", lambda *a, **kw: calls.append(kw) or {"outcome": "complete"})
+    assert main(["fleet", *args, "--fleet", str(cli.path), "--follow", "--format", "json"],
+                stdout=io.StringIO(), stderr=io.StringIO()) == 0
+    assert calls[0]["follow"] and calls[0]["operation_id"] == "window"

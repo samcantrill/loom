@@ -1235,6 +1235,16 @@ class _RemoteAgentJournal:
             )
             conn.commit()
 
+        if poll_result == "assignment":
+            from ._phase_timing import milestone
+            # A shared reference binds the attempt before the full bundle is fetched.
+            received = cast(Mapping[str, PlainData], result["request"])
+            milestone(
+                "assignment_received", session_id=session_id, assignment_id=received["assignment_id"],
+                attempt_id=received["attempt_id"], stage_work_id=received.get("stage_work_id"),
+                stage_name=received.get("stage_name"), attempt=received.get("attempt"),
+            )
+
     def fence_poll(self, session_id: str, sequence: int) -> None:
         """Record the coordinator's confirmation that this poll was fenced."""
         with self._connection() as conn:

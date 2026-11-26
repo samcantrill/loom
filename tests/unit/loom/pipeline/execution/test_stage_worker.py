@@ -181,6 +181,46 @@ def test_resident_stage_worker_passes_containment_owner_to_stage_context(
     )
 
 
+@pytest.mark.parametrize("failure", ["construction", "invocation"])
+def test_worker_observes_only_project_run(tmp_path, monkeypatch, failure):
+    from contextlib import contextmanager
+
+    store, run_uri = _prepared_run(tmp_path)
+    request = StageWorkerRequest.from_dict(store.read_stage_worker_request(run_uri, "build", attempt=1))
+    observations = []
+
+    @contextmanager
+    def observe_run():
+        observations.append("entered")
+        try:
+            yield
+        except RuntimeError:
+            observations.append("raised")
+            raise
+
+    class Stage:
+        def run(self, context, inputs):
+            assert observations == ["constructed", "entered"]
+            observations.append("running")
+            raise RuntimeError("project invocation failed")
+
+    def construct(**_kwargs):
+        assert observations == []
+        if failure == "construction":
+            raise RuntimeError("project construction failed")
+        observations.append("constructed")
+        return Stage()
+
+    monkeypatch.setattr(stage_worker, "construct_stage", construct)
+    result = stage_worker.execute_resident_stage_worker_request(
+        worker_request=request, workspace_root=tmp_path / "worker",
+        process_containment_owner=ProcessContainmentOwner.OUTER_BOUNDARY,
+        stage_invocation=observe_run(),
+    )
+    assert result.status is StageStatus.FAILED
+    assert observations == ([] if failure == "construction" else ["constructed", "entered", "running", "raised"])
+
+
 def test_native_attachment_roundtrip_is_bound_before_construction(tmp_path, monkeypatch):
     from copy import deepcopy
     from loom.fingerprints import hash_mapping

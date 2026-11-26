@@ -120,6 +120,9 @@ def continue_repair(operation, *, action="resume", failed_check=None,
         else:
             result = workload_upgrades.continue_upgrade(child)
     finally:
+        # A follower of the parent waits on the repaired checks' native IDs.
+        operation.check_observations = getattr(child, "check_observations", {})
+        operation.continuation_checks = upgrades._attempts(child)
         child.close()
     if result["state"] == "complete":
         result = {

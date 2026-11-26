@@ -76,7 +76,7 @@ def test_upgrade_observation_is_bounded_while_standalone_waits(tmp_path, monkeyp
     for _ in range(2):
         result = self_tests._observe_check(
             client, operator, tmp_path, {"requests": {"cpu": {}}}, "cpu",
-            self_tests.time.monotonic() + 120, **({} if wait else {"wait": False}),
+            self_tests.time.monotonic() + 120, wait=wait,
         )
         assert result["outcome"] == "waiting"
     assert [identity for identity, _ in calls] == ["check-id", "check-id"]
@@ -114,3 +114,70 @@ def test_check_replays_only_its_missing_start_operation(tmp_path, monkeypatch, o
                                       self_tests.time.monotonic() + 10)
         assert caught.value is missing
         assert sent == []
+
+
+@pytest.mark.parametrize("changed", ["credential", "locator"])
+def test_changed_binding_discards_partial_ranges_and_old_verification(tmp_path, monkeypatch, changed):
+    from hashlib import sha256
+    import base64
+    from loom import _artifact_ranges
+    from loom.fleet import _check_artifacts
+
+    directory = tmp_path / "receipts"
+    directory.mkdir()
+    credential = tmp_path / "client.crt"
+    credential.write_bytes(b"first certificate")
+    monkeypatch.setattr(_check_artifacts, "load_coordinator_connection_file",
+                        lambda path: SimpleNamespace(certificate_path=credential))
+    monkeypatch.setattr(_check_artifacts, "gettempdir", lambda: str(tmp_path))
+    intent = {"requests": {"cpu": {"preparation": {"operation_id": "exact-check"}}},
+              "coordinator_id": "owner", "connection": "selected-client"}
+    selected = {"locator": {"run_uri": "test:run", "stage_name": "probe", "output_name": "report",
+                            "commit_id": "old"}, "artifact": {"metadata": {"loom.shared_publication": {}}}}
+    payload = b'{"test":true}' + b" " * _artifact_ranges.CHUNK_BYTES
+    declaration = "f" * 64
+    offsets = []
+    corrupt = False
+    def describe(*args, **kwargs):
+        return {"outcome": "available", "primary": "report.json", "verification": "verified_at_read",
+                "declaration": declaration, "next_cursor": None, "members": [{
+                    "path": "report.json", "size_bytes": len(payload), "digest": sha256(payload).hexdigest(),
+                }]}
+    def read(locator, *, offset, length, member, **kwargs):
+        data = payload[offset:offset + length]
+        if corrupt and offset + length == len(payload):
+            data = data[:-1] + b"!"
+        offsets.append(offset)
+        return {"outcome": "available", "data": base64.b64encode(data).decode(), "member": member,
+                "offset": offset, "declaration": declaration, "locator": locator.to_dict()}
+    client = SimpleNamespace(describe_artifact=describe, read_artifact_chunk=read)
+    def fetch(*, collect=True):
+        return _check_artifacts.verify_publication(client, directory, "cpu", intent, selected, None, collect=collect)
+
+    assert fetch(collect=False)["code"] == "publication_available"
+    assert not offsets
+    save = _artifact_ranges._save
+    def detach(path, data):
+        save(path, data)
+        raise TimeoutError("detach after a durable range")
+    with monkeypatch.context() as patch:
+        patch.setattr(_artifact_ranges, "_save", detach)
+        assert fetch()["outcome"] == "waiting"
+    def change(generation):
+        if changed == "credential":
+            credential.write_bytes(generation.encode())
+        else:
+            selected["locator"]["commit_id"] = generation
+    change("second")
+    offsets.clear()
+    assert fetch()["report"] == {"test": True}
+    assert sorted(offsets) == [0, _artifact_ranges.CHUNK_BYTES]
+    assert fetch(collect=False)["report"] == {"test": True}
+    change("third")
+    assert fetch(collect=False)["code"] == "publication_available"
+    offsets.clear()
+    corrupt = True
+    result = fetch()
+    assert sorted(offsets) == [0, _artifact_ranges.CHUNK_BYTES]
+    assert result["outcome"] == "failed" and result["code"] == "publication_integrity_failed"
+    assert fetch(collect=False)["code"] == "publication_available"

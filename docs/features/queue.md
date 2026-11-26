@@ -106,10 +106,15 @@ for a GPU or a larger search bound. Exhaustion is not infeasibility, and Stage
 
 The coordinator can start the host-independent worker request for a managed-agent
 stage in the active READY window once its durable attempt and bound inputs are
-visible. One stage can occupy the preparation pool in anticipation of selection.
-Further work uses the current placement demand. Reservation rechecks the host,
-offer, capacity, cancellation and scheduling epoch. A restart rebuilds this
-work from the durable admission and attempt.
+visible. In READY order, one of two preparation workers can build an early
+request while the other serves placement demand. The coordinator retains up to
+four early requests. As each build finishes, its completion wakes the scheduler
+and frees the worker for the next READY stage, even if the completed request
+is still waiting for a slot. Selection promotes an early build in place. Both
+resource classes keep access to preparation capacity. Reservation rechecks the
+host, offer, capacity, cancellation and scheduling epoch. Slurm checks its offer
+and GPU budget before preparation. A restart rebuilds this work from the
+durable admission and attempt.
 
 Workers notify the scheduling thread of completed run observations and READY
 prerequisites. When a bulk IO slot opens, the scheduler revisits the oldest
@@ -125,6 +130,29 @@ boundaries are `preparation` (admission or authority observation),
 `host_eligibility`, `request_preparation` and `reservation`. The coordinator
 retains observations for the most recent 288 admission/stage keys and clears
 them as work settles. Process restart begins a new observation interval.
+
+`owners.scheduling_summaries` retains the most recent 288 finished attempt
+observations across runs. Each summary identifies the admission, stage work,
+attempt, outcome and committed assignment when available. The `wait_ns`
+map accumulates monotonic time in the last observed reason. Reasons include
+`assignment_slots_full` when fresh offers establish slot exhaustion,
+`run_parallel_limit`, `no_eligible_offer` and `capacity_unknown`.
+The coordinator computes `eligible_request_ready_ns` from observations of
+the same eligible offer overlapping a completed worker request. Expiry,
+replacement, disappearance and consumption bound the interval. This is a
+lower bound because the selector does not probe every possible placement for
+measurement. A missing observation is reported as unknown. These measurements
+use the normal scheduling decisions and the bounded diagnostic writer.
+
+For a single-stage workload, run
+`python tools/startup_timings.py CLIENT_LOG COORDINATOR_LOG AGENT_LOG` with
+all participating logs. The report joins submission, admission, assignment and
+worker events, reports nearest-rank p50, p95 and maximum times in seconds, and
+counts unlinked evidence. It distinguishes the preparation child from the
+first target entry. Same-process spans use the monotonic clock. Cross-process
+differences use UTC, with uncertainty unknown unless an independently measured
+per-clock error bound is supplied using `--clock-error-ms`. A stalled or full
+diagnostic writer may omit events. Its records carry cumulative omission counts.
 
 All dependency-ready unassigned `PENDING` attempts in the bounded window may be
 projected; they consume no `max_parallel_stages` slot. The coordinator
