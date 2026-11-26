@@ -2891,7 +2891,7 @@ def inspect_role_declaration(
 
 @contextmanager
 def service_replacement_guard(
-    service, expected_root_id: str, *, recovery_results=None, retirement_control=None,
+    service, expected_root_id: str, *, recovery_results=None, retirement_control=None, allow_admission_upgrade=False,
 ):
     """Hold a stopped, settled native role during current runtime replacement.
 
@@ -2906,7 +2906,8 @@ def service_replacement_guard(
     durable successful contained results. Journals remain retained for ordinary
     startup replay; this does not assert logical settlement.
     An exact applied ``retirement_control`` permits its acknowledgement to await
-    the replacement's startup. Every other effect must be settled.
+    the replacement's startup. Every other effect must be settled. Fleet may
+    select the exact v19 predecessor for the forward admission-schema upgrade.
     """
     from .errors import QueueConflictError
     from ._agent_session_journal import _RemoteAgentJournal
@@ -2975,12 +2976,15 @@ def service_replacement_guard(
         if config.agent_root is not None:
             raise QueueConflictError("replacement requires a pure coordinator")
         # Refuse unsupported roots before creating the lock, then recheck under it.
-        _open_root(config.coordinator_root, role="coordinator")
+        _open_root(config.coordinator_root, role="coordinator", for_storage_upgrade=allow_admission_upgrade)
         with _acquire_lock(config.coordinator_root):
             require_unretired(config.coordinator_root)
-            actual = _open_root(config.coordinator_root, role="coordinator")
+            actual = _open_root(config.coordinator_root, role="coordinator", for_storage_upgrade=allow_admission_upgrade)
             if actual != expected_root_id:
                 raise QueueConflictError("replacement native root identity changed")
+            if allow_admission_upgrade:
+                from .local_daemon import _validate_deployment_binding
+                _validate_deployment_binding(config, coordinator_id=actual)
             local_daemon_owner_work_is_retained(config, coordinator_id=actual, agent_id=None)
             if recovery_results is not None:
                 from .service_upgrade import require_result_recovery

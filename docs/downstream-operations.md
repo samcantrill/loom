@@ -380,8 +380,8 @@ performs one final directory rename; an existing target is never overwritten.
 Startup reopens only the complete bound role and rejects a different config.
 Unsupported role schemas, incompatible profile bindings and incomplete roots
 are rejected. Initialization never overwrites a populated root. Only complete
-current coordinator schema 19 and agent schema 12 are accepted; there is no
-schema migration or repair path. See [current control roots](#current-control-roots).
+coordinator schema 20 and agent schema 12 roots start directly. Schema 19
+coordinators have a stopped admission-journal upgrade. See [current control roots](#current-control-roots).
 
 Current outbound agents require the `agent-control-wait-v1` capability during
 handshake, before registration or capacity offers. A coordinator lacking it is
@@ -493,14 +493,15 @@ store tools; no automatic expiry or preparation-delete command is provided.
 
 ## Current Control Roots
 
-Coordinator control roots require schema 19; agent roots require schema 12.
+Coordinator control roots require schema 20. Agent roots require schema 12.
 Fresh initialization creates their complete current schemas, including delivery
 references. Startup and inspection never add columns or reconstruct older
 preparation layouts. Unsupported or incomplete roots are refused before owner
 locks, service startup or database mutation. Current SQLite transaction recovery
 and current-session restart/replay remain supported.
 
-For an unsupported installation, settle its work with its original owner, verify
+For a complete schema 19 coordinator, follow the [stopped admission upgrade](features/queue.md#stopped-storage-upgrades).
+For any other unsupported installation, settle its work with its original owner, verify
 containment and release, stop its services and preserve roots and receipts. Create
 fresh roots with the current runtime and regenerate client bindings. The current
 runtime has no general old-control-schema upgrade or adoption command. Current
@@ -562,7 +563,7 @@ projections retain all mandatory references within 64 KiB; only optional full
 preflight detail may be omitted in favor of its pinned report. Prospective
 mandatory overflow is refused before target publication/admission.
 
-Coordinator schema 19 retains these facts in the preparation owner and a native
+Coordinator schema 20 retains these facts in the preparation owner and a native
 cancellation control table. Unsupported roots require fresh initialization under
 the [current control-root procedure](#current-control-roots), after work settles
 under its original owner. Preserve the old roots and outputs.

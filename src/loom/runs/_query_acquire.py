@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loom.pipeline.stores import LocalRunStore
 from loom.pipeline.stores.errors import StoreError
@@ -14,6 +15,10 @@ from ._extract import (
     _composition_fingerprint,
     _string_or_none,
 )
+
+
+if TYPE_CHECKING:
+    from loom.pipeline.stores.read_models import AuthoritativeRunSnapshot
 
 
 def needs_notes(query: RunQuery) -> bool:
@@ -30,7 +35,8 @@ def needs_notes(query: RunQuery) -> bool:
 
 
 def acquire_run(
-    root: Path, run_uri: str, authority: Any = None, *, include_notes: bool = False
+    root: Path, run_uri: str, authority: Any = None, *, include_notes: bool = False,
+    read_snapshot: Callable[[str], AuthoritativeRunSnapshot] | None = None,
 ) -> QueryRecord:
     """Read detached facts; do not infer event times from revision timestamps."""
     store = LocalRunStore(root)
@@ -60,7 +66,7 @@ def acquire_run(
             for key in ("status", "started_at", "finished_at"):
                 native[key] = UNAVAILABLE
             return record
-        snapshot = authority.open_run(run_uri)
+        snapshot = (read_snapshot or authority.open_run)(run_uri)
         native["status"] = snapshot.status.value
         native["started_at"] = (
             snapshot.started_at if snapshot.started_at_known else UNAVAILABLE

@@ -122,3 +122,47 @@ follow the original run; repeat only the same native-supported cancellation
 intent after uncertainty. JSON uses `loom.cli.runs.cancel.v1` and keeps the
 scope message off stdout. Successful acknowledgement exits 0; control or
 connection failures exit 6.
+
+## Listing the coordinator queue
+
+Use `loom queue list` to read active, waiting, pending-authority and cancelling
+admissions. The coordinator reads one live journal page in descending priority
+and ascending enqueue order. It applies exact state and creator filters before
+paging. `AGE` measures time since acceptance. `ACTIVE` describes coordinator
+admission. Stage execution and external scheduler state are available through
+`loom runs jobs` and individual admission inspection.
+
+```sh
+loom queue list
+loom queue list --user client --wide
+loom queue list --state FAILED --limit 20
+loom queue list --all --format json
+loom queue daemon-agents
+```
+
+The principal is the authenticated credential responsible for the admission's
+creation. Sites using shared credentials see that credential's identity.
+Historical rows with unknown creators appear in unfiltered listings. Use
+`--wide` for the full admission ID and UTC acceptance time. Continue a page
+with `--cursor` and the same selection. Rows can change state between reads.
+`loom.cli.queue.list.v1` carries full IDs, observation time and the next cursor.
+The coordinator advertises `queue-list-v1` during negotiation.
+
+`loom queue daemon-status` summarizes admission and assignment counts.
+`loom queue daemon-agents` lists the native session state and scheduling
+capacity for each agent. CPU capacity reflects the current CPU offer. GPU
+capacity uses per-device observations when present and otherwise the GPU devices
+actually offered. Observation age measures the oldest displayed offer or
+resource observation. Missing or stale evidence prints `unknown`. Text reads
+negotiate `agent-offer-capacity-v1`. Older coordinators supply the available
+resource observations. JSON uses the original agent projection. Use
+`loom queue daemon-agent` for individual resources. In `loom runs jobs`, the
+admission state, coordinator assignment, local execution journal, and Slurm
+scheduler evidence have separate columns. Follow the cursor to continue
+partially examined results. The table commands accept `--wide` for full values.
+
+For connection-based reads, explicit `--connection` and `--endpoint` select the
+target. Otherwise, the CLI loads the coordinator connection referenced by the
+protected deployment file named by `LOOM_DEPLOYMENT`. Fleet shell setup can
+export that path once. The selected deployment is read without starting services.
+Use `--format json` for machine-readable results and diagnostics.

@@ -94,7 +94,7 @@ def owner(tmp_path, request):
         daemon.stop()
 
 
-def offer(agent, session, *, busy=False):
+def offer(agent, session, *, busy=False, monitored=True):
     agent.publish_offer(
         AgentOffer(
             session.session_id,
@@ -116,7 +116,7 @@ def offer(agent, session, *, busy=False):
                     "external_occupancy" if busy else "available",
                     "2026-10-06T00:00:00Z",
                 ),
-            ),
+            ) if monitored else (),
         ),
         idempotency_key="offer-1",
     )
@@ -168,12 +168,68 @@ def test_observation_matrix_preserves_roots_and_control_state(owner, monkeypatch
         assert value.value["resource_status"][0]["reason_code"] == "external_occupancy"
     if case in {"drained", "stale"}:
         assert value.value["available"] is False
+        assert daemon.agent(session.agent_id, include_capacity=True).offered_capacity is None
     assert value.freshness == ("retained" if case == "stale" else "current")
     status = operator.observe_status()
     assert status.value["configuration_revision"] == "1"
     assert status.value["scheduling_fingerprint"].startswith("scheduling-")
     assert dump(daemon.config.control_database) == before
     assert set(daemon.config.coordinator_root.rglob("*")) == files
+
+
+def test_cli_agent_capacity_reads_current_offers_without_gpu_monitor(owner, monkeypatch, capsys):
+    import loom.queue.local_daemon_transport as unix
+    from loom.cli.main import main
+    from loom.timestamps import parse_timestamp, utc_timestamp
+
+    daemon, agent, session, _ = owner
+    server = LocalDaemonSocketServer(daemon, daemon.config.endpoint)
+    server.start()
+    monkeypatch.setenv("COLUMNS", "180")
+
+    def cli(*args):
+        assert main(["queue", *args, "--endpoint", str(daemon.config.endpoint)]) == 0
+        return capsys.readouterr().out
+
+    def capacity(*args):
+        return cli(*args).splitlines()[1].split()[3:5]
+
+    try:
+        assert capacity("daemon-agents") == ["unknown", "unknown"]
+        offer(agent, session, monitored=False)
+        assert capacity("daemon-agents") == ["available", "available"]
+        detail = cli("daemon-agent", session.agent_id)
+        assert detail.splitlines()[1].split()[3:5] == ["available", "available"]
+        assert "cpu: 2" in detail and "gpu devices offered: 1" in detail
+        assert capacity("daemon-agent", session.agent_id, "--operator") == ["available", "available"]
+
+        legacy = daemon.agent(session.agent_id).to_dict()
+        assert "offered_capacity" not in legacy
+        assert json.loads(cli("daemon-agents", "--format", "json"))["result"]["agents"] == [legacy]
+        assert json.loads(cli("daemon-agent", session.agent_id, "--format", "json"))["result"] == legacy
+        with monkeypatch.context() as peer:
+            dispatch = unix.dispatch_control
+            calls = []
+
+            def old_peer(daemon, principal, operation, payload, **kwargs):
+                calls.append(operation)
+                assert "include_capacity" not in payload
+                result = dispatch(daemon, principal, operation, payload, **kwargs)
+                if operation == "handshake":
+                    return {**result, "capabilities": ["daemon-control-v1"]}
+                return result
+
+            peer.setattr(unix, "dispatch_control", old_peer)
+            assert capacity("daemon-agents") == ["unknown", "unknown"]
+            assert calls == ["handshake", "agents"]
+
+        expired = utc_timestamp(parse_timestamp(daemon._clock()) + timedelta(seconds=61))
+        monkeypatch.setattr(daemon, "_clock", lambda: expired)
+        assert capacity("daemon-agents") == ["unknown", "unknown"]
+        assert capacity("daemon-agent", session.agent_id) == ["unknown", "unknown"]
+        assert capacity("daemon-agent", session.agent_id, "--operator") == ["unknown", "unknown"]
+    finally:
+        server.stop()
 
 
 @pytest.mark.parametrize("owner", [("drain", "resume")], indirect=True)

@@ -9,9 +9,9 @@ if TYPE_CHECKING:
     from .local_daemon import LocalDaemonAdmission
 
 
-_ACTIVE = "state NOT IN ('SUCCEEDED','FAILED','CANCELLED','BLOCKED')"
+ACTIVE_PREDICATE = "state NOT IN ('SUCCEEDED','FAILED','CANCELLED','BLOCKED')"
 LEGACY_CANCELLED = "state = 'CANCELLED' AND cancellation_operation_id IS NULL"
-_PRIORITY_ORDER = "run_priority DESC, enqueue_sequence, admission_id"
+PRIORITY_ORDER = "run_priority DESC, enqueue_sequence, admission_id"
 _PAGE_SIZE = 32
 
 
@@ -28,7 +28,7 @@ def ensure_scan_index(conn: sqlite3.Connection) -> None:
     conn.execute(f"CREATE INDEX IF NOT EXISTS legacy_cancelled_admissions "
                  f"ON managed_admissions(enqueue_sequence, admission_id) WHERE {LEGACY_CANCELLED}")
     conn.execute(f"CREATE INDEX IF NOT EXISTS managed_admissions_active_order "
-                 f"ON managed_admissions ({_PRIORITY_ORDER}) WHERE {_ACTIVE}")
+                 f"ON managed_admissions ({PRIORITY_ORDER}) WHERE {ACTIVE_PREDICATE}")
 
 
 class SchedulingAdmissions(dict[str, "LocalDaemonAdmission"]):
@@ -57,8 +57,8 @@ class AdmissionScan:
         """Read just one priority-ordered page and its continuation witness."""
         if self.high_water is None:
             self.high_water = enqueue_through
-        prefix = f"SELECT * FROM managed_admissions WHERE {_ACTIVE} AND enqueue_sequence <= ? "
-        order = f"ORDER BY {_PRIORITY_ORDER} LIMIT ?"
+        prefix = f"SELECT * FROM managed_admissions WHERE {ACTIVE_PREDICATE} AND enqueue_sequence <= ? "
+        order = f"ORDER BY {PRIORITY_ORDER} LIMIT ?"
         limit = _PAGE_SIZE + 1
         if self.after is None:
             return tuple(conn.execute(prefix + order, (self.high_water, limit)))

@@ -1065,10 +1065,15 @@ reapplying policy over later controls. Completed operations report completion.
 
 ### Current storage and source capabilities
 
-Runtime replacement requires coordinator schema 19, agent schema 12 and complete
-current tables; the supervisor requires schema 6. The candidate refuses old or
-incomplete roots before schema repair or role-lock creation. There is no offline
-schema upgrader, installation adoption or manual intermediate-version bridge.
+The candidate starts coordinators on schema 20, agents on schema 12 and supervisors
+on schema 6. It refuses unsupported or incomplete roots before role-lock creation. For a complete schema 19 coordinator,
+the candidate reports the required admission upgrade during read-only qualification.
+Standard forward replacement upgrades the journal under the stopped coordinator's
+native lock, after verifying settlement, the closed maintenance gate and the
+deployment identity. If publication is interrupted after the database commit,
+resume the same Fleet operation. Configuration-retirement upgrades require
+current roots. The [stopped admission upgrade](features/queue.md#stopped-storage-upgrades)
+can also run independently.
 The source must already supply the required maintenance and conditional-control
 capabilities. Unsupported installations follow the fresh-root procedure above.
 

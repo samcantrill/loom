@@ -36,6 +36,7 @@ def _submit(
     self: LocalDaemon,
     request: LocalDaemonAdmissionRequest,
     *,
+    direct_principal: str | None = None,
     preparation_operation_id: str | None = None,
     run_operation_id: str | None = None,
     preparation_claim: tuple[object, ...] | None = None,
@@ -143,17 +144,18 @@ def _submit(
 
         def insert(conn: sqlite3.Connection) -> None:
             parent = preparation_operation_id or run_operation_id
-            if parent is not None and preparation_claim is not None:
-                self._preparations.require_admission_claim(
+            creator = direct_principal
+            if parent is not None:
+                if preparation_claim is None:
+                    raise QueueConflictError("preparation admission claim is missing")
+                creator = self._preparations.require_admission_claim(
                     conn, parent, request, preparation_claim, child=preparation_operation_id is not None,
                 )
             if self._execution is not execution or epochs != (self._epoch, self._scheduling_epoch):
                 raise QueueConflictError("admission scheduling changed during preparation")
             self._lifetime.require_accepting()
-            if run_operation_id is not None:
-                current = conn.execute("SELECT cancellation_requested, state FROM preparation_operations WHERE operation_id = ?", (run_operation_id,)).fetchone()
-                if current is None or current["cancellation_requested"] or current["state"] in {"applied", "cancelled", "failed", "conflict"}:
-                    raise QueueConflictError("run continuation is suppressed or complete")
+            if creator is None:
+                raise QueueServiceError("admission requires a submitting principal")
             from ._maintenance import classify
             classify(conn, request.queue_item_id, parent_id=preparation_operation_id or run_operation_id,
                      intent=intent, preparation_child=preparation_operation_id is not None)
@@ -166,8 +168,8 @@ def _submit(
                         intent_digest, execution_owner, state, accepted_at,
                         authority_operation_id, run_priority, enqueue_sequence,
                         revision, cancellation_operation_id,
-                        blocked_reason
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL)
+                        blocked_reason, admitted_by
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL, ?)
                     """,
                 (
                     admission_id,
@@ -181,6 +183,7 @@ def _submit(
                     operation_id,
                     run_priority,
                     self._next_enqueue_sequence(conn),
+                    creator,
                 ),
             )
             if run_operation_id is not None:

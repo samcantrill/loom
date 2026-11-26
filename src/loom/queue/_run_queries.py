@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable, Mapping
+from concurrent.futures import Future
+from contextvars import copy_context
+from threading import Thread
+from time import monotonic
 from dataclasses import replace
-from functools import cmp_to_key
+from functools import cmp_to_key, lru_cache, partial
 from typing import Any
 
 from .errors import QueueError
 
 from loom.runs._query_acquire import acquire_run, needs_notes
-from loom.runs._query_page import QueryPage, search_page
+from loom.runs._query_page import QueryObservationDeadline, QueryPage, search_page
 from loom.runs.query import (
     JobQuery,
     Order,
@@ -36,6 +41,44 @@ QUERY_OPERATIONS = frozenset(
         "tag_values",
     }
 )
+
+
+# Leave time within the ten-second HTTPS exchange for encoding and transfer.
+_JOB_PAGE_SECONDS = 7.5
+_JOB_READ_SECONDS = 4.0
+_JOB_JOURNAL_BATCH = 16
+
+
+def _job_read[T](daemon: Any, deadline: float, read: Callable[[], T]) -> T:
+    """Stop waiting at the deadline even for a stalled filesystem or authority.
+
+    A detached read keeps its daemon's slot until its actual I/O finishes.
+    """
+    end = min(deadline, monotonic() + _JOB_READ_SECONDS)
+    left = end - monotonic()
+    if left <= 0 or not daemon._job_read_slots.acquire(timeout=left):
+        raise QueryObservationDeadline()
+    future: Future[T] = Future()
+
+    def run() -> None:
+        try:
+            if monotonic() >= end:
+                raise QueryObservationDeadline()
+            future.set_result(read())
+        except BaseException as exc:
+            future.set_exception(exc)
+        finally:
+            daemon._job_read_slots.release()
+
+    try:
+        Thread(target=copy_context().run, args=(run,), name="loom-job-read", daemon=True).start()
+    except BaseException:
+        daemon._job_read_slots.release()
+        raise
+    try:
+        return future.result(timeout=max(0.0, end - monotonic()))
+    except TimeoutError as exc:
+        raise QueryObservationDeadline() from exc
 
 
 def validate_query_request(operation: str, payload: Any) -> dict[str, Any]:
@@ -82,6 +125,29 @@ def _operation(row: dict[str, Any], owner: str) -> dict[str, Any]:
     }
 
 
+def _job_warnings(admission_id: str, owners: Mapping[str, Any]) -> list[dict[str, Any]]:
+    def warning(axis: str, diagnostic: str | None, **identity: Any) -> dict[str, Any]:
+        return {
+            "code": "job_associations_unavailable", "admission_id": admission_id,
+            "axis": axis, "diagnostic": diagnostic, **identity,
+        }
+
+    warnings = [
+        warning(axis, observation.get("diagnostic"))
+        for axis, observation in owners.items()
+        if isinstance(observation, Mapping) and observation.get("availability") == "unavailable"
+    ]
+    for assignment in owners["slurm"]["assignments"]:
+        submission = assignment["submission"]
+        if submission["dispatch_state"] == "unavailable" or (
+            assignment["job_id"] is not None and submission["scheduler_state"] is None
+        ):
+            warnings.append(warning(
+                "slurm", "scheduler_observation_unavailable", assignment_id=assignment["assignment_id"],
+            ))
+    return warnings
+
+
 def search(daemon: Any, query: RunQuery) -> QueryPage:
     owner = daemon._require_started()
     if query.scope["kind"] == "collection":
@@ -95,6 +161,7 @@ def search(daemon: Any, query: RunQuery) -> QueryPage:
             owner=owner,
             authority_factory=daemon.config.coordinator_authority_factory,
         )
+    job_deadline = monotonic() + _JOB_PAGE_SECONDS
     bounded_candidates = None
     discovery_warnings = []
     if query.entity == "runs" and any(order.field == "created_at" for order in query.order_by):
@@ -123,10 +190,26 @@ def search(daemon: Any, query: RunQuery) -> QueryPage:
             raise QueryError("unsupported run ordering")
     else:
         from ._query_journal import journal_candidates
-        rows = journal_candidates(daemon, query, owner)
+        rows = (
+            _job_read(daemon, job_deadline, partial(journal_candidates, daemon, query, owner))
+            if query.entity == "jobs" else journal_candidates(daemon, query, owner)
+        )
         operations, admissions = (rows, []) if query.entity == "submissions" else ([], rows)
     originals = {row["operation_id"]: row for row in operations}
     factory = daemon.config.coordinator_authority_factory
+    read_snapshot = None
+    acquire_metadata = acquire_run
+    if query.entity == "jobs" and factory is not None:
+        # A job's run metadata and owner report describe one authority revision.
+        factory = lru_cache(maxsize=1)(factory)
+        read_authority = factory
+
+        @lru_cache(maxsize=1)
+        def job_snapshot(uri: str):
+            return read_authority(uri).open_run(uri)
+
+        read_snapshot = job_snapshot
+        acquire_metadata = partial(acquire_run, read_snapshot=job_snapshot)
     cache: dict[str, QueryRecord] = {}
 
     def original_context(operation_id: str) -> dict[str, Any]:
@@ -148,7 +231,7 @@ def search(daemon: Any, query: RunQuery) -> QueryPage:
             authority = factory(uri) if factory is not None else None
         except (OSError, ValueError, LookupError):
             authority = None
-        record = acquire_run(
+        record = acquire_metadata(
             daemon.config.run_store_root,
             uri,
             authority,
@@ -214,6 +297,29 @@ def search(daemon: Any, query: RunQuery) -> QueryPage:
     else:
         candidates = admissions
 
+    # Batch only shared journal data. Per-run authorities, stored results and
+    # supplemental observations are opened as each candidate is examined.
+    batch_size = min(query.limit, _JOB_JOURNAL_BATCH)
+    job_indices = {row["admission_id"]: i for i, row in enumerate(admissions)} if query.entity == "jobs" else {}
+    batch_start = -1
+    owner_view = None
+
+    def job_owners(candidate: dict[str, Any]):
+        from .local_daemon import _admission_from_row
+        from .local_daemon_execution import _read_owner_journals
+
+        nonlocal batch_start, owner_view
+        offset = job_indices[candidate["admission_id"]] // batch_size * batch_size
+        if offset != batch_start or owner_view is None:
+            uris = tuple(row["run_uri"] for row in admissions[offset:offset + batch_size])
+            owner_view = _read_owner_journals(
+                daemon.config, uris, coordinator_id=owner, agent_id=daemon._agent_id, clock=daemon._clock,
+                read_snapshot=read_snapshot,
+            )
+            batch_start = offset
+        admission = _admission_from_row(candidate)
+        return daemon._admission_detail(admission, owner_view(admission, admission.revision)).owners
+
     def acquire(candidate: dict[str, Any]) -> QueryRecord:
         uri = candidate.get("run_uri")
         base = run_record(uri) if uri else QueryRecord({"native": {}}, stages=())
@@ -252,22 +358,9 @@ def search(daemon: Any, query: RunQuery) -> QueryPage:
             )
         elif query.entity == "jobs":
             try:
-                detail = daemon.admission(candidate["admission_id"])
-                owners = detail.to_dict()["owners"]
+                owners = job_owners(candidate)
                 record.sources["job_associations"] = owners
-                for axis, observation in owners.items():
-                    if (
-                        isinstance(observation, dict)
-                        and observation.get("availability") == "unavailable"
-                    ):
-                        record.warnings.append(
-                            {
-                                "code": "job_associations_unavailable",
-                                "admission_id": candidate["admission_id"],
-                                "axis": axis,
-                                "diagnostic": observation.get("diagnostic"),
-                            }
-                        )
+                record.warnings.extend(_job_warnings(candidate["admission_id"], owners))
             except (OSError, ValueError, LookupError, QueueError):
                 record.warnings.append(
                     {
@@ -303,7 +396,15 @@ def search(daemon: Any, query: RunQuery) -> QueryPage:
             keys.append(value)
         keyed.append((tuple(keys), candidate))
     keyed.sort(key=cmp_to_key(lambda a, b: compare_keys(a[0], b[0], query.order_by)))
-    return search_page(query, owner, keyed, acquire, warnings=warnings)
+    def bounded_acquire(candidate: dict[str, Any]) -> QueryRecord:
+        try:
+            return _job_read(daemon, job_deadline, partial(acquire, candidate))
+        except QueryObservationDeadline as exc:
+            raise QueryObservationDeadline(candidate["admission_id"]) from exc
+
+    return search_page(
+        query, owner, keyed, bounded_acquire if query.entity == "jobs" else acquire, warnings=warnings,
+    )
 
 
 def query_operation(daemon: Any, operation: str, value: dict[str, Any]) -> Any:
