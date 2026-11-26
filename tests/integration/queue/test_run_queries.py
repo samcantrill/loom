@@ -463,7 +463,7 @@ def _trace_search_journals(monkeypatch, config):
 
 @pytest.mark.parametrize(
     "count,fault",
-    [(1, None), (16, None), (16, "missing-agent"), (16, "corrupt-stage"), (16, "invalid-utf8")],
+    [(1, None), (16, None), (16, "missing-agent"), (16, "corrupt-stage"), (16, "invalid-utf8"), (16, "blob-fence")],
 )
 def test_job_search_reads_shared_journals_once(tmp_path, monkeypatch, count, fault):
     from tests.integration.mcp.test_stdio import _coordinator
@@ -473,6 +473,9 @@ def test_job_search_reads_shared_journals_once(tmp_path, monkeypatch, count, fau
         jobs = _seed_assignment_jobs(daemon, count)
         if fault == "missing-agent":
             monkeypatch.setattr(type(config), "agent_journal", property(lambda _: tmp_path / "missing.sqlite"))
+        if fault == "blob-fence":
+            with sqlite3.connect(config.agent_journal) as conn:
+                conn.execute("UPDATE assignments SET grant_fence = ? WHERE assignment_id = ?", (b"bad", "assignment-15"))
         corrupt_stage = fault in ("corrupt-stage", "invalid-utf8")
         if corrupt_stage:
             # Invalid UTF-8 fails inside the SQLite driver before it yields the
@@ -515,7 +518,7 @@ def test_job_search_reads_shared_journals_once(tmp_path, monkeypatch, count, fau
                     assert assignment["assignment_id"] == assignment_id
                     assert assignment["decline_reason_code"] == ("device_missing" if job_id == "job-1" else None)
                     assert owners["scheduling"]["state"] == owners["slurm"]["state"] == "empty"
-                if fault == "missing-agent":
+                if fault == "missing-agent" or (fault == "blob-fence" and job_id == "job-15"):
                     affected["execution"] = "agent_journal_unavailable"
                 elif not bad_row:
                     entry, = owners["execution"]["journal"]

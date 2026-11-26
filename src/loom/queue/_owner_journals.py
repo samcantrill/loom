@@ -202,6 +202,15 @@ def read_execution_journal(
     return ExecutionJournalRead(by_run, scheduling, assignment, storage_by_run, clock())
 
 
+def _nullable_text(row: sqlite3.Row, column: str) -> str | None:
+    # SQLite's TEXT affinity also permits blobs. Decode at the owner boundary
+    # so the enclosing row reader can attribute a bad value to its run.
+    value = row[column]
+    if value is None or isinstance(value, str):
+        return value
+    raise ValueError(f"invalid text in journal column {column}")
+
+
 def _indexed_run(row: sqlite3.Row) -> str:
     return str(row["run_uri"])
 
@@ -318,12 +327,12 @@ def _append_slurm(records: _ExecutionRows, row: sqlite3.Row) -> None:
             "state": str(row["state"]),
             "profile_id": str(row["profile_id"]),
             "operation_id": str(row["operation_id"]),
-            "job_id": row["job_id"],
-            "cluster": row["cluster"],
+            "job_id": _nullable_text(row, "job_id"),
+            "cluster": _nullable_text(row, "cluster"),
             "bootstrap_registered": row["bootstrap_incarnation"] is not None,
             "input_ready": bool(row["input_ready"]),
             "fence_bound": row["fence"] is not None,
-            "process_execution_id": row["process_execution_id"],
+            "process_execution_id": _nullable_text(row, "process_execution_id"),
             "loom_result_status": report_status if isinstance(report_status, str) else None,
             "diagnostic": _slurm_state_diagnostic(str(row["state"])),
             "submission": {
@@ -380,11 +389,11 @@ def _append_storage(records: list[SlurmStorageFacts], row: sqlite3.Row) -> None:
         SlurmStorageFacts(
             assignment_id=str(row["assignment_id"]),
             provider_released=evidence is not None and evidence.get("provider_released") is True,
-            agent_evidence_accepted_at=row["agent_evidence_accepted_at"],
-            compute_released_at=row["compute_released_at"],
-            publication_requested_at=row["publication_requested_at"],
-            publication_completed_at=row["publication_completed_at"],
-            publication_cancelled_at=row["publication_cancelled_at"],
+            agent_evidence_accepted_at=_nullable_text(row, "agent_evidence_accepted_at"),
+            compute_released_at=_nullable_text(row, "compute_released_at"),
+            publication_requested_at=_nullable_text(row, "publication_requested_at"),
+            publication_completed_at=_nullable_text(row, "publication_completed_at"),
+            publication_cancelled_at=_nullable_text(row, "publication_cancelled_at"),
         )
     )
 
@@ -444,9 +453,9 @@ def _append_agent_assignment(records: _Rows, row: sqlite3.Row, run_uri: str) -> 
         {
             "assignment_id": assignment.assignment_id,
             "state": str(row["state"]),
-            "process_execution_id": row["process_execution_id"],
-            "execution_fence": row["grant_fence"],
-            "availability_revision": row["availability_revision"],
+            "process_execution_id": _nullable_text(row, "process_execution_id"),
+            "execution_fence": _nullable_text(row, "grant_fence"),
+            "availability_revision": _nullable_text(row, "availability_revision"),
         }
     )
 
