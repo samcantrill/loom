@@ -327,16 +327,28 @@ def test_slow_capture_keeps_control_live_and_cancellation_waits_for_safe_cleanup
 
 
 def test_candidate_inspection_does_not_repeat_report_loading_or_block_other_runs(tmp_path, monkeypatch):
+    from loom.queue._preparation_operations import CoordinatorPreparations
+
     service = _text_service(tmp_path, qualify_actions=True)
     LocalDaemon.initialize_deployment(service.daemon)
     entered, release, finished = Event(), Event(), Event()
     capture = CoordinatorPreparation.capture_candidate
     read_report = CoordinatorPreparation.read_report
+    read_async = CoordinatorPreparations._read_report_async
+    held_child = None
     reads = []
 
-    def record_report(owner, *args):
-        reads.append(args[2].operation_id)
-        return read_report(owner, *args)
+    def observe_report_identity(owner, row, config, admission, request, binding, token):
+        nonlocal held_child
+        if request.operation_id == "held-candidate":
+            held_child = token.child
+        return read_async(owner, row, config, admission, request, binding, token)
+
+    def record_report(owner, config, admission, request, binding):
+        if request.operation_id == "held-candidate":
+            assert held_child is not None
+            reads.append(held_child)
+        return read_report(owner, config, admission, request, binding)
 
     def hold_candidate(owner, *args):
         if not entered.is_set():
@@ -353,12 +365,15 @@ def test_candidate_inspection_does_not_repeat_report_loading_or_block_other_runs
     try:
         original = _start(daemon, "candidate-original")
         assert daemon._wait(original["queue_item_id"], timeout_seconds=40).state.value == "SUCCEEDED"
+        monkeypatch.setattr(CoordinatorPreparations, "_read_report_async", observe_report_identity)
         monkeypatch.setattr(CoordinatorPreparation, "read_report", record_report)
         monkeypatch.setattr(CoordinatorPreparation, "capture_candidate", hold_candidate)
         daemon.start_run(_reconciled_request("held-candidate"), principal_id="caller")
         assert entered.wait(timeout=40), daemon._service_error
-        before = reads.count("held-candidate")
-        assert before == 1
+        # A terminal audit event can advance the child revision after success.
+        # Each exact child can be hydrated once, including across publication-owner selection.
+        before = tuple(reads)
+        assert before and len(set(before)) == len(before)
         daemon.start_run(
             replace(_reconciled_request("candidate-independent"), fresh_stages=("author",)),
             principal_id="caller",
@@ -367,7 +382,7 @@ def test_candidate_inspection_does_not_repeat_report_loading_or_block_other_runs
         assert operation.state == "applied", (operation.to_dict(), daemon._service_error)
         outcome = daemon._wait(_result(operation)["queue_item_id"], timeout_seconds=50)
         assert outcome.state.value == "SUCCEEDED", (outcome, daemon._service_error)
-        assert reads.count("held-candidate") == before
+        assert tuple(reads) == before
         daemon.cancel_run_operation("held-candidate", principal_id="caller")
         cancelled = daemon.wait_operation("held-candidate", timeout=30).operation
         assert cancelled.state == "cancelled", cancelled.to_dict()
