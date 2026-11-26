@@ -204,3 +204,22 @@ coordinator; `--format json` retains the envelope. MCP exposes
 `loom_query_fields`, `loom_tag_keys` and `loom_tag_values`. Unix CLIENT and HTTPS
 CLIENT/QUERY reads share semantics; QUERY gains no mutation rights.
 Handshakes advertise `run-query-v1`.
+
+### Inspecting runs from the terminal
+
+`loom runs context RUN_URI` shows the original submission, current annotations
+and linked submission operations. When only some links fit, the heading gives
+both the displayed count and the retained total, such as “20 of 37 submissions”.
+Unavailable evidence is listed by reason. Use `--format json` for the complete
+native response, including the inspection document when available.
+
+`loom runs notes RUN_URI` shows UTC timestamps, authors and note text in the
+order returned. Long notes wrap, and a continuation cursor appears after the
+last row when available. Supplying `--text` and `--mutation-id` appends a note
+and prints its recorded ID.
+
+`loom runs fields --entity runs` groups native and stage fields, marks the
+native fields that support sorting, and lists the supported operators.
+`loom runs tags` lists one observed key per line. Add `--key KEY` to list
+values. An empty page can still carry coverage warnings and a cursor. Repeat
+the same read with the printed `--cursor` to continue.

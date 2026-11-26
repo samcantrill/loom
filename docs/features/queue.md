@@ -1703,12 +1703,20 @@ loom queue daemon-maintenance --connection operator.json --close --operation-id 
 loom queue daemon-maintenance --connection operator.json --open --operation-id maintenance-018
 ```
 
-Read-only use reports the gate's state, revision, owning maintenance ID/intent,
-coordinator identity and exact check permissions. Close/open obtain the expected
-coordinator and gate revision and retain an exact control ID. Repeating the CLI
-operation observes its retained receipt after a lost reply. A new maintenance
-window requires a new operation ID. Opening requires the same maintenance owner
-and intent and the observed revision; restart never opens the gate implicitly.
+Read-only text output shows whether admission is open or closed, whether the
+coordinator reports settlement, and the owning maintenance ID. While settlement
+is pending, it lists what the coordinator is waiting for. The JSON observation
+also includes the gate revision, owning intent, coordinator identity and exact
+check permissions.
+
+Close/open obtain the expected coordinator and gate revision and retain an
+exact control ID. Their text receipt shows the operation ID, mutation outcome
+and admission state recorded at application. Repeating the CLI operation
+returns that same receipt, even if the gate has since changed. Read
+`daemon-maintenance` without a mutation flag to check current settlement.
+A new maintenance window requires a new operation ID. Opening requires the
+same maintenance owner and intent and the observed revision; restart never
+opens the gate implicitly.
 
 Closure and new acceptance serialize at the coordinator transaction boundary.
 Already accepted requests replay; changed intent conflicts before maintenance

@@ -51,9 +51,10 @@ def table(
     wide: bool = False,
     continuation_column: int | None = None,
     priority_columns: Sequence[int] = (),
+    row_details: Sequence[Sequence[str]] | None = None,
     empty: str,
 ) -> str:
-    """Align one row per entity; move long prose to a labelled continuation."""
+    """Align one row per entity, followed by its optional explanatory lines."""
     if not rows:
         return empty
     body = [[cell(value) for value in row] for row in rows]
@@ -62,13 +63,22 @@ def table(
         for i, header in enumerate(headers)
     ]
     columns = shutil.get_terminal_size().columns
+
+    def details(index: int) -> list[str]:
+        lines = []
+        if row_details is not None:
+            for detail in row_details[index]:
+                lines.extend(textwrap.wrap(cell(detail), width=max(columns, 8),
+                                           initial_indent="  ", subsequent_indent="    "))
+        return lines
+
     if not wide:
         # Give each column its heading, then share spare room among long values.
         budget = columns - 2 * (len(headers) - 1) - sum(map(len, headers))
         if budget < 0:
             # On a very narrow terminal the headings alone would overflow.
             records = []
-            for row in body:
+            for index, row in enumerate(body):
                 lines = []
                 for header, value in zip(headers, row, strict=True):
                     lines.extend(
@@ -78,7 +88,7 @@ def table(
                             subsequent_indent="  ",
                         )
                     )
-                records.append("\n".join(lines))
+                records.append("\n".join([*lines, *details(index)]))
             return "\n\n".join(records)
         fitted = list(map(len, headers))
         for index in priority_columns:
@@ -98,7 +108,7 @@ def table(
         ).rstrip()
 
     lines = [line(headers)]
-    for row in body:
+    for index, row in enumerate(body):
         extra = None
         for i, (value, width) in enumerate(zip(row, widths, strict=True)):
             if len(value) <= width:
@@ -121,22 +131,24 @@ def table(
                     subsequent_indent="    ",
                 )
             )
+        lines.extend(details(index))
     return "\n".join(lines)
 
 
 def fields(
-    payload: Mapping[str, Any], keys: Sequence[str], *, indent: str = ""
+    payload: Mapping[str, Any], keys: Sequence[str], *, indent: str = "",
+    literal_keys: bool = False,
 ) -> list[str]:
-    """Present selected receipt fields with nesting intact."""
+    """Present nested fields, preserving authored keys when requested."""
     lines = []
     for key in keys:
         if key not in payload:
             continue
         value = payload[key]
-        label = key.replace("_", " ")
+        label = cell(key) if literal_keys else key.replace("_", " ")
         if isinstance(value, Mapping) and value:
             lines.append(f"{indent}{label}:")
-            lines.extend(fields(value, tuple(value), indent=indent + "  "))
+            lines.extend(fields(value, tuple(value), indent=indent + "  ", literal_keys=literal_keys))
         elif isinstance(value, (list, tuple)) and any(
             isinstance(item, Mapping) for item in value
         ):
@@ -144,7 +156,7 @@ def fields(
             for i, item in enumerate(value, 1):
                 lines.append(f"{indent}  {i}.")
                 if isinstance(item, Mapping):
-                    lines.extend(fields(item, tuple(item), indent=indent + "    "))
+                    lines.extend(fields(item, tuple(item), indent=indent + "    ", literal_keys=literal_keys))
                 else:
                     lines.append(indent + "    " + cell(item))
         else:

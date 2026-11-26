@@ -191,6 +191,101 @@ def _lineage(page: Mapping[str, Any]) -> str:
     )
 
 
+def _notes(payload: Mapping[str, Any], wide: bool) -> str:
+    if "note_id" in payload:
+        return f"Note recorded: {cell(payload['note_id'])}"
+    rows = [(n["created_at"], n["author"], n["text"]) for n in payload["notes"]]
+    return page_text(
+        table(
+            ("TIME (UTC)", "AUTHOR", "NOTE"),
+            rows,
+            priority_columns=(0, 1),
+            continuation_column=2,
+            wide=wide,
+            empty="No notes returned on this page.",
+        ),
+        payload,
+    )
+
+
+def _annotation_values(values: Mapping[str, Any]) -> list[str]:
+    return fields(values, ("description", "tags", "metadata"), indent="  ", literal_keys=True)
+
+
+def _context(payload: Mapping[str, Any], wide: bool) -> str:
+    lines = [cell(payload["run_uri"]), "", "Original submission"]
+    original = payload["initializer_submission"]
+    if original is None:
+        lines.append("  Unavailable")
+    else:
+        lines.extend(
+            fields(
+                original,
+                ("operation_id", "principal_id", "accepted_at", "state"),
+                indent="  ",
+            )
+        )
+        if original["context"] is None:
+            lines.append("  No submission context supplied.")
+        else:
+            lines.extend(_annotation_values(original["context"]))
+
+    lines.extend(["", "Current annotations"])
+    annotations = payload["annotations"]
+    if annotations is None:
+        lines.append("  Unavailable")
+    else:
+        lines.extend(fields(annotations, ("revision",), indent="  "))
+        lines.extend(_annotation_values(annotations))
+
+    links = payload["submissions"]
+    total = payload["submission_count"]
+    heading = "Linked submissions"
+    if len(links) < total:
+        heading += f" ({len(links)} of {total} submissions)"
+    lines.extend(["", heading])
+    lines.append(
+        table(
+            ("OPERATION ID", "ACCEPTED AT", "STATE"),
+            [
+                (link["operation_id"], link["accepted_at"], link["state"])
+                for link in links
+            ],
+            continuation_column=0,
+            wide=wide,
+            empty="No linked submissions.",
+        )
+    )
+    if payload["unavailable"]:
+        lines.extend(["", "Unavailable evidence"])
+        lines.extend(f"  {cell(reason)}" for reason in payload["unavailable"])
+    return "\n".join(lines)
+
+
+def _query_fields(payload: Mapping[str, Any]) -> str:
+    lines = [f"Native fields ({cell(payload['entity'])})"]
+    for name in payload["native_fields"]:
+        suffix = " (sortable)" if name in payload["sort_fields"] else ""
+        lines.append(f"  {cell(name)}{suffix}")
+    lines.extend(["", "Stage fields"])
+    lines.extend(f"  {cell(name)}" for name in payload["stage_fields"])
+    lines.extend(["", "Supported operators"])
+    lines.extend(f"  {cell(operator)}" for operator in payload["operators"])
+    return "\n".join(lines)
+
+
+def _tags(page: Mapping[str, Any]) -> str:
+    values = [
+        cell(item["key"] if "key" in item else item["value"]) for item in page["items"]
+    ]
+    content = (
+        "\n".join(value or '""' for value in values)
+        if values
+        else "No tags returned on this page."
+    )
+    return page_text(content, page)
+
+
 def format_discovery_text(command: str, page: Mapping[str, Any], *, wide: bool) -> str:
     if command in {"jobs", "submissions", "search"}:
         return _search(command, page, wide)
@@ -198,4 +293,12 @@ def format_discovery_text(command: str, page: Mapping[str, Any], *, wide: bool) 
         return _outputs(page, wide)
     if command == "lineage":
         return _lineage(page)
+    if command == "notes":
+        return _notes(page, wide)
+    if command == "context":
+        return _context(page, wide)
+    if command == "fields":
+        return _query_fields(page)
+    if command == "tags":
+        return _tags(page)
     return "\n".join([command, *fields(page, tuple(page))])

@@ -285,6 +285,39 @@ def test_unix_codec_mutation_outcomes_unknown_operation_and_cli(owner, capsys):
         server.stop()
 
 
+def test_cli_maintenance_controls_display_the_recorded_gate(owner, capsys):
+    from loom.cli.main import main
+
+    command = ["queue", "daemon-maintenance", "--endpoint", str(owner.config.endpoint)]
+    server = LocalDaemonSocketServer(owner, owner.config.endpoint)
+    server.start()
+    try:
+        def invoke(action, *args):
+            assert main([*command, f"--{action}", "--operation-id", "window", *args]) == 0
+            return capsys.readouterr().out
+
+        for action, resulting_state in (("close", "closed"), ("open", "open")):
+            operation_id = f"maintenance:window:{action}"
+            text = invoke(action)
+            assert text.splitlines() == [
+                f"Operation {operation_id}",
+                "Mutation outcome: applied",
+                f"Admission after operation: {resulting_state}",
+            ]
+            receipt = operator(owner).maintenance_operation(operation_id)
+            assert json.loads(invoke(action, "--format", "json"))["result"] == receipt
+
+        # Replaying the old close after opening reports its original effect.
+        assert invoke("close").splitlines() == [
+            "Operation maintenance:window:close",
+            "Mutation outcome: applied",
+            "Admission after operation: closed",
+        ]
+        assert operator(owner).observe_maintenance()["state"] == "open"
+    finally:
+        server.stop()
+
+
 def check_binding(owner, request):
     selected = owner.config.preparation_policy.select(request.preparation)["profile"]
     profile = selected.get("container_capability", selected.get("profile_descriptor"))
