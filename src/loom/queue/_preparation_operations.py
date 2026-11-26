@@ -1553,9 +1553,16 @@ class CoordinatorPreparations:
                     conn.rollback()
                     self._fail(row, "result_too_large")
                     return
+                claimed_selection = _json(selected)
                 write_status(conn, "operation", "UPDATE preparation_operations SET target_name = ?, queue_item_id = ?, selected_json = ?, result_json = ? WHERE operation_id = ?",
-                             (target_name, queue_id, _json(selected), _json(result), operation_id))
+                             (target_name, queue_id, claimed_selection, _json(result), operation_id))
                 conn.commit()
+            # Recording the publication owner changes the selection but consumes
+            # the same committed child report. Carry only this exact transition.
+            cached = self._reports.get(operation_id)
+            if cached is not None and cached[0] == report_token and report_token.selection == row["selected_json"]:
+                report_token = report_token._replace(selection=claimed_selection)
+                self._reports[operation_id] = (report_token, cached[1])
             row = self._read(operation_id)
         elif row["target_name"] != target_name:
             self._fail(row, "candidate_key_conflict", conflict=True)

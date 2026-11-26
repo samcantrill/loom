@@ -1057,8 +1057,8 @@ def test_selected_gpu_intent_keeps_host_policy_separate_from_preparation(fleet, 
     inventory = replace(inventory, gpu_qualification="nonexclusive")
     observe = CoordinatorOperatorClient.observe_agent
 
-    def with_gpu(client, name):
-        observation = observe(client, name)
+    def with_gpu(client, name, *, deadline=None):
+        observation = observe(client, name, deadline=deadline)
         value = cast(dict[str, Any], thaw_plain_data(observation.value))
         value["offer"]["gpu_devices"] = [{"device_id": "GPU-18cf22d0-ba80-55a5-f8d8-cb19fe940cd1"}]
         return replace(observation, value=value)

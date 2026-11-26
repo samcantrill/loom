@@ -582,9 +582,13 @@ def test_unqualified_or_different_profile_cannot_take_preparation_but_runs_ordin
             daemon.reconcile_once()
             operation = client.operation("prepare-1")
             assert operation.state == "pending"
-            child = client.admission(
-                _result(operation)["preparation_admission_id"]
-            ).admission
+            child_id = _result(operation)["preparation_admission_id"]
+            deadline = monotonic() + 25
+            child = client.admission(child_id).admission
+            while child.state.value == "PENDING_AUTHORITY":
+                assert monotonic() < deadline, child
+                sleep(0.02)
+                child = client.admission(child_id).admission
             # Admission projection can be ACTIVE between scheduling passes;
             # native assignments establish whether an ineligible worker ran it.
             assert child.state.value in {"ACTIVE", "WAITING"}, child
