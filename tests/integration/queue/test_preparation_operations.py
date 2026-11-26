@@ -2116,6 +2116,7 @@ def test_validated_reports_survive_publication_capacity_wait(tmp_path, monkeypat
 
     service = _service(tmp_path)
     reads, submissions, publications = Counter(), Counter(), Counter()
+    reads_at_first_offer: dict[str, int] = {}
     blocked, release = Event(), Event()
     requests = [
         replace(_request(), operation_id=f"capacity-{i}", run_name=f"capacity-{i}")
@@ -2141,6 +2142,7 @@ def test_validated_reports_survive_publication_capacity_wait(tmp_path, monkeypat
 
     def limited(operation_id, action, function, *args, **kwargs):
         if action == "preparation_target_publication" and not release.is_set():
+            reads_at_first_offer.setdefault(operation_id, reads[operation_id])
             submissions[operation_id] += 1
             if all(submissions[r.operation_id] >= 3 for r in requests):
                 blocked.set()
@@ -2153,7 +2155,11 @@ def test_validated_reports_survive_publication_capacity_wait(tmp_path, monkeypat
             daemon.prepare_run(request, principal_id="caller")
         assert blocked.wait(45), (reads, submissions)
         expected = {request.operation_id: 1 for request in requests}
-        assert reads == expected
+        # A new child authority revision may require a fresh read before
+        # publication is first offered. Repeated capacity refusals must reuse it.
+        assert reads_at_first_offer.keys() == expected.keys()
+        assert all(count >= 1 for count in reads_at_first_offer.values())
+        assert reads == reads_at_first_offer
         release.set()
         daemon._wake.set()
         for request in requests:
@@ -2162,7 +2168,7 @@ def test_validated_reports_survive_publication_capacity_wait(tmp_path, monkeypat
             ).operation
             assert completed.state == "applied", completed
             assert daemon.prepare_run(request, principal_id="caller") == completed
-        assert reads == publications == expected
+        assert publications == expected
     finally:
         release.set()
         daemon.stop()

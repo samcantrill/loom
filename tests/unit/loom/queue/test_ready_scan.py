@@ -52,7 +52,6 @@ def test_ready_gpu_work_waits_for_its_prepared_context_then_dispatches(monkeypat
     from loom.pipeline.runtime import ExecutionRouteKind
     from loom.scheduling import PolicyDecisionState
     from loom.queue import _action_results
-    from loom.queue._scheduling_waits import SchedulingWaits
     from time import monotonic_ns
 
     monkeypatch.setattr(_action_results, "action_attempt_cancelled", lambda *args: False)
