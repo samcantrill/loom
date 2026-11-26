@@ -1,4 +1,4 @@
-"""Summarize single-stage Loom submissions from combined client, coordinator and agent logs."""
+"""Summarize coordinator context loading and single-stage Loom submissions from diagnostic logs."""
 from __future__ import annotations
 
 import argparse
@@ -10,12 +10,10 @@ from math import ceil, isfinite
 from pathlib import Path
 
 
-def _distribution(values):
+def _distribution(values, *, percentiles=(50, 95)):
     values = sorted(values)
-    if not values:
-        return {"samples": 0, "p50": None, "p95": None, "max": None}
-    return {"samples": len(values), "p50": values[ceil(.50 * len(values)) - 1],
-            "p95": values[ceil(.95 * len(values)) - 1], "max": values[-1]}
+    quantiles = {f"p{p}": values[ceil(p * len(values) / 100) - 1] if values else None for p in percentiles}
+    return {"samples": len(values), **quantiles, "max": values[-1] if values else None}
 
 
 # Measurements are computed on a single joined placement before aggregating.
@@ -37,9 +35,18 @@ _HANDOFF = {
 }
 _REQUEST = ("request_preparation_queued", "request_preparation_worker_started", "worker_request_available")
 _AGENT = ("assignment_received", "supervisor_launch", "stage_run_entered", "stage_run_returned")
+_CONTEXT_PHASES = {
+    "request_to_loader_start": ("context_requested", "context_loader_started"),
+    "loader_start_to_available": ("context_loader_started", "context_available"),
+    "available_to_first_consumer": ("context_available", "context_consumer_advanced"),
+}
+_CONTEXT_ACTIONS = {action for pair in _CONTEXT_PHASES.values() for action in pair} | {
+    "context_validation", "context_discarded", "context_cache_evicted",
+}
+_CONTEXT_ID = ("admission_id", "admission_revision", "coordinator_epoch", "scheduling_epoch", "context_request_id")
 _BULK_PHASES = {"preparation_report_hydration", "preparation_target_publication", "preparation_annotation_initialization"}
 _ACTIONS = {"submission_sent", "submission_acknowledged", "admission_committed", "admission_succeeded", "prepared_target_committed",
-            "attempt_ready", "attempt_scheduling_summary", "reservation_committed", *_REQUEST, *_AGENT}
+            "attempt_ready", "attempt_scheduling_summary", "reservation_committed", *_REQUEST, *_AGENT, *_CONTEXT_ACTIONS}
 
 
 @dataclass
@@ -107,6 +114,9 @@ class Trace:
         self.prepared = defaultdict(list)
         self.assignments = defaultdict(lambda: defaultdict(list))
         self.work = defaultdict(lambda: defaultdict(list))
+        self.contexts = defaultdict(lambda: defaultdict(list))
+        self.context_operations = defaultdict(set)
+        self.unattributed_context_events = 0
         self.prepare_only = set()
         for record in records:
             if record.get("diagnostic") != "loom.phase_timings":
@@ -133,7 +143,17 @@ class Trace:
                 a = e.attrs
                 operation = span.get("operation_id") or record.get("operation_id")
                 admission = a.get("admission_id")
-                if e.action in ("submission_sent", "submission_acknowledged"):
+                if e.action in _CONTEXT_ACTIONS:
+                    # Request counters restart with the coordinator. A partial clock
+                    # identity cannot link two milestones even if their UTC times agree.
+                    if None in e.domain or not all(k in a for k in _CONTEXT_ID):
+                        self.unattributed_context_events += 1
+                        continue
+                    key = (e.domain, *(a[k] for k in _CONTEXT_ID))
+                    self.contexts[key][e.action].append(e)
+                    if operation is not None:
+                        self.context_operations[admission].add(operation)
+                elif e.action in ("submission_sent", "submission_acknowledged"):
                     if a.get("submit_method") == "submit":
                         identity = a.get("queue_item_id") or admission
                         if identity is None:
@@ -338,6 +358,98 @@ def _seconds(interval):
     return None if interval is None else interval["seconds"]
 
 
+def _context_load(key, actions):
+    """Measure the monotonic endpoints owned by one request in one coordinator process."""
+    domain, *identity = key
+    singles = {action: _unique(events) for action, events in actions.items()}
+    intervals = {}
+    for name, (opening, closing) in _CONTEXT_PHASES.items():
+        start, end = singles.get(opening), singles.get(closing)
+        duration = None
+        if start and end and start.ns is not None and end.ns is not None and end.ns >= start.ns:
+            duration = (end.ns - start.ns) / 1e9
+        intervals[name] = duration
+    requested, advanced = singles.get("context_requested"), singles.get("context_consumer_advanced")
+    validation = singles.get("context_validation")
+    discards = sorted({(e.attrs.get("owner", "unknown"), e.attrs.get("reason", "unknown"))
+                       for e in actions.get("context_discarded", ())})
+    return {
+        **dict(zip(_CONTEXT_ID, identity)), **dict(zip(("host", "process_id", "process_origin_ns"), domain)),
+        "source": next(iter(actions.values()))[0].attrs.get("source"),
+        "initial_wait_reason": requested.attrs.get("wait_reason") if requested else None,
+        "consumer": advanced.attrs.get("consumer") if advanced else None,
+        "validation_result": validation.attrs.get("result") if validation else None,
+        "discards": [{"owner": owner, "reason": reason} for owner, reason in discards],
+        "cache_evictions": sorted({e.attrs.get("reason", "unknown") for e in actions.get("context_cache_evicted", ())}),
+        "interval_seconds": intervals,
+    }
+
+
+def _context_report(trace, operation):
+    samples = defaultdict(list)
+    revisions = defaultdict(Counter)
+    selected_revisions = set()
+    waits, validations, evictions = Counter(), Counter(), Counter()
+    discard_reasons = defaultdict(Counter)
+    best = {}
+    for key, actions in trace.contexts.items():
+        row = _context_load(key, actions)
+        admission, revision = row["admission_id"], row["admission_revision"]
+        counts = revisions[admission, revision]
+        counts["requests"] += 1
+        counts["loader_starts"] += int("context_loader_started" in actions)
+        if row["initial_wait_reason"] is not None:
+            waits[row["initial_wait_reason"]] += 1
+        if row["validation_result"] is not None:
+            validations[row["validation_result"]] += 1
+        for discard in row["discards"]:
+            discard_reasons[discard["owner"]][discard["reason"]] += 1
+        evictions.update(row["cache_evictions"])
+        scores = {name: seconds for name, seconds in row["interval_seconds"].items() if seconds is not None}
+        for name, seconds in scores.items():
+            samples[name].append(seconds)
+        if operation is not None:
+            linked, _ = trace.admissions.get(admission, (None, None))
+            op_id = linked[1] if isinstance(linked, tuple) else linked
+            if operation != op_id and operation not in trace.context_operations[admission]:
+                continue
+            selected_revisions.add((admission, revision))
+        # Keep the longest measured example of each interval and a discarded
+        # request. A discard can be the only surviving record for its request.
+        if row["discards"]:
+            scores["discarded"] = max(scores.values(), default=-1)
+        for name, score in scores.items():
+            if name not in best or score > best[name][0]:
+                best[name] = score, row
+
+    examples = []
+    for name, (_, row) in best.items():
+        if "slowest_for" not in row:
+            row["slowest_for"] = []
+            examples.append(row)
+        row["slowest_for"].append(name)
+    report = {
+        "observed_requests": len(trace.contexts), "admission_revisions": len(revisions),
+        "unattributed_events": trace.unattributed_context_events,
+        "repeated_requests": sum(counts["requests"] - 1 for counts in revisions.values()),
+        "observed_reloads": sum(max(0, counts["loader_starts"] - 1) for counts in revisions.values()),
+        "requests_per_revision": dict(sorted(Counter(v["requests"] for v in revisions.values()).items())),
+        "loader_starts_per_revision": dict(sorted(Counter(v["loader_starts"] for v in revisions.values()).items())),
+        "interval_seconds": {
+            name: {**_distribution(samples[name], percentiles=(50, 95, 99)), "unknown": len(trace.contexts) - len(samples[name])}
+            for name in _CONTEXT_PHASES
+        },
+        "initial_wait_reasons": dict(waits), "validation_results": dict(validations),
+        "discard_reasons": {owner: dict(reasons) for owner, reasons in discard_reasons.items()},
+        "cache_eviction_reasons": dict(evictions), "slow_examples": examples,
+    }
+    if operation is not None:
+        report["selected_revisions"] = [
+            {"admission_id": ad, "admission_revision": rev, **revisions[ad, rev]} for ad, rev in sorted(selected_revisions)
+        ]
+    return report
+
+
 def summarize(records, *, clock_error_ms=None, slowest=10, operation=None):
     """Join native identities, then compute nearest-rank quantiles across measured intervals."""
     trace = Trace(records)
@@ -414,6 +526,7 @@ def summarize(records, *, clock_error_ms=None, slowest=10, operation=None):
         any_cross |= any(i and i["clock"] == "utc" for s in samples for i in s.values())
     return {
         "unit": "seconds", "first_send_to_first_ack": _distribution(i["seconds"] for i in send_times),
+        "context_loader": _context_report(trace, operation),
         "ack_to_first_target_entry": _distribution(i["seconds"] for i in durations),
         "submissions_without_acknowledgement": ack_missing, "acknowledgements": acked,
         "acknowledgements_without_target_entry": without_target, "preparation_only_acknowledgements": prep_acks,

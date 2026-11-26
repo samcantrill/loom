@@ -17,6 +17,7 @@ from loom.pipeline.runtime import ExecutionRouteKind
 from loom.pipeline.status import StageStatus
 from loom.scheduling import PolicyDecisionState
 from ._admission_scan import SchedulingAdmissions
+from ._context_timing import timing_for
 from ._recovery_retry import _RecoveryRetry
 from ._run_observations import ObservationSteps, RunObservationPending, RunSteps
 from ._managed_local import ManagedLocalError, ManagedOfferUnavailable
@@ -64,9 +65,17 @@ def reconcile_admission(
         self._cycle_context_epochs.setdefault(admission.admission_id, (self.daemon._epoch, self.daemon._scheduling_epoch))
     intent, scoped_authority = (self._admission_context(admission, prepared_intent=prepared_intent)
                                if prepared_context is None else prepared_context)
-    self._cycle_contexts[admission.admission_id] = (intent, scoped_authority)
+    previous = self._cycle_contexts.get(admission.admission_id)
+    if previous is not None and previous[1] is not scoped_authority:
+        if (old_timing := timing_for(previous)) is not None:
+            old_timing.discard("retained", "replaced")
+    context = (intent, scoped_authority)
+    self._cycle_contexts[admission.admission_id] = context
+    timing = timing_for(context)
 
     def steps() -> RunSteps:
+        if timing is not None:
+            timing.advance("run_reconciliation")
         outcome = yield from _reconcile_admission_steps(self, admission, intent, scoped_authority)
         if outcome.state not in {
             LocalDaemonAdmissionState.SUCCEEDED,
@@ -93,6 +102,8 @@ def reconcile_admission(
             # Binding succeeded. Activation changes the admission revision, so
             # a read started with the pre-activation revision could never apply.
             self.admission_activated(admission.admission_id)
+            if timing is not None:
+                timing.advance("admission_activation")
             self.daemon._wake.set()
             raise RunObservationPending()
         return self.run_observations.advance(
@@ -377,6 +388,8 @@ def _advance_ready_inputs(self, record, admission, context, epochs, *, anticipat
     if not _current_ready_attempt(snapshot, record):
         self._scheduling_waits.prequeue(record, "snapshot_unavailable")
         return True
+    if (timing := timing_for(context)) is not None:
+        timing.advance("stage_preparation")
     self._scheduling_waits.prequeue(record, "unknown")
     if anticipated:
         self._prepared_ready_request(record, snapshot, intent, speculative=True)
@@ -468,7 +481,7 @@ def _schedule_window(
                 continue
             admission = admissions.get(identity)
             if admission is not None and self._cycle_context_revisions.get(identity) != admission.revision:
-                self.discard_dispatch_context(identity)
+                self.discard_dispatch_context(identity, reason="admission_revision_changed")
             if admission is not None and self._cycle_context_epochs.get(identity) != epochs:
                 if self.run_observations.awaiting_read(admission, epochs, daemon._result_verifications.bulk):
                     continue
@@ -556,6 +569,8 @@ def _schedule_window(
             self._scheduling_waits.capacity(record, "snapshot_unavailable")
             exhausted_admissions.add(identity)
             return None
+        if (timing := timing_for(contexts[identity])) is not None:
+            timing.advance("stage_selection")
         return snapshot
 
     excluded_work: set[str] = set()
