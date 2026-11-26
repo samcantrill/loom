@@ -57,9 +57,11 @@ def _read_decline_reason(
         f"SELECT payload_json FROM {table} WHERE assignment_id = ? AND event_id = ?",
         (assignment_id, f"{assignment_id}:definitive_decline"),
     ).fetchone()
-    if row is None:
-        return None
-    reason = json.loads(str(row[0])).get("reason_code")
+    return _decode_decline_reason(row[0]) if row is not None else None
+
+
+def _decode_decline_reason(payload: object) -> str:
+    reason = json.loads(str(payload)).get("reason_code")
     if not isinstance(reason, str) or reason not in GPU_DECLINE_REASONS:
         raise ManagedLocalError("assignment decline reason is invalid")
     return reason
