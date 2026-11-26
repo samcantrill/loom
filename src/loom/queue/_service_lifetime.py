@@ -8,6 +8,7 @@ stores; this module never infers their lifetime from process presence.
 from __future__ import annotations
 
 import json
+import sqlite3
 import time
 from typing import TYPE_CHECKING, NamedTuple
 from pathlib import Path
@@ -254,12 +255,27 @@ def retained_lifetime(
         return lifetime
 
 
+_REMOTE_RELEASE_PENDING = "state NOT IN ('RELEASED', 'FAILED', 'CANCELLED')"
+
+
+def remote_release_pending(
+    conn: sqlite3.Connection, run_uri: str, assignment_ids: tuple[str, ...]
+) -> bool:
+    """Look up this admission's session receipts by primary key."""
+    return conn.execute(
+        "SELECT 1 FROM json_each(?) AS ids CROSS JOIN remote_assignments AS remote "
+        "ON remote.assignment_id = ids.value WHERE remote.run_uri = ? "
+        f"AND remote.{_REMOTE_RELEASE_PENDING} LIMIT 1",
+        (json.dumps(assignment_ids), run_uri),
+    ).fetchone() is not None
+
+
 def _retained_coordinator_operations(conn) -> bool:
     """One predicate for active and offline coordinator service ownership."""
     return _retained_coordinator_mutations(conn) or any(
         conn.execute(query).fetchone() is not None for query in (
             "SELECT 1 FROM managed_admissions WHERE state NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED') LIMIT 1",
-            "SELECT 1 FROM remote_assignments WHERE state NOT IN ('RELEASED', 'FAILED', 'CANCELLED') LIMIT 1",
+            f"SELECT 1 FROM remote_assignments WHERE {_REMOTE_RELEASE_PENDING} LIMIT 1",
         )
     )
 

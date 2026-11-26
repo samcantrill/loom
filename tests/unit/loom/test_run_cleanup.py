@@ -26,13 +26,15 @@ def _case(monkeypatch, *, owner="assignment", preparation=False, mode="release",
             return {"retained": mode != "release" or clock.polls == 1, "cleanup_blocked": None}
         assert operation == "admission"
         clock.admissions.append(payload["admission_id"])
-        owners = {
+        owners: dict[str, Any] = {
             "assignment": {"availability": "available", "assignments": []},
             "slurm": {"availability": "available", "assignments": []},
             "execution": {"availability": "available", "journal": []},
         }
         selected = "preparation" if preparation else "target"
-        if payload["admission_id"] == selected and mode != "other":
+        if owner == "remote_delivery":
+            owners["remote_release_pending"] = payload["admission_id"] == selected and mode != "other"
+        elif payload["admission_id"] == selected and mode != "other":
             key = "journal" if owner == "execution" else "assignments"
             owners[owner][key] = [{"state": "terminal_acknowledged"}]
             if mode == "unavailable":
@@ -56,6 +58,7 @@ def _case(monkeypatch, *, owner="assignment", preparation=False, mode="release",
 
 @pytest.mark.parametrize("owner,preparation", [
     ("assignment", False), ("assignment", True), ("slurm", False), ("execution", False),
+    ("remote_delivery", False), ("remote_delivery", True),
 ])
 def test_cleanup_waits_for_own_release(monkeypatch, owner, preparation):
     clock, available, observation = _case(monkeypatch, owner=owner, preparation=preparation)
@@ -63,6 +66,21 @@ def test_cleanup_waits_for_own_release(monkeypatch, owner, preparation):
     assert result["coordinator"] == {"state": "stopped", "evidence": {}}
     assert clock.polls == 2
     assert ("preparation" if preparation else "target") in clock.admissions
+
+
+def test_remote_release_is_scoped_to_the_run_and_assignment():
+    from loom.queue._service_lifetime import remote_release_pending
+
+    with sqlite3.connect(":memory:") as conn:
+        conn.execute("CREATE TABLE remote_assignments (assignment_id TEXT PRIMARY KEY, run_uri TEXT, state TEXT)")
+        conn.executemany("INSERT INTO remote_assignments VALUES (?, ?, ?)", [
+            ("finished", "target", "RELEASED"), ("waiting", "target", "TERMINAL"),
+            ("other", "another", "TERMINAL"),
+        ])
+        assert remote_release_pending(conn, "target", ("finished", "waiting"))
+        assert not remote_release_pending(conn, "target", ("finished", "missing", "other"))
+        conn.execute("UPDATE remote_assignments SET state = 'RELEASED' WHERE assignment_id = 'waiting'")
+        assert not remote_release_pending(conn, "target", ("waiting",))
 
 
 def test_cleanup_returns_when_only_other_work_remains(monkeypatch):

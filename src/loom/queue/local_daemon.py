@@ -1823,14 +1823,21 @@ class LocalDaemon:
         # Extend the existing loose owner detail, not the strict inspection wire.
         assignment = owners.get("assignment")
         if isinstance(assignment, Mapping):
+            from ._service_lifetime import remote_release_pending
             from .operations import _agent_observation
 
             rows = assignment.get("assignments", ())
-            agent_ids = sorted({
-                cast(str, row["agent_id"]) for row in rows
-                if isinstance(row, Mapping) and isinstance(row.get("agent_id"), str)
-                and row["agent_id"] != self._agent_id
-            }) if isinstance(rows, (list, tuple)) else []
+            remote_rows = [
+                row for row in rows if isinstance(row, Mapping)
+                and isinstance(row.get("agent_id"), str) and row["agent_id"] != self._agent_id
+            ] if isinstance(rows, (list, tuple)) else []
+            if remote_rows:
+                with self._connection() as conn:
+                    owners["remote_release_pending"] = remote_release_pending(
+                        conn, admission.run_uri,
+                        tuple(cast(str, row["assignment_id"]) for row in remote_rows),
+                    )
+            agent_ids = sorted({cast(str, row["agent_id"]) for row in remote_rows})
             sessions: list[PlainData] = []
             for agent_id in agent_ids[:_MAX_ADMISSION_PAGE_SIZE]:
                 try:

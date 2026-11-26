@@ -80,6 +80,8 @@ def _owned_assignments_pending(
             "admission", {"admission_id": admission_id}, available.connection_id,
             deadline=deadline,
         ))
+        if detail.owners.get("remote_release_pending") is True:
+            return True
         for name in ("assignment", "slurm"):
             owner = detail.owners.get(name)
             if not isinstance(owner, Mapping) or owner.get("availability") != "available":

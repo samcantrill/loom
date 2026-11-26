@@ -380,7 +380,9 @@ def test_assignment_agent_reason_uses_native_session_not_capacity(
                 "availability": "available",
                 "state": "populated",
                 "freshness": "current",
-                "assignments": [{"agent_id": session.agent_id, "state": "running"}],
+                "assignments": [{
+                    "assignment_id": "assignment-1", "agent_id": session.agent_id, "state": "running",
+                }],
             }
         },
     )
