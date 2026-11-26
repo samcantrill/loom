@@ -62,6 +62,7 @@ class ContextPreparations:
         self._next_load: dict[str, tuple[int, tuple[str | None, str | None], float, str]] = {}
         self._interval = 0.0
         self._tracing = qualification_timings()
+        self._drained: list[ContextTiming] = []
         # Diagnostic history of offers refused before a slot exists. This is
         # bounded independently of the executor and never schedules a retry.
         self._waiting: OrderedDict[str, ContextTiming] = OrderedDict()
@@ -170,7 +171,18 @@ class ContextPreparations:
                 self._next_load[item.admission.admission_id] = (
                     item.admission.revision, item.epochs, monotonic() + self._interval, item.admission.run_uri,
                 )
-        return tuple(item for item in completed if not item.invalidated)
+        ready = tuple(item for item in completed if not item.invalidated)
+        if self._tracing:
+            self._drained.extend(item.timing for item in ready if item.timing is not None)
+        return ready
+
+    def finish_handoffs(self) -> None:
+        # An exception while checking one admission can interrupt the drained
+        # batch before the remaining contexts reach their individual owners.
+        for timing in self._drained:
+            if not timing.handed_off:
+                timing.discard("preparation", "handoff_interrupted")
+        self._drained.clear()
 
     def next_delay(self) -> float | None:
         now = monotonic()

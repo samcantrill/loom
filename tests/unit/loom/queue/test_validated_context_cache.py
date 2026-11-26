@@ -329,7 +329,7 @@ def test_context_loader_refusals_keep_the_first_request_across_retries(monkeypat
     from types import SimpleNamespace
 
     from loom.queue import _context_timing
-    from loom.queue._context_preparation import ContextPreparations
+    from loom.queue._context_preparation import ContextPreparations, PreparedAdmissionContext
     from loom.queue.local_daemon import LocalDaemonAdmission, LocalDaemonAdmissionState
 
     monkeypatch.setenv("LOOM_QUALIFICATION_TIMINGS", "all")
@@ -348,7 +348,7 @@ def test_context_loader_refusals_keep_the_first_request_across_retries(monkeypat
 
     def load(_admission, _epochs):
         assert release.wait(5)
-        return object(), SimpleNamespace(_context_timing=_context_timing.current_load.get())
+        return cast(PreparedAdmissionContext, (object(), SimpleNamespace(_context_timing=_context_timing.current_load.get())))
 
     def select(admission):
         return [(name, attrs) for name, attrs in events if attrs["admission_id"] == admission.admission_id]
@@ -386,6 +386,14 @@ def test_context_loader_refusals_keep_the_first_request_across_retries(monkeypat
             "context_available", "context_consumer_advanced", "context_discarded"]
         assert len({attrs["context_request_id"] for _, attrs in actual}) == 1
         assert actual[0][1]["wait_reason"] == "workers_busy"
+        pool.finish_handoffs()
+        # A transient failure during admission lookup can skip remaining
+        # results after the turn already drained them from the loader pool.
+        assert pool.try_submit(base, epochs, load, for_dispatch=True)
+        pool._pending[base.admission_id].future.result(timeout=5)
+        assert len(pool.completed()) == 1
+        pool.finish_handoffs()
+        assert select(base)[-1][1]["reason"] == "handoff_interrupted"
     finally:
         release.set()
         pool.close()

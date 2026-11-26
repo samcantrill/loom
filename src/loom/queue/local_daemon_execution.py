@@ -1346,7 +1346,7 @@ class LocalDaemonExecution:
         coordinator_epoch: str,
         scheduling_epoch: str,
         cancellation_operation: Callable[[str], str | None],
-        admission_activated: Callable[[str], None],
+        admission_activated: Callable[[str], bool | None],
         daemon: LocalDaemon | None = None,
     ) -> None:
         self.config = config

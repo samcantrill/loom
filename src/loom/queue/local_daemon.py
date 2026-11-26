@@ -2806,7 +2806,10 @@ class LocalDaemon:
                 owner.open_owner_stores()
                 checked = (owner, epochs)
             with self._reconcile_guard:
-                return self._reconcile_once(checked)
+                try:
+                    return self._reconcile_once(checked)
+                finally:
+                    self._contexts.finish_handoffs()
 
 
     def _reconcile_once(self, checked=None) -> tuple[LocalDaemonAdmission, ...]:
@@ -4291,9 +4294,9 @@ class LocalDaemon:
         )
         return sequence
 
-    def _activate_admission(self, admission_id: str) -> None:
+    def _activate_admission(self, admission_id: str) -> bool:
         with self._connection() as conn:
-            write_status(
+            changed = write_status(
                 conn, "admission",
                 "UPDATE managed_admissions SET state = ?, blocked_reason = NULL, "
                 "revision = revision + 1 "
@@ -4309,6 +4312,7 @@ class LocalDaemon:
                 ),
             )
             conn.commit()
+            return changed.rowcount > 0
 
     def _admission_for_queue_item(self, queue_item_id: str) -> LocalDaemonAdmission:
         with self._connection() as conn:

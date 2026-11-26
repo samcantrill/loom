@@ -22,6 +22,7 @@ class ContextTiming:
     epochs: tuple[str | None, str | None]
     source: str
     request_id: int = field(default_factory=lambda: next(_request_ids))
+    handed_off: bool = False
     advanced: bool = False
     discarded: bool = False
 
