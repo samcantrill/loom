@@ -39,6 +39,10 @@ class ManagedLocalError(ValueError):
     __module__ = "loom.queue._managed_local"  # Retained failure type in worker records.
 
 
+class ManagedOfferUnavailable(ManagedLocalError):
+    """The selected offer failed a definitive check before acquiring a claim."""
+
+
 GPU_DECLINE_REASONS = frozenset(
     {
         "external_process_detected",

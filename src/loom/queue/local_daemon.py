@@ -1816,6 +1816,14 @@ class LocalDaemon:
             ),
         )
 
+    def _waiting_reasons(self, rows: Sequence[tuple[str, str, str | None]]) -> dict[str, str]:
+        """Enrich generic WAITING rows while preserving specific durable diagnostics."""
+        eligible = {identity for identity, state, reason in rows if state == "WAITING"
+                    and reason in (None, "awaiting scheduling decision",
+                                   "no dependency-ready stage currently has managed capacity")}
+        observed = self._execution._scheduling_waits.waiting_reasons(eligible) if self._execution and eligible else {}
+        return {identity: observed.get(identity, "awaiting scheduling decision") for identity in eligible}
+
     def admissions(
         self, *, limit: int = _MAX_ADMISSION_PAGE_SIZE, cursor: str | None = None
     ) -> AdmissionPage:
@@ -1835,6 +1843,9 @@ class LocalDaemon:
         with self._connection() as conn:
             rows = tuple(conn.execute(query, (*values, limit + 1)))
         page = tuple(_admission_from_row(row) for row in rows[:limit])
+        reasons = self._waiting_reasons([(item.admission_id, item.state.value, item.blocked_reason) for item in page])
+        page = tuple(replace(item, blocked_reason=reasons[item.admission_id])
+                     if item.admission_id in reasons else item for item in page)
         next_cursor = (
             _encode_admission_cursor(page[-1].enqueue_sequence, page[-1].admission_id)
             if len(rows) > limit and page
@@ -1876,6 +1887,10 @@ class LocalDaemon:
     ) -> LocalDaemonAdmissionDetail:
         if not isinstance(view.get("authority"), Mapping):
             raise QueueStorageError("targeted admission owner detail is unavailable")
+        if admission.state is LocalDaemonAdmissionState.WAITING:
+            reasons = self._waiting_reasons([(admission.admission_id, admission.state.value, admission.blocked_reason)])
+            if admission.admission_id in reasons:
+                admission = replace(admission, blocked_reason=reasons[admission.admission_id])
         owners = dict(view)
         if self._execution is not None:
             owners["scheduling_waits"] = self._execution._scheduling_waits.observed(admission.run_uri)
@@ -2220,8 +2235,8 @@ class LocalDaemon:
             execution = self._execution
         if execution is None:
             raise QueueServiceError("local daemon execution is absent")
-        completed_runs = (*[scope[1] for scope in scopes if scope[0] == "run"],
-                          *execution._completed_local_runs.take())
+        completed_local = execution._completed_local_runs.take()
+        completed_runs = (*[scope[1] for scope in scopes if scope[0] == "run"], *completed_local)
         for uri in completed_runs:
             if len(self._resuming_runs) < 256:
                 self._resuming_runs.setdefault(uri, None)
@@ -2247,13 +2262,18 @@ class LocalDaemon:
             invalidated = set(self._context_invalidations)
             self._context_invalidations.clear()
         execution.run_observations.invalidate(invalidated, bulk)
-        execution.dispatch_observations.begin_cycle(invalidated, epochs, self.config.poll_interval_seconds)
+        schedulable = SchedulingAdmissions(enqueue_through, self._lookup_schedulable_admissions)
+        schedulable.include(execution.dispatch_observations.requested_admissions())
+        execution.dispatch_observations.begin_cycle(
+            invalidated.union(completed_local), epochs, self.config.poll_interval_seconds,
+            {key: row.revision for key, row in schedulable.items()},
+            execution.stage_work_store.ready_ids, execution._ready_continuations.offer,
+        )
         execution.retain_dispatch_contexts(invalidated, epochs, bulk.active_runs() | self._resuming_runs.keys())
         self._contexts.begin_cycle(minimum_interval=self.config.poll_interval_seconds, invalidated=invalidated)
         prepared = {item.admission.admission_id: item for item in (
             *self._contexts.completed(), *execution.run_observations.completed(),
         )}
-        schedulable = SchedulingAdmissions(enqueue_through, self._lookup_schedulable_admissions)
         waiting_outcomes: dict[str, LocalDaemonExecutionOutcome] = {}
         for preparation in sorted(prepared.values(), key=lambda item: AdmissionScan.key(item.admission)):
             admission = preparation.admission
@@ -2345,6 +2365,7 @@ class LocalDaemon:
         # launch at most that many assignments, but a larger pipeline is
         # never rejected merely for having more stages.
         from ._coordinator_run_progress import resume_ready_inputs
+        from ._ready_window import ScanYield
         resume_ready_inputs(execution, execution._ready_continuations.take(), schedulable, epochs)
         started_admissions: set[str] = set()
         with bulk.visiting(schedulable.visited_dispatch):
@@ -2357,7 +2378,9 @@ class LocalDaemon:
                     if epochs != (self._epoch, self._scheduling_epoch):
                         self._wake.set()
                         break
-                    scheduled = execution.schedule_once(schedulable, waiting_outcomes=waiting_outcomes)
+                    scheduled = execution.schedule_once(schedulable, waiting_outcomes=waiting_outcomes, deadline=dispatch_deadline)
+                    if scheduled is ScanYield.MORE:
+                        break  # The ready cursor already owns the next wake.
                     if scheduled is None:
                         break
                     admission_id, outcome = scheduled
@@ -2373,7 +2396,9 @@ class LocalDaemon:
                             else "healthy"
                         ),
                     )
-                    self._set_state(admission_id, outcome.state, reason=outcome.reason, observed=admission)
+                    # An exempt shared producer may start while its graph cancellation settles.
+                    if admission.cancellation_operation_id is None:
+                        self._set_state(admission_id, outcome.state, reason=outcome.reason, observed=admission)
                 else:
                     # A full batch may leave runnable work. Yield the cycle lock
                     # but do not impose the safety interval on the next batch.
@@ -2437,7 +2462,7 @@ class LocalDaemon:
         with self._connection() as conn:
             rows = conn.execute(
                 f"SELECT * FROM managed_admissions WHERE admission_id IN ({placeholders}) "
-                "AND state IN ('ACTIVE','WAITING') AND cancellation_operation_id IS NULL", tuple(identities),
+                "AND state IN ('ACTIVE','WAITING','CANCELLATION_REQUESTED','CANCELLING')", tuple(identities),
             ).fetchall()
         with self._state_guard():
             return {row["admission_id"]: _admission_from_row(row) for row in rows
@@ -4079,7 +4104,13 @@ class LocalDaemonClientView:
         self._daemon._require_view_role(self._principal, LocalDaemonRole.CLIENT)
         coordinator_id = self._daemon._require_started()
         with self._daemon._connection() as conn:
-            return queue_page(conn, coordinator_id, self._daemon._clock(), selection, limit, cursor)
+            page = queue_page(conn, coordinator_id, self._daemon._clock(), selection, limit, cursor)
+        rows = cast(list[dict[str, PlainData]], page["admissions"])
+        reasons = self._daemon._waiting_reasons([(str(row["admission_id"]), str(row["state"]), cast(str | None, row.get("blocked_reason"))) for row in rows])
+        for row in rows:
+            if row["admission_id"] in reasons:
+                row["blocked_reason"] = reasons[str(row["admission_id"])]
+        return page
 
     def admissions(
         self, *, limit: int = _MAX_ADMISSION_PAGE_SIZE, cursor: str | None = None

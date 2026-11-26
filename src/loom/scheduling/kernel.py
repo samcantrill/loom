@@ -100,17 +100,21 @@ class SchedulingKernel:
         work: Sequence[WorkItem],
         candidates: Sequence[Candidate],
         as_of: int,
+        compatible_candidates: Mapping[str, frozenset[str]] | None = None,
     ) -> SchedulingDecision:
-        return self.decide_snapshot(
-            SchedulingSnapshot(
-                as_of=as_of,
-                work=tuple(work),
-                candidates=tuple(candidates),
-                component_epoch=self._component_epoch,
-            )
+        """Apply policy to eligible work–candidate pairs. An omitted work ID in a supplied map has no eligible profile."""
+        snapshot = SchedulingSnapshot(
+            as_of=as_of, work=tuple(work), candidates=tuple(candidates),
+            component_epoch=self._component_epoch,
         )
+        return self._decide(snapshot, compatible_candidates)
 
     def decide_snapshot(self, snapshot: SchedulingSnapshot) -> SchedulingDecision:
+        return self._decide(snapshot, None)
+
+    def _decide(
+        self, snapshot: SchedulingSnapshot, compatible_candidates: Mapping[str, frozenset[str]] | None,
+    ) -> SchedulingDecision:
         if not isinstance(snapshot, SchedulingSnapshot):
             raise SchedulingError("decide_snapshot requires SchedulingSnapshot")
         if snapshot.component_epoch != self._component_epoch:
@@ -125,7 +129,10 @@ class SchedulingKernel:
             )
 
         evaluations = tuple(
-            self._evaluate_work(item, snapshot.candidates, snapshot.as_of)
+            self._evaluate_work(item, snapshot.candidates if compatible_candidates is None else tuple(
+                candidate for candidate in snapshot.candidates
+                if candidate.candidate_id in compatible_candidates.get(item.stage_work_id, ())
+            ), snapshot.as_of)
             for item in sorted(snapshot.work, key=lambda value: value.order_key)
         )
         invalid = next(

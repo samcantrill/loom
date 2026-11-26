@@ -343,9 +343,9 @@ def _rename_graph(tmp_path):
     path.write_text(json.dumps(config))
 
 
-@pytest.mark.parametrize("cancel_final", [False, True])
+@pytest.mark.parametrize(("cancel_final", "defer_placement"), [(False, False), (True, False), (False, True)])
 def test_shared_producer_survives_original_graph_cancel_and_reopen(
-    tmp_path, cancel_final, monkeypatch
+    tmp_path, cancel_final, defer_placement, monkeypatch
 ):
     from loom.queue._action_result_resolution import ActionResultResolution
 
@@ -355,11 +355,16 @@ def test_shared_producer_survives_original_graph_cancel_and_reopen(
         recovered.append(owner)
         return recover(owner)
     monkeypatch.setattr(ActionResultResolution, "reconcile_cancellations", count_recovery)
-    service = _text_service(tmp_path, qualify_actions=True, delay=30)
+    service = _text_service(tmp_path, qualify_actions=True, delay=1 if defer_placement else 30)
     LocalDaemon.initialize_deployment(service.daemon)
     daemon = LocalDaemon(service.daemon, preparation=CoordinatorPreparation(service))
     daemon.start()
     try:
+        if defer_placement:
+            execute = daemon._execution._execute
+            def defer_author(**kwargs):
+                return False if kwargs["record"].stage_name == "author" else execute(**kwargs)
+            monkeypatch.setattr(daemon._execution, "_execute", defer_author)
         first = _start(daemon, "original")
         original_uri = first["prepared_run"]["run_uri"]
         factory = service.daemon.coordinator_authority_factory
@@ -378,7 +383,7 @@ def test_shared_producer_survives_original_graph_cancel_and_reopen(
         _until(
             lambda: (
                 (stage := original_stage()) is not None
-                and stage.status.value == "RUNNING"
+                and stage.status.value == ("PENDING" if defer_placement else "RUNNING")
             )
         )
         _rename_graph(tmp_path)

@@ -120,11 +120,15 @@ class ReadyPreparationPool:
     def request_for_descriptors(
         self, key: tuple[str, str], work_id: str,
     ) -> tuple[bool, StageWorkerRequest | None]:
-        """Return one demanded request when its descriptor phase can begin."""
+        """Return a completed request when its descriptor phase can begin."""
         stage = self._pending.get(key)
         if stage is None or stage.retiring or stage.work_id != work_id:
             return False, None
-        if stage.speculative or "input-descriptors" in stage.phases:
+        if "input-descriptors" in stage.phases:
+            return True, None
+        if stage.speculative and any(
+            not pending.finished() for pending in self._pending.values() if pending.speculative
+        ):
             return True, None
         request = stage.prepared_request()
         return True, None if request is None else request.value
@@ -278,22 +282,25 @@ def prepare_ready_request(
     from loom.pipeline.status import StageStatus
     from loom.pipeline.stores.input_lineage import validate_worker_inputs
     from loom.pipeline._project_contracts import validate_admitted_worker
-    from .errors import QueueConflictError
+    from .errors import QueueConflictError, QueueServiceError
 
     store = LocalRunStore(root)
     attempt = next(a for s in snapshot.stages for a in s.attempts if a.attempt_id == record.attempt_id)
-    raw = store.read_stage_worker_request(record.run_uri, record.stage_name, attempt=None)
-    if raw is not None:
-        previous = StageWorkerRequest.from_dict(raw)
-        if previous.attempt != record.attempt:
+    try:
+        raw = store.read_stage_worker_request(record.run_uri, record.stage_name, attempt=None)
+        retained = None if raw is None else StageWorkerRequest.from_dict(raw)
+    except ValueError as error:
+        raise QueueServiceError("retained worker request is invalid") from error
+    if retained is not None:
+        if retained.attempt != record.attempt:
             prior_interrupted = any(
-                a.attempt == previous.attempt and a.status in {StageStatus.FAILED, StageStatus.CANCELLED}
+                a.attempt == retained.attempt and a.status in {StageStatus.FAILED, StageStatus.CANCELLED}
                 for s in snapshot.stages if s.stage_name == record.stage_name for a in s.attempts
             )
-            if not prior_interrupted or previous.attempt + 1 != record.attempt:
+            if not prior_interrupted or retained.attempt + 1 != record.attempt:
                 raise QueueConflictError("managed retry worker request conflicts")
-            raw = None
-    if raw is None:
+            retained = None
+    if retained is None:
         request = prepare_stage_attempt(
             stage_state=store, stage_workspaces=store, local_paths=store,
             reliability=store, prepared_runs=store, config=store,
@@ -305,9 +312,15 @@ def prepare_ready_request(
                 for s in snapshot.stages if s.stage_name == record.stage_name and s.latest_commit is not None), None)},
         )
     else:
-        request = StageWorkerRequest.from_dict(raw)
-        validate_admitted_worker(store, request, stage, config=store, local_paths=store)
-    validate_worker_inputs(request, attempt.input_bindings)
+        request = retained
+        try:
+            validate_admitted_worker(store, request, stage, config=store, local_paths=store)
+        except ValueError as error:
+            raise QueueServiceError("retained worker request differs from admitted work") from error
+    try:
+        validate_worker_inputs(request, attempt.input_bindings)
+    except ValueError as error:
+        raise QueueServiceError("worker request differs from retained input bindings") from error
     return request
 
 

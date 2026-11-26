@@ -49,6 +49,7 @@ from loom.pipeline.stores.authority import (
     PreparedAttemptReceipt,
     PreparedAttemptRequest,
     PreparedBindingObservation,
+    PreparedAttemptBindRejected,
     StatusTransition,
 )
 from loom.pipeline.stores.coordination import (
@@ -1531,7 +1532,8 @@ class AuthorityRepository:
             return RunStatus.CANCELLED
 
     def bind_prepared_attempt(
-        self, run_uri: str, *, assignment_id: str, attempt_id: str
+        self, run_uri: str, *, assignment_id: str, attempt_id: str,
+        expected_revision: BackendRevision | None = None,
     ) -> None:
         run_uri = _non_empty(run_uri, "run_uri")
         assignment_id = _non_empty(assignment_id, "assignment_id")
@@ -1556,6 +1558,9 @@ class AuthorityRepository:
                     raise AuthorityRepositoryError("assignment binding conflicts")
                 return
             _require_no_repository_cancellation_epoch(conn, run_uri, attempt_id=attempt_id)
+            rejection = AuthorityRepositoryError if expected_revision is None else PreparedAttemptBindRejected
+            if expected_revision is not None and expected_revision != _current_run_revision(conn, run_uri):
+                raise PreparedAttemptBindRejected("stale authority revision for prepared binding")
             run_status = RunStatus(cast(str, _require_run_row(conn, run_uri)["status"]))
             if run_status in {
                 RunStatus.SUCCEEDED,
@@ -1563,17 +1568,20 @@ class AuthorityRepository:
                 RunStatus.CANCELLED,
                 RunStatus.INTERRUPTED,
             }:
-                raise AuthorityRepositoryError("terminal run cannot bind prepared work")
+                raise rejection("terminal run cannot bind prepared work")
             attempt = conn.execute(
-                "SELECT stage_name, status FROM stage_attempts "
-                "WHERE run_uri = ? AND attempt_id = ?",
+                "SELECT a.status FROM stage_attempts a JOIN authority_stages s "
+                "ON s.run_uri = a.run_uri AND s.stage_name = a.stage_name "
+                "WHERE a.run_uri = ? AND a.attempt_id = ? AND s.status = 'PENDING' "
+                "AND NOT EXISTS (SELECT 1 FROM stage_attempts n WHERE n.run_uri = a.run_uri AND "
+                "n.stage_name = a.stage_name AND n.attempt_number > a.attempt_number)",
                 (run_uri, attempt_id),
             ).fetchone()
             if (
                 attempt is None
                 or StageStatus(cast(str, attempt["status"])) is not StageStatus.PENDING
             ):
-                raise AuthorityRepositoryError(
+                raise rejection(
                     "only a PENDING prepared attempt may bind"
                 )
             receipt_row = conn.execute(
@@ -1588,7 +1596,7 @@ class AuthorityRepository:
             )
             for upstream_stage, commit_id in request.upstream_commits.items():
                 if _latest_stage_commit_id(conn, run_uri, upstream_stage) != commit_id:
-                    raise AuthorityRepositoryError("prepared attempt upstream commit evidence is stale")
+                    raise rejection("prepared attempt upstream commit evidence is stale")
             if (
                 conn.execute(
                     "SELECT 1 FROM managed_attempt_bindings "
@@ -1597,7 +1605,7 @@ class AuthorityRepository:
                 ).fetchone()
                 is not None
             ):
-                raise AuthorityRepositoryError("prepared attempt is already bound")
+                raise rejection("prepared attempt is already bound")
             conn.execute(
                 "INSERT INTO managed_attempt_bindings "
                 "(run_uri, assignment_id, attempt_id, state, fence, "
