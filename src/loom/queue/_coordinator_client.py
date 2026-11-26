@@ -27,7 +27,7 @@ from ._coordinator_control import (
     validate_request,
 )
 from . import _coordinator_transport as transport_io
-from ._phase_timing import qualification_timings, reported_phases, request_identity
+from ._phase_timing import milestone, qualification_timings, reported_phases, request_identity
 from ._coordinator_transport import ControlTransport
 from .errors import QueueError
 from .local_daemon import (
@@ -270,6 +270,14 @@ class NativeCoordinatorClient:
                     else None,
                     message=str(exc),
                 ) from exc
+        submission = operation in {"start_run", "prepare_run", "submit"}
+        operation_id = queue_item_id = None
+        if submission:
+            operation_id = request_identity(envelope)
+            item = cast(Mapping[str, PlainData], envelope["request"]).get("queue_item_id")
+            queue_item_id = item if isinstance(item, str) and len(item) <= 256 else None
+            milestone("submission_sent", operation_id=operation_id,
+                      submit_method=operation, queue_item_id=queue_item_id)
         value = self._exchange(operation, envelope, bound, waiting=waiting)
         try:
             if operation in {"handshake", "operator_handshake"}:
@@ -281,6 +289,12 @@ class NativeCoordinatorClient:
                 ) or (isinstance(version, str) and version != "1"):
                     raise control_error("unsupported", operation, envelope)
             decoded = decode_result(operation, value)
+            if submission:
+                milestone(
+                    "submission_acknowledged", operation_id=operation_id, submit_method=operation,
+                    queue_item_id=queue_item_id,
+                    admission_id=decoded.admission_id if isinstance(decoded, LocalDaemonAdmission) else None,
+                )
             if operation in {"handshake", "operator_handshake"}:
                 self._last_connection = cast(CoordinatorConnectionDescription, decoded)
             return decoded

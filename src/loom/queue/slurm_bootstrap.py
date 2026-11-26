@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import base64
 import hashlib
 import json
@@ -377,6 +377,8 @@ def run_slurm_bootstrap(
             or delivery.executor_name != selected.executor_name
         ):
             raise QueueConflictError("SLURM resident profile identity conflicts")
+        from ._attempt_timing import assignment_milestone, stage_invocation
+        assignment_milestone("assignment_received", delivery)
         storage = cast(Mapping[str, object], registration.get("result_storage"))
         transport = SharedSlurmResult(storage, assignment_id, compute=True)
         workspace = SlurmBootstrapWorkspace(
@@ -504,11 +506,15 @@ def run_slurm_bootstrap(
                     os.chdir(selected.project_root)
                     if str(selected.project_root) not in sys.path:
                         sys.path.insert(0, str(selected.project_root))
+                    from ._phase_timing import PhaseTimings
+                    timings = PhaseTimings()
                     result = execute_resident_stage_worker_request(
                         worker_request=workspace.worker_request(),
+                        stage_invocation=stage_invocation(delivery, timings),
                         workspace_root=workspace.root,
                         process_containment_owner=ProcessContainmentOwner.OUTER_BOUNDARY,
                     )
+                    result = replace(result, executor_metadata={**result.executor_metadata, "native_timings": timings.payload()})
                 report = workspace.retain_result(result)
             except (QueueServiceError, QueueConflictError, RuntimeResourceError, ValueError, OSError) as exc:
                 transport.failure(str(exc))

@@ -44,7 +44,7 @@ from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.pipeline.runtime._resource_controls import _validated_resource_controls
 from ._process_group import OwnedProcessGroup, require_group_wait_support
 from ._agent_progress import _Progress, _Spawn, _cooperative, _delay, _external, _steps
-from ._phase_timing import log_phases, observe_phases, phase
+from ._phase_timing import log_phases, milestone, observe_phases, phase
 from ._submitted_container_policy import SubmittedContainerPolicy
 from .submitted_execution import SubmittedContainerCapability, SubmittedContainerExecution
 
@@ -472,6 +472,8 @@ class AgentProcessSupervisor:
         self._agent_id = self._configuration.agent_id
         self._children: dict[str, OwnedProcessGroup] = {}
         self._namespace_inits: dict[str, int] = {}
+        from ._submitted_image_launch import VerifiedImageCache
+        self._image_cache = VerifiedImageCache.for_supervisor(self.root, self._configuration)
         self._image_inputs = {}
         self._pending_namespaces: dict[str, subprocess.Popen[bytes]] = {}
         self._stop_requested: set[str] = set()
@@ -763,7 +765,9 @@ class AgentProcessSupervisor:
         image_paths = None
         def capture_image(image, roots):
             nonlocal image_paths
-            image_paths = inputs.enter_context(image_for_launch(image, roots, launch.assignment_id))
+            image_paths = inputs.enter_context(image_for_launch(
+                image, roots, launch.assignment_id, cache=self._image_cache,
+            ))
             return image_paths
 
         self._validate_launch(launch)
@@ -868,6 +872,8 @@ class AgentProcessSupervisor:
             raise AgentProcessSupervisorError("resident root was not created") from exc
         if image_paths is not None:
             self._image_inputs[launch.launch_operation_id] = inputs.pop_all()
+        milestone("supervisor_launch", assignment_id=launch.assignment_id, agent_id=launch.agent_id,
+                  backend=launch.backend_kind)
         self._children[launch.launch_operation_id] = OwnedProcessGroup(child)
         self._startup_started_at[launch.launch_operation_id] = monotonic()
         if launch.backend_kind == "apptainer":
@@ -1273,6 +1279,9 @@ class AgentProcessSupervisor:
                 "terminal": SupervisorLaunchState.EXITED,
                 "unknown": SupervisorLaunchState.UNKNOWN,
             }[observation.state]
+            if row is None and state in {SupervisorLaunchState.RUNNING, SupervisorLaunchState.EXITED}:
+                milestone("supervisor_launch", assignment_id=launch.assignment_id, agent_id=launch.agent_id,
+                          backend=launch.backend_kind)
             if observation.contained and (
                 contain or row is not None and row["state"] == "contained"
             ):
@@ -2687,6 +2696,7 @@ def _serve(
             supervisor.rotate_clean_continuity()
         finally:
             journal.close()
+    supervisor._image_cache.recover_scratch(root, supervisor.quiescent)
     secret = (root / "service.secret").read_bytes()
     endpoint = _endpoint_for_root(root)
     if endpoint.exists():
@@ -2806,6 +2816,7 @@ def _serve(
             thread.join()
         if endpoint.exists():
             endpoint.unlink()
+        supervisor._image_cache.clear_idle()
         lock.close()
 
 

@@ -130,6 +130,8 @@ def _reconcile_admission_steps(
     intent: ManagedLocalIntent,
     scoped_authority: _ScopedCoordinatorAuthority,
 ) -> RunSteps:
+    from loom.pipeline.orchestration import SchedulingProjectionState
+
     action_resolver = self._action_resolution
     cancelling = admission.cancellation_operation_id is not None or self.cancellation_operation(admission.admission_id) is not None
     if cancelling:
@@ -195,7 +197,10 @@ def _reconcile_admission_steps(
                 with phase("coordinator.orchestrate_ready"):
                     try:
                         stage_plan, readiness, expected = steps.send(action_revision)
-                    except StopIteration:
+                    except StopIteration as done:
+                        for record in done.value:
+                            if record.scheduling_state is SchedulingProjectionState.READY:
+                                self._scheduling_waits.ready(record)
                         break
                 action_revision = None
                 if readiness.action is PlanAction.RUN:
@@ -466,6 +471,10 @@ def _schedule_window(
                        if not action_attempt_cancelled(conn, record.run_uri, record.attempt_id))
     if not window:
         return None
+    # A release before agent acceptance reopens the existing projection. A
+    # retry can reach dispatch before the next admission reconciliation sweep.
+    for record in window:
+        self._scheduling_waits.ready(record)
     if isinstance(admissions, SchedulingAdmissions):
         admissions.include({record.admission_id for record in window})
         admissions.visited_dispatch.update(
@@ -510,6 +519,7 @@ def _schedule_window(
         ):
             exhausted_admissions.add(record.admission_id)
             self._scheduling_waits.record(record.run_uri, record.stage_name, "reservation")
+            self._scheduling_waits.capacity(record, "run_parallel_limit")
         elif daemon is not None:
             try:
                 _advance_ready_inputs(self, record, admission, context, epochs, anticipated=True)
@@ -517,6 +527,9 @@ def _schedule_window(
                 # Route-specific eligibility will report/retry the exact preparation.
                 pass
     remote_targets = self._remote_candidates()
+    configured_hosts = {rule.agent_id for rule in self.config.agent_policy.agents}
+    all_slots_full = (self.agent_id is None and bool(configured_hosts)
+                      and configured_hosts.issubset(self._full_offer_hosts))
     local_candidate = (
         self._candidate_for_dispatch()
         if self.agent_id is not None and self.local_profile_ready and any(
@@ -525,6 +538,11 @@ def _schedule_window(
         )
         else None
     )
+    observed_offers = {target.offer_id for _, target in remote_targets.values()}
+    local_timing = self._local_offer_timing() if local_candidate is not None else None
+    if local_timing is not None:
+        observed_offers.add(local_timing[0])
+    self._scheduling_waits.current_offers(observed_offers, epochs)
     observed: dict[str, AuthoritativeRunSnapshot | None] = {}
 
     def dispatch_snapshot(
@@ -548,13 +566,16 @@ def _schedule_window(
                 observed[identity] = None
         snapshot = observed[identity]
         if snapshot is None:
+            self._scheduling_waits.capacity(record, "preparation")
             self._scheduling_waits.record(record.run_uri, record.stage_name, "preparation")
             exhausted_admissions.add(identity)
             return None
         if snapshot.revision.sequence < record.authority_revision.sequence:
+            self._scheduling_waits.capacity(record, "preparation")
             return None
         if not any(attempt.attempt_id == record.attempt_id for stage in snapshot.stages
                    if stage.stage_name == record.stage_name for attempt in stage.attempts):
+            self._scheduling_waits.capacity(record, "preparation")
             return None
         return snapshot
 
@@ -683,6 +704,16 @@ def _schedule_window(
                 return admission.admission_id, outcome
         if selected_id is None:
             for pending in managed_records:
+                target_host = pending.placement.target
+                if target_host in self._full_offer_hosts or (target_host is None and all_slots_full):
+                    reason = "assignment_slots_full"
+                elif not candidates or (target_host is not None and not any(
+                    c.attributes.get("target") == target_host for c in candidates
+                )):
+                    reason = "capacity_unknown"
+                else:
+                    reason = "no_eligible_offer"
+                self._scheduling_waits.capacity(pending, reason)
                 self._scheduling_waits.record(pending.run_uri, pending.stage_name, "host_eligibility")
             return None
         record = _stage_work(self.stage_work_store, selected_id)
@@ -696,6 +727,7 @@ def _schedule_window(
             excluded_work.add(record.stage_work_id)
             continue
         if not self._failure_policy_allows_new_work(intent, snapshot):
+            self._scheduling_waits.capacity(record, "run_policy")
             exhausted_admissions.add(record.admission_id)
             continue
         candidate_id = cast(str, decision.candidate_id)
@@ -713,6 +745,7 @@ def _schedule_window(
         if selected_profile is None or not _profile_satisfies_requirement(
             selected_profile, record.execution_requirement
         ):
+            self._scheduling_waits.capacity(record, "no_eligible_offer")
             if remote_target is not None:
                 del remote_targets[candidate_id]
             else:
@@ -721,12 +754,21 @@ def _schedule_window(
         if remote_target is not None:
             eligible = self._remote_eligible(intent=intent, snapshot=snapshot, record=record)
             if eligible is None:
+                self._scheduling_waits.capacity(record, "request_preparation")
                 self._scheduling_waits.record(record.run_uri, record.stage_name, "request_preparation")
                 excluded_work.add(record.stage_work_id)
                 continue
             if not eligible:
+                self._scheduling_waits.capacity(record, "no_eligible_offer")
                 del remote_targets[candidate_id]
                 continue
+        timing = ((remote_target[1].offer_id, remote_target[1].expires_ns)
+                  if remote_target is not None else local_timing)
+        if timing is not None:
+            available = self._ready_preparations.request_available_ns(
+                (record.run_uri, record.stage_name), record.stage_work_id,
+            )
+            self._scheduling_waits.eligible(record, *timing, available)
         try:
             with _dispatch_offering(self, record, "execution"):
                 started = self._execute(
@@ -748,8 +790,10 @@ def _schedule_window(
             # bypassed, while other offer/reservation failures end this
             # turn so an unresolved offer cannot be reinterpreted.
             if str(exc) == "run active-assignment limit reached":
+                self._scheduling_waits.capacity(record, "run_parallel_limit")
                 exhausted_admissions.add(record.admission_id)
                 continue
+            self._scheduling_waits.capacity(record, "capacity_unknown")
             return None
         if not started:
             excluded_work.add(record.stage_work_id)

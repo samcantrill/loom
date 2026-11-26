@@ -1,5 +1,6 @@
 """Real scheduler continuations across capacity, cancellation and restart."""
 from dataclasses import replace
+import sqlite3
 from threading import Event
 from typing import cast
 
@@ -73,53 +74,104 @@ def test_free_bulk_slot_revisits_waiting_owner_outside_discovery(tmp_path, monke
         daemon.stop()
 
 
-def test_worker_request_precedes_host_eligibility_and_restart_resumes_attempt(tmp_path, monkeypatch):
-    from loom.queue import _ready_preparation
-    from loom.queue._scheduling_waits import SchedulingWaits
-
+def test_early_requests_survive_lost_notifications_and_restart(tmp_path, monkeypatch):
     config = replace(_daemon_config(tmp_path), remote_profiles=(
         ResidentProfileDescriptor.from_dict(_launch_profile().descriptor),
     ))
-    run_uri = _persist_sleep_run(config.run_store_root, run_name="remote-ready", stage_name="work", seconds=0.01)
     store = LocalRunStore(config.run_store_root)
+    runs = {name: _persist_sleep_run(config.run_store_root, run_name=name, stage_name="work", seconds=0.01)
+            for name in ("first", "second", "third")}
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config)
-    written, host_wait = Event(), Event()
-    prepare, record = _ready_preparation.prepare_ready_request, SchedulingWaits.record
+    completed = Event()
+    work_ids = []
 
-    def watch_request(**kwargs):
-        worker = prepare(**kwargs)
-        written.set()
-        return worker
+    def drop_notification(work_id):
+        work_ids.append(work_id)
+        if len(work_ids) == len(runs):
+            completed.set()
 
-    def watch_wait(self, uri, stage, boundary):
-        record(self, uri, stage, boundary)
-        if uri == run_uri and boundary == "host_eligibility":
-            host_wait.set()
-
-    monkeypatch.setattr(_ready_preparation, "prepare_ready_request", watch_request)
-    monkeypatch.setattr(SchedulingWaits, "record", watch_wait)
     daemon.start()
     principal = LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
     try:
-        monkeypatch.setattr(daemon._execution, "_candidate_for_dispatch", lambda: None)
-        admission = daemon.client_view(principal).submit(LocalDaemonAdmissionRequest("test", run_uri))
-        assert written.wait(15), daemon._service_error
-        assert host_wait.wait(10)
+        execution = daemon._execution
+        assert execution is not None
+        monkeypatch.setattr(execution, "_candidate_for_dispatch", lambda: None)
+        monkeypatch.setattr(execution._ready_preparations, "_on_ready", drop_notification)
+        client = daemon.client_view(principal)
+        for name, uri in runs.items():
+            client.submit(LocalDaemonAdmissionRequest(name, uri))
+        assert completed.wait(20), daemon._service_error
         assert _supervisor_launch_count(config) == 0
-        request = store.read_stage_worker_request(run_uri, "work", attempt=None)
-        assert request is not None
-        waits = cast(list[dict], daemon.admission(admission.admission_id).owners["scheduling_waits"])
-        assert any(row["boundary"] == "host_eligibility" and row["elapsed_nanoseconds"] >= 0 for row in waits)
+        requests = {uri: store.read_stage_worker_request(uri, "work", attempt=None) for uri in runs.values()}
+        assert all(requests.values())
     finally:
         daemon.stop()
 
     daemon.start()
     try:
-        assert daemon.client_view(principal).wait("test", timeout_seconds=20).state.value == "SUCCEEDED"
-        assert _supervisor_launch_count(config) == 1
-        assert store.read_stage_worker_request(run_uri, "work", attempt=None) == request
+        client = daemon.client_view(principal)
+        for name in runs:
+            assert client.wait(name, timeout_seconds=20).state.value == "SUCCEEDED"
+        assert _supervisor_launch_count(config) == len(runs)
+        with sqlite3.connect(config.execution_database) as conn:
+            rows = conn.execute("SELECT stage_work_id FROM coordinator_assignments").fetchall()
+        assert sorted(work for work, in rows) == sorted(work_ids)
+        for uri, original in requests.items():
+            assert store.read_stage_worker_request(uri, "work", attempt=None) == original
     finally:
+        daemon.stop()
+
+
+def test_cancel_while_request_build_finishes_cannot_reserve(tmp_path, monkeypatch):
+    from loom.queue import _ready_preparation
+
+    config = replace(_daemon_config(tmp_path), remote_profiles=(
+        ResidentProfileDescriptor.from_dict(_launch_profile().descriptor),
+    ))
+    held = _persist_sleep_run(config.run_store_root, run_name="held", stage_name="work", seconds=0.01)
+    peer = _persist_sleep_run(config.run_store_root, run_name="peer", stage_name="work", seconds=0.01)
+    entered, release, completed = Event(), Event(), Event()
+    held_work_ids = set()
+    prepare = _ready_preparation.prepare_ready_request
+
+    def hold_request(**kwargs):
+        worker = prepare(**kwargs)
+        if kwargs["record"].run_uri == held:
+            held_work_ids.add(kwargs["record"].stage_work_id)
+            entered.set()
+            assert release.wait(30)
+        return worker
+
+    monkeypatch.setattr(_ready_preparation, "prepare_ready_request", hold_request)
+    LocalDaemon.initialize(config)
+    daemon = LocalDaemon(config)
+    daemon.start()
+    try:
+        execution = daemon._execution
+        assert execution is not None
+
+        def notify(work_id):
+            execution._ready_continuations.post(work_id)
+            if work_id in held_work_ids:
+                completed.set()
+
+        monkeypatch.setattr(execution._ready_preparations, "_on_ready", notify)
+        client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+        client.submit(LocalDaemonAdmissionRequest("held", held))
+        assert entered.wait(10), daemon._service_error
+        client.submit(LocalDaemonAdmissionRequest("peer", peer))
+        assert client.wait("peer", timeout_seconds=15).state.value == "SUCCEEDED"
+        client.cancel("held")
+        assert client.wait("held", timeout_seconds=10).state.value == "CANCELLED"
+        release.set()
+        assert completed.wait(10)
+        daemon.reconcile_once()
+        assert _supervisor_launch_count(config) == 1
+        with sqlite3.connect(config.execution_database) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM coordinator_assignments WHERE run_uri=?", (held,)).fetchone() == (0,)
+    finally:
+        release.set()
         daemon.stop()
 
 
@@ -157,7 +209,12 @@ def test_admission_detail_times_actual_context_request_and_reservation_waits(tmp
             assert any(row["boundary"] == boundary and row["elapsed_nanoseconds"] >= 0 for row in waits), waits
             release.set()
         assert client.wait("observed", timeout_seconds=15).state.value == "SUCCEEDED"
-        assert not daemon.admission(admission.admission_id).owners["scheduling_waits"]
+        owners = daemon.admission(admission.admission_id).owners
+        assert not owners["scheduling_waits"]
+        summary, = cast(list[dict], owners["scheduling_summaries"])
+        assert summary["result"] == "reserved" and summary["assignment_id"]
+        assert summary["admission_id"] == admission.admission_id
+        assert summary["wait_ns"]["reservation"] > 0
     finally:
         for _, release in gates.values():
             release.set()

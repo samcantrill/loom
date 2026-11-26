@@ -1033,8 +1033,11 @@ def test_current_launch_round_trip_binds_resource_controls(tmp_path: Path) -> No
 
 
 def test_launch_exact_replay_has_one_root_and_conflicting_identity_rejects(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    launches = []
+    monkeypatch.setattr("loom.queue._agent_process_supervisor.milestone",
+                        lambda action, **ids: launches.append((action, ids["assignment_id"])))
     (tmp_path / "agent").mkdir()
     supervisor = AgentProcessSupervisor.initialize(
         tmp_path / "agent", agent_id="agent-A", profiles=(_profile(),)
@@ -1048,6 +1051,7 @@ def test_launch_exact_replay_has_one_root_and_conflicting_identity_rejects(
     first = supervisor.launch(launch)
     replay = supervisor.launch(launch)
 
+    assert launches == [("supervisor_launch", launch.assignment_id)]
     assert first.process_id == replay.process_id
     assert replay.state is SupervisorLaunchState.RUNNING
     with pytest.raises(AgentProcessSupervisorError, match="conflicts"):

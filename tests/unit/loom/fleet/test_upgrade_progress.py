@@ -166,3 +166,20 @@ def test_only_confirmed_failed_checks_are_labelled_failed(tmp_path, check_gate, 
         upgrades._run_checks(operation)
     assert observation.snapshot()["phase"] == "checking"
     assert observation.snapshot()["reason_code"] == code
+
+
+def test_milestones_keep_distinct_observation_times_even_when_reporter_lags():
+    now, records = [0.0], []
+    observer = Observation(records.append, "apply", clock=lambda: now[0])
+    observer.gate(True)
+    events = ["services_replaced", "last_native_check_acknowledged", "last_artifact_verified"]
+    for index, event in enumerate(events, 1):
+        now[0] = index * 10
+        observer.milestone(event)
+        observer.milestone(event)
+    now[0] = 40
+    observer.gate(False)
+    observer.finish("complete")
+    milestones = [(row["event"], row["elapsed_seconds"]) for row in records if row["event"] in {*events, "admission_reopened"}]
+    assert milestones == [*zip(events, [10, 20, 30], strict=True), ("admission_reopened", 40)]
+    assert records[-1]["event"] == "result"

@@ -8,7 +8,8 @@ from contextvars import ContextVar
 from datetime import datetime, timezone
 from itertools import count
 import os
-from time import monotonic
+from socket import gethostname
+from time import monotonic, monotonic_ns, time_ns
 from typing import Any, cast
 
 from loom.serialization import PlainData
@@ -19,6 +20,8 @@ from ._phase_diagnostics import diagnostics
 _observer: ContextVar[Callable[[dict[str, PlainData]], None] | None] = ContextVar(
     "queue_phase_observer", default=None
 )
+_clock_host = gethostname()
+_process_origin = time_ns()
 _operation: ContextVar[str | None] = ContextVar("queue_phase_operation", default=None)
 
 
@@ -35,6 +38,34 @@ def observe_phases(observer: Callable[[dict[str, PlainData]], None]) -> Iterator
 def log_phases(value: dict[str, PlainData]) -> None:
     """Offer a bounded record to the process-local stderr writer."""
     diagnostics.submit(value, qualification=qualification_timings())
+
+
+def milestone(
+    action: str, *, operation_id: str | None = None, collector: PhaseTimings | None = None,
+    details: Mapping[str, PlainData] | None = None,
+    **attributes: PlainData,
+) -> None:
+    """Report one transition with a local monotonic stamp and a UTC correlation point."""
+    try:
+        span: dict[str, PlainData] = {
+            "action": action, "started_at": datetime.now(timezone.utc).isoformat(),
+            "elapsed_nanoseconds": 0, "outcome": "complete",
+            "attributes": {**(details or {}), **attributes, "monotonic_ns": monotonic_ns(), "process_id": os.getpid(),
+                           "host": _clock_host, "process_origin_ns": _process_origin},
+        }
+        if operation_id is not None:
+            span["operation_id"] = operation_id
+        value: dict[str, PlainData] = {
+            "clock": "process_monotonic", "spans": [span], "dropped_spans": 0,
+            "operation_id": operation_id,
+        }
+        if collector is None:
+            log_phases(value)
+        else:
+            collector.observe(value)
+    except Exception:
+        # Diagnostic collection never owns a lifecycle transition.
+        pass
 
 
 def request_identity(value: Mapping[str, object]) -> str | None:

@@ -65,6 +65,7 @@ from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.timestamps import parse_timestamp, utc_timestamp
 
 from .gpu.occupancy import GpuOccupancyMonitor, GpuOccupancySnapshot, _sample_gpu_occupancy
+from ._attempt_timing import assignment_milestone
 from ._agent_progress import _Progress, _cooperative, _external, _steps
 
 from loom.pipeline.execution.models import (
@@ -3802,6 +3803,7 @@ def _run_reserved_local_assignment(
 ) -> ManagedExecutionReceipt:
     """Drive the authority, journal and supervisor for the durable reservation."""
     assignment = staged.assignment
+    assignment_milestone("assignment_received", assignment)
     worker_request = staged.worker_request
     commands = staged.commands
     workspace = staged.workspace
@@ -4002,6 +4004,7 @@ def _run_reserved_local_assignment(
                     expected="logical_released",
                     next_state="released",
                 )
+                assignment_milestone("assignment_released", assignment)
             return ManagedExecutionReceipt(
                 assignment=assignment,
                 fence=fence,
@@ -4042,6 +4045,7 @@ def _run_reserved_local_assignment(
             next_state="terminal",
         )
         journal.acknowledge_terminal(assignment.assignment_id)
+        assignment_milestone("terminal_acknowledged", assignment)
         coordinator.advance(
             assignment.assignment_id,
             expected="terminal",
@@ -4085,6 +4089,7 @@ def _run_reserved_local_assignment(
             expected="logical_released",
             next_state="released",
         )
+        assignment_milestone("assignment_released", assignment)
         return ManagedExecutionReceipt(
             assignment=assignment,
             fence=fence,

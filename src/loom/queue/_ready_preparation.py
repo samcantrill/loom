@@ -6,12 +6,14 @@ from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextvars import copy_context
 from dataclasses import dataclass, field
-from time import monotonic
+from time import monotonic, monotonic_ns
 from pathlib import Path
 from typing import Any, TYPE_CHECKING, Literal, cast
 
 from loom.pipeline.execution import StageWorkerRequest
 from loom.serialization import PlainData
+
+from ._phase_timing import milestone
 
 
 if TYPE_CHECKING:
@@ -22,6 +24,12 @@ if TYPE_CHECKING:
     from loom.pipeline.specs import StageSpec
     from loom.pipeline.stores.read_models import AuthoritativeRunSnapshot
     from ._remote_stage_execution import _RemoteArtifact
+
+
+@dataclass(frozen=True)
+class _PreparedRequest:
+    value: Any
+    available_ns: int
 
 
 @dataclass
@@ -43,6 +51,15 @@ class _StagePreparation:
     def finished(self) -> bool:
         return all(item.future.done() for item in self.phases.values())
 
+    def prepared_request(self) -> _PreparedRequest | None:
+        pending = self.phases.get("request")
+        if pending is None:
+            return None
+        future = pending.future
+        if not future.done() or future.cancelled() or future.exception() is not None:
+            return None
+        return future.result()
+
 
 class ReadyPreparationPool:
     """Only the scheduling thread mutates membership; workers return evidence.
@@ -61,14 +78,29 @@ class ReadyPreparationPool:
         self._workers = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="loom-ready-inputs")
         self._pending: dict[tuple[str, str], _StagePreparation] = {}
         self._capacity = max_active_stages
+        self._max_workers = max_workers
         self._on_ready = on_ready
         self._wake = wake
         self._closed = False
 
     def can_anticipate(self, key: tuple[str, str]) -> bool:
-        """Leave worker and retained-stage capacity for current placement demand."""
-        return (key not in self._pending and len(self._pending) < self._capacity - 1
-                and not any(item.speculative for item in self._pending.values()))
+        """Admit one early build on a free worker and retain up to four early requests."""
+        if (self._closed or self._max_workers < 2 or key in self._pending
+            or len(self._pending) >= self._capacity - 1):
+            return False
+        early = [stage for stage in self._pending.values() if stage.speculative]
+        if len(early) >= 4 or any(not stage.finished() for stage in early):
+            return False
+        busy = sum(not phase.future.done() for stage in self._pending.values() for phase in stage.phases.values())
+        return busy < self._max_workers
+
+    def request_available_ns(self, key: tuple[str, str], work_id: str) -> int | None:
+        """Return the monotonic completion time for the exact successful request."""
+        stage = self._pending.get(key)
+        if stage is None or stage.retiring or stage.work_id != work_id:
+            return None
+        request = stage.prepared_request()
+        return None if request is None else request.available_ns
 
     def request_for_descriptors(
         self, key: tuple[str, str], work_id: str,
@@ -77,19 +109,17 @@ class ReadyPreparationPool:
         stage = self._pending.get(key)
         if stage is None or stage.retiring or stage.work_id != work_id:
             return False, None
-        pending = stage.phases.get("request")
-        if stage.speculative or pending is None or "input-descriptors" in stage.phases:
+        if stage.speculative or "input-descriptors" in stage.phases:
             return True, None
-        request = pending.future
-        if not request.done() or request.cancelled() or request.exception() is not None:
-            return True, None
-        return True, request.result()
+        request = stage.prepared_request()
+        return True, None if request is None else request.value
 
     def poll(
         self, key: tuple[str, str], identity: str,
         prepare: Callable[[], Any], *, phase: str = "request",
         resource_class: Literal["cpu", "gpu"] | None = None,
         work_id: str | None = None, speculative: bool = False,
+        attempt_id: str | None = None, admission_id: str | None = None,
     ) -> tuple[Any | None, str | None]:
         if self._closed:
             return None, "stage_preparation_cancelled"
@@ -106,7 +136,7 @@ class ReadyPreparationPool:
         if stage is None:
             if phase != "request":
                 return None, "stage_preparation_pending"
-            if len(self._pending) >= self._capacity:
+            if len(self._pending) >= self._capacity or (speculative and not self.can_anticipate(key)):
                 return None, "stage_preparation_capacity"
             if (resource_class is not None and self._capacity > 1
                 and sum(item.resource_class == resource_class for item in self._pending.values()) >= self._capacity - 1):
@@ -123,7 +153,25 @@ class ReadyPreparationPool:
             del stage.phases[phase]
             pending = None
         if pending is None:
-            future = self._workers.submit(copy_context().run, prepare)
+            if phase == "request":
+                attributes = {"stage_work_id": work_id, "attempt_id": attempt_id,
+                              "admission_id": admission_id, "run_uri": key[0], "stage_name": key[1]}
+                if work_id is not None:
+                    milestone("request_preparation_queued", **attributes)
+
+                def build_request() -> _PreparedRequest:
+                    if work_id is not None:
+                        milestone("request_preparation_worker_started", **attributes)
+                    value = prepare()
+                    available_ns = monotonic_ns()
+                    if work_id is not None:
+                        milestone("worker_request_available", **attributes)
+                    return _PreparedRequest(value, available_ns)
+
+                task: Callable[[], Any] = build_request
+            else:
+                task = prepare
+            future = self._workers.submit(copy_context().run, task)
             pending = _Pending(identity, future)
             stage.phases[phase] = pending
             notify = self._on_ready
@@ -134,7 +182,8 @@ class ReadyPreparationPool:
         if not pending.future.done():
             return None, "stage_preparation_pending"
         try:
-            return pending.future.result(), None
+            result = pending.future.result()
+            return (result.value if phase == "request" else result), None
         except Exception:
             if not pending.retry_at:
                 pending.retry_at = monotonic() + 5

@@ -198,6 +198,11 @@ def _submit(
 
         _commit_reference(self, execution, insert)
     self._wake.set()
+    from ._phase_timing import milestone
+
+    milestone("admission_committed", operation_id=preparation_operation_id or run_operation_id,
+              admission_id=admission_id, run_uri=request.run_uri, queue_item_id=request.queue_item_id,
+              role="preparation" if preparation_operation_id is not None else "target")
     return self._admission(admission_id)
 
 

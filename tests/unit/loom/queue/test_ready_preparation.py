@@ -212,3 +212,96 @@ def test_completed_waiting_class_keeps_preparation_capacity_for_peer(monkeypatch
             assert pool.poll(("blocked", str(index)), "request", lambda: pytest.fail("evicted prerequisite"), resource_class=blocked_class) == (True, None)
     finally:
         pool.close()
+
+
+def test_early_retention_leaves_workers_and_request_owners_for_demand(monkeypatch):
+    monkeypatch.setattr("loom.queue._ready_preparation.ThreadPoolExecutor", ControlledExecutor)
+    completions = []
+    pool = ReadyPreparationPool(lambda: None, max_active_stages=6, on_ready=completions.append)
+    workers = cast(ControlledExecutor, pool._workers)
+    try:
+        for index in range(4):
+            name = str(index)
+            key = ("early", name)
+            assert pool.can_anticipate(key)
+            pool.poll(key, name, lambda: True, work_id=name, resource_class="cpu", speculative=True)
+            assert not pool.can_anticipate(("early", "next"))
+            workers.complete()
+            assert pool.request_for_descriptors(key, name) == (True, None)
+        assert completions == ["0", "1", "2", "3"]
+        assert not pool.can_anticipate(("early", "next"))
+        assert pool.poll(("early", "next"), "next", lambda: True, speculative=True)[1] == "stage_preparation_capacity"
+        for resource in ("cpu", "gpu"):
+            pool.poll(("demanded", resource), resource, lambda: "ready", resource_class=resource)
+        workers.complete()
+        for resource in ("cpu", "gpu"):
+            assert pool.poll(("demanded", resource), resource, lambda: pytest.fail("duplicate"),
+                             resource_class=resource) == ("ready", None)
+            pool.discard(("demanded", resource))
+        assert pool.poll(("early", "0"), "0", lambda: pytest.fail("duplicate"), resource_class="cpu") == (True, None)
+        assert pool.can_anticipate(("early", "next"))
+    finally:
+        pool.close()
+
+
+def test_promote_running_build_while_peer_uses_other_worker(monkeypatch):
+    key = ("run", "work")
+    entered, release, peer, complete = Event(), Event(), Event(), Event()
+    milestones = []
+    def record(action, **attrs):
+        milestones.append((action, attrs))
+    monkeypatch.setattr("loom.queue._ready_preparation.milestone", record)
+    pool = ReadyPreparationPool(lambda: None, on_ready=lambda owner: complete.set() if owner == "work-1" else None)
+
+    def held():
+        entered.set()
+        assert release.wait(10)
+        return "original"
+
+    try:
+        pool.poll(key, "identity-1", held, speculative=True,
+                  work_id="work-1", attempt_id="try-1", admission_id="admission")
+        assert entered.wait(10)
+        assert pool.request_available_ns(key, "work-1") is None
+        pool.poll(("peer", "work"), "peer", peer.set)
+        assert peer.wait(10)
+        assert not release.is_set()
+        pool.poll(key, "identity-1", lambda: pytest.fail("duplicate writer"),
+                  work_id="work-1", attempt_id="try-1", admission_id="admission")
+        release.set()
+        assert complete.wait(10)
+        assert pool.request_for_descriptors(key, "work-1") == (True, "original")
+        assert pool.request_available_ns(key, "work-1") is not None
+        assert pool.request_available_ns(key, "work-2") is None
+        assert [action for action, _ in milestones] == [
+            "request_preparation_queued", "request_preparation_worker_started", "worker_request_available",
+        ]
+        assert all(attrs == {"stage_work_id": "work-1", "attempt_id": "try-1", "admission_id": "admission",
+                             "run_uri": "run", "stage_name": "work"} for _, attrs in milestones)
+        pool.discard(key)
+        assert pool.request_available_ns(key, "work-1") is None
+    finally:
+        release.set()
+        pool.close()
+
+
+def test_failed_early_request_never_reports_availability(monkeypatch):
+    monkeypatch.setattr("loom.queue._ready_preparation.ThreadPoolExecutor", ControlledExecutor)
+    actions = []
+    monkeypatch.setattr("loom.queue._ready_preparation.milestone", lambda action, **_: actions.append(action))
+    pool = ReadyPreparationPool(lambda: None)
+    key = ("run", "work")
+
+    def failed():
+        raise OSError("preparation read failed")
+
+    try:
+        pool.poll(key, "request", failed, work_id="old", speculative=True)
+        cast(ControlledExecutor, pool._workers).complete()
+        assert pool.request_available_ns(key, "old") is None
+        assert actions == ["request_preparation_queued", "request_preparation_worker_started"]
+        with pytest.raises(OSError, match="preparation read failed"):
+            pool.poll(key, "request", failed, work_id="old")
+        assert pool.can_anticipate(("peer", "work"))
+    finally:
+        pool.close()

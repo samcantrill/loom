@@ -103,6 +103,34 @@ def test_factory_is_lazy_and_connection_failure_preserves_submission_identity(
     assert not endpoint.parent.exists()
 
 
+@pytest.mark.parametrize("method", ["prepare_run", "start_run"])
+def test_submission_observations_bracket_the_native_exchange(tmp_path, monkeypatch, method):
+    from loom.queue.preparation import PreparationSource, PrepareRunRequest
+    from loom.queue.run import RunRequest
+
+    endpoint = tmp_path / "client.sock"
+    observed = []
+    monkeypatch.setattr("loom.queue._coordinator_client.milestone",
+                        lambda action, **ids: observed.append((action, ids)))
+
+    def reply(connection, _request):
+        assert [action for action, _ in observed] == ["submission_sent"]
+        connection.sendall(encode_wire({"ok": True, "result": {
+            "operation_id": "operation", "kind": method, "state": "accepted",
+            "code": None, "result": None,
+        }}) + b"\n")
+
+    preparation = PrepareRunRequest("operation", "run", PreparationSource("shared", "project", ".", ("pipeline.yaml",)),
+                                    "pipeline.yaml", "profile")
+    with _peer(endpoint, reply), CoordinatorClient.from_unix_socket(endpoint) as client:
+        accepted = (client.prepare_run(preparation) if method == "prepare_run"
+                    else client.start_run(RunRequest(preparation, "item")))
+    assert accepted.operation_id == "operation"
+    assert [action for action, _ in observed] == ["submission_sent", "submission_acknowledged"]
+    assert all(ids["operation_id"] == accepted.operation_id and ids["submit_method"] == method
+               for _, ids in observed)
+
+
 def test_queue_list_on_old_coordinator_explains_upgrade_before_issuing_query(tmp_path: Path) -> None:
     from io import StringIO
 

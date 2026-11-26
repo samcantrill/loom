@@ -1985,6 +1985,7 @@ def test_rejected_remote_target_unbinds_attempt_and_releases_reservation(
     daemon = LocalDaemon(config)
     daemon.start()
     rejected = []
+    original_target = local_daemon_execution._target_remote_delivery
 
     def reject_target(*args, **kwargs):
         rejected.append(kwargs["request"])
@@ -2059,6 +2060,20 @@ def test_rejected_remote_target_unbinds_attempt_and_releases_reservation(
             assert conn.execute(
                 "SELECT COUNT(*) FROM managed_attempt_unbind_receipts"
             ).fetchone()[0] == len(rejected)
+        monkeypatch.setattr(local_daemon_execution, "_target_remote_delivery", original_target)
+        deadline = monotonic() + 10
+        while True:
+            daemon.reconcile_once()
+            with sqlite3.connect(config.control_database) as conn:
+                row = conn.execute("SELECT assignment_id FROM remote_assignments").fetchone()
+            if row is not None:
+                break
+            assert monotonic() < deadline, "reopened attempt did not receive a delivery"
+            sleep(0.01)
+        summaries = cast(list[dict], daemon._execution._scheduling_waits.summaries(run_uri))
+        by_assignment = {item["assignment_id"]: item for item in summaries}
+        assert by_assignment[rejected[0].assignment_id]["projection_revision"] < by_assignment[row[0]]["projection_revision"]
+        assert by_assignment[rejected[0].assignment_id]["attempt_id"] == by_assignment[row[0]]["attempt_id"]
     finally:
         daemon.stop()
 
@@ -6001,6 +6016,12 @@ def test_loopback_remote_agent_declines_then_executes_and_commits_real_stages(
     monkeypatch: pytest.MonkeyPatch,
     with_local_agent: bool,
 ) -> None:
+    observed = []
+
+    def record(value, *, qualification):
+        observed.extend(value["spans"])
+
+    monkeypatch.setattr("loom.queue._phase_diagnostics.diagnostics.submit", record)
     credentials = _credentials(tmp_path / "tls")
     descriptor = ResidentProfileDescriptor(
         "resident-1", "revision-1", "project-1", "environment-1", "executor-1"
@@ -6373,6 +6394,17 @@ def test_loopback_remote_agent_declines_then_executes_and_commits_real_stages(
         assert partial_commit_blocked
         assert first["state"] == "RELEASED"
         assert second["state"] == "RELEASED"
+        boundaries = {"assignment_received", "stage_run_entered", "stage_run_returned",
+                      "terminal_acknowledged", "assignment_released"}
+        for assignment in (first, second):
+            spans = [span for span in observed if span["action"] in boundaries
+                     and span["attributes"]["assignment_id"] == assignment["assignment_id"]]
+            assert [span["action"] for span in spans] == [
+                "assignment_received", "stage_run_entered", "stage_run_returned",
+                "terminal_acknowledged", "assignment_released",
+            ]
+            assert spans[1]["attributes"]["process_id"] != os.getpid()
+            assert spans[1]["attributes"]["attempt_id"] == spans[0]["attributes"]["attempt_id"]
         assert restarted
         assert daemon.status().coordinator_epoch != original_epoch
         assert completed.state is LocalDaemonAdmissionState.SUCCEEDED
@@ -7028,6 +7060,9 @@ def test_native_control_lost_reply_reconciles_same_id_and_guards_before_dispatch
             client.inspect_run(run_uri)
         assert caught.value.code == "not_found"
         assert projection_calls == []
+        submissions = []
+        monkeypatch.setattr("loom.queue._coordinator_client.milestone",
+                            lambda action, **ids: submissions.append((action, ids)))
         with pytest.raises(CoordinatorClientError) as lost:
             client.submit(request)
         assert dropped.is_set(), (lost.value.code, str(lost.value))
@@ -7038,6 +7073,11 @@ def test_native_control_lost_reply_reconciles_same_id_and_guards_before_dispatch
         replay = client.submit(request)
         assert replay.admission_id == admitted.admission_id
         assert replay.intent_digest == admitted.intent_digest
+        assert [action for action, _ in submissions] == [
+            "submission_sent", "submission_sent", "submission_acknowledged",
+        ]
+        assert all(ids["queue_item_id"] == "original-item" for _, ids in submissions)
+        assert submissions[-1][1]["admission_id"] == admitted.admission_id
         assert len(client.admissions().admissions) == 1
         detail = client.admission(admitted.admission_id).admission
         assert detail.admission_id == replay.admission_id

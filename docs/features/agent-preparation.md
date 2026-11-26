@@ -1628,8 +1628,25 @@ The launcher uses a copy-on-write clone when supported. The streaming fallback
 needs temporary space up to the full image size per independent launch. The
 resident supervisor holds this file through physical use. A staging-continuation
 probe for that launch uses the same verified file. Independent submissions
-on mutable storage verify fresh bytes. Concurrent submissions of the same
-kernel SquashFS object and qualified root can share the active verified copy.
+on mutable storage, including NFS, verify fresh bytes at every launch.
+
+A resident supervisor can reuse the private copy across sequential launches
+when the authorized source is on a read-only kernel SquashFS mount. It pins the
+source descriptor and keys verification by the mount, inode, qualified root,
+digest and declared size. Each launch reopens its selected source. The
+supervisor reserves up to 8 GiB across at most eight copies, including fills
+in progress. Active users pin their copy. Space pressure evicts idle copies
+in least-recently-used order. A launch that cannot reserve space uses ordinary
+temporary storage and can fail if its filesystem is full.
+
+Retained files are owner-read-only inside private directories under the
+protected supervisor root. Keep that root outside administrator-configured
+writable container binds. Loom policies exposing it through guest-writable
+mounts use the ordinary path. A supervisor starts with an empty verification
+index. After an interrupted shutdown it reclaims old scratch only when the
+existing lifecycle evidence proves quiescence. Until then old paths remain
+available to their original launches and new launches use ordinary scratch.
+Standalone probes and Slurm share verification only during overlapping use.
 
 
 Submitted child inputs and preparation reports use schema 11; their private

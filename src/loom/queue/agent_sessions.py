@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from ._service_signals import write_status
 from ._coordinator_transactions import short_write
-from ._phase_timing import phase
+from ._phase_timing import milestone, phase
 
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
@@ -4636,6 +4636,7 @@ class AgentSessionService:
 
         def finish(wait: bool) -> AgentSession:
             short_write(self._daemon, record_release, wait_for_writer=wait)
+            milestone("assignment_released", assignment_id=assignment_id, session_id=session_id)
             self._daemon._poll_waiters.notify(session_id)
             self._daemon._wake_admission(str(row["run_uri"]))
             return resumed
