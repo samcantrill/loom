@@ -274,3 +274,39 @@ def test_verified_publication_replays_original_revision_but_not_changed_result(t
     with pytest.raises(QueueConflictError, match="immutable action result"):
         store.publish(claim_id, result={"commit": "different"},
                       expected_revision=verified_revision, **fence)
+
+
+def test_launchable_page_reads_one_snapshot_and_preserves_shared_demand(tmp_path):
+    from types import SimpleNamespace
+    from loom.queue._action_results import action_attempt_cancelled, launchable_page
+
+    store = _store(tmp_path)
+    _select(store)
+    _select(store, run="peer")
+    with store.connection() as conn:
+        conn.execute("CREATE TABLE managed_admissions(admission_id TEXT PRIMARY KEY, "
+                     "run_uri TEXT, state TEXT, cancellation_operation_id TEXT)")
+        rows = [
+            ("owner", "run-a", "WAITING", "cancel"), ("peer", "peer", "ACTIVE", None),
+            ("stopped", "stop", "WAITING", "cancel"), ("historical", "done", "SUCCEEDED", None),
+        ]
+        conn.executemany("INSERT INTO managed_admissions VALUES (?,?,?,?)", rows)
+        conn.execute("UPDATE action_claims SET attempt_id='attempt-a'")
+        conn.commit()
+        work = tuple(SimpleNamespace(admission_id=key, run_uri=uri, attempt_id="attempt-a")
+                     for key, uri, _, _ in rows)
+        statements = []
+        conn.set_trace_callback(statements.append)
+        assert launchable_page(conn, work * 32) == (work[0], work[1]) * 32
+        conn.set_trace_callback(None)
+        assert sum(s.startswith("SELECT") for s in statements) == 3
+        assert not conn.in_transaction
+        assert [action_attempt_cancelled(conn, r.run_uri, r.attempt_id) for r in work[:3]] == [False, False, True]
+        # The exact reservation-time read observes cancellation after the advisory page.
+        conn.execute("UPDATE action_demands SET state='detached'")
+        conn.commit()
+        assert action_attempt_cancelled(conn, "run-a", "attempt-a")
+        assert launchable_page(conn, work) == (work[1],)
+        conn.execute("UPDATE action_claims SET state='settling'")
+        conn.commit()
+        assert launchable_page(conn, work) == (work[1],)

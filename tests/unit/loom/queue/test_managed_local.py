@@ -831,6 +831,8 @@ def test_empty_claims_reuse_current_offer_without_consuming_capacity(tmp_path) -
         )
         == "reserved"
     )
+    # Releasing a failed claim-free bind must preserve the peer's consumed offer.
+    coordinator.release_unbound(second.assignment_id)
     consuming_loser = replace(
         consuming,
         assignment_id="assignment-consuming-loser",
@@ -924,7 +926,8 @@ def test_replacement_offer_withholds_old_session_claim_without_inheriting_it(
         )
 
 
-def test_unaccepted_release_can_reopen_the_same_availability_offer(tmp_path) -> None:
+@pytest.mark.parametrize("accepted_binding", [False, True])
+def test_unaccepted_release_can_reopen_the_same_availability_offer(tmp_path, accepted_binding) -> None:
     _provider_value, command = _provider()
     assert isinstance(command.assignment, ManagedAssignment)
     capacity = command.claim.atoms[0]
@@ -954,16 +957,17 @@ def test_unaccepted_release_can_reopen_the_same_availability_offer(tmp_path) -> 
         max_parallel_stages=2,
         decision_receipt=_decision_receipt(first, claim),
     )
-    coordinator.advance(first.assignment_id, expected="reserved", next_state="bound")
+    if accepted_binding:
+        coordinator.advance(first.assignment_id, expected="reserved", next_state="bound")
 
     assert {record.stage_work_id for record in SQLiteStageWorkStore(path).ready_window()} == {
         second.stage_work_id,
     }
 
-    assert (
-        coordinator.release_unaccepted(first.assignment_id, reopen_offer=True)
-        == "released"
-    )
+    if accepted_binding:
+        assert coordinator.release_unaccepted(first.assignment_id, reopen_offer=True) == "released"
+    else:
+        assert coordinator.release_unbound(first.assignment_id) == "released"
     reopened = next(
         record
         for record in SQLiteStageWorkStore(path).list_stage_work()

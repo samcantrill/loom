@@ -149,3 +149,17 @@ def test_unobserved_endpoints_do_not_report_zero_latency(monkeypatch):
     summaries = cast(list[dict], owner.summaries(incomplete.run_uri))
     assert [row["prequeue_status"] for row in summaries] == ["inapplicable", "missing"]
     assert all(row["prequeue_wait_ns"] is None and row["prequeue_queued_ns"] is None for row in summaries)
+
+
+def test_oldest_ready_stage_and_reason_counts_survive_mixed_admission_waits():
+    owner = waits.SchedulingWaits()
+    a, b, c = (_record(name) for name in "abc")
+    for item, stamp, reason in ((a, 4, "snapshot_unavailable"), (b, 2, "input_descriptors"),
+                                (c, 5, "snapshot_unavailable")):
+        item.ready_at = stamp
+        owner.ready(item)
+        owner.prequeue(item, reason)
+    assert owner.waiting_reasons({"admission"}) == {
+        "admission": "b: inspecting worker inputs (2 awaiting authority snapshot, 1 inspecting worker inputs)"
+    }
+    assert owner.waiting_reasons({"other"}) == {}

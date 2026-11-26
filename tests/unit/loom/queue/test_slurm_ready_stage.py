@@ -60,6 +60,41 @@ def test_repeated_delivery_reads_preserve_live_state_and_revalidate_changed_byte
     assert len(validations) == 3
 
 
+@pytest.mark.parametrize("superseded", [False, True])
+def test_unbound_slurm_reservation_recovers_capacity_and_exact_decision_after_restart(tmp_path, superseded):
+    from dataclasses import replace
+    from loom.pipeline.orchestration import SchedulingProjectionState
+    from loom.pipeline.stores.read_models import BackendRevision
+    from tests.unit.loom.queue.test_slurm_admission import ReservationFixture
+
+    fixture = ReservationFixture(tmp_path)
+    assignment, arguments = fixture.candidate("stale-bind", 8)
+    decision = BackendRevision(7, "decision")
+    fixture.store.reserve(assignment, **arguments, decision_revision=decision)
+    decided = fixture.work.find_stage_work(assignment.stage_work_id)
+    assert decided is not None
+    assert decided.scheduling_diagnostics["decision_revision"] == decision.to_dict()
+    if superseded:
+        fixture.work.create_or_refresh(replace(
+            decided, scheduling_state=SchedulingProjectionState.WAIT,
+            scheduling_diagnostics={"code": "authority_state_mismatch"},
+        ))
+    store = fixture.reopen()
+    assert store.agent_page(assignment.agent_id, assignment.agent_root_id) == ()
+    assert store.reserved_gpu_count() == 8
+    store.release_unbound(assignment.assignment_id)
+    store.release_unbound(assignment.assignment_id)
+    assert store.reserved_gpu_count() == 0
+    if superseded:
+        assert fixture.work.ready_window() == ()
+        waiting = fixture.work.find_stage_work(assignment.stage_work_id)
+        assert waiting is not None and waiting.scheduling_state is SchedulingProjectionState.WAIT
+    else:
+        ready, = fixture.work.ready_window()
+        assert ready.stage_work_id == assignment.stage_work_id
+        assert ready.projection_revision > decided.projection_revision
+
+
 def test_retained_delivery_cache_applies_total_byte_budget(tmp_path):
     from tests.unit.loom.queue.test_slurm_admission import ReservationFixture
 

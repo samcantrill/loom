@@ -124,10 +124,23 @@ additional demand stays in the durable backlog. Withdrawal releases the
 waiting position. Cancelled IO that is already running occupies its worker
 until it returns.
 
+A demanded authority snapshot retains its interested READY attempts until each
+hands off to request preparation or dispatch. Admission revisions, epoch changes
+and departure from READY retire obsolete interest. The selector can yield between
+complete pages while preserving admission rotation and its separate GPU cursor.
+Reservation checks the current offer and cancellation transactionally. Binding
+a new assignment requires the authority revision used for its scheduling policy
+decision. Exact accepted replays remain idempotent. The
+`dispatch_observation_consumed` milestone reports monotonic completion and
+consumption timestamps within the coordinator process.
+
 Targeted admission detail exposes `owners.scheduling_waits` with the observed
-stage, boundary, UTC start and monotonic elapsed nanoseconds. The four
-boundaries are `preparation` (admission or authority observation),
-`host_eligibility`, `request_preparation` and `reservation`. The coordinator
+stage, boundary, UTC start and monotonic elapsed nanoseconds. Generic WAITING
+rows show the oldest observed READY stage and stage counts by reason. Specific
+route diagnostics take precedence. Before observation the queue reports
+“awaiting scheduling decision”. An authority read, request build, input
+inspection, run limit and host rejection have separate wait reasons.
+The coordinator
 retains observations for the most recent 288 admission/stage keys and clears
 them as work settles. Process restart begins a new observation interval.
 

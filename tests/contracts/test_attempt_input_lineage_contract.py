@@ -38,6 +38,42 @@ def prepare(authority, uri, *, bindings=(), stage="consume", upstream=None):
     )
 
 
+@pytest.mark.parametrize("backend", ["embedded", "authenticated"])
+def test_reprepared_upstream_commit_prevents_binding_an_older_input(tmp_path, backend):
+    from loom.pipeline.transition_policy import TransitionIntent
+    from loom.pipeline.stores.authority import PreparedAttemptBindRejected
+
+    uri, authority, _, _ = _consumer(tmp_path, backend)
+    upstream = prepare(authority, uri, stage="upstream")
+
+    def commit(receipt, previous=None):
+        pair = {"assignment_id": "worker-" + receipt.attempt.attempt_id, "attempt_id": receipt.attempt.attempt_id}
+        authority.bind_prepared_attempt(uri, **pair, expected_revision=authority.open_run(uri).revision)
+        fence = authority.grant_prepared_attempt(uri, **pair)
+        return authority.record_output_commit(
+            uri, "upstream", **pair, fencing_token=fence.fencing_token, supersedes_commit_id=previous,
+            outputs={"out": ArtifactRef(artifact_id="data", uri=uri + "/out", artifact_type="text")},
+        ).commit.commit_id
+
+    original = commit(upstream)
+    consumer = prepare(authority, uri, upstream={"upstream": original})
+    stale = authority.transition_stage(
+        uri, "upstream", from_status=StageStatus.SUCCEEDED, to_status=StageStatus.STALE,
+        intent=TransitionIntent.RESUME,
+    )
+    replacement = authority.ensure_prepared_attempt(uri, replace(
+        upstream.request, readiness_generation="next-readiness", operation_id="prepare-next", next_attempt=2,
+        expected_stage_status=StageStatus.STALE, expected_attempt_id=upstream.attempt.attempt_id,
+        expected_revision=stale.revision,
+    ))
+    assert commit(replacement, original) != original
+    pair = {"assignment_id": "consumer", "attempt_id": consumer.attempt.attempt_id}
+    with pytest.raises(PreparedAttemptBindRejected, match="upstream commit evidence is stale"):
+        authority.bind_prepared_attempt(uri, **pair, expected_revision=authority.open_run(uri).revision)
+    with pytest.raises(ValueError, match="not bound"):
+        authority.grant_prepared_attempt(uri, **pair)
+
+
 def test_prepared_binding_round_trip_with_nested_artifact_metadata(tmp_path):
     uri, authority, _, _ = _consumer(tmp_path, "embedded")
     binding = AttemptInputBinding(

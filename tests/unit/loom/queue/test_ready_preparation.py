@@ -228,7 +228,7 @@ def test_early_retention_leaves_workers_and_request_owners_for_demand(monkeypatc
             assert not pool.can_anticipate(("early", "next"))
             assert pool.anticipation_wait(("early", "next")) == "early_build_pending"
             workers.complete()
-            assert pool.request_for_descriptors(key, name) == (True, None)
+            assert pool.request_for_descriptors(key, name) == (True, True)
         assert completions == ["0", "1", "2", "3"]
         assert not pool.can_anticipate(("early", "next"))
         assert pool.anticipation_wait(("early", "next")) == "early_retention_limit"

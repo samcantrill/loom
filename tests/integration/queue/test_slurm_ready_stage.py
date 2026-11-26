@@ -377,6 +377,22 @@ def test_slurm_offer_recovery_defers_preparation_and_rechecks_after_validation(
         assert daemon._execution is not None
         assert not daemon._execution.slurm_assignments.list_run_unreleased(run_uri)
         execution = daemon._execution
+        # Force one stale bind after the offer returns. A fresh policy decision
+        # must acquire its own operation and submit the still-ready attempt once.
+        from loom.pipeline.reliability import ReliabilityPolicy
+        from loom.pipeline.stores.read_models import ReliabilityPolicyFact, ReliabilityPolicyScope
+        from loom.queue._coordinator_run_authority import _ScopedCoordinatorAuthority
+        first_reservation = []
+        bind = _ScopedCoordinatorAuthority.bind_prepared_attempt
+        def change_revision(owner, uri, **kwargs):
+            if not first_reservation:
+                first_reservation.append(kwargs["assignment_id"])
+                SQLitePerRunAuthorityStore(uri).write_reliability_policy_fact(uri, ReliabilityPolicyFact(
+                    run_uri=uri, scope=ReliabilityPolicyScope.RUN, policy=ReliabilityPolicy(),
+                    recorded_at="2026-08-30T00:00:00Z",
+                ))
+            return bind(owner, uri, **kwargs)
+        monkeypatch.setattr(_ScopedCoordinatorAuthority, "bind_prepared_attempt", change_revision)
         available.set()
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
@@ -385,7 +401,11 @@ def test_slurm_offer_recovery_defers_preparation_and_rechecks_after_validation(
             time.sleep(0.02)
         daemon.stop()
         assert len([call for call in runner.calls if call[0] == "sbatch"]) == 1
-        assert len(execution.slurm_assignments.list_run_unreleased(run_uri)) == 1
+        live, = execution.slurm_assignments.list_run_unreleased(run_uri)
+        stale = execution.slurm_assignments.read(first_reservation[0])
+        assert stale.state == "released"
+        assert stale.assignment.operation_id != live.assignment.operation_id
+        assert stale.assignment.attempt_id == live.assignment.attempt_id
     finally:
         daemon.stop()
 

@@ -241,6 +241,8 @@ def test_agent_task_page_filters_owner_before_limit_and_survives_restart(
         assignment = replace(assignment, agent_id="other" if index % 2 else "selected")
         arguments["max_reserved_gpus"] = None
         fixture.store.reserve(assignment, **arguments)
+        assert not any(row.assignment == assignment for row in fixture.store.agent_page(assignment.agent_id, assignment.agent_root_id))
+        fixture.store.advance(assignment.assignment_id, expected="reserved", next_state="bound")
     assert assignment is not None
     selected_root = assignment.agent_root_id
     fixture.store.accept_agent_evidence("task-2", 1, {"source": "test"})
