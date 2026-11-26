@@ -2917,16 +2917,25 @@ def test_machine_cancel_records_peer_containment_and_release_before_restart(monk
 def test_lost_release_orders_other_completion_and_preserves_local_stop(
     monkeypatch, restart_epoch
 ):
+    from loom.queue.errors import QueueConflictError
+
     held, release, committed_b, stopped_c = Event(), Event(), Event(), Event()
     dispatch = transport._dispatch
     stop_request = AgentProcessSupervisorClient.request_stop
     requests = []
     held_request = []
+    rejected_reconciliations = set()
     ids = {}
 
     def exchange(view, operation, value):
         request = (operation, dict(value))
         requests.append(request)
+        if operation == "reconcile":
+            try:
+                return dispatch(view, operation, value)
+            except QueueConflictError:
+                rejected_reconciliations.add(value["idempotency_key"])
+                raise
         result = dispatch(view, operation, value)
         if (
             operation == "release"
@@ -3019,16 +3028,21 @@ def test_lost_release_orders_other_completion_and_preserves_local_stop(
                 ]
             _eventually(releases_settled)
             if restart_epoch:
-                assert (
-                    len(
-                        {
-                            value["idempotency_key"]
-                            for operation, value in requests
-                            if operation == "reconcile"
-                        }
-                    )
-                    == 1
-                )
+                reconciles = [value for operation, value in requests if operation == "reconcile"]
+                first = reconciles[0]
+                key = deployment._operation_id("reconcile", first["expected"]["session_id"], first["coordinator_epoch"])
+                attempts = {}
+                for request in reconciles:
+                    assert attempts.setdefault(request["idempotency_key"], request) == request
+                assert list(attempts) in ([key], [key, key + ":before-release"])
+                if len(attempts) == 2:
+                    # Only a rejected post-release revision permits the retained pre-release view.
+                    assert key in rejected_reconciliations
+                    fallback = attempts[key + ":before-release"]
+                    revision = fallback["expected"]["availability_revision"]
+                    assert revision != first["expected"]["availability_revision"]
+                    assert fallback == {**first, "idempotency_key": key + ":before-release",
+                                        "expected": {**first["expected"], "availability_revision": revision}}
         finally:
             release.set()
             for gate in gates:
