@@ -39,6 +39,7 @@ from .authority import (
     CoordinatorAdmissionRequest,
     ExecutionFence,
     OutputCommit,
+    PreparedAttemptBindRejected,
     PreparedAttemptReceipt,
     PreparedAttemptRequest,
     StatusTransition,
@@ -633,11 +634,20 @@ class AuthenticatedCoordinatorAuthority:
         return PreparedAttemptReceipt.from_dict(_body_required(result, "receipt"))
 
     def bind_prepared_attempt(
-        self, run_uri: str, *, assignment_id: str, attempt_id: str
+        self, run_uri: str, *, assignment_id: str, attempt_id: str,
+        expected_revision: BackendRevision | None = None,
     ) -> None:
-        self._attempt_pair(
-            COORDINATOR_BIND_ATTEMPT_PATH, run_uri, assignment_id, attempt_id
-        )
+        body = _attempt_pair_body(assignment_id, attempt_id)
+        if expected_revision is not None:
+            # Older authorities must refuse the conditional shape before mutation.
+            body = {"decision": body}
+        try:
+            self._call(COORDINATOR_BIND_ATTEMPT_PATH, run_uri,
+                       body=body, expected_revision=expected_revision)
+        except AuthenticatedCoordinatorAuthorityError as error:
+            if error.code == "prepared_attempt_bind_rejected":
+                raise PreparedAttemptBindRejected(str(error)) from error
+            raise
 
     def unbind_prepared_attempt(
         self, run_uri: str, *, assignment_id: str, attempt_id: str

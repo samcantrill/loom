@@ -1953,10 +1953,11 @@ def test_remote_candidate_ceiling_and_reflected_remaining_resources(
         daemon.stop()
 
 
+@pytest.mark.parametrize("interruption", ["withdrawn_offer", "stale_decision", "lost_bind_reply"])
 def test_rejected_remote_target_unbinds_attempt_and_releases_reservation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, interruption: str
 ) -> None:
-    """The target CAS may reject after selection/reservation; its caller compensates."""
+    """Definite refusals and lost replies recover the exact pre-delivery reservation."""
     from tests.unit.loom.queue.test_agent_sessions import _config, _policy, _view
 
     descriptor = ResidentProfileDescriptor(
@@ -1991,9 +1992,28 @@ def test_rejected_remote_target_unbinds_attempt_and_releases_reservation(
         rejected.append(kwargs["request"])
         raise QueueConflictError("agent resident assignment ceiling is exhausted")
 
-    monkeypatch.setattr(
-        local_daemon_execution, "_target_remote_delivery", reject_target
-    )
+    if interruption == "withdrawn_offer":
+        monkeypatch.setattr(local_daemon_execution, "_target_remote_delivery", reject_target)
+    else:
+        from loom.pipeline.reliability import ReliabilityPolicy
+        from loom.pipeline.stores.read_models import ReliabilityPolicyFact, ReliabilityPolicyScope
+        from loom.queue._managed_local import ManagedLocalError
+
+        scoped = local_daemon_execution._ScopedCoordinatorAuthority
+        original_bind = scoped.bind_prepared_attempt
+        def interrupt_bind(owner, uri, **identity):
+            if not rejected:
+                rejected.append(identity)
+                if interruption == "stale_decision":
+                    authority.write_reliability_policy_fact(uri, ReliabilityPolicyFact(
+                        run_uri=uri, scope=ReliabilityPolicyScope.RUN, policy=ReliabilityPolicy(),
+                        recorded_at="2026-08-30T00:00:00Z",
+                    ))
+                else:
+                    original_bind(owner, uri, **identity)
+                    raise ManagedLocalError("authority bind reply lost")
+            return original_bind(owner, uri, **identity)
+        monkeypatch.setattr(scoped, "bind_prepared_attempt", interrupt_bind)
     try:
         view = _view(daemon)
         hello = view.handshake()
@@ -2035,31 +2055,40 @@ def test_rejected_remote_target_unbinds_attempt_and_releases_reservation(
             daemon.reconcile_once()
             assert monotonic() < deadline, "prepared target was not attempted"
             sleep(0.01)
-        with sqlite3.connect(config.control_database) as conn:
-            assert (
-                conn.execute("SELECT COUNT(*) FROM agent_deliveries").fetchone()[0] == 0
-            )
-            assert (
-                conn.execute("SELECT COUNT(*) FROM remote_assignments").fetchone()[0]
-                == 0
-            )
         assert daemon._execution is not None
-        for request in rejected:
-            assert (
-                daemon._execution.coordinator.state(request.assignment_id) == "released"
-            )
-        from loom.pipeline.stores.sqlite_authority import _authority_database_path
+        if interruption == "withdrawn_offer":
+            with sqlite3.connect(config.control_database) as conn:
+                assert (
+                    conn.execute("SELECT COUNT(*) FROM agent_deliveries").fetchone()[0] == 0
+                )
+                assert (
+                    conn.execute("SELECT COUNT(*) FROM remote_assignments").fetchone()[0]
+                    == 0
+                )
+            for request in rejected:
+                assert (
+                    daemon._execution.coordinator.state(request.assignment_id) == "released"
+                )
+            from loom.pipeline.stores.sqlite_authority import _authority_database_path
 
-        with sqlite3.connect(_authority_database_path(run_uri)) as conn:
-            assert (
-                conn.execute(
-                    "SELECT COUNT(*) FROM managed_attempt_bindings"
-                ).fetchone()[0]
-                == 0
-            )
-            assert conn.execute(
-                "SELECT COUNT(*) FROM managed_attempt_unbind_receipts"
-            ).fetchone()[0] == len(rejected)
+            with sqlite3.connect(_authority_database_path(run_uri)) as conn:
+                assert (
+                    conn.execute(
+                        "SELECT COUNT(*) FROM managed_attempt_bindings"
+                    ).fetchone()[0]
+                    == 0
+                )
+                assert conn.execute(
+                    "SELECT COUNT(*) FROM managed_attempt_unbind_receipts"
+                ).fetchone()[0] == len(rejected)
+        else:
+            identity = rejected[0]
+            first_id = identity["assignment_id"]
+            assert identity["expected_revision"] is not None
+            if interruption == "stale_decision":
+                assert daemon._execution.coordinator.state(first_id) == "released"
+                with pytest.raises(ValueError, match="not bound"):
+                    authority.grant_prepared_attempt(run_uri, assignment_id=first_id, attempt_id=identity["attempt_id"])
         monkeypatch.setattr(local_daemon_execution, "_target_remote_delivery", original_target)
         deadline = monotonic() + 10
         while True:
@@ -2072,8 +2101,17 @@ def test_rejected_remote_target_unbinds_attempt_and_releases_reservation(
             sleep(0.01)
         summaries = cast(list[dict], daemon._execution._scheduling_waits.summaries(run_uri))
         by_assignment = {item["assignment_id"]: item for item in summaries}
-        assert by_assignment[rejected[0].assignment_id]["projection_revision"] < by_assignment[row[0]]["projection_revision"]
-        assert by_assignment[rejected[0].assignment_id]["attempt_id"] == by_assignment[row[0]]["attempt_id"]
+        first_id = rejected[0].assignment_id if interruption == "withdrawn_offer" else rejected[0]["assignment_id"]
+        assert first_id != row[0]
+        assert daemon._execution.coordinator.state(first_id) == "released"
+        assert by_assignment[first_id]["projection_revision"] < by_assignment[row[0]]["projection_revision"]
+        assert by_assignment[first_id]["attempt_id"] == by_assignment[row[0]]["attempt_id"]
+        if interruption == "lost_bind_reply":
+            from loom.pipeline.stores.sqlite_authority import _authority_database_path
+            with sqlite3.connect(_authority_database_path(run_uri)) as conn:
+                assert conn.execute(
+                    "SELECT attempt_id FROM managed_attempt_unbind_receipts WHERE assignment_id=?", (first_id,),
+                ).fetchone() == (rejected[0]["attempt_id"],)
     finally:
         daemon.stop()
 
@@ -4629,7 +4667,7 @@ def test_same_run_local_and_remote_stages_overlap(tmp_path: Path, monkeypatch, s
         if binding_pause:
             def hold_local_binding(owner, uri, **kwargs):
                 if current_thread().name.startswith("loom-local-assignment") and not grant_entered.is_set():
-                    bound_identity.update(kwargs)
+                    bound_identity.update((name, kwargs[name]) for name in ("assignment_id", "attempt_id"))
                     if scenario == "restart-after-committed-bind":
                         bind(owner, uri, **kwargs)
                     grant_entered.set()

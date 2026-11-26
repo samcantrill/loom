@@ -1,15 +1,17 @@
 """Resume a run's reconciliation on the scheduler after its authority read."""
 from __future__ import annotations
 
+from bisect import bisect_right
 from collections import OrderedDict
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextvars import copy_context
 from dataclasses import dataclass, field
-from time import monotonic
+from time import monotonic_ns
 from typing import TYPE_CHECKING, Any
 
 from ._completion_inbox import CompletionInbox
+from ._phase_timing import milestone
 
 if TYPE_CHECKING:
     from loom.pipeline.stores.read_models import AuthoritativeRunSnapshot
@@ -188,49 +190,79 @@ class RunObservations:
 class _DispatchRead:
     admission: LocalDaemonAdmission
     epochs: Epochs
-    future: Future[tuple[float, AuthoritativeRunSnapshot | Exception]]
-    requested: bool = False
-
-    def notify_when_ready(self, wake: Callable[[], None]) -> None:
-        if not self.requested:
-            self.requested = True
-            self.future.add_done_callback(lambda _: wake())
+    future: Future[tuple[int, AuthoritativeRunSnapshot | Exception]]
+    work_ids: set[str] = field(default_factory=set)
+    selected: set[str] = field(default_factory=set)
 
 
 class DispatchObservations:
-    """Read READY authority without occupying the scheduler or reserving capacity.
-
-    The selector consumes each result once. A read started in anticipation of
-    another preparation step only wakes the selector if it asks for that result.
-    """
+    """Keep a demanded read until dispatch or request preparation consumes it."""
 
     def __init__(self, wake: Callable[[], None]) -> None:
+        self._hint_after = ""
         self._workers = ThreadPoolExecutor(max_workers=2, thread_name_prefix="loom-dispatch-observation")
         self._reads: dict[str, _DispatchRead] = {}
-        self._retiring: dict[str, Future[tuple[float, AuthoritativeRunSnapshot | Exception]]] = {}
+        self._retiring: dict[str, Future[tuple[int, AuthoritativeRunSnapshot | Exception]]] = {}
+        self._consumed: dict[str, tuple[int, Epochs, AuthoritativeRunSnapshot]] = {}
         self._wake = wake
 
     def requested_runs(self) -> set[str]:
-        """Only a read demanded by dispatch owns a continuation of its context."""
-        return {read.admission.run_uri for read in self._reads.values() if read.requested}
+        return {read.admission.run_uri for read in self._reads.values() if read.work_ids}
 
-    def _discard(self, identity: str) -> None:
-        read = self._reads.pop(identity)
-        if not read.future.cancel() and not read.future.done():
+    def requested_admissions(self) -> set[str]:
+        return {key for key, read in self._reads.items() if read.work_ids}
+
+    def invalidate_admission(self, identity: str) -> None:
+        self._consumed.pop(identity, None)
+        read = self._reads.pop(identity, None)
+        if read is not None and not read.future.cancel() and not read.future.done():
             self._retiring[identity] = read.future
 
-    def begin_cycle(self, invalidated: set[str], epochs: Epochs, interval: float) -> None:
+    def begin_cycle(
+        self, invalidated: set[str], epochs: Epochs, interval: float,
+        revisions: Mapping[str, int], ready_ids: Callable[[set[str]], set[str]],
+        offer: Callable[[str], None],
+    ) -> None:
+        self._consumed.clear()
         self._retiring = {key: future for key, future in self._retiring.items() if not future.done()}
+        completed = []
+        ready = ready_ids({work for read in self._reads.values() for work in read.work_ids})
         for key, read in tuple(self._reads.items()):
             if read.epochs != epochs or read.admission.run_uri in invalidated:
-                self._discard(key)
-            elif read.future.done() and monotonic() - read.future.result()[0] > (
-                max(1.0, interval) if read.requested else interval
-            ):
-                self._discard(key)
+                self.invalidate_admission(key)
+            elif read.work_ids:
+                read.work_ids.intersection_update(ready)
+                read.selected.intersection_update(read.work_ids)
+                if revisions.get(key) != read.admission.revision or not read.work_ids:
+                    self.invalidate_admission(key)
+                elif read.future.done():
+                    # Hints can coalesce or overflow. The owner offers its outstanding
+                    # work again until the scheduler actually takes the result.
+                    completed.extend(read.work_ids)
+            elif read.future.done() and monotonic_ns() - read.future.result()[0] > interval * 1e9:
+                self.invalidate_admission(key)
+
+        if completed:
+            completed.sort()
+            start = bisect_right(completed, self._hint_after)
+            # Rotate even when a permanently blocked peer cannot consume its hint.
+            for offset in range(min(32, len(completed))):
+                self._hint_after = completed[(start + offset) % len(completed)]
+                offer(self._hint_after)
+
+    def selected(self, admission_id: str, work_id: str) -> bool:
+        read = self._reads.get(admission_id)
+        return read is not None and work_id in read.selected
+
+    def retire_work(self, admission_id: str, work_id: str) -> None:
+        read = self._reads.get(admission_id)
+        if read is not None and work_id in read.work_ids:
+            read.selected.discard(work_id)
+            read.work_ids.remove(work_id)
+            if not read.work_ids:
+                self.invalidate_admission(admission_id)
 
     def snapshot_for_preparation(self, admission: LocalDaemonAdmission, epochs: Epochs) -> AuthoritativeRunSnapshot | None:
-        """Borrow a completed read for host-independent IO, leaving dispatch its fresh check."""
         read = self._reads.get(admission.admission_id)
         if (read is None or read.admission.revision != admission.revision or read.epochs != epochs
             or not read.future.done()):
@@ -238,51 +270,76 @@ class DispatchObservations:
         _, result = read.future.result()
         return None if isinstance(result, Exception) else result
 
+    def transferred(self, admission: LocalDaemonAdmission, epochs: Epochs, work_id: str) -> None:
+        """Request preparation now owns this work. Peers still own their handoff."""
+        read = self._reads.get(admission.admission_id)
+        if (read is None or work_id not in read.work_ids or not read.future.done()
+            or read.epochs != epochs or read.admission.revision != admission.revision):
+            return
+        completed, result = read.future.result()
+        if isinstance(result, Exception):
+            return  # The selection owner handles failed authority reads and retry.
+        consumed = monotonic_ns()
+        milestone("dispatch_observation_consumed", admission_id=admission.admission_id,
+                  stage_work_id=work_id, completed_ns=completed, consumed_ns=consumed,
+                  completion_wait_ns=consumed - completed)
+        self._consumed[admission.admission_id] = admission.revision, epochs, result
+        read.selected.discard(work_id)
+        read.work_ids.remove(work_id)
+        if not read.work_ids:
+            del self._reads[admission.admission_id]
+
     def _start(
         self, admission: LocalDaemonAdmission, epochs: Epochs, load: Callable[[], AuthoritativeRunSnapshot],
-        *, requested: bool, notify: Callable[[], None] | None = None,
+        work_ids: set[str], selected: str | None = None,
     ) -> None:
         identity = admission.admission_id
         if identity in self._retiring or len(self._reads) >= 32:
             return
-        # Keep a real worker available for demand from another READY run.
-        limit = 2 if requested else 1
+        limit = 2 if work_ids else 1
         if sum(not item.future.done() for item in self._reads.values()) + len(self._retiring) >= limit:
             return
 
-        def capture() -> tuple[float, AuthoritativeRunSnapshot | Exception]:
+        def capture() -> tuple[int, AuthoritativeRunSnapshot | Exception]:
             try:
                 snapshot = load()
             except Exception as error:
-                return monotonic(), error
-            return monotonic(), snapshot
+                return monotonic_ns(), error
+            return monotonic_ns(), snapshot
 
         future = self._workers.submit(copy_context().run, capture)
-        read = _DispatchRead(admission, epochs, future)
-        self._reads[identity] = read
-        if requested:
-            read.notify_when_ready(notify or self._wake)
+        self._reads[identity] = _DispatchRead(admission, epochs, future, work_ids, {selected} if selected is not None else set())
+        if work_ids:
+            future.add_done_callback(lambda _: self._wake())
 
     def poll(
         self, admission: LocalDaemonAdmission, epochs: Epochs, load: Callable[[], AuthoritativeRunSnapshot],
-        *, notify: Callable[[], None] | None = None,
+        *, work_id: str, peers: set[str],
     ) -> AuthoritativeRunSnapshot | None:
         identity = admission.admission_id
+        previous = self._consumed.get(identity)
+        if previous is not None and previous[:2] == (admission.revision, epochs):
+            if identity not in self._reads:
+                self._start(admission, epochs, load, set())
+            return previous[2]
         read = self._reads.get(identity)
         if read is not None and (read.admission.revision != admission.revision or read.epochs != epochs):
-            self._discard(identity)
+            self.invalidate_admission(identity)
             read = None
         if read is None:
-            self._start(admission, epochs, load, requested=True, notify=notify)
+            self._start(admission, epochs, load, peers | {work_id}, work_id)
             return None
+        if not read.work_ids:
+            read.work_ids.update(peers)
+            read.future.add_done_callback(lambda _: self._wake())
+        read.work_ids.add(work_id)
+        read.selected.add(work_id)
         if not read.future.done():
-            read.notify_when_ready(notify or self._wake)
             return None
-        del self._reads[identity]
         _, result = read.future.result()
         if isinstance(result, Exception):
+            self.invalidate_admission(identity)
             raise result
-        self._start(admission, epochs, load, requested=False)
         return result
 
     def close(self) -> None:

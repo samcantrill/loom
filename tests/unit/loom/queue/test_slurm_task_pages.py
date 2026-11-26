@@ -180,6 +180,7 @@ def test_agent_renews_during_packing_and_reply_uses_current_page(tmp_path, monke
         assignment = replace(assignment, agent_id=session.agent_id, agent_root_id=session.agent_root_id)
         store = execution.slurm_assignments
         store.reserve(assignment, **{**args, "max_reserved_gpus": None})
+        store.advance(assignment.assignment_id, expected="reserved", next_state="bound")
 
         def reject_full_record(_row):
             pytest.fail("agent task observation decoded a complete worker record")

@@ -19,7 +19,7 @@ from loom.scheduling import PolicyDecisionState
 from ._admission_scan import SchedulingAdmissions
 from ._recovery_retry import _RecoveryRetry
 from ._run_observations import ObservationSteps, RunObservationPending, RunSteps
-from ._managed_local import ManagedLocalError
+from ._managed_local import ManagedLocalError, ManagedOfferUnavailable
 from ._remote_stage_execution import ResidentProfileDescriptor
 from .errors import QueueServiceError
 from .local_daemon import LocalDaemonAdmissionState
@@ -132,6 +132,7 @@ def _reconcile_admission_steps(
 ) -> RunSteps:
     from loom.pipeline.orchestration import SchedulingProjectionState
 
+    yield from self._recover_remote_reservations(admission, scoped_authority)
     action_resolver = self._action_resolution
     cancelling = admission.cancellation_operation_id is not None or self.cancellation_operation(admission.admission_id) is not None
     if cancelling:
@@ -265,7 +266,7 @@ def _reconcile_admission_steps(
     return LocalDaemonExecutionOutcome(
         LocalDaemonAdmissionState.WAITING,
         slurm_diagnostic
-        or "no dependency-ready stage currently has managed capacity",
+        or "awaiting scheduling decision",
     )
 
 
@@ -307,83 +308,29 @@ def _settled_terminal_outcome(
     return terminal
 
 
-def schedule_once(
-    self: LocalDaemonExecution, admissions: Mapping[str, LocalDaemonAdmission], *,
-    waiting_outcomes: dict[str, LocalDaemonExecutionOutcome] | None = None,
-) -> tuple[str, LocalDaemonExecutionOutcome] | None:
-    """Scan bounded pages, continuing beyond blocked work on the next cycle.
-
-    A fixed timestamp/admission boundary excludes arrivals during a sweep.
-    A complete sweep restarts at the priority head, as does process restart.
-    Cursor state is only an optimization: durable reservation remains authority.
-    """
-    if not admissions and not (isinstance(admissions, SchedulingAdmissions) and admissions.enqueue_through):
-        self._ready_scan_after = None
-        self._ready_scan_boundary = None
-        self._gpu_scan_after = self._gpu_scan_boundary = None
-        return None
-    if self._ready_scan_boundary is None:
-        _, snapshot_time = self._daemon_owner()._accepted_snapshot()
-        self._ready_scan_boundary = (
-            snapshot_time, (admissions.enqueue_through if isinstance(admissions, SchedulingAdmissions)
-                            else max(row.enqueue_sequence for row in admissions.values())),
-        )
-    if self._prefer_gpu_dispatch:
-        outcome = _schedule_gpu_opportunity(self, admissions, waiting_outcomes)
-        if outcome is not None:
-            self._ready_scan_after = self._ready_scan_boundary = None
-            self._last_dispatch_enqueue = admissions[outcome[0]].enqueue_sequence
-            self._prefer_gpu_dispatch = False
-            return outcome
-    for _ in range(4):
-        page = self._read_ready_window(
-            after=self._ready_scan_after, rotate_after=self._last_dispatch_enqueue,
-            ready_through=self._ready_scan_boundary[0],
-            enqueue_through=self._ready_scan_boundary[1],
-        )
-        if not page:
-            self._ready_scan_after = None
-            self._ready_scan_boundary = None
-            return None
-        outcome = _schedule_window(self, admissions, page, waiting_outcomes=waiting_outcomes)
-        if outcome is not None:
-            self._ready_scan_after = None
-            self._ready_scan_boundary = None
-            self._last_dispatch_enqueue = admissions[outcome[0]].enqueue_sequence
-            self._prefer_gpu_dispatch = not self._prefer_gpu_dispatch
-            return outcome
-        self._ready_scan_after = page[-1]
-        if len(page) < 256:
-            self._ready_scan_after = None
-            self._ready_scan_boundary = None
-            return None
-    # Yield the global coordinator lock before continuing a large backlog.
-    self._daemon_owner()._wake.set()
-    return None
+def _dispatch_policy_allows(self, admission, intent, snapshot, record):
+    # The cancellation epoch explicitly exempts an owned producer with live demand.
+    # A cancelled sibling belongs to that graph; other fail-fast checks still apply.
+    if admission.cancellation_operation_id is not None and self._action_attempt_needed(record.run_uri, record.attempt_id):
+        return self._failure_policy_allows_new_work(intent, snapshot, exempt_graph_cancellation=True)
+    return self._failure_policy_allows_new_work(intent, snapshot)
 
 
-def _schedule_gpu_opportunity(self, admissions, waiting_outcomes):
-    """One bounded GPU-head page, then fall back to ordinary fair dispatch.
-
-    Its cursor/rotation are independent: successful CPU admissions cannot reset
-    a blocked GPU prefix. Capacity and cancellation still use normal dispatch.
-    """
-    if self._gpu_scan_boundary is None:
-        self._gpu_scan_boundary = self._ready_scan_boundary
-    page = self._read_ready_window(
-        after=self._gpu_scan_after, rotate_after=self._last_gpu_dispatch_enqueue,
-        ready_through=self._gpu_scan_boundary[0], enqueue_through=self._gpu_scan_boundary[1],
-        gpu_heads_only=True,
-    )
-    outcome = _schedule_window(self, admissions, page, waiting_outcomes=waiting_outcomes) if page else None
-    if outcome is not None:
-        self._last_gpu_dispatch_enqueue = admissions[outcome[0]].enqueue_sequence
-        self._gpu_scan_after = self._gpu_scan_boundary = None
-    elif len(page) < 256:
-        self._gpu_scan_after = self._gpu_scan_boundary = None
-    else:
-        self._gpu_scan_after = page[-1]
-    return outcome
+def _current_ready_attempt(snapshot: AuthoritativeRunSnapshot, record: StageWorkRecord) -> bool:
+    if snapshot.revision.sequence < record.authority_revision.sequence:
+        return False
+    stages = {stage.stage_name: stage for stage in snapshot.stages}
+    stage = stages.get(record.stage_name)
+    if stage is None or stage.status is not StageStatus.PENDING or not stage.attempts:
+        return False
+    attempt = max(stage.attempts, key=lambda item: item.attempt)
+    if attempt.attempt_id != record.attempt_id or attempt.status is not StageStatus.PENDING:
+        return False
+    for name, commit_id in record.upstream_commits.items():
+        upstream = stages.get(name)
+        if upstream is None or upstream.latest_commit is None or upstream.latest_commit.commit_id != commit_id:
+            return False
+    return True
 
 
 def _advance_ready_inputs(self, record, admission, context, epochs, *, anticipated):
@@ -403,6 +350,9 @@ def _advance_ready_inputs(self, record, admission, context, epochs, *, anticipat
             queued = self._ready_preparations.request_queued_ns(key, record.stage_work_id)
             if queued is not None:
                 self._scheduling_waits.queued(record, queued)
+                _, prepared = self._ready_preparations.request_for_descriptors(key, record.stage_work_id)
+                if prepared is not None and remote:
+                    self._prepared_input_descriptors(record, prepared)
             else:
                 self._scheduling_waits.prequeue(record, wait)
             return True
@@ -421,11 +371,10 @@ def _advance_ready_inputs(self, record, admission, context, epochs, *, anticipat
     if snapshot is None or snapshot.revision.sequence < record.authority_revision.sequence:
         self._scheduling_waits.prequeue(record, "snapshot_unavailable")
         return True
-    if not self._failure_policy_allows_new_work(intent, snapshot):
+    if not _dispatch_policy_allows(self, admission, intent, snapshot, record):
         self._scheduling_waits.prequeue(record, "run_policy")
         return True
-    if not any(stage.stage_name == record.stage_name and stage.status is StageStatus.PENDING
-               and any(a.attempt_id == record.attempt_id for a in stage.attempts) for stage in snapshot.stages):
+    if not _current_ready_attempt(snapshot, record):
         self._scheduling_waits.prequeue(record, "snapshot_unavailable")
         return True
     self._scheduling_waits.prequeue(record, "unknown")
@@ -446,15 +395,22 @@ def resume_ready_inputs(self, work_ids, admissions, epochs):
         self._scheduling_waits.ready(record, scanned=True)
         admissions.include({record.admission_id})
         admission = admissions.get(record.admission_id)
-        context = self._cycle_contexts.get(record.admission_id)
-        if (admission is None or context is None or self._cycle_context_epochs.get(record.admission_id) != epochs
-            or self._cycle_context_revisions.get(record.admission_id) != admission.revision):
+        if admission is None:
+            continue
+        context = self.continuation_context(admission, epochs)
+        if context is None:
+            if not self.run_observations.awaiting_read(admission, epochs, self.daemon._result_verifications.bulk):
+                self.daemon._contexts.try_submit(admission, epochs, self.prepare_admission_context, for_dispatch=True)
             self._scheduling_waits.prequeue(record, "context_unavailable")
             continue
         if self._attempt_cancel_requested(record.run_uri, record.attempt_id):
+            self.dispatch_observations.retire_work(admission.admission_id, work_id)
             continue
         try:
-            _advance_ready_inputs(self, record, admission, context, epochs, anticipated=False)
+            selected = self.dispatch_observations.selected(admission.admission_id, work_id)
+            _advance_ready_inputs(self, record, admission, context, epochs, anticipated=not selected)
+            if self._ready_preparations.request_queued_ns((record.run_uri, record.stage_name), work_id) is not None:
+                self.dispatch_observations.transferred(admission, epochs, work_id)
         except Exception:
             # The selected route owns the durable decision about a failed preparation.
             continue
@@ -485,11 +441,10 @@ def _schedule_window(
     decision_as_of, snapshot_time = self._daemon_owner()._accepted_snapshot()
     # Read the page's cancellation preflight over one control connection. The
     # actual reservation rechecks the current cancellation and offer.
-    from ._action_results import action_attempt_cancelled
+    from ._action_results import launchable_page
 
     with self.config.connect_database(self.config.control_database) as conn:
-        window = tuple(record for record in page
-                       if not action_attempt_cancelled(conn, record.run_uri, record.attempt_id))
+        window = launchable_page(conn, page)
     if not window:
         return None
     # A release before agent acceptance reopens the existing projection. A
@@ -523,6 +478,7 @@ def _schedule_window(
                       if self._cycle_context_epochs.get(key) == epochs}
     contexts = self._cycle_contexts
     exhausted_admissions: set[str] = set()
+    active_counts: dict[str, int] = {}
     early_work: set[str] = set()
     for record in window:
         admission = admissions.get(record.admission_id)
@@ -535,11 +491,10 @@ def _schedule_window(
         if admission is None or context is None:
             self._scheduling_waits.prequeue(record, "context_unavailable")
             continue
-        if (
-            context[0].max_parallel_stages is not None
-            and self.coordinator.run_active_assignment_count(admission.run_uri)
-            >= context[0].max_parallel_stages
-        ):
+        limit = context[0].max_parallel_stages
+        if limit is not None and admission.run_uri not in active_counts:
+            active_counts[admission.run_uri] = self.coordinator.run_active_assignment_count(admission.run_uri)
+        if limit is not None and active_counts[admission.run_uri] >= limit:
             exhausted_admissions.add(record.admission_id)
             self._scheduling_waits.record(record.run_uri, record.stage_name, "reservation")
             self._scheduling_waits.capacity(record, "run_parallel_limit")
@@ -569,7 +524,6 @@ def _schedule_window(
     if local_timing is not None:
         observed_offers.add(local_timing[0])
     self._scheduling_waits.current_offers(observed_offers, epochs)
-    observed: dict[str, AuthoritativeRunSnapshot | None] = {}
 
     def dispatch_snapshot(
         admission: LocalDaemonAdmission, authority: _ScopedCoordinatorAuthority, record: StageWorkRecord,
@@ -577,39 +531,47 @@ def _schedule_window(
         if self.daemon is None:
             return authority.open_run(admission.run_uri)
         identity = admission.admission_id
-        if identity not in observed:
-            try:
-                observed[identity] = self.dispatch_observations.poll(
-                    admission, epochs, lambda: authority.open_run(admission.run_uri),
-                    notify=lambda: self._ready_continuations.post(record.stage_work_id),
-                )
-            except Exception as error:
-                with self.daemon._state_guard():
-                    retry = self.daemon._admission_retries.setdefault(admission.run_uri, _RecoveryRetry())
-                retry.failed(error, operation_id=admission.authority_operation_id, admission_id=identity,
-                             state=(admission.revision, epochs[1]))
-                self.daemon._record_admission_health(identity, "unavailable")
-                observed[identity] = None
-        snapshot = observed[identity]
+        try:
+            snapshot = self.dispatch_observations.poll(
+                admission, epochs, lambda: authority.open_run(admission.run_uri),
+                work_id=record.stage_work_id, peers={peer.stage_work_id for peer in window
+                    if peer.admission_id == identity and peer.placement.route.kind == record.placement.route.kind},
+            )
+        except Exception as error:
+            with self.daemon._state_guard():
+                retry = self.daemon._admission_retries.setdefault(admission.run_uri, _RecoveryRetry())
+            retry.failed(error, operation_id=admission.authority_operation_id, admission_id=identity,
+                         state=(admission.revision, epochs[1]))
+            self.daemon._record_admission_health(identity, "unavailable")
+            snapshot = None
         if snapshot is None:
             self._scheduling_waits.prequeue(record, "snapshot_unavailable")
-            self._scheduling_waits.capacity(record, "preparation")
-            self._scheduling_waits.record(record.run_uri, record.stage_name, "preparation")
+            self._scheduling_waits.capacity(record, "snapshot_unavailable")
+            self._scheduling_waits.record(record.run_uri, record.stage_name, "snapshot_unavailable")
             exhausted_admissions.add(identity)
             return None
-        if snapshot.revision.sequence < record.authority_revision.sequence:
+        if not _current_ready_attempt(snapshot, record):
+            self.dispatch_observations.invalidate_admission(identity)
             self._scheduling_waits.prequeue(record, "snapshot_unavailable")
-            self._scheduling_waits.capacity(record, "preparation")
-            return None
-        if not any(attempt.attempt_id == record.attempt_id for stage in snapshot.stages
-                   if stage.stage_name == record.stage_name for attempt in stage.attempts):
-            self._scheduling_waits.prequeue(record, "snapshot_unavailable")
-            self._scheduling_waits.capacity(record, "preparation")
+            self._scheduling_waits.capacity(record, "snapshot_unavailable")
+            exhausted_admissions.add(identity)
             return None
         return snapshot
 
     excluded_work: set[str] = set()
     attempted_slurm: set[str] = set()
+    profiles = {key: target.profile for key, (_, target) in remote_targets.items()}
+    candidates = [candidate for _, (candidate, _) in sorted(remote_targets.items())]
+    if local_candidate is not None and local_candidate.candidate_id not in profiles:
+        launch = self.config.resident_worker_launch_profile
+        if launch is not None:
+            profiles[local_candidate.candidate_id] = ResidentProfileDescriptor.from_dict(launch.descriptor)
+            candidates.insert(0, local_candidate)
+    compatible = {record.stage_work_id: frozenset(
+        key for key, profile in profiles.items()
+        if _profile_satisfies_requirement(profile, record.execution_requirement)
+    ) for record in window if record.admission_id in contexts and record.admission_id in admissions
+       and record.placement.route.kind is ExecutionRouteKind.MANAGED_AGENT}
     while True:
         managed_records = tuple(
             record
@@ -620,38 +582,6 @@ def _schedule_window(
             and record.admission_id not in exhausted_admissions
             and record.placement.route.kind is ExecutionRouteKind.MANAGED_AGENT
         )
-        local_profile = (
-            None
-            if self.config.resident_worker_launch_profile is None
-            else ResidentProfileDescriptor.from_dict(
-                self.config.resident_worker_launch_profile.descriptor
-            )
-        )
-        candidates = tuple(
-            [
-                local_candidate
-                for _ in (0,)
-                if local_candidate is not None
-                and local_candidate.candidate_id not in remote_targets
-                and local_profile is not None
-                and any(
-                    _profile_satisfies_requirement(
-                        local_profile, record.execution_requirement
-                    )
-                    for record in managed_records
-                )
-            ]
-            + [
-                target[0]
-                for _, target in sorted(remote_targets.items())
-                if any(
-                    _profile_satisfies_requirement(
-                        target[1].profile, record.execution_requirement
-                    )
-                    for record in managed_records
-                )
-            ]
-        )
         # Admission fairness belongs to this shared route selector. The native
         # resident kernel still owns resource feasibility and stage selection.
         groups = tuple(dict.fromkeys(record.admission_id for record in managed_records))
@@ -661,7 +591,7 @@ def _schedule_window(
             decision = self._scheduling.kernel(group).decide(
                 work=tuple(record.to_work_item() for record in group),
                 candidates=candidates,
-                as_of=snapshot_time,
+                as_of=snapshot_time, compatible_candidates=compatible,
             )
             if decision.state is PolicyDecisionState.SELECT:
                 break
@@ -706,7 +636,9 @@ def _schedule_window(
             snapshot = dispatch_snapshot(admission, authority, record)
             if snapshot is None:
                 continue
-            if not self._failure_policy_allows_new_work(intent, snapshot):
+            if self.daemon is not None:
+                self.dispatch_observations.transferred(admission, epochs, record.stage_work_id)
+            if not _dispatch_policy_allows(self, admission, intent, snapshot, record):
                 self._scheduling_waits.prequeue(record, "run_policy")
                 exhausted_admissions.add(record.admission_id)
                 continue
@@ -761,47 +693,24 @@ def _schedule_window(
         if snapshot is None:
             excluded_work.add(record.stage_work_id)
             continue
-        if not self._failure_policy_allows_new_work(intent, snapshot):
+        if not _dispatch_policy_allows(self, admission, intent, snapshot, record):
+            if self.daemon is not None:
+                self.dispatch_observations.invalidate_admission(record.admission_id)
             self._scheduling_waits.prequeue(record, "run_policy")
             self._scheduling_waits.capacity(record, "run_policy")
             exhausted_admissions.add(record.admission_id)
             continue
         candidate_id = cast(str, decision.candidate_id)
         remote_target = remote_targets.get(candidate_id)
-        local_profile = (
-            None
-            if self.config.resident_worker_launch_profile is None
-            else ResidentProfileDescriptor.from_dict(
-                self.config.resident_worker_launch_profile.descriptor
-            )
-        )
-        selected_profile = (
-            local_profile if remote_target is None else remote_target[1].profile
-        )
-        if selected_profile is None or not _profile_satisfies_requirement(
-            selected_profile, record.execution_requirement
-        ):
-            self._scheduling_waits.capacity(record, "no_eligible_offer")
-            if record.stage_work_id not in early_work:
-                self._scheduling_waits.prequeue(record, "no_eligible_offer")
-            if remote_target is not None:
-                del remote_targets[candidate_id]
-            else:
-                excluded_work.add(record.stage_work_id)
-            continue
         if remote_target is not None:
-            self._scheduling_waits.prequeue(record, "unknown")
-            eligible = self._remote_eligible(intent=intent, snapshot=snapshot, record=record)
-            if eligible is None:
-                self._scheduling_waits.capacity(record, "request_preparation")
-                self._scheduling_waits.record(record.run_uri, record.stage_name, "request_preparation")
+            blocker = self._remote_preparation_wait(intent=intent, snapshot=snapshot, record=record)
+            if (daemon is not None and (blocker == "attempt_preparation_error"
+                    or self._ready_preparations.request_queued_ns((record.run_uri, record.stage_name), record.stage_work_id) is not None)):
+                self.dispatch_observations.transferred(admission, epochs, record.stage_work_id)
+            if blocker is not None:
+                self._scheduling_waits.capacity(record, blocker)
+                self._scheduling_waits.record(record.run_uri, record.stage_name, blocker)
                 excluded_work.add(record.stage_work_id)
-                continue
-            if not eligible:
-                self._scheduling_waits.capacity(record, "no_eligible_offer")
-                if record.stage_work_id not in early_work:
-                    self._scheduling_waits.prequeue(record, "no_eligible_offer")
-                del remote_targets[candidate_id]
                 continue
         timing = ((remote_target[1].offer_id, remote_target[1].expires_ns)
                   if remote_target is not None else local_timing)
@@ -826,6 +735,10 @@ def _schedule_window(
                     decision_as_of=decision_as_of,
                     execution_started=lambda: None,
                 )
+        except ManagedOfferUnavailable:
+            self._scheduling_waits.capacity(record, "capacity_unknown")
+            candidates = [item for item in candidates if item.candidate_id != candidate_id]
+            continue
         except ManagedLocalError as exc:
             # The reserve operation is the final capacity and
             # max-parallel CAS.  A concurrent run-limit loser is
@@ -837,6 +750,10 @@ def _schedule_window(
                 continue
             self._scheduling_waits.capacity(record, "capacity_unknown")
             return None
+        if daemon is not None and (started or self._ready_preparations.request_queued_ns(
+            (record.run_uri, record.stage_name), record.stage_work_id,
+        ) is not None):
+            self.dispatch_observations.transferred(admission, epochs, record.stage_work_id)
         if not started:
             excluded_work.add(record.stage_work_id)
             continue

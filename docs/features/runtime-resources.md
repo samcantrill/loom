@@ -715,7 +715,7 @@ The scheduler works only with safe projections and proposes a versioned
 resource planner  resolves requests, tests feasibility, and proposes safe claims
 scheduler         validates complete claims and ranks grouped ready-stage work
 coordinator CAS   rechecks run concurrency and reserves exact work/offer revisions
-authority CAS     binds the exact still-ready prepared stage attempt
+authority CAS     binds the exact pending attempt at the revision used to check run policy
 agent provider    revalidates reality, binds, accounts, and releases locally
 ```
 
@@ -730,6 +730,14 @@ execution failure, while ambiguous acceptance remains bound and unknown.
 `SUBMITTED` means granted, not proven running: only an exact current-fence
 confirmed process-start fact advances authority to `RUNNING`; failed or
 ambiguous start remains `SUBMITTED` and cannot license another launch.
+
+A new binding compares the dispatch snapshot's run revision inside the
+authority transaction. It also checks the latest pending attempt and its
+upstream commits. A sibling failure between selection and bind invalidates the
+decision. A definite refusal releases the unstarted reservation for a fresh
+placement decision. An interrupted bind replays with the original assignment
+identity and checks the accepted binding before the revision comparison.
+Slurm agents receive the assignment after authority binding succeeds.
 
 The placement engine does not interpret dependencies. One authority-side
 planning predicate exposes only ready `PlanAction.RUN` attempts and revalidates

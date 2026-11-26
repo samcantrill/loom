@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from loom.pipeline.status import RunStatus, StageStatus
     from loom.pipeline.stores import CancellationEpochRequest
     from loom.pipeline.stores.authority import ExecutionFence, PreparedAttemptRequest, StatusTransition
-    from loom.pipeline.stores.read_models import AuthoritativeRunSnapshot, LifecycleReason
+    from loom.pipeline.stores.read_models import AuthoritativeRunSnapshot, BackendRevision, LifecycleReason
     from .coordinator_authority import CoordinatorAuthorityStore
     from ._lifecycle_observers import LifecycleObservers
 
@@ -92,11 +92,12 @@ class _ScopedCoordinatorAuthority:
         self._store.release_action_producer(run_uri, binding)
 
     def bind_prepared_attempt(
-        self, run_uri: str, *, assignment_id: str, attempt_id: str
+        self, run_uri: str, *, assignment_id: str, attempt_id: str,
+        expected_revision: BackendRevision | None = None,
     ) -> None:
         self._run(run_uri)
         self._store.bind_prepared_attempt(
-            run_uri, assignment_id=assignment_id, attempt_id=attempt_id
+            run_uri, assignment_id=assignment_id, attempt_id=attempt_id, expected_revision=expected_revision
         )
 
     def unbind_prepared_attempt(

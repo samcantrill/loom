@@ -11,13 +11,17 @@ from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager, contextmanager
 import json
 import sqlite3
-from typing import Any, Iterator
+from typing import TYPE_CHECKING, Any, Iterator
 from uuid import uuid4
 
 from loom.fingerprints import hash_mapping
 from loom.serialization import PlainData, stable_json_bytes
 
 from .errors import QueueConflictError
+
+
+if TYPE_CHECKING:
+    from loom.pipeline.orchestration import StageWorkRecord
 
 
 def initialize_action_results(conn: sqlite3.Connection) -> None:
@@ -440,17 +444,56 @@ def action_attempt_cancelled(
         "SELECT state FROM action_claims WHERE owner_run_uri = ? AND attempt_id = ?",
         (run_uri, attempt_id),
     ).fetchone()
-    if claim is not None and claim[0] in {"settling", "cancelled"}:
-        return True
     cancellation = conn.execute(
         "SELECT cancellation_operation_id FROM managed_admissions WHERE run_uri = ?",
         (run_uri,),
     ).fetchone()
-    return (
-        cancellation is not None
-        and cancellation[0] is not None
-        and not action_attempt_needed(conn, run_uri, attempt_id)
-    )
+    cancelled = cancellation is not None and cancellation[0] is not None
+    state = claim[0] if claim is not None else None
+    return _denies_launch(state, cancelled, cancelled and state == "owned"
+                         and action_attempt_needed(conn, run_uri, attempt_id))
+
+
+def _denies_launch(claim_state: str | None, graph_cancelled: bool, live_demand: bool) -> bool:
+    return claim_state in {"settling", "cancelled"} or (graph_cancelled and not live_demand)
+
+
+def launchable_page(conn: sqlite3.Connection, page: tuple[StageWorkRecord, ...]) -> tuple[StageWorkRecord, ...]:
+    """Read one advisory cancellation snapshot. Reservation checks again at commit."""
+    if not page:
+        return ()
+    conn.execute("BEGIN")
+    try:
+        ids = json.dumps(sorted({r.admission_id for r in page}))
+        owners = {row[0]: row[1] is not None for row in conn.execute(
+            "SELECT admission_id, cancellation_operation_id FROM managed_admissions "
+            "WHERE admission_id IN (SELECT value FROM json_each(?)) "
+            "AND state NOT IN ('SUCCEEDED','FAILED','CANCELLED','BLOCKED')", (ids,),
+        )}
+        current = tuple(r for r in page if r.admission_id in owners)
+        if not current:
+            return ()
+        uris = json.dumps(sorted({r.run_uri for r in current}))
+        claims = {(uri, attempt): (state, claim_id) for uri, attempt, state, claim_id in conn.execute(
+            "SELECT owner_run_uri, attempt_id, state, claim_id FROM action_claims "
+            "WHERE owner_run_uri IN (SELECT value FROM json_each(?))", (uris,),
+        )}
+        needed_ids = set()
+        for record in current:
+            if owners[record.admission_id]:
+                claim = claims.get((record.run_uri, record.attempt_id))
+                if claim is not None and claim[0] == "owned":
+                    needed_ids.add(claim[1])
+        live = {row[0] for row in conn.execute(
+            "SELECT DISTINCT claim_id FROM action_demands WHERE state='live' "
+            "AND claim_id IN (SELECT value FROM json_each(?))", (json.dumps(sorted(needed_ids)),),
+        )} if needed_ids else set()
+        def allowed(record: StageWorkRecord) -> bool:
+            state, claim_id = claims.get((record.run_uri, record.attempt_id), (None, None))
+            return not _denies_launch(state, owners[record.admission_id], claim_id in live)
+        return tuple(r for r in current if allowed(r))
+    finally:
+        conn.rollback()
 
 
 def attach_action_fence(
