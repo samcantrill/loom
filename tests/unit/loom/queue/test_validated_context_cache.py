@@ -356,21 +356,21 @@ def test_context_loader_refusals_keep_the_first_request_across_retries(monkeypat
     second = replace(base, admission_id="second")
     third = replace(base, admission_id="third")
     try:
-        assert pool.try_submit(base, epochs, load, for_dispatch=True)
-        assert not pool.try_submit(third, epochs, load, for_dispatch=True)
+        assert pool.try_submit(base, epochs, load, dispatch_work_id="first-work")
+        assert not pool.try_submit(third, epochs, load, dispatch_work_id="third-work")
         assert pool.try_submit(second, epochs, load)
-        assert not pool.try_submit(third, epochs, load, for_dispatch=True)
+        assert not pool.try_submit(third, epochs, load, dispatch_work_id="third-work")
         assert [(name, attrs["wait_reason"]) for name, attrs in select(third)] == [
             ("context_requested", "dispatch_slot_busy")]
         pool.begin_cycle(invalidated=[base.run_uri])
         assert [a["reason"] for name, a in select(third) if name == "context_discarded"] == ["run_invalidated"]
         third = replace(third, revision=2)
-        assert not pool.try_submit(third, epochs, load, for_dispatch=True)
+        assert not pool.try_submit(third, epochs, load, dispatch_work_id="third-work")
         release.set()
         for pending in tuple(pool._pending.values()):
             pending.future.result(timeout=5)
         assert not pool.completed()
-        assert pool.try_submit(third, epochs, load, for_dispatch=True)
+        pool.retry_dispatch(epochs, lambda ids: {third.admission_id: third}, lambda row, work: True, load)
         pool._pending[third.admission_id].future.result(timeout=5)
         item, = pool.completed()
         checked = item.result()
@@ -389,7 +389,7 @@ def test_context_loader_refusals_keep_the_first_request_across_retries(monkeypat
         pool.finish_handoffs()
         # A transient failure during admission lookup can skip remaining
         # results after the turn already drained them from the loader pool.
-        assert pool.try_submit(base, epochs, load, for_dispatch=True)
+        assert pool.try_submit(base, epochs, load, dispatch_work_id="first-work")
         pool._pending[base.admission_id].future.result(timeout=5)
         assert len(pool.completed()) == 1
         pool.finish_handoffs()
