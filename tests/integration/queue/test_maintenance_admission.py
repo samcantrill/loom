@@ -166,32 +166,45 @@ def test_gate_owner_revision_and_exact_mutation_survive_restart(owner, monkeypat
 
 @pytest.mark.parametrize("winner", ("accept", "close"))
 def test_close_and_accept_share_atomic_owner(owner, monkeypatch, winner):
-    from loom.queue import _maintenance
+    from loom.queue import _maintenance, _preparation_operations
 
-    entered, release = Event(), Event()
-    original = _maintenance.classify
+    # SQLite can roll back a busy commit and replay the whole transition.
+    # Choose the winning durable receipt, then race the other request against its reply.
+    module = _preparation_operations if winner == "accept" else _maintenance
+    write = module.short_write
+    committed, reply = Event(), Event()
 
-    def held(*args, **kwargs):
-        entered.set()
-        assert release.wait(10)
-        return original(*args, **kwargs)
+    def pause_reply(*args, **kwargs):
+        result = write(*args, **kwargs)
+        if result is not None:
+            committed.set()
+            assert reply.wait(10)
+        return result
 
-    monkeypatch.setattr(_maintenance, "classify", held)
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        if winner == "close":
-            change(owner, "close")
-        accept = pool.submit(owner.prepare_run, _request(), principal_id="caller")
-        assert entered.wait(10)
-        close = pool.submit(change, owner, "close") if winner == "accept" else None
-        release.set()
+    monkeypatch.setattr(module, "short_write", pause_reply)
+
+    def accept():
+        return owner.prepare_run(_request(), principal_id="caller")
+
+    def close():
+        return change(owner, "close")
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        first = pool.submit(accept if winner == "accept" else close)
+        try:
+            assert committed.wait(10)
+            if winner == "accept":
+                assert close()["gate"]["state"] == "closed"
+            else:
+                with pytest.raises(MaintenanceInProgress):
+                    accept()
+                assert counts(owner) == (0, 0)
+        finally:
+            reply.set()
         if winner == "accept":
-            assert accept.result().operation_id == "prepare-1"
-            assert close is not None
-            assert close.result()["gate"]["state"] == "closed"
+            assert first.result().operation_id == "prepare-1"
         else:
-            with pytest.raises(MaintenanceInProgress):
-                accept.result()
-            assert counts(owner) == (0, 0)
+            assert first.result()["gate"]["state"] == "closed"
 
 
 def test_inflight_preparation_and_two_stage_pipeline_continue_closed(tmp_path):
