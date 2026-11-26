@@ -325,6 +325,7 @@ def test_rejected_remote_target_unbinds_attempt_and_releases_reservation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, interruption: str
 ) -> None:
     """Definite refusals and lost replies recover the exact pre-delivery reservation."""
+    from loom.pipeline.stores.sqlite_authority import _authority_database_path
     from loom.pipeline.stores.authority import PreparedBindingState
     from tests.unit.loom.queue.test_agent_sessions import _config, _policy, _view
 
@@ -437,8 +438,6 @@ def test_rejected_remote_target_unbinds_attempt_and_releases_reservation(
                 assert (
                     daemon._execution.coordinator.state(request.assignment_id) == "released"
                 )
-            from loom.pipeline.stores.sqlite_authority import _authority_database_path
-
             with sqlite3.connect(_authority_database_path(run_uri)) as conn:
                 assert (
                     conn.execute(
