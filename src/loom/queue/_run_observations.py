@@ -203,7 +203,6 @@ class DispatchObservations:
         self._workers = ThreadPoolExecutor(max_workers=2, thread_name_prefix="loom-dispatch-observation")
         self._reads: dict[str, _DispatchRead] = {}
         self._retiring: dict[str, Future[tuple[int, AuthoritativeRunSnapshot | Exception]]] = {}
-        self._consumed: dict[str, tuple[int, Epochs, AuthoritativeRunSnapshot]] = {}
         self._wake = wake
 
     def requested_runs(self) -> set[str]:
@@ -213,7 +212,6 @@ class DispatchObservations:
         return {key for key, read in self._reads.items() if read.work_ids}
 
     def invalidate_admission(self, identity: str) -> None:
-        self._consumed.pop(identity, None)
         read = self._reads.pop(identity, None)
         if read is not None and not read.future.cancel() and not read.future.done():
             self._retiring[identity] = read.future
@@ -223,7 +221,6 @@ class DispatchObservations:
         revisions: Mapping[str, int], ready_ids: Callable[[set[str]], set[str]],
         offer: Callable[[str], None],
     ) -> None:
-        self._consumed.clear()
         self._retiring = {key: future for key, future in self._retiring.items() if not future.done()}
         completed = []
         ready = ready_ids({work for read in self._reads.values() for work in read.work_ids})
@@ -283,22 +280,28 @@ class DispatchObservations:
         milestone("dispatch_observation_consumed", admission_id=admission.admission_id,
                   stage_work_id=work_id, completed_ns=completed, consumed_ns=consumed,
                   completion_wait_ns=consumed - completed)
-        self._consumed[admission.admission_id] = admission.revision, epochs, result
         read.selected.discard(work_id)
         read.work_ids.remove(work_id)
-        if not read.work_ids:
-            del self._reads[admission.admission_id]
+        # Keep the completed read as an age-limited speculative snapshot. A
+        # later winner in this turn can acquire its own interest atomically.
 
     def _start(
         self, admission: LocalDaemonAdmission, epochs: Epochs, load: Callable[[], AuthoritativeRunSnapshot],
-        work_ids: set[str], selected: str | None = None,
+        work_ids: set[str], selected: str,
     ) -> None:
         identity = admission.admission_id
-        if identity in self._retiring or len(self._reads) >= 32:
+        if identity in self._retiring:
             return
-        limit = 2 if work_ids else 1
-        if sum(not item.future.done() for item in self._reads.values()) + len(self._retiring) >= limit:
+        if sum(not item.future.done() for item in self._reads.values()) + len(self._retiring) >= 2:
             return
+        if len(self._reads) >= 32:
+            # Sharing a completed read with unselected peers must leave room for
+            # a newly selected admission, even if those peers stay READY forever.
+            spare = next((key for key, read in self._reads.items()
+                          if not read.selected and read.future.done()), None)
+            if spare is None:
+                return
+            self.invalidate_admission(spare)
 
         def capture() -> tuple[int, AuthoritativeRunSnapshot | Exception]:
             try:
@@ -308,20 +311,14 @@ class DispatchObservations:
             return monotonic_ns(), snapshot
 
         future = self._workers.submit(copy_context().run, capture)
-        self._reads[identity] = _DispatchRead(admission, epochs, future, work_ids, {selected} if selected is not None else set())
-        if work_ids:
-            future.add_done_callback(lambda _: self._wake())
+        self._reads[identity] = _DispatchRead(admission, epochs, future, work_ids, {selected})
+        future.add_done_callback(lambda _: self._wake())
 
     def poll(
         self, admission: LocalDaemonAdmission, epochs: Epochs, load: Callable[[], AuthoritativeRunSnapshot],
         *, work_id: str, peers: set[str],
     ) -> AuthoritativeRunSnapshot | None:
         identity = admission.admission_id
-        previous = self._consumed.get(identity)
-        if previous is not None and previous[:2] == (admission.revision, epochs):
-            if identity not in self._reads:
-                self._start(admission, epochs, load, set())
-            return previous[2]
         read = self._reads.get(identity)
         if read is not None and (read.admission.revision != admission.revision or read.epochs != epochs):
             self.invalidate_admission(identity)
@@ -331,7 +328,8 @@ class DispatchObservations:
             return None
         if not read.work_ids:
             read.work_ids.update(peers)
-            read.future.add_done_callback(lambda _: self._wake())
+            if not read.future.done():
+                read.future.add_done_callback(lambda _: self._wake())
         read.work_ids.add(work_id)
         read.selected.add(work_id)
         if not read.future.done():

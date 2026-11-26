@@ -368,3 +368,25 @@ def test_unreadable_input_leaves_the_only_host_available_to_its_peer(monkeypatch
     selected = progress._schedule_window(owner, {"run": admission}, tuple(records.values()))
     assert selected is not None and selected[0] == "run"
     assert inspected == ["a", "b"] and reserved == ["b"]
+
+
+def test_new_selection_reclaims_peer_only_observation_at_capacity():
+    from threading import Event
+    from loom.queue._run_observations import DispatchObservations
+
+    wake = Event()
+    owner = DispatchObservations(wake.set)
+    epochs = ("epoch", "policy")
+    try:
+        for index in range(33):
+            admission = SimpleNamespace(admission_id=str(index), run_uri=str(index), revision=1)
+            work = f"selected-{index}"
+            wake.clear()
+            assert owner.poll(admission, epochs, lambda: "result", work_id=work, peers={"blocked-sibling"}) is None
+            assert wake.wait(2), index
+            assert owner.poll(admission, epochs, lambda: "result", work_id=work, peers=set()) == "result"
+            owner.transferred(admission, epochs, work)
+        assert len(owner.requested_admissions()) == 32
+        assert "0" not in owner.requested_admissions()
+    finally:
+        owner.close()
