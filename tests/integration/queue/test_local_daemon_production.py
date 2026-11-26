@@ -4184,6 +4184,7 @@ def _persist_sleep_run(
     independent_stage_names: tuple[str, ...] | None = None,
     max_parallel_stages: int | None = None,
     sequential_inputs: bool = False,
+    dependencies: Mapping[str, tuple[str, ...]] | None = None,
 ) -> str:
     run_store = LocalRunStore(run_root)
     run_uri = path_to_run_uri(run_root / run_name)
@@ -4212,6 +4213,12 @@ def _persist_sleep_run(
         for index, stage in enumerate(pipeline_config["stages"][1:], start=1):
             stage["depends_on"] = [stage_names[index - 1]]
             stage["inputs"] = {"data": f"{stage_names[index - 1]}.data"}
+    if dependencies:
+        for stage in pipeline_config["stages"]:
+            parents = dependencies.get(stage["name"], ())
+            if parents:
+                stage["depends_on"] = list(parents)
+                stage["inputs"] = {parent: f"{parent}.data" for parent in parents}
     spec = PipelineSpec.from_config(pipeline_config)
     plan = plan_pipeline(
         spec,
