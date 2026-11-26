@@ -157,6 +157,23 @@ lower bound because the selector does not probe every possible placement for
 measurement. A missing observation is reported as unknown. These measurements
 use the normal scheduling decisions and the bounded diagnostic writer.
 
+When a READY stage requests an admission context and both loader workers or
+the dispatch slot are occupied, the reconciliation owner remembers the refused
+admission revision, both epochs and the READY work that requested it. There are
+two loader workers and at most one pending dispatch load. Discovery can still
+use the other worker and can satisfy a dispatch request for the same admission.
+
+After draining completions, the coordinator services retained demand before
+opportunistic dispatch. Higher run priority goes first. Equal-priority waiters
+keep their first-refusal order through repeat visits. Before starting a retry,
+the coordinator checks the current admission, revision, epochs, READY work,
+route, cancellation and existing continuation. A cancelled graph can still
+supply a producer with a live consumer through the ordinary cancellation rule.
+Up to 256 admissions retain a retry. At capacity, higher priority can displace
+the newest waiter of lowest priority. Work beyond the bound, or an eligible
+sibling of retired work, remains discoverable in the ordinary READY scan.
+Restart reconstructs demand from that same durable projection.
+
 For placement qualification, start the coordinator with
 `LOOM_QUALIFICATION_TIMINGS=all` and pass its stderr to the offline report.
 

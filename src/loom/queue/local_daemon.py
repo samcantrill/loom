@@ -2380,8 +2380,9 @@ class LocalDaemon:
         # The durable ready query owns the 256-item window.  A cycle may
         # launch at most that many assignments, but a larger pipeline is
         # never rejected merely for having more stages.
-        from ._coordinator_run_progress import resume_ready_inputs
+        from ._coordinator_run_progress import resume_ready_inputs, retry_dispatch_context
         from ._ready_window import ScanYield
+        retry_dispatch_context(execution, epochs)
         resume_ready_inputs(execution, execution._ready_continuations.take(), schedulable, epochs)
         started_admissions: set[str] = set()
         with bulk.visiting(schedulable.visited_dispatch):
