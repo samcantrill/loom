@@ -9,7 +9,7 @@ from pathlib import Path
 import sqlite3
 import sys
 from collections.abc import Mapping
-from time import monotonic
+from time import monotonic, sleep
 from typing import Any, cast
 
 import pytest
@@ -49,6 +49,7 @@ from loom.queue.agent_session_transport import (
 )
 from loom.queue.agent_sessions import (
     AgentOffer,
+    AgentPollActiveError,
     AgentProviderDescriptor,
     AgentPolicyConfig,
     AgentPrincipalPolicy,
@@ -65,6 +66,28 @@ from tests.support.mutual_tls import (
     certificate_fingerprint as _fingerprint,
     mutual_tls_credentials as _credentials,
 )
+
+
+def settle_stopped_service_poll(owner: LocalDaemonAgentHttpClient) -> None:
+    """A stopped agent's last HTTP poll can still be active at the coordinator."""
+    deadline = monotonic() + 20
+    while True:
+        try:
+            owner._resume_pending_poll(wait_timeout_ms=100)
+            return
+        except AgentPollActiveError:
+            assert monotonic() < deadline, "stopped service poll did not settle"
+            sleep(0.02)
+
+
+def restart_daemon(daemon: LocalDaemon, *, start_held: bool = False) -> None:
+    """Reopen the same owner after its detached read operations finish."""
+    daemon.stop()
+    deadline = monotonic() + 20
+    while daemon._contexts.running() or daemon._result_verifications.running():
+        assert monotonic() < deadline, "coordinator reads did not finish after stop"
+        sleep(0.02)
+    daemon.start(start_held=start_held)
 
 
 def _local_launch_profile() -> ResidentWorkerLaunchProfile:

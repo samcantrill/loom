@@ -57,6 +57,7 @@ from loom.queue.deployment import (
     run_outbound_agent_service,
 )
 from tests.support.agent_sessions import (
+    restart_daemon,
     _prepare_remote_sleep_run,
     _fresh_remote_agent_root,
 )
@@ -537,8 +538,7 @@ def test_service_registration_recovers_uncertainty_across_coordinator_restart(
         assert client._require_journal().pending_registration() == request
     finally:
         client.close()
-    work.daemon.stop()
-    work.daemon.start()
+    restart_daemon(work.daemon)
     service = work.start_agent()
 
     def registered_in_current_epoch():
@@ -701,8 +701,7 @@ def test_outstanding_poll_recovery_across_coordinator_epoch(
     finally:
         probe.close()
     old_epoch = work.daemon._epoch
-    work.daemon.stop()
-    work.daemon.start()
+    restart_daemon(work.daemon)
     assert work.daemon._epoch != old_epoch
     second = work.start_agent()
     deadline = monotonic() + 45

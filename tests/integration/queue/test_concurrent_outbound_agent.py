@@ -72,6 +72,8 @@ from loom.queue.deployment import (
 from tests.support.mutual_tls import certificate_fingerprint, mutual_tls_credentials
 from tests.support.stage29_composition import ResidentProviderFactory
 from tests.support.agent_sessions import (
+    restart_daemon,
+    settle_stopped_service_poll,
     _prepare_remote_producer_run,
     _prepare_remote_sleep_run,
     _prepare_gpu_environment_run,
@@ -599,8 +601,7 @@ def test_restart_admits_short_work_before_known_worker_exits(
             case.thread.join(20)
             assert not case.thread.is_alive()
             if restart_epoch:
-                case.daemon.stop()
-                case.daemon.start()
+                restart_daemon(case.daemon)
             uncertain.set()
             uri, authority = _submit(case, "short")
             offers = _rows(case.database, "SELECT COUNT(*) FROM agent_offers")
@@ -2155,7 +2156,7 @@ def test_restart_recovers_rejected_next_poll_without_losing_queued_work(monkeypa
         assert not case.thread.is_alive()
         owner = LocalDaemonAgentHttpClient(case.config.client)
         try:
-            owner._resume_pending_poll(wait_timeout_ms=100)
+            settle_stopped_service_poll(owner)
             journal = owner._require_journal()
             session = journal.active_session()
             assert session is not None
@@ -2191,9 +2192,7 @@ def test_restart_recovers_rejected_next_poll_without_losing_queued_work(monkeypa
             monkeypatch.setattr(AgentSessionService, "_require_current_offer", require_offer)
         _submit(case, "queued-through-rejection")
         if restart_coordinator:
-            case.daemon.stop()
-            _eventually(lambda: not case.daemon._contexts.running())
-            case.daemon.start()
+            restart_daemon(case.daemon)
         resume_poll_offset = len(polls)
         case.stop.clear()
         case.thread = Thread(target=case.serve)
@@ -2981,8 +2980,7 @@ def test_lost_release_orders_other_completion_and_preserves_local_stop(
             ]
             assert not premature, premature
             if restart_epoch:
-                case.daemon.stop()
-                case.daemon.start()
+                restart_daemon(case.daemon)
             release.set()
             for name in ("a", "b"):
                 assert (
