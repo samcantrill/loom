@@ -133,6 +133,9 @@ class Trace:
                         self.admissions[admission] = ("direct", a["queue_item_id"]), "target"
                 elif e.action == "prepared_target_committed":
                     self.prepared[operation].append(e)
+                    child = a.get("child_admission_id")
+                    if child and operation:
+                        self.admissions[child] = operation, "preparation"
                 elif a.get("assignment_id"):
                     self.assignments[a["assignment_id"]][e.action].append(e)
                 elif all(_work(a)):
@@ -146,6 +149,9 @@ def _request(events, reserved, single_cycle):
         stamp = reserved.attrs["request_available_ns"]
         finished = _unique(e for e in available if stamp is not None and e.domain == reserved.domain
                            and e.attrs.get("request_available_ns") == stamp)
+        if finished is None:
+            # An earlier failed build can have queue and start events under the same attempt.
+            return {}
     elif single_cycle and all(len({(e.utc, e.domain, e.ns) for e in events.get(action, ())}) <= 1
                               for action in _REQUEST):
         finished = _unique(available)
@@ -177,11 +183,14 @@ def _attempt(trace, key, assignment, assigned, ready, single_cycle, error_ms):
     events = {action: _first(assigned.get(action, ())) for action in _AGENT}
     events.update(admission_committed=trace.admitted.get(admission), attempt_ready=ready,
                   reservation_committed=reserved)
-    events.update(_request(trace.work.get(key, {}), reserved, single_cycle))
+    events.update(_request(trace.work.get(key, {}), reserved or summary, single_cycle))
     intervals = _measure(events, _PHASES, error_ms)
-    queued = events.get("request_preparation_queued")
+    build = next((e for action in reversed(_REQUEST) if (e := events.get(action)) is not None
+                  and "request_queued_ns" in e.attrs), None)
+    queued = build or events.get("request_preparation_queued")
+    queued_ns = queued.attrs.get("request_queued_ns", queued.ns) if queued else None
     carried = bool(ready and queued and ready.domain == queued.domain and ready.ns is not None
-                   and queued.ns is not None and queued.ns < ready.ns)
+                   and queued_ns is not None and queued_ns < ready.ns)
     if carried:
         intervals["ready_to_request_queued"] = None
         intervals["request_worker_queue"] = None
@@ -192,7 +201,8 @@ def _attempt(trace, key, assignment, assigned, ready, single_cycle, error_ms):
     return {
         "admission_id": admission, "stage_work_id": work_id, "attempt_id": attempt, "assignment_id": assignment,
         "stage_name": r.get("stage_name") or s.get("stage_name") or (ready.attrs.get("stage_name") if ready else None),
-        "ready_projection_revision": ready.attrs.get("projection_revision") if ready else r.get("ready_projection_revision"),
+        "ready_projection_revision": (ready.attrs.get("projection_revision") if ready else
+                                      r.get("ready_projection_revision", s.get("ready_projection_revision"))),
         "projection_revision": r.get("projection_revision", s.get("projection_revision")),
         "intervals": intervals, "request_queued_before_this_ready": carried,
         "wait_reason_seconds": {k: v / 1e9 for k, v in waits.items()} if waits is not None else None,
@@ -224,11 +234,11 @@ def _attempts(trace, error_ms):
         # Legacy emitters lack a reservation-to-READY link. Only use an unambiguous cycle.
         single_cycle = len(placements) <= 1 and (not ready_events or _unique(ready_events) is not None)
         for identity, assigned in placements:
-            reserved = _first(assigned.get("reservation_committed", ()))
-            revision = reserved.attrs.get("ready_projection_revision") if reserved else None
-            if reserved is not None and revision is not None:
+            link = _first(assigned.get("reservation_committed", ())) or _first(assigned.get("attempt_scheduling_summary", ()))
+            revision = link.attrs.get("ready_projection_revision") if link else None
+            if link is not None and revision is not None:
                 ready = _unique(e for e in ready_events if e.attrs.get("projection_revision") == revision
-                                and e.domain == reserved.domain)
+                                and e.domain == link.domain)
             else:
                 ready = _unique(ready_events) if single_cycle else None
             if ready is not None:

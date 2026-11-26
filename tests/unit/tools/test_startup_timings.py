@@ -55,7 +55,7 @@ def test_direct_submission_correlates_without_parent_operation():
 
 def test_selected_timeline_links_the_publishing_child_and_both_clock_domains():
     work = dict(admission_id="target", stage_work_id="w", attempt_id="attempt")
-    req = {**work, "request_queued_ns": 99}
+    req = {**work, "request_queued_ns": 3_000_000_000}
     records = [
         _event("submission_sent", 0, op="operation"),
         _event("submission_acknowledged", 1, op="operation"),
@@ -71,9 +71,9 @@ def test_selected_timeline_links_the_publishing_child_and_both_clock_domains():
         _event("attempt_ready", 12, ns=2_000_000_000, projection_revision=3, work=work),
         _event("request_preparation_queued", 13, ns=3_000_000_000, work=req),
         _event("request_preparation_worker_started", 14, ns=4_000_000_000, work=req),
-        _event("worker_request_available", 16, ns=6_000_000_000, request_available_ns=100, work=req),
+        _event("worker_request_available", 16, ns=6_000_000_000, request_available_ns=6_000_000_000, work=req),
         _event("reservation_committed", 20, ns=10_000_000_000, assignment_id="assigned",
-               projection_revision=5, ready_projection_revision=3, request_available_ns=100, work=work),
+               projection_revision=5, ready_projection_revision=3, request_available_ns=6_000_000_000, work=work),
         _event("attempt_scheduling_summary", 20, assignment_id="assigned", result="reserved",
                saw_eligible_offer=True, eligible_request_ready_ns=100_000_000,
                wait_ns={"assignment_slots_full": 2_000_000_000, "capacity_unknown": 5_000_000_000}, work=work),
@@ -101,6 +101,14 @@ def test_selected_timeline_links_the_publishing_child_and_both_clock_domains():
     }]
     assert r["phase_distributions"]["target"]["request_worker_io"]["samples"] == 1
     assert r["phase_distributions"]["preparation"]["request_worker_io"]["unknown"] == 2
+    without_child_commit = [r for r in records if not (
+        r["spans"][0]["action"] == "admission_committed" and r["spans"][0]["attributes"]["admission_id"] == "child"
+    )]
+    partial, = summarize(without_child_commit)["submissions"]
+    assert partial["handoffs"][0]["intervals"]["child_return_to_prepared_target_commit"]["seconds"] == 3
+    child = next(a for a in partial["attempts"]["preparation"] if a["admission_id"] == "child")
+    assert child["assignment_id"] == "ca"
+    assert child["intervals"]["admission_to_ready"] is None
 
 
 def test_reopened_attempt_reuses_only_its_exact_request_and_missing_evidence_stays_unknown():
@@ -132,6 +140,28 @@ def test_reopened_attempt_reuses_only_its_exact_request_and_missing_evidence_sta
     assert c["intervals"]["ready_to_request_queued"] is None
     assert c["intervals"]["request_available_to_reservation"]["seconds"] == 7e-9
     assert all(v is None for v in report["handoffs"][0]["intervals"].values())
+
+    # Exact build tokens survive a dropped queue marker. A reopened placement
+    # can consume the built request, but it cannot contribute a second build.
+    records.append(_event("request_preparation_worker_started", 10, ns=10, request_queued_ns=9, work=key))
+    missing_queue = [e for e in records if not (e["spans"][0]["action"] == "request_preparation_queued"
+                                                and e["spans"][0]["attributes"]["request_queued_ns"] == 9)]
+    r = summarize(missing_queue)
+    _, accepted, carried = r["submissions"][0]["attempts"]["target"]
+    assert accepted["intervals"]["request_worker_io"]["seconds"] == 1e-9
+    assert carried["request_queued_before_this_ready"]
+    assert carried["intervals"]["request_worker_io"] is None
+    assert r["phase_distributions"]["target"]["request_worker_io"]["samples"] == 2
+
+    partial = [e for e in records if not (e["spans"][0]["action"] == "reservation_committed"
+                                           and e["spans"][0]["attributes"]["assignment_id"] == "rejected")]
+    partial.append(_event("attempt_scheduling_summary", 6, ns=6, assignment_id="rejected", work=key,
+                          ready_projection_revision=1, projection_revision=2, request_available_ns=4,
+                          result="reserved"))
+    placements = summarize(reversed(partial))["submissions"][0]["attempts"]["target"]
+    assert [a["assignment_id"] for a in placements] == ["rejected", "accepted", "carried"]
+    assert placements[0]["intervals"]["request_worker_io"]["seconds"] == 1e-9
+    assert placements[0]["intervals"]["reservation_to_agent"] is None
 
 
 def test_ranking_and_lookup_include_incomplete_submissions_without_polluting_percentiles():
@@ -168,3 +198,19 @@ def test_missing_reservation_preserves_known_agent_intervals_and_discards_mismat
     assert row["intervals"]["reservation_to_agent"] is None
     assert row["intervals"]["agent_to_supervisor"]["seconds"] == 1
     assert row["intervals"]["supervisor_to_stage_run"]["seconds"] == 2
+
+
+def test_reserved_build_with_dropped_completion_does_not_claim_earlier_failed_build():
+    key = dict(admission_id="a", stage_work_id="w", attempt_id="attempt")
+    records = [
+        _event("admission_committed", 1, op="r", role="target", admission_id="a"),
+        _event("attempt_ready", 2, ns=2, projection_revision=1, work=key),
+        _event("request_preparation_queued", 3, ns=3, request_queued_ns=3, work=key),
+        _event("request_preparation_worker_started", 8, ns=8, request_queued_ns=3, work=key),
+        _event("reservation_committed", 12, ns=12, request_available_ns=11, ready_projection_revision=1,
+               assignment_id="successful", work=key),
+    ]
+    row, = summarize(records)["submissions"][0]["attempts"]["target"]
+    assert row["assignment_id"] == "successful"
+    assert row["intervals"]["ready_to_request_queued"] is None
+    assert row["intervals"]["request_worker_queue"] is None
